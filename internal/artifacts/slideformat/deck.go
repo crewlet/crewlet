@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -279,10 +280,12 @@ func slideID(p string) (string, bool) {
 		return "", false
 	}
 	id, ok := strings.CutSuffix(rest, ".html")
-	return id, ok && idRE.MatchString(id)
+	return id, ok && idRE().MatchString(id)
 }
 
-var faceKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var faceKeyRE = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+})
 
 // ParseIndex reads `deck.json`, answering nil with the findings where it
 // cannot be read at all.
@@ -327,7 +330,7 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 	seen := map[string]bool{}
 	for _, id := range idx.Order {
 		switch {
-		case !idRE.MatchString(id):
+		case !idRE().MatchString(id):
 			bad("order names %q, and a slide id is 1 to 64 letters, digits, _ and -", id)
 		case seen[id]:
 			bad("order names slide %q twice", id)
@@ -353,10 +356,10 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 		bad("faces names %d typefaces and a deck declares at most %d", len(idx.Faces), MaxFaces)
 	}
 	for key, f := range idx.Faces {
-		if !faceKeyRE.MatchString(key) {
+		if !faceKeyRE().MatchString(key) {
 			bad("face %q: a face's key is its family lowercased, spaces as -", key)
 		}
-		if !familyRE.MatchString(f.Family) {
+		if !familyRE().MatchString(f.Family) {
 			bad("face %q's family %q: a letter, then letters, digits, spaces, _ and -, at most 40",
 				key, f.Family)
 		}

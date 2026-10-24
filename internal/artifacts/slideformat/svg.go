@@ -3,6 +3,7 @@ package slideformat
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // ---- inline SVG ----------------------------------------------------------- //
@@ -21,68 +22,83 @@ import (
 const MaxSVGBytes = 52 << 10
 
 // svgElements are the drawing's elements, by the lowercased name the HTML
-// tokenizer reads to the name SVG spells.
-var svgElements = map[string]string{
-	"svg": "svg", "g": "g", "defs": "defs", "path": "path", "rect": "rect", "circle": "circle",
-	"ellipse": "ellipse", "line": "line", "polyline": "polyline", "polygon": "polygon",
-	"lineargradient": "linearGradient", "radialgradient": "radialGradient", "stop": "stop",
-	"clippath": "clipPath", "mask": "mask", "pattern": "pattern", "title": "title", "desc": "desc",
-	"text": "text", "tspan": "tspan", "use": "use", "symbol": "symbol", "marker": "marker",
-	"filter": "filter", "fegaussianblur": "feGaussianBlur", "feoffset": "feOffset",
-	"feblend": "feBlend", "fecolormatrix": "feColorMatrix", "feflood": "feFlood",
-	"fecomposite": "feComposite", "femerge": "feMerge", "femergenode": "feMergeNode",
-	"fedropshadow": "feDropShadow",
-}
+// tokenizer reads to the name SVG spells. Every table and pattern of this file
+// is built at first use (the package doc says why).
+var svgElements = sync.OnceValue(func() map[string]string {
+	return map[string]string{
+		"svg": "svg", "g": "g", "defs": "defs", "path": "path", "rect": "rect", "circle": "circle",
+		"ellipse": "ellipse", "line": "line", "polyline": "polyline", "polygon": "polygon",
+		"lineargradient": "linearGradient", "radialgradient": "radialGradient", "stop": "stop",
+		"clippath": "clipPath", "mask": "mask", "pattern": "pattern", "title": "title", "desc": "desc",
+		"text": "text", "tspan": "tspan", "use": "use", "symbol": "symbol", "marker": "marker",
+		"filter": "filter", "fegaussianblur": "feGaussianBlur", "feoffset": "feOffset",
+		"feblend": "feBlend", "fecolormatrix": "feColorMatrix", "feflood": "feFlood",
+		"fecomposite": "feComposite", "femerge": "feMerge", "femergenode": "feMergeNode",
+		"fedropshadow": "feDropShadow",
+	}
+})
 
 // svgTextElements are the drawing's elements that hold text.
-var svgTextElements = map[string]bool{"text": true, "tspan": true, "title": true, "desc": true}
+var svgTextElements = sync.OnceValue(func() map[string]bool {
+	return map[string]bool{"text": true, "tspan": true, "title": true, "desc": true}
+})
 
 // svgAttrs are the drawing's attributes, lowercased to as SVG spells them.
-var svgAttrs = map[string]string{
-	"id": "id", "viewbox": "viewBox", "width": "width", "height": "height", "x": "x", "y": "y",
-	"x1": "x1", "y1": "y1", "x2": "x2", "y2": "y2", "cx": "cx", "cy": "cy", "r": "r", "rx": "rx",
-	"ry": "ry", "fx": "fx", "fy": "fy", "d": "d", "points": "points", "transform": "transform",
-	"fill": "fill", "stroke": "stroke", "stroke-width": "stroke-width",
-	"stroke-linecap": "stroke-linecap", "stroke-linejoin": "stroke-linejoin",
-	"stroke-miterlimit": "stroke-miterlimit", "stroke-dasharray": "stroke-dasharray",
-	"stroke-dashoffset": "stroke-dashoffset", "stroke-opacity": "stroke-opacity",
-	"fill-opacity": "fill-opacity", "fill-rule": "fill-rule", "clip-rule": "clip-rule",
-	"opacity": "opacity", "offset": "offset", "stop-color": "stop-color",
-	"stop-opacity": "stop-opacity", "gradientunits": "gradientUnits",
-	"gradienttransform": "gradientTransform", "spreadmethod": "spreadMethod",
-	"clip-path": "clip-path", "mask": "mask", "preserveaspectratio": "preserveAspectRatio",
-	"aria-label": "aria-label", "aria-hidden": "aria-hidden", "role": "role",
-	"font-size": "font-size", "font-family": "font-family", "font-weight": "font-weight",
-	"font-style": "font-style", "text-anchor": "text-anchor",
-	"dominant-baseline": "dominant-baseline", "letter-spacing": "letter-spacing", "dx": "dx",
-	"dy": "dy", "patternunits": "patternUnits", "patterncontentunits": "patternContentUnits",
-	"patterntransform": "patternTransform", "maskunits": "maskUnits",
-	"maskcontentunits": "maskContentUnits", "clippathunits": "clipPathUnits", "href": "href",
-	"xlink:href": "href", "filter": "filter", "stddeviation": "stdDeviation", "in": "in",
-	"in2": "in2", "result": "result", "mode": "mode", "values": "values", "type": "type",
-	"operator": "operator", "k1": "k1", "k2": "k2", "k3": "k3", "k4": "k4",
-	"flood-color": "flood-color", "flood-opacity": "flood-opacity",
-	"markerwidth": "markerWidth", "markerheight": "markerHeight", "refx": "refX", "refy": "refY",
-	"orient": "orient", "markerunits": "markerUnits", "marker-start": "marker-start",
-	"marker-mid": "marker-mid", "marker-end": "marker-end", "filterunits": "filterUnits",
-	"primitiveunits": "primitiveUnits", "visibility": "visibility", "display": "display",
-	"paint-order": "paint-order", "vector-effect": "vector-effect",
-	"shape-rendering": "shape-rendering", "pathlength": "pathLength", "textlength": "textLength",
-	"lengthadjust": "lengthAdjust", "color": "color", "rotate": "rotate",
-}
+var svgAttrs = sync.OnceValue(func() map[string]string {
+	return map[string]string{
+		"id": "id", "viewbox": "viewBox", "width": "width", "height": "height", "x": "x", "y": "y",
+		"x1": "x1", "y1": "y1", "x2": "x2", "y2": "y2", "cx": "cx", "cy": "cy", "r": "r", "rx": "rx",
+		"ry": "ry", "fx": "fx", "fy": "fy", "d": "d", "points": "points", "transform": "transform",
+		"fill": "fill", "stroke": "stroke", "stroke-width": "stroke-width",
+		"stroke-linecap": "stroke-linecap", "stroke-linejoin": "stroke-linejoin",
+		"stroke-miterlimit": "stroke-miterlimit", "stroke-dasharray": "stroke-dasharray",
+		"stroke-dashoffset": "stroke-dashoffset", "stroke-opacity": "stroke-opacity",
+		"fill-opacity": "fill-opacity", "fill-rule": "fill-rule", "clip-rule": "clip-rule",
+		"opacity": "opacity", "offset": "offset", "stop-color": "stop-color",
+		"stop-opacity": "stop-opacity", "gradientunits": "gradientUnits",
+		"gradienttransform": "gradientTransform", "spreadmethod": "spreadMethod",
+		"clip-path": "clip-path", "mask": "mask", "preserveaspectratio": "preserveAspectRatio",
+		"aria-label": "aria-label", "aria-hidden": "aria-hidden", "role": "role",
+		"font-size": "font-size", "font-family": "font-family", "font-weight": "font-weight",
+		"font-style": "font-style", "text-anchor": "text-anchor",
+		"dominant-baseline": "dominant-baseline", "letter-spacing": "letter-spacing", "dx": "dx",
+		"dy": "dy", "patternunits": "patternUnits", "patterncontentunits": "patternContentUnits",
+		"patterntransform": "patternTransform", "maskunits": "maskUnits",
+		"maskcontentunits": "maskContentUnits", "clippathunits": "clipPathUnits", "href": "href",
+		"xlink:href": "href", "filter": "filter", "stddeviation": "stdDeviation", "in": "in",
+		"in2": "in2", "result": "result", "mode": "mode", "values": "values", "type": "type",
+		"operator": "operator", "k1": "k1", "k2": "k2", "k3": "k3", "k4": "k4",
+		"flood-color": "flood-color", "flood-opacity": "flood-opacity",
+		"markerwidth": "markerWidth", "markerheight": "markerHeight", "refx": "refX", "refy": "refY",
+		"orient": "orient", "markerunits": "markerUnits", "marker-start": "marker-start",
+		"marker-mid": "marker-mid", "marker-end": "marker-end", "filterunits": "filterUnits",
+		"primitiveunits": "primitiveUnits", "visibility": "visibility", "display": "display",
+		"paint-order": "paint-order", "vector-effect": "vector-effect",
+		"shape-rendering": "shape-rendering", "pathlength": "pathLength", "textlength": "textLength",
+		"lengthadjust": "lengthAdjust", "color": "color", "rotate": "rotate",
+	}
+})
 
 // svgDropped are attributes a drawing may carry that change nothing once it
 // is inline in a page: its namespace declarations.
-var svgDropped = map[string]bool{"xmlns": true, "xmlns:xlink": true, "version": true}
+var svgDropped = sync.OnceValue(func() map[string]bool {
+	return map[string]bool{"xmlns": true, "xmlns:xlink": true, "version": true}
+})
 
 // svgRefAttrs may name a paint server, clip, mask, filter or marker of the
 // same drawing, as `url(#id)`.
-var svgRefAttrs = map[string]bool{"fill": true, "stroke": true, "clip-path": true, "mask": true,
-	"filter": true, "marker-start": true, "marker-mid": true, "marker-end": true}
+var svgRefAttrs = sync.OnceValue(func() map[string]bool {
+	return map[string]bool{"fill": true, "stroke": true, "clip-path": true, "mask": true,
+		"filter": true, "marker-start": true, "marker-mid": true, "marker-end": true}
+})
 
 var (
-	svgIDRE  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
-	svgRefRE = regexp.MustCompile(`^url\(\s*#([A-Za-z][A-Za-z0-9_.-]{0,63})\s*\)$`)
+	svgIDRE = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
+	})
+	svgRefRE = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^url\(\s*#([A-Za-z][A-Za-z0-9_.-]{0,63})\s*\)$`)
+	})
 )
 
 // svgDrawing is one drawing as it is read: the ids it declares and the ids it
@@ -109,10 +125,10 @@ func (d *svgDrawing) svgAttr(tag, key, val string, line int, bad func(string, ..
 		bad("<%s style>: inside an svg, use presentation attributes such as fill and stroke", tag)
 		return "", "", false
 	}
-	if svgDropped[key] {
+	if svgDropped()[key] {
 		return "", "", false
 	}
-	name, ok := svgAttrs[key]
+	name, ok := svgAttrs()[key]
 	if !ok {
 		bad("<%s %s> is not an attribute an inline svg may carry", tag, key)
 		return "", "", false
@@ -126,7 +142,7 @@ func (d *svgDrawing) svgAttr(tag, key, val string, line int, bad func(string, ..
 	}
 	switch {
 	case name == "id":
-		if !svgIDRE.MatchString(val) {
+		if !svgIDRE().MatchString(val) {
 			bad("<%s id=%q>: an id is a letter, then letters, digits, _, . and -, at most 64", tag, val)
 			return "", "", false
 		}
@@ -137,14 +153,14 @@ func (d *svgDrawing) svgAttr(tag, key, val string, line int, bad func(string, ..
 		d.ids[val] = true
 	case name == "href":
 		id, ok := strings.CutPrefix(val, "#")
-		if !ok || !svgIDRE.MatchString(id) {
+		if !ok || !svgIDRE().MatchString(id) {
 			bad("<%s href=%q>: a drawing refers only to its own shapes, as #id", tag, val)
 			return "", "", false
 		}
 		d.refs = append(d.refs, svgRef{id: id, line: line})
 	case strings.Contains(low, "url("):
-		m := svgRefRE.FindStringSubmatch(strings.TrimSpace(val))
-		if m == nil || !svgRefAttrs[name] {
+		m := svgRefRE().FindStringSubmatch(strings.TrimSpace(val))
+		if m == nil || !svgRefAttrs()[name] {
 			bad("<%s %s=%q>: a drawing refers only to its own gradients, clips, masks, filters "+
 				"and markers, as url(#id)", tag, key, val)
 			return "", "", false
