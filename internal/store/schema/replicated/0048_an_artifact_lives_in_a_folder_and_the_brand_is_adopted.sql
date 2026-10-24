@@ -137,7 +137,7 @@ CREATE TABLE artifact_brand (
     kit_id          TEXT    NOT NULL,
     kit_version     INTEGER NOT NULL,
     -- The canonical brand.json of that version (internal/artifacts/brandformat),
-    -- at most artifacts.MaxBrandJSONBytes.
+    -- at most brandformat.MaxIndexBytes.
     brand_json      BLOB    NOT NULL,
     -- The SHA-256, in hex, of the stylesheet generated from it at adoption.
     -- Generated once and stored as an object, never regenerated at serve
