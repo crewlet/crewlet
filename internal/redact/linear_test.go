@@ -298,12 +298,24 @@ func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
 	t.Parallel()
 	const unit = 125 * time.Microsecond
 	small, large := strings.Repeat("x", 4), strings.Repeat("x", 32)
-	square := func(text string) { time.Sleep(time.Duration(len(text)*len(text)) * unit) }
+	square := func(text string) { spin(time.Duration(len(text)*len(text)) * unit) }
 	if ok, s, l := withinFactor(square, small, large, 3*8); ok {
 		t.Errorf("a square cost passed: %v against %v", l, s)
 	}
-	linear := func(text string) { time.Sleep(time.Duration(len(text)) * 50 * unit) }
+	linear := func(text string) { spin(time.Duration(len(text)) * 50 * unit) }
 	if ok, s, l := withinFactor(linear, small, large, 3*8); !ok {
 		t.Errorf("a linear cost failed: %v against %v", l, s)
+	}
+}
+
+// spin holds the CPU for d, as a read whose cost is d does.
+//
+// NOT time.Sleep, whose floor is the timer's resolution rather than d: on a
+// virtual machine that is about a millisecond, so the square case's 320µs
+// short read measured 1.1ms, its ratio fell to nineteen against a factor of
+// twenty-four, and a quadratic cost passed on every run. A spin costs what it
+// is asked to, at any resolution, which is the property the case is about.
+func spin(d time.Duration) {
+	for start := time.Now(); time.Since(start) < d; {
 	}
 }
