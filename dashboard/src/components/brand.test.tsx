@@ -18,6 +18,7 @@ import { LiveSocket, Store, type ArtifactKind, type BrandAnswer } from "~/protoc
 import { healthFrame } from "~/test/health.ts";
 import { BRAND_KIT_FACES, BRAND_SYSTEM_STACKS } from "~/contract/artifacts.ts";
 import { faceDrawing } from "~/lib/brand/brand.ts";
+import { fmtDate } from "~/lib/format.ts";
 import type { BrandFace } from "~/protocol/types.ts";
 import { AdoptedBrandScope, BrandAgentNote, BrandFact, BrandMakeChip } from "./brand.tsx";
 
@@ -131,6 +132,9 @@ test("the note under Ask an agent names the brand the agent follows", async () =
   ).toBeTruthy();
 });
 
+/** When the artifact a Brand fact is about was made. */
+const MADE = "2026-10-20T09:00:00Z";
+
 /** The Brand fact for an artifact of `kind` whose shown version records `brand`. */
 function fact(
   kind: ArtifactKind,
@@ -138,15 +142,7 @@ function fact(
   versionBrand?: string,
   theme?: string,
 ) {
-  mount(<BrandFact id="01ART" kind={kind} version={3} />, [], brand, {
-    artifact_version: {
-      artifact: "01ART",
-      number: 3,
-      capabilities: [],
-      ...(versionBrand ? { brand: versionBrand } : {}),
-      manifest: { entry: "index.html", files: [] },
-    },
-  });
+  // THE DECK IS READ OVER HTTP as the fact mounts, so its answer is in place first.
   vi.stubGlobal(
     "fetch",
     vi.fn(
@@ -157,6 +153,15 @@ function fact(
         }),
     ),
   );
+  mount(<BrandFact id="01ART" kind={kind} version={3} made={MADE} />, [], brand, {
+    artifact_version: {
+      artifact: "01ART",
+      number: 3,
+      capabilities: [],
+      ...(versionBrand ? { brand: versionBrand } : {}),
+      manifest: { entry: "index.html", files: [] },
+    },
+  });
 }
 
 test("a doc or a dashboard is in the current brand, live", async () => {
@@ -173,6 +178,16 @@ test("a page keeps the brand it was published with until it is next published", 
   expect(screen.getByText("changes at the next publish")).toBeTruthy();
   cleanup();
   fact("design", ADOPTED);
+  expect(await screen.findByText("Crewlet's look")).toBeTruthy();
+});
+
+// A DECK COPIES THE BRAND WHEN IT IS MADE and never follows it, so it is never
+// "current" nor "older": it says which brand it was made with, and when.
+test("a deck says the brand it was made with, and the day", async () => {
+  fact("slides", ADOPTED, undefined, "brand");
+  expect(await screen.findByText(`Made with the FairSplit brand of ${fmtDate(MADE)}`)).toBeTruthy();
+  cleanup();
+  fact("slides", ADOPTED, undefined, "midnight");
   expect(await screen.findByText("Crewlet's look")).toBeTruthy();
 });
 

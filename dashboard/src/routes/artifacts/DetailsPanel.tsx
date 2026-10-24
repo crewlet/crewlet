@@ -113,7 +113,7 @@ export function DetailsPanel({
             </dd>
           </>
         )}
-        <BrandFact id={detail.id} kind={detail.kind} version={showing} />
+        <BrandFact id={detail.id} kind={detail.kind} version={showing} made={detail.created_at} />
         <dt>Your role</dt>
         <dd>{detail.elevated ? "Administrator" : ROLE_WORDS[detail.role]}</dd>
         <dt>Shares</dt>

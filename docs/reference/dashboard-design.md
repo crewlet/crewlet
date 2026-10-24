@@ -7511,7 +7511,9 @@ where they make things: the Make row's `BrandChip` (or **Set up your brand**
 for an administrator), the company's theme first and chosen in a new deck's
 picker, a note under Ask an agent, and a **Brand** fact in an artifact's
 Details (current, an older brand that changes at the next publish, or
-Crewlet's look). A kit's own page draws the same cards and preview for the
+Crewlet's look; a deck, which copies the brand when it is made and never
+follows it, says "Made with the Acme brand of" the day it was made). A kit's
+own page draws the same cards and preview for the
 version on show, and says whether it is the adopted one.
 
 **Access** is the identity directory, over the routes `/iam` serves to an

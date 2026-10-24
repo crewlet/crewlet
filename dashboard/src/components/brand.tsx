@@ -21,6 +21,7 @@ import { readDeck } from "~/lib/artifacts/api.ts";
 import { useAdoptedBrand, useAdoptedMark, useBrand } from "~/lib/brand/useBrand.ts";
 import { faceDrawing, mayAdoptBrand } from "~/lib/brand/brand.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
+import { fmtDate } from "~/lib/format.ts";
 
 /** Where the company's brand is shown and set. */
 export const BRAND_PAGE: readonly string[] = ["company", "brand"];
@@ -79,18 +80,23 @@ const BRAND_TAKES: Readonly<Record<ArtifactKind, "live" | "pinned" | "copied" | 
  * - A doc or a dashboard is drawn in the adopted brand, live.
  * - An HTML page or a design keeps the brand it was published with (the
  *   stylesheet's digest its version records) until it is next published.
- * - A deck keeps the look it was made with (the theme it began in).
+ * - A deck copies the brand when it is made and never follows it: "Made
+ *   with the Acme brand of 24 Oct 2026", the day it was made, since a deck
+ *   is never the current brand nor an older one to update.
  * - A sheet, and a brand kit itself, carry no fact.
  */
 export function BrandFact({
   id,
   kind,
   version,
+  made,
 }: {
   id: string;
   kind: ArtifactKind;
   /** The version on show. */
   version: number;
+  /** When the artifact was made: the day a deck copied the brand. */
+  made: string;
 }) {
   const takes = BRAND_TAKES[kind];
   const { adoption } = useBrand({ enabled: takes !== "none" });
@@ -137,7 +143,7 @@ export function BrandFact({
     case "copied":
       shown =
         deckTheme === BRAND_DECK_THEME ? (
-          <span>The company brand, as it was when the deck was made</span>
+          <span>{`Made with the ${name ? `${name} brand` : "company brand"} of ${fmtDate(made)}`}</span>
         ) : (
           crewlet
         );
