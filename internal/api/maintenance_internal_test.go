@@ -78,6 +78,32 @@ func TestAMaintenanceNodeServesAFilesBytesAndWritesNone(t *testing.T) {
 	}
 }
 
+// A NODE IN A MAINTENANCE MODE HAS NO RETENTION QUESTION, AND A NODE IN
+// SERVICE ANSWERS ONE. [RetentionSource] is the one constructor `crewlet run`
+// and the end-to-end harness both wire, so what it answers on each kind of
+// node is what each surface serves: a maintenance node arms no trim and has
+// no floor it published, and a report of zeros there would claim a perfectly
+// trimmed log.
+//
+// Mutation: answer a source whatever RetentionReport says and the maintenance
+// node registers the question; answer nil always and the node in service
+// loses it. Each goes red.
+func TestARetentionSourceIsAnsweredWhereATrimRuns(t *testing.T) {
+	t.Parallel()
+	source := RetentionSource(t.Context(), nodeEngine(t, ""))
+	if source == nil {
+		t.Fatal("a node in service answers no retention question")
+	}
+	if _, ok := source(t.Context()).(statelog.Report); !ok {
+		t.Errorf("a node in service answers its retention question with %T, "+
+			"want its trim's report", source(t.Context()))
+	}
+	if RetentionSource(t.Context(), nodeEngine(t, statelog.ModeMaintenance)) != nil {
+		t.Error("a node in a maintenance mode, which arms no trim, answers a " +
+			"retention question")
+	}
+}
+
 // nodeEngine boots a real engine — a data node on an embedded stream in a
 // directory of its own, running a two-seat company on the native tracker and
 // knowledge base — in mode, as `crewlet run -mode <mode>` does, or in service

@@ -274,6 +274,10 @@ func wireAPI(
 			// them.
 			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
 			WorkSearch: searchSource, Files: fileSource,
+			// AND WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY,
+			// through the constructor cmd/crewlet wires it with: nil on a
+			// member in a maintenance mode, which arms no trim.
+			Retention: api.RetentionSource(ctx, e),
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
