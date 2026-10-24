@@ -80,7 +80,7 @@ func Teardown(ctx context.Context, opts Options) error {
 				"detail", "no integrations.github.token resolved, so this engine "+
 					"cannot list or delete the webhooks it registered: check "+
 					"these for a hook pointing at this address and remove it. "+
-					"There may be none — this engine registers one where it "+
+					"There may be none: this engine registers one where it "+
 					"can and cannot look now")
 		}
 		return nil
