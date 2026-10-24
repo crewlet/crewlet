@@ -438,6 +438,12 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	started := time.Now()
 	res, err := run(ctx, in)
 	if err != nil {
+		// NO CLI RAN, which is all run's error ever says: the binary is
+		// missing or not executable here, or the host would not give it a
+		// pipe or a process. That is this host's fault, the one exec failure
+		// the next member is no answer to, so it is fatal. A CLI that DID run
+		// comes back as a result whatever happened to it, and [completion]
+		// classifies it by what that was.
 		return nil, p.fail(llm.KindFatal, err)
 	}
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
@@ -652,6 +658,23 @@ func (p *Provider) completion(
 		}
 		return nil, p.fail(llm.KindServer, fmt.Errorf("%s:\n%s", what,
 			tail(nonEmpty(res.stderr, out.text, res.stdout))))
+	}
+	// A RUN NOT SEEN TO ITS END IS A SERVER FAILURE TOO, whatever it
+	// printed. A stdout that something the CLI left running still held a
+	// grace after the CLI was done was cut there, so no reading of it can be
+	// shown to be the whole answer: the refusal a clipped stdout gets above,
+	// for the same reason. And a wait that failed is a CLI that started and
+	// did not finish as one. Neither is a call the engine could not make, so
+	// the chain may carry it to the next member, and nothing says it lasts,
+	// so nothing is sat out. Both used to come back from [run] as an error,
+	// read as fatal: the walk stopped at the head with a whole answer on
+	// stdout, the CLI having exited 0.
+	//
+	// After the markers, which classify on what the vendor SAID: a spent plan
+	// reported on a stdout a helper then held is still a spent plan.
+	if why := res.unfinished(); why != "" {
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI exited 0, but %s:\n%s",
+			p.agent, why, tail(nonEmpty(res.stderr, res.stdout))))
 	}
 	if strings.TrimSpace(res.stdout) == "" {
 		// Exit zero and nothing on stdout AT ALL — no envelope, no

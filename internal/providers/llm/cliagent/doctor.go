@@ -505,7 +505,9 @@ func reportsCurrentClock(text string, now time.Time) bool {
 //
 // The error contract differs from Output's and that is the point: run reports
 // a non-zero exit as (res, nil), so an empty version is a probe that produced
-// nothing rather than one that failed to start.
+// nothing rather than one that failed to start. Nothing is read from a probe
+// that was not seen to its end either: a stdout a helper held was cut, and the
+// first line of a cut stream is not known to be a whole version.
 func (p *Provider) probeVersion(ctx context.Context) string {
 	if len(p.profile.VersionArgs) == 0 {
 		return ""
@@ -520,7 +522,7 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 		timeout: probeTimeout,
 		grace:   p.termGrace,
 	})
-	if err != nil || res.exitCode != 0 {
+	if err != nil || res.exitCode != 0 || res.unfinished() != "" {
 		return ""
 	}
 	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])

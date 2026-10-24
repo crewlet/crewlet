@@ -541,11 +541,14 @@ every call, and the walk moves on whenever a failure is one another entry might
 not share: a spent plan or a rate limit (`rate_limit`), a missing or expired
 login (`auth`), a `timeout`, or a run that failed for no reason the profile
 recognises (`server`) — an error or an overload the CLI relayed from its vendor,
-a crash, output this build can no longer read. Only a `fatal` failure stops it,
-and that is a call the engine itself cannot make: a prompt it cannot render, a
-file of the call's it cannot write, a CLI it cannot start on this host. Those
-are yours to fix, and walking past one would only carry every call to the next
-entry, and its bill, until somebody read why.
+a crash, output this build can no longer read, a run not seen to its end (see
+[a helper that outlives the CLI](#a-helper-that-outlives-the-cli)). Only a
+`fatal` failure stops it, and that is a call the engine itself cannot make: a
+prompt it cannot render, a file of the call's it cannot write, a CLI it cannot
+start on this host — the binary missing or not executable there, or no pipe or
+process for it, refused before any CLI exists. Those are yours to fix, and
+walking past one would only carry every call to the next entry, and its bill,
+until somebody read why. A CLI that started is never `fatal`, however it ended.
 
 The natural chain is **one CLI, two ways to pay**: the plan first, the key
 after it.
@@ -1562,6 +1565,26 @@ If you see it repeatedly, the entry's **`model`** is the field to change. There
 is no per-call effort or thinking budget to turn down: a headless coding CLI
 takes neither, and its own configuration of the model is the CLI's (see
 [What an entry does not set](#what-an-entry-does-not-set)).
+
+### A helper that outlives the CLI
+
+A CLI that exits while something it started still holds its output open — a
+helper forked with the CLI's standard output or error inherited — is waited for
+five seconds, and then the stream is read as far as it got. Which stream decides
+the call:
+
+- **standard error held**: the answer on standard output is whole, so it
+  stands; the cut costs only the CLI's own commentary, and
+  `cli_agent_output_held` is logged with `stream: stderr`.
+- **standard output held**: what was read stops wherever the five seconds ran
+  out, so no reading of it can be shown to be the whole answer. The call fails
+  as `server`, as a clipped answer does: the chain carries it to the next entry,
+  and the entry is not sat out. `cli_agent_output_held` is logged with
+  `stream: stdout`.
+
+A CLI whose wait fails another way after it started, as a prompt left unread on
+standard input by a helper does, is `server` too; one that exits 0 when its
+deadline's signal arrives is a `timeout`.
 
 ### Token accounting
 

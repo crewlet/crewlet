@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -73,10 +74,9 @@ type invocation struct {
 	// writes it, before the call returns. Nil takes the ordinary path where
 	// stdout is only read after the process exits.
 	//
-	// Called from the goroutine os/exec runs the output copier on — one
-	// goroutine, in order, and cmd.Wait does not return until it has
-	// finished, so it never runs concurrently with the caller's own use of
-	// the result.
+	// Called from the goroutine [run] copies stdout on — one goroutine, in
+	// order, and run does not return until it has finished, so it never runs
+	// concurrently with the caller's own use of the result.
 	onLine func(string)
 }
 
@@ -138,6 +138,43 @@ type rawResult struct {
 	// clipped stderr costs only diagnosis. Summing them, as this used to,
 	// produced a warning that could not say which had happened.
 	droppedStdout, droppedStderr int
+
+	// heldStdout and heldStderr report a stream that something the CLI
+	// started still held open [invocation.grace] after the CLI was done —
+	// exited, or its call ended, whichever came first — so its read was cut
+	// there. Separate for the reason the dropped counts are: a held stdout
+	// is an answer nobody can show is whole, and a held stderr costs only
+	// diagnosis.
+	heldStdout, heldStderr bool
+
+	// waitErr is what waiting for a child that RAN reported besides its exit
+	// status: the call's context ending under a child that then exited 0, a
+	// prompt something the CLI started held unread on stdin past the grace
+	// ([exec.ErrWaitDelay]), a signal that could not be sent. A child that
+	// never ran is [run]'s error instead, and leaves no result at all.
+	waitErr error
+
+	// grace is the invocation's, kept for the message that says how long a
+	// held stream was waited for.
+	grace time.Duration
+}
+
+// unfinished says why a child that ran cannot be taken as having finished
+// cleanly, or "" when it can: the reason a caller that reads what the child
+// printed refuses it. A deadline and a non-zero exit are not among them, since
+// every caller already tells those apart and classifies each as itself. A held
+// stderr is not among them either: what it cost is diagnosis, and what was
+// printed on stdout stands.
+func (r *rawResult) unfinished() string {
+	switch {
+	case r.heldStdout:
+		return fmt.Sprintf("something it started still held its stdout open %s after "+
+			"the CLI was done, so what it printed cannot be shown to be whole", r.grace)
+	case r.waitErr != nil:
+		return fmt.Sprintf("waiting for it to finish failed: %v", r.waitErr)
+	default:
+		return ""
+	}
 }
 
 // run executes one invocation, terminating the whole process TREE on timeout.
@@ -145,6 +182,14 @@ type rawResult struct {
 // The tree, not the process: a coding CLI is a launcher over a Node or Bun
 // runtime that forks helpers, and signalling only the process Go started
 // leaves those holding the seat's memory and its network sockets.
+//
+// AN ERROR MEANS NO CHILD RAN: an invocation refused before the fork, a pipe
+// the host would not give, a binary exec could not start. Everything that
+// happened to a child that did start — its exit, the deadline, a stream
+// something it left behind still held, a wait that failed — is in the result,
+// because only the caller can say what each means, and a caller that read
+// every error as "could not start" stopped a seat's fallback chain on a CLI
+// that had printed a whole answer and exited 0 ([Provider.Complete]).
 func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec hands a child whose
 	// Env is nil the ENGINE's own environment — its keyring, its Tier A
@@ -175,11 +220,29 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	var stdout, stderr cappedBuffer
 	stdout.limit = maxOutput
 	stderr.limit = maxOutput
-	cmd.Stdout = io.Writer(&stdout)
+	sink := io.Writer(&stdout)
 	if in.onLine != nil {
-		cmd.Stdout = &lineTee{sink: &stdout, on: in.onLine, limit: maxOutput}
+		sink = &lineTee{sink: &stdout, on: in.onLine, limit: maxOutput}
 	}
-	cmd.Stderr = &stderr
+
+	// THE OUTPUT ON PIPES OF OUR OWN, handed to the child as files. Given
+	// any other io.Writer, os/exec makes the pipe itself and copies it on a
+	// goroutine its Wait waits for, and when something the CLI started still
+	// holds a pipe after the CLI has exited, it closes both once WaitDelay is
+	// out and reports one [exec.ErrWaitDelay] for the pair. Which stream was
+	// held is the whole question: a held stderr costs only diagnosis and the
+	// answer stands, while a held stdout is an answer nobody can show is
+	// whole. Owning the read ends is what lets [outputPipe] say which.
+	outPipe, err := newOutputPipe()
+	if err != nil {
+		return nil, fmt.Errorf("cli-agent: starting %q: %w", in.binary, err)
+	}
+	errPipe, err := newOutputPipe()
+	if err != nil {
+		outPipe.abandon()
+		return nil, fmt.Errorf("cli-agent: starting %q: %w", in.binary, err)
+	}
+	cmd.Stdout, cmd.Stderr = outPipe.w, errPipe.w
 	procgroup.Set(cmd)
 
 	// Cancel signals the GROUP rather than letting os/exec signal the one
@@ -189,31 +252,35 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	cmd.WaitDelay = in.grace
 
 	if err := cmd.Start(); err != nil {
+		outPipe.abandon()
+		errPipe.abandon()
 		return nil, fmt.Errorf("cli-agent: starting %q: %w", in.binary, err)
 	}
 	pgid := cmd.Process.Pid
-	waitErr := cmd.Wait()
+	outPipe.drainInto(sink)
+	errPipe.drainInto(&stderr)
 
-	res := &rawResult{
-		stdout:   stdout.String(),
-		stderr:   stderr.String(),
-		timedOut: errors.Is(callCtx.Err(), context.DeadlineExceeded),
+	// THE GRACE RUNS FROM WHICHEVER COMES FIRST, the CLI exiting or its call
+	// ending, which is os/exec's own rule for WaitDelay: a call stopped under
+	// a stubborn tree is then let go one grace after it ended rather than
+	// two, the first spent waiting for the CLI to exit and the second for
+	// its pipes.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	var waitErr error
+	waited := false
+	select {
+	case waitErr = <-exited:
+		waited = true
+	case <-callCtx.Done():
 	}
-	res.droppedStdout, res.droppedStderr = stdout.Truncated(), stderr.Truncated()
-	for _, s := range []struct {
-		stream  string
-		dropped int
-	}{{"stdout", res.droppedStdout}, {"stderr", res.droppedStderr}} {
-		if s.dropped == 0 {
-			continue
-		}
-		// NAMES THE STREAM. A truncated stream is how a usage figure or a
-		// closing fence goes missing, and an operator debugging a mangled
-		// answer needs to know which half was cut — the caller refuses on
-		// stdout and carries on for stderr.
-		log.WarnContext(ctx, "cli_agent_output_truncated", "binary", in.binary,
-			"stream", s.stream, "dropped_bytes", s.dropped, "limit_bytes", maxOutput)
+	letGoBy := time.Now().Add(in.grace)
+	if !waited {
+		// Bounded: Cancel has signalled the group, and os/exec kills the
+		// CLI once WaitDelay is out.
+		waitErr = <-exited
 	}
+
 	// GATED ON THE CONTEXT ENDING, not on the deadline specifically.
 	// cmd.Cancel and WaitDelay fire on cancellation exactly as they do on a
 	// timeout, so both leave the same survivor — but the reap only ran for
@@ -234,16 +301,121 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		}
 	}
 
+	res := &rawResult{
+		timedOut: errors.Is(callCtx.Err(), context.DeadlineExceeded),
+		grace:    in.grace,
+	}
+	// Decided AT THE DEADLINE, before the read ends are closed: a copy that
+	// stops because its pipe was closed under it is one that was cut.
+	res.heldStdout = !outPipe.endedBy(letGoBy)
+	res.heldStderr = !errPipe.endedBy(letGoBy)
+	outPipe.release()
+	errPipe.release()
+
+	// Read only now that both copiers have returned: they write these
+	// buffers, and release is what waits for them.
+	res.stdout, res.stderr = stdout.String(), stderr.String()
+	res.droppedStdout, res.droppedStderr = stdout.Truncated(), stderr.Truncated()
+	for _, s := range []struct {
+		stream  string
+		dropped int
+		held    bool
+	}{{"stdout", res.droppedStdout, res.heldStdout}, {"stderr", res.droppedStderr, res.heldStderr}} {
+		// NAMES THE STREAM. A truncated stream is how a usage figure or a
+		// closing fence goes missing, and an operator debugging a mangled
+		// answer needs to know which half was cut — the caller refuses on
+		// stdout and carries on for stderr.
+		if s.dropped > 0 {
+			log.WarnContext(ctx, "cli_agent_output_truncated", "binary", in.binary,
+				"stream", s.stream, "dropped_bytes", s.dropped, "limit_bytes", maxOutput)
+		}
+		// And for the same reason a held one: the caller refuses an answer
+		// on a held stdout, and only this line says that a held stderr cut
+		// the diagnosis of a call that otherwise answered.
+		if s.held {
+			log.WarnContext(ctx, "cli_agent_output_held", "binary", in.binary,
+				"stream", s.stream, "grace", in.grace)
+		}
+	}
+
 	var exitErr *exec.ExitError
 	switch {
 	case waitErr == nil:
-		return res, nil
 	case errors.As(waitErr, &exitErr):
 		res.exitCode = exitErr.ExitCode()
-		return res, nil
 	default:
-		return res, fmt.Errorf("cli-agent: running %q: %w", in.binary, waitErr)
+		// THE CHILD RAN, so this is part of its result rather than run's
+		// error, which says only that no child did.
+		res.waitErr = waitErr
 	}
+	return res, nil
+}
+
+// outputPipe is one of a child's output streams, on a pipe [run] owns both
+// ends of: the write end handed to the child as a file, and the read end a
+// copier drains into the stream's sink.
+type outputPipe struct {
+	r, w *os.File
+	// done is closed when the copier has returned, and eof — written before
+	// that — says whether it returned because every holder of the write end
+	// let go, rather than because the read end was closed under it.
+	done chan struct{}
+	eof  bool
+}
+
+func newOutputPipe() (*outputPipe, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("making a pipe for its output: %w", err)
+	}
+	return &outputPipe{r: r, w: w, done: make(chan struct{})}, nil
+}
+
+// abandon closes both ends of a pipe no child was given, its copier never
+// started.
+func (p *outputPipe) abandon() {
+	_ = p.r.Close()
+	_ = p.w.Close()
+}
+
+// drainInto drops the parent's copy of the write end, which the child now has
+// its own of, and starts copying what the child writes into sink.
+//
+// The write end goes FIRST: while the parent holds it the pipe never reaches
+// its end, whoever else lets go.
+func (p *outputPipe) drainInto(sink io.Writer) {
+	_ = p.w.Close()
+	go func() {
+		defer close(p.done)
+		_, err := io.Copy(sink, p.r)
+		p.eof = err == nil
+	}()
+}
+
+// endedBy waits until the stream reaches its end or the deadline passes, and
+// reports whether it reached its end first.
+func (p *outputPipe) endedBy(deadline time.Time) bool {
+	select {
+	case <-p.done:
+		return p.eof
+	default:
+	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-p.done:
+		return p.eof
+	case <-timer.C:
+		return false
+	}
+}
+
+// release closes the read end, which ends a copy still blocked on a holder
+// that has not let go, and waits for the copier to return, so nothing writes
+// into the sink after it.
+func (p *outputPipe) release() {
+	_ = p.r.Close()
+	<-p.done
 }
 
 // cappedBuffer accumulates output up to a limit and then drops the rest.

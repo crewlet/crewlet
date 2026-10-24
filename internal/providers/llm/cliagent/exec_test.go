@@ -89,6 +89,15 @@ func runFakeCLI() {
 		fakeStubborn()
 	case os.Getenv("FAKE_GRANDCHILD") == "1":
 		fakeGrandchild()
+	case os.Getenv("FAKE_HOLD_STREAM") != "":
+		// A CLI that answers and exits 0, leaving a helper behind that holds
+		// one of its streams — see exec_unix_test.go.
+		fakeLeaveHolder(os.Getenv("FAKE_HOLD_STREAM"))
+		fmt.Print(os.Getenv("FAKE_STDOUT"))
+	case os.Getenv("FAKE_EXIT_0_ON_TERM") == "1":
+		// A CLI that ends cleanly when it is asked to stop — see
+		// exec_unix_test.go.
+		fakeExitZeroOnTerm()
 	case os.Getenv("FAKE_DUMP_CWD") == "1":
 		// THE CHILD'S OWN ANSWER, because nothing else can give one, and it
 		// reports what it FINDS rather than only where it is.

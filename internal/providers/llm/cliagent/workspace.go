@@ -675,20 +675,23 @@ func (e *loginRefusedError) Unwrap() error { return e.err }
 //     unusable until somebody signs in again, which is what an auth failure
 //     says, so the chain moves on — and the next call tries the login again,
 //     since `crewlet llm login` mends it and that call must find it.
-//   - Any other command that exited non-zero — the export a previous
-//     generation's login is carried out through — is a SERVER failure: the
-//     local CLI failed to answer, as a 5xx is a vendor failing to, and the
-//     login it holds is fine, merely not out yet.
-//   - Everything else is a filesystem failure on this host and stays FATAL.
+//   - Any other command that ran and did not succeed — exited non-zero, or
+//     exited 0 without being seen to its end — is a SERVER failure: the local
+//     CLI failed to answer, as a 5xx is a vendor failing to, and the login it
+//     holds is fine, merely not out (or in) yet. The export a previous
+//     generation's login is carried out through is the usual one.
+//   - Everything else is a filesystem failure on this host, or a CLI it could
+//     not start, and stays FATAL.
 func acquireFailureKind(err error) llm.ErrorKind {
 	var refused *loginRefusedError
 	var exit *auxiliaryExitError
+	var unfinished *auxiliaryUnfinishedError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return llm.KindTimeout
 	case errors.As(err, &refused):
 		return llm.KindAuth
-	case errors.As(err, &exit):
+	case errors.As(err, &exit), errors.As(err, &unfinished):
 		return llm.KindServer
 	default:
 		return llm.KindFatal
