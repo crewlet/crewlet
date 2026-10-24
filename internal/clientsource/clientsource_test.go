@@ -559,6 +559,37 @@ func TestFieldReadsAPropertyNotEveryColon(t *testing.T) {
 	}
 }
 
+// SCALARS READS A CONSTANT, NEVER PART OF AN EXPRESSION: a number, a flag and
+// a string are read where each is the whole value, and `4.5 * 2` or a name is
+// skipped, so a gate counting the values against the engine's rows fails on
+// the row it could not read.
+//
+// Mutation: drop the check that the value ends the property and `4.5 * 2`
+// reads as 4.5.
+func TestScalarsReadsOnlyAWholeConstant(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"contract/brand.ts": "export const BRAND_CONTRAST_PAIRS = [\n" +
+			"  { ground: \"light\", min: 4.5, refuses: true },\n" +
+			"  { \"ground\": 'dark', min: 3, refuses: false },\n" +
+			"  { ground: GROUND, min: 4.5 * 2, refuses: !open },\n" +
+			"] as const;",
+	})
+	body, err := clientsource.Literal(root, "BRAND_CONTRAST_PAIRS")
+	if err != nil {
+		t.Fatalf("Literal: %v", err)
+	}
+	for key, want := range map[string][]string{
+		"ground":  {"light", "dark"},
+		"min":     {"4.5", "3"},
+		"refuses": {"true", "false"},
+	} {
+		if got := clientsource.Scalars(body, key); !slices.Equal(got, want) {
+			t.Errorf("Scalars(%s) = %q, want %q", key, got, want)
+		}
+	}
+}
+
 // A SPREAD IS REFUSED, because the members it brings are declared somewhere
 // the literal does not show. A spread into a CALL inside a member is an
 // argument, not a member, and is not.
