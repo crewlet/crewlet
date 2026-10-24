@@ -69,6 +69,18 @@ function Screens() {
 }
 
 /** The builder's table view, for a reader holding `grants`. */
+/**
+ * The toolbar's way to the principles: the company's row selected, then its
+ * entry in the toolbar's menu for the selection. The company's row offers no
+ * way there itself.
+ */
+async function openFromToolbar(entry: string) {
+  const acme = (await screen.findAllByRole("row")).find((r) => r.textContent?.includes("Acme"))!;
+  fireEvent.click(acme);
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Acme, selected" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(entry) }));
+}
+
 function mount(grants: string[]) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/company/org/edit?view=table";
@@ -96,11 +108,11 @@ function mount(grants: string[]) {
 
 // AN ADMINISTRATOR'S EDIT OF THE COMPANY LANDS IN THE MISSION, on the page
 // that writes it, with the engine's words in the field and the focus in it.
-// Mutation: send the company's Edit to `edit=charter` (the address the builder
+// Mutation: send the toolbar's Edit principles to `edit=charter` (the address the builder
 // used to read) and the page opens nothing.
-test("the company's Edit principles opens Company › Principles with the mission in edit", async () => {
+test("the toolbar's Edit principles opens Company › Principles with the mission in edit", async () => {
   mount(["admin", "tracker", "knowledge"]);
-  fireEvent.click(await screen.findByRole("button", { name: "Edit principles" }));
+  await openFromToolbar("Edit principles");
   const mission = await within(await screen.findByRole("region", { name: "Mission" })).findByRole(
     "textbox",
     { name: "Mission" },
@@ -120,7 +132,7 @@ test("the company's Edit principles opens Company › Principles with the missio
 // nothing opens, and the guarded route is never asked.
 test("a reader who may not write them opens Company › Principles to read", async () => {
   mount(["tracker", "knowledge"]);
-  fireEvent.click(await screen.findByRole("button", { name: "Open principles" }));
+  await openFromToolbar("Open principles");
   const region = await screen.findByRole("region", { name: "Mission" });
   expect(within(region).getByText(CHARTER.mission)).toBeDefined();
   expect(location.hash).toBe("#/company/principles");

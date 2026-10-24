@@ -36,7 +36,6 @@ import { TableView } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
 import type { CompanyEdit } from "./BuilderContext.tsx";
-import { COMPANY_KEY } from "./model/keys.ts";
 import { render } from "@testing-library/react";
 
 afterEach(() => {
@@ -351,36 +350,37 @@ describe("acting on a row", () => {
   });
 
   /*
-   * THE COMPANY'S EDIT IS ITS PRINCIPLES, named for them, and its name is the
-   * one entry its menu holds: Company › Principles writes the mission, the
-   * vision and the policies, so the row's pencil goes there and Rename
-   * company is how the builder's own company field is reached.
+   * THE COMPANY'S ROW CARRIES NO EDIT. Its principles are written on Company ›
+   * Principles, a page the toolbar offers, so the row draws its Add and a menu
+   * of Rename company alone, and Enter on it opens nothing. Mutation: draw the
+   * pencil on every row again and the company's strip carries one.
    */
-  test("the company's row draws its Add and Edit principles, and a menu of Rename company alone", () => {
+  test("the company's row draws its Add and a menu of Rename company alone", () => {
     const { spies } = mount();
-    expect(strip("Acme")).toEqual(["Add to Acme", "Edit principles", "Actions for Acme"]);
+    expect(strip("Acme")).toEqual(["Add to Acme", "Actions for Acme"]);
     expect(within(row("Acme")).queryByRole("button", { name: /^Delete/ })).toBeNull();
-    fireEvent.click(within(row("Acme")).getByRole("button", { name: "Edit principles" }));
-    expect(spies.openEditor).toHaveBeenCalledWith(COMPANY_KEY);
     expect(actions("Acme")).toEqual([["Rename company", false]]);
     fireEvent.click(screen.getByRole("menuitem", { name: /Rename company/ }));
     expect(spies.openCompanyRename).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(row("Acme"), { key: "Enter" });
+    expect(spies.openEditor).not.toHaveBeenCalled();
+    expect(spies.openPrinciples).not.toHaveBeenCalled();
   });
 
-  test("a reader who may not write the principles is offered to open them", () => {
+  test("a reader who may not write the principles is offered no way to them on the row", () => {
     mount({ principles: "read" });
-    expect(strip("Acme")).toContain("Open principles");
+    expect(strip("Acme")).toEqual(["Add to Acme", "Actions for Acme"]);
+    expect(actions("Acme")).toEqual([["Rename company", false]]);
   });
 
   /*
-   * AND A ROW WHOSE MENU WOULD BE EMPTY DRAWS NONE. A company this draft is
-   * still creating has no Principles page yet, so its Edit is the name form
-   * and everything it can take is a button on its own row.
+   * A COMPANY STILL BEING CREATED is named the same way: no Principles page
+   * exists yet, and its row has no Edit either, only Rename company.
    */
-  test("a company still being created draws the controls and no menu at all", () => {
+  test("a company still being created is renamed from its menu, with no Edit", () => {
     mount({ principles: null });
-    expect(strip("Acme")).toEqual(["Add to Acme", "Edit Acme"]);
-    expect(menuTrigger("Acme")).toBeNull();
+    expect(strip("Acme")).toEqual(["Add to Acme", "Actions for Acme"]);
+    expect(actions("Acme")).toEqual([["Rename company", false]]);
   });
 
   /*

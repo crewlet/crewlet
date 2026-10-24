@@ -529,11 +529,14 @@ describe("keys", () => {
     press("Backspace");
     expect(spies.openDelete.mock.calls).toEqual([[seatKey("dev")], [seatKey("dev")]]);
 
+    // THE COMPANY HAS NO EDIT (`nodeActions.editsInPlace`): Enter on it opens
+    // nothing, neither an editor nor its principles, which are the toolbar's.
     item("Acme").focus();
     press("Delete");
     expect(spies.openDelete).toHaveBeenCalledTimes(2);
     press("Enter");
-    expect(spies.openEditor).toHaveBeenLastCalledWith(COMPANY_KEY);
+    expect(spies.openEditor).toHaveBeenCalledTimes(1);
+    expect(spies.openPrinciples).not.toHaveBeenCalled();
 
     // A chord is the Builder's (Undo), never the node's, and Shift turns
     // neither Enter nor Delete into the node's action.
@@ -542,7 +545,19 @@ describe("keys", () => {
     press("Delete", { shiftKey: true });
     expect(spies.openDelete).toHaveBeenCalledTimes(2);
     press("Enter", { shiftKey: true });
-    expect(spies.openEditor).toHaveBeenCalledTimes(2);
+    expect(spies.openEditor).toHaveBeenCalledTimes(1);
+  });
+
+  // A DOUBLE-CLICK IS ENTER'S POINTER TWIN: it opens a seat's editor and does
+  // nothing on the company, whose principles are written on a page of their
+  // own. Mutation: let the company's activation through and it opens one.
+  test("a double-click edits a seat and does nothing on the company", () => {
+    const { spies } = mount();
+    fireEvent.doubleClick(item("Dev"));
+    expect(spies.openEditor).toHaveBeenLastCalledWith(seatKey("dev"));
+    fireEvent.doubleClick(item("Acme"));
+    expect(spies.openEditor).toHaveBeenCalledTimes(1);
+    expect(spies.openPrinciples).not.toHaveBeenCalled();
   });
 
   test("read-only, a node can still be opened but never deleted", () => {
@@ -688,14 +703,10 @@ describe("what a node offers a pointer", () => {
   });
 
   /* The company cannot be deleted, so it is not offered and does not refuse. */
-  test("the company has no Delete, and a read-only draft has none at all", () => {
+  test("the company has no Delete and no Edit, and a read-only draft has no Delete at all", () => {
     mount();
-    expect(controls("Acme")).toEqual([
-      "Collapse Acme",
-      "Edit principles",
-      "Actions for Acme",
-      "Add to Acme",
-    ]);
+    // Nor an Edit: the company's principles are the toolbar's alone.
+    expect(controls("Acme")).toEqual(["Collapse Acme", "Actions for Acme", "Add to Acme"]);
     cleanup();
     mount(undefined, { readOnly: true });
     expect(controls("Engineering")).toEqual([

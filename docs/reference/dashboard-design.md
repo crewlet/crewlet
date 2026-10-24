@@ -1160,7 +1160,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
-| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's Edit opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
+| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
@@ -8856,15 +8856,19 @@ while the screen binds the real chart, table, editor and dialogs, and
   may contain no tab stops of its own, and they are the card's and the row's
   own list (`nodeActions.nodeMenu`) rather than a copy: the same entries,
   order, names and icons, Edit reports included. Open seat is offered only for
-  a seat the saved company has. **The company's Edit is Company › Principles**
-  (`BuilderApi.principles`): its mission, vision and standing policies are
-  written there alone, so once the company exists its Edit (the pencil, Enter,
-  the menu) navigates there, in edit (`?edit=mission`) for a reader
-  `useConfigWriteAccess` admits and named **Edit principles**, or plainly and
-  named **Open principles** for one it does not; the name, the one company
-  field the model writes (`model/document.ts`'s `COMPANY_FIELDS`), is the
-  menu's **Rename company**. A company the draft is still creating has no
-  such page, so there its Edit is the name form. The model refuses a change to
+  a seat the saved company has. **The company's node has no Edit**
+  (`nodeActions.editsInPlace`): no pencil on its card or row, and Enter and a
+  double-click on it do nothing, because its mission, vision and standing
+  policies are written on Company › Principles alone and a pencil on the root
+  of the chart that left for another page read as editing the node. Once the
+  company exists, the toolbar's menu for the selected company offers that page
+  (`BuilderApi.principles`, `openPrinciples`), in edit (`?edit=mission`) for a
+  reader the page's own gate admits (`useMayWriteCharter`) and named **Edit principles**, or
+  plainly and named **Open principles** for one it does not; the card's and the
+  row's menus leave it out. The name, the one company field the model writes
+  (`model/document.ts`'s `COMPANY_FIELDS`), is **Rename company** on every
+  surface's menu, and a company the draft is still creating is named the same
+  way. The model refuses a change to
   the principles at its recording door, a kept log holding one is unreadable,
   `buildPatch` never names them, and an engine problem about one is listed at
   document level with **Open Principles**. A node's key is its IDENTITY (a seat's

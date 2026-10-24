@@ -44,6 +44,7 @@ import { builderReducer, type BuilderAction, type BuilderState } from "./model/r
 export interface BuilderSpies {
   openEditor: ReturnType<typeof vi.fn<BuilderApi["openEditor"]>>;
   openCompanyRename: ReturnType<typeof vi.fn<() => void>>;
+  openPrinciples: ReturnType<typeof vi.fn<() => void>>;
   openAdd: ReturnType<typeof vi.fn<BuilderApi["openAdd"]>>;
   openMove: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
   openDelete: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
@@ -55,6 +56,7 @@ export function builderSpies(): BuilderSpies {
   return {
     openEditor: vi.fn(),
     openCompanyRename: vi.fn(),
+    openPrinciples: vi.fn(),
     openAdd: vi.fn(),
     openMove: vi.fn(),
     openDelete: vi.fn(),
@@ -92,7 +94,7 @@ export function BuilderHarness({
   spies: BuilderSpies;
   probe: HarnessProbe;
   readOnly?: boolean;
-  /** What the company node's Edit opens (`BuilderApi.principles`): a saved company's page to write, by default. */
+  /** How the toolbar offers the principles (`BuilderApi.principles`): a saved company's page to write, by default. */
   principles?: CompanyEdit;
   identities?: ReadonlySet<string>;
   agents?: AgentRow[];
@@ -161,6 +163,7 @@ export function BuilderHarness({
       selection: { key: selected, select: setSelected },
       openEditor: spies.openEditor,
       openCompanyRename: spies.openCompanyRename,
+      openPrinciples: spies.openPrinciples,
       principles,
       openAdd: spies.openAdd,
       openMove: spies.openMove,

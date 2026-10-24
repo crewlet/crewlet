@@ -48,8 +48,8 @@ import type { NodeView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
 import {
   addSections,
-  editGlyph,
   editLabel,
+  editsInPlace,
   isDeletable,
   leadLabel,
   rowMenu,
@@ -68,7 +68,7 @@ import { NodeGlyph, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes
 import { addLabel } from "./AddNodeDialog.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { TrashGlyph, EllipsisVerticalGlyph } from "@crewlethq/icons/glyphs";
+import { TrashGlyph, EllipsisVerticalGlyph, PencilGlyph } from "@crewlethq/icons/glyphs";
 import {
   EmptyValue,
   IconButton,
@@ -265,6 +265,8 @@ export function TableView() {
       const node = structure.nodes.get(id as NodeKey);
       if (!node) return false;
       if (action === "activate") {
+        // The company has no edit ([editsInPlace]), so Enter on its row does nothing.
+        if (!editsInPlace(node)) return false;
         api.openEditor(node.key);
         return true;
       }
@@ -368,12 +370,14 @@ function RowControls({
         />
       )}
       <OrgTableActions>
-        <IconButton
-          size="sm"
-          label={editLabel(api, view, name)}
-          icon={editGlyph(api, view)}
-          onClick={() => api.openEditor(view.key)}
-        />
+        {editsInPlace(view) && (
+          <IconButton
+            size="sm"
+            label={editLabel(name)}
+            icon={<PencilGlyph />}
+            onClick={() => api.openEditor(view.key)}
+          />
+        )}
         {isDeletable(view) && (
           <IconButton
             size="sm"

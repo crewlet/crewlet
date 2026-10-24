@@ -108,11 +108,12 @@ export interface BuilderDerived {
 export type EditorSectionName = "reports" | "leadership" | "project";
 
 /**
- * What the company node's Edit opens. Its mission, vision and standing
- * policies are written on Company › Principles alone, so once the company
- * exists its Edit goes there: in edit for a reader who may write them
- * (`write`), plainly for one who may not (`read`). A company this draft is
- * still creating has no such page yet, and its Edit is the name form (`null`).
+ * How the toolbar offers the company's principles. Its mission, vision and
+ * standing policies are written on Company › Principles alone, so once the
+ * company exists the toolbar's entry goes there: in edit for a reader who may
+ * write them (`write`), plainly for one who may not (`read`). A company this
+ * draft is still creating has no such page yet, and no entry (`null`). The
+ * company's node carries no edit of its own (`nodeActions.editsInPlace`).
  */
 export type CompanyEdit = "write" | "read" | null;
 
@@ -148,17 +149,18 @@ export interface BuilderApi {
   documentProblems: ConfigProblem[];
   /** The selected node, mirrored in the URL's `unit=` and `seat=` filters. */
   selection: { key: NodeKey | null; select(key: NodeKey | null): void };
-  /**
-   * Opens the node's editor, at `section` when one is named. The company's is
-   * Company › Principles once the company exists ([BuilderApi.principles]),
-   * and the name form while this draft is creating it.
-   */
+  /** Opens a unit's or a seat's editor, at `section` when one is named. */
   openEditor(key: NodeKey, section?: EditorSectionName): void;
   /** Opens the form that renames the company, the one company field the builder writes. */
   openCompanyRename(): void;
   /**
-   * What the company node's Edit opens: Company › Principles in edit
-   * (`write`), the same page to read (`read`), or the name form (`null`).
+   * Leaves the builder for Company › Principles, in edit for a reader who may
+   * write them ([BuilderApi.principles]). The draft is kept for the return.
+   */
+  openPrinciples(): void;
+  /**
+   * How the toolbar offers the company's principles: Company › Principles in
+   * edit (`write`), the same page to read (`read`), or nothing (`null`).
    */
   principles: CompanyEdit;
   /** `parent` is a unit's key, or `null` for the company root. */

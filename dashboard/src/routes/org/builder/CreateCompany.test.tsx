@@ -123,15 +123,15 @@ test("the create form carries no builder toolbar until a template is recorded", 
   expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
 });
 
-// A COMPANY STILL BEING CREATED HAS NO PRINCIPLES PAGE: its Edit is the name
-// form, in place, rather than a trip to a page that has nothing to show.
-test("the company a draft is creating is edited in the builder, by its name", async () => {
+// A COMPANY STILL BEING CREATED HAS NO PRINCIPLES PAGE: it is renamed in the
+// builder, in place, rather than sent to a page that has nothing to show.
+test("the company a draft is creating is renamed in the builder", async () => {
   const engine = new Engine(null);
   mountBuilder({ engine });
   await startCompany({});
   await screen.findByText("No problems");
   const before = location.hash;
-  fireEvent.click(screen.getByRole("button", { name: "Edit the company" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open the company's name form" }));
   const dialog = await screen.findByRole("dialog", { name: /Nimbus/ });
   expect(within(dialog).getByLabelText(/^Company name/)).toBeDefined();
   expect(location.hash).toBe(before);
