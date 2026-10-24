@@ -536,9 +536,10 @@ func (p *Provider) completion(
 	if res.droppedStdout > 0 {
 		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
 			"the CLI wrote more than %d bytes to stdout and %d were dropped, so "+
-				"the answer is incomplete — raise cli.max_output_bytes for this "+
-				"provider, or point it at a model that streams less",
-			maxOutput, res.droppedStdout))
+				"the answer is incomplete. No completion comes near that size, so "+
+				"the CLI printed something besides one: run `crewlet llm doctor %s` "+
+				"to see what, or point this provider at a model that streams less",
+			maxOutput, res.droppedStdout, p.key))
 	}
 
 	out := extract(p.profile, res.stdout)
