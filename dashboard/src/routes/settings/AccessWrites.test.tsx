@@ -367,11 +367,13 @@ test("a reader without Admin sees no write control, and an administrator sees th
   mount(ADMIN);
   await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
-  await screen.findAllByRole("button", { name: "Invite person" });
+  // EACH WAITED FOR: the list's controls and the opened person's (their
+  // credentials' Revoke) are drawn on separate commits, as the reader's
+  // half above waits for the credentials before it looks.
   for (const name of ["Invite person", "Cancel", "Revoke"]) {
-    expect(screen.getAllByRole("button", { name: new RegExp(`^${name}`) }).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      (await screen.findAllByRole("button", { name: new RegExp(`^${name}`) })).length,
+    ).toBeGreaterThan(0);
   }
   expect(screen.getByRole("button", { name: /^More for / })).toBeTruthy();
   // A SEAT'S OWN GESTURES stay on the seat: this page invites through a picker.
@@ -399,8 +401,9 @@ test("invite person picks an open seat, then invites onto it", async () => {
   mount(ADMIN);
   fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
   const picker = await screen.findByRole("dialog", { name: "Invite person" });
-  await settle();
-  pick(within(picker).getByLabelText(/^Seat/), /Lee Ops/);
+  // THE SEAT FIELD IS DRAWN ONCE THE OPEN SEATS HAVE ANSWERED, which a fixed
+  // number of ticks only sometimes outwaits.
+  pick(await within(picker).findByLabelText(/^Seat/), /Lee Ops/);
   fireEvent.click(within(picker).getByRole("button", { name: "Continue" }));
   const invite = await screen.findByRole("dialog", { name: "Invite someone as Lee Ops" });
   fireEvent.change(within(invite).getByLabelText("Email address"), {

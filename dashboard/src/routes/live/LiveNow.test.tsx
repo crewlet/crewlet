@@ -435,6 +435,11 @@ test("Load older asks phases again with the cursor the page carried", async () =
   });
   const card = await phasesCard(asked);
   const more = await within(card).findByRole("button", { name: `Load ${PHASE_PAGE} older` });
+  // PRESSED ONCE IT CAN BE: the button is drawn, disabled, before the first
+  // page has answered with the cursor it continues from, and a press then
+  // asks nothing — which a loaded runner reached, and waited out its bound
+  // for an older page nobody had asked for.
+  await waitFor(() => expect(more.getAttribute("aria-disabled")).not.toBe("true"));
   act(() => more.click());
   await within(card).findByText("Start of the record.");
   const pages = asked.filter((q) => q.kind === "phases");
