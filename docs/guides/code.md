@@ -104,39 +104,43 @@ repository whatever it says ([Visibility](../concepts/code-host.md#visibility)).
 
 ## Give each person a token
 
-A person pushes with their own Tier A API token, and the engine knows whose it
-is from the org chart. Add the token to every node's Tier A:
+A person pushes with a token that acts as them — as the human seat they hold,
+which every person does from the moment they join
+([Humans in the Org Chart](../concepts/humans-in-the-org.md)) — so there is
+nothing to bind. Their own **machine token** is that token: they mint it
+themselves, signed in as themselves, either from the dashboard's Account page
+(`#/account`, **Personal access tokens › New token**) or from a terminal:
 
-```yaml
-# crewlet.yaml (Tier A, on every node)
-api:
-  auth:
-    tokens:
-      - id: sarah
-        token: ${SARAH_API_TOKEN}
+```sh
+crewlet iam token -login
 ```
 
-and bind it to the person's human seat in the company document:
+which asks for their login, their password and, where they hold one, their
+second factor, and prints the token once
+([`crewlet iam`](../reference/cli.md#crewlet-iam)). Revoking it ends it, and
+removing its owner ends every token they minted.
 
-```yaml
-roles:
-  - name: Sarah Chen
-    handle: sarah-chen
-    kind: human
-    contact:
-      crewlet_operator_id: sarah
+A **Tier A token** pushes too when the identity directory binds it to a human
+seat: it acts under the login `token:<id>`, and
+
+```sh
+crewlet iam create -kind machine -login token:<id> -seat <handle> -grants none
 ```
 
-That binding is the same one the dashboard's writes and an assistant's
-operator tools go by ([Humans in the Org
-Chart](../concepts/humans-in-the-org.md)). With it, Sarah's pushes are hers:
-each is recorded as one `operator_acted` event with transport `git`, naming
-the token, her seat, the repository and what became of the push, and the
-repository's push history (below) shows her as `actor_seat`.
+binds it in one record — on a human seat nobody holds, since a person's seat
+is theirs alone, so its pushes are that seat's rather than any person's
+([Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)).
 
-**A token bound to nobody fetches only**, and so does every caller when
-`api.auth.disabled` is set — such a caller is nobody, so a push with it is
-refused at its first request, before anything is sent:
+Either way it is the same principal the dashboard's writes and an assistant's
+operator tools act as, so a person's pushes are theirs: each is recorded as one
+`operator_acted` event with transport `git`, naming the seat, its kind and the
+credential the push came through (`pat:<credential id>` for a machine token,
+`token:<id>` for a Tier A token), the repository and what became of the push,
+and the repository's push history (below) shows the seat as `actor_seat`.
+
+**A credential bound to no seat fetches only** — a Tier A token or a service
+account the directory binds to none. It acts as no person, so a push with it
+is refused at its first request, before anything is sent:
 `fatal: remote error: this token is not bound to a person: …`. A pipeline that
 only clones needs no seat.
 
@@ -231,7 +235,7 @@ status and the node's log keeps the reason. The ones a person meets most:
 | git prints | What to do |
 |---|---|
 | `repository "<name>" not found` | Check the name in `code.repos`. |
-| `this token is not bound to a person` | Push with your own token — the one your seat's `contact.crewlet_operator_id` names. |
+| `this token is not bound to a person` | Push with a token that acts as your seat — your own machine token (`crewlet iam token -login`, or the dashboard's Account page). |
 | `(stale: refs/heads/main is at <id>; fetch first)` | Fetch, integrate, push again. |
 | `(protected_force: …)`, `(protected_delete: …)`, `(protected_direct: …)` | The rule named says what it allows; a change to it is a change to `code.repos`. |
 | `(ref_conflict: refs/heads/feature is in the way: …)` | A branch and a directory of branches never share a name (`feature` beside `feature/x`). Delete the one in the way in the same push — `git push origin :feature HEAD:feature/x` — or choose another name; a clone holding the old one fetches with `git fetch --prune`. |
@@ -261,7 +265,7 @@ own credentials — your credential helper, your SSH key, your proxy — and pus
 it to the code host as you, so the engine reaches no other host and the
 repository's push history names you for every step. Where the source asks for a
 password none of your helpers holds, or ssh for a host key or a passphrase,
-your git asks you on the terminal, as it would for a clone of your own. Your token must be bound to
+your git asks you on the terminal, as it would for a clone of your own. Your token must act as
 your seat ([Give each person a token](#give-each-person-a-token)): a token bound
 to nobody fetches only, and the import says so before it downloads anything.
 The source is cloned into the system's temporary directory, so point `TMPDIR`

@@ -29,9 +29,9 @@ Without `admin`, the lead of a unit edits the units they lead instead
 
 The credential is a person signed in holding `admin`, or an API token that
 carries it, exchanged for a session on the dashboard's sign-in screen.
-There is no posture in which it is not needed — `api.auth.disabled` is
-retired, and `crewlet run -dev-principal` is a flag on a node reached over
-loopback rather than a configuration a browser can meet. What the builder
+There is no posture in which it is not needed — no setting turns
+authentication off, and `crewlet run -dev-principal` is a flag on a node
+reached over loopback rather than a configuration a browser can meet. What the builder
 shows is decided from what the engine answers, never from whether somebody is
 signed in:
 
