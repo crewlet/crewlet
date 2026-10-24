@@ -115,11 +115,11 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
       <Callout
         variant="neutral"
         icon={by ? <VendorMark vendor="atlassian" size="md" /> : undefined}
-        title={by ? `${by.name} does this for your company` : "Your company runs none"}
+        title={by ? `${by.name} does this for your company` : "Nothing does this for your company"}
       >
         {by
-          ? `Your agents work in ${by.name} through the Atlassian integration, so ${service.name} stays off. Running both would leave two places for the same ${what}.`
-          : `The company document turns ${service.name} off and names nothing in its place.`}
+          ? `Your agents work in ${by.name} through the Atlassian integration, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
+          : `The company document leaves ${service.name} out and names nothing in its place.`}
       </Callout>
       <section aria-label={`What ${service.name} would give you`}>
         <h3 className="t-label">Running it here would give you</h3>

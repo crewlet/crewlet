@@ -13,7 +13,7 @@ import { useNow } from "~/lib/clock.ts";
 import { asSentence, plural } from "~/lib/format.ts";
 import { SetupForm } from "../SetupForm.tsx";
 import { SetupPasses, SurfaceDeliveries, integrationFacts } from "./catalogue.tsx";
-import { toolFacts, type Intent, type Model, type Tool } from "./model.ts";
+import { workingLine, type Intent, type Model, type Tool } from "./model.ts";
 import {
   AgentList,
   BeforeYouStart,
@@ -190,7 +190,7 @@ export function AppPane({
               ))}
             </div>
           ) : (
-            <StatusDot tone="success">Working. {toolFacts(tool)}</StatusDot>
+            <StatusDot tone="success">{workingLine(tool)}</StatusDot>
           )}
           {/* ADVISORIES ARE SAID, never raised: the tool works, and what the
               loop noticed (an access wider than asked) is worth reading once. */}

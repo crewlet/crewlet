@@ -403,7 +403,7 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 
 test("a service the company runs none of says so, with no product to open", async () => {
   mount(ADMIN, "knowledge", { tracker: "native", knowledge: "none" });
-  expect(await screen.findByText("Your company runs none")).toBeTruthy();
+  expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Open Confluence/ })).toBeNull();
 });
 

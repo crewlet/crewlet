@@ -571,7 +571,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     label: "Integrations",
     icon: "plug",
     path: ["company", "integrations"],
-    hint: "Crewlet's own services, and the apps the company connects",
+    hint: "Crewlet's own services and the apps the company connects",
     keywords: ["integrations", "connect", "apps", "crewlet works", "crewlet knowledge"],
     chord: "n",
     place: "company",
