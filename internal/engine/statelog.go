@@ -1721,6 +1721,11 @@ type publishedFloors struct {
 	at time.Time
 }
 
+// errNoFloorStore is the cause every domain's floor read carries on a node
+// handed no coordination store ([readFloorsOf]).
+var errNoFloorStore = errors.New("this node has no coordination store to read a " +
+	"published floor from")
+
 // domainFloor is what one domain's key answered: its row, no row (the trim
 // has never written one for the domain), or why it could not be read.
 type domainFloor struct {
@@ -1746,7 +1751,23 @@ func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
 // DOMAIN and all of them at once — the one read every caller's
 // [publishedFloors] comes from, whichever handle on the fleet it holds. Each
 // domain's answer is its own: one that fails leaves every other domain read.
+//
+// NO FLEET IS EVERY DOMAIN UNREAD, never a crash and never a floor of zero. A
+// node handed no coordination store holds no published floor to read, which
+// is not the same fact as a trim that has never run: answered as "no row",
+// every read would be served against a floor nobody published. Each domain
+// carries the error instead, so every caller's own unread arm answers — a
+// readiness reading over no logs needs no floor at all, and one over logs
+// refuses as a broker it cannot reach.
 func readFloorsOf(ctx context.Context, fleet coord.Fleet, domains []string) publishedFloors {
+	if fleet == nil {
+		out := publishedFloors{domains: make(map[string]domainFloor, len(domains)), at: time.Now()}
+		for _, domain := range domains {
+			out.domains[domain] = domainFloor{err: fmt.Errorf("engine: read %s's published "+
+				"trim floor: %w", domain, errNoFloorStore)}
+		}
+		return out
+	}
 	got := make([]domainFloor, len(domains))
 	var wg sync.WaitGroup
 	for i, domain := range domains {
