@@ -60,9 +60,11 @@
 // only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
 // public listener. Which requests under /git/ are fetches and which pushes is
 // [GitAccess]'s answer and nobody else's; on a git route, and on no other, the
-// token may arrive as a Basic credential's password ([Guard.Credential]); and a
-// git route's refusal is the challenge git answers with its credential helper,
-// written in the one form git prints ([GitText], [GitChallenge]).
+// token may arrive as a Basic credential's password ([Guard.Credential]); and
+// every refusal the guard writes on a git route is in the one form git prints
+// ([GitText]): the 401 is the challenge git answers with its credential helper
+// ([GitChallenge]), and a resolved credential's 403 and a node's identity 503
+// are the same sentences the API's envelope carries, in one line.
 //
 // # And two gates beside it
 //
@@ -666,6 +668,15 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			log.Info("api_auth_refused_resolved",
 				"route", path, "code", refusal.Code,
 				"detail", refusal.Detail, "remote", g.Client(r))
+			if GitAccess(r) != GitNone {
+				// A GIT CLIENT PRINTS ONLY TEXT: the JSON envelope
+				// reaches a person at a terminal as a bare "returned
+				// error: 403", which says neither that their seat is
+				// gone nor what to do. The detail is the one sentence
+				// the refusal carries, and it is one line.
+				GitText(w, refusal.Status, refusal.Detail)
+				return
+			}
 			httpjson.FailWith(w, refusal.Status, refusal.Code,
 				map[string]string{"detail": refusal.Detail})
 			return
@@ -681,6 +692,13 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			//nolint:contextcheck // r is the resolved request; see Resolve above
 			log.Log(r.Context(), UnreadLevel(r.Context()), "api_auth_unavailable",
 				"route", path, "remote", g.Client(r))
+			if GitAccess(r) != GitNone {
+				// In git's form, and still saying when to come back:
+				// git does not retry on its own, so the sentence is
+				// what tells a person a retry will do.
+				gitIdentityUnavailable(w)
+				return
+			}
 			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
 				RetryIdentitySeconds)
 			return

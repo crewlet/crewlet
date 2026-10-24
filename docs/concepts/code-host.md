@@ -1334,6 +1334,9 @@ words, since git does not read the header.
 | What happened | What git prints | What to do |
 |---|---|---|
 | No credential, or a wrong one | git asks for one (a 401 challenge) | Give your token as the password. |
+| Your token acts as a seat the org chart no longer holds as a human seat | `seat "<handle>" isn't in the org chart anymore`, or `seat "<handle>" is a "agent" seat now, and only a "human" seat can be held` (403) | Ask an admin to move you to a human seat; signing in again changes nothing. |
+| A session that may only enrol a second factor (where `api.auth.totp` is `required`) | `This company requires two-step verification. Set it up (POST /auth/totp) before you do anything else.` (403) | Enrol an authenticator in the dashboard, then push or fetch with your own token. |
+| The node cannot tell who your token is — it cannot read its identity estate or the org chart, or is behind on identity changes | `this node cannot tell who this credential is right now: retry in 2 s, or against another node` (503) | Retry, or against another node. |
 | The company hosts no code | `this company does not host code (code.native is not set)` (404) | Turn the code host on ([`code.native`](../guides/code.md#turn-it-on)). |
 | The node is applying the configuration the fleet activated | `this node is applying the configuration the fleet activated and answers once that apply ends: retry in 5 seconds, or against another node (applying)` (503) | Retry. |
 | The node could not apply the configuration the fleet activated | `this node could not apply the configuration the fleet activated, which hosts code (config_apply_failed: GET /fleet and this node's log say why): …`, or `this node could not read the configuration the fleet activated, so it cannot say whether this company hosts code (config_apply_failed: …): ask another node …` (503) | Ask another node. An operator reads why in `GET /fleet` and the node's log, and activates a corrected configuration. |

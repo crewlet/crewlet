@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -155,8 +156,10 @@ func advertises(r *http.Request, tail string) bool {
 // git's remote-curl shows an HTTP refusal's body only when it is text/plain
 // (show_http_message), each line prefixed `remote: `; the API's JSON, which
 // every other client reads, prints nothing at all to a person at a terminal.
-// So the guard's 401, the drain gate's 503 and every refusal the code host
-// makes before git runs are written here, and in no other form.
+// So every refusal the guard writes on a git route — its 401 challenge, a
+// resolved credential's 403 ([Refusal]) and its identity 503 — the drain
+// gate's 503 and every refusal the code host makes before git runs are
+// written here, and in no other form.
 //
 // The response is never sniffed into anything else, and never cached in front
 // of the node: a refusal is about this moment — a drain, a credential — and a
@@ -205,6 +208,24 @@ func GitChallenge(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", gitRealm)
 	GitText(w, http.StatusUnauthorized, gitAuthSentence)
 }
+
+// gitIdentityUnavailable is the guard's 503 on a git route: this node could not
+// tell who the credential is, which waiting clears — the same answer
+// `503 identity_unavailable` is everywhere else, with the same
+// [RetryIdentitySeconds] in its Retry-After.
+//
+// THE SENTENCE SAYS THE RETRY, because git reads no Retry-After: it prints the
+// body and stops, so a person at a terminal learns that a retry will do only
+// from the words, and the header is for the proxy or the CI wrapper that does
+// read one.
+func gitIdentityUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", strconv.Itoa(RetryIdentitySeconds))
+	GitText(w, http.StatusServiceUnavailable, gitIdentitySentence)
+}
+
+// gitIdentitySentence is what git prints beside [gitIdentityUnavailable]'s 503.
+var gitIdentitySentence = "this node cannot tell who this credential is right now: retry in " +
+	strconv.Itoa(RetryIdentitySeconds) + " s, or against another node"
 
 // gitRealm is the challenge: Basic, the realm git shows when it prompts, and
 // UTF-8 as the encoding a credential is sent in (RFC 7617).

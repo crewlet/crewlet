@@ -5,14 +5,18 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -371,4 +375,128 @@ func TestGitTextRefusesASentenceOfTwoLines(t *testing.T) {
 		}
 	}()
 	auth.GitText(httptest.NewRecorder(), http.StatusServiceUnavailable, "this node is draining\nretry in 30 s\n")
+}
+
+// EVERY REFUSAL ON A GIT ROUTE IS ONE GIT PRINTS — not the 401 alone.
+//
+// The guard writes two more answers about somebody it has RESOLVED: a
+// credential whose seat the chart will not let it act as (403
+// seat_unavailable) and a session that may only enrol a second factor (403
+// second_factor_enrolment_required), and one about a node that cannot tell
+// (503 identity_unavailable). Each was the API's JSON on every route, and git
+// prints nothing of a JSON body: a person whose seat was retired, or who
+// pushed to a node behind on identity, saw a bare `The requested URL returned
+// error: 403` with nothing saying why or whether to retry. So on a git route
+// each is text/plain in one line, the 503 keeping its Retry-After — and the
+// control is the same refusal on an API route, which stays the envelope.
+// Mutation: answer either arm with httpjson on a git route and its row fails.
+func TestEveryRefusalOnAGitRouteIsOneGitPrints(t *testing.T) {
+	t.Parallel()
+	const gitPath = "/git/r.git/info/refs?service=git-upload-pack"
+	// The token as each route takes it: git's Basic password on a git route,
+	// and a bearer everywhere else, where Basic is no credential at all.
+	asOpsWith := func(g *auth.Guard, path string) *http.Response {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if strings.HasPrefix(path, auth.GitPrefix) {
+			req.Header.Set("Authorization", basic("crewlet", opsToken))
+		} else {
+			req.Header.Set("Authorization", "Bearer "+opsToken)
+		}
+		rec := httptest.NewRecorder()
+		g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rec, req)
+		return rec.Result()
+	}
+	enrolling := func(path string) *http.Response {
+		s := newSignedIn(t)
+		s.dir.identity.Session.EnrolmentOnly = true
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		s.withCookie(req)
+		rec := httptest.NewRecorder()
+		s.guard().Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rec, req)
+		return rec.Result()
+	}
+	for _, tc := range []struct {
+		name       string
+		answer     func(path string) *http.Response
+		status     int
+		code       httpjson.Code
+		says       string
+		retryAfter string
+	}{
+		{
+			name: "a token bound to a seat the chart removed",
+			answer: func(path string) *http.Response {
+				dir, chart := boundOps()
+				delete(chart.seats, sessionSeat)
+				return asOpsWith(tokenGuard(t, auth.SeatBindings{Directory: dir, Chart: chart}), path)
+			},
+			status: http.StatusForbidden, code: httpjson.CodeSeatUnavailable, says: sessionSeat,
+		},
+		{
+			name:   "a session that may only enrol a second factor",
+			answer: enrolling,
+			status: http.StatusForbidden, code: httpjson.CodeSecondFactorEnrolmentRequired,
+			says: "two-step verification",
+		},
+		{
+			name: "a node that cannot read the binding",
+			answer: func(path string) *http.Response {
+				dir, chart := boundOps()
+				dir.err = errors.New("the replicated estate is not open")
+				return asOpsWith(tokenGuard(t, auth.SeatBindings{Directory: dir, Chart: chart}), path)
+			},
+			status: http.StatusServiceUnavailable, code: httpjson.CodeIdentityUnavailable,
+			says:       "cannot tell who",
+			retryAfter: strconv.Itoa(auth.RetryIdentitySeconds),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res := tc.answer(gitPath)
+			defer res.Body.Close()
+			if res.StatusCode != tc.status {
+				t.Fatalf("status %d, want %d", res.StatusCode, tc.status)
+			}
+			if got := res.Header.Get("Content-Type"); got != "text/plain; charset=utf-8" {
+				t.Errorf("answered %q on a git route: git prints a refusal's body only "+
+					"when it is text/plain", got)
+			}
+			if got := res.Header.Get("Retry-After"); got != tc.retryAfter {
+				t.Errorf("Retry-After %q, want %q", got, tc.retryAfter)
+			}
+			body, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			line := string(body)
+			if strings.Count(line, "\n") != 1 || !strings.HasSuffix(line, "\n") {
+				t.Errorf("body %q is not one line: git prints each line as a remote: "+
+					"line of its own", line)
+			}
+			if !strings.Contains(line, tc.says) {
+				t.Errorf("body %q does not say %q", line, tc.says)
+			}
+
+			// THE CONTROL: the same refusal on an API route is the
+			// envelope, so it is the route and nothing else that chose
+			// git's form.
+			api := tc.answer("/agents")
+			defer api.Body.Close()
+			var envelope map[string]any
+			if err := json.NewDecoder(api.Body).Decode(&envelope); err != nil {
+				t.Fatalf("the API route's refusal is not JSON: %v", err)
+			}
+			if api.StatusCode != tc.status || envelope["error"] != string(tc.code) {
+				t.Errorf("the API route answered %d %v, want %d %q", api.StatusCode,
+					envelope["error"], tc.status, tc.code)
+			}
+			if got := api.Header.Get("Retry-After"); got != tc.retryAfter {
+				t.Errorf("the API route's Retry-After %q, want %q", got, tc.retryAfter)
+			}
+		})
+	}
 }
