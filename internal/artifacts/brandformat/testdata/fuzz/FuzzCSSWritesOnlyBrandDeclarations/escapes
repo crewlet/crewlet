@@ -1,0 +1,8 @@
+go test fuzz v1
+string("\\72 ed")
+string("/* */")
+string("\ufeffAcme")
+string("\x00")
+string("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+float64(-1.0)
+int(900)
