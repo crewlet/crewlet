@@ -658,8 +658,9 @@ func (t *publishArtifact) Description() string {
 		"Prefer `edits` (exact old_str and new_str pairs) for a change to an existing " +
 		"page; `content` replaces the entry page whole; `files` adds, replaces or " +
 		"removes files; `source` publishes a build's whole output from your coding run; " +
-		"`restore_version` rolls back. Publishing reaches nobody by itself: send the " +
-		"`url` to whoever is waiting."
+		"`restore_version` rolls back. When your company has a brand, read " +
+		"get_company_brand before writing slides, logos or typefaces. Publishing reaches " +
+		"nobody by itself: send the `url` to whoever is waiting."
 }
 
 func (t *publishArtifact) Parameters() map[string]any {
