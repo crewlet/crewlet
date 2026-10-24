@@ -78,7 +78,8 @@ export const ARTIFACT_LIST_SORTS = ["updated", "created", "title", "opened"] as 
  * in the engine's order: what a history row and the company trail are worded
  * by. Not every op the log carries: a purge takes the history with it, and a
  * pin, an unpin and an opened mark are one person's browsing, so none of them
- * is ever a row; an asset's records are filed under the asset's own op.
+ * is ever a row; an asset's records are filed under the asset's own op. A
+ * move names the folders by id only, never by name.
  */
 export const ARTIFACT_HISTORY_OPS = [
   "create",
@@ -95,6 +96,7 @@ export const ARTIFACT_HISTORY_OPS = [
   "asset_remove",
   "link_work_item",
   "read_elevated",
+  "move",
 ] as const;
 
 /** The longest title, in UTF-8 bytes (`artifacts.MaxTitleBytes`): a tab title and a card line. */

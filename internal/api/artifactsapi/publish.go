@@ -276,6 +276,10 @@ type createBody struct {
 	// WorkItem is the tracker item the artifact is made for, which lists it
 	// there. It confers nothing.
 	WorkItem string `json:"work_item,omitempty"`
+
+	// Folder is the folder the artifact is created in, by id; absent is the
+	// top level. Filing into it asks contributor on it.
+	Folder string `json:"folder,omitempty"`
 }
 
 // publishedAnswer is a version a create or a publish landed.
@@ -352,10 +356,18 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	if !s.audiencesKnown(w, r, audiences...) {
 		return
 	}
+	if body.Folder != "" {
+		if _, err = s.gate.AdmitFolder(r.Context(), s.reads, p, authz.ActionArtifactFolderFile,
+			body.Folder); err != nil {
+			refuseFolderAdmission(w, r, authz.ActionArtifactFolderFile, err, false)
+			return
+		}
+	}
 	actor := iam.ActorFor(p)
 	out, report, err := pipe.Create(r.Context(), s.creatorCall(p, key, item), artifactupload.CreateRequest{
 		Kind: body.Kind, Title: body.Title, Description: body.Description, Icon: body.Icon,
 		Owner: actor.Name, OwnerKind: actor.Kind, SourceKey: body.SourceKey, Shares: shares,
+		Folder: body.Folder,
 		Upload: body.Upload, Files: body.Files, Entry: body.Entry, Label: body.Label,
 		Contract: body.Contract, Capabilities: body.Capabilities, Starter: body.Starter,
 		Doc: body.Doc, Deck: body.Deck, Layout: body.Layout,

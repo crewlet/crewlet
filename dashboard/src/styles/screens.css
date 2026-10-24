@@ -10407,6 +10407,108 @@ a.live-row:focus-visible {
   inset: 0;
 }
 
+/* THE FOLDERS' TILES (`FolderTile`): four across a laptop's page and three on
+   a narrower one, as the cards under them, and one column under the phone
+   breakpoint, where each tile takes the 44px row shape on its own. A count by
+   the page's width, for the reason the cards take one. */
+.artifacts-folders {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+@container page (width < 1000px) {
+  .artifacts-folders {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-3);
+  }
+}
+@container page (width < 640px) {
+  .artifacts-folders {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--spacing-2);
+  }
+}
+
+/* A ROW'S FOLDER in the list: its path in words, cut with the whole of it on
+   hover, in the tertiary step beside the edited time. */
+.artifacts-folder {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+}
+
+/* THE SELECTION BAR sits under the toolbar it replaces the use of. */
+.artifacts-selection {
+  margin-top: calc(-1 * var(--spacing-2));
+}
+/* UNDER THE PHONE BREAKPOINT THE BAR DOCKS to the window's foot (the kit's
+   `SelectionBar`, at the same 640px), over the content, so the content keeps
+   room under its last card for the bar and the gap around it: the last card
+   was otherwise under the bar, out of a thumb's reach. */
+@media (width < 640px) {
+  .app .crewlet-app-shell__content:has(.artifacts-selection) {
+    padding-bottom: calc(var(--size-control-lg) + var(--spacing-8));
+  }
+}
+
+/* A FOLDER DIALOG'S BODY: the field, the choice of who sees it, and the
+   sentence every folder gesture ends on, in the tertiary step. */
+.artifacts-folder-form,
+.artifacts-move {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+/* MOVE TO…'S LIST OPENS UNDER ITS FIELD, over the dialog's body rather than
+   in its flow (the kit's `Combobox`), so while it is open the body keeps room
+   for its six rows and sets its sentence at the foot of that room: without it
+   the open list ran under the dialog's foot and over the sentence. Closed, a
+   place chosen, the body is the field and the sentence. */
+.artifacts-move.is-listing {
+  justify-content: space-between;
+  min-height: calc(var(--size-control-md) + 14rem);
+}
+.artifacts-folder-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* ONE PLACE IN MOVE TO…'S LIST: its glyph, the folders above it quietly,
+   then its own name, on one line cut at the end. */
+.artifacts-move-place {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifacts-move-glyph {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.artifacts-move-words {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifacts-move-above {
+  color: var(--color-text-tertiary);
+}
+
+/* AN EMPTY FOLDER'S TWO WAYS ON, side by side. */
+.artifacts-empty-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-2);
+}
+
 /* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
    in a row, each a figure over a thin bar, under a hairline that says the
    gallery has ended. */
@@ -10850,6 +10952,14 @@ a.live-row:focus-visible {
 .artifact-facts dd {
   margin: 0;
   color: var(--color-text-primary);
+}
+/* THE FOLDER FACT: where it is kept, then Move… beside it on the same line
+   while there is room, under it where there is not. */
+.artifact-facts .artifact-folder-fact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
 }
 .artifact-list {
   display: flex;

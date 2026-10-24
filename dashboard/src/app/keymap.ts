@@ -48,6 +48,7 @@ export type KeyScope =
   | "object"
   | "peek"
   | "artifact"
+  | "gallery"
   | "canvas"
   | "draft"
   | "compose"
@@ -62,6 +63,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "peek", title: "With a peek open" },
   { scope: "object", title: "On a page with tabs" },
   { scope: "artifact", title: "On an open artifact" },
+  { scope: "gallery", title: "In the artifacts gallery and its folders" },
   { scope: "canvas", title: "On a chart" },
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply" },
@@ -274,6 +276,39 @@ const PAGE: KeyRow[] = [
     scope: "artifact",
     presses: [{ key: "s" }],
     does: "Share it",
+    by: "dashboard",
+  },
+  // THE GALLERY'S GESTURES on its listings and its folders
+  // (`routes/artifacts/listing.tsx`, `Folders.tsx`, `FolderPage.tsx`). Bare
+  // letters, because a window chord compares no Shift and no Alt: the
+  // shifted and Alt keys a desktop file manager uses would fire for the
+  // plain letter here.
+  {
+    id: "gallery.select",
+    scope: "gallery",
+    presses: [{ key: "x" }],
+    does: "Start picking artifacts, or stop and clear the picks",
+    by: "dashboard",
+  },
+  {
+    id: "gallery.move",
+    scope: "gallery",
+    presses: [{ key: "m" }],
+    does: "Move what is picked to a folder",
+    by: "dashboard",
+  },
+  {
+    id: "gallery.folder",
+    scope: "gallery",
+    presses: [{ key: "n" }],
+    does: "Make a new folder here",
+    by: "dashboard",
+  },
+  {
+    id: "gallery.up",
+    scope: "gallery",
+    presses: [{ key: "u" }],
+    does: "Go up to the folder above",
     by: "dashboard",
   },
   {

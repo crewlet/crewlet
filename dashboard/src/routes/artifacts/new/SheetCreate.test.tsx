@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
+import { TestClient } from "~/test/client.tsx";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "~/lib/keyedWrite.ts";
 import { SheetCreate } from "./SheetCreate.tsx";
 
@@ -69,14 +70,17 @@ afterEach(cleanup);
 
 function mount(hash = "#/artifacts/new/sheet") {
   location.hash = hash;
+  // A CLIENT TO STAND IN: the page reads the folder tree for its Save in.
   return render(
-    <Router>
-      <LayerHost>
-        <ToastProvider>
-          <SheetCreate />
-        </ToastProvider>
-      </LayerHost>
-    </Router>,
+    <TestClient>
+      <Router>
+        <LayerHost>
+          <ToastProvider>
+            <SheetCreate />
+          </ToastProvider>
+        </LayerHost>
+      </Router>
+    </TestClient>,
   );
 }
 
@@ -139,6 +143,24 @@ test("Create writes the sheet, its schema and its rows in the order drawn, and o
     "Book the customer interviews",
   ]);
   expect(ops.map((o) => o.doc).sort()).toEqual(ops.map((o) => o.doc));
+});
+
+// STARTED IN A FOLDER, FILED THERE: New on a folder's page opens the kind's
+// page with `?folder=`, the bar says where it will be saved, and the create
+// carries the folder (the engine decides whether the reader may file there).
+test("a sheet started in a folder is filed in it, and the bar says where it is saved", async () => {
+  const folder = "0192f2c4-4444-7000-8000-00000000000b";
+  mount(`#/artifacts/new/sheet?folder=${folder}`);
+  expect(screen.getAllByRole("button", { name: /Save in/ }).length).toBeGreaterThan(0);
+  fireEvent.change(screen.getByRole("textbox", { name: "Sheet title" }), {
+    target: { value: "Launch plan" },
+  });
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Sheet title" }), {
+    key: "Enter",
+    metaKey: true,
+  });
+  await waitFor(() => expect(location.hash).toBe(`#/artifacts/${ID}`));
+  expect(sent[0]!.body).toEqual({ kind: "sheet", title: "Launch plan", folder });
 });
 
 test("a refused row batch still opens the sheet, and says how many rows went in", async () => {

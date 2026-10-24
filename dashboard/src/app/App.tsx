@@ -107,6 +107,8 @@ const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
 const Diary = lazyScreen("knowledge", (m) => m.Diary);
 const ArtifactGallery = lazyScreen("artifacts", (m) => m.ArtifactGallery);
 const ArtifactPage = lazyScreen("artifacts", (m) => m.ArtifactPage);
+const ArtifactFolders = lazyScreen("artifacts", (m) => m.ArtifactFolders);
+const ArtifactFolderPage = lazyScreen("artifacts", (m) => m.ArtifactFolderPage);
 /** Each kind's create page, a chunk of its own (`lazyScreen.ts`). */
 const NEW_ARTIFACT: Readonly<Record<MakeKind, ComponentType>> = {
   doc: lazyScreen("new-doc", (m) => m.DocCreate),
@@ -217,6 +219,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <Diary key={route.handle} handle={route.handle} />;
     case "artifacts":
       return <ArtifactGallery key={route.section} section={route.section} />;
+    case "artifact-folders":
+      return <ArtifactFolders />;
+    case "artifact-folder":
+      return <ArtifactFolderPage key={route.id} id={route.id} />;
     case "artifact":
       return <ArtifactPage key={route.id} id={route.id} />;
     case "new-artifact": {

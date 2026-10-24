@@ -252,6 +252,14 @@ type FolderCreatePayload struct {
 	// ([artifacts.MaxFolderDepth]), stamped on every folder it makes.
 	MaxDepth int `json:"max_depth"`
 
+	// MaxFolders and MaxChildren are the bounds on the company's live
+	// folders and on one folder's live children the writer decided under
+	// ([artifacts.MaxFolders], [artifacts.MaxFolderChildren]), STAMPED so
+	// the apply enforces the bound the record was decided under rather
+	// than its own build's constant, which a later build may change.
+	MaxFolders  int `json:"max_folders"`
+	MaxChildren int `json:"max_children"`
+
 	// Shares are granted on a new TOP-LEVEL folder: its visibility preset
 	// (the company as contributor for "Everyone", none for "Only you").
 	// Empty for a subfolder, which its top-level folder decides. A
@@ -282,6 +290,19 @@ type FolderMovePayload struct {
 	// Root is the top-level folder the moved folder sits under afterwards,
 	// which every folder beneath it is re-rooted to in the same apply.
 	Root string `json:"root"`
+
+	// MaxDepth and MaxChildren are the depth bound and the bound on one
+	// folder's live children the writer decided under, stamped for
+	// [FolderCreatePayload.MaxFolders]' reason.
+	MaxDepth    int `json:"max_depth"`
+	MaxChildren int `json:"max_children"`
+
+	// Shares are the shares a folder moved TO THE TOP LEVEL holds there:
+	// the shares of the top-level folder it was under, so who sees it and
+	// everything beneath it is what it was before the move. Empty for a
+	// move under a folder, which drops a top-level folder's own shares
+	// because its new top-level folder decides it from then on.
+	Shares []artifacts.Share `json:"shares,omitempty"`
 
 	Authority artifacts.Authority `json:"authority"`
 }

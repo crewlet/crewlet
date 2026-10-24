@@ -793,6 +793,18 @@ export const WORKSPACES: WorkspaceRow[] = [
         hint: "Artifacts somebody shared with you, your team or the whole company",
         keywords: ["company-wide", "by agents"],
       },
+      // THE COMPANY'S FOLDERS, a fourth question beside the three flat ones:
+      // where things are kept rather than who made them. A folder is a place
+      // and never a permission, so every reader browses them, and a folder's
+      // own page (`#/artifacts/folders/<id>`) is in this section.
+      {
+        key: "folders",
+        label: "Folders",
+        icon: "folder",
+        path: ["artifacts", "folders"],
+        hint: "The company's folders you can see, and what is in none of them",
+        keywords: ["folder", "directory", "organise", "organize", "move", "file"],
+      },
       // EACH KIND'S CREATE PAGE IS AN ADDRESS, not a tab: the gallery's Make
       // row and its New menu open them, and a reader arrives at Artifacts to
       // look. Listed so the palette finds "new doc" and the trail names it.
@@ -1149,6 +1161,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "audit",
   "yours",
   "shared",
+  "folders",
   "new",
 ];
 

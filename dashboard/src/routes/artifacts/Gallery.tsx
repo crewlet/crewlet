@@ -51,105 +51,50 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArtifactAccessLabel,
-  ArtifactCardSkeleton,
-  ArtifactKindGlyph,
-  ArtifactMakeRow,
-  ArtifactNameCell,
-  Button,
-  Input,
-  LivePreviewBudgetProvider,
-  Section,
-  SegmentedControl,
-  Select,
-  Skeleton,
-  TableEntityCell,
-  PrincipalAvatar,
-} from "@crewlethq/ui";
-import {
-  GaugeGlyph,
-  LayoutGridGlyph,
-  ListGlyph,
-  PlusGlyph,
-  SearchGlyph,
-  TrashGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ArtifactMakeRow, LivePreviewBudgetProvider, Section } from "@crewlethq/ui";
+import { GaugeGlyph } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
-import { PageActions } from "~/app/frame/PageActions.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { type DataGridColumn } from "@crewlethq/ui";
-import { useSearchTarget } from "~/app/searchTarget.ts";
+import { useKeymap } from "~/app/keymap.ts";
 import {
   LEGACY_ARTIFACT_SECTIONS,
-  artifactPath,
   artifactSectionPath,
   newArtifactPath,
   type ArtifactSection,
 } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, fmtDate, relTime } from "~/lib/format.ts";
-import { STORAGE_KEYS } from "~/lib/storage.ts";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useClient } from "~/lib/store-hooks.ts";
-import { useViewer, type ViewerState } from "~/lib/viewer.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { offeredKinds } from "~/app/nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
-import { usePinsChanged } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";
+import { useArtifactPeople } from "~/lib/artifacts/people.ts";
+import { TRASH_KEPT, isArtifactKind, type MakeKind } from "~/lib/artifacts/words.ts";
+import { NewArtifactButton } from "./new/NewArtifactMenu.tsx";
 import {
-  KIND_WORDS,
-  KINDS,
-  ROLE_WORDS,
-  TRASH_KEPT,
-  isArtifactKind,
-  purgeAt,
-  purgeSentence,
-  type MakeKind,
-} from "~/lib/artifacts/words.ts";
-import { ListedArtifactCard, accessOf } from "./parts.tsx";
-import { ArtifactMenu } from "./GalleryMenu.tsx";
-import { NewArtifactMenu } from "./new/NewArtifactMenu.tsx";
+  DEFAULT_SORT,
+  GalleryBar,
+  GallerySelectionBar,
+  GallerySkeleton,
+  GalleryToolbar,
+  Listing,
+  listParams,
+  noMatch,
+  sortOf,
+  useListing,
+  useShape,
+  type ListingView,
+} from "./listing.tsx";
+import { useGallerySelection } from "./selection.ts";
+import { MoveDialog } from "./MoveDialog.tsx";
+import type { ArtifactListScope } from "~/protocol/index.ts";
 import { BrandMakeChip } from "~/components/brand.tsx";
-import { ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
-import {
-  type ArtifactKind,
-  type ArtifactListAnswer,
-  type ArtifactListItem,
-  type ArtifactListScope,
-  type ArtifactListSort,
-} from "~/protocol/index.ts";
-
-/** How often a gallery reads itself again: no push moves a listing, and a minute keeps a left-open tab current. */
-const GALLERY_POLL_MS = 60_000;
-
-/** A page of the listing: the engine's own default, and the most a page asks for. */
-const PAGE = 50;
 
 /** The scope each section asks the engine about. All is everything the reader can see. */
 const SCOPE: Readonly<Record<ArtifactSection, ArtifactListScope>> = {
   all: "all",
   yours: "mine",
   shared: "shared",
-};
-
-/**
- * The order a section is listed in when the reader chose none: the latest
- * activity first, which is the time every card says ("Edited 20h ago"), so a
- * grid reads top to bottom as a timeline. What the reader opened lately is
- * one choice away, as Recently opened.
- */
-const DEFAULT_SORT: ArtifactListSort = "updated";
-
-/** What each order is called in the bar. */
-const SORT_WORDS: Readonly<Record<ArtifactListSort, string>> = {
-  updated: "Recent activity",
-  created: "Newest",
-  title: "Title, A to Z",
-  opened: "Recently opened",
 };
 
 /** The Make row's heading: what the reader does there, said plainly. */
@@ -212,164 +157,6 @@ const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> 
   },
 };
 
-/**
- * What a search or a type that found nothing says: the phrase it looked for,
- * and only the change that could find more. It said "Change the phrase or the
- * type" with no type chosen.
- */
-export function noMatch(q: string, kind: ArtifactKind | ""): { title: string; hint: string } {
-  if (q) {
-    return {
-      title: `Nothing matches “${q}”`,
-      hint: kind
-        ? `Only ${KIND_WORDS[kind]} artifacts were searched. Try another phrase, or choose Every type.`
-        : "Try another phrase.",
-    };
-  }
-  if (kind) {
-    return {
-      title: `No ${KIND_WORDS[kind]} artifacts here`,
-      hint: "Choose Every type to see the rest.",
-    };
-  }
-  return { title: "Nothing matches", hint: "Try another phrase." };
-}
-
-/** The listing's parameters as the engine reads them. */
-function listParams(
-  scope: ArtifactListScope,
-  kind: string,
-  q: string,
-  sort: ArtifactListSort,
-  trashed: boolean,
-): Record<string, unknown> {
-  return {
-    scope,
-    sort,
-    "max-keys": PAGE,
-    ...(kind ? { kind } : {}),
-    ...(q.trim() ? { q: q.trim() } : {}),
-    ...(trashed ? { status: "trashed" } : {}),
-  };
-}
-
-/**
- * One listing, its first page live and the pages after it fetched on demand.
- * A change of question drops the pages after the first: they answered another
- * question.
- */
-function useListing(params: Record<string, unknown>, enabled = true) {
-  const { socket } = useClient();
-  const first = useQuery("artifacts", params, { pollMs: GALLERY_POLL_MS, enabled });
-  // A PIN MOVES A ROW between the pinned list and the rest, and marks it.
-  usePinsChanged(first.refetch);
-  const key = JSON.stringify(params);
-  const [more, setMore] = useState<{ key: string; items: ArtifactListItem[]; after: string }>({
-    key,
-    items: [],
-    after: "",
-  });
-  const [loadingMore, setLoadingMore] = useState(false);
-  const extra = more.key === key ? more : { key, items: [], after: "" };
-  const after = extra.items.length > 0 ? extra.after : (first.data?.next_continuation_token ?? "");
-  const loadMore = useCallback(() => {
-    if (!after || loadingMore) return;
-    setLoadingMore(true);
-    socket
-      .query("artifacts", { ...params, "continuation-token": after })
-      .then((page: ArtifactListAnswer) =>
-        setMore((was) => ({
-          key,
-          items: [...(was.key === key ? was.items : []), ...page.contents],
-          after: page.next_continuation_token ?? "",
-        })),
-      )
-      .catch(() => {
-        // A PAGE THAT DID NOT COME is asked for again by the same button:
-        // the rows already drawn stay, and nothing is claimed about the rest.
-      })
-      .finally(() => setLoadingMore(false));
-  }, [after, loadingMore, socket, params, key]);
-  const items = useMemo(() => {
-    const seen = new Set<string>();
-    const out: ArtifactListItem[] = [];
-    for (const item of [...(first.data?.contents ?? []), ...extra.items]) {
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      out.push(item);
-    }
-    return out;
-  }, [first.data, extra.items]);
-  // A RENAME, THE TRASH OR A RESTORE moves rows on any page: the pages after
-  // the first are dropped with the first read again, as a new question would.
-  const refetch = useCallback(() => {
-    setMore({ key, items: [], after: "" });
-    first.refetch();
-  }, [first, key]);
-  return { first, items, after, loadMore, loadingMore, refetch };
-}
-
-/**
- * Who a row names, as the reader knows them: "You" for the reader's own
- * record (`ViewerState.owner`, the name an owner is recorded under), else the
- * chart's name or the login's words.
- */
-function whoWords(
-  name: string,
-  viewer: Pick<ViewerState, "owner">,
-  people: ArtifactPeople,
-): string {
-  return viewer.owner !== "" && name === viewer.owner ? "You" : people.seatName(name);
-}
-
-/** How a listing is drawn. */
-type Shape = "grid" | "list";
-
-/**
- * The shape this browser draws the gallery in: the grid unless the reader
- * chose the list here before. A preference that could not be read or kept
- * (a private window) is the grid, every time.
- */
-function useShape(): [Shape, (next: Shape) => void] {
-  const [shape, setShape] = useState<Shape>(() => {
-    try {
-      return localStorage.getItem(STORAGE_KEYS.artifactsShape) === "list" ? "list" : "grid";
-    } catch {
-      return "grid";
-    }
-  });
-  const choose = useCallback((next: Shape) => {
-    setShape(next);
-    try {
-      if (next === "grid") localStorage.removeItem(STORAGE_KEYS.artifactsShape);
-      else localStorage.setItem(STORAGE_KEYS.artifactsShape, next);
-    } catch {
-      // A preference the browser will not keep holds for this visit only.
-    }
-  }, []);
-  return [shape, choose];
-}
-
-/**
- * The fact columns' tracks, FIXED rather than sized to their contents: All
- * draws Pinned and the rest as two grids one above the other, and a page
- * loaded later is the same grid grown, so a track sized to what one grid holds
- * put a column at two places on one screen and moved it when a page came in.
- * Each is its widest value at the body size ("Company" beside its glyph,
- * "Nov 18, 2026", "Can comment"); a longer owner's name is cut, with the
- * whole of it on hover.
- */
-const TRACK = {
-  access: "7.5rem",
-  owner: "11rem",
-  when: "7.5rem",
-  role: "8rem",
-  purge: "10rem",
-} as const;
-
-/** How many card placeholders the grid draws while its first page loads: two rows at three across. */
-const SKELETON_CARDS = 6;
-
 export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   const people = useArtifactPeople();
   const now = useNow();
@@ -388,16 +175,14 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   const kind = isArtifactKind(kindParam) ? kindParam : "";
   const [q, setQ] = useParam("q", "");
   const [sortParam, setSort] = useParam("sort", "");
-  const sort: ArtifactListSort = (ARTIFACT_LIST_SORTS as readonly string[]).includes(sortParam)
-    ? (sortParam as ArtifactListSort)
-    : DEFAULT_SORT;
+  const sort = sortOf(sortParam);
   const [shape, setShape] = useShape();
   const [trash, setTrash] = useParam("status", "");
   // THE TRASH IS THE OWNER'S: a reader's own artifacts are the ones they can
   // restore, so the trashed listing is offered on Yours.
   const trashed = section === "yours" && trash === "trashed";
   const params = useMemo(
-    () => listParams(SCOPE[section], kind, q, sort, trashed),
+    () => listParams({ scope: SCOPE[section], kind, q, sort, trashed }),
     [section, kind, q, sort, trashed],
   );
   const listing = useListing(params);
@@ -417,7 +202,37 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
     return listing.items.filter((i) => !pins.has(i.id));
   }, [section, listing.items, pinned.items]);
 
-  const view: ListingView = { section, trashed, shape, people, viewer, now, onChanged: refetch };
+  // PICKING FOR A MOVE, over every card drawn (the pins above the rest), and
+  // never in the trash, whose rows move nowhere until they are restored.
+  const drawn = useMemo(
+    () => [...(section === "all" && !trashed ? pinned.items : []), ...rows],
+    [section, trashed, pinned.items, rows],
+  );
+  const selection = useGallerySelection(
+    useMemo(() => drawn.map((i) => i.id), [drawn]),
+    JSON.stringify(params),
+  );
+  const picked = useMemo(
+    () => drawn.filter((i) => selection.selected.has(i.id)),
+    [drawn, selection.selected],
+  );
+  const selectRef = useRef<HTMLButtonElement>(null);
+  const [moving, setMoving] = useState(false);
+  useKeymap({
+    "gallery.select": { run: () => selection.setToggled(!selection.selecting), when: !trashed },
+  });
+
+  const view: ListingView = {
+    trashed,
+    own: section === "yours",
+    folders: true,
+    shape,
+    people,
+    viewer,
+    now,
+    onChanged: refetch,
+    selection: trashed ? null : selection,
+  };
   const showPinned = section === "all" && !trashed && pinned.items.length > 0;
   const filtered = q.trim() !== "" || kind !== "";
   // THE MAKE ROW opens the reader's own sections, and only for a reader who
@@ -439,7 +254,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
 
   return (
     <LivePreviewBudgetProvider>
-      <GalleryBar q={q} onQ={setQ} canAuthor={author.can ? null : author.reason} />
+      <GalleryBar q={q} onQ={setQ}>
+        <NewArtifactButton held={author.can ? null : author.reason} />
+      </GalleryBar>
       {showMake && <MakeRow />}
       <GalleryToolbar
         kind={kind}
@@ -453,7 +270,32 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
             ? { on: trashed, onChange: (on) => setTrash(on ? "trashed" : "") }
             : null
         }
+        select={
+          trashed
+            ? null
+            : { on: selection.selecting, onChange: selection.setToggled, ref: selectRef }
+        }
       />
+      {!trashed && (
+        <GallerySelectionBar
+          selection={selection}
+          picked={picked}
+          author={author}
+          onMove={() => setMoving(true)}
+          returnFocusRef={selectRef}
+        />
+      )}
+      {moving && (
+        <MoveDialog
+          subject={{ kind: "artifacts", items: picked }}
+          onClose={() => setMoving(false)}
+          onMoved={() => {
+            setMoving(false);
+            selection.clear();
+            refetch();
+          }}
+        />
+      )}
       {trashed && (
         <p className="artifacts-trash-note">
           Only you see your trash. An artifact stays here for {TRASH_KEPT}, then it is deleted for
@@ -534,373 +376,5 @@ function MakeRow() {
         }))}
       />
     </Section>
-  );
-}
-
-/** The listing's placeholder, in the shape it will be drawn in, said once. */
-function GallerySkeleton({ shape }: { shape: Shape }) {
-  if (shape === "list") return <Skeleton variant="list" rows={6} label="Loading artifacts" />;
-  return (
-    <>
-      <ul className="artifacts-cards" role="list" aria-hidden="true">
-        {Array.from({ length: SKELETON_CARDS }, (_, i) => (
-          <li key={i}>
-            <ArtifactCardSkeleton />
-          </li>
-        ))}
-      </ul>
-      <Skeleton variant="box" width={0} height={0} label="Loading artifacts" />
-    </>
-  );
-}
-
-/** The gallery's page bar: the phrase and New. */
-function GalleryBar({
-  q,
-  onQ,
-  canAuthor,
-}: {
-  q: string;
-  onQ: (q: string) => void;
-  /** Why the reader may not start one, or null when they may. */
-  canAuthor: string | null;
-}) {
-  const box = useRef<HTMLInputElement>(null);
-  useSearchTarget(box);
-  // THE PHRASE IS TYPED HERE and sent when the reader pauses, so a listing is
-  // not asked for once per keystroke.
-  const [typed, setTyped] = useState(q);
-  useEffect(() => setTyped(q), [q]);
-  useEffect(() => {
-    if (typed === q) return undefined;
-    const t = setTimeout(() => onQ(typed), SEARCH_PAUSE_MS);
-    return () => clearTimeout(t);
-  }, [typed, q, onQ]);
-  return (
-    <PageActions>
-      <span className="artifacts-find page-find">
-        <Input
-          ref={box}
-          type="search"
-          inputSize="sm"
-          width="full"
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          leading={<SearchGlyph size="sm" />}
-          placeholder="Search artifacts"
-          aria-label="Search artifacts"
-        />
-      </span>
-      {canAuthor === null ? (
-        <NewArtifactMenu />
-      ) : (
-        <Button
-          size="small"
-          variant="primary"
-          leadingIcon={<PlusGlyph size="sm" />}
-          disabledReason={canAuthor}
-          title={canAuthor}
-        >
-          New
-        </Button>
-      )}
-    </PageActions>
-  );
-}
-
-/** How long the phrase waits for the reader to pause before it is asked. */
-const SEARCH_PAUSE_MS = 300;
-
-/**
- * The gallery's toolbar: the type and the order the listing is asked in, the
- * trash on Yours, and the shape it is drawn in: quiet controls on a line of
- * their own, since the cards are what the page is for.
- *
- * `toolbar` FIRST, as every screen's second row: the scroller's
- * `:has(.toolbar)` publishes `--sticky-top`, which the grid's column heads
- * offset themselves by.
- */
-function GalleryToolbar({
-  kind,
-  onKind,
-  sort,
-  onSort,
-  shape,
-  onShape,
-  trash,
-}: {
-  kind: string;
-  onKind: (kind: string) => void;
-  sort: ArtifactListSort;
-  onSort: (sort: ArtifactListSort) => void;
-  shape: Shape;
-  onShape: (shape: Shape) => void;
-  /** The trash toggle, on the section whose listing has one, or null. */
-  trash: { on: boolean; onChange: (on: boolean) => void } | null;
-}) {
-  return (
-    <div className="toolbar">
-      <Select
-        size="sm"
-        width="auto"
-        appearance="quiet"
-        value={kind}
-        onChange={(value) => onKind(String(value))}
-        options={[
-          { value: "", label: "Every type" },
-          ...KINDS.map((k) => ({
-            value: k,
-            label: KIND_WORDS[k],
-            leading: <ArtifactKindGlyph kind={k} size="sm" />,
-          })),
-        ]}
-        ariaLabel="Type"
-        placeholder="Every type"
-        active={kind !== ""}
-      />
-      <Select
-        size="sm"
-        width="auto"
-        appearance="quiet"
-        value={sort}
-        onChange={(value) => onSort(String(value) as ArtifactListSort)}
-        options={ARTIFACT_LIST_SORTS.map((s) => ({ value: s, label: SORT_WORDS[s] }))}
-        ariaLabel="Order"
-      />
-      {/* THE TRASH AND THE SHAPE ARE ONE CLUSTER at the far end, so a narrow
-          row moves them down together and keeps them at the end. */}
-      <span className="artifacts-bar-end">
-        {trash && (
-          // A TOGGLE, SO ONE NAME: pressed, it is the trash's listing, and
-          // pressed again the reader's own.
-          <Button
-            size="small"
-            variant="ghost"
-            leadingIcon={<TrashGlyph size="sm" />}
-            pressed={trash.on}
-            onClick={() => trash.onChange(!trash.on)}
-          >
-            Trash
-          </Button>
-        )}
-        <SegmentedControl<Shape>
-          semantics="radio"
-          size="sm"
-          label="Show as"
-          value={shape}
-          onValueChange={onShape}
-          options={[
-            {
-              value: "grid",
-              icon: <LayoutGridGlyph size="sm" />,
-              srLabel: "Grid",
-              title: "Grid",
-            },
-            { value: "list", icon: <ListGlyph size="sm" />, srLabel: "List", title: "List" },
-          ]}
-        />
-      </span>
-    </div>
-  );
-}
-
-/** What every listing on the gallery is drawn for: its section, its shape and its reader. */
-interface ListingView {
-  section: ArtifactSection;
-  /** The trash's listing, on Yours. */
-  trashed: boolean;
-  shape: Shape;
-  people: ArtifactPeople;
-  viewer: Pick<ViewerState, "owner">;
-  now: number;
-  /** A row's menu moved the listing: a rename, the trash or a restore. */
-  onChanged: () => void;
-}
-
-/** One listing, drawn in the shape the reader chose. */
-function Listing({
-  items,
-  view,
-  name,
-  loadMore,
-  loadingMore,
-  total,
-}: {
-  items: ArtifactListItem[];
-  view: ListingView;
-  name: string;
-  loadMore?: (() => void) | undefined;
-  loadingMore?: boolean;
-  total?: number | undefined;
-}) {
-  const note =
-    total !== undefined && total > items.length
-      ? `${fmtCount(items.length)} of ${fmtCount(total)}`
-      : undefined;
-  const { section, trashed, people, viewer, now, onChanged } = view;
-  if (view.shape === "grid") {
-    return (
-      <>
-        <ul className="artifacts-cards" role="list">
-          {items.map((item) => (
-            <li key={item.id}>
-              <ListedArtifactCard
-                item={item}
-                people={people}
-                now={now}
-                actions={<ArtifactMenu item={item} onChanged={onChanged} />}
-              />
-            </li>
-          ))}
-        </ul>
-        {loadMore && (
-          <div className="artifacts-more">
-            <Button size="small" variant="secondary" onClick={loadMore} loading={loadingMore}>
-              Load more
-            </Button>
-            {note && <span className="artifacts-more-note">{note}</span>}
-          </div>
-        )}
-      </>
-    );
-  }
-  // ON YOURS EVERY ROW IS THE READER'S, so its owner and their role would say
-  // "You" and "Owner" on every row; the trash's rows say when each went in
-  // and when it goes for good in their place.
-  const own = section === "yours";
-  const columns: DataGridColumn<ArtifactListItem>[] = [
-    {
-      key: "title",
-      header: "Name",
-      floor: "14rem",
-      phoneLead: true,
-      // THE KIND IS PRINTED UNDER THE TITLE, beside the description, so the
-      // list keeps no Type column of its own: the mark and its word are the
-      // grid card's badge, said in a row.
-      cell: (item) => (
-        <ArtifactNameCell
-          kind={item.kind}
-          title={item.title}
-          detail={item.description}
-          pinned={item.pinned ?? false}
-          trashed={item.status === "trashed"}
-          labels={{ kinds: KIND_WORDS }}
-        />
-      ),
-    },
-    // WHO CAN OPEN IT, but not in the trash: a trashed artifact opens for
-    // nobody until it is restored, and its rows say when it goes instead.
-    ...(trashed
-      ? []
-      : [
-          {
-            key: "access",
-            header: "Access",
-            width: TRACK.access,
-            drop: 3,
-            // ON A PHONE the lead already says what it is; the line under it
-            // is when it was edited, and who can open it is its page's to say.
-            phoneOmit: true,
-            cell: (item: ArtifactListItem) => <ArtifactAccessLabel access={accessOf(item)} />,
-          },
-        ]),
-    ...(own
-      ? []
-      : [
-          {
-            key: "owner",
-            header: "Owner",
-            width: TRACK.owner,
-            drop: 2,
-            // ON A PHONE the row's line is the type and the time: the owner
-            // and the role are the artifact's own page's to say.
-            phoneOmit: true,
-            // THE OWNER'S BADGE, as the chart draws them: a person's circle
-            // and an agent's character, so the column reads by who as well
-            // as by name.
-            cell: (item: ArtifactListItem) => (
-              <TableEntityCell
-                name={whoWords(item.owner, viewer, people)}
-                badge={<PrincipalAvatar principal={people.seatPrincipal(item.owner)} size="xs" />}
-              />
-            ),
-          },
-        ]),
-    trashed
-      ? {
-          key: "trashed",
-          header: "Trashed",
-          width: TRACK.when,
-          cell: (item: ArtifactListItem) => (
-            <time dateTime={item.trashed_at} title={item.trashed_at}>
-              {relTime(item.trashed_at, now)}
-            </time>
-          ),
-        }
-      : {
-          key: "updated",
-          header: "Edited",
-          width: TRACK.when,
-          cell: (item: ArtifactListItem) => (
-            <time className="artifacts-when" dateTime={item.updated_at} title={item.updated_at}>
-              {relTime(item.updated_at, now)}
-            </time>
-          ),
-        },
-    ...(trashed
-      ? [
-          {
-            key: "purge",
-            header: "Deleted for good",
-            width: TRACK.purge,
-            drop: 1,
-            cell: (item: ArtifactListItem) => {
-              const at = purgeAt(item.trashed_at);
-              return at ? (
-                <time dateTime={at} title={purgeSentence(item.trashed_at)}>
-                  {fmtDate(at)}
-                </time>
-              ) : (
-                `${TRASH_KEPT} after`
-              );
-            },
-          },
-        ]
-      : own
-        ? []
-        : [
-            {
-              key: "role",
-              header: "Your role",
-              width: TRACK.role,
-              drop: 1,
-              phoneOmit: true,
-              cell: (item: ArtifactListItem) => (
-                <span className="artifacts-role">{ROLE_WORDS[item.role]}</span>
-              ),
-            },
-          ]),
-    {
-      key: "actions",
-      header: "",
-      action: true,
-      shrink: true,
-      cell: (item) => <ArtifactMenu item={item} onChanged={onChanged} />,
-    },
-  ];
-  return (
-    <div className="artifacts-list">
-      <DataGrid
-        rows={items}
-        columns={columns}
-        rowKey={(item) => item.id}
-        rowHref={(item) => href(artifactPath(item.id))}
-        serverSorted
-        name={name}
-        phoneRows="compact"
-        onLoadMore={loadMore}
-        loadedNote={note}
-      />
-    </div>
   );
 }

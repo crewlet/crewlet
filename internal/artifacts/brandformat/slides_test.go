@@ -36,7 +36,7 @@ func TestTheBrandsSlideThemeIsInsideTheSlideFormat(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			th := brandformat.SlideTheme(b)
-			if th.ID != brandformat.SlideThemeID || th.Name != b.Name || th.Tag == "" {
+			if th.ID != slideformat.BrandTheme || th.Name != b.Name || th.Tag == "" {
 				t.Errorf("the theme is named %q %q %q", th.ID, th.Name, th.Tag)
 			}
 			for _, face := range []string{th.Display, th.Body} {

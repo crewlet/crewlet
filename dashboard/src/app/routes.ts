@@ -129,6 +129,24 @@ export function artifactPath(id: string): string[] {
 }
 
 /**
+ * The Folders section's address: the company's top-level folders the reader
+ * can see, then what is in none of them. Here for the reason [artifactPath]
+ * is: an artifact's page and its Details link to it.
+ */
+export function artifactFoldersPath(): string[] {
+  return ["artifacts", "folders"];
+}
+
+/**
+ * A folder's page, by its id, never by its path: the id the engine minted
+ * survives a rename and a move, so a link pasted in chat still opens it.
+ * Here for the reason [artifactPath] is.
+ */
+export function artifactFolderPath(id: string): string[] {
+  return ["artifacts", "folders", id];
+}
+
+/**
  * The org builder's address, Org chart › Edit org: the one place the chart,
  * the seats, the charter and the policies are written, which every page that
  * reads them offers as its way to change them. Here for the reason
@@ -198,6 +216,8 @@ export type FramedScreen =
   | { screen: "diaries" }
   | { screen: "diary"; handle: string }
   | { screen: "artifacts"; section: ArtifactSection }
+  | { screen: "artifact-folders" }
+  | { screen: "artifact-folder"; id: string }
   | { screen: "artifact"; id: string }
   /** A kind's own create page, or, with no kind, the address that redirects to one. */
   | { screen: "new-artifact"; kind: MakeKind | null }
@@ -510,6 +530,21 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
       kind === "brand" && more.length === 0
         ? "the company's brand is set up on Company › Brand"
         : "a new artifact is a doc, slides, a sheet, a design, a dashboard or an HTML page",
+    );
+  }
+  // THE FOLDERS: the section, and one folder by the id the engine minted
+  // (`#/artifacts/folders/<id>`), never its path, so a rename or a move
+  // breaks no link. A word there names nothing the engine could have minted.
+  if (first === "folders") {
+    if (tail.length === 0) return screen({ screen: "artifact-folders" });
+    const [id, ...more] = tail;
+    if (more.length === 0 && id !== undefined && ID_SHAPE.test(id)) {
+      return screen({ screen: "artifact-folder", id });
+    }
+    return missing(
+      "artifacts",
+      under("Artifacts"),
+      "a folder is opened from Folders, an artifact's details or a link somebody shared",
     );
   }
   // NOTHING IS ADDRESSED UNDER AN ARTIFACT: its tabs, its version and its

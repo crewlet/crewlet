@@ -66,6 +66,24 @@ describe("a history row", () => {
     );
   });
 
+  // A MOVE NAMES FOLDERS BY ID ALONE, so the sentence says where the
+  // artifact went and never a folder's name a reader may not be shown.
+  test("a move says where it went and names no folder", () => {
+    expect(historyWords(entry({ op: "move", summary: { to_folder: "f-1" } }), names)).toBe(
+      "filed it in a folder",
+    );
+    expect(
+      historyWords(entry({ op: "move", summary: { from_folder: "f-1", to_folder: "f-2" } }), names),
+    ).toBe("moved it to another folder");
+    expect(historyWords(entry({ op: "move", summary: { from_folder: "f-1" } }), names)).toBe(
+      "moved it to the top level",
+    );
+    expect(
+      historyWords(entry({ op: "move", outcome: "refused", summary: { to_folder: "f-1" } }), names),
+    ).toBe("tried to file it in a folder and was refused");
+    expect(historyOpTag("move")).toBe("move");
+  });
+
   test("a purge's first step reads as the deletion beginning", () => {
     expect(historyWords(entry({ op: "purge_begin" }), names)).toBe("began deleting it for good");
     expect(historyWords(entry({ op: "purge_begin", outcome: "refused" }), names)).toBe(

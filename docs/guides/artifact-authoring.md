@@ -151,17 +151,21 @@ to the datastore and presence, used without a framework). It is served from
 `/_crewlet/kit/<version>/` on the artifact origin:
 
 ```html
-<link rel="stylesheet" href="/_crewlet/kit/0.38.0/kit.css">
-<link rel="stylesheet" href="/_crewlet/kit/0.38.0/content.css">
-<script src="/_crewlet/kit/0.38.0/theme.js"></script>
-<script type="module" src="/_crewlet/kit/0.38.0/kit.js"></script>
+<link rel="stylesheet" href="/_crewlet/kit/<version>/kit.css">
+<link rel="stylesheet" href="/_crewlet/kit/<version>/content.css">
+<script src="/_crewlet/kit/<version>/theme.js"></script>
+<script type="module" src="/_crewlet/kit/<version>/kit.js"></script>
 ```
 
-Link the version shown here, which is the newest this engine serves. The
-version in the path is a pin: the engine keeps serving every kit version it
-has shipped, so a page published against an older kit keeps the exact files
-it was written against when the engine moves to a newer one. To take a newer
-kit, publish a new version of the page that links it.
+Link the newest version this engine serves, the one that reads the company's
+[brand](#your-companys-brand). Nothing here names it, because it moves with the
+engine: a seat's artifacts skill carries it as `${crewlet_kit_version}`, which
+the engine fills in from the kit it embeds, `get_company_brand` answers it as
+`kit_version`, and the publish warning on a release the engine does not serve
+names it. The version in the path is a pin: the engine keeps serving every kit
+version it has shipped, so a page published against an older kit keeps the
+exact files it was written against when the engine moves to a newer one. To
+take a newer kit, publish a new version of the page that links it.
 
 Colours, spacing and type come from the kit's tokens, never literal values,
 so a page looks like the rest of the company in both themes.
@@ -186,6 +190,34 @@ the dashboard's document and form look in both themes:
 
 It is opt in: a page that does not link it, every page published before it
 existed included, paints exactly as before.
+
+### Your company's brand
+
+When an administrator has adopted a brand (Company, Brand), the artifact
+origin links its generated stylesheet beside the kit on every page and design,
+pinned to the brand current when the version was published. The stylesheet
+sets only the kit's brand inputs, so a page written with the kit's tokens
+(`var(--color-brand-accent)`, `var(--font-family-display)`) takes the brand's
+colours and typefaces in both themes without a line of its own; a page with
+colour literals, or linked to a kit older than the one that reads the brand,
+does not. Docs and dashboards follow the adopted brand as the dashboard draws
+them.
+
+- **A logo** is the kit's markup, never a URL:
+  `<span class="crewlet-logo" role="img" aria-label="Acme"></span>`, with
+  `data-variant="on-dark"` for a dark band or `"mark"` for a square space. It
+  draws the brand's own logo and takes no room where the brand has none.
+- **A file of the brand in a version** (a deck's logo or typeface, a doc's
+  image) is copied from the adoption, never redrawn: an agent names it with
+  `{from_brand: "logo.primary"}` in `files` (`logo.on_dark`, `logo.mark`,
+  `font.heading`, `font.body`), and `get_company_brand` lists each with the
+  path to copy it to.
+- **A deck** begun in New, Slides or with an agent's `starter` in the theme
+  `brand` is drawn in the brand once: its colours are inline, its logo and
+  typefaces are files of the version, and a later adoption changes nothing in
+  it.
+- **A page that must not take the brand**, such as a mock of somebody else's
+  screen, sets `<html data-crewlet-brand="off">`.
 
 ---
 
@@ -335,8 +367,10 @@ style and bound; the short version:
   `files`. In the dashboard, New › Slides starts one from a theme and the
   slides you choose to open with (see
   [Themes and layouts](../reference/slide-format.md#themes-and-layouts)), which
-  you edit in place. An agent's deck may name one of those themes as `theme` in
-  `deck.json`, so a person adds slides to it from that theme's layouts. Revise one slide at a time with `edits` on its file against your
+  you edit in place; an agent starts one the same way with `create_artifact`'s
+  `starter` (`theme: "brand"` for the company's brand). An agent's deck may name
+  one of those themes as `theme` in `deck.json`, so a person adds slides to it
+  from that theme's layouts. Revise one slide at a time with `edits` on its file against your
   base version; `get_artifact` with `view: "outline"` lists the slides first.
 
 ## Writing a dashboard

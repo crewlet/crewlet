@@ -31,6 +31,7 @@ import (
 // router's, so a node whose own copy is out of service answers from a peer's.
 type Reads interface {
 	Heads
+	FolderReads
 	BrandReads
 }
 
@@ -56,6 +57,7 @@ type Writes interface {
 		artifactsdomain.Written, error)
 	Pin(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, pinned bool) (
 		artifactsdomain.Written, error)
+	FolderWrites
 }
 
 // Pipeline is the upload and publish pipeline (internal/artifactupload): every
@@ -237,6 +239,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	ready := authz.Policy{Action: authz.ActionArtifactReady, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
+	// A FOLDER IS CREATED WITH THE APP, decided without any folder; the
+	// parent's contributor role is asked in the handler, on the parent.
+	createFolder := authz.Policy{Action: authz.ActionArtifactFolderCreate, Object: func(*http.Request) authz.Object {
+		return authz.Object{Kind: authz.KindArtifactFolder}
+	}}
 	brand := func(a authz.Action) authz.Policy {
 		return authz.Policy{Action: a, Object: func(*http.Request) authz.Object {
 			return authz.Object{Kind: authz.KindCompany}
@@ -277,6 +284,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"GET /artifacts/{id}/versions/{n}/outline", pre, s.outline},
 		{"GET /artifacts/{id}/versions/{n}/dashboard", pre, s.board},
 		{"POST /artifacts/ready", ready, s.reportReady},
+		{"PUT /artifacts/{id}/folder", pre, s.moveArtifact},
+		{"POST /artifacts/folder-moves", pre, s.moveArtifacts},
+		{"POST /artifact-folders", createFolder, s.createFolder},
+		{"PATCH /artifact-folders/{id}", pre, s.patchFolder},
+		{"DELETE /artifact-folders/{id}", pre, s.removeFolder},
 		{"GET /brand", brand(authz.ActionBrandRead), s.brand},
 		{"GET /brand/files/{hash}", brand(authz.ActionBrandRead), s.brandFile},
 		{"POST /brand/adoptions", brand(authz.ActionBrandAdopt), s.adoptBrand},
