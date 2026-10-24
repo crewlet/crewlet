@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,21 @@ func TestATokenBindsTheFolderNotItsPath(t *testing.T) {
 	q.Delimiter = "/"
 	if _, err := g.n.reader.List(t.Context(), g.bob, q); !errors.Is(err, artifactsdomain.ErrBadCursor) {
 		t.Errorf("a recursive token continuing a one-level listing: %v", err)
+	}
+	// A TOKEN NEVER LISTS ITS FOLDER UNDER ANOTHER FOLDER'S WORDS: a query
+	// naming a different folder beside it, by id or by a path that names
+	// one now, is refused rather than answered as the token's folder.
+	other := q
+	other.Delimiter = ""
+	other.Prefix, other.Folder = "", g.drafts.ID
+	if _, err := g.n.reader.List(t.Context(), g.jane, other); !errors.Is(err, artifactsdomain.ErrBadCursor) ||
+		!strings.Contains(err.Error(), "another folder") {
+		t.Errorf("a token sent with another folder's id: %v", err)
+	}
+	other.Folder, other.Prefix = "", "Drafts/"
+	if _, err := g.n.reader.List(t.Context(), g.jane, other); !errors.Is(err, artifactsdomain.ErrBadCursor) ||
+		!strings.Contains(err.Error(), "another folder") {
+		t.Errorf("a token sent with another folder's path: %v", err)
 	}
 }
 

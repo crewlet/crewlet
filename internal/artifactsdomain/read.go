@@ -1361,7 +1361,23 @@ func (s listSpec) place(tree *folderTree) (placed, error) {
 	ref := s.folder
 	if s.after != nil {
 		// A LATER PAGE LISTS THE TOKEN'S FOLDER, by id, whatever its path
-		// has become; it is still one the viewer must see now.
+		// has become; it is still one the viewer must see now. A query that
+		// names ANOTHER folder beside the token is refused rather than
+		// answered with the token's folder under the query's words: by id,
+		// or by a path that names a folder now. A path that names none is
+		// the token's folder renamed since the first page, which the token
+		// governs.
+		named := s.folder
+		if named == "" && s.prefix != "" {
+			if found, err := tree.resolvePath(s.prefix); err == nil && len(found) == 1 {
+				named = found[0].id
+			}
+		}
+		if named != "" && named != s.after.Folder {
+			return placed{}, fmt.Errorf("%w: the continuation token continues another folder "+
+				"than the one this query names; send the prefix it was minted under, or "+
+				"drop the token to start again", ErrBadCursor)
+		}
 		ref = s.after.Folder
 	} else if s.prefix != "" {
 		found, err := tree.resolvePath(s.prefix)

@@ -6623,7 +6623,9 @@ where they see that folder. One artifact's head and its history's moves
 reaches nobody it is not shown to. A `prefix` or `folder` that names nothing the caller sees is
 `404 not_found`, never an empty page. The continuation token carries the
 folder's id rather than its path, so a rename between two pages does not move
-the next one, and a token is held to the delimiter it was minted under. Each
+the next one, a token is held to the delimiter it was minted under, and a
+query naming another folder beside a token (by `folder`, or by a `prefix` that
+names a folder now) is refused rather than answered as the token's folder. Each
 common prefix is `{prefix, folder, name, visibility, items, folders}`, counting
 only what the reader may open, by the same filter the page and its `total`
 are counted by.
