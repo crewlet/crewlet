@@ -127,9 +127,14 @@ func TestEveryContractRowNamesAGateThatReadsIt(t *testing.T) {
 		seen[row.Name] = true
 
 		dir, test, ok := strings.Cut(row.Gate, ".")
-		if !ok || !strings.HasPrefix(dir, "internal/") || !strings.HasPrefix(test, "Test") {
-			t.Errorf("%s names the gate %q, which is not <package directory>.<TestName>",
-				row.Name, row.Gate)
+		// A GATE IS AN ENGINE PACKAGE'S, or the CLI's: a declaration the
+		// binary's own commands decide — the terminal steps a screen hands
+		// an operator — can only be run where those commands are, in
+		// package main's tests.
+		engine := strings.HasPrefix(dir, "internal/") || dir == "cmd/crewlet"
+		if !ok || !engine || !strings.HasPrefix(test, "Test") {
+			t.Errorf("%s names the gate %q, which is not <package directory>.<TestName> "+
+				"under internal/ or cmd/crewlet", row.Name, row.Gate)
 			continue
 		}
 		file, err := gates.file(filepath.Join(root, filepath.FromSlash(dir)), test)

@@ -72,6 +72,7 @@ import {
   useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
 import { PRINCIPLES_PATH } from "~/app/routes.ts";
+import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
 import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
@@ -165,10 +166,11 @@ import {
   Button,
   ButtonLink,
   Callout,
+  CodeBlock,
   cx,
+  Disclosure,
   EmptyState,
   IconButton,
-  InlineCode,
   Kbd,
   LayerHost,
   Menu,
@@ -1494,11 +1496,15 @@ function BuilderScreen({
   // THE COMPANY RUNS AND ITS AGENTS WAIT. The engine applies a company with no
   // providers.llm and places its seats, then holds every delivery on the
   // seat's inbox until an apply brings a provider (engine/nomodels.go). The
-  // dashboard writes none, so the builder says where one comes from.
-  // A lead's draft holds one unit and no settings, so it says nothing either way.
+  // dashboard writes none, so the builder gives the terminal steps that add
+  // one — the same the card after a create gives, from the same declaration.
+  // So while that card is up the caution waits: it would say the same thing
+  // twice, steps and all. A lead's draft holds one unit and no settings, so it
+  // says nothing either way.
   const noProvider =
     state.mode === "edit" &&
     state.scope === null &&
+    !created &&
     !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
@@ -1904,8 +1910,11 @@ function BuilderScreen({
         )}
         {noProvider && (
           <Callout variant="warning" icon={<CpuGlyph />}>
-            No model provider is set, so agents can’t work. Add one with{" "}
-            <InlineCode>crewlet config import</InlineCode>.
+            No model provider is set, so agents can’t work. One is added from a terminal on the
+            node’s host, starting from the company the store holds:
+            <Disclosure title="The steps" size="compact" headingLevel="none">
+              <CodeBlock plain wrap code={PROVIDER_STEPS} />
+            </Disclosure>
           </Callout>
         )}
         {refusal && (

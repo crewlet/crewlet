@@ -712,10 +712,12 @@ it ticked to build the company — or to lead a unit, whose own team they may
 edit without it. The dashboard adds no model provider — Settings › Models &
 keys edits one the configuration already declares — so one step stays outside
 it. Until it is done the company runs and no agent seat takes a turn; whatever
-is sent to a seat waits on its inbox. Add `providers.llm` afterwards with a
-`PATCH /config` merge patch, as the builder's next steps show
-([The Org Builder](../guides/org-builder.md#creating-the-company)), and the
-work that waited runs.
+is sent to a seat waits on its inbox. The builder's next steps give it: with
+`crewlet run` stopped, write the company to a file with `crewlet config
+export`, add `providers.llm` to it, sign the CLI in with `crewlet llm login`,
+import the file and start the node again
+([Giving the company a model](../guides/org-builder.md#giving-the-company-a-model)),
+and the work that waited runs.
 
 ## Split deployment (optional)
 

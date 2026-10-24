@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { setStepUpConfirmer, type OrgProjection } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
@@ -520,9 +521,15 @@ test("a company with no model provider is told so, and one with a provider is no
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
   // caution says the agents cannot work rather than claiming nothing is applied.
-  expect(
-    await screen.findByText(/No model provider is set, so agents can’t work\. Add one with/),
-  ).toBeDefined();
+  const caution = (
+    await screen.findByText(/No model provider is set, so agents can’t work\./)
+  ).closest(".crewlet-callout") as HTMLElement;
+  // And it gives the steps that add one, the card's own: the declaration the
+  // engine walks from a company only the store holds.
+  fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
+  expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
+    PROVIDER_STEPS,
+  );
   cleanup();
 
   const engineWith = new Engine(company());

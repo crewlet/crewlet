@@ -156,11 +156,64 @@ After a successful create, three steps remain. **Open Principles** opens
 Company › Principles in edit, to write the mission, the vision and the standing
 policies every agent reads. The builder cannot take the other two: connecting
 chat and trackers in Company › Integrations, and adding a model provider, which
-no dashboard screen writes. The engine applies the new company
+no dashboard screen adds. The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
-exists. The panel gives the exact `crewlet config import` and `PATCH /config`
-commands for it.
+exists. The panel gives the terminal steps for it, which
+[Giving the company a model](#giving-the-company-a-model) explains.
+
+### Giving the company a model
+
+Every model is a [coding CLI](../concepts/llm-backends.md) the engine drives,
+signed in on the node's host, so adding the first one is done in a terminal
+there — beside the node's `crewlet.yaml`. The company the builder created is
+in the store and in no file, so the steps start by writing it to one. The
+builder's panel after a create gives them, and so does its caution while the
+company has no model:
+
+```bash
+# Stop crewlet run first (Ctrl+C), and run these beside its
+# crewlet.yaml: each one opens the store, which one process holds.
+
+# 1. Write the running company to a file
+crewlet config export > company.yaml
+
+# 2. Add the model to it
+providers:
+  llm:
+    default:
+      model: sonnet
+
+# 3. Sign its CLI in to your subscription, and check it end to end
+crewlet llm login default -capture-token
+crewlet llm doctor default
+
+# 4. Import the file, and start the node again
+crewlet config import company.yaml
+crewlet run
+```
+
+- **The node is stopped first** because `crewlet config export` and every
+  `crewlet llm` command open the node's own store, and a running node holds
+  it: one process at a time. Run them on the host and in the directory of the
+  node that holds the store.
+- **The file comes from `crewlet config export`**, the active revision as it
+  is stored, rather than from `GET /config?format=yaml` or **Copy as YAML**:
+  those are redacted, and `crewlet llm` refuses a company file that still
+  carries a `__redacted__` mask, since nothing on its way restores one. A
+  `${NAME}` reference comes out as the reference, and a credential written
+  inline comes out in the clear (a company the builder created holds none).
+- **The entry needs only its model.** `default` drives Claude Code, the
+  default CLI, on your subscription; `-capture-token` mints a headless token
+  and stores it in the [secret store](../concepts/secret-store.md) under the
+  CLI's own token variable, which an entry that names no `auth.token` reads.
+  `crewlet llm doctor` then makes a real call with a tool to prove the CLI is
+  installed, signed in and still matches the profile Crewlet drives it with.
+  For another CLI or an API key, write the entry
+  [LLM Backends](../concepts/llm-backends.md) describes instead.
+- **The import is offline**, with the node stopped: it marks the revision
+  active in the node's store, and the node publishes it to the fleet as it
+  starts. The work that waited on the seats' inboxes runs on the new model.
 
 ## Reading the organization
 
@@ -358,8 +411,13 @@ once one is added
 ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
 The builder does not write providers, and the dashboard does not add one:
 Settings › Models & keys edits a model the configuration already declares.
-Add one with `crewlet config import` or `PATCH /config`
-([Configure via the API](configure-via-api.md)).
+The caution folds away the steps that add one — the panel's own, starting from
+the company the store holds ([Giving the company a model](#giving-the-company-a-model)).
+It waits while the panel a create leaves is on screen, which says the same and
+gives the same steps. Any write of the document adds the entry, `PATCH /config`
+included ([Configure via the API](configure-via-api.md)); what only a terminal
+does is sign its CLI in, and `crewlet llm` reads the entry it signs in from a
+company file.
 
 ## Adding a unit or a seat
 

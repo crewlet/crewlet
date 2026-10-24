@@ -52,7 +52,10 @@ type Entry struct {
 	Reader Reader
 	// Gate is the test that owns the comparison, as the package's directory
 	// from the module root and the test's name:
-	// `internal/events.TestCategoryChipsAreTheEngines`.
+	// `internal/events.TestCategoryChipsAreTheEngines`. The directory is
+	// under internal/, or is cmd/crewlet for a declaration the CLI owns: the
+	// commands are the binary's own package, and its tests are the only
+	// place they run.
 	Gate string
 }
 
@@ -130,6 +133,9 @@ var contract = []Entry{
 	// avatar.ts
 	{"AVATAR_CHARACTERS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
 	{"AVATAR_COLORS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
+
+	// providersteps.ts
+	{"PROVIDER_STEPS", ReadScalar, "cmd/crewlet.TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds"},
 
 	// models.ts
 	{"CLIAuthMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},

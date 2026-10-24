@@ -26,14 +26,16 @@
  * in edit rather than this form asking for one of the three in passing.
  *
  * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
- * `providers.llm`, which no screen edits), so the next steps name it too and
- * give the command for the one step that has no screen at all.
+ * `providers.llm`, which no screen adds), so the next steps after a successful
+ * create name it too and give the terminal steps for the one step that has no
+ * screen at all (`contract/providersteps.ts`).
  */
 
 import { useState } from "react";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 import { href } from "~/app/router.tsx";
 import { ConfigField } from "~/components/ConfigField.tsx";
+import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
@@ -214,7 +216,9 @@ export function CreateCompany({
 /**
  * What is left to do once the company exists: write the principles every
  * agent reads, connect the tools it works in, and give it a model provider,
- * which no dashboard screen writes.
+ * which no dashboard screen adds. The company this card follows is in the
+ * store and in no file, which is where the steps start
+ * (`contract/providersteps.ts` says why each one is the one it is).
  */
 export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   return (
@@ -253,32 +257,14 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         <div className="col gap-1">
           <strong>Add a model provider</strong>
           <span className="t-caption">
-            Agents can’t work until one is added. Every model runs through a coding CLI. This adds
-            Claude Code and signs it in with <InlineCode>crewlet llm login</InlineCode>:
+            Agents can’t work until one is added. Every model runs through a coding CLI, signed in
+            on the node’s host. These steps write the company you just created to a file, add Claude
+            Code to it, sign it in with <InlineCode>crewlet llm login</InlineCode> and import the
+            file:
           </span>
-          <CodeBlock plain wrap code={PROVIDER_SNIPPET} />
+          <CodeBlock plain wrap code={PROVIDER_STEPS} />
         </div>
       </div>
     </Card>
   );
 }
-
-/**
- * The exact steps the card above names, in the order they work in. The entry
- * goes in the company FILE first, because `crewlet llm` reads the entry it
- * signs in from that file. `-capture-token` stores a headless token in the
- * secret store under the CLI's own token variable, which an entry naming no
- * `auth.token` reads — so the entry needs nothing more than its model.
- */
-const PROVIDER_SNIPPET = `# 1. Add the model to company.yaml
-providers:
-  llm:
-    default:
-      model: sonnet
-
-# 2. Sign its CLI in to your subscription, and check it end to end
-crewlet llm login default -capture-token
-crewlet llm doctor default
-
-# 3. Import the file
-crewlet config import company.yaml`;
