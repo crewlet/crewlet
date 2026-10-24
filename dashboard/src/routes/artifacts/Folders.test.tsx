@@ -466,6 +466,34 @@ describe("Move to…", () => {
     });
   });
 
+  // THE LIST NEVER LEAVES THE DIALOG: it is always on screen, so a press on
+  // Cancel while the field holds focus lands on Cancel and closes the
+  // dialog, rather than on the veil after a list collapsing on blur shrank
+  // the dialog under the pointer. Mutation: draw the list as a popup that
+  // closes on blur and the list is gone once the field loses focus.
+  test("the list stays on screen when the field loses focus, and Cancel closes at the first press", () => {
+    const onClose = vi.fn();
+    mount(
+      <MoveDialog
+        subject={{ kind: "artifacts", items: [{ id: "a1", title: "Pricing FAQ", folder: Q4 }] }}
+        onClose={onClose}
+        onMoved={vi.fn()}
+      />,
+      "#/artifacts",
+    );
+    const dialog = screen.getByRole("dialog", { name: "Move “Pricing FAQ”" });
+    const field = within(dialog).getByRole("combobox", { name: "Find a folder" });
+    expect(document.activeElement).toBe(field);
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    fireEvent.mouseDown(cancel);
+    fireEvent.blur(field);
+    expect(within(dialog).getByRole("listbox", { name: "Folders" })).toBeTruthy();
+    expect(within(dialog).getAllByRole("option").length).toBeGreaterThan(0);
+    fireEvent.mouseUp(cancel);
+    fireEvent.click(cancel);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   test("a folder is never offered a place inside itself, and a move that widens asks first", async () => {
     answer = (req) =>
       (req.body as { confirm_widen?: boolean }).confirm_widen

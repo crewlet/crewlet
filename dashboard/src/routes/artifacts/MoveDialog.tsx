@@ -8,7 +8,8 @@
  *
  * Every place the reader may file into is one row, its path in words
  * ("Marketing › Campaigns › Q3"), the top level first and the tree in its own
- * order after it, found by typing any part of the path (`Combobox`). The
+ * order after it, found by typing any part of the path (the kit's inline
+ * `Combobox`: the list always on screen under the field, at one height). The
  * place it is in now is marked Current. A folder the reader cannot see is
  * never listed, and neither is one they may only view: every row is one the
  * engine would file into.
@@ -86,6 +87,9 @@ export type MoveSubject =
  * is narrowed by typing rather than by scrolling through all of them.
  */
 const SHOWN = 50;
+
+/** How many places Move to…'s list shows before it scrolls, and so how tall it stands. */
+const MOVE_ROWS = 6;
 
 /** The option values that are not a folder's id (which is a uuid, so never one of these). */
 const TOP = "@top";
@@ -194,7 +198,6 @@ export function MoveDialog({
   );
 
   const [phrase, setPhrase] = useState("");
-  const [listOpen, setListOpen] = useState(true);
   const [chosen, setChosen] = useState<MoveTarget | null>(null);
   const [step, setStep] = useState<"choose" | "create" | "widen">("choose");
   const artifacts = useMoveArtifacts();
@@ -247,16 +250,12 @@ export function MoveDialog({
       : []),
   ];
 
-  // BACK TO THE LIST, open on the phrase the reader typed.
-  const back = () => {
-    setStep("choose");
-    setListOpen(true);
-  };
+  // BACK TO THE LIST, on the phrase the reader typed.
+  const back = () => setStep("choose");
 
   const choose = (target: MoveTarget, path: string) => {
     setChosen(target);
     setPhrase(path);
-    setListOpen(false);
   };
 
   const commit = async (option: ComboboxOption) => {
@@ -443,7 +442,7 @@ export function MoveDialog({
       }
     >
       <form
-        className={listOpen ? "artifacts-move is-listing" : "artifacts-move"}
+        className="artifacts-move"
         onSubmit={(e) => {
           e.preventDefault();
           if (!hold) void move();
@@ -457,12 +456,14 @@ export function MoveDialog({
           width="full"
           autoFocus
           value={phrase}
-          onValueChange={(next) => {
-            setPhrase(next);
-            setListOpen(true);
-          }}
-          open={listOpen}
-          onOpenChange={setListOpen}
+          onValueChange={setPhrase}
+          // THE LIST IS THE DIALOG'S BODY, always on screen at one height
+          // (the kit's inline Combobox): a list that closed when the field
+          // lost focus shrank the dialog between the press on Cancel and its
+          // release, so the click landed on the veil.
+          inline
+          rows={MOVE_ROWS}
+          chosen={chosen ? chosen.id || TOP : undefined}
           options={options}
           onCommit={(option) => void commit(option)}
           commitOn="click"
