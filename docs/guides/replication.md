@@ -638,20 +638,24 @@ A record at a version this build cannot decode is retained, and everything
 whose scope meets it is retained too. That is bounded rather than open-ended:
 the **deferral grace** is 30 minutes, past which `deferred_old` fires — naming
 the log, the position of the oldest record held and the record version it was
-written at against the one this build reads. Where the node's copy is judged
-by that log (the tracker's and the knowledge base's are; the identity
-estate's, the vectors' and the usage log's are not) the node takes its copy
-out of service at the same moment — its seats stay, and read the estate from
-the other data nodes — because both are measured from one instant — the
-position heartbeat's first sighting of the record — and the alarm says which of
-the two it is. It
-is **one alarm** however many logs hold such a record, and it lists each of
-them in its `domains` with that log's own detail, so an upgrade that moved two
-logs' record versions names both, each saying what its own grace did: a detail
-naming only the node's oldest record would have said the identity estate's took
-nothing out of service while the tracker's had. Its log lines are written per
-log, so the second log's record passing the grace, and the first log's clearing
-while the second's stands, are each said.
+written at against the one this build reads. The node takes its copy of that
+log out of service at the same moment, because both are measured from one
+instant — the position heartbeat's first sighting of the record. Every log's
+copy is judged on its own
+([ADR-0045](../../adr/0045-a-domains-fault-takes-only-its-own-copy-out-of-service.md)),
+so only that log's copy goes: what the estate routes to it is answered by the
+other data nodes, the node's copies of every other log keep serving, and its
+seats stay. The identity log is the one whose requests are not all routed:
+what this node answers from its own identity rows — the sign-ins, sessions and
+tokens of anybody the held record may be about, and every directory decision —
+answers 503 here from the moment the record is held, not only past the grace,
+until this node can read it. It is **one alarm** however many logs hold such a
+record, and it lists each of them in its `domains` with that log's own detail,
+so an upgrade that moved two logs' record versions names both, each with its
+own record and how long its own grace has run: a detail naming only the node's
+oldest record would have hidden the second log, whose copy went out of service
+too. Its log lines are written per log, so the second log's record passing the
+grace, and the first log's clearing while the second's stands, are each said.
 
 So a rolling upgrade should finish inside that window. An upgrade that stalls
 half-done leaves the old nodes holding records they cannot apply and refusing
