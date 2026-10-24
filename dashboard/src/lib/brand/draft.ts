@@ -33,7 +33,7 @@ import {
   BRAND_IMAGE_MAX_BYTES,
   BRAND_IMAGE_MAX_SIDE,
   BRAND_SVG_MAX_BYTES,
-} from "~/contract/artifacts.ts";
+} from "~/contract/brand.ts";
 import { fmtBytes, utf8Bytes } from "../format.ts";
 
 /** A bound in bytes as a sentence says it: "512 KB", "2 MB", the whole unit where it is one. */

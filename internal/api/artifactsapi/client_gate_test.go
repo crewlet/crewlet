@@ -27,11 +27,22 @@ import (
 // minted it in, the presence chrome draws what a member is doing, and the
 // history and the company trail word every op a history row is filed under. Every
 // one of those is a closed set the engine owns, so `contract/artifacts.ts`
-// declares each once and this holds it: a value the engine grew that the
+// (and `contract/brand.ts`, for a brand kit's) declares each once and this
+// holds it: a value the engine grew that the
 // dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
 // dashboard keeps that the engine dropped is a choice every write refuses.
 // The ORDER is held too, because the role ladder is an order (each includes
 // the ones before it) and the dashboard draws the others in the engine's.
+// contractFile is the dashboard module a gated name is declared in: a brand
+// kit's rows in `contract/brand.ts`, which only the brand's lazy screens read,
+// every other artifacts row in `contract/artifacts.ts`.
+func contractFile(name string) string {
+	if strings.HasPrefix(name, "BRAND_") {
+		return "contract/brand.ts"
+	}
+	return "contract/artifacts.ts"
+}
+
 func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -62,7 +73,7 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		}
 		if !slices.Equal(client, engine) {
 			t.Errorf("the dashboard's %s is %q and the engine's is %q, in that order: "+
-				"change contract/artifacts.ts to the engine's", name, client, engine)
+				"change %s to the engine's", name, client, engine, contractFile(name))
 		}
 	}
 }
@@ -156,7 +167,7 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		}
 		if client != engine {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
-				"contract/artifacts.ts to the engine's figure", name, client, engine)
+				"%s to the engine's figure", name, client, engine, contractFile(name))
 		}
 	}
 }

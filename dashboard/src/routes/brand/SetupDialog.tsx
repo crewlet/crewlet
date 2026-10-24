@@ -7,7 +7,7 @@
 import { useMemo, useState } from "react";
 import { Button, ColorField, FormField, Input, LogoSlot, Modal, Text } from "@crewlethq/ui";
 import type { BrandDocument } from "~/protocol/index.ts";
-import { BRAND_NAME_MAX_BYTES } from "~/contract/artifacts.ts";
+import { BRAND_NAME_MAX_BYTES } from "~/contract/brand.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import { DEFAULT_FACE, brandContrast, refusalWords, refusingPair } from "~/lib/brand/brand.ts";
 import {

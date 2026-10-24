@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "vitest";
 import { contrast, parseHex } from "@crewlethq/tokens";
-import { BRAND_COLOR_FALLBACKS, BRAND_CONTRAST_PAIRS } from "~/contract/artifacts.ts";
+import { BRAND_COLOR_FALLBACKS, BRAND_CONTRAST_PAIRS } from "~/contract/brand.ts";
 import type { BrandDocument } from "~/protocol/index.ts";
 import {
   BRAND_COLOR_ROLES,

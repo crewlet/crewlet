@@ -16,7 +16,7 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type ArtifactKind, type BrandAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
-import { BRAND_KIT_FACES, BRAND_SYSTEM_STACKS } from "~/contract/artifacts.ts";
+import { BRAND_KIT_FACES, BRAND_SYSTEM_STACKS } from "~/contract/brand.ts";
 import { faceDrawing } from "~/lib/brand/brand.ts";
 import { fmtDate } from "~/lib/format.ts";
 import type { BrandFace } from "~/protocol/types.ts";

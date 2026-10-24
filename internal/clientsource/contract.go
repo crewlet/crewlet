@@ -364,6 +364,8 @@ var contract = []Entry{
 	{"ARTIFACT_FOLDER_MAX_DEPTH", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_MOVE_MAX_ITEMS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_LIST_DELIMITER", ReadScalar, "internal/api/artifactsapi.TestTheDashboardListsWithTheEnginesDelimiter"},
+
+	// brand.ts
 	{"BRAND_NAME_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"BRAND_TAGLINE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"BRAND_VOICE_SUMMARY_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},

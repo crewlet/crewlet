@@ -32,7 +32,7 @@ import {
   BRAND_FACE_FAMILIES,
   BRAND_KIT_FACES,
   BRAND_SYSTEM_STACKS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/brand.ts";
 import type { BrandAnswer, BrandDocument, BrandFace, BrandFileRef } from "~/protocol/index.ts";
 import { plural } from "../format.ts";
 

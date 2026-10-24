@@ -38,7 +38,7 @@ import {
   BRAND_VOICE_EXAMPLE_MAX_BYTES,
   BRAND_VOICE_MAX_EXAMPLES,
   BRAND_VOICE_SUMMARY_MAX_BYTES,
-} from "~/contract/artifacts.ts";
+} from "~/contract/brand.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import type { BrandDocument, BrandFace } from "~/protocol/index.ts";
 import {
