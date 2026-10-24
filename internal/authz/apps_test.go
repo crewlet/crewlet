@@ -261,8 +261,9 @@ func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
 // reader is shown it.
 func TestShowsFollowsTheKindsApp(t *testing.T) {
 	t.Parallel()
-	// THE ARTIFACTS APP GATES AUTHORING AND NEVER READING: an artifact is
-	// shown by its shares, so no kind belongs to it.
+	// THE ARTIFACTS APP GATES AUTHORING AND NEVER READING: an artifact and
+	// a folder of the artifact tree are each shown by their shares, so no
+	// kind belongs to it.
 	authoringOnly := map[iam.Grant]bool{iam.GrantArtifacts: true}
 	used := map[iam.Grant]bool{}
 	for _, k := range authz.ObjectKinds {
@@ -278,7 +279,8 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 			person("jane.doe", iam.GrantArtifacts),
 			person("jane.doe", iam.GrantAdmin),
 		} {
-			want := k != authz.KindArtifact && (app == "" || p.Can(app))
+			want := k != authz.KindArtifact && k != authz.KindArtifactFolder &&
+				(app == "" || p.Can(app))
 			if got := authz.Shows(p, k); got != want {
 				t.Errorf("Shows(%v, %s) = %v, want %v", p.Grants, k, got, want)
 			}
