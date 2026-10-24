@@ -188,6 +188,14 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		t.Fatalf("read the anchors: %v", err)
 	}
 	for _, w := range written[:len(written)-1] {
+		// A SUBJECT THE FLOOR'S OWN RECORD ALSO WROTE keeps its anchor, at
+		// the floor, which the check below holds: an anchor is one row per
+		// subject naming its LAST record, so a candidate whose suite records
+		// share a subject — a reanchor's generation, a singleton — leaves
+		// nothing below the floor on it to remove.
+		if w.env.Subject == kept.env.Subject {
+			continue
+		}
 		if _, ok := anchors[spec.Name][subjectOf(spec, w.env.Subject)]; ok {
 			return fmt.Errorf("the anchor of %s at %d is still on %s after a trimmed "+
 				"record naming %s applied — every anchor below the floor goes",
