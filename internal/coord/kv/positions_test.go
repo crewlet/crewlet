@@ -15,7 +15,7 @@ import (
 // THE POSITIONS REGISTER HAS NO TTL, and this is the case that says why.
 //
 // Every other bucket in this estate expires its keys — that is what a lease,
-// a claim, a dedupe window and a cooldown ARE. The register is the one bucket
+// a claim, a dedupe window and a rate window ARE. The register is the one bucket
 // where a key's disappearance would be read as a fact rather than as silence:
 // a node whose position key expired reads as a node that has applied NOTHING,
 // and the trim takes a MINIMUM across those rows. So an expiry here does not
@@ -131,7 +131,6 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 		FireRetention:    ttl,
 		FollowRetention:  ttl,
 		RebaseRetention:  ttl,
-		CooldownMax:      ttl,
 		BudgetRetention:  ttl,
 		StatusFreshness:  ttl,
 		CustodyRetention: ttl,

@@ -183,9 +183,8 @@ type Config struct {
 	Resume *Resume
 
 	// AgentRun runs the executor as somebody else's agentic loop instead
-	// of the engine's own. Nil is the native tool loop, which is what
-	// every seat on an API provider has and what a cli-agent entry in
-	// text mode has. See agentrun.go.
+	// of the engine's own. Nil is the native tool loop, which is what a
+	// seat on an entry in text mode has. See agentrun.go.
 	AgentRun AgentLauncher
 
 	// Steer is the turn's box of notes from a person (internal/agent/steer),
@@ -934,8 +933,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// THE SEED AND THE SURFACE TRAVEL WITH THE TEXT because the prompt is
 	// all three: a resumed loop opens with the saved messages instead of
 	// the strings, and every round of either carries the tool-definition
-	// array, which both HTTP vendors bill as input and the cli-agent text
-	// backend writes into the prompt literally.
+	// array, which the CLI backend writes into the prompt literally and the
+	// vendor bills as input.
 	emit.started(ctx, ph, iteration, system, user, in.seed, surface,
 		capsOf(policy, out.Rounds+in.rounds))
 
@@ -1142,7 +1141,7 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 	// number — the dashboard's `rounds()` builds one block per number and the
 	// partial overwrites the block it lands on — so an unshifted partial from
 	// extension round 1 is written into the phase's committed round 1: that
-	// round's thinking and prose are replaced by text the model is writing
+	// round's prose is replaced by text the model is writing
 	// twenty rounds later, sitting directly above round 1's own tool calls,
 	// while the round actually running gets no block at all. The abandoned
 	// attempts carry the same number and travel with it.
@@ -1702,16 +1701,17 @@ func missingTools(s *tools.Surface) []string {
 // reviewArtifact is what the executor produced, handed to the reviewer.
 //
 // WHOLE, and that is a bug fix rather than a preference. [turn.Work.Text] is
-// the assistant messages of the executor's tool loop concatenated, thinking
-// blocks included (a corrective's repeats excepted — see toolloop's
-// assistantText) — so the draft is at its END. The 2000-rune cut this used to
-// carry kept the HEAD, which on any multi-round execution is the opening of
-// round one's reasoning and not the draft at all. The reviewer's verdict
+// the assistant messages of the executor's tool loop concatenated (a
+// corrective's repeats excepted — see toolloop's assistantText) — so the
+// draft is at its END. The 2000-rune cut this used to carry kept the HEAD,
+// which on any multi-round execution is the opening of round one's prose and
+// not the draft at all. The reviewer's verdict
 // decides whether the turn ships or loops, and it was being asked for that
 // verdict on a prefix that frequently did not contain the work.
 //
-// Bounded by the executor's round cap times the phase's max_tokens, which is a
-// real ceiling and the right place for one.
+// Bounded by the executor's round cap times what one round can write — its
+// model's own output ceiling, which the CLI holds it to — which is a real
+// ceiling and the right place for one.
 //
 // "(empty)" rather than "" for a pass with no text: an absent section reads as
 // a section the engine forgot to fill in.

@@ -81,7 +81,7 @@ test("an edit is kept as its operation log and nothing of the document", async (
   expect(value.baseRevision).toBe("r1");
   expect(value.ops).toHaveLength(1);
   expect(kept()).not.toContain("Designer");
-  expect(kept()).not.toContain("anthropic");
+  expect(kept()).not.toContain("claude-sonnet-5-5");
 });
 
 test("a kept draft of the same revision waits for Keep or Discard, and Keep restores it", async () => {

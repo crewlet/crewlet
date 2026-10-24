@@ -445,8 +445,8 @@ func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("active: %v", err)
 		}
-		body := `{"type": "anthropic", "model": "claude-sonnet-5",
-		  "api_keys": ["sk-` + strings.ReplaceAll(name, " ", "-") + `"]}`
+		body := `{"model": "claude-sonnet-5",
+		  "auth": {"token": "sk-` + strings.ReplaceAll(name, " ", "-") + `"}}`
 		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu", body,
 			map[string]string{"X-Summary": "an entity", "If-Match": spell(current.ID)})
 		if res.Code != http.StatusCreated {

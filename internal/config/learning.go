@@ -33,11 +33,11 @@ type Learning struct {
 func DefaultLearning() Learning {
 	return Learning{
 		Episodic:         Episodic{RetrievalLimit: 5},
-		Reflect:          Reflect{BudgetTokens: 5000, SummarizeMaxTokens: 400},
-		Counterparty:     Counterparty{BudgetTokens: 3000},
+		Reflect:          Reflect{},
+		Counterparty:     Counterparty{},
 		SkillSynthesis:   DefaultSkillSynthesis(),
 		SkillRefinement:  DefaultSkillRefinement(),
-		SkillPromotion:   SkillPromotion{MinSiblingCount: 3, JaccardThreshold: 0.6, BudgetTokens: 4000},
+		SkillPromotion:   SkillPromotion{MinSiblingCount: 3, JaccardThreshold: 0.6},
 		SkillCurator:     SkillCurator{IntervalHours: 24, StaleAfterDays: 30, ArchiveAfterDays: 90},
 		PersonalMemory:   PersonalMemory{MaxRefreshesPerTurn: 3},
 		EpisodeLifecycle: DefaultEpisodeLifecycle(),
@@ -50,8 +50,6 @@ func (l *Learning) On() bool { return l.Enabled.Or(true) }
 func (l *Learning) validate(path Path) error {
 	var p problems
 	p.wrap(l.Episodic.validate(at(path, "episodic")))
-	p.wrap(l.Reflect.validate(at(path, "reflect")))
-	p.wrap(l.Counterparty.validate(at(path, "counterparty")))
 	p.wrap(l.SkillSynthesis.validate(at(path, "skill_synthesis")))
 	p.wrap(l.SkillRefinement.validate(at(path, "skill_refinement")))
 	p.wrap(l.SkillPromotion.validate(at(path, "skill_promotion")))
@@ -91,9 +89,6 @@ type Reflect struct {
 	// turn.
 	PersistDecider Toggle `yaml:"persist_decider,omitempty" json:"persist_decider,omitzero" desc:"Run the persist decision after each turn (default on)."`
 
-	// BudgetTokens softly caps the reflection call. 0 disables the cap.
-	BudgetTokens int `yaml:"budget_tokens,omitempty" json:"budget_tokens,omitempty" js:"min=0" desc:"Soft token cap on the reflection call; 0 = uncapped."`
-
 	// SummarizeEpisodes passes the turn-start `## Similar prior work`
 	// block's hits through the seat's cheap auxiliary model, which writes
 	// ONE short briefing of them (at most four bullets) in place of the raw
@@ -101,9 +96,6 @@ type Reflect struct {
 	// answers. query_episodes' answer is never summarised: a seat that asked
 	// for its turns gets them.
 	SummarizeEpisodes Toggle `yaml:"summarize_episodes,omitempty" json:"summarize_episodes,omitzero" desc:"Summarise the turn-start Similar prior work block's hits into one briefing through the auxiliary model (default on); query_episodes is never summarised."`
-
-	// SummarizeMaxTokens softly caps that briefing.
-	SummarizeMaxTokens int `yaml:"summarize_max_tokens,omitempty" json:"summarize_max_tokens,omitempty" js:"min=0" desc:"Soft cap on the Similar prior work briefing, in tokens."`
 }
 
 // Runs reports whether reflection runs, applying the true default.
@@ -117,27 +109,15 @@ func (r *Reflect) Decides() bool { return r.PersistDecider.Or(true) }
 // default.
 func (r *Reflect) Summarizes() bool { return r.SummarizeEpisodes.Or(true) }
 
-func (r *Reflect) validate(path Path) error {
-	var p problems
-	p.wrap(nonNegative(path, "budget_tokens", r.BudgetTokens))
-	p.wrap(nonNegative(path, "summarize_max_tokens", r.SummarizeMaxTokens))
-	return p.err()
-}
-
 // Counterparty is per-counterparty profiling: for each turn triggered by an
 // identifiable sender, update a profile of that person from this seat's
 // point of view.
 type Counterparty struct {
-	Enabled      Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Observe counterparties (default on)."`
-	BudgetTokens int    `yaml:"budget_tokens,omitempty" json:"budget_tokens,omitempty" js:"min=0" desc:"Soft token cap on the profiler call."`
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Observe counterparties (default on)."`
 }
 
 // Observes reports whether profiling runs, applying the true default.
 func (c *Counterparty) Observes() bool { return c.Enabled.Or(true) }
-
-func (c *Counterparty) validate(path Path) error {
-	return nonNegative(path, "budget_tokens", c.BudgetTokens)
-}
 
 // SkillSynthesis drafts reusable skills from what turns actually did.
 //
@@ -151,8 +131,6 @@ type SkillSynthesis struct {
 	// MinToolCalls is the single-turn trigger. Turns below it get no
 	// inline draft, but still feed clustered synthesis.
 	MinToolCalls int `yaml:"min_tool_calls,omitempty" json:"min_tool_calls,omitempty" js:"min=0" desc:"Tool calls a turn needs before an inline draft."`
-
-	BudgetTokens int `yaml:"budget_tokens,omitempty" json:"budget_tokens,omitempty" js:"min=0" desc:"Soft token cap per draft attempt."`
 
 	// MaxSkillsPerAgent is a hard cap; once reached the synthesizer
 	// no-ops.
@@ -177,7 +155,6 @@ type SkillSynthesis struct {
 func DefaultSkillSynthesis() SkillSynthesis {
 	return SkillSynthesis{
 		MinToolCalls:              5,
-		BudgetTokens:              4000,
 		MaxSkillsPerAgent:         50,
 		DuplicateJaccardThreshold: 0.7,
 		SchedulerIntervalSeconds:  3600,
@@ -201,7 +178,6 @@ func (s *SkillSynthesis) Clusters() bool { return s.SchedulerEnabled.Or(false) }
 func (s *SkillSynthesis) validate(path Path) error {
 	var p problems
 	p.wrap(positive(path, "min_tool_calls", s.MinToolCalls))
-	p.wrap(nonNegative(path, "budget_tokens", s.BudgetTokens))
 	p.wrap(positive(path, "max_skills_per_agent", s.MaxSkillsPerAgent))
 	p.wrap(fraction(path, "duplicate_jaccard_threshold", s.DuplicateJaccardThreshold))
 	p.wrap(positive(path, "scheduler_interval_seconds", s.SchedulerIntervalSeconds))
@@ -219,7 +195,6 @@ type SkillRefinement struct {
 	Enabled             Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Refine skills after use (default on)."`
 	AutoRefineOnSuccess Toggle `yaml:"auto_refine_on_success,omitempty" json:"auto_refine_on_success,omitzero" desc:"Append an observation when a skill's turn succeeded (default on)."`
 	AutoRefineOnFailure Toggle `yaml:"auto_refine_on_failure,omitempty" json:"auto_refine_on_failure,omitzero" desc:"Append a counter-example when it failed (default on)."`
-	BudgetTokens        int    `yaml:"budget_tokens,omitempty" json:"budget_tokens,omitempty" js:"min=0" desc:"Soft token cap per refinement."`
 	MaxBodyChars        int    `yaml:"max_body_chars,omitempty" json:"max_body_chars,omitempty" js:"min=0" desc:"Ceiling on a refined skill's body."`
 	MaxVersionsKept     int    `yaml:"max_versions_kept,omitempty" json:"max_versions_kept,omitempty" js:"min=0" desc:"Archived versions kept for rollback."`
 }
@@ -234,7 +209,7 @@ func (s *SkillRefinement) OnFailure() bool { return s.AutoRefineOnFailure.Or(tru
 
 // DefaultSkillRefinement is the shipped defaults.
 func DefaultSkillRefinement() SkillRefinement {
-	return SkillRefinement{BudgetTokens: 3000, MaxBodyChars: 20000, MaxVersionsKept: 10}
+	return SkillRefinement{MaxBodyChars: 20000, MaxVersionsKept: 10}
 }
 
 // Refines reports whether refinement runs, applying the true default.
@@ -242,7 +217,6 @@ func (s *SkillRefinement) Refines() bool { return s.Enabled.Or(true) }
 
 func (s *SkillRefinement) validate(path Path) error {
 	var p problems
-	p.wrap(nonNegative(path, "budget_tokens", s.BudgetTokens))
 	p.wrap(positive(path, "max_body_chars", s.MaxBodyChars))
 	p.wrap(positive(path, "max_versions_kept", s.MaxVersionsKept))
 	return p.err()
@@ -257,7 +231,6 @@ type SkillPromotion struct {
 	// before it is worth promoting. Below three it is a coincidence.
 	MinSiblingCount  int     `yaml:"min_sibling_count,omitempty" json:"min_sibling_count,omitempty" js:"min=0" desc:"Distinct seats a cluster needs before promotion."`
 	JaccardThreshold float64 `yaml:"jaccard_threshold,omitempty" json:"jaccard_threshold,omitempty" js:"min=0;max=1" desc:"Similarity that pools two seats' skills."`
-	BudgetTokens     int     `yaml:"budget_tokens,omitempty" json:"budget_tokens,omitempty" js:"min=0" desc:"Soft token cap per promotion draft."`
 }
 
 // Promotes reports whether promotion runs, applying the true default.
@@ -267,7 +240,6 @@ func (s *SkillPromotion) validate(path Path) error {
 	var p problems
 	p.wrap(positive(path, "min_sibling_count", s.MinSiblingCount))
 	p.wrap(fraction(path, "jaccard_threshold", s.JaccardThreshold))
-	p.wrap(nonNegative(path, "budget_tokens", s.BudgetTokens))
 	return p.err()
 }
 
@@ -362,7 +334,6 @@ type EpisodeLifecycle struct {
 
 	CompactionJaccardThreshold float64 `yaml:"compaction_jaccard_threshold,omitempty" json:"compaction_jaccard_threshold,omitempty" js:"min=0;max=1" desc:"Similarity that pools two episodes into one cluster."`
 	CompactionBatchSize        int     `yaml:"compaction_batch_size,omitempty" json:"compaction_batch_size,omitempty" js:"min=0" desc:"Raw episodes pulled into one pass."`
-	CompactionBudgetTokens     int     `yaml:"compaction_budget_tokens,omitempty" json:"compaction_budget_tokens,omitempty" js:"min=0" desc:"Soft token cap on summarising one cluster."`
 
 	// ExemplarCount is how many originals stay raw after a cluster is
 	// compacted, so an operator can drill into typical examples without
@@ -390,7 +361,6 @@ func DefaultEpisodeLifecycle() EpisodeLifecycle {
 		// treated as distinct.
 		CompactionJaccardThreshold: 0.6,
 		CompactionBatchSize:        200,
-		CompactionBudgetTokens:     4000,
 		ExemplarCount:              2,
 	}
 }
@@ -405,7 +375,6 @@ func (e *EpisodeLifecycle) validate(path Path) error {
 	p.wrap(positive(path, "compaction_min_cluster_size", e.CompactionMinClusterSize))
 	p.wrap(fraction(path, "compaction_jaccard_threshold", e.CompactionJaccardThreshold))
 	p.wrap(positive(path, "compaction_batch_size", e.CompactionBatchSize))
-	p.wrap(nonNegative(path, "compaction_budget_tokens", e.CompactionBudgetTokens))
 	p.wrap(nonNegative(path, "exemplar_count", e.ExemplarCount))
 	p.wrap(nonNegative(path, "compacted_max_age_days", e.CompactedMaxAgeDays))
 

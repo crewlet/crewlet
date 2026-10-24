@@ -17,6 +17,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // helperEnv marks a re-execution of this test binary as the fake CLI rather
@@ -87,6 +89,15 @@ func runFakeCLI() {
 		fakeStubborn()
 	case os.Getenv("FAKE_GRANDCHILD") == "1":
 		fakeGrandchild()
+	case os.Getenv("FAKE_HOLD_STREAM") != "":
+		// A CLI that answers and exits 0, leaving a helper behind that holds
+		// one of its streams — see exec_unix_test.go.
+		fakeLeaveHolder(os.Getenv("FAKE_HOLD_STREAM"))
+		fmt.Print(os.Getenv("FAKE_STDOUT"))
+	case os.Getenv("FAKE_EXIT_0_ON_TERM") == "1":
+		// A CLI that ends cleanly when it is asked to stop — see
+		// exec_unix_test.go.
+		fakeExitZeroOnTerm()
 	case os.Getenv("FAKE_DUMP_CWD") == "1":
 		// THE CHILD'S OWN ANSWER, because nothing else can give one, and it
 		// reports what it FINDS rather than only where it is.
@@ -353,10 +364,6 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 	if comp.StopReason != llm.StopToolUse {
 		t.Errorf("StopReason = %q, want tool_use", comp.StopReason)
 	}
-	// Recorded so no other backend mistakes this turn for one of its own.
-	if comp.Provider != "cli-agent" {
-		t.Errorf("Provider = %q, want cli-agent", comp.Provider)
-	}
 	if comp.Content != "reading" {
 		t.Errorf("Content = %q", comp.Content)
 	}
@@ -387,8 +394,10 @@ func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
 }
 
 // A spent subscription arrives as prose on a SUCCESSFUL exit. Classifying it
-// RATE_LIMIT is what carries the role onto its metered fallback for the rest
-// of the window and back again afterwards, with no operator intervention.
+// RATE_LIMIT is what carries the role onto its fallback for the rest of the
+// window and back again afterwards, with no operator intervention — and the
+// window it sits out is the vendor's own reset instant ([Provider.bench]),
+// where the profile reads one.
 func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 	t.Parallel()
 	reset := time.Now().Add(37 * time.Minute).Unix()
@@ -410,8 +419,8 @@ func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 	if !errors.As(err, &classified) {
 		t.Fatalf("error is not classified: %v", err)
 	}
-	if classified.RetryAfter < 30*time.Minute || classified.RetryAfter > 40*time.Minute {
-		t.Errorf("RetryAfter = %v, want the vendor's own reset instant", classified.RetryAfter)
+	if left := time.Until(p.sitOut.until); left < 30*time.Minute || left > 40*time.Minute {
+		t.Errorf("the entry sits out %v, want the vendor's own reset instant", left)
 	}
 }
 
@@ -479,7 +488,7 @@ func TestTheWallClockCapEndsACall(t *testing.T) {
 
 // Exit zero with nothing on stdout is a failed call, but not a FATAL one:
 // nothing about the request was refused, so the chain must be free to try
-// another member and the credential must not be cooled.
+// another member and the entry must not sit out.
 func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ""}, nil)
@@ -487,8 +496,123 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 	if got := llm.KindOf(err); got != llm.KindServer {
 		t.Fatalf("kind = %v, want server", got)
 	}
-	if llm.KindOf(err).ExhaustsCredential() {
-		t.Error("an empty answer must not cool the credential")
+	if err := p.benched(); err != nil {
+		t.Errorf("an empty answer sat the entry out: %v", err)
+	}
+}
+
+// claudeOverloaded is how Claude Code reports an overloaded API once its own
+// retries are spent: a failed run whose result is the API's error, relayed.
+const claudeOverloaded = `{"type":"result","subtype":"success","is_error":true,` +
+	`"result":"API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"}`
+
+// shippedShape is the overrides that make the fake CLI's output read as the
+// named built-in profile reads it: its output mode, where its answer and its
+// failure flag are, its markers and where they are matched — so a case built
+// on it says what the shipped entry would make of the same output.
+func shippedShape(t *testing.T, agent string) map[string]any {
+	t.Helper()
+	builtin, ok := cliprofile.Builtin(agent)
+	if !ok {
+		t.Fatalf("no built-in %s profile", agent)
+	}
+	shape := map[string]any{
+		"output":       string(builtin.EffectiveOutput()),
+		"marker_scope": string(builtin.EffectiveMarkerScope()),
+	}
+	set := func(key string, values []any) {
+		if len(values) > 0 {
+			shape[key] = values
+		}
+	}
+	paths := func(ps []cliprofile.Path) []any {
+		out := make([]any, 0, len(ps))
+		for _, path := range ps {
+			out = append(out, toAny(path))
+		}
+		return out
+	}
+	var limits, auths []any
+	for _, m := range builtin.LimitMarkers {
+		limits = append(limits, map[string]any{"sentinel": m.Sentinel})
+	}
+	for _, m := range builtin.AuthMarkers {
+		auths = append(auths, map[string]any{"sentinel": m.Sentinel})
+	}
+	set("limit_markers", limits)
+	set("auth_markers", auths)
+	set("text_paths", paths(builtin.TextPaths))
+	set("error_paths", paths(builtin.ErrorPaths))
+	set("event_type_path", toAny(builtin.EventTypePath))
+	set("text_events", toAny(builtin.TextEvents))
+	set("marker_events", toAny(builtin.MarkerEvents))
+	set("marker_path", toAny(builtin.MarkerPath))
+	return shape
+}
+
+// toAny is a list of strings as the []any an overrides map carries.
+func toAny(ss []string) []any {
+	out := make([]any, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s)
+	}
+	return out
+}
+
+// A VENDOR OUTAGE IS A SERVER FAILURE, NOT A FATAL ONE. Claude Code relays an
+// overloaded API as a failed run — a non-zero exit with the API's error as its
+// result — and no marker matches it, because it is neither a spent plan nor a
+// login. Nothing about it says the request is one no model could take, so it
+// is retryable, and the next member of the seat's chain gets the call; and it
+// does not sit the entry out, because an overload the next call may not meet
+// must not hold every seat on the node off a working entry.
+//
+// Mutation: classify a failed run as fatal again, and the kind is wrong.
+func TestAFailedRunIsAServerFailureThatDoesNotSitTheEntryOut(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
+		shippedShape(t, "claude-code"))
+	_, err := ask(t, p, llm.Request{})
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Fatalf("kind = %v, want server (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "overloaded_error") {
+		t.Errorf("err = %v, want the error the CLI relayed", err)
+	}
+	if err := p.benched(); err != nil {
+		t.Errorf("a failed run sat the entry out: %v", err)
+	}
+}
+
+// THE CHAIN CARRIES THE SEAT PAST A HEAD WHOSE CLI FAILED. The point of a
+// fallback list is surviving one vendor's outage; when a failed run was fatal,
+// the walk stopped at the head and the turn failed against the same dead head
+// on every redelivery, with the next entry never asked.
+//
+// Mutation: classify a failed run as fatal again, and the backup is never
+// called and no fallback fires.
+func TestAChainWalksPastAHeadWhoseCLIFailed(t *testing.T) {
+	t.Parallel()
+	head := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
+		shippedShape(t, "claude-code"))
+	backup := fakeProvider(t, map[string]string{"FAKE_STDOUT": "from the backup"}, nil)
+	var seen []chain.Fallback
+	walk, err := chain.New([]chain.Member{{Key: "plan", Provider: head}, {Key: "key", Provider: backup}},
+		chain.Options{OnFallback: func(f chain.Fallback) { seen = append(seen, f) }})
+	if err != nil {
+		t.Fatalf("chain.New: %v", err)
+	}
+	comp, err := walk.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("the chain stopped at the failed head: %v", err)
+	}
+	if comp.Content != "from the backup" || comp.ProviderKey != "key" {
+		t.Errorf("answered %q from %q, want the backup's answer", comp.Content, comp.ProviderKey)
+	}
+	if len(seen) != 1 || seen[0].From != "plan" || seen[0].To != "key" || seen[0].Kind != llm.KindServer {
+		t.Errorf("fallbacks = %+v, want one from plan to key, of kind server", seen)
 	}
 }
 
@@ -526,7 +650,7 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 }
 
 // The default mode must never let a metered key through, even one an operator
-// put in cli.env — that is the flat-rate-plan-billed-anyway failure the mode
+// put in env — that is the flat-rate-plan-billed-anyway failure the mode
 // exists to prevent.
 func TestSubscriptionModeStripsAMeteredKey(t *testing.T) {
 	t.Parallel()

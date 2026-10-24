@@ -278,7 +278,7 @@ func TestAFrozenFailedCallKeepsNoRoundInFlight(t *testing.T) {
 	s.Apply(env("agent_phase_started", planCall()))
 	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
 		"round_num":     3,
-		"partial_round": map[string]any{"round": 4, "reasoning": "half a thou"},
+		"partial_round": map[string]any{"round": 4, "content": "half a sente"},
 	}), streamOnly, at("2026-06-14T12:00:04+00:00")))
 	s.Apply(env("agent_phase_completed",
 		with(planCall(), map[string]any{"failed": true, "error": "boom"}),

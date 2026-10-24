@@ -64,7 +64,7 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -72,19 +72,18 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	// THROUGH THE SAME CHAIN EVERY OTHER COMMAND USES, for the company's
-	// own ${VAR} values. The ADDRESS is no longer one of them: what goes
-	// into an app manifest is a URL, and while it was a Tier B pointer a
-	// manifest could carry "${PUBLIC_URL}/webhooks/slack/<handle>" where
-	// an address belongs — Slack refuses such an app and names nothing.
-	// The address is Tier A's now ([webhookBase]), resolved before the file
-	// is decoded.
-	resolveCtx := context.Background()
-	_, boot, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
+	// TIER A ALONE, and no ${VAR} of the company's: the one thing this run
+	// reads from the deployment is the ADDRESS, and it is no longer a Tier B
+	// value — what goes into an app manifest is a URL, and while it was a
+	// Tier B pointer a manifest could carry "${PUBLIC_URL}/webhooks/slack/<handle>"
+	// where an address belongs, which Slack refuses naming nothing. The
+	// address is Tier A's now ([webhookBase]), resolved before the file is
+	// decoded, so resolving the company's values here would open the store,
+	// or reveal credentials through the running node, for nothing read.
+	boot, err := companyBootstrap(*sinks.bootstrap)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
 
 	// READ ONCE. Four places below build a URL from it, and four separate
 	// reads of the flag is how one of them ends up using the flag while

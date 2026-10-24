@@ -44,7 +44,7 @@ func BuiltinNames() []string {
 // Builtin returns a copy of one built-in profile.
 //
 // A copy because callers merge overrides into it, and a shared map value
-// would let one provider's `cli.overrides` rewrite the table every later
+// would let one provider's `overrides` rewrite the table every later
 // provider reads.
 func Builtin(name string) (Profile, bool) {
 	p, ok := builtins()[name]
@@ -134,11 +134,11 @@ func cloneMap(in map[string]string) map[string]string {
 	return out
 }
 
-// ErrOverrides marks a `cli.overrides` map that does not decode into a
+// ErrOverrides marks an `overrides` map that does not decode into a
 // profile — a key no profile field has, or a value of the wrong shape — as
 // opposed to a merged profile that decodes and breaks a rule. Config reports
 // the two under different kinds, so an editor can be pointed at the typo.
-var ErrOverrides = errors.New("cli.overrides does not decode into a profile")
+var ErrOverrides = errors.New("overrides does not decode into a profile")
 
 // Load resolves the profile for one provider entry: the built-in table
 // entry for name, with overrides merged in, validated.
@@ -180,7 +180,7 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 // Maps merge key-wise so `env: {A: 1}` adds rather than replaces. EVERYTHING
 // ELSE REPLACES WHOLESALE — in particular lists, because position matters in
 // an argv and an element-wise merge of two command lines produces one neither
-// side wrote. Documented in subscription-llm-backends.md, and pinned by
+// side wrote. Documented in llm-backends.md, and pinned by
 // TestOverridesReplaceListsWholesale.
 func applyOverrides(base Profile, overrides map[string]any) (Profile, error) {
 	raw, err := yaml.Marshal(base)
@@ -206,7 +206,7 @@ func applyOverrides(base Profile, overrides map[string]any) (Profile, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&merged); err != nil {
 		return Profile{}, fmt.Errorf("%w — the fields are listed under "+
-			"\"Profile fields\" in docs/concepts/subscription-llm-backends.md", err)
+			"\"Profile fields\" in docs/concepts/llm-backends.md", err)
 	}
 	return merged, nil
 }

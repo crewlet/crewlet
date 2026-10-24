@@ -301,7 +301,7 @@ export const UnbrokenCode = 32;
  * document's. A page, a description or a comment is a DOCUMENT: a newline
  * inside a paragraph is a soft wrap somebody typed to keep a source line
  * short, and a heading opens a section of it. A MODEL'S WORDS — a round's
- * speech and thinking, a coding run's report, a prompt the engine built for a
+ * speech, a coding run's report, a prompt the engine built for a
  * model — are neither. A model writes one fact per line and means each line,
  * and a "## Summary" in the middle of a transcript is emphasis inside one item
  * of the page, not a section of it.
@@ -694,7 +694,7 @@ export function renderMarkdown(source: string, options: RenderOptions = {}): Rea
 }
 
 /**
- * How a MODEL'S WORDS are rendered: a round's speech and thinking, a coding
+ * How a MODEL'S WORDS are rendered: a round's speech, a coding
  * run's report. Every newline is the line break the model meant, and a heading
  * is emphasis inside one transcript item rather than a section of the page —
  * see [RenderOptions]. One constant, so the transcript's every block of a

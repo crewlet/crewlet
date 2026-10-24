@@ -109,7 +109,21 @@ func run(args []string, stdout, stderr io.Writer) error {
 // `CREWLET_LOG_FORMAT` and `CREWLET_LOG_FILE` configure the process's one
 // logger, which is the process's state rather than the invocation's, so they
 // are read from the process.
-func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err error) {
+	// A READ THROUGH A NODE THAT FAILED PART WAY THROUGH A COMMAND stops it
+	// with a panic, because the lookup that made it has no error to return
+	// and its only other answer, unset, is the one that mints over a working
+	// secret ([readFailed]). It is the command's failure, and answered here
+	// as one; any other panic is a bug, and goes on as it came.
+	defer func() {
+		if r := recover(); r != nil {
+			failed, ok := r.(readFailed)
+			if !ok {
+				panic(r)
+			}
+			err = failed
+		}
+	}()
 	if len(args) == 0 {
 		usage(stderr)
 		return errors.New("no command given")
@@ -255,8 +269,8 @@ Usage:
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,
                               sessions and tokens
-  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends;
-                              doctor also checks anthropic entries against their model
+  crewlet llm <cmd>           Log in, verify and export the coding CLIs every model
+                              runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
@@ -373,14 +387,29 @@ type tierBSeed struct {
 // [configFlags.load] does: an operator fixing a broker URL only to be told
 // about their org chart on the next boot has been made to pay twice for one
 // edit.
-func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
+func (c configFlags) loadForRun(ctx context.Context, set *flag.FlagSet, importPath string) (
 	*config.Bootstrap, tierBSeed, error,
 ) {
 	// See [configFlags.load] for why Tier A resolves environment-only.
 	boot, bootErr := config.LoadBootstrap(*c.bootstrap, config.EnvOnly())
 	bootErr = nameTheNeighbour(*c.bootstrap, bootErr)
 
-	seed, seedErr := c.resolveSeed(set, importPath)
+	// THE REVISION A REDACTED FILE WAS READ FROM is this node's active one,
+	// which its own store holds: a company.yaml kept in sync from Copy as
+	// YAML or `GET /config` carries a mask for every inline credential, and
+	// the file starts the node — which boots on it — and may be imported
+	// over that revision, so it is restored against it as `crewlet config
+	// import` restores one ([config.LoadCompanyToRun]). Read only for a file
+	// with a mask in it, and never from a scratch store, which holds the
+	// previous run's rows and is deleted as the engine opens it.
+	var prior config.PriorRevision
+	if bootErr == nil && !boot.Store.Scratch {
+		prior = func() (*config.Company, error) {
+			company, _, err := companyFromStore(ctx, *c.bootstrap)
+			return company, err
+		}
+	}
+	seed, seedErr := c.resolveSeed(set, importPath, prior)
 	if bootErr == nil && seedErr == nil && seed.Override {
 		seedErr = refuseManagedOverride(boot, seed.Path)
 	}
@@ -396,8 +425,10 @@ func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
 	return boot, seed, seedErr
 }
 
-// resolveSeed decides which Tier B file this invocation carries and why.
-func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSeed, error) {
+// resolveSeed decides which Tier B file this invocation carries and why, the
+// file restored against prior where it is a redacted read.
+func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
+	prior config.PriorRevision) (tierBSeed, error) {
 	named := strings.TrimSpace(importPath)
 	if named != "" && isFlagSet(set, "company") {
 		// REFUSED rather than resolved by precedence. The two flags ask
@@ -415,7 +446,7 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 	// boots import nothing from it: see [config.LoadCompanyToRun]. Where the
 	// file IS imported, seedCompany holds it to the admission rules first.
 	if named != "" {
-		company, err := config.LoadCompanyToRun(named)
+		company, err := config.LoadCompanyToRun(named, prior)
 		if err != nil {
 			return tierBSeed{}, err
 		}
@@ -423,7 +454,7 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 	}
 
 	path := *c.company
-	company, err := config.LoadCompanyToRun(path)
+	company, err := config.LoadCompanyToRun(path, prior)
 	if err == nil {
 		return tierBSeed{Path: path, Company: company}, nil
 	}
@@ -1015,7 +1046,11 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	log := logging.Get("cli")
 	warnUnrecognisedLogNames(log, "flag", "-log-level", *logLevel, "-log-format", *logFormat)
 
-	boot, seed, loadErr := cfg.loadForRun(fs, *importCompany)
+	// A BACKGROUND CONTEXT, because the run's own — cancelled by a signal —
+	// is made below, once the log file this load names is open. What the
+	// load reads is this node's own files, bounded by the store's busy
+	// timeout.
+	boot, seed, loadErr := cfg.loadForRun(context.Background(), fs, *importCompany)
 	if boot == nil {
 		// Tier A itself is what failed, so there is no document naming a
 		// log file and nothing to open. stderr is the whole record.
@@ -2279,13 +2314,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: retentionSource(ctx, e),
-			// EVERY MODEL'S KEY BAG: the provenance this node's epoch
-			// resolved and its pools' state, read per call because an
-			// apply replaces every pool — beside the fleet's cooldown
-			// ledger, so a key a peer benched reads cooling here before
-			// this node's refresher has pulled it.
-			CredentialPools: e.CredentialPools,
-			Cooldowns:       e.Backends().Fleet,
 			// WHAT THE FLEET HAS BACKED UP: each owner's newest
 			// announced point, marked by the policy the trim takes —
 			// Tier A, fixed for the life of this process.

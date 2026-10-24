@@ -34,9 +34,7 @@ name: Moves
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-zulu-key"]
 roles:
 `
 	two := company(t, head+`

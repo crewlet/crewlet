@@ -142,7 +142,7 @@ func TestEveryCollectionIsCreatable(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, serversDoc)
 	bodies := map[string]string{
-		configapi.EntityLLMProviders: `{"type":"anthropic","model":"m","api_keys":["k"]}`,
+		configapi.EntityLLMProviders: `{"model":"m"}`,
 		configapi.EntityMCPServers:   `{"name":"fresh","command":"fresh-mcp"}`,
 	}
 	for _, kind := range configapi.EntityKinds() {
@@ -234,7 +234,7 @@ func TestACreateOnlyWriteAddsAProviderUnderItsKey(t *testing.T) {
 	s.seed(t, serversDoc)
 
 	res := s.do(t, http.MethodPut, "/config/llm-providers/yankee",
-		`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${YANKEE_KEY}"]}`,
+		`{"model":"claude-sonnet-5","auth":{"mode":"api-key","api_key":"${YANKEE_KEY}"}}`,
 		createOnly("add a second provider"))
 	if res.Code != http.StatusCreated {
 		t.Fatalf("create-only provider PUT = %d, want 201: %s", res.Code, res.Body.String())
@@ -262,7 +262,7 @@ func TestProvidersCreatedOneByOneKeepTheOrderTheyWereAdded(t *testing.T) {
 
 	for _, key := range []string{"yankee", "alpha"} {
 		res := s.do(t, http.MethodPut, "/config/llm-providers/"+key,
-			`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${KEY}"]}`,
+			`{"model":"claude-sonnet-5"}`,
 			createOnly("add "+key))
 		if res.Code != http.StatusCreated {
 			t.Fatalf("create %s = %d, want 201: %s", key, res.Code, res.Body.String())

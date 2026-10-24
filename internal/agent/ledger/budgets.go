@@ -56,8 +56,8 @@ const (
 	// keeps it whole; this is a render bound.
 	//
 	// It needs one because Execution.Text is every assistant message of that
-	// round's tool loop concatenated, thinking included — so its size is the
-	// round cap times the phase's max_tokens, PER ITERATION, and the block
+	// round's tool loop concatenated — so its size is the round cap times
+	// what one round can write, PER ITERATION, and the block
 	// accumulates one of those per self_iterate and is re-sent on every round
 	// of both phases that follow, the executor and the reviewer. That product,
 	// not the single value, is what a bound has to answer.

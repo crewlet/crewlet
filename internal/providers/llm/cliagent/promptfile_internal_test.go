@@ -331,10 +331,12 @@ func TestTheMuseProfileReadsOneAnswerOutOfItsEventStream(t *testing.T) {
 		t.Errorf("a failed run resolved a text path (%q), which would hide the "+
 			"reason from the markers", out.text)
 	}
-	hit, matched := classifyMarkers(p, failed, failed, "")
+	// The run EXITS 1 — "run ended with Failed" on stderr — so it is a failed
+	// run, where a sentinel counts anywhere in what was said.
+	hit, matched := classifyMarkers(p, cliOutput{said: failed, stdout: failed, failed: true})
 	if !matched || hit.Kind != llm.KindRateLimit {
 		t.Errorf("the failure reason classified as %v (matched=%v), want a spent "+
-			"credential — a FATAL here strands the seat's fallback chain", hit.Kind, matched)
+			"credential — unrecognised, it never sits the entry out", hit.Kind, matched)
 	}
 }
 
@@ -441,7 +443,8 @@ func TestAClassifiedFailureNamesTheLineItMatched(t *testing.T) {
 		`{"schema_version":1,"sequence":2,"payload_type":"run.terminal.failed","payload":{"kind":"run_terminal","terminal":"failed","reason":"` + reason + `"}}`,
 	}, "\n")
 
-	hit, ok := classifyMarkers(p, stream, stream, "")
+	// A failed run: muse exits 1 on `run.terminal.failed`.
+	hit, ok := classifyMarkers(p, cliOutput{said: stream, stdout: stream, failed: true})
 	if !ok {
 		t.Fatal("the failure did not classify at all")
 	}

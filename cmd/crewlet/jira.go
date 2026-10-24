@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // `crewlet jira provision` — the Atlassian tracker's reconcile.
@@ -27,6 +28,17 @@ import (
 // invisible until an issue reaches nobody: which account each seat's
 // credential authenticates as, whether every project the org names exists
 // and agrees about its lead, and whether the inbound webhook is registered.
+
+// jiraProvisionReads is every variable `crewlet jira provision` reads of the
+// company: the instance, the org account it reads it with, the key the hook
+// signs with (minted when it resolves empty), and each seat's own Jira
+// credential, whose account it reports ([jira.SeatCredentialReads]) — the
+// names a running node is asked to reveal ([companyResolver]).
+func jiraProvisionReads(cfg *config.Jira, o *org.Organization) []string {
+	return unionReads(
+		fieldReads(cfg.URL, cfg.CloudID, cfg.SiteURL, cfg.Email, cfg.Token, cfg.WebhookSecret),
+		jira.SeatCredentialReads(o))
+}
 
 func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -54,7 +66,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -70,7 +82,9 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, environ,
+		jiraProvisionReads(cfg, organization), *sinks.bootstrap,
+		*sinks.api, stdout)
 	if err != nil {
 		return err
 	}

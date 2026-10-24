@@ -347,9 +347,11 @@ func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 //
 // The classification prefix is the CLI's own and survives the vendor
 // rewording the sentence after it; both were captured from 0.42.0 answering a
-// stubbed 429 and 401. A marker that stopped matching would classify a spent
-// plan FATAL, and the seat would never fall through to its metered key —
-// silent until somebody hits their cap.
+// stubbed 429 and 401. A marker that stopped matching would leave a spent plan
+// unrecognised: the failed run would still carry the seat to its metered key,
+// as a `server` failure, but the entry would never sit out, so every call would
+// launch the spent CLI first to hear the same sentence again — silent until
+// somebody reads why the plan's calls all fail.
 func TestTheKimiProfileClassifiesTheFailuresItsCLIActuallyPrints(t *testing.T) {
 	t.Parallel()
 	p, ok := cliprofile.Builtin("kimi-code")
@@ -389,7 +391,7 @@ func TestTheKimiProfileClassifiesTheFailuresItsCLIActuallyPrints(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			hit, ok := classifyMarkers(p, "", "", tc.stderr)
+			hit, ok := classifyMarkers(p, cliOutput{stderr: tc.stderr, failed: true})
 			if !ok {
 				t.Fatalf("no marker fired on what the CLI really printed:\n%s", tc.stderr)
 			}

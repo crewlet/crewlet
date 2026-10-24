@@ -33,7 +33,9 @@
 // coarse kind. The one classification that is genuinely its own is a SPENT
 // SUBSCRIPTION, which arrives as prose on a SUCCESSFUL exit and is recognised
 // by a vendor's verbatim sentinel plus the reset instant it carries — never
-// by keyword, which is how the same recognition was got wrong twice before.
+// by keyword, which is how the same recognition was got wrong twice before,
+// and on such an exit only where the sentinel OPENS what the CLI said, which
+// is otherwise the model's own words (see [classifyMarkers]).
 package cliagent
 
 import (
@@ -45,6 +47,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -53,8 +56,7 @@ import (
 
 var log = logging.Get("llm.cliagent")
 
-// providerName is what a classified failure calls this backend, and what a
-// completion records as its [llm.Origin.Provider].
+// providerName is what a classified failure calls this backend.
 const providerName = "cli-agent"
 
 // Config is one cli-agent provider entry, fully resolved.
@@ -73,7 +75,9 @@ type Config struct {
 	// AgentMode runs a seat's executor as the CLI's own agentic run
 	// rather than as a text completion. See [Provider.AgentMode].
 	AgentMode bool
-	// StateDir is the resolved credential + per-seat home directory.
+	// StateDir is the resolved state directory. The CLI keeps its login and
+	// its per-seat homes under <StateDir>/<Agent> ([Shared]), so entries on
+	// one directory share a login only when they drive one CLI.
 	StateDir string
 	// Overrides are the operator's profile edits.
 	Overrides map[string]any
@@ -93,8 +97,8 @@ type Config struct {
 	// whoever builds the entry to run it.
 	CredentialBundle string
 	// CredentialBundleConfigured is whether CredentialBundle came from
-	// cli.auth.credential_bundle rather than the conventional
-	// CREWLET_LLM_CLI_<KEY>_CREDENTIALS ([BundleVarName]), for the lines that
+	// auth.credential_bundle rather than the conventional
+	// CREWLET_LLM_CLI_<KEY>_CREDENTIALS ([cliprofile.BundleVarName]), for the lines that
 	// tell an operator what retires it ([Provider.LogoutNotice]) — the same
 	// split [Auth.TokenConfigured] makes for the token.
 	CredentialBundleConfigured bool
@@ -129,6 +133,15 @@ type Provider struct {
 	// against the caller's context: a seat whose turn was cancelled while
 	// queueing must not go on to launch a process nobody is waiting for.
 	slots chan struct{}
+
+	// sitOut is the window this entry sits out after its CLI reported a
+	// spent plan ([Provider.bench]).
+	sitOut bench
+
+	// now is the clock the bench is read against — time.Now, and a fixed
+	// clock in the suite, which has to watch a window end without waiting
+	// a minute for it.
+	now func() time.Time
 }
 
 var _ llm.Provider = (*Provider)(nil)
@@ -151,7 +164,7 @@ func New(cfg Config) (*Provider, error) {
 	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
 			"cli-agent %q: no model_args element of the %q CLI carries {model}, so model %q "+
-				"would be ignored — remove it, or declare cli.overrides.model_args with {model}",
+				"would be ignored — remove it, or declare overrides.model_args with {model}",
 			cfg.Key, cfg.Agent, cfg.Model)
 	}
 	if cfg.StateDir == "" {
@@ -180,6 +193,7 @@ func New(cfg Config) (*Provider, error) {
 		timeout:          cfg.Timeout,
 		termGrace:        termGrace,
 		slots:            make(chan struct{}, slots),
+		now:              time.Now,
 	}
 	if p.timeout <= 0 {
 		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a CLI call with no "+
@@ -228,11 +242,25 @@ func (p *Provider) CodingAgent() string { return p.agent }
 // Profile is the resolved profile, for `crewlet llm doctor`.
 func (p *Provider) Profile() cliprofile.Profile { return p.profile }
 
-// Workspace is the state directory this provider shares.
+// Workspace is this provider's CLI's share of its state directory, which every
+// entry on the same directory and CLI shares.
 func (p *Provider) Workspace() *Workspace { return p.ws }
 
 // Agent is which CLI this provider drives.
 func (p *Provider) Agent() string { return p.agent }
+
+// AuthMode is how this entry signs its CLI in ([Auth.Mode]), for a caller that
+// has to tell an operator which credential to supply: of the variables the
+// engine hands the CLI, api-key reads only the key and inherit-env only the
+// engine's own environment, so a remedy written for a subscription — mint a
+// token into the secret store — is one the entry would never read
+// ([Provider.ModeSignIn]). The credential files are seeded under every mode.
+func (p *Provider) AuthMode() AuthMode {
+	if p.auth.Mode == "" {
+		return AuthSubscription
+	}
+	return p.auth.Mode
+}
 
 // String identifies the provider in a log line.
 func (p *Provider) String() string {
@@ -241,12 +269,16 @@ func (p *Provider) String() string {
 
 // Complete runs one CLI invocation and reads its answer.
 //
-// [llm.Request.Effort] is NOT applied, deliberately: a CLI reads its effort
-// from its own configuration in the seat's state directory, and no profile has
-// a per-invocation flag to carry a ceiling on. A ceiling it cannot carry is
-// not one it may fake — rewriting the CLI's settings per call would race every
-// concurrent call sharing the directory — so the call runs at the CLI's own level.
+// An entry its CLI last reported spent is NOT called while it sits out
+// ([Provider.benched]): the call fails at once as a rate limit, naming the
+// instant, so the seat's chain moves to its next model without a process
+// launched to learn again what the last one said. Checked as the call arrives
+// and again once it holds a slot, because a call that queued for one may have
+// waited out the very call that sat the entry out.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if err := p.benched(); err != nil {
+		return nil, err
+	}
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
@@ -258,7 +290,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	prompt, err := RenderPrompt(req)
 	if err != nil {
-		return nil, p.fail(llm.KindFatal, 0, err)
+		return nil, p.fail(llm.KindFatal, err)
 	}
 
 	select {
@@ -268,7 +300,18 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// Queued behind other seats and the caller gave up. Reported as
 		// a timeout rather than fatal: nothing about the request was
 		// wrong, and the chain should be free to try another member.
-		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
+		return nil, p.fail(llm.KindTimeout, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
+	}
+	// AGAIN, NOW THAT THE SLOT IS HELD. A call that queued behind a full
+	// entry passed the check above before the sit-out existed, so when the
+	// calls ahead of it report the spent plan it would otherwise take its
+	// slot, check out a home and start a whole CLI only to hear the same
+	// sentence — and every call behind it would wait for that too. Refused
+	// here, the queue drains at once, each call handing its slot to the next
+	// through the release deferred above. The check at the top stays: it
+	// spares a call that arrives during a sit-out the render and the queue.
+	if sitting := p.benched(); sitting != nil {
+		return nil, sitting
 	}
 
 	checkout, err := p.ws.Acquire(ctx, seat, callID, p)
@@ -277,7 +320,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// itself now, so what failed may be a slow host or an unusable
 		// login rather than this host's filesystem — see
 		// [acquireFailureKind].
-		return nil, p.fail(acquireFailureKind(err), 0, err)
+		return nil, p.fail(acquireFailureKind(err), err)
 	}
 	defer func() {
 		// WITHOUT THE CALL'S CANCELLATION: a release is a teardown, and a
@@ -369,7 +412,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			args, err := systemArgs(
 				p.profile.SystemPromptArgs, p.profile.SystemPromptFile, system, checkout.Work)
 			if err != nil {
-				return nil, p.fail(llm.KindFatal, 0, err)
+				return nil, p.fail(llm.KindFatal, err)
 			}
 			in.args = append(in.args, args...)
 		case p.profile.SystemPromptEnv != "":
@@ -377,7 +420,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			pair, err := systemEnv(
 				p.profile.SystemPromptEnv, p.profile.SystemPromptFile, system, checkout.Work)
 			if err != nil {
-				return nil, p.fail(llm.KindFatal, 0, err)
+				return nil, p.fail(llm.KindFatal, err)
 			}
 			// APPENDED, so it wins: the child env is assembled from the
 			// allowlist and the profile's own config_env above, and the
@@ -401,7 +444,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// stays in the per-call working directory at 0600.
 		rendered, writeErr := promptArgs(p.profile.PromptArgs, prompt, checkout.Work)
 		if writeErr != nil {
-			return nil, p.fail(llm.KindFatal, 0, writeErr)
+			return nil, p.fail(llm.KindFatal, writeErr)
 		}
 		in.args = append(in.args, rendered...)
 	default:
@@ -411,7 +454,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	started := time.Now()
 	res, err := run(ctx, in)
 	if err != nil {
-		return nil, p.fail(llm.KindFatal, 0, err)
+		// NO CLI RAN, which is all run's error ever says: the binary is
+		// missing or not executable here, or the host would not give it a
+		// pipe or a process. That is this host's fault, the one exec failure
+		// the next member is no answer to, so it is fatal. A CLI that DID run
+		// comes back as a result whatever happened to it, and [completion]
+		// classifies it by what that was.
+		return nil, p.fail(llm.KindFatal, err)
 	}
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
@@ -472,7 +521,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	return p.completion(ctx, prompt, res, usageDoc)
+	return p.completion(ctx, prompt, len(req.Tools) > 0, res, usageDoc)
 }
 
 // newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
@@ -512,12 +561,16 @@ func (p *Provider) argv() []string {
 // EMPTY is a real outcome rather than an error (see the fall-through below),
 // and the one place that can say so is here, where the token counts that
 // explain it are still in hand.
+//
+// offeredTools says whether the prompt carried the response contract, which
+// [RenderPrompt] appends exactly when the request offered tools. Only then is
+// the reply read as an envelope: see the read below.
 func (p *Provider) completion(
-	ctx context.Context, prompt string, res *rawResult, usageDoc string,
+	ctx context.Context, prompt string, offeredTools bool, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
-		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf(
-			"the CLI did not answer within %s — raise cli.timeout_seconds if this model "+
+		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
+			"the CLI did not answer within %s — raise timeout_seconds if this model "+
 				"legitimately reasons for longer:\n%s", p.timeout, tail(res.stderr)))
 	}
 
@@ -530,11 +583,12 @@ func (p *Provider) completion(
 	// member and the credential is not benched: nothing about the prompt was
 	// rejected.
 	if res.droppedStdout > 0 {
-		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
+		return nil, p.fail(llm.KindServer, fmt.Errorf(
 			"the CLI wrote more than %d bytes to stdout and %d were dropped, so "+
-				"the answer is incomplete — raise cli.max_output_bytes for this "+
-				"provider, or point it at a model that streams less",
-			maxOutput, res.droppedStdout))
+				"the answer is incomplete. No completion comes near that size, so "+
+				"the CLI printed something besides one: run `crewlet llm doctor %s` "+
+				"to see what, or point this provider at a model that streams less",
+			maxOutput, res.droppedStdout, p.key))
 	}
 
 	out := extract(p.profile, res.stdout)
@@ -577,17 +631,66 @@ func (p *Provider) completion(
 	// The events scope reads neither as text: it decodes the whole of
 	// stdout and looks only at the CLI's own failure events — see
 	// [cliprofile.MarkerScope] — which is why stdout itself is handed over
-	// beside what was said.
+	// beside what was said. And whether the CLI said the run FAILED is
+	// handed over too, because it decides where in what was said a
+	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
-	if hit, ok := classifyMarkers(p.profile, said, res.stdout, res.stderr); ok {
-		return nil, p.fail(hit.Kind, hit.Retry,
-			fmt.Errorf("%s", nonEmpty(hit.Said, firstLine(said, res.stderr))))
+	if hit, ok := classifyMarkers(p.profile, cliOutput{
+		said: said, stdout: res.stdout, stderr: res.stderr,
+		failed: res.exitCode != 0 || out.failed,
+	}); ok {
+		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
+		if hit.Kind == llm.KindRateLimit {
+			p.bench(hit.Retry, reason)
+			// WHERE IT MATCHED, beside what it matched: a sit-out takes the
+			// entry from every seat on this node, and the one question an
+			// operator who doubts it has is whether the vendor said it.
+			log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
+				"source", string(hit.Source), "said", reason)
+		}
+		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}
 
+	// A RUN THE CLI SAYS FAILED, FOR NO REASON A PROFILE RECOGNISES, IS A
+	// SERVER FAILURE — the CLI or its vendor did not answer: an overload or
+	// a 5xx it relayed once its own retries ran out, a crash, a reason in
+	// words no marker knows. It used to be FATAL, on the reasoning that every
+	// member of the seat's chain would refuse the call identically, and that
+	// is true only of a call the engine cannot make at all ([llm.KindFatal]).
+	// The next member is another login, another vendor or another binary,
+	// which does not share this one's outage: trying it costs one process
+	// launch, and stopping cost the seat every turn for as long as the outage
+	// lasted, each redelivered against the same dead head. Nothing is
+	// repeated by the walk, either — a text call runs none of the seat's
+	// tools; the engine runs those once an answer is back.
+	//
+	// NOT BENCHED: only a spent plan sits the entry out ([Provider.bench]),
+	// because only a spent plan is known to last. A failure the next call
+	// may not meet must not hold every seat on the node off a working entry.
 	if res.exitCode != 0 || out.failed {
-		return nil, p.fail(llm.KindFatal, 0, fmt.Errorf(
-			"the CLI exited %d:\n%s", res.exitCode,
+		what := fmt.Sprintf("the %s CLI exited %d", p.agent, res.exitCode)
+		if res.exitCode == 0 {
+			what = fmt.Sprintf("the %s CLI exited 0 and reported that the run failed", p.agent)
+		}
+		return nil, p.fail(llm.KindServer, fmt.Errorf("%s:\n%s", what,
 			tail(nonEmpty(res.stderr, out.text, res.stdout))))
+	}
+	// A RUN NOT SEEN TO ITS END IS A SERVER FAILURE TOO, whatever it
+	// printed. A stdout that something the CLI left running still held a
+	// grace after the CLI was done was cut there, so no reading of it can be
+	// shown to be the whole answer: the refusal a clipped stdout gets above,
+	// for the same reason. And a wait that failed is a CLI that started and
+	// did not finish as one. Neither is a call the engine could not make, so
+	// the chain may carry it to the next member, and nothing says it lasts,
+	// so nothing is sat out. Both used to come back from [run] as an error,
+	// read as fatal: the walk stopped at the head with a whole answer on
+	// stdout, the CLI having exited 0.
+	//
+	// After the markers, which classify on what the vendor SAID: a spent plan
+	// reported on a stdout a helper then held is still a spent plan.
+	if why := res.unfinished(); why != "" {
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI exited 0, but %s:\n%s",
+			p.agent, why, tail(nonEmpty(res.stderr, res.stdout))))
 	}
 	if strings.TrimSpace(res.stdout) == "" {
 		// Exit zero and nothing on stdout AT ALL — no envelope, no
@@ -596,8 +699,8 @@ func (p *Provider) completion(
 		// exist: there is no shape for a path to miss and no field to
 		// find empty. Not a fatal request problem — nothing about the
 		// prompt was refused — so the chain is free to try another
-		// member, and the credential is not cooled.
-		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
+		// member, and the entry is not benched.
+		return nil, p.fail(llm.KindServer, fmt.Errorf(
 			"the %s CLI exited 0 but printed nothing at all%s",
 			p.agent, stderrDetail(res.stderr)))
 	}
@@ -620,12 +723,12 @@ func (p *Provider) completion(
 		// KindServer, so the chain may try another member and the
 		// credential is not benched: nothing about the prompt was
 		// refused.
-		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
+		return nil, p.fail(llm.KindServer, fmt.Errorf(
 			"the %s CLI's output parsed, but none of the text_paths this profile "+
 				"looks in resolved (%s) — the profile no longer matches the "+
 				"installed CLI, so nothing it printed can be read as the model's "+
 				"reply. Run `crewlet llm doctor %s` and set "+
-				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
+				"providers.llm.%s.overrides.text_paths. It printed:\n%s",
 			p.agent, cliprofile.PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
 	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
@@ -634,8 +737,7 @@ func (p *Provider) completion(
 	// whole output budget on hidden reasoning does. That is a MODEL
 	// outcome, and [llm.Provider] forbids a backend from deciding what a
 	// failure means beyond a coarse kind, so it must not be dressed as one:
-	// both API backends return exactly this shape (a Completion with empty
-	// Content) for the identical situation, and the tool loop is the frame
+	// it is a Completion with empty Content, and the tool loop is the frame
 	// that corrects it.
 	//
 	// It used to be a KindServer error, on the reasoning that there was no
@@ -645,19 +747,28 @@ func (p *Provider) completion(
 	// from being reported as an outage of a CLI that demonstrably answered.
 	//
 	// Falls through rather than returning early so the round is charged:
-	// ParseEnvelope("") yields Message:"" and Parsed:false, so Content
-	// becomes "" with the vendor's real usage attached below — an empty
-	// answer costs tokens, and it was previously the one outcome that spent
-	// them without ever reaching a budget.
-	env := ParseEnvelope(out.text)
+	// Content becomes "" with the vendor's real usage attached below — an
+	// empty answer costs tokens, and it was previously the one outcome that
+	// spent them without ever reaching a budget.
 	comp := &llm.Completion{
 		Model:      p.model,
-		Provider:   providerName,
-		Content:    env.Message,
+		Content:    out.text,
 		StopReason: llm.StopEnd,
 	}
-	if !env.Parsed {
-		comp.Content = out.text
+	// AN ENVELOPE ONLY WHERE ONE WAS ASKED FOR. A call that offered no tools
+	// sent no contract, so its reply is the answer verbatim — and reading it
+	// as an envelope anyway is not harmless forgiveness: the envelope reader
+	// accepts `content`, `text`, `message` and `response` as the message key,
+	// so an auxiliary answer that IS a JSON object carrying one of them
+	// (the persist decider's `{"kind": "LONG", "content": "..."}`) came back
+	// as that one field, its caller's decode failed, and the decision was
+	// silently dropped.
+	var env Envelope
+	if offeredTools {
+		env = ParseEnvelope(out.text)
+		if env.Parsed {
+			comp.Content = env.Message
+		}
 	}
 	for i, call := range env.ToolCalls {
 		comp.ToolCalls = append(comp.ToolCalls, llm.ToolCall{
@@ -721,53 +832,135 @@ func (p *Provider) completion(
 // "usage limit" case-insensitively across a reply is what made this wrong
 // before: a model asked about rate limits writes the phrase itself, and every
 // such answer was thrown away as a spent plan.
+//
 // A FUNCTION OF THE PROFILE, not a method on the provider: what a vendor's
 // spent plan looks like is a property of the profile table, and the only way
 // to check a shipped profile's sentinels against the output its CLI actually
 // produces is to be able to ask without a running provider.
 //
-// said is what the CLI said — the located answer, or the whole of stdout when
-// none was located — and stdout is the whole of it, which only the events
-// scope reads, and only as decoded events.
-func classifyMarkers(p cliprofile.Profile, said, stdout, stderr string) (markerHit, bool) {
-	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
-	// ONE — see [cliprofile.MarkerScope]. Searching the model's own words is what
-	// makes a spent Claude Code plan recognisable at all, and it is also
-	// how a seat asked "what is our quota?" answers in prose that benches
-	// its own credential. A profile whose CLI reports on stderr and
-	// nowhere else opts out, and then no sentence the model writes can
-	// classify anything.
-	var haystacks []string
+// # What the model said is not the vendor's report
+//
+// Verbatim is not enough on its own, because what the CLI said on stdout is,
+// on every healthy run, the MODEL's words — its prose, and the arguments of
+// every tool call it makes — and a seat asked to add backoff for the GitHub
+// API writes "rate limit" as readily as a vendor reports one. Matched anywhere
+// in there, a sentence the model wrote threw its answer away as a spent plan
+// and sat the entry out for every seat on the node, and the redelivered turn
+// wrote it again a minute later. So in the default scope a sentinel in what
+// was said counts in two places only:
+//
+//   - ANYWHERE, in a run the CLI itself reported failed — a non-zero exit,
+//     or its own failure flag ([cliprofile.Profile.ErrorPaths]). The CLI has
+//     said this was no answer; what it printed is its account of why.
+//   - AT THE START, in a run it did not: the sentinel begins the first
+//     non-empty line, so that what was said IS the vendor's report rather
+//     than an answer that mentions one. That is the shape of the clean-exit
+//     report this package has measured — Claude Code's spent plan, a line
+//     beginning "Usage limit reached" standing where the answer should be —
+//     and it is what makes the shipped profiles' generic, unmeasured
+//     sentinels ("rate limit", "quota") safe to keep: a model's answer that
+//     merely mentions one, or a tool call that carries one in its
+//     arguments, is not classified at all, and comes back as the answer it
+//     is.
+//
+// Stderr is matched anywhere: it is the CLI's own channel, and the answer
+// does not reach it. The events scope reads the CLI's own failure
+// events and nothing else, and the stderr scope stderr alone — see
+// [cliprofile.MarkerScope].
+func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
+	var haystacks []haystack
 	switch p.EffectiveMarkerScope() {
 	case cliprofile.MarkerScopeEvents:
-		return classifyFailureEvents(p, stdout)
+		return classifyFailureEvents(p, out.stdout)
 	case cliprofile.MarkerScopeStderr:
-		haystacks = []string{stderr}
+		haystacks = []haystack{{text: out.stderr, source: sourceStderr}}
 	default:
-		haystacks = []string{said, stderr}
+		said := haystack{text: out.said, source: sourceReport, anchored: true}
+		if out.failed {
+			said = haystack{text: out.said, source: sourceFailedRun}
+		}
+		haystacks = []haystack{said, {text: out.stderr, source: sourceStderr}}
 	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
-			idx := strings.Index(hay, marker.Sentinel)
-			if idx < 0 {
+			idx, found := hay.find(marker.Sentinel)
+			if !found {
 				continue
 			}
 			return markerHit{
-				Kind:  llm.KindRateLimit,
-				Retry: resetAfter(hay[idx:], marker),
-				Said:  lineAt(hay, idx),
+				Kind:   llm.KindRateLimit,
+				Retry:  resetAfter(hay.text[idx:], marker),
+				Said:   lineAt(hay.text, idx),
+				Source: hay.source,
 			}, true
 		}
 	}
 	for _, marker := range p.AuthMarkers {
 		for _, hay := range haystacks {
-			if idx := strings.Index(hay, marker.Sentinel); idx >= 0 {
-				return markerHit{Kind: llm.KindAuth, Said: lineAt(hay, idx)}, true
+			if idx, found := hay.find(marker.Sentinel); found {
+				return markerHit{Kind: llm.KindAuth, Said: lineAt(hay.text, idx), Source: hay.source}, true
 			}
 		}
 	}
-	return markerHit{Kind: llm.KindFatal}, false
+	return markerHit{}, false
 }
+
+// cliOutput is what one finished run gives [classifyMarkers] to read.
+type cliOutput struct {
+	// said is what the CLI said: the located answer, or the whole of stdout
+	// when none was located.
+	said string
+	// stdout is the whole of it, which only the events scope reads, and only
+	// as decoded events.
+	stdout string
+	// stderr is the CLI's own diagnostic channel.
+	stderr string
+	// failed is the CLI's own word that the run failed: a non-zero exit, or
+	// the flag at the profile's error_paths.
+	failed bool
+}
+
+// haystack is one text a sentinel may be found in, and on what terms.
+type haystack struct {
+	text   string
+	source markerSource
+	// anchored admits a sentinel only where it BEGINS the text's first
+	// non-empty line — the rule for what a run that did not fail said on
+	// stdout, which is the model's words unless it is the vendor's report.
+	anchored bool
+}
+
+// find is the byte offset of sentinel in the haystack, on its terms.
+func (h haystack) find(sentinel string) (int, bool) {
+	if !h.anchored {
+		idx := strings.Index(h.text, sentinel)
+		return idx, idx >= 0
+	}
+	// The first non-space byte opens the first non-empty line, trimmed.
+	start := strings.IndexFunc(h.text, func(r rune) bool { return !unicode.IsSpace(r) })
+	if start < 0 || !strings.HasPrefix(h.text[start:], sentinel) {
+		return -1, false
+	}
+	return start, true
+}
+
+// markerSource is where a sentinel matched — the evidence that the vendor,
+// and not the model, said it.
+type markerSource string
+
+const (
+	// sourceReport is what a run that did not fail said on stdout, which is
+	// the vendor's report: the sentinel begins its first non-empty line.
+	sourceReport markerSource = "report"
+	// sourceFailedRun is what a run the CLI reported failed said on stdout,
+	// where a sentinel counts anywhere.
+	sourceFailedRun markerSource = "failed-run"
+	// sourceStderr is the CLI's stderr.
+	sourceStderr markerSource = "stderr"
+	// sourceEvent is one of the CLI's own failure events, under
+	// [cliprofile.MarkerScopeEvents].
+	sourceEvent markerSource = "event"
+)
 
 // markerHit is what a matched sentinel tells the caller.
 //
@@ -783,6 +976,8 @@ type markerHit struct {
 	// Said is the line the sentinel matched on — the vendor's own words,
 	// in the place the vendor put them.
 	Said string
+	// Source is where it matched, which is why it counts as the vendor's.
+	Source markerSource
 }
 
 // lineAt returns the line of s containing byte offset idx, trimmed.
@@ -797,8 +992,8 @@ func lineAt(s string, idx int) string {
 
 // resetAfter reads the reset instant a limit marker carries.
 //
-// Zero when the vendor gave none, which the credential pool reads as "use the
-// configured cooldown" — the honest answer, rather than inventing a window.
+// Zero when the vendor gave none, which [Provider.bench] reads as "sit out
+// the default" — the honest answer, rather than inventing a window.
 func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
 	if marker.ResetSeparator == "" {
 		return 0
@@ -833,11 +1028,8 @@ func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
 }
 
 // fail wraps an error as a classified provider failure.
-func (p *Provider) fail(kind llm.ErrorKind, retryAfter time.Duration, err error) error {
-	return &llm.Error{
-		Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model,
-		RetryAfter: retryAfter, Err: err,
-	}
+func (p *Provider) fail(kind llm.ErrorKind, err error) error {
+	return &llm.Error{Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model, Err: err}
 }
 
 // firstLine is the first non-empty line across the given texts, for a failure

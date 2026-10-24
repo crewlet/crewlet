@@ -114,8 +114,8 @@ func TestACatalogueNothingReachesIsRefused(t *testing.T) {
 	for _, tail := range []string{
 		"    default_run_in: direct\n",
 		"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n",
-		"  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n" +
-			"      cli: {agent: claude-code, mode: agent, run_in: direct}\n" +
+		"  llm:\n    sub:\n      model: sonnet\n" +
+			"      agent: claude-code\n      mode: agent\n      run_in: direct\n" +
 			"roles:\n  - name: SWE\n    llm: sub\n",
 	} {
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"+tail)

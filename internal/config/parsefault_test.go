@@ -202,7 +202,7 @@ func TestEveryProblemInAFileIsReported(t *testing.T) {
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := config.LoadCompany(path)
+	_, err := config.LoadCompany(path, nil)
 	want := []found{
 		{"token_budget.day", 0, "out_of_range"},
 		{"notification_rate_limit", 0, "out_of_range"},

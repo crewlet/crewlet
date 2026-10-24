@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -28,7 +27,7 @@ type Auth struct {
 	// Token is a resolved long-lived subscription token, or empty when
 	// the login lives in the credential files instead.
 	Token string
-	// TokenConfigured reports that the entry NAMED a token (cli.auth.token),
+	// TokenConfigured reports that the entry NAMED a token (auth.token),
 	// whatever it resolved to. Only the doctor reads it: an empty Token is
 	// either "this entry signs in some other way" or "the reference it
 	// wrote resolved to nothing", and only the second is worth telling the
@@ -55,11 +54,11 @@ func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 // one below is visible in the order: the host allowlist every child gets
 // ([hostbox.Inherit]), then the isolation variables, then the profile's own
 // fixed environment, then the profile's passthrough, then the operator's
-// cli.env, then auth. The isolation is NOT protected by its place in that
+// env, then auth. The isolation is NOT protected by its place in that
 // order — every layer above it could replace it — but by validation: a
 // profile whose env or passthrough_env names one of
 // [cliprofile.Profile.IsolationVariables] does not load
-// ([cliprofile.Profile.Validate]), and an entry whose cli.env names one is
+// ([cliprofile.Profile.Validate]), and an entry whose env names one is
 // refused on every write of the configuration and warned about on every node
 // that applies it (config's admission rules, which never take a node off the
 // fleet's revision over an entry that still runs).
@@ -79,7 +78,7 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	// to be exported while the operator believed they were on a flat-rate
 	// plan. This package kept its own list once, and it had drifted from the
 	// sandbox's by five names. Anything else a CLI needs is declared — in the
-	// profile's passthrough_env, or the operator's cli.env.
+	// profile's passthrough_env, or the operator's env.
 	env := hostbox.Inherit()
 
 	// The isolation. Every path a CLI could keep state under is pointed
@@ -141,7 +140,7 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 //
 // The removal is the load-bearing half. A subscription call that left an
 // ANTHROPIC_API_KEY in place — inherited from the profile's env, or written
-// by an operator into cli.env — would bill the metered account silently while
+// by an operator into env — would bill the metered account silently while
 // the plan sat unused, which is the failure the default mode exists to
 // prevent.
 func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
@@ -213,26 +212,4 @@ func TokenVarName(p cliprofile.Profile) (string, error) {
 		return "", fmt.Errorf("this CLI mints no headless token")
 	}
 	return p.TokenEnv, nil
-}
-
-// BundleVarName is the conventional secret name a provider's exported
-// credential bundle lives under.
-//
-// A CONVENTION rather than a required setting, so `crewlet llm export -secret-store`
-// and the engine's boot-time restore agree without the operator wiring
-// cli.auth.credential_bundle by hand — and one function, so the writer and
-// the reader cannot derive it differently.
-func BundleVarName(key string) string {
-	var b strings.Builder
-	b.WriteString("CREWLET_LLM_CLI_")
-	for _, r := range strings.ToUpper(key) {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	b.WriteString("_CREDENTIALS")
-	return b.String()
 }

@@ -37,109 +37,19 @@
         "null"
       ]
     },
-    "CLIAgent": {
+    "CLIAgentAuth": {
       "additionalProperties": false,
       "properties": {
-        "agent": {
-          "description": "Which coding CLI to drive.",
-          "enum": [
-            "claude-code",
-            "codex",
-            "gemini-cli",
-            "qwen-code",
-            "opencode",
-            "cursor-agent",
-            "copilot",
-            "grok",
-            "muse-code",
-            "kimi-code",
-            "hermes",
-            "pi",
-            "custom",
-            "",
-            null
-          ]
-        },
-        "auth": {
-          "$ref": "#/$defs/CLIAgentAuth"
-        },
-        "env": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ],
-            "x-crewlet-secret": true
-          },
-          "description": "Extra environment for the CLI child process.",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "max_concurrent": {
-          "description": "Concurrent CLI processes; each costs 200-400 MB.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "mode": {
-          "description": "text (a model behind the engine's tool loop) or agent (the CLI runs the executor).",
-          "enum": [
-            "text",
-            "agent",
-            "",
-            null
-          ]
-        },
-        "overrides": {
-          "additionalProperties": {},
-          "description": "Field-wise overrides of the built-in CLI profile.",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "run_in": {
-          "description": "Where an agent-mode run happens. Empty = providers.sandbox.default_run_in.",
-          "enum": [
-            "direct",
-            "container",
-            "e2b",
-            "",
-            null
-          ]
-        },
-        "state_dir": {
-          "description": "Credential + per-seat home directory. Entries sharing one share a login.",
+        "api_key": {
+          "description": "${VAR} holding an API key, read under auth.mode api-key. Empty reads the CLI's own key variable.",
           "type": [
             "string",
             "number",
             "boolean",
             "null"
-          ]
+          ],
+          "x-crewlet-secret": true
         },
-        "timeout_seconds": {
-          "description": "Wall-clock cap on one CLI invocation.",
-          "minimum": 0,
-          "type": [
-            "number",
-            "null"
-          ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "CLIAgentAuth": {
-      "additionalProperties": false,
-      "properties": {
         "credential_bundle": {
           "description": "${VAR} holding a bundle exported by crewlet llm export.",
           "type": [
@@ -318,47 +228,12 @@
     "Counterparty": {
       "additionalProperties": false,
       "properties": {
-        "budget_tokens": {
-          "description": "Soft token cap on the profiler call.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "enabled": {
           "description": "Observe counterparties (default on).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
             "string",
-            "null"
-          ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "CredentialCooldowns": {
-      "additionalProperties": false,
-      "properties": {
-        "auth_seconds": {
-          "description": "Cooldown after an auth error (60..86400s).",
-          "maximum": 86400,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "rate_limit_seconds": {
-          "description": "Cooldown after a rate-limit error (60..86400s).",
-          "maximum": 86400,
-          "minimum": 0,
-          "type": [
-            "integer",
             "null"
           ]
         }
@@ -686,14 +561,6 @@
         },
         "compaction_batch_size": {
           "description": "Raw episodes pulled into one pass.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "compaction_budget_tokens": {
-          "description": "Soft token cap on summarising one cluster.",
           "minimum": 0,
           "type": [
             "integer",
@@ -1304,9 +1171,31 @@
     "LLMProvider": {
       "additionalProperties": false,
       "properties": {
-        "api_keys": {
-          "description": "API keys, ${VAR} supported. Several rotate on rate-limit/auth errors.",
-          "items": {
+        "agent": {
+          "description": "Which coding CLI to drive (default claude-code).",
+          "enum": [
+            "claude-code",
+            "codex",
+            "gemini-cli",
+            "qwen-code",
+            "opencode",
+            "cursor-agent",
+            "copilot",
+            "grok",
+            "muse-code",
+            "kimi-code",
+            "hermes",
+            "pi",
+            "custom",
+            "",
+            null
+          ]
+        },
+        "auth": {
+          "$ref": "#/$defs/CLIAgentAuth"
+        },
+        "env": {
+          "additionalProperties": {
             "type": [
               "string",
               "number",
@@ -1315,91 +1204,71 @@
             ],
             "x-crewlet-secret": true
           },
+          "description": "Extra environment for the CLI child process.",
           "type": [
-            "array",
+            "object",
             "null"
           ]
         },
-        "base_url": {
-          "description": "Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy).",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "claude_model": {
-          "description": "anthropic only: the Claude model id whose request shape this entry uses, when model is a gateway alias the table cannot read.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "cli": {
-          "$ref": "#/$defs/CLIAgent",
-          "description": "The cli-agent block. Required for type cli-agent, refused otherwise."
-        },
-        "cooldowns": {
-          "$ref": "#/$defs/CredentialCooldowns"
-        },
-        "model": {
-          "description": "Model id this provider serves.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "reasoning": {
-          "description": "openai only: send reasoning_effort to a reasoning model.",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
-          "type": [
-            "boolean",
-            "string",
-            "null"
-          ]
-        },
-        "reasoning_budget_tokens": {
-          "description": "anthropic, budget-era models only (claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5 and older): the thinking budget in tokens, 1024 or more and below the model's output cap. Unset means no thinking.",
+        "max_concurrent": {
+          "description": "Concurrent CLI processes; each costs 200-400 MB.",
           "minimum": 0,
           "type": [
             "integer",
             "null"
           ]
         },
-        "reasoning_effort": {
-          "description": "How hard the model thinks. openai: sent while reasoning is on. anthropic: sent on every call, high when unset, refused at a level the model does not take.",
+        "mode": {
+          "description": "text (a model behind the engine's tool loop) or agent (the CLI runs the executor).",
           "enum": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
+            "text",
+            "agent",
             "",
             null
           ]
         },
+        "model": {
+          "description": "Model id, in the CLI's own grammar (OpenCode: \u003cprovider\u003e/\u003cmodel\u003e).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "overrides": {
+          "additionalProperties": {},
+          "description": "Field-wise overrides of the built-in CLI profile.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "run_in": {
+          "description": "Where an agent-mode run happens. Empty = providers.sandbox.default_run_in.",
+          "enum": [
+            "direct",
+            "container",
+            "e2b",
+            "",
+            null
+          ]
+        },
+        "state_dir": {
+          "description": "Credential + per-seat home directory, each CLI under \u003cstate_dir\u003e/\u003cagent\u003e. Entries sharing one and a CLI share a login.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "timeout_seconds": {
-          "description": "Seconds one HTTP attempt may take: the whole of a unary call, the longest silence in a streamed one (default 600).",
+          "description": "Wall-clock cap on one CLI invocation (default 600).",
           "minimum": 0,
           "type": [
             "number",
             "null"
-          ]
-        },
-        "type": {
-          "description": "Which implementation to construct.",
-          "enum": [
-            "openai",
-            "anthropic",
-            "openai-compatible",
-            "cli-agent",
-            "",
-            null
           ]
         }
       },
@@ -1883,7 +1752,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/LLMProvider"
           },
-          "description": "Named LLM providers; seats select one by key.",
+          "description": "Named models, each a coding CLI the engine drives; seats select one by key.",
           "type": [
             "object",
             "null"
@@ -1917,14 +1786,6 @@
     "Reflect": {
       "additionalProperties": false,
       "properties": {
-        "budget_tokens": {
-          "description": "Soft token cap on the reflection call; 0 = uncapped.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "enabled": {
           "description": "Run reflection after each turn (default on).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -1949,14 +1810,6 @@
           "type": [
             "boolean",
             "string",
-            "null"
-          ]
-        },
-        "summarize_max_tokens": {
-          "description": "Soft cap on the Similar prior work briefing, in tokens.",
-          "minimum": 0,
-          "type": [
-            "integer",
             "null"
           ]
         }
@@ -2913,7 +2766,7 @@
           ]
         },
         "default_run_in": {
-          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no cli.run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
+          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
           "enum": [
             "direct",
             "container",
@@ -3229,14 +3082,6 @@
     "SkillPromotion": {
       "additionalProperties": false,
       "properties": {
-        "budget_tokens": {
-          "description": "Soft token cap per promotion draft.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "enabled": {
           "description": "Promote sibling skills to unit scope (default on).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -3290,14 +3135,6 @@
             "null"
           ]
         },
-        "budget_tokens": {
-          "description": "Soft token cap per refinement.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "enabled": {
           "description": "Refine skills after use (default on).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -3332,14 +3169,6 @@
     "SkillSynthesis": {
       "additionalProperties": false,
       "properties": {
-        "budget_tokens": {
-          "description": "Soft token cap per draft attempt.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "cluster_jaccard_threshold": {
           "description": "Similarity that pools two turns into one cluster.",
           "maximum": 1,

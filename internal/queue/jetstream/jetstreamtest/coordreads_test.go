@@ -69,7 +69,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		RateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
-		CooldownMax: time.Hour, BudgetRetention: coord.BudgetRetention,
+		BudgetRetention: coord.BudgetRetention,
 		StatusFreshness: 10 * time.Minute, CustodyRetention: 10 * time.Minute,
 	}
 	clients := make([]*js.Queue, len(c.Servers))

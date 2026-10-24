@@ -22,10 +22,10 @@ import (
 // second — most of it the CLI starting the private server `--standalone`
 // gives it. Thirty seconds is sixty times that, so a host already running
 // max_concurrent coding CLIs does not fail a seat's generation or lose a
-// call's real counts over a slow start, and a tenth of the default per-call
-// cap (cli.timeout_seconds, 300), so a wedged command cannot quietly spend
-// most of the call it brackets: every one of them runs inside the call's
-// concurrency slot.
+// call's real counts over a slow start, and a twentieth of the default
+// per-call cap (timeout_seconds, 600), so a wedged command cannot quietly
+// spend much of the call it brackets: every one of them runs inside the
+// call's concurrency slot.
 //
 // A constant rather than a setting because nothing about a deployment moves
 // it: the work is a fixed-size local round trip, and the per-call cap is the
@@ -53,6 +53,10 @@ const auxiliaryTimeout = 30 * time.Second
 //   - running out of [auxiliaryTimeout] is an [auxiliaryTimeoutError], which
 //     is a [context.DeadlineExceeded] to errors.Is;
 //   - exiting non-zero is an [auxiliaryExitError];
+//   - exiting 0 without being seen to its end — a stdout something it left
+//     running still held, a wait that failed — is an
+//     [auxiliaryUnfinishedError], because what it printed may be a login
+//     with its end missing;
 //   - a child that could not be started at all is the error [run] gave.
 func (p *Provider) runAuxiliary(
 	ctx context.Context, args []string, dir string, env []string, stdin string,
@@ -68,7 +72,7 @@ func (p *Provider) runAuxiliary(
 		grace:   p.termGrace,
 	})
 	switch {
-	case err == nil && !res.timedOut && res.exitCode == 0:
+	case err == nil && !res.timedOut && res.exitCode == 0 && res.unfinished() == "":
 		// Ran to the end — whatever the caller's context did meanwhile,
 		// since what it was waiting for is done.
 	case ctx.Err() != nil:
@@ -88,14 +92,19 @@ func (p *Provider) runAuxiliary(
 }
 
 // auxiliaryFailure is the error for a command that ran and did not succeed —
-// timed out or exited non-zero — with its stderr scrubbed of what it was
-// handed on stdin and what it printed ([scrubAuxiliary]).
+// timed out, exited non-zero, or exited 0 without being seen to its end — with
+// its stderr scrubbed of what it was handed on stdin and what it printed
+// ([scrubAuxiliary]).
 func auxiliaryFailure(command string, res *rawResult, stdin string) error {
 	stderr := scrubAuxiliary(res.stderr, stdin, res.stdout)
-	if res.timedOut {
+	switch {
+	case res.timedOut:
 		return &auxiliaryTimeoutError{command: command, stderr: stderr}
+	case res.exitCode != 0:
+		return &auxiliaryExitError{command: command, code: res.exitCode, stderr: stderr}
+	default:
+		return &auxiliaryUnfinishedError{command: command, why: res.unfinished(), stderr: stderr}
 	}
-	return &auxiliaryExitError{command: command, code: res.exitCode, stderr: stderr}
 }
 
 // auxiliaryTimeoutError is an auxiliary command that ran past
@@ -125,6 +134,27 @@ type auxiliaryExitError struct {
 
 func (e *auxiliaryExitError) Error() string {
 	return fmt.Sprintf("%s exited %d%s", e.command, e.code, stderrDetail(e.stderr))
+}
+
+// auxiliaryUnfinishedError is an auxiliary command that exited 0 and still
+// cannot be taken as done: something it left running held its stdout past the
+// grace, so what it printed was cut there, or waiting for it failed.
+//
+// NOT an [auxiliaryExitError], which an import reads as the CLI refusing the
+// login ([loginRefusedError]): this CLI refused nothing, and the next call
+// imports the same login again. To [acquireFailureKind] it is the SERVER
+// failure an exit is, a local CLI that did not answer usably.
+type auxiliaryUnfinishedError struct {
+	command string
+	// why is [rawResult.unfinished], which repeats nothing the command was
+	// handed or printed.
+	why string
+	// stderr is already scrubbed.
+	stderr string
+}
+
+func (e *auxiliaryUnfinishedError) Error() string {
+	return fmt.Sprintf("%s exited 0, but %s%s", e.command, e.why, stderrDetail(e.stderr))
 }
 
 // scrubMarker replaces what [scrubAuxiliary] takes out, in [redact]'s marker

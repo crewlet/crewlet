@@ -22,9 +22,9 @@ import (
 // catalogue, in one seat's prompt. A procedure four seats independently
 // arrived at is something the TEAM has, which makes it documentation — so the
 // output is a draft page a unit lead reviews rather than a skill row nobody
-// asked for. `skill_promotion.enabled`, `min_sibling_count`,
-// `jaccard_threshold` and `budget_tokens` all validated and were read by
-// nothing, and `Skills.ListFor` existed for this pass with no caller.
+// asked for. `skill_promotion.enabled`, `min_sibling_count` and
+// `jaccard_threshold` all validated and were read by nothing, and
+// `Skills.ListFor` existed for this pass with no caller.
 
 // fakeWriter records the drafts a pass asked for.
 type fakeWriter struct {
@@ -341,7 +341,7 @@ func TestTheWidestConvergenceIsPromotedFirst(t *testing.T) {
 	if !strings.Contains(prompt, "fetch -> build -> tag -> announce") {
 		t.Fatalf("the prompt is about the wrong convergence:\n%s", prompt)
 	}
-	wantLowEffort(t, aux.seen[0])
+	wantNoTools(t, aux.seen[0])
 }
 
 // A PROMOTER MISSING ANY HALF REFUSES TO BE BUILT rather than silently

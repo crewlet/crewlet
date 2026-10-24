@@ -598,10 +598,12 @@ func TestOnlyALockedStoreGetsARemediation(t *testing.T) {
 // perfectly good way forward.
 func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 	t.Parallel()
-	// Each opener, and the function that must appear in it. `secrets.go`
-	// routes to the API; the other two explain.
+	// Each opener, and the function that must appear in it. The secret
+	// store's two — the write and the read every command that resolves the
+	// company makes — route to the API; the other two explain.
 	openers := map[string]map[string]string{
 		"secrets.go":    {"openSecretStore": "throughTheRunningNode"},
+		"provision.go":  {"companyResolver": "storedThroughTheRunningNode"},
 		"config_cmd.go": {"openConfigStore": "engineHoldsTheStore"},
 		"ops.go":        {"runMigrate": "engineHoldsTheStore"},
 	}

@@ -64,7 +64,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	t.Helper()
 	logs.attribute(t)
 	model := newScriptedModel(t)
-	doc := fmt.Sprintf(companyDoc, model.url)
+	doc := goldenCompany(model)
 	if amend != nil {
 		doc = amend(doc)
 	}
@@ -213,7 +213,7 @@ func TestADataMemberRefusesATakenLeafPortByName(t *testing.T) {
 	}
 	defer held.Close()
 	model := newScriptedModel(t)
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	cfg, err := config.ParseCompany([]byte(goldenCompany(model)))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
 func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 	t.Parallel()
 	model := newScriptedModel(t)
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	cfg, err := config.ParseCompany([]byte(goldenCompany(model)))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}

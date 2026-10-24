@@ -37,9 +37,8 @@ providers:
         optional_keys: [.npmrc, NPM_TOKEN]
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-run-env-key"]
+      auth: {mode: api-key, api_key: "sk-ant-fake-run-env-key"}
 roles:
   - name: Engineer
     handle: swe
@@ -214,9 +213,8 @@ providers:
         optional_keys: [.npmrc, NPM_TOKEN]
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-run-env-key"]
+      auth: {mode: api-key, api_key: "sk-ant-fake-run-env-key"}
 roles:
   - name: Engineer
     handle: swe

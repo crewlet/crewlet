@@ -78,13 +78,13 @@ func ParseEnvelope(reply string) Envelope {
 
 // decodeEnvelopeObject reads one candidate document, THROUGH json.Number.
 //
-// The number rule is the same one [httpapi.DecodeArgs] states for the HTTP
-// providers, and it is not a display concern here: these arguments are
+// The number rule is not a display concern here: these arguments are
 // EXECUTED. Decoded into an `any` a number becomes a float64, so a call naming
 // a 19-digit id — a Jira issue id, a Slack timestamp, a GitHub node id — is
 // re-encoded as 1234567890123456800 and runs against a DIFFERENT row, with
-// nothing anywhere reporting an error. A seat on a subscription CLI backend
-// was the one seat in this engine still doing that.
+// nothing anywhere reporting an error.
+// [github.com/crewlet/crewlet/internal/tools.ReadArgs] holds a record this
+// engine wrote to the same rule.
 //
 // Nothing else read out of the envelope is a number — [fromDocument] and
 // [readCall] take strings and lists — so the whole document can be decoded

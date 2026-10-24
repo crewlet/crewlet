@@ -168,7 +168,7 @@ type SandboxProvider struct {
 	// the shape the catalogue exists for — so the refusal is written at
 	// the seat or entry that named none, never on this field alone. See
 	// [Company.validateSandboxPlacement].
-	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no cli.run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own."`
+	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own."`
 
 	// DefaultCodingAgent is what a seat that names none runs.
 	DefaultCodingAgent CodingAgent `yaml:"default_coding_agent,omitempty" json:"default_coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Coding agent for seats that name none."`

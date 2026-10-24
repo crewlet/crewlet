@@ -40,16 +40,9 @@ providers:
       - {name: shared, brief: b}
   llm:
     main:
-      type: anthropic
       model: claude-golden
-    sub:
-      type: cli-agent
-      model: sonnet
-      cli: {agent: claude-code, mode: agent, run_in: e2b, state_dir: %[1]q}
-    deflt:
-      type: cli-agent
-      model: sonnet
-      cli: {agent: claude-code, mode: agent, state_dir: %[1]q}
+    sub: {agent: claude-code, model: sonnet, mode: agent, run_in: e2b, state_dir: %[1]q}
+    deflt: {agent: claude-code, model: sonnet, mode: agent, state_dir: %[1]q}
 roles:
   - name: Founder
     handle: founder
@@ -99,7 +92,7 @@ roles:
 	if err != nil {
 		t.Fatalf("this fixture's company does not build an org: %v", err)
 	}
-	models, _, err := buildProviders(cfg, config.EnvOnly())
+	models, err := buildProviders(cfg, config.EnvOnly())
 	if err != nil {
 		t.Fatalf("buildProviders: %v", err)
 	}

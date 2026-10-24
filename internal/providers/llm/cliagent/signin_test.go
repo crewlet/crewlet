@@ -3,6 +3,7 @@ package cliagent
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,35 +30,35 @@ type signInCase struct {
 func signInCases() []signInCase {
 	return []signInCase{
 		{
-			// THE REPORTED BUG: a hermes key given through cli.env, the
+			// THE REPORTED BUG: a hermes key given through env, the
 			// route its profile names, was "no login of its own".
-			name:  "a cli.env key on a CLI that reads its provider's key from its environment",
+			name:  "a env key on a CLI that reads its provider's key from its environment",
 			agent: "hermes", env: map[string]string{"OPENROUTER_API_KEY": "sk-or-x"},
-			signedIn: true, line: "cli.env sets OPENROUTER_API_KEY",
+			signedIn: true, line: "env sets OPENROUTER_API_KEY",
 		},
 		{
 			name: "the same key on opencode, which also reads it", agent: "opencode",
 			env:      map[string]string{"ANTHROPIC_API_KEY": "sk-ant-x"},
-			signedIn: true, line: "cli.env sets ANTHROPIC_API_KEY",
+			signedIn: true, line: "env sets ANTHROPIC_API_KEY",
 		},
 		{
 			// kimi-code is handed KIMI_API_KEY and ignores it.
-			name:  "a cli.env key on a CLI that does not read one",
+			name:  "a env key on a CLI that does not read one",
 			agent: "kimi-code", env: map[string]string{"KIMI_API_KEY": "sk-kimi"},
 			problem: "no sign-in",
 		},
 		{
-			name:  "a cli.env variable that is configuration, not a credential",
+			name:  "a env variable that is configuration, not a credential",
 			agent: "hermes", env: map[string]string{"HTTPS_PROXY": "http://proxy.example.com"},
-			problem: "cli.env, under that provider's own variable",
+			problem: "env, under that provider's own variable",
 		},
 		{
 			// A count of model tokens is configuration: read as a
 			// credential by a substring match, it reported an entry with
 			// no key at all as signed in.
-			name:  "a cli.env tuning variable whose name holds TOKENS",
+			name:  "a env tuning variable whose name holds TOKENS",
 			agent: "hermes", env: map[string]string{"HERMES_MAX_TOKENS": "4096"},
-			problem: "cli.env, under that provider's own variable",
+			problem: "env, under that provider's own variable",
 		},
 		{
 			// A CLI that fronts any provider may be pointed at a server
@@ -68,17 +69,17 @@ func signInCases() []signInCase {
 			problem: "served by an endpoint that takes no key, run the doctor without -no-smoke",
 		},
 		{
-			name:  "a cli.env key whose ${VAR} resolved to nothing",
+			name:  "a env key whose ${VAR} resolved to nothing",
 			agent: "pi", env: map[string]string{"ANTHROPIC_API_KEY": ""},
-			problem: "cli.env sets ANTHROPIC_API_KEY, but the ${VAR} it references resolved to nothing",
-			// It already took the cli.env route; being told to take it
+			problem: "env sets ANTHROPIC_API_KEY, but the ${VAR} it references resolved to nothing",
+			// It already took the env route; being told to take it
 			// would read as a second fault.
 			without: "or set the key of the provider its model names",
 		},
 		{
 			// Subscription mode removes the profile's api_key_env from
 			// the child, which is the guard against a metered bill.
-			name:  "a metered key in cli.env that subscription mode removes",
+			name:  "a metered key in env that subscription mode removes",
 			agent: "claude-code", env: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-x"},
 			auth:    Auth{Mode: AuthSubscription},
 			problem: "run `crewlet llm login sub`",
@@ -87,19 +88,28 @@ func signInCases() []signInCase {
 			without: "endpoint that takes no key",
 		},
 		{
+			// Gemini CLI declares no login subcommand, so `crewlet llm
+			// login sub` refuses for it: the route that works is a login
+			// made with the CLI by hand, adopted.
+			name: "a CLI with no login command of its own", agent: "gemini-cli",
+			problem: "`crewlet llm login sub -from-host`",
+			without: "run `crewlet llm login sub`",
+		},
+		{
 			// The operator wrote a token reference; that it resolved to
 			// nothing is the fault to name, ahead of the routes they did
 			// not take.
-			name: "a cli.auth.token whose ${VAR} resolved to nothing", agent: "claude-code",
+			name: "a auth.token whose ${VAR} resolved to nothing", agent: "claude-code",
 			auth:    Auth{Mode: AuthSubscription, TokenConfigured: true},
-			problem: "cli.auth.token is set, but the ${VAR} it references resolved to nothing",
+			problem: "auth.token is set, but the ${VAR} it references resolved to nothing",
 		},
 		{
 			// THE FALSE HEALTHY: api-key mode removes the token, so a
 			// resolved token is not a sign-in there.
 			name: "api-key mode with no key and a token it removes", agent: "claude-code",
-			auth:    Auth{Mode: AuthAPIKey, Token: "oauth-token"},
-			problem: "auth.mode is api-key and its api_keys value resolved to nothing",
+			auth: Auth{Mode: AuthAPIKey, Token: "oauth-token"},
+			problem: "its auth.mode is api-key, which hands the CLI only its key " +
+				"(providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY), and that key resolved to nothing",
 		},
 		{
 			name: "a keyed api-key entry", agent: "grok",
@@ -271,6 +281,78 @@ func TestAnAnsweredSmokeTestClearsANoSignInProblem(t *testing.T) {
 			}
 			if problem == "" {
 				t.Errorf("a CLI that failed with nothing to sign it in raised no problem (sign-in: %q)", d.SignIn)
+			}
+		})
+	}
+}
+
+// A MODE'S SIGN-IN NAMES ONLY THE VARIABLES ITS PROFILE HAS, since those are
+// the only ones [applyAuth] hands the CLI. Codex has a key variable and no
+// token one, so inherit-env forwards one name, and an entry whose profile has
+// none for its mode — which every write of the configuration refuses, and an
+// apply only warns about — is told that the mode itself is the remedy, never
+// to set a variable that would reach nothing. Subscription has none at all: its
+// credentials are a login and a stored token, which each message words for its
+// own setting.
+func TestEachModesSignInNamesOnlyTheVariablesItsProfileHas(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		agent     string
+		mode      AuthMode
+		variables []string
+		want      []string
+		notWant   []string
+	}{
+		{agent: "claude-code", mode: AuthSubscription},
+		{
+			agent: "claude-code", mode: AuthInheritEnv,
+			variables: []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"},
+			want:      []string{"CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "neither is set there", "export one"},
+		},
+		{
+			agent: "codex", mode: AuthAPIKey, variables: []string{"OPENAI_API_KEY"},
+			want: []string{"its auth.mode is api-key", "providers.llm.sub.auth.api_key, else OPENAI_API_KEY",
+				"`crewlet secrets set`"},
+		},
+		{
+			agent: "codex", mode: AuthInheritEnv, variables: []string{"OPENAI_API_KEY"},
+			want:    []string{"only OPENAI_API_KEY from the engine's own process environment", "it is not set there", "export it"},
+			notWant: []string{" or ", "neither"},
+		},
+		{
+			agent: "hermes", mode: AuthAPIKey,
+			want:    []string{"no api_key_env", "set auth.mode: subscription"},
+			notWant: []string{"else ", "crewlet secrets set"},
+		},
+		{
+			agent: "hermes", mode: AuthInheritEnv,
+			want:    []string{"neither a token_env nor an api_key_env", "set auth.mode: subscription"},
+			notWant: []string{"export"},
+		},
+	} {
+		t.Run(tc.agent+"/"+string(tc.mode), func(t *testing.T) {
+			t.Parallel()
+			p := newSignInProvider(t, signInCase{agent: tc.agent, auth: Auth{Mode: tc.mode}})
+			sign, fromEnv := p.ModeSignIn()
+			if fromEnv != (tc.mode != AuthSubscription) {
+				t.Fatalf("ModeSignIn reports %v for %s", fromEnv, tc.mode)
+			}
+			if !fromEnv {
+				return
+			}
+			if !slices.Equal(sign.Variables, tc.variables) {
+				t.Errorf("Variables = %v, want %v", sign.Variables, tc.variables)
+			}
+			missing := sign.Missing()
+			for _, want := range tc.want {
+				if !strings.Contains(missing, want) {
+					t.Errorf("%q does not say %q", missing, want)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(missing, bad) {
+					t.Errorf("%q says %q, which this profile does not have", missing, bad)
+				}
 			}
 		})
 	}

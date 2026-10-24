@@ -71,7 +71,7 @@ func TestAWorkConfigDirIsInsideTheCallAndHoldsWhatTheCLIReads(t *testing.T) {
 // it reads `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`,
 // so a child given only the second, beside any value of the first — an empty
 // one included — walked every ancestor again. Which is why the operator's
-// own spelling of the second, handed through cli.env, changes nothing here:
+// own spelling of the second, handed through env, changes nothing here:
 // the first is set, so the second is never read.
 //
 // And ONLY A CALL gets the directory: a command run in a home — a credential

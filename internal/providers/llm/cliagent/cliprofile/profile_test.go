@@ -37,7 +37,7 @@ func TestCustomShipsNothingAndSaysWhatIsMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load(custom) succeeded with no overrides")
 	}
-	for _, want := range []string{"binary", "cli.overrides"} {
+	for _, want := range []string{"binary", "overrides"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
@@ -271,7 +271,7 @@ func TestNoShippedSentinelCanMatchOrdinaryText(t *testing.T) {
 	}
 }
 
-// A profile's env is forwarded whatever auth.mode says, and cli.overrides is
+// A profile's env is forwarded whatever auth.mode says, and overrides is
 // stored and shown unredacted — so a key written there is both a silent bill
 // and a credential in plain text. The field's own comment always said "never
 // a credential"; nothing held it to that. An ADMISSION rule, like the
@@ -283,8 +283,8 @@ func TestAProfileMayNotCarryACredentialInItsEnv(t *testing.T) {
 		extra       map[string]any
 		want        string
 	}{
-		{"hermes", "OPENROUTER_API_KEY", nil, "cli.env"},
-		{"claude-code", "ANTHROPIC_AUTH_TOKEN", nil, "cli.env"},
+		{"hermes", "OPENROUTER_API_KEY", nil, "env"},
+		{"claude-code", "ANTHROPIC_AUTH_TOKEN", nil, "env"},
 		// Named by the profile as its key variable: refused as auth's
 		// to set, even though the name does not look like a credential.
 		{"grok", "XAI_LOGIN", map[string]any{"api_key_env": "XAI_LOGIN"}, "api_key_env"},
@@ -339,13 +339,13 @@ func TestTheTextPathsRuleNamesTheDefaultedOutput(t *testing.T) {
 	}
 }
 
-// A typo in cli.overrides is refused with a pointer to the field list in the
+// A typo in overrides is refused with a pointer to the field list in the
 // docs, so the list has to exist and be THE list: every field the decoder
 // accepts, and nothing it refuses. It did not exist when the pointer was
 // first written.
 func TestTheDocsListEveryProfileField(t *testing.T) {
 	t.Parallel()
-	page := filepath.Join(sourcetree.Root(t), "docs", "concepts", "subscription-llm-backends.md")
+	page := filepath.Join(sourcetree.Root(t), "docs", "concepts", "llm-backends.md")
 	raw, err := os.ReadFile(page) //nolint:gosec // a fixed path under the module root
 	if err != nil {
 		t.Fatal(err)
@@ -368,12 +368,12 @@ func TestTheDocsListEveryProfileField(t *testing.T) {
 	}
 	for name := range accepted {
 		if !documented[name] {
-			t.Errorf("profile field %q is accepted by cli.overrides but missing from the docs' field list", name)
+			t.Errorf("profile field %q is accepted by overrides but missing from the docs' field list", name)
 		}
 	}
 	for name := range documented {
 		if !accepted[name] {
-			t.Errorf("the docs list %q, which cli.overrides refuses", name)
+			t.Errorf("the docs list %q, which overrides refuses", name)
 		}
 	}
 }
@@ -438,7 +438,7 @@ func TestEnvSignInIsDeclaredExactlyWhereTheCLIReadsItsKeyFromItsEnvironment(t *t
 		t.Fatalf("Load: %v", err)
 	}
 	if !p.EnvSignIn {
-		t.Error("cli.overrides.env_sign_in did not reach the profile")
+		t.Error("overrides.env_sign_in did not reach the profile")
 	}
 }
 
@@ -460,6 +460,6 @@ func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	if p.ModelNamesProvider {
-		t.Error("cli.overrides.model_names_provider did not reach the profile")
+		t.Error("overrides.model_names_provider did not reach the profile")
 	}
 }

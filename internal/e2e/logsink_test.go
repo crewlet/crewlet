@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -26,7 +27,23 @@ import (
 // test runner to itself: cluster_test.go stands up a fleet of engines, each
 // embedding its own NATS server, in this one process. See
 // `go doc ./internal/solo`.
+//
+// And it is where this binary becomes the scripted model's CLI when it was
+// re-executed as one ([scriptedCLIEnv]) — FIRST, before the sink or the
+// framework, so the child's stdout is exactly the answer it prints, and as
+// a dispatch here rather than a test function, which every ordinary run would
+// otherwise report as a skip.
 func TestMain(m *testing.M) {
+	if endpoint := os.Getenv(scriptedCLIEnv); endpoint != "" {
+		os.Exit(runScriptedCLI(endpoint))
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: this binary cannot name its own path, and every "+
+			"company here runs it as its model's CLI: %v\n", err)
+		os.Exit(1)
+	}
+	scriptedCLIBinary = binary
 	logging.Configure(slog.LevelDebug, logging.FormatJSON, logs)
 	os.Exit(solo.Run(m))
 }

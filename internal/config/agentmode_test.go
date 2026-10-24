@@ -15,22 +15,23 @@ import (
 func TestTheCLIModeIsAClosedSet(t *testing.T) {
 	t.Parallel()
 	err := rejects(t, "name: Acme\nproviders:\n  llm:\n    sub:\n"+
-		"      type: cli-agent\n      cli: {agent: claude-code, mode: agentic}\n",
-		"providers.llm.sub.cli.mode")
+		"      agent: claude-code\n      mode: agentic\n",
+		"providers.llm.sub.mode")
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Fatalf("want ErrUnknownValue, got %v", err)
 	}
-	// Both spellings load, and an entry that names none is text — which is
-	// what every cli-agent entry meant before agent mode existed.
+	// Both spellings load, and an entry that names none is text: the mode
+	// that runs nothing but the CLI itself, so it needs no sandbox to place.
 	for _, mode := range []string{"", "text", "agent"} {
-		block := "cli: {agent: claude-code}"
+		block := "agent: claude-code\n"
 		if mode != "" {
-			block = "cli: {agent: claude-code, mode: " + mode + "}"
+			block += "      mode: " + mode + "\n"
 		}
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n"+
-			"      type: cli-agent\n      model: sonnet\n      "+block+"\n")
+			"      model: sonnet\n      "+block)
 		want := mode == "agent"
-		if got := cfg.Providers.LLM["sub"].CLI.AgentMode(); got != want {
+		sub := cfg.Providers.LLM["sub"]
+		if got := sub.AgentMode(); got != want {
 			t.Errorf("mode %q reports AgentMode() = %v", mode, got)
 		}
 	}
@@ -41,8 +42,8 @@ func TestTheCLIModeIsAClosedSet(t *testing.T) {
 func TestARunInOnATextModeCLIIsRefused(t *testing.T) {
 	t.Parallel()
 	err := rejects(t, "name: Acme\nproviders:\n  llm:\n    sub:\n"+
-		"      type: cli-agent\n      cli: {agent: claude-code, run_in: e2b}\n",
-		"providers.llm.sub.cli.run_in")
+		"      agent: claude-code\n      run_in: e2b\n",
+		"providers.llm.sub.run_in")
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
@@ -56,7 +57,7 @@ func TestARunInOnATextModeCLIIsRefused(t *testing.T) {
 func TestSelfNeedsAnAgentModeExecutor(t *testing.T) {
 	t.Parallel()
 	api := "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n" +
-		"      type: anthropic\n      model: claude-golden\n" +
+		"      model: claude-golden\n" +
 		"roles:\n  - name: SWE\n    llm: main\n    sandbox: {enabled: true, run_in: self}\n"
 	err := rejects(t, api, "roles[0].sandbox.run_in")
 	if !errors.Is(err, ErrConflict) {
@@ -65,7 +66,7 @@ func TestSelfNeedsAnAgentModeExecutor(t *testing.T) {
 
 	// The same seat on an agent-mode entry loads.
 	mustCompany(t, "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n"+
-		"      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent}\n"+
+		"      model: sonnet\n      agent: claude-code\n      mode: agent\n"+
 		"roles:\n  - name: SWE\n    llm: sub\n    sandbox: {enabled: true, run_in: self}\n")
 }
 
@@ -114,9 +115,9 @@ func TestSelfIsTheOneCellWithNoBackend(t *testing.T) {
 // provider declared.
 func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 	t.Parallel()
-	doc := "name: Acme\nproviders:\n  llm:\n    first:\n      type: anthropic\n      model: a\n" +
-		"    default:\n      type: anthropic\n      model: b\n" +
-		"    named:\n      type: anthropic\n      model: c\n"
+	doc := "name: Acme\nproviders:\n  llm:\n    first:\n      model: a\n" +
+		"    default:\n      model: b\n" +
+		"    named:\n      model: c\n"
 	cfg := mustCompany(t, doc+"roles:\n  - name: Picky\n    llm: named\n  - name: Silent\n")
 	for _, tc := range []struct{ seat, want string }{
 		{"Picky", "named"},
@@ -138,8 +139,8 @@ func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 
 	// With no entry called "default", the first DECLARED one wins — which
 	// is why declaration order is preserved rather than left to the map.
-	noDefault := mustCompany(t, "name: Acme\nproviders:\n  llm:\n    zeta:\n      type: anthropic\n      model: a\n"+
-		"    alpha:\n      type: anthropic\n      model: b\nroles:\n  - name: Silent\n")
+	noDefault := mustCompany(t, "name: Acme\nproviders:\n  llm:\n    zeta:\n      model: a\n"+
+		"    alpha:\n      model: b\nroles:\n  - name: Silent\n")
 	if key, _, ok := noDefault.ExecutorProvider(&noDefault.Roles[0]); !ok || key != "zeta" {
 		t.Errorf("with no default the executor resolved to %q, want the first declared", key)
 	}
@@ -153,7 +154,7 @@ func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 	}
 }
 
-// AN AGENT-MODE ENTRY IS A RUN, placed by its own cli.run_in, and it gets the
+// AN AGENT-MODE ENTRY IS A RUN, placed by its own run_in, and it gets the
 // same three questions a seat's gate gets: is there a catalogue, is the cell
 // it names configured, and does a silent entry have a default to fall to.
 // Each was unasked, and each failed at the seat's first turn — every turn —
@@ -161,17 +162,17 @@ func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 	t.Parallel()
 	entry := func(runIn string) string {
-		cli := "cli: {agent: claude-code, mode: agent}"
+		cli := "agent: claude-code\n      mode: agent\n"
 		if runIn != "" {
-			cli = "cli: {agent: claude-code, mode: agent, run_in: " + runIn + "}"
+			cli += "      run_in: " + runIn + "\n"
 		}
-		return "  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n      " + cli + "\n" +
+		return "  llm:\n    sub:\n      model: sonnet\n      " + cli +
 			"roles:\n  - name: SWE\n    llm: sub\n"
 	}
 
 	t.Run("no catalogue at all", func(t *testing.T) {
 		t.Parallel()
-		err := rejects(t, "name: Acme\nproviders:\n"+entry(""), "providers.llm.sub.cli.mode")
+		err := rejects(t, "name: Acme\nproviders:\n"+entry(""), "providers.llm.sub.mode")
 		if !errors.Is(err, ErrMissing) {
 			t.Fatalf("want ErrMissing, got %v", err)
 		}
@@ -179,7 +180,7 @@ func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 	t.Run("a cell the catalogue does not hold", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n"+
-			entry("e2b"), "providers.llm.sub.cli.run_in")
+			entry("e2b"), "providers.llm.sub.run_in")
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("want ErrConflict, got %v", err)
 		}
@@ -187,7 +188,7 @@ func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 	t.Run("a silent entry on an ambiguous catalogue", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"+entry(""),
-			"providers.llm.sub.cli.run_in")
+			"providers.llm.sub.run_in")
 		if !errors.Is(err, ErrMissing) {
 			t.Fatalf("want ErrMissing, got %v", err)
 		}
@@ -196,7 +197,7 @@ func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 		t.Parallel()
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n"+
 			"    default_run_in: direct\n"+entry("e2b"))
-		if where := cfg.SandboxPlacements()[PlacementE2B]; where != "providers.llm.sub.cli.run_in" {
+		if where := cfg.SandboxPlacements()[PlacementE2B]; where != "providers.llm.sub.run_in" {
 			t.Errorf("the entry's cell is reached by %q, want the entry itself", where)
 		}
 		// And what reaching a cell implies follows: a container run
@@ -213,9 +214,9 @@ func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 		// nothing, so its cell is not built and its questions are not
 		// asked — the day a seat points at it, they are.
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n"+
-			"  llm:\n    main:\n      type: anthropic\n      model: claude-golden\n"+
-			"    sub:\n      type: cli-agent\n      model: sonnet\n"+
-			"      cli: {agent: claude-code, mode: agent, run_in: e2b}\n"+
+			"  llm:\n    main:\n      model: claude-golden\n"+
+			"    sub:\n      model: sonnet\n"+
+			"      agent: claude-code\n      mode: agent\n      run_in: e2b\n"+
 			"roles:\n  - name: SWE\n    llm: main\n")
 		if _, reached := cfg.SandboxPlacements()[PlacementE2B]; reached {
 			t.Error("an unused entry's cell was reached")
@@ -230,8 +231,8 @@ func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 func TestSelfIsNotACellAnAgentModeEntryCanName(t *testing.T) {
 	t.Parallel()
 	err := rejects(t, "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n"+
-		"      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent, run_in: self}\n",
-		"providers.llm.sub.cli.run_in")
+		"      model: sonnet\n      agent: claude-code\n      mode: agent\n      run_in: self\n",
+		"providers.llm.sub.run_in")
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Fatalf("want ErrUnknownValue, got %v", err)
 	}
@@ -263,9 +264,9 @@ func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
 	t.Parallel()
 	// The agent-mode entry is declared FIRST, so it is the fallback.
 	const providers = "name: Acme\nproviders:\n  llm:\n" +
-		"    coder:\n      type: cli-agent\n      model: sonnet\n" +
-		"      cli: {agent: claude-code, mode: agent, run_in: e2b}\n" +
-		"    main:\n      type: anthropic\n      model: claude-golden\n"
+		"    coder:\n      model: sonnet\n" +
+		"      agent: claude-code\n      mode: agent\n      run_in: e2b\n" +
+		"    main:\n      model: claude-golden\n"
 	const founder = "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"
 
 	// No catalogue, and none needed: no seat's executor is the agent-mode
@@ -283,7 +284,7 @@ func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
 
 	// And an AGENT seat falling through the same fallback still reaches it,
 	// or this would just be "the fallback never counts".
-	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", agentModeEntryPath("coder").String())
+	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", at(entryPath("coder"), "mode").String())
 }
 
 // THE FALLBACK IS THE COMPANY'S, NOT THE SEAT'S — the entry called "default",
@@ -294,10 +295,10 @@ func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
 func TestBothPathsToTheExecutorEntryAgree(t *testing.T) {
 	t.Parallel()
 	for _, doc := range []string{
-		"    first:\n      type: anthropic\n      model: a\n" +
-			"    default:\n      type: anthropic\n      model: b\n",
-		"    first:\n      type: anthropic\n      model: a\n" +
-			"    second:\n      type: anthropic\n      model: b\n",
+		"    first:\n      model: a\n" +
+			"    default:\n      model: b\n",
+		"    first:\n      model: a\n" +
+			"    second:\n      model: b\n",
 	} {
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  llm:\n"+doc+
 			"roles:\n  - name: Picky\n    llm: first\n  - name: Silent\n")
@@ -319,7 +320,7 @@ func TestBothPathsToTheExecutorEntryAgree(t *testing.T) {
 // AN AGENT-MODE SEAT'S GATE PLACES NOTHING AND DRIVES NOTHING.
 //
 // Such a seat is never offered run_sandbox: its one box is its executor's,
-// placed by the entry's own cli.run_in, and run by that entry's CLI. So a
+// placed by the entry's own run_in, and run by that entry's CLI. So a
 // gate's `run_in` naming a cell, or a `coding_agent` naming another runner,
 // reads as a working choice and is read by nothing — and the cell used to be
 // counted as reached, so a company was refused for want of an image no box
@@ -329,8 +330,8 @@ func TestAnAgentModeSeatsGatePlacesNothing(t *testing.T) {
 	t.Parallel()
 	company := func(gate string) string {
 		return "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
-			"  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n" +
-			"      cli: {agent: claude-code, mode: agent, run_in: direct}\n" +
+			"  llm:\n    sub:\n      model: sonnet\n" +
+			"      agent: claude-code\n      mode: agent\n      run_in: direct\n" +
 			"roles:\n  - name: SWE\n    llm: sub\n    sandbox: " + gate + "\n"
 	}
 
@@ -338,7 +339,7 @@ func TestAnAgentModeSeatsGatePlacesNothing(t *testing.T) {
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "providers.llm.sub.cli.run_in") {
+	if !strings.Contains(err.Error(), "providers.llm.sub.run_in") {
 		t.Errorf("the refusal does not name what places the box:\n%v", err)
 	}
 	// Only that: the container is reached by nothing, so no image is asked
@@ -385,8 +386,8 @@ func TestAnAgentModeSeatsGatePlacesNothing(t *testing.T) {
 func TestAGateThatIsOffIsReadOnAnAgentModeSeat(t *testing.T) {
 	t.Parallel()
 	const providers = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
-		"  llm:\n    main:\n      type: anthropic\n      model: claude-golden\n" +
-		"    sub:\n      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent}\n"
+		"  llm:\n    main:\n      model: claude-golden\n" +
+		"    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n"
 	const gate = "    sandbox:\n      enabled: false\n      env: {GITLAB_TOKEN: \"${T}\"}\n" +
 		"      setup:\n        - {name: tools, brief: b}\n"
 

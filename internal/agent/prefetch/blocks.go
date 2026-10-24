@@ -24,17 +24,6 @@ const (
 	// most-similar is rarely the one that helps.
 	recallHits = 3
 
-	// DefaultSummaryTokens caps the optional summary of those hits when
-	// the operator names no ceiling, on a call that does not think (a
-	// thinking call is sent the model's own ceiling; llm.Request.MaxTokens).
-	//
-	// Four hundred, which is what three two-sentence episodes compress
-	// into with room for the briefing sentence that ties them to the task
-	// — and the value [config.Reflect.SummarizeMaxTokens] has always
-	// defaulted to, which is why it was safe to hardcode and invisible
-	// that it had been: raising the config knob moved nothing.
-	DefaultSummaryTokens = 400
-
 	// maxRenderedTraits caps one counterparty's traits.
 	//
 	// A profiler pass contributes at most a handful of keys, but the store
@@ -138,7 +127,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
 			"Current task:\n"+r.Ask+
 				"\n\nPast turns by this agent:\n"+whole+
-				"\n\nBriefing:", f.summaryTokens())
+				"\n\nBriefing:")
 		if ok && strings.TrimSpace(summary) != "" {
 			return summary
 		}
@@ -156,14 +145,6 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 // call, and only a text past about eleven kilobytes, a task description or a
 // final answer pages long, is condensed before the summary reads it.
 const summaryTextBytes = compact.ChunkBytes / (2 * recallHits)
-
-// summaryTokens is the operator's cap on the episode summary, or the default.
-func (f *Fetcher) summaryTokens() int {
-	if f.src.SummarizeMaxTokens > 0 {
-		return f.src.SummarizeMaxTokens
-	}
-	return DefaultSummaryTokens
-}
 
 // renderEpisodes renders the recalled turns, each one's ask and account
 // condensed where it is past textBytes — through [learning.PastTurns], the

@@ -3,11 +3,11 @@
  *
  * `rounds()` joins a phase's narration and its tool calls on the number they
  * share, and lib/phases.test.ts proves that join. What is asserted here is the
- * half a reader actually sees: that the join survives into the markup, so a
- * round's thinking, the prose it said and every call it asked for are inside
- * one `.round` element and nothing else is. The complaint that prompted these
- * was "we are not grouping the thinking with its tool call" — the data was
- * grouped and the rendering did not say so.
+ * half a reader actually sees: that the join survives into the markup, so the
+ * prose a round said and every call it asked for are inside one `.round`
+ * element and nothing else is. The complaint that prompted these was "we are
+ * not grouping the model's words with its tool call" — the data was grouped
+ * and the rendering did not say so.
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -38,7 +38,6 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     failed: false,
     error: "",
     errorKind: "",
-    refusal: null,
     systemPrompt: "",
     userPrompt: "",
     systemSections: null,
@@ -95,8 +94,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
 const TWO_ROUNDS = phase({
   roundsUsed: 2,
   narration: [
-    { round: 1, reasoning: "the file first", content: "Reading the file.", declined: false },
-    { round: 2, reasoning: "that is enough", content: "Posted it.", declined: false },
+    { round: 1, content: "Reading the file.", declined: false },
+    { round: 2, content: "Posted it.", declined: false },
   ],
   tools: [
     {
@@ -166,20 +165,17 @@ describe("a settled phase's zero is a number", () => {
 });
 
 describe("a round is one block", () => {
-  test("a round's thinking, speech and calls all sit inside that round", () => {
+  test("a round's speech and calls all sit inside that round", () => {
     const { container } = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
     const blocks = [...container.querySelectorAll(".round")];
     expect(blocks).toHaveLength(2);
 
-    // The thinking's character count is what its collapsed head shows, so it
-    // identifies WHICH round's reasoning without expanding anything.
-    expect(blocks[0]!.textContent).toContain(`${"the file first".length} chars`);
     expect(blocks[0]!.textContent).toContain("Reading the file.");
     expect(blocks[0]!.textContent).toContain("read_file");
 
     // …and none of round 2 leaked into it. This is the failure the complaint
-    // describes from the other side: a call rendered away from the thinking
-    // that asked for it is a call rendered NEXT TO thinking that did not.
+    // describes from the other side: a call rendered away from the words that
+    // asked for it is a call rendered NEXT TO words that did not.
     expect(blocks[0]!.textContent).not.toContain("submit_work");
     expect(blocks[0]!.textContent).not.toContain("Posted it.");
     expect(blocks[1]!.textContent).toContain("submit_work");
@@ -203,8 +199,8 @@ describe("a round is one block", () => {
   test("a round says which round it is, to a reader who cannot see the rail", () => {
     // The numeral is drawn as a node in the rail and hidden from assistive
     // tech with it — leaving the one thing that ties the blocks below
-    // together unannounced, so the thinking and its call were read out as two
-    // unrelated collapsed rows.
+    // together unannounced, so the words and their call were read out as two
+    // unrelated rows.
     const { container } = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
     const spoken = [...container.querySelectorAll(".round .sr-only")].map((n) => n.textContent);
     expect(spoken).toEqual(["Round 1", "Round 2"]);
@@ -218,7 +214,7 @@ describe("a round is one block", () => {
       <PhaseCard
         record={phase({
           roundsUsed: 2,
-          narration: [{ round: 2, reasoning: "", content: "Done.", declined: false }],
+          narration: [{ round: 2, content: "Done.", declined: false }],
           tools: [
             {
               name: "read_file",
@@ -260,7 +256,7 @@ describe("a round is one block", () => {
 describe("a failed tool call", () => {
   const withFailure = phase({
     roundsUsed: 1,
-    narration: [{ round: 1, reasoning: "", content: "Trying.", declined: false }],
+    narration: [{ round: 1, content: "Trying.", declined: false }],
     tools: [
       {
         name: "read_file",
@@ -463,7 +459,7 @@ describe("a tool call's arguments", () => {
   function withArgs(args: string): PhaseRecord {
     return phase({
       roundsUsed: 1,
-      narration: [{ round: 1, reasoning: "", content: "Working.", declined: false }],
+      narration: [{ round: 1, content: "Working.", declined: false }],
       tools: [
         {
           name: "read_file",
@@ -636,8 +632,8 @@ describe("a round that answered in prose", () => {
         record={phase({
           roundsUsed: 2,
           narration: [
-            { round: 1, reasoning: "", content: SUBMISSION, declined: true },
-            { round: 2, reasoning: "", content: "", declined: false },
+            { round: 1, content: SUBMISSION, declined: true },
+            { round: 2, content: "", declined: false },
           ],
           tools: [call("submit_work", 2)],
         })}
@@ -667,8 +663,8 @@ describe("a round that answered in prose", () => {
           decision: "incomplete",
           rescueFired: true,
           narration: [
-            { round: 1, reasoning: "", content: "Commenting.", declined: false },
-            { round: 2, reasoning: "", content: SUBMISSION, declined: true },
+            { round: 1, content: "Commenting.", declined: false },
+            { round: 2, content: SUBMISSION, declined: true },
           ],
           tools: [call("comment_on_work_item", 1)],
         })}
@@ -687,7 +683,7 @@ describe("a round that answered in prose", () => {
         record={phase({
           live: true,
           roundsUsed: 1,
-          narration: [{ round: 1, reasoning: "", content: SUBMISSION, declined: true }],
+          narration: [{ round: 1, content: SUBMISSION, declined: true }],
         })}
         defaultOpen
       />,
@@ -706,8 +702,8 @@ describe("a round that answered in prose", () => {
 });
 
 /**
- * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, its thinking, a
- * coding run's report — read by a model's habits rather than a document's.
+ * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, a coding run's
+ * report — read by a model's habits rather than a document's.
  */
 describe("a model's words", () => {
   const SAID = [
@@ -725,7 +721,7 @@ describe("a model's words", () => {
       <PhaseCard
         record={phase({
           roundsUsed: 1,
-          narration: [{ round: 1, reasoning: "", content: SAID, declined: false }],
+          narration: [{ round: 1, content: SAID, declined: false }],
         })}
         defaultOpen
       />,
@@ -746,7 +742,7 @@ describe("a model's words", () => {
       <PhaseCard
         record={phase({
           roundsUsed: 1,
-          narration: [{ round: 1, reasoning: "## Weighing it", content: SAID, declined: false }],
+          narration: [{ round: 1, content: SAID, declined: false }],
         })}
         defaultOpen
       />,
@@ -898,84 +894,30 @@ describe("a running phase's transcript", () => {
 });
 
 /**
- * A ROUND THAT DID NOT FINISH, AND A MODEL THAT DECLINED, ARE SAID IN WORDS.
- *
- * The engine ends a phase on a round its output cap cut off, one that filled
- * the context window, and one its model refused — and none of them looks
- * different on the round itself: the words read like any round's, and a call
- * the cap cut off was never run, so there is no failed row to catch the eye.
- * The round's stop reason is what says which, and a refusal is a decision the
- * header names as one rather than an error kind that reads as the engine
- * refusing.
+ * A FAILED PHASE SAYS WHAT FAILED, in the engine's own words: its error kind on
+ * the head a reader scans down a turn, and its error in the body. The CONTROL
+ * is the same phase that did not fail, which says neither.
  */
-describe("a phase a round did not finish", () => {
-  const timed = (round: number, stopReason: string) => ({
-    round,
-    startedAt: "",
-    durationMs: 0,
-    model: "m",
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    toolCalls: 0,
-    stopReason,
-  });
-
-  test("a round the cap cut off says so, and the round that finished does not", () => {
+describe("a failed phase", () => {
+  test("names its error kind on its head and its error in its body", () => {
     const { container } = render(
       <PhaseCard
         record={phase({
           failed: true,
-          errorKind: "max_tokens",
-          error: "cut off",
-          roundsUsed: 2,
-          narration: [
-            { round: 1, reasoning: "", content: "Reading.", declined: false },
-            { round: 2, reasoning: "", content: "Posting the summ", declined: false },
-          ],
-          timedRounds: [timed(1, "tool_use"), timed(2, "max_tokens")],
+          errorKind: "rate_limit",
+          error: "cli-agent/claude-code: sitting out until 14:05",
         })}
         defaultOpen
       />,
     );
-    const [first, second] = [...container.querySelectorAll(".round")];
-    expect(second!.querySelector(".round-note.critical")?.textContent).toMatch(/output limit/);
-    expect(second!.classList.contains("errored")).toBe(true);
-    // THE CONTROL: a round that finished carries no note and no mark.
-    expect(first!.querySelector(".round-note")).toBeNull();
-    expect(first!.classList.contains("errored")).toBe(false);
-    expect(screen.getByText("max_tokens")).toBeDefined();
-  });
-
-  test("a refused phase is named as declined, with what the vendor said, even with no words", () => {
-    const { container } = render(
-      <PhaseCard
-        record={phase({
-          failed: true,
-          errorKind: "refusal",
-          error: "llm anthropic/m: refusal: the model declined the request (cyber)",
-          refusal: { category: "cyber", explanation: "exploit development" },
-          roundsUsed: 1,
-          narration: [],
-          tools: [],
-          timedRounds: [timed(1, "refusal")],
-        })}
-        defaultOpen
-      />,
+    expect(container.querySelector(".phase-head")?.textContent).toContain("rate_limit");
+    expect(container.querySelector(".phase-body")?.textContent).toContain(
+      "cli-agent/claude-code: sitting out until 14:05",
     );
-    expect(screen.getByText("declined by model")).toBeDefined();
-    // Not the error kind's word, which reads as the engine refusing.
-    expect(screen.queryByText("refusal")).toBeNull();
-    const body = container.querySelector(".phase-body")!.textContent ?? "";
-    expect(body).toMatch(/declined this request/);
-    expect(body).toMatch(/cyber/);
-    expect(body).toMatch(/exploit development/);
-    expect(body).toMatch(/The phase ended here\./);
-    // The refused round said nothing and ran nothing, and it still has its
-    // place on the rail — it is the round that explains why the phase ended.
-    const rounds = container.querySelectorAll(".round");
-    expect(rounds.length).toBe(1);
-    expect(rounds[0]!.querySelector(".round-note.critical")?.textContent).toMatch(/declined/);
+    cleanup();
+    const { container: whole } = render(<PhaseCard record={phase()} defaultOpen />);
+    expect(whole.textContent).not.toContain("rate_limit");
+    expect(whole.textContent).not.toContain("failed");
   });
 });
 
@@ -1053,7 +995,7 @@ describe("a publishing call", () => {
   function publishing(failed: boolean): PhaseRecord {
     return phase({
       roundsUsed: 1,
-      narration: [{ round: 1, reasoning: "", content: "Publishing.", declined: false }],
+      narration: [{ round: 1, content: "Publishing.", declined: false }],
       tools: [
         {
           name: "create_artifact",

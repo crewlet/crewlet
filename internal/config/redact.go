@@ -169,8 +169,10 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 // fired; the masks are anonymous, so the wrong answer looked exactly like the
 // right one.
 //
-// A list of credentials genuinely has no identity (a reordered `api_keys`
-// cannot be matched to what it hid) and stays positional. What separates the
+// A member that cannot name itself genuinely has no identity — a reordered
+// list of them cannot be matched to what it hid — and stays positional, which
+// is why no anonymous list in the document may carry a credential
+// (`TestEveryCredentialCarryingCollectionCanNameItself`). What separates the
 // two is whether a member can name itself, so the member is what says.
 type identified interface{ IdentityKey() string }
 
@@ -409,9 +411,9 @@ func mask(value string, secret bool) string {
 //
 // A document reaches this state when [Company.RestoreRedacted] could not
 // resolve a mask — a member that is new or renamed carries no prior value of
-// its own, and a list of BARE credentials that changed length no longer says
-// by position which one is which. Guessing would write one credential into
-// another's place. Refusing to guess is right; storing the result silently is
+// its own, and an identity the prior revision gives to more than one member
+// names none of them. Guessing would write one credential into another's
+// place. Refusing to guess is right; storing the result silently is
 // not. The literal "__redacted__" would be handed to a provider as an API key
 // and fail at the first call, hours later, with an authentication error that
 // names nothing about where it came from.

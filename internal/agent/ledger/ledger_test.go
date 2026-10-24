@@ -396,7 +396,7 @@ func TestALargeObjectArgumentIsFittedAsItsJSON(t *testing.T) {
 // with nothing fitted it renders whole rather than from either end.
 func TestAPriorRoundsOutputIsFittedNotCut(t *testing.T) {
 	t.Parallel()
-	produced := "<think>" + strings.Repeat("reasoning ", 2000) + "</think>\nTHE DRAFT ENDS HERE."
+	produced := strings.Repeat("the draft goes on ", 2000) + "\nTHE DRAFT ENDS HERE."
 	records := []Iteration{{Iteration: 1, Text: produced}}
 	pieces := IterationPieces(records, nil)
 	if len(pieces) != 1 || pieces[0].Kind != PieceProduced || pieces[0].Limit != RenderedArtifactLimit {

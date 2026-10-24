@@ -150,15 +150,87 @@ func TestLoadFromDisk(t *testing.T) {
 	if err := os.WriteFile(path, []byte("name: Acme\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadCompany(path)
+	cfg, err := LoadCompany(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Name != "Acme" {
 		t.Fatalf("name = %q", cfg.Name)
 	}
-	if _, err := LoadCompany(filepath.Join(dir, "missing.yaml")); err == nil {
+	if _, err := LoadCompany(filepath.Join(dir, "missing.yaml"), nil); err == nil {
 		t.Fatal("a missing file should fail")
+	}
+}
+
+// A FILE IS RESTORED AGAINST ITS PRIOR REVISION ONLY WHEN IT IS A REDACTED
+// READ, and the prior is asked for nothing otherwise: answering it opens a
+// store, which a file with no mask has no reason to do. A prior that cannot be
+// read fails the load, saying the file's masks are why it was asked; one that
+// answers restores each mask before the rules judge it, under both loaders.
+func TestAFileIsRestoredAgainstItsPriorOnlyWhenItCarriesAMask(t *testing.T) {
+	t.Parallel()
+	const doc = `name: Acme
+providers:
+  llm:
+    main:
+      model: sonnet
+      auth: {mode: api-key, api_key: "%s"}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: main
+`
+	write := func(t *testing.T, key string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "company.yaml")
+		if err := os.WriteFile(path, []byte(strings.Replace(doc, "%s", key, 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	prior, err := ParseCompany([]byte(strings.Replace(doc, "%s", "sk-ant-the-stored-one", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaders := map[string]func(string, PriorRevision) (*Company, error){
+		"LoadCompany": LoadCompany, "LoadCompanyToRun": LoadCompanyToRun,
+	}
+	for name, load := range loaders {
+		t.Run(name, func(t *testing.T) {
+			asked := 0
+			answer := func() (*Company, error) { asked++; return prior, nil }
+
+			if _, err := load(write(t, "${ANTHROPIC_API_KEY}"), answer); err != nil {
+				t.Fatalf("a file with no mask: %v", err)
+			}
+			if asked != 0 {
+				t.Errorf("a file with no mask asked for its prior %d times", asked)
+			}
+
+			got, err := load(write(t, Redacted), answer)
+			if err != nil {
+				t.Fatalf("a redacted read with a prior to restore it from: %v", err)
+			}
+			if key := got.Providers.LLM["main"].Auth.APIKey; key != "sk-ant-the-stored-one" {
+				t.Errorf("the restored key is %q, not the prior's", key)
+			}
+
+			unreadable := errors.New("the store is held by another process")
+			_, err = load(write(t, Redacted), func() (*Company, error) { return nil, unreadable })
+			if !errors.Is(err, unreadable) || !strings.Contains(err.Error(), "redacted") {
+				t.Errorf("an unreadable prior = %v, want its error and why it was asked", err)
+			}
+
+			for what, none := range map[string]PriorRevision{
+				"no prior":      nil,
+				"no active one": func() (*Company, error) { return nil, nil },
+			} {
+				_, err := load(write(t, Redacted), none)
+				if err == nil || !strings.Contains(err.Error(), "providers.llm.main.auth.api_key") {
+					t.Errorf("%s: a mask nothing answers = %v, want a refusal naming its field", what, err)
+				}
+			}
+		})
 	}
 }
 

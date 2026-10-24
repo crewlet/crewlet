@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { setStepUpConfirmer, type OrgProjection } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
@@ -520,9 +521,15 @@ test("a company with no model provider is told so, and one with a provider is no
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
   // caution says the agents cannot work rather than claiming nothing is applied.
-  expect(
-    await screen.findByText(/No model provider is set, so agents can’t work\. Add one with/),
-  ).toBeDefined();
+  const caution = (
+    await screen.findByText(/No model provider is set, so agents can’t work\./)
+  ).closest(".crewlet-callout") as HTMLElement;
+  // And it gives the steps that add one, the card's own: the declaration the
+  // engine walks from a company only the store holds.
+  fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
+  expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
+    PROVIDER_STEPS,
+  );
   cleanup();
 
   const engineWith = new Engine(company());
@@ -996,6 +1003,33 @@ describe("a document another system manages", () => {
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(screen.queryByText(/managed by gitops/i)).toBeNull();
   });
+
+  // ITS MODEL IS ADDED WHERE IT IS WRITTEN. The terminal steps end in an
+  // offline `crewlet config import`, which a managed document refuses to every
+  // caller, and the managing system would replace any other write at its next
+  // reconcile — so a managed company with no model is told where the model
+  // comes from and is given no steps, a writer it names included: managed is
+  // where the document is written, not who may edit it here.
+  test.each([
+    ["a reader it blocks", MANAGED],
+    ["a writer it names", { ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }],
+  ])(
+    "a managed company with no model is told it is added there, not given steps: %s",
+    async (_, viewer) => {
+      const without = company();
+      delete without.providers;
+      mountBuilder({ engine: new Engine(without), viewer: () => viewer });
+      const caution = (
+        await screen.findByText(/No model provider is set, so agents can’t work\./)
+      ).closest(".crewlet-callout") as HTMLElement;
+      expect(caution.textContent).toContain(
+        "The company’s configuration is managed by gitops, so the model is added there.",
+      );
+      expect(within(caution).queryByRole("button", { name: "The steps" })).toBeNull();
+      expect(document.body.textContent).not.toContain("crewlet config");
+      expect(document.body.textContent).not.toContain("crewlet llm");
+    },
+  );
 });
 
 // WORK'S NEW PROJECT ARRIVES HERE, naming the unit by its key: the node's

@@ -352,7 +352,7 @@ func TestARotatedCredentialIsReresolved(t *testing.T) {
 	atBoot := instance.identityLookups()
 
 	rotated, err := config.ParseCompany([]byte(strings.Replace(
-		withSeatCredential(instance.url)(fmt.Sprintf(companyDoc, n.model.url)),
+		withSeatCredential(instance.url)(goldenCompany(n.model)),
 		"glpat-ceo", "glpat-rotated", 1)))
 	if err != nil {
 		t.Fatalf("company config: %v", err)

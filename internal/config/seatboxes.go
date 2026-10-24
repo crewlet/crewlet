@@ -47,7 +47,7 @@ type BoxStep struct {
 //
 // TWO KINDS OF BOX, and a seat has at most one. The box an AGENT-MODE
 // EXECUTOR runs every turn in, which its providers.llm entry places
-// (`cli.run_in`) whatever the gate says, and which a seat with no gate at all
+// (`run_in`) whatever the gate says, and which a seat with no gate at all
 // still runs in — and such a seat has no other, because its surface never
 // offers run_sandbox (the runner's offersSandbox): it already holds a shell,
 // and a gate reading `self` says exactly that. Otherwise the seat's
@@ -102,8 +102,8 @@ func (c *Company) SeatBoxes() iter.Seq[SeatBox] {
 			}
 			if hasExecutor {
 				key, entry, resolved := c.executorProvider(role, fallback)
-				if resolved && entry.CLI.AgentMode() {
-					if !yield(SeatBox{Seat: role, At: path, Cell: placed(entry.CLI.RunIn), Executor: key, Steps: steps}) {
+				if resolved && entry.AgentMode() {
+					if !yield(SeatBox{Seat: role, At: path, Cell: placed(entry.RunIn), Executor: key, Steps: steps}) {
 						return
 					}
 					// ONE BOX, whatever the gate says: an agent-mode

@@ -64,8 +64,8 @@ flowchart LR
     NODE["<b>A node</b><br/><i>crewlet run</i>"]
 
     subgraph supply["What a turn consumes"]
-        LLM["<b>LLM API</b><br/>Anthropic · OpenAI · any<br/>OpenAI-compatible endpoint<br/><i>or a coding CLI on your own subscription</i>"]
-        EMB["<b>Embeddings API</b><br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
+        LLM["<b>Models, through coding CLIs</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each CLI calls its own vendor</i>"]
+        EMB["<b>Embeddings API</b> — OpenAI-compatible<br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
         BOX["<b>Code sandbox</b><br/>an E2B VM, or this host"]
     end
@@ -222,7 +222,7 @@ flowchart TB
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
         TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
-        PROV["<b>Provider chain</b><br/>fallback chain over<br/>a credential pool"]
+        PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's coding CLIs"]
     end
     STREAM[("<b>Event stream</b>")]
     KV[("<b>Coordination KV</b>")]
@@ -246,25 +246,25 @@ registry one would shadow the other and every seat would call whichever won,
 acting in the tracker or the chat backend as somebody else. So a claimed seat
 gets its own cloned registry and its own bridge.
 
-**One model call has three layers of failure handling, each owning exactly one
+**One model call has two layers of failure handling, each owning exactly one
 decision.** The backend *classifies* and does nothing else — it never retries.
-The credential pool decides whether the **key** is at fault: a rate-limit or
-auth failure benches that key for a cooldown and the next call leases another,
-least-in-flight. The fallback chain decides whether the **model** is worth
-abandoning and moves to the next one in the role's chain, publishing a
-`provider_fallback` event for each hand-off — addressed to the turn, the phase
-and the iteration it happened in, so a chain that only flaps under load is
-visible on the turn that paid for it rather than only in aggregate. Exhausting
-the chain publishes `llm_unavailable` and fails the turn. That is why the same
-429 produces three different behaviours at three different altitudes, and why
-cooldowns are fleet state rather than per-process: a limit belongs to the key at
-the vendor, so four nodes should not each pay their own 429 to learn it. What a
-classified failure *says* — in a log line, `llm_unavailable`, a turn's error —
-is the backend's own line: the status, the provider's id for the request and
-what the provider said about it, redacted, which is also what an exhausted pool
-reports its last key was told. It is never the vendor SDK's own error text,
-which for Anthropic is the request URL (a password in `base_url` with it) and
-the raw response body.
+The one thing it holds of its own is a spent plan: a CLI that reported its
+vendor's rate limit in the vendor's own words is `rate_limit`, and the entry
+then sits out on this node until the reset the CLI named (an hour at most), or
+for a minute where it named none, so every round of every seat on it does not
+start a process to hear the same sentence again. The fallback chain decides
+whether the **model** is worth abandoning and moves to the next one in the
+role's chain, publishing a `provider_fallback` event for each hand-off —
+addressed to the turn, the phase and the iteration it happened in, so a chain
+that only flaps under load is visible on the turn that paid for it rather than
+only in aggregate. Exhausting the chain publishes `llm_unavailable` and fails
+the turn. The sit-out is the node's own and is not shared with the fleet: an
+entry holds one login, every other node learns the same thing from its own
+calls once per window, and a coordination read in front of every model call
+would put the store under every turn. What a classified failure *says* — in a log line,
+`llm_unavailable`, a turn's error — is the backend's own line: how the CLI
+exited and the tail of what it printed, or the vendor's own sentence for a
+spent plan or an expired login.
 
 **The observability edge is two routes, not one, and the split is deliberate.**
 A published event forks. It is written to this node's `crewlet_events` **inline,
@@ -660,7 +660,7 @@ to the adopted log.
 | **`crewlet_status`** | One key per node: which revision it applied |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | `crewlet_rebases` | The instant a unit of work's writes are minted at when its own start is older than the operation ledger remembers, so a crash re-run, a retried resume or the next half of the turn mints where the attempt before it did. The bucket's age, 30 days, is the ledger's retention |
-| **`crewlet_token_windows`** · `crewlet_rate` · `crewlet_cooldowns` | The token counters — one record per scope, a slot for each calendar window, aged 32 days past its last charge — the notification valve, benched credentials |
+| **`crewlet_token_windows`** · `crewlet_rate` | The token counters — one record per scope, a slot for each calendar window, aged 32 days past its last charge — and the notification valve |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
 | `crewlet_objects` | The [object store](object-store.md)'s **backend record** (`nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store), and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it, and the `trash-reaper` duty's, which the next holder of the duty resumes from. **No age**: an expired record would let the next node record a different store and split the company's files between two |
@@ -896,7 +896,7 @@ here.
 | Live knowledge search | `internal/knowledge` | [Knowledge system](knowledge-system.md) |
 | Diary, episodes, skill induction, profiles | `internal/learning` | [Agent learning](agent-learning.md) |
 | What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |
-| Models, the fallback chain, the key pool | `internal/providers` | [Provider layer](overview.md#provider-layer) · [Subscription LLM backends](subscription-llm-backends.md) |
+| Models, each a coding CLI, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
 | Detached coding runs | `internal/sandbox`, `internal/hostbox` | [Code sandbox](code-sandbox.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |

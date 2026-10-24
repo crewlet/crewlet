@@ -11,7 +11,7 @@ import (
 // public address, which is what a Slack manifest's request URL is built from.
 const slackDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
     "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "Jane Founder", "handle": "founder", "kind": "human",

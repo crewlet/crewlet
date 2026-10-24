@@ -21,7 +21,9 @@ Crewlet is a Go engine for orchestrating hierarchically organized AI agent compa
 - **NATS JetStream** (`github.com/nats-io/nats-server`) — the event stream and the ONLY broker; there is no Pulsar backend. Embedded by default, in the engine's own process with no listener; a fleet clusters the embedded members (`stream.cluster`) or dials an external NATS cluster (`stream.type: nats`), and a node without the `data` role joins the members' broker as a LEAF with JetStream off. The coordination KV lives on the stream's own broker on every topology: over the queue's connection on an external broker, over a second watched connection on the embedded one (ADR-0001). Either connection NATS closes for good stops the node
 - **`github.com/modelcontextprotocol/go-sdk`** — MCP client and server
 - **OpenTelemetry** (`go.opentelemetry.io/otel` and the OTLP trace exporters) — tracing, configured from the standard `OTEL_*` environment rather than Tier A. The provider is always installed and only the exporter is conditional, because a trace id is an event-store column before it is an exporter's concern
-- **Official vendor SDKs** where one exists; a thin typed client where one does not (Mattermost, GitLab, Confluence)
+- **Coding CLIs are the only LLM backend** — every model call runs a vendor's own CLI as a subprocess (Claude Code for Anthropic's models, on a plan or an API key; Codex for OpenAI's; OpenCode for open models), driven through `internal/providers/llm/cliagent`. There is no HTTP client to a model vendor and none is to be added: the vendors move their request shapes, caching and sign-in with every model, and their CLIs carry that for us (`docs/concepts/llm-backends.md`)
+- **`github.com/openai/openai-go`** — the embeddings client (`providers.embeddings`) and only that
+- **Official vendor SDKs** for integrations where one exists; a thin typed client where one does not (Mattermost, GitLab, Confluence)
 - **`github.com/aws/aws-sdk-go-v2`** — the object store's `s3` backend and only that: request signing, the regional endpoint rules and the credential chain. Its HTTP goes through `httpx`. The default backend, `nats`, needs nothing beyond the broker
 - **YAML** (`gopkg.in/yaml.v3`) — config parsing
 - **`testing`** — the standard library's, with no assertion framework. Table tests where the cases vary, named tests where the reasoning does
@@ -219,7 +221,7 @@ What needs one — anything it renders, calls, copies, runs or links:
 - **A document it renders** — a field, enum value, default, rule or refusal of Tier B or Tier A, and so of `schema/`
 - **A credential position** — a field tagged `secret:"true"`, each mapped to a reference field on one of its kinds (a test holds the two lists to each other)
 - **A route or an answer it calls** — `/health`, `/ready`, `/fleet`, `/agents`, `/config`, `/secrets` and the pause tools of `/operator/mcp`: the path, method, status, error envelope, the fields it reads, the paths a validation error names, who may call it
-- **A decision it copies** — the engine functions its `internal/render/mirror_test.go` fingerprints by file and name, the Claude model table (`claudemodel`) and the CLI profiles (`cliprofile`)
+- **A decision it copies** — the engine functions its `internal/render/mirror_test.go` fingerprints by file and name, and the CLI profiles (`cliprofile`)
 - **How the engine runs in a pod** — `crewlet run -config`, the `CREWLET_*` variables, the ports, the probes, the drain and its grace, and where the engine writes: it runs non-root on a read-only root filesystem with only a data volume, `/tmp` and the home directory writable
 - **The image and the tag** — the `Dockerfile`, `.goreleaser.yaml`, `make image-context` and `main-image.yml` (its path and name, which its release verifies the signature against), and any `v*` tag
 - **A page or heading it links** — `https://github.com/crewlet/crewlet/blob/main/docs/<page>.md#<heading>`; its docs gate fails when one goes
@@ -244,7 +246,7 @@ The implementation follows `docs/concepts/`. Its subsystems:
 6. **Knowledge System** — the company's pages (`statelog`'s third domain), searched by keyword (BM25 over the engine's own index; Turso has no fts5), semantically (two-stage 1-bit retrieval: a replicated inverted file over sign codes, then an exact rerank) or `hybrid` by default (the two fused by reciprocal rank fusion at k = 60). Embeddings are a domain computed once by a fleet duty. Confluence is the other backend, one per company. Plus each agent's diary
 7. **Communication** — external chat (Mattermost, Slack) and ephemeral A2A channels; the eight surfaces are `integration.Kinds`
 8. **Notification Service** — a queue-based spine, the vendors on top
-9. **Provider Layer** — pluggable LLM and embeddings, behind a credential pool and a fallback chain
+9. **Provider Layer** — every model a coding CLI (one login or key per entry, a spent plan sitting its entry out), behind a fallback chain; embeddings on the OpenAI SDK
 10. **Store** — each node's own embedded Turso files: its NODE file and, on a data node, the whole REPLICATED estate beside it (two files, because a snapshot copies one); a node without `data` keeps a scratch file. Spend and turn history is the replicated `usage` domain, kept 181 days (ADR-0020); turn detail stays 30 days in each data node's event log and is read from every node at query time (ADR-0021)
 11. **Coordination** — TTL leases with a fencing epoch, plus the fleet's shared counters, ledgers and sealed credentials; a token budget is counted per calendar window and never reset by hand (ADR-0019)
 12. **Seat Ownership** — which node runs which seat, converging without a coordinator

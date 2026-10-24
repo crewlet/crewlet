@@ -59,24 +59,8 @@ type State struct {
 	Version int `json:"version"`
 
 	// Messages is the conversation as it stood, ending with the assistant
-	// turn whose run_sandbox tool call is still unanswered.
-	//
-	// An assistant turn carries what the response held in the vendor's own
-	// shape and the backend that wrote it ([llm.Message.Raw],
-	// [llm.Message.Origin]), which the resumed loop hands back unchanged:
-	// Anthropic's content blocks, which a model that preserves its thinking
-	// refuses to see come back different, and an OpenAI-wire host's own
-	// reasoning fields, which Kimi K3 is trained to read on every earlier
-	// turn and DeepSeek and Gemini 3 refuse a tool loop without. A turn
-	// with none — one another backend wrote — is rebuilt from the neutral
-	// view without its reasoning.
-	//
-	// Each such turn also carries what its reasoning is bound to
-	// ([llm.Message.Binding]): for Anthropic the tools its request carried,
-	// because a resume renders them again from the registry it wakes up
-	// against and the backend sheds the reasoning written under any other
-	// set; for the OpenAI wire format the endpoint that wrote it, because a
-	// resume may reach another host through a configuration that moved.
+	// turn whose run_sandbox tool call is still unanswered. Its JSON is
+	// [llm.Message]'s own, which is pinned for exactly this reader.
 	Messages []llm.Message `json:"messages"`
 
 	// PendingCallID and PendingCallName identify the dangling call the

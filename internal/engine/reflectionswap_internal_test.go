@@ -13,8 +13,8 @@ import (
 // A LATER APPLY'S REFLECTION WORKERS GO LIVE ONLY WHEN THE APPLY SWAPS THEM IN.
 // The running seats' reflections are served by whatever workers the dispatcher
 // holds, so workers swapped in as soon as they were built ran the revision's
-// models before its configured credential bundles were restored — a pass on a
-// cli-agent entry the revision signs in from its bundle ran signed out. Built
+// models before its configured credential bundles were restored — a pass on an
+// entry the revision signs in from its bundle ran signed out. Built
 // by prepareReflection, they wait for the swap it returns, which the apply
 // makes after the restore ([TestTheBundleIsRestoredBeforeTheEpochIsCurrent]
 // holds that order).

@@ -10,13 +10,17 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The provisioning commands, and the flags they share.
@@ -52,9 +56,23 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 		// writes through its API — which is also what puts a minted
 		// credential on every node rather than on this one.
 		api: fs.String("api", "",
-			"the running node to record credentials through; default is the "+
-				"api.host:port in -config"),
+			"the node to read the company's stored values and record "+
+				"credentials through; default is this node's store, or the "+
+				"running engine at the api.host:port in -config"),
 	}
+}
+
+// readAPIFlag adds -api to a command that reads the company and records
+// nothing: the node its stored values are read through ([companyResolver]).
+//
+// THE SAME FLAG the provisioning commands, `crewlet llm` and `crewlet
+// secrets` take, and needed for the same cases: a node that holds no data
+// has no store of the company's to read, and a machine that is not a node has
+// none at all, so the values are a node's that does.
+func readAPIFlag(fs *flag.FlagSet) *string {
+	return fs.String("api", "",
+		"the node to read the company's stored values through; default is "+
+			"this node's store, or the running engine holding it")
 }
 
 // bootstrapFlag adds the -config flag: the Tier A document naming this
@@ -126,7 +144,7 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 }
 
 // companyResolver builds the chain a run resolves Tier B ${VAR} references
-// through: the node's secret store first, the environment behind it.
+// through: the company's secret store first, the environment behind it.
 //
 // THE SAME ORDER THE ENGINE USES, and it has to be the same one. Every
 // command below reads the company's own values — the instance URL, the
@@ -137,6 +155,38 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // replaced a working webhook secret at the third-party app with a fresh one and broke
 // every delivery in flight until the config caught up. The store is where a
 // rotated secret lives; a tool that provisions against it has to read it.
+//
+// # Which store, and the running engine decides it
+//
+// The same way [openSecretStore] decides where a write goes. A stopped node's
+// own table is opened directly. A RUNNING engine holds that table under an OS
+// lock ([store.ErrLocked]) for as long as it runs, and the company's values
+// are then the fleet's, on the coordination KV inside the engine's own
+// process, so they are read through its API ([storedThroughTheRunningNode]).
+// Refusing instead made every one of these commands, and `crewlet llm`,
+// unusable beside the node they exist to serve. An explicit apiURL is the
+// command's instruction, and the read follows it rather than the local path,
+// WHETHER OR NOT a Tier A is at this one: a command run against a named node
+// from a machine that is not one would otherwise open, and create, an empty
+// database at the Tier A path — or with no file there, read the environment
+// alone — and resolve every stored value as unset.
+//
+// THROUGH A NODE, ONLY WHAT THIS COMMAND READS is fetched — the variables in
+// reads, which each command takes from the fields it resolves and the tables
+// its readers loop over — because each value comes back through
+// `GET /secrets/{name}?reveal=true`: the one route that hands a credential
+// out, logged by name against the caller and refused to a machine token.
+// Revealing every value the company reads, for a command that reads two of
+// them, put the whole credential set in this process and the node's log for
+// nothing: `crewlet llm login` for one entry revealed every vendor's tokens,
+// and a GitLab provision every model's. Names rather than document paths,
+// because a path prefix cannot tell an entry `gpt-5` from `gpt-5.1`, nor a
+// tool server `github` from `github.internal`. See [nodeValues] for why they
+// are revealed before the command runs rather than one at a time as each is
+// read.
+//
+// A node that holds no data (`store.scratch`) has no store of the company's
+// to open, and is refused unless apiURL names one that does.
 //
 // # When there is no store
 //
@@ -151,36 +201,314 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // A bootstrap that exists and cannot be read fails the run instead. Someone
 // who configured a store and did not get it must not have their secrets
 // quietly resolved from a stale export.
-// IT ALSO HANDS BACK THE TIER A IT LOADED, which every caller now needs and
-// none of them should load a second time. Where a vendor reaches this
-// deployment is Tier A's ([webhookBase]), the OPERATOR's fact rather than the
-// company's — so a command building a webhook URL or an app manifest reads it
-// from here, and a second `LoadBootstrap` in each command would be six places
-// to disagree about which file was consulted. Nil when there is no Tier A file
-// at all, which is a real way to run these commands: the caller then has only
-// the `-public-url` flag, which is exactly what it is for.
-func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer) (
-	*config.Resolver, *config.Bootstrap, func(), error) {
+//
+// IT ALSO HANDS BACK THE TIER A IT LOADED ([companyBootstrap]), which every
+// caller now needs and none of them should load a second time. Nil when there
+// is no Tier A file at all.
+func companyResolver(ctx context.Context, environ config.Source, reads []string,
+	bootstrapPath, apiURL string, notes io.Writer) (*config.Resolver, *config.Bootstrap, func(), error) {
 
-	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
+	boot, err := companyBootstrap(bootstrapPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if strings.TrimSpace(apiURL) != "" {
+		client, cerr := newSecretsClient(environ, boot, apiURL)
+		if cerr != nil {
+			return nil, nil, nil, cerr
+		}
+		values, rerr := storedThrough(ctx, client, reads, notes)
+		if rerr != nil {
+			return nil, nil, nil, fmt.Errorf("read the company's stored values "+
+				"through %s: %w%s", client.base, rerr, revealRemedy(rerr))
+		}
+		return config.WithStore(values), boot, func() {}, nil
+	}
+	if boot == nil {
 		fmt.Fprintf(notes, "no %s: resolving ${VAR} from the environment only.\n",
 			bootstrapPath)
 		return config.EnvOnly(), nil, func() {}, nil
 	}
-	boot, err := loadBootstrapForStore(bootstrapPath)
-	if err != nil {
-		return nil, nil, nil, err
+	// A NODE THAT HOLDS NO DATA HAS NO STORE TO READ. Its file is scratch —
+	// the previous run's, deleted at every boot — and the company's values
+	// are a data node's, which nothing in its Tier A addresses. So the run
+	// is told to name one, rather than resolve every stored value as unset:
+	// it is a seats node, where the logins `crewlet llm` makes are made.
+	if boot.Store.Scratch {
+		return nil, nil, nil, fmt.Errorf("%s is a node that holds no data "+
+			"(store.scratch), so the company's stored values are read through "+
+			"a node that does: name one with -api, or run this on one",
+			bootstrapPath)
 	}
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err != nil {
-		return nil, nil, nil, err
+		values, rerr := storedThroughTheRunningNode(ctx, environ, boot, bootstrapPath,
+			reads, err, notes)
+		if rerr != nil {
+			return nil, nil, nil, rerr
+		}
+		return config.WithStore(values), boot, func() {}, nil
 	}
 	values, err := sv.All(ctx)
 	if err != nil {
 		closeStore()
 		return nil, nil, nil, fmt.Errorf("read the secret store: %w", err)
 	}
+	sayWhatAStoppedNodeCannotRead(notes, reads, values, boot.Store.Path)
 	return config.WithStore(config.MapSource(values)), boot, closeStore, nil
+}
+
+// sayWhatAStoppedNodeCannotRead names each value the command reads that a
+// stopped node's own table and the environment both leave unset.
+//
+// THE TABLE IS NOT THE FLEET'S STORE. It holds what was stored while the
+// engine was stopped, and the engine moves those rows onto the fleet at its
+// next start and deletes them here ([fleetsecrets.Migrate]); the fleet's own
+// rows are on the coordination KV, which a stopped engine is not serving.
+// So a name in neither place may be one the fleet holds, and this run
+// cannot tell — it resolves it as unset, which for a key a provisioner
+// mints when it resolves empty replaces a working one. Said on every run
+// that meets one, naming the ways to the fleet's values, rather than
+// refused: before a node's first start the table is the whole store, and a
+// value nobody has stored yet is exactly what `crewlet llm login` and a
+// first provisioning run are there to write.
+func sayWhatAStoppedNodeCannotRead(notes io.Writer, reads []string,
+	local map[string]string, storePath string) {
+
+	var unread []string
+	for _, name := range reads {
+		if _, stored := local[name]; stored {
+			continue
+		}
+		if _, exported := os.LookupEnv(name); exported {
+			continue
+		}
+		unread = append(unread, "${"+name+"}")
+	}
+	if len(unread) == 0 {
+		return
+	}
+	fmt.Fprintf(notes, "this node's engine is not running, so the fleet's stored "+
+		"values cannot be read: %s — in neither %s, which holds only what was "+
+		"stored while the engine was stopped, nor the environment — resolve as "+
+		"unset here. If the fleet holds any of them, start the engine and re-run, "+
+		"or name a running node with -api.\n",
+		strings.Join(unread, ", "), storePath)
+}
+
+// companyBootstrap is the Tier A a command reading the company runs under,
+// or nil when there is no file at this path — a supported way to run one,
+// away from any node. A file that exists and does not load is the error.
+//
+// Its own function because one command needs the document and resolves
+// nothing: `crewlet slack provision` reads only where vendors reach this
+// deployment ([webhookBase]), and resolving the company's values for it would
+// open the store, or reveal credentials through the running node, for a run
+// that reads none of them.
+func companyBootstrap(bootstrapPath string) (*config.Bootstrap, error) {
+	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return loadBootstrapForStore(bootstrapPath)
+}
+
+// revealRemedy is what a read through a node that failed tells the operator to
+// change: the token, where the node refused it, and nothing more where it did
+// not — a node that is down, draining or failing answers the same for any
+// token, and naming the token then sends an operator to change one that works.
+func revealRemedy(err error) string {
+	if refusedTheToken(err) {
+		return revealTakesATierAToken
+	}
+	return ""
+}
+
+// revealTakesATierAToken is what a read through a node that was refused
+// tells the operator to change: reading a value is a reveal, which the
+// authority table gives admin with a person present, so a machine token —
+// which acts for its owner with nobody there — is refused it whatever it
+// carries, and the token that reads is one of Tier A's.
+const revealTakesATierAToken = "\n\nEach value is read with a reveal, which takes admin and " +
+	"a person present: " + apiTokenEnv + " must hold one of Tier A's api.auth " +
+	"tokens, since a machine token is refused a reveal whatever it carries"
+
+// storedThroughTheRunningNode answers a locked store with the values the
+// command reads, through the node holding it — the read half of
+// [throughTheRunningNode], and [store.ErrLocked] is the only error it routes
+// for the same reason: every other failure is a broken node, whose own
+// message an HTTP attempt would replace with a connection refused.
+func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
+	boot *config.Bootstrap, bootstrapPath string, reads []string,
+	err error, notes io.Writer) (*nodeValues, error) {
+
+	if !errors.Is(err, store.ErrLocked) {
+		return nil, err
+	}
+	client, cerr := newSecretsClient(environ, boot, "")
+	if cerr == nil {
+		var values *nodeValues
+		if values, cerr = storedThrough(ctx, client, reads, notes); cerr == nil {
+			return values, nil
+		}
+	}
+	// BOTH FACTS, as a write's refusal gives them: the lock alone reads as
+	// "blocked, no way forward", and the API's complaint alone as though
+	// this node's own table were an answer. It is not one while the engine
+	// runs — the company's values are the fleet's then — so stopping the
+	// engine is not offered as the way round.
+	return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
+		"database, so the company's stored values are read through its API — "+
+		"and they cannot be: %w%s", err, bootstrapPath, cerr, revealRemedy(cerr))
+}
+
+// storedThrough reads, through a running node, the stored values a command
+// reads, and says on notes that it did.
+//
+// THE LISTING FIRST, which reveals nothing: a name the command reads and the
+// fleet does not hold is left to the environment without a request, exactly
+// as the local table's absence leaves it. A name that went between the
+// listing and its read is absent the same way.
+func storedThrough(ctx context.Context, client *secretsClient, reads []string,
+	notes io.Writer) (*nodeValues, error) {
+
+	rows, err := client.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	values := &nodeValues{
+		values: map[string]string{},
+		held:   make(map[string]bool, len(rows)),
+		reveal: func(name string) (string, error) { return client.Get(ctx, name) },
+		where:  client.base,
+		notes:  notes,
+	}
+	for _, row := range rows {
+		values.held[row.Name] = true
+	}
+	for _, name := range unionReads(reads) {
+		if _, _, err := values.revealLocked(name); err != nil {
+			return nil, err
+		}
+	}
+	// SAID EVERY TIME, as the environment-only chain is: which chain ran is
+	// what an operator reads first when a value is not the one they set, and
+	// each read here is a line in the node's log under their token.
+	fmt.Fprintf(notes, "resolving ${VAR} through the running node at %s: %d of "+
+		"the stored values this command reads revealed there, each logged by name.\n",
+		client.base, len(values.values))
+	return values, nil
+}
+
+// nodeValues is the stored values one command reads, through the running
+// node that holds them: a [config.Source] over the fleet's rows that reveals
+// only what is read.
+//
+// # The command's scope is revealed before it runs
+//
+// Not one value at a time as the command reads it, which would reveal no
+// more and fail worse. A read is a [config.Source] lookup, which has no
+// error to return: a reveal the node refused — a machine token, which is
+// refused every one — could only come back as "unset", and unset is what
+// tells a provisioning run to MINT, so a GitLab provision would replace the
+// key a working hook signs with because its token could not read the one
+// in the store. Revealed up front, the same refusal stops the command
+// before it has done anything.
+//
+// # A read outside the scope is still answered from the fleet
+//
+// Revealed as it is made, and said on notes. A command whose scope missed a
+// field it reads — a new one, say — then resolves the fleet's value rather
+// than the environment's, which is the engine's answer; resolving it as
+// unset would be the same mint. That reveal has no error to return either,
+// so a refused one PANICS: the run stops where it is, as it would on a
+// vendor's own failure part way through, rather than going on to act on a
+// value it does not have.
+type nodeValues struct {
+	// mu guards values and held: a provisioner may read from more than one
+	// goroutine, and a reveal is a request the lock holds across.
+	mu sync.Mutex
+
+	// values is every stored value revealed so far, by name.
+	values map[string]string
+
+	// held is every name the node listed, less those found gone since.
+	held map[string]bool
+
+	// reveal reads one value through the node.
+	reveal func(name string) (string, error)
+
+	// where is the node's address, for what is said on notes.
+	where string
+	notes io.Writer
+}
+
+// Lookup implements [config.Source].
+func (n *nodeValues) Lookup(name string) (string, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if value, ok := n.values[name]; ok {
+		return value, true
+	}
+	if !n.held[name] {
+		return "", false
+	}
+	value, ok, err := n.revealLocked(name)
+	if err != nil {
+		panic(readFailed{fmt.Errorf("read ${%s} through the running node at %s: %w — "+
+			"stopping rather than resolving a stored value as unset%s",
+			name, n.where, err, revealRemedy(err))})
+	}
+	if ok {
+		fmt.Fprintf(n.notes, "revealed ${%s} through the running node at %s as it "+
+			"was read, beyond the values this command reveals before it runs.\n",
+			name, n.where)
+	}
+	return value, ok
+}
+
+// readFailed is a read through a running node that failed part way through a
+// command, carried by a panic out of the [nodeValues.Lookup] that has no error
+// to return, and answered at the command's top as the error it is ([runIn]).
+// A panic, because the alternative answer — unset — is the one that mints.
+type readFailed struct{ err error }
+
+func (r readFailed) Error() string { return r.err.Error() }
+func (r readFailed) Unwrap() error { return r.err }
+
+// revealLocked reveals one held name, reporting whether the node still held
+// it. n.mu is held, or n is not yet shared.
+func (n *nodeValues) revealLocked(name string) (string, bool, error) {
+	if !n.held[name] {
+		return "", false, nil
+	}
+	value, err := n.reveal(name)
+	switch {
+	case errors.Is(err, secrets.ErrNotFound):
+		delete(n.held, name)
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	n.values[name] = value
+	return value, true, nil
+}
+
+// fieldReads is every variable these fields reference, each once, sorted:
+// what a command reads behind the fields of the document it resolves.
+func fieldReads(fields ...string) []string {
+	var names []string
+	for _, field := range fields {
+		names = append(names, envref.Names(field)...)
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// unionReads is every name in these lists, each once, sorted.
+func unionReads(lists ...[]string) []string {
+	names := slices.Concat(lists...)
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // operatorCredential reads the human operator's own credential, from the
@@ -196,6 +524,16 @@ func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer)
 // the seat tokens it exists to mint.
 func operatorCredential(name string) string {
 	return strings.TrimSpace(config.EnvOnly().Lookup(name))
+}
+
+// gitlabProvisionReads is every variable `crewlet gitlab provision` reads of
+// the company: the instance, and the key its hooks sign with, which it mints
+// when that resolves empty — the names a running node is asked to reveal
+// ([companyResolver]). Not the engine's read token, which it never uses: it
+// works with the operator's admin token, read from the environment alone
+// ([operatorCredential]).
+func gitlabProvisionReads(cfg *config.GitLab) []string {
+	return fieldReads(cfg.URL, cfg.SigningSecret)
 }
 
 // runGitLabProvision is `crewlet gitlab provision`.
@@ -268,7 +606,7 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 			*mode, strings.Join(gitlab.Modes(), ", "))
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -288,7 +626,9 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	// so a -dry-run does it too — a dry run that could not say this would
 	// be silent about the one outcome an operator most needs warning of.
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, environ,
+		gitlabProvisionReads(cfg), *sinks.bootstrap,
+		*sinks.api, stdout)
 	if err != nil {
 		return err
 	}
@@ -552,6 +892,17 @@ func soleVarOf(value string) string {
 	return name
 }
 
+// mattermostProvisionReads is every variable `crewlet mattermost provision`
+// reads of the company: the instance's address alone — the name a running
+// node is asked to reveal ([companyResolver]). The bots' tokens are what it
+// mints, and it works with the operator's admin token.
+func mattermostProvisionReads(cfg *config.Mattermost) []string {
+	if cfg == nil {
+		return nil
+	}
+	return fieldReads(cfg.URL)
+}
+
 // runMattermostProvision is `crewlet mattermost provision`.
 func runMattermostProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -582,7 +933,7 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -612,7 +963,9 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 	}
 	defer closeSink()
 
-	env, _, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ,
+		mattermostProvisionReads(cfg), *sinks.bootstrap,
+		*sinks.api, stdout)
 	if err != nil {
 		return err
 	}
@@ -681,8 +1034,16 @@ func sortedKeys(m map[string][]string) []string {
 	return out
 }
 
+// mattermostDoctorReads is every variable `crewlet mattermost doctor` reads
+// of the company: the instance and its team, and each seat's bot token, which
+// its checks authenticate with ([mattermost.SeatTokenReads]) — the names a
+// running node is asked to reveal ([companyResolver]).
+func mattermostDoctorReads(cfg *config.Mattermost, o *org.Organization) []string {
+	return unionReads(fieldReads(cfg.URL, cfg.Team), mattermost.SeatTokenReads(o))
+}
+
 // runMattermostDoctor is `crewlet mattermost doctor`.
-func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Writer) error {
+func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("mattermost doctor", flag.ContinueOnError)
@@ -696,6 +1057,7 @@ func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Write
 			"reads MATTERMOST_PUBLIC_URL; with neither, the Site URL is judged "+
 			"on its own")
 	bootstrap := bootstrapFlag(fs)
+	apiURL := readAPIFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -703,11 +1065,11 @@ func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Write
 	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN] "+
-				"[-browser-url URL]")
+				"[-browser-url URL] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -721,7 +1083,8 @@ func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Write
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ,
+		mattermostDoctorReads(cfg, organization), *bootstrap, *apiURL, stdout)
 	if err != nil {
 		return err
 	}

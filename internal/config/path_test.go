@@ -38,7 +38,7 @@ func TestAMapKeyHoldingADotStaysOneSegment(t *testing.T) {
 	t.Parallel()
 	cfg := DefaultCompany()
 	cfg.Name = "Acme"
-	cfg.Providers.LLM = map[string]LLMProvider{"claude-3.5": {Type: LLMAnthropic}}
+	cfg.Providers.LLM = map[string]LLMProvider{"claude-3.5": {}}
 	var found *Fault
 	for _, problem := range flatten(cfg.Validate()) {
 		if errors.As(problem, &found) && found.Path.String() == "providers.llm.claude-3.5.model" {

@@ -76,8 +76,8 @@ func (s *CoordStore) clock() time.Time {
 // A COUNT, unlike the time the fleet store retries its own lost races for
 // (internal/coord/kv's race.go), and for the reason that file gives its own
 // counted loops: what a write here races ends the race of itself. The time
-// bound exists for records whose writers nothing limits — the token counter, a
-// credential's cooldown — while a run's record is written only by its seat's
+// bound exists for records whose writers nothing limits — the token counter —
+// while a run's record is written only by its seat's
 // own turns and a peer recovering it, two or three writers at the very worst.
 // Sixteen is that several times over, so exhausting it is a store that is not
 // settling rather than a queue of legitimate writers, and it is reported as an

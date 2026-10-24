@@ -50,9 +50,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-supervision-key"]
 mcp_servers:
   - name: tracker
     shared: %t

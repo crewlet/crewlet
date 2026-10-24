@@ -1,11 +1,8 @@
 package engine
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"go/ast"
 	"go/token"
 	"io"
@@ -37,17 +34,15 @@ func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
 
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
 roles:
   - name: CEO
     handle: ceo
@@ -60,11 +55,12 @@ roles:
 	if err != nil {
 		t.Fatalf("NewCompany: %v", err)
 	}
-	stateDir, err := c.Providers.LLM["subscription"].CLI.ResolvedStateDir("subscription")
+	entry := c.Providers.LLM["subscription"]
+	stateDir, err := entry.ResolvedStateDir("subscription")
 	if err != nil {
 		t.Fatal(err)
 	}
-	login := filepath.Join(stateDir, "credentials", name)
+	login := filepath.Join(stateDir, "claude-code", "credentials", name)
 	if _, err := os.Stat(login); !os.IsNotExist(err) {
 		t.Fatalf("building the epoch wrote the bundle's login (%v) — validating a document "+
 			"would write onto the host", err)
@@ -244,13 +240,14 @@ func bundledLogin(t *testing.T) string {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
 	c := parseBundled(t, bundledCompanyDoc)
-	stateDir, err := c.Providers.LLM["subscription"].CLI.ResolvedStateDir("subscription")
+	entry := c.Providers.LLM["subscription"]
+	stateDir, err := entry.ResolvedStateDir("subscription")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(stateDir, "credentials", name)
+	return filepath.Join(stateDir, "claude-code", "credentials", name)
 }
 
 // bundleNode boots an engine over a fresh store on company, nil for none.
@@ -286,10 +283,8 @@ name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
   sandbox:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
@@ -332,7 +327,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
 	c, err := config.ParseCompany([]byte(bundledCompanyDoc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -349,7 +344,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		}
 	}
 	if provider == nil {
-		t.Fatal("the premise: the epoch holds no cli-agent provider for the entry")
+		t.Fatal("the premise: the epoch holds no CLI provider for the entry")
 	}
 	if !provider.Workspace().HasLogin() {
 		t.Fatal("the premise: the epoch restored no login")
@@ -374,6 +369,63 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	}
 	if strings.Contains(got, "cli_agent_bundle_restore_failed") {
 		t.Errorf("a logout was warned as a bundle that failed to restore:\n%s", got)
+	}
+}
+
+// AN ENTRY MOVED TO ANOTHER CLI DOES NOT RESTORE THE OLD CLI'S BUNDLE, even
+// where the two keep their login under one file name. The bundle is keyed by
+// the entry, so the epoch after the move restores the one exported from pi
+// into codex's empty login — and pi's `auth.json` is a name codex keeps too,
+// so it was written there: a credential codex cannot read, which as a login
+// already present then kept every later restore out, the replacement bundle
+// included. The epoch warns it as a bundle that failed, naming the CLI it was
+// exported from, and writes nothing.
+//
+// NOT PARALLEL: it sets the conventional variable and swaps the process's log.
+//
+// Mutation: drop the manifest's check from the restore, and codex's login is
+// pi's file here.
+func TestAnEntryMovedToAnotherCLIDoesNotRestoreTheOldCLIsBundle(t *testing.T) {
+	logs := &bundleLog{}
+	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "pi", "auth.json", `{"token":"pi"}`))
+	c := parseBundled(t, `
+name: Acme
+providers:
+  llm:
+    subscription:
+      model: gpt-5
+      agent: codex
+roles:
+  - name: CEO
+    handle: ceo
+    llm: subscription
+`)
+	company, err := NewCompany(c)
+	if err != nil {
+		t.Fatalf("NewCompany: %v", err)
+	}
+	company.restoreBundles(t.Context())
+
+	entry := c.Providers.LLM["subscription"]
+	stateDir, err := entry.ResolvedStateDir("subscription")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := filepath.Join(stateDir, "codex", "credentials")
+	if entries, err := os.ReadDir(credentials); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Errorf("the epoch restored pi's bundle into codex's login: %v", entries)
+	}
+	got := logs.String()
+	for _, want := range []string{"cli_agent_bundle_restore_failed", `it names \"pi\"`,
+		"crewlet llm export subscription"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the epoch's warning does not carry %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -413,33 +465,35 @@ name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
 roles:
   - name: CEO
     handle: ceo
     llm: subscription
 `
 
-// testBundle packs one credential file the way `crewlet llm export` does.
-func testBundle(t *testing.T, name, body string) string {
+// testBundle is a bundle of agent's holding one credential file, exported by
+// `crewlet llm export`'s own writer from a state directory of its own — so it
+// names the CLI it came from exactly as an export does.
+func testBundle(t *testing.T, agent, name, body string) string {
 	t.Helper()
-	var raw bytes.Buffer
-	zw := gzip.NewWriter(&raw)
-	tw := tar.NewWriter(zw)
-	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+	p, err := cliagent.New(cliagent.Config{
+		Key: "export", Agent: agent, StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatalf("building the exporting %s entry: %v", agent, err)
+	}
+	login := filepath.Join(p.Workspace().CredentialsDir(), name)
+	if err := os.MkdirAll(filepath.Dir(login), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tw.Write([]byte(body)); err != nil {
+	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
+	blob, err := p.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle: %v", err)
 	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(raw.Bytes())
+	return blob
 }

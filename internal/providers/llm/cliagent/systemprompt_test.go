@@ -126,7 +126,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	t.Parallel()
 	// Checked against each CLI's own --help — or, where the vendor
 	// documents its flags rather than printing them all, against that — at
-	// the version named in docs/concepts/subscription-llm-backends.md.
+	// the version named in docs/concepts/llm-backends.md.
 	// Seven of the twelve have no such flag at all — two of those read a
 	// file named by an environment variable instead, and one discovers an
 	// agent file the working directory holds — and an empty entry here is

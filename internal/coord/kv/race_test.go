@@ -73,9 +73,8 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 // THE FLEET STORE'S OTHER RACES OUTLAST MORE LOSSES THAN SIXTEEN.
 //
 // Each lost race is a store that answered, so none of these is an outage
-// until the store's patience says it is: a credential's cooldown behind a
-// burst of refusals, a channel's count and an unfollow, each made to lose
-// twenty in a row. The custody claim and the object backend's record lose a
+// until the store's patience says it is: a channel's count and an unfollow,
+// each made to lose twenty in a row. The custody claim and the object backend's record lose a
 // race only to a key removed between a refused create and the leader's read
 // of it, which no bucket in front of the leader can stage; they take the same
 // [FleetStore.retryRaces].
@@ -89,27 +88,6 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 		setup  func(t *testing.T, f *FleetStore)
 		run    func(t *testing.T, f *FleetStore)
 	}{{
-		// A peer's shorter cooldown is already recorded, so every write
-		// is a compare-and-swap on it.
-		name:   "a cooldown",
-		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.cooldowns },
-		key:    encodeKey("anthropic:sk-…abcd"),
-		setup: func(t *testing.T, f *FleetStore) {
-			if err := f.Cool(t.Context(), "anthropic:sk-…abcd", time.Now().Add(time.Minute)); err != nil {
-				t.Fatalf("Cool: %v", err)
-			}
-		},
-		run: func(t *testing.T, f *FleetStore) {
-			until := time.Now().Add(time.Hour).UTC()
-			if err := f.Cool(t.Context(), "anthropic:sk-…abcd", until); err != nil {
-				t.Fatalf("Cool: %v", err)
-			}
-			got, err := f.Since(t.Context(), time.Now())
-			if err != nil || !got["anthropic:sk-…abcd"].Equal(until) {
-				t.Fatalf("Since = (%v, %v), want the cooldown recorded", got, err)
-			}
-		},
-	}, {
 		name:   "a channel's count",
 		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.channels },
 		key:    encodeKey("ch-1"),
@@ -171,16 +149,16 @@ func TestARaceEndsAtThePatienceOrTheCallersHangUp(t *testing.T) {
 		store := openFleet(t, embeddedNATS(t))
 		const patience = 200 * time.Millisecond
 		store.patience = patience
-		earlier := time.Now().Add(time.Minute).UTC()
-		if err := store.Cool(t.Context(), "k", earlier); err != nil {
-			t.Fatalf("Cool: %v", err)
-		}
-		losing := &loseWrites{KeyValue: store.cooldowns, key: encodeKey("k"), forever: true}
-		store.cooldowns = losing
+		openCountedChannel(t, store, "k")
+		losing := &loseWrites{KeyValue: store.channels, key: encodeKey("k"), forever: true}
+		store.channels = losing
 
 		began := time.Now()
 		answered := make(chan error, 1)
-		go func() { answered <- store.Cool(t.Context(), "k", time.Now().Add(time.Hour)) }()
+		go func() {
+			_, _, err := store.CountChannelMessage(t.Context(), "k", time.Now())
+			answered <- err
+		}()
 		var err error
 		select {
 		case err = <-answered:
@@ -188,7 +166,7 @@ func TestARaceEndsAtThePatienceOrTheCallersHangUp(t *testing.T) {
 			t.Fatal("a race that lost every attempt was still racing after 30s: nothing bounds it")
 		}
 		if !errors.Is(err, coord.ErrUnavailable) || !strings.Contains(err.Error(), "did not land within") {
-			t.Fatalf("Cool = %v, want an unavailable store naming the contention", err)
+			t.Fatalf("CountChannelMessage = %v, want an unavailable store naming the contention", err)
 		}
 		if took := time.Since(began); took < patience {
 			t.Fatalf("the race gave up after %v, before its %v patience", took, patience)
@@ -196,23 +174,24 @@ func TestARaceEndsAtThePatienceOrTheCallersHangUp(t *testing.T) {
 		if losing.lost.Load() < 2 {
 			t.Fatalf("the race lost %d times, want it to have retried", losing.lost.Load())
 		}
-		if got, err := store.Since(t.Context(), time.Now()); err != nil || !got["k"].Equal(earlier) {
-			t.Fatalf("Since = (%v, %v), want only the cooldown recorded before", got, err)
+		if ch, found, err := store.Channel(t.Context(), "k"); err != nil || !found || ch.Messages != 1 {
+			t.Fatalf("Channel = (%+v, %v, %v), want only the message counted before", ch, found, err)
 		}
 	})
 	t.Run("the caller's hang-up", func(t *testing.T) {
 		t.Parallel()
 		store := openFleet(t, embeddedNATS(t))
 		store.patience = time.Minute
-		if err := store.Cool(t.Context(), "k", time.Now().Add(time.Minute)); err != nil {
-			t.Fatalf("Cool: %v", err)
-		}
-		losing := &loseWrites{KeyValue: store.cooldowns, key: encodeKey("k"), forever: true}
-		store.cooldowns = losing
+		openCountedChannel(t, store, "k")
+		losing := &loseWrites{KeyValue: store.channels, key: encodeKey("k"), forever: true}
+		store.channels = losing
 
 		ctx, cancel := context.WithCancel(t.Context())
 		answered := make(chan error, 1)
-		go func() { answered <- store.Cool(ctx, "k", time.Now().Add(time.Hour)) }()
+		go func() {
+			_, _, err := store.CountChannelMessage(ctx, "k", time.Now())
+			answered <- err
+		}()
 		deadline := time.Now().Add(30 * time.Second)
 		for losing.lost.Load() < 2 {
 			if time.Now().After(deadline) {
@@ -224,12 +203,26 @@ func TestARaceEndsAtThePatienceOrTheCallersHangUp(t *testing.T) {
 		select {
 		case err := <-answered:
 			if !errors.Is(err, context.Canceled) || !errors.Is(err, coord.ErrUnavailable) {
-				t.Fatalf("Cool = %v, want the store unavailable for the cancelled context", err)
+				t.Fatalf("CountChannelMessage = %v, want the store unavailable for the cancelled context", err)
 			}
 		case <-time.After(30 * time.Second):
 			t.Fatal("the race went on for a caller no longer listening")
 		}
 	})
+}
+
+// openCountedChannel opens channel id on store with one message already
+// counted, so a write that loses every race leaves a count to compare with.
+func openCountedChannel(t *testing.T, store *FleetStore, id string) {
+	t.Helper()
+	if err := store.OpenChannel(t.Context(), coord.Channel{
+		ID: id, Requester: "a", Target: "b", OpenedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("OpenChannel: %v", err)
+	}
+	if _, _, err := store.CountChannelMessage(t.Context(), id, time.Now()); err != nil {
+		t.Fatalf("CountChannelMessage: %v", err)
+	}
 }
 
 // windowNanos is a rate window's instant as its key spells it.

@@ -189,11 +189,6 @@ const (
 	// together.
 	RebaseRetention = 30 * 24 * time.Hour
 
-	// CooldownMax is the longest credential cooldown anything sets, and
-	// therefore the bucket's age. A cooldown carries its own end instant,
-	// so the bucket only has to outlive the longest one.
-	CooldownMax = 24 * time.Hour
-
 	// BudgetRetention is how long a token counter outlives its last
 	// write, and the bucket's age that enforces it (ADR-0019).
 	//
@@ -416,27 +411,6 @@ type Ledger interface {
 
 	// Record marks one key worked. Best effort, for the same reason.
 	Record(ctx context.Context, scope, key, detail string, at time.Time) error
-}
-
-// Cooldowns is the fleet's shared credential cooldown ledger.
-//
-// A key a peer found rate-limited is a key this node should not spend a call
-// discovering is rate-limited. It is deliberately NOT on the hot path: see
-// [Cooldowns.Since], which a pool refreshes on a ticker rather than reading
-// per request.
-type Cooldowns interface {
-	// Cool records that a credential is unusable until the given instant.
-	// Best effort: a cooldown that did not propagate costs one peer one
-	// wasted call, which is what the situation cost before this existed.
-	Cool(ctx context.Context, key string, until time.Time) error
-
-	// Since returns every cooldown recorded across the fleet that has not
-	// yet lapsed, as key to the instant it lifts.
-	//
-	// An error yields no cooldowns, which reads as "nothing is cooled" —
-	// the pre-sharing behaviour, and the one that cannot make a healthy
-	// fleet refuse to use any of its credentials.
-	Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
 }
 
 // Activation is one entry of the config pointer every node converges on.
@@ -1432,7 +1406,6 @@ type Fleet interface {
 	Counter
 	Claims
 	Ledger
-	Cooldowns
 	Budgets
 	Plane
 	Channels

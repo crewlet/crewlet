@@ -19,12 +19,12 @@ const ClaudeCodeName = "claude-code"
 // key or bearer token, or a toggle moving it onto a cloud provider's own
 // credentials (Bedrock, Vertex AI, Microsoft Foundry).
 //
-// The engine reads it twice, and both readings need every member. One of them
-// in a seat's own environment is what lets the seat run this runner on an
-// entry that is not Anthropic's, and it is what stops an `anthropic` entry's
-// key and endpoint being added beside it — Claude Code ranks an API key above
-// the plan token, so a company key underlaid beside a seat's plan token moved
-// that seat onto metered billing without a word.
+// The engine reads it to tell whether ANYTHING in a run's environment signs
+// the CLI in, the seat's own role.sandbox.env included, which is why every
+// member is here: the entry's own sign-in is underlaid by name beneath what
+// the seat brought, and Claude Code ranks an API key above a plan token, so a
+// list that missed one would report a box signed in to nothing when it was
+// not.
 var ClaudeCodeCredentialEnv = []string{
 	"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
@@ -73,14 +73,12 @@ func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) st
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
 	}
-	// VERBATIM, because whichever entry reached this runner already names
-	// the model in Claude Code's own terms: an `anthropic` entry's model id,
-	// or a claude-code cli-agent entry's alias exactly as its text calls
-	// pass it. The engine refuses every other cli-agent entry here, and a
-	// run on the seat's own sign-in over an OpenAI-wire entry carries no
-	// model, so Claude Code's own choice stands.
-	if req.LLM != nil && req.LLM.Model != "" {
-		parts = append(parts, "--model", shellQuote(req.LLM.Model))
+	// VERBATIM, because the only entry that reaches this runner is a
+	// claude-code one, which already names the model in Claude Code's own
+	// terms — its alias or id exactly as its text calls pass it. The engine
+	// refuses every other CLI's entry here.
+	if req.Model != "" {
+		parts = append(parts, "--model", shellQuote(req.Model))
 	}
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-turns", strconv.Itoa(req.Limits.MaxTurns))
@@ -214,11 +212,10 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		DeliveredRefs: deliveredRefs(msg.Result),
 	}
 	if u := msg.Usage; u != nil {
-		// INPUT TOKENS ARE A SUM, for the reason the engine's own Anthropic
-		// provider states: the vendor's input_tokens is only the UNCACHED
-		// remainder, and a coding run is almost entirely cached rounds —
-		// so reading it alone put a fraction of every run's prompt on the
-		// budget counter and the spend rollup.
+		// INPUT TOKENS ARE A SUM: the vendor's input_tokens is only the
+		// UNCACHED remainder, and a coding run is almost entirely cached
+		// rounds — so reading it alone put a fraction of every run's
+		// prompt on the budget counter and the spend rollup.
 		res.CacheReadTokens = u.CacheReadInputTokens
 		res.CacheWriteTokens = u.CacheCreationInputTokens
 		res.InputTokens = u.InputTokens + res.CacheReadTokens + res.CacheWriteTokens

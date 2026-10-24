@@ -27,12 +27,12 @@ func TestEveryConfiguredAgentNameHasAProfile(t *testing.T) {
 	}
 	for _, name := range accepted {
 		if !slices.Contains(shipped, name) {
-			t.Errorf("config accepts cli.agent %q but no profile ships for it", name)
+			t.Errorf("config accepts agent %q but no profile ships for it", name)
 		}
 	}
 	for _, name := range shipped {
 		if !slices.Contains(accepted, name) {
-			t.Errorf("profile %q ships but config refuses it as cli.agent", name)
+			t.Errorf("profile %q ships but config refuses it as agent", name)
 		}
 	}
 }

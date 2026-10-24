@@ -213,9 +213,9 @@ type Bucket struct {
 	// the calls in this bucket.
 	//
 	// THE CONTRACT A READER DIVIDES BY: input_tokens ALREADY INCLUDES the
-	// cached prefix — every backend reports it that way (the Anthropic one
-	// adds its cache counts back into the input total, OpenAI's prompt count
-	// never excluded them) — so these are a BREAKDOWN of InputTokens and
+	// cached prefix — the backend reports it that way, adding a CLI's own
+	// cache counts back into its input total — so these are a BREAKDOWN of
+	// InputTokens and
 	// never an addition to it. The cache's share of a bucket's input is
 	// cache_read_tokens / input_tokens, and adding the two double-counts the
 	// prefix. TotalTokens is input plus output, as it always was.

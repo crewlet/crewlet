@@ -12,28 +12,26 @@
  *     while it was live and closed the instant it completed — hiding the
  *     transcript at exactly the moment it became complete — and slammed the
  *     whole turn card shut when its last phase finished, for the same reason.
- *  3. **Each round is one block: what the model thought, what it said, then
- *     the tools it called** — in that order, which is the order they happened.
- *     Rounds only append, so nothing above the insertion point can move.
+ *  3. **Each round is one block: what the model said, then the tools it
+ *     called** — in that order, which is the order they happened. Rounds only
+ *     append, so nothing above the insertion point can move.
  *
  *     The engine sends `round_narration` for exactly this. Before it did, the
  *     only text was `response`, the JOIN of every round's turn, and a join
- *     cannot be undone: this card split it on a leading `<think>` tag, so
- *     round 1's thinking rendered as "the reasoning" and every later round's
- *     thinking rendered as "the model output", tags and all. A reader saw the
- *     model deliberating about which tool to try, labelled as its answer, in a
- *     block detached from the tool calls that deliberation was about.
+ *     cannot be undone: prose contains blank lines, so nothing could say which
+ *     round said what, and a reader saw the model's words in a block detached
+ *     from the tool calls they were about.
  *
  *     Grouping the data was only half of it: the block has to LOOK like one
- *     block. It did not, and a reader said so — a thought and the call it
- *     asked for read as two unrelated collapsed rows. The devices meant to
+ *     block. It did not, and a reader said so — the words and the call they
+ *     asked for read as two unrelated rows. The devices meant to
  *     bound a round both described the sequence instead (a rail drawn only
  *     between rounds, a tint only on even ones), so a phase with a single
  *     round had neither. The rail is a bracket around each round now and the
  *     round's content shares one left edge; see `.round` in screens.css.
  *
  *  4. **The model's words are set as prose, not as code — and as the markdown
- *     they are.** Its reasoning, its speech and a coding run's report get a
+ *     they are.** Its speech and a coding run's report get a
  *     proportional face, a real line height and a bounded measure, and are
  *     rendered as markdown read by a model's habits (`Words`): its fenced
  *     JSON is a code block rather than three backticks and a wall of braces,
@@ -107,10 +105,8 @@ import {
   phaseDuration,
   transcriptLength,
   type PhaseRecord,
-  type Refusal,
   type Round,
   rounds,
-  stopNote,
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
@@ -317,9 +313,9 @@ function useTail(active: boolean) {
 
     // DRIVEN BY LAYOUT, not by a number derived from the data. Deriving it
     // meant naming in advance which field's growth counts, and the first
-    // attempt counted the round's `content` — so a phase streaming a long
-    // THINKING block grew for a minute without the effect ever re-running,
-    // and the box sat still while text poured into it. A size observer fires
+    // attempt counted the round's `content` — so a phase streaming into a
+    // block that field did not cover grew for a minute without the effect
+    // ever re-running, and the box sat still while text poured into it. A size observer fires
     // for every reason the content can get taller: a fragment landing, a new
     // round, a disclosure opening, text rewrapping.
     //
@@ -384,8 +380,8 @@ function DeclinedNote({ fate, rescued }: { fate: Declined; rescued: boolean }) {
 }
 
 /**
- * A model's words — its speech, its thinking, a coding run's report — as the
- * markdown it wrote.
+ * A model's words — its speech, a coding run's report — as the markdown it
+ * wrote.
  *
  * MARKDOWN, because that is what models write: the design doc said a model's
  * speech "is not markdown" and a round's fenced ```json block was printed as
@@ -399,32 +395,12 @@ function DeclinedNote({ fate, rescued }: { fate: Declined; rescued: boolean }) {
  * Memoised on the text, because a live phase re-renders on every streamed
  * frame and an open round's words are re-parsed only when they changed.
  */
-function Words({ text, muted, streaming }: { text: string; muted?: boolean; streaming?: boolean }) {
+function Words({ text, streaming }: { text: string; streaming?: boolean }) {
   const nodes = useMemo(() => renderMarkdown(text, MODEL_WORDS), [text]);
-  return <div className={cx("prose md", muted && "muted", streaming && "stream")}>{nodes}</div>;
+  return <div className={cx("prose md", streaming && "stream")}>{nodes}</div>;
 }
 
-/**
- * What a refused phase's body says in place of its error: that the model
- * DECLINED, under which policy category, in the vendor's own words where it
- * gave any, and that the phase ended there.
- */
-function RefusalNote({ refusal }: { refusal: Refusal }) {
-  return (
-    <span>
-      The model declined this request
-      {refusal.category && (
-        <>
-          {" "}
-          (<span className="mono">{refusal.category}</span>)
-        </>
-      )}
-      {refusal.explanation ? `: ${refusal.explanation}` : "."} The phase ended here.
-    </span>
-  );
-}
-
-/** One round: thinking, speech, then the calls that round asked for. */
+/** One round: what the model said, then the calls that round asked for. */
 function RoundBlock({
   round,
   live,
@@ -438,16 +414,10 @@ function RoundBlock({
   rescued: boolean;
 }) {
   const said = round.content.trim();
-  const thinking = round.reasoning.trim();
-  // A round that DID NOT FINISH — cut off at the output cap, refused, out of
-  // context, paused — says so under its words: it is the round that ended the
-  // phase, and nothing else on it does (its words read like any round's, and
-  // a call the cap cut off was never run, so it has no failed row).
-  const stopped = stopNote(round.stopReason);
   // Marked on the ROUND, not just on the row inside it: "which round went
   // wrong" is the question a reader brings to a stuck turn, and the answer
   // used to be an icon inside a collapsed row they had to open to find.
-  const errored = round.tools.some((t) => t.failed) || stopped !== null;
+  const errored = round.tools.some((t) => t.failed);
   return (
     <li className={cx("round", errored && "errored", declined && "declined", live && "live")}>
       <div className="round-rail">
@@ -480,49 +450,11 @@ function RoundBlock({
             <div className="t-caption">
               <TriangleAlertGlyph size="xs" /> this attempt was abandoned mid-answer and retried
             </div>
-            {a.reasoning.trim() && <p className="prose muted">{a.reasoning.trim()}</p>}
             {a.content.trim() && <p className="prose muted">{a.content.trim()}</p>}
           </div>
         ))}
-        {thinking &&
-          (round.streaming ? (
-            // Open while it streams: a collapsed disclosure whose only sign
-            // of life is a character count is not "watching it think". It
-            // carries `round-thinking` so it sits on the round's own left
-            // edge — the same edge the disclosure that replaces it sits on,
-            // so the block does not shift sideways when the round commits.
-            <div className="col gap-1 round-thinking">
-              <div className="t-label">Thinking</div>
-              <Words text={thinking} muted streaming />
-            </div>
-          ) : (
-            // `aside` IS our `tone="reasoning"`, and uilet describes it in our
-            // own words — "what was considered rather than what was decided",
-            // a rule down its edge so a reader can skip the block by its shape.
-            // `round-thinking` stays on it for the reason the streaming branch
-            // above gives: both sit on the round's own left edge, so the block
-            // does not shift sideways when the round commits.
-            <Disclosure
-              className="round-thinking"
-              title="Thinking"
-              count={`${thinking.length} chars`}
-              variant="aside"
-              headingLevel="none"
-              lazy
-            >
-              <Words text={thinking} muted />
-            </Disclosure>
-          ))}
         {said && <Words text={said} streaming={round.streaming} />}
         {declined && <DeclinedNote fate={declined} rescued={rescued} />}
-        {/* CRITICAL, unlike a declined round's caution: this round ended the
-            phase, and the turn with it. The glyph carries the hue's meaning to
-            a reader who cannot see it. */}
-        {stopped && (
-          <p className="round-note critical">
-            <TriangleAlertGlyph size="xs" /> {stopped}
-          </p>
-        )}
         {round.tools.length > 0 && (
           <div className="round-tools">
             {round.tools.map((t, i) => (
@@ -576,7 +508,7 @@ export function PhaseCard({
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
-  const ledger = rounds(record.tools, record.narration, record.partial, record.timedRounds);
+  const ledger = rounds(record.tools, record.narration, record.partial);
   // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
   // engine drove none — the run's own loop happened in a box — so its
   // `response` is the report the run wrote back, and it carries an activity
@@ -716,17 +648,7 @@ export function PhaseCard({
             {record.codingAgent || "sandbox"}
           </Tag>
         )}
-        {/* A REFUSAL IS NAMED AS ONE: the model declined, which is a decision
-            rather than a fault, and the word a reader needs is what it did —
-            not the error kind's `refusal`, which reads as the engine refusing.
-            Still danger: the phase, and its turn, ended there. */}
-        {record.failed && record.refusal ? (
-          <Tag variant="danger" title="The phase ended here and won’t be retried">
-            declined by model
-          </Tag>
-        ) : (
-          record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>
-        )}
+        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {parked
@@ -808,13 +730,7 @@ export function PhaseCard({
 
       {open && (
         <div className="phase-body">
-          {record.failed && record.refusal ? (
-            <Callout variant="danger">
-              <RefusalNote refusal={record.refusal} />
-            </Callout>
-          ) : (
-            record.failed && record.error && <Callout variant="danger">{record.error}</Callout>
-          )}
+          {record.failed && record.error && <Callout variant="danger">{record.error}</Callout>}
           {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
 
           {/* A WITHHELD BODY IS SAID, never drawn as a phase that was told
@@ -894,7 +810,7 @@ export function PhaseCard({
             </Disclosure>
           )}
 
-          {/* The transcript. One block per round — thought, speech, calls —
+          {/* The transcript. One block per round — speech, then calls —
               in the order they happened. Rounds append, so nothing above an
               insertion can move, which is the whole point. */}
           {ledger.length > 0 && (

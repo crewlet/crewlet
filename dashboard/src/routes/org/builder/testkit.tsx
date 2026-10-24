@@ -66,7 +66,7 @@ export const json = (payload: unknown, status = 200, headers: Record<string, str
 export function company(): CompanyDocument {
   return {
     name: "Acme",
-    providers: { llm: { default: { type: "anthropic", model: "claude-sonnet-5-5" } } },
+    providers: { llm: { default: { model: "claude-sonnet-5-5" } } },
     roles: [
       { name: "CEO", handle: "ceo", goal: "Lead", manages: ["engineering"] },
       { name: "Designer", handle: "designer", goal: "Design" },

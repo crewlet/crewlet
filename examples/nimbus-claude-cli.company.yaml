@@ -23,8 +23,7 @@
 #                 -company examples/nimbus.company.yaml
 #
 # See docs/integrations/mattermost.md § First run, end to end for the
-# walkthrough, and docs/concepts/subscription-llm-backends.md for the
-# login options.
+# walkthrough, and docs/concepts/llm-backends.md for the login options.
 #
 # GROWING PAST CHAT.  Every other integration is additive and documented
 # on its own page — a code host (docs/integrations/gitlab.md,
@@ -88,8 +87,8 @@ timezone: "Europe/Berlin"
 # out instead.  No per-agent ``token_budget`` is set below, so these two are
 # the only ceilings in force and the whole company shares them.
 #
-# THEY STILL APPLY ON A SUBSCRIPTION.  A cli-agent provider is not metered
-# by Crewlet, but the CLI reports its usage and the engine counts it — so
+# THEY STILL APPLY ON A SUBSCRIPTION.  A plan is not metered per token by
+# its vendor, but the CLI reports its usage and the engine counts it — so
 # the day ceiling is what stops a scheduling loop burning a whole plan
 # window overnight, and the week ceiling tracks the plan itself: 10M is
 # roughly a week of the schedules below plus ordinary chat traffic for
@@ -107,11 +106,12 @@ providers:
   llm:
     # ── The one model: a coding CLI on YOUR subscription ──────────────
     #
-    # `cli-agent` drives a locally installed coding CLI as a headless text
-    # model, on the flat-rate plan you already pay for, so this company
-    # needs no metered API key at all.  Crewlet never sees a password: the
-    # CLI holds the vendor's own OAuth login and `crewlet llm login` only
-    # decides WHERE that credential lands.
+    # Every providers.llm entry is a locally installed coding CLI the engine
+    # drives — here Claude Code as a headless text model, on the flat-rate
+    # plan you already pay for, so this company needs no metered API key at
+    # all.  Crewlet never sees a password: the CLI holds the vendor's own
+    # OAuth login and `crewlet llm login` only decides WHERE that credential
+    # lands.
     #
     # PREREQUISITE: the `claude` binary on the machine running
     # `crewlet run`, and one of these, once:
@@ -140,7 +140,7 @@ providers:
     #   crewlet llm doctor default -company examples/nimbus.company.yaml \
     #                              -config  examples/nimbus.config.yaml
     #
-    # `doctor` is the command that matters here.  A cli-agent entry can be
+    # `doctor` is the command that matters here.  An entry can be
     # configured perfectly and still not work — a missing binary, a
     # profile whose flags drifted from the installed version, an expired
     # login, or the one nothing else catches: a model that answers PROSE
@@ -149,9 +149,14 @@ providers:
     # ends the phase without its submission.  Only a real completion with a real tool
     # proves that, so `doctor` runs one.
     #
-    # See docs/concepts/subscription-llm-backends.md.
+    # See docs/concepts/llm-backends.md.
     default:
-      type: cli-agent
+      agent: claude-code            # the default, written out; or codex |
+                                    #   gemini-cli | opencode | muse-code |
+                                    #   kimi-code | hermes | pi | …  Another
+                                    #   CLI reads `model` in its own grammar:
+                                    #   opencode's is <provider>/<model>
+                                    #   (anthropic/claude-sonnet-5).
       model: haiku                  # whatever `claude --model` accepts:
                                     #   haiku | sonnet | opus, or a full
                                     #   model id.  Haiku is the cheapest
@@ -160,45 +165,31 @@ providers:
                                     #   weakest at the tool-call envelope,
                                     #   which is exactly what
                                     #   `crewlet llm doctor` measures.
-      cli:
-        agent: claude-code          # or codex | gemini-cli | opencode
-                                    #    | muse-code | kimi-code | hermes
-                                    #    | pi | …  Another CLI reads
-                                    #   `model` in its own grammar:
-                                    #   opencode's is <provider>/<model>
-                                    #   (anthropic/claude-sonnet-5).
-        mode: text                  # the default: a model behind the
+      mode: text                    # the default: a model behind the
                                     #   engine's own tool loop.  `agent`
                                     #   hands the executor to the CLI's own
-                                    #   agentic loop and needs
-                                    #   providers.sandbox, which this
-                                    #   chat-only company does not
-                                    #   configure.
-        # ONE LOGIN FOR BOTH ENTRIES.  state_dir defaults to a directory
-        # derived PER PROVIDER KEY, so `default` and `coding` below would
-        # otherwise land on ~/.crewlet/llm-cli/default and .../coding —
-        # two credential directories, two `crewlet llm login` runs, two
-        # sets of per-seat homes.  Naming the same path on both is how
-        # entries say they share, and it is deliberately explicit: two
-        # unrelated providers must never silently collide and prune each
-        # other's state.  Entries that share one must also drive the SAME
-        # CLI, which `crewlet validate` checks.
-        #
-        # A LITERAL PATH — unlike every credential field here it is not
-        # ${VAR}-expanded, because it names where the engine keeps files
-        # rather than a secret (the same reason the store path is a Tier A
-        # field).  So it lives under ./nimbus-data with everything else
-        # this example writes, which does mean `rm -rf nimbus-data` logs
-        # the CLI out; `crewlet llm login default -from-host` puts it back
-        # with no browser round-trip.  Point it at a persistent volume
-        # when the engine runs in an ephemeral container.
-        state_dir: "./nimbus-data/llm-cli/claude"
-        timeout_seconds: 300        # wall clock for ONE invocation. Not the
-                                    #   HTTP timeout above it: this covers a
-                                    #   Node runtime starting (seconds before
-                                    #   the first byte), the model call, and
-                                    #   the CLI's own internal retries.
-        max_concurrent: 4           # CLI processes at once, ACROSS the whole
+                                    #   agentic loop — see `coding` below.
+      # ONE LOGIN FOR BOTH ENTRIES.  state_dir defaults to a directory
+      # derived PER PROVIDER KEY, so `default` and `coding` below would
+      # otherwise land on ~/.crewlet/llm-cli/default and .../coding —
+      # two credential directories, two `crewlet llm login` runs, two
+      # sets of per-seat homes.  Naming the same path on both is how
+      # entries say they share, and it is deliberately explicit: two
+      # unrelated providers must never silently collide and prune each
+      # other's state.  The login is shared per CLI: each keeps its files
+      # in a subdirectory named for it (here .../claude/claude-code), so
+      # an entry on this path that drove another CLI would share nothing.
+      #
+      # A LITERAL PATH — unlike every credential field here it is not
+      # ${VAR}-expanded, because it names where the engine keeps files
+      # rather than a secret (the same reason the store path is a Tier A
+      # field).  So it lives under ./nimbus-data with everything else
+      # this example writes, which does mean `rm -rf nimbus-data` logs
+      # the CLI out; `crewlet llm login default -from-host` puts it back
+      # with no browser round-trip.  Point it at a persistent volume
+      # when the engine runs in an ephemeral container.
+      state_dir: "./nimbus-data/llm-cli/claude"
+      max_concurrent: 4             # CLI processes at once, ACROSS the whole
                                     #   company.  Written out rather than
                                     #   left to the identical default,
                                     #   because on this backend it is the
@@ -214,8 +205,8 @@ providers:
                                     #   turns): turns past this queue for a
                                     #   CLI slot, and the learning passes
                                     #   below queue for the same four.
-        auth:
-          mode: subscription        # subscription (default) | api-key | inherit-env.
+      auth:
+        mode: subscription          # subscription (default) | api-key | inherit-env.
                                     #   Deliberately not inherit-env: a
                                     #   backend that silently picked up a
                                     #   stray ANTHROPIC_API_KEY would bill
@@ -257,7 +248,7 @@ providers:
     #     In a fleet that URL must address the NODE, never a load
     #     balancer — a session is a live tool surface in one process.
     coding:
-      type: cli-agent
+      agent: claude-code
       model: haiku                  # the same model as `default`. Haiku is
                                     #   the weakest of the three at a long
                                     #   agentic coding loop, which is what
@@ -265,10 +256,8 @@ providers:
                                     #   swap this one entry to `sonnet` if
                                     #   your runs thrash, and the login and
                                     #   every other seat stay as they are.
-      cli:
-        agent: claude-code
-        mode: agent                 # text (default) | agent
-        run_in: direct              # a cell of providers.sandbox below.
+      mode: agent                   # text (default) | agent
+      run_in: direct                # a cell of providers.sandbox below.
                                     #   On the ENTRY rather than the seat,
                                     #   because it is a property of this
                                     #   runtime: the subscription login
@@ -276,23 +265,25 @@ providers:
                                     #   local cell reaches it directly and
                                     #   a remote one would need a headless
                                     #   token instead.
-        state_dir: "./nimbus-data/llm-cli/claude"   # SAME as `default`: one login
-        timeout_seconds: 300
-        max_concurrent: 4
-        auth:
-          mode: subscription
+      state_dir: "./nimbus-data/llm-cli/claude"   # SAME as `default`: one login
+      max_concurrent: 4
+      auth:
+        mode: subscription
 
-    # A METERED KEY AS A BACKSTOP.  A spent plan window arrives as prose on
-    # a successful exit ("Usage limit reached. Resets at 4pm."); the engine
-    # matches that wording and reports RATE_LIMIT, which the ordinary
-    # fallback chain treats as retryable.  So `llm: [default, metered]` on
-    # a role carries it onto a key for the rest of the window and back
-    # again afterwards, with no operator in the loop:
+    # AN API KEY AS A BACKSTOP.  A spent plan window arrives as prose on a
+    # successful exit ("Usage limit reached. Resets at 4pm."); the engine
+    # matches that wording, reports RATE_LIMIT — which the ordinary fallback
+    # chain treats as retryable — and sits the entry out for a minute before
+    # trying the plan again.  So `llm: [default, metered]` on a role carries
+    # it onto a key for the rest of the window and back again afterwards,
+    # with no operator in the loop.  The same CLI on an Anthropic API key,
+    # with a state_dir of its own (the default, per key), since it is not
+    # the subscription's login:
     #
     # metered:
-    #   type: anthropic
-    #   model: claude-haiku-4-5-20251001
-    #   api_keys: ["${ANTHROPIC_API_KEY}"]
+    #   agent: claude-code
+    #   model: haiku
+    #   auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
 
   # ── Embeddings: OFF, deliberately ───────────────────────────────────
   #
@@ -353,7 +344,7 @@ providers:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST.  In
     # general a seat picks one with `role.sandbox.run_in` — but not here:
     # every sandbox seat in this company runs its executor in AGENT MODE,
-    # and such a seat's box is placed by its ENTRY, `cli.run_in` on
+    # and such a seat's box is placed by its ENTRY, `run_in` on
     # providers.llm.coding above, while its own `run_in` stays `self` (any
     # other cell there is refused, naming that entry).  This company
     # configures the ENGINE HOST only — each coding job runs as a process
@@ -361,7 +352,7 @@ providers:
     # no API key and nothing to provision.
     local:
       # The local backend serves two cells, chosen by the coding entry's
-      # `cli.run_in` (or, on a seat not in agent mode, by the seat's own
+      # `run_in` (or, on a seat not in agent mode, by the seat's own
       # `run_in`):
       #
       #   run_in: direct     state isolation only — each box gets its own
@@ -428,7 +419,7 @@ providers:
     # toolchain for a remote box would install it on the engine host
     # instead.  A `direct` box inherits whatever toolchains the machine
     # already has, which is the point of choosing it.  Provision
-    # deliberately with `cli.run_in: container` on the coding entry and an
+    # deliberately with `run_in: container` on the coding entry and an
     # image (an `e2b` cell would also need the headless token, above).
     # (File steps are not merely discouraged here: a step writing a system
     # path is REFUSED under `direct`, naming the mode.)
@@ -449,9 +440,9 @@ providers:
 #     seat that has to discover its way around four servers and 50-150
 #     tools; a chat turn here is discover, activate, post, submit — well
 #     inside 12.
-#   - On a cli-agent backend EVERY ROUND IS A PROCESS LAUNCH.  A Node
-#     runtime costs seconds before the first byte, so 24 rounds is minutes
-#     of pure launch overhead on a turn that needed six.
+#   - On a coding CLI EVERY ROUND IS A PROCESS LAUNCH.  A Node runtime
+#     costs seconds before the first byte, so 24 rounds is minutes of pure
+#     launch overhead on a turn that needed six.
 #
 # The ceiling stays 2x the base, which is what an extension is for: a
 # phase that is genuinely progressing gets a second budget, and one that

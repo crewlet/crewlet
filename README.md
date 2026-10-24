@@ -104,7 +104,9 @@ prompt on its own model — a frontier model to work, a cheap one to check. See
 
 There is no infrastructure to bring up. Crewlet is one binary: it embeds its
 event stream (a NATS JetStream server) and its database is a local file it
-creates. Describe a company and run it:
+creates. Its models run through the **coding CLI** each vendor ships — Claude
+Code, Codex or OpenCode, installed beside it — so the vendor's own harness
+drives every model, on your plan or your key. Describe a company and run it:
 
 ```bash
 go install github.com/crewlet/crewlet/cmd/crewlet@latest
@@ -114,9 +116,10 @@ go install github.com/crewlet/crewlet/cmd/crewlet@latest
 crewlet secrets keygen -key-id 2026-01    # prints the export line below
 export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-export ANTHROPIC_API_KEY="sk-ant-..."     # or OpenAI, or any OpenAI-compatible endpoint
+export ANTHROPIC_API_KEY="sk-ant-..."     # Claude Code's key — or sign it in on your Claude plan
 export OPENAI_API_KEY="sk-..."            # embeddings
 
+crewlet llm doctor     # the model end to end: the CLI, its sign-in, a real tool call
 crewlet run            # reads ./crewlet.yaml (Tier A) and ./company.yaml (Tier B)
 ```
 
@@ -146,10 +149,9 @@ mission: "Ship AI-powered products fast"
 
 providers:
   llm:
-    default:
-      type: anthropic
-      model: claude-sonnet-5-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
+    default:             # Claude Code, the default CLI
+      model: sonnet
+      auth: { mode: api-key }   # reads ANTHROPIC_API_KEY; drop it to run on your plan
 
 roles:
   - name: Your Name
@@ -193,10 +195,11 @@ first turn with no integrations at all, then wiring in the real ones.
 
 > **Want a whole company to run?** Two complete seven-seat reference orgs ship
 > in `examples/`, the same company at both ends of the stack.
-> `nimbus.company.yaml` is the full one — GitLab, Mattermost, a metered key,
-> and the engine's own work tracker and knowledge base.
+> `nimbus.company.yaml` is the full one — GitLab, Mattermost, open models
+> through OpenCode on an OpenRouter key, and the engine's own work tracker and
+> knowledge base.
 > `nimbus-claude-cli.company.yaml` is the short path: chat on Mattermost, its
-> model a coding CLI you already subscribe to, and its engineering seats running
+> model Claude Code on the Claude plan you already pay for, and its engineering seats running
 > that same CLI as their own agentic loop in a sandbox on the engine host, on
 > that same login — no API key, and no service beyond the chat server in this
 > repo's compose file. Neither needs a tracker or a wiki account: both run the
@@ -220,7 +223,7 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 
 | | Options |
 |---|---|
-| **LLM** | [Anthropic](docs/getting-started/quickstart.md#llm-options), OpenAI, or **any OpenAI-compatible endpoint** — including your own vLLM / LiteLLM gateway |
+| **LLM** | Every model through the vendor's own [coding CLI](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server |
 | **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
@@ -303,7 +306,7 @@ crewlet schema company                        # JSON Schema (editors, CI, agents
 crewlet config import | show | export | revisions | diff | activate
 crewlet secrets keygen                        # a keyring key — REQUIRED on every node: it signs every
                                               #   state-log record and session cookie, and seals the config
-crewlet secrets set LLM_API_KEY               # a secret the engine reads ${VAR} from
+crewlet secrets set ANTHROPIC_API_KEY         # a secret the engine reads ${VAR} from
 
 crewlet confluence import company.yaml docs/  # publish knowledge docs + tool skills
 crewlet gitlab provision company.yaml         # reconcile the company's seats into GitLab
@@ -330,7 +333,7 @@ Full reference: [CLI](docs/reference/cli.md) ·
 
 **Core concepts**
 - [Overview](docs/concepts/overview.md) · [Organization model](docs/concepts/organization-model.md) · [Humans in the org chart](docs/concepts/humans-in-the-org.md)
-- [Agent runtime](docs/concepts/agent-runtime.md) · [Turn engine](docs/concepts/turn-engine.md) · [Code sandbox](docs/concepts/code-sandbox.md)
+- [Agent runtime](docs/concepts/agent-runtime.md) · [Turn engine](docs/concepts/turn-engine.md) · [LLM backends](docs/concepts/llm-backends.md) · [Code sandbox](docs/concepts/code-sandbox.md)
 - [Knowledge system](docs/concepts/knowledge-system.md) · [Agent learning](docs/concepts/agent-learning.md) · [Tool skills](docs/concepts/tool-skills.md)
 - [Event system](docs/concepts/event-system.md) · [Scheduling](docs/concepts/scheduling.md) · [Configuration](docs/concepts/configuration.md)
 

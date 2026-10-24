@@ -57,13 +57,6 @@ import (
 // answer twenty-four times.
 const PromotionInterval = 24 * time.Hour
 
-// DefaultPromotionTokens caps one promotion draft.
-//
-// Larger than a single-turn synthesis draft, because the prompt carries
-// several agents' whole procedures and the answer is a page a person reads
-// rather than a body a model follows.
-const DefaultPromotionTokens = 4000
-
 // DefaultMinSiblings is how many distinct seats must converge. Below three it
 // is a coincidence — two seats sharing a procedure is as likely to be two
 // seats copying one trigger as it is a team practice.
@@ -159,7 +152,6 @@ type Promoter struct {
 	minSiblings int
 	poolAt      float64
 	timeout     time.Duration
-	maxTokens   int
 }
 
 // PromoterOptions configures the pass. Zero values take the shipped defaults,
@@ -180,10 +172,6 @@ type PromoterOptions struct {
 
 	// CallTimeout bounds one auxiliary call; zero takes DefaultAuxTimeout.
 	CallTimeout time.Duration
-
-	// MaxTokens caps one promotion draft; zero takes
-	// DefaultPromotionTokens.
-	MaxTokens int
 }
 
 // NewPromoter builds the pass.
@@ -205,7 +193,7 @@ func NewPromoter(opts PromoterOptions) (*Promoter, error) {
 		writer: opts.Writer, skills: opts.Skills,
 		models: opts.Models, units: opts.Units,
 		minSiblings: opts.MinSiblings, poolAt: opts.JaccardThreshold,
-		timeout: opts.CallTimeout, maxTokens: opts.MaxTokens,
+		timeout: opts.CallTimeout,
 	}
 	if p.minSiblings <= 0 {
 		p.minSiblings = DefaultMinSiblings
@@ -215,9 +203,6 @@ func NewPromoter(opts PromoterOptions) (*Promoter, error) {
 	}
 	if p.timeout <= 0 {
 		p.timeout = DefaultAuxTimeout
-	}
-	if p.maxTokens <= 0 {
-		p.maxTokens = DefaultPromotionTokens
 	}
 	return p, nil
 }
@@ -301,9 +286,6 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 			{Role: llm.RoleSystem, Content: PromotionSystemPrompt},
 			{Role: llm.RoleUser, Content: buildPromotionPrompt(unit, best)},
 		},
-		Temperature: llm.Temp(auxTemperature),
-		Effort:      auxEffort,
-		MaxTokens:   p.maxTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("drafting a promotion for %s: %w", unit.ID, err)

@@ -504,12 +504,7 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 	if opts.Org == nil {
 		return nil
 	}
-	var seats []*org.Role
-	for seat := range opts.Org.AllRoles() {
-		if !seat.IsHuman() {
-			seats = append(seats, seat)
-		}
-	}
+	seats := agentSeats(opts.Org)
 	out := make([]SeatIdentity, len(seats))
 
 	// The credentials are read first so the fan-out below runs over the

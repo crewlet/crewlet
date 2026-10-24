@@ -208,7 +208,7 @@ func TestTheSeatCapStopsTheDraftBeforeTheModelCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := provider.callCount()
-	wantLowEffort(t, provider.request(t, 0))
+	wantNoTools(t, provider.request(t, 0))
 	if _, err := s.Reflect(t.Context(), toolTurn("q", "r", "s")); err != nil {
 		t.Fatal(err)
 	}

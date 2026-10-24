@@ -542,13 +542,13 @@ func TestTheFilterDecidesWhichMemoriesReachThePrompt(t *testing.T) {
 	if strings.Contains(blocks.PersonalMemory, "Sam prefers") {
 		t.Fatalf("an unselected memory reached the prompt:\n%s", blocks.PersonalMemory)
 	}
-	// Every auxiliary pass here is a filter, a rewrite or a summary — and
-	// it is latency a person waits through. A thinking model at the entry's
-	// level spends the pass's cap reasoning and answers nothing.
+	// Every auxiliary pass here is a filter, a rewrite or a summary, and it
+	// wants text back: a tool on the surface invites a model to call it and
+	// answer nothing, which renders as an empty block with no error.
 	model.mu.Lock()
 	defer model.mu.Unlock()
-	if len(model.asked) != 1 || model.asked[0].Effort != llm.EffortLow {
-		t.Errorf("asked %+v, want one call with a ceiling of low", model.asked)
+	if len(model.asked) != 1 || len(model.asked[0].Tools) != 0 {
+		t.Errorf("asked %+v, want one call offering no tools", model.asked)
 	}
 }
 
