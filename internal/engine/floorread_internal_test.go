@@ -226,7 +226,7 @@ func TestAWriteFenceReadsItsFloorWithoutListingTheRegister(t *testing.T) {
 // no write may wait with them.
 func TestAWriteAtZeroLandsWhileTheRegistersListingsAreHeld(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)

@@ -146,7 +146,9 @@ func TestDeclaredRepositoriesAreReconciledAtActivation(t *testing.T) {
 		t.Errorf("web is %s, managed by %s; want active, managed by the configuration",
 			web.Status, web.ManagedBy)
 	}
-	if want := (code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}); web.Owner != want {
+	// THE KEY the document mints for a unit that states none, from its name:
+	// what every durable row names a unit by.
+	if want := (code.Owner{Kind: code.OwnerUnit, Ref: config.MintUnitID("Engineering")}); web.Owner != want {
 		t.Errorf("web's owner is %+v, want the unit's key %+v", web.Owner, want)
 	}
 	if web.DefaultBranch != config.DefaultCodeBranch {

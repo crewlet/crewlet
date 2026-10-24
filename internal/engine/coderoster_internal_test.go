@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -170,7 +171,7 @@ func TestTheCodeRosterIsTheChart(t *testing.T) {
 
 	// A REFERENCE OUTLIVES ITS SPELLING.
 	renamed, _ := rosterOfChart(t, rosterChart("        id: plat\n"))
-	if s, _ := renamed.Seat("dev"); s.Unit != "Infra" {
+	if s, _ := renamed.Seat("dev"); s.Unit != config.MintUnitID("Infra") {
 		t.Fatalf("the premise: dev's unit is %q", s.Unit)
 	}
 	if s, _ := renamed.Seat("plat-lead"); s.Unit != "plat" {

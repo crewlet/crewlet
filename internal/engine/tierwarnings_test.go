@@ -14,9 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// logless is a company that runs no state log — every backend a vendor's, no
-// code — so a revision that hosts code is the one that brings the native
-// runtime, and this node's code host, up at its apply.
+// logless is a company that keeps nothing native — every backend a vendor's, no
+// code — and the base of each revision these cases activate. The node they
+// stand up boots with NO company: a data node runs its native runtime for any
+// company it holds, whatever its backends, so the runtime that builds this
+// node's code host is the one its FIRST company brings up at that company's
+// apply — and a revision that turns code.native on under a runtime already
+// running only says it needs a restart (native_backend_needs_restart).
 const logless = `
 name: Acme
 tracker:
@@ -55,8 +59,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 	if err := os.WriteFile(stray, []byte("an operator's file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	e := newEngine(t, engine.Options{Bootstrap: b, Company: parsedCompany(t, logless),
-		GitHook: codetest.HookCommand(t)})
+	e := unconfiguredEngineWith(t, engine.Options{Bootstrap: b, GitHook: codetest.HookCommand(t)})
 	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
 		o.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	})
@@ -111,7 +114,7 @@ func TestAGitNodeComparesItsDerivedBudget(t *testing.T) {
 	gittest.RequireNode(t) // an activation hosts code on this node
 	const gib = int64(1) << 30
 	logs := &logBuffer{}
-	e := newEngine(t, engine.WithCacheDisk(engine.Options{Company: parsedCompany(t, logless),
+	e := unconfiguredEngineWith(t, engine.WithCacheDisk(engine.Options{
 		GitHook: codetest.HookCommand(t)}, 64*gib, 48*gib))
 	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
 		o.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -41,9 +42,27 @@ func fleetReconciler(t *testing.T, e *Engine) *Reconciler {
 // a reconciler's tick.
 func activateRevision(t *testing.T, e *Engine, doc string) int64 {
 	t.Helper()
-	payload, err := json.Marshal(parseCompany(t, doc))
+	return activateRevisionAt(t, e, doc).Epoch
+}
+
+// activateRevisionAt is [activateRevision] answering the whole activation: its
+// epoch, and the instant a node booted on its revision is stamped with
+// ([Options.ActivatedAt]), which is how that node knows it serves the
+// pointer's revision ([Engine.servedFleetRevision]).
+//
+// SEALED under e's own keyring in both places, as every writer stores and
+// publishes it: a node holding a keyring applies only a sealed document, since
+// a plaintext one is one anything reaching the store or the coordination
+// bucket could have authored.
+func activateRevisionAt(t *testing.T, e *Engine, doc string) coord.Activation {
+	t.Helper()
+	document, err := json.Marshal(parseCompany(t, doc))
 	if err != nil {
 		t.Fatalf("encode the revision: %v", err)
+	}
+	payload, err := secrets.Seal(e.Cipher(), document)
+	if err != nil {
+		t.Fatalf("seal the revision: %v", err)
 	}
 	now := time.Now().UTC()
 	id, err := e.backends.Store.Configs().InsertActive(t.Context(), store.Revision{
@@ -61,7 +80,7 @@ func activateRevision(t *testing.T, e *Engine, doc string) int64 {
 	if err != nil {
 		t.Fatalf("activate the revision: %v", err)
 	}
-	return activation.Epoch
+	return activation
 }
 
 // tickApplies is one reconcile tick that must leave e serving epoch, its
@@ -325,45 +344,63 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 }
 
 // A NODE STILL REACHING THE FLEET'S REVISION DECLINES THE PURGE QUIETLY, AND
-// ASKS AGAIN SOON.
+// ASKS AGAIN SOON — AND A NODE BOOTED ON THE FLEET'S REVISION PURGES AT ONCE.
 //
 // The duty's loop is armed inside [New] and its first turn runs at once —
 // before `crewlet run` has built the reconciler, which it does only once New
-// has returned, and long before that reconciler's first tick. Every restart of
-// a data node that hosts code meets that, and an apply that builds the native
-// runtime meets the same inside its own tick. None of it is a fault: the turn
-// declines at DEBUG, gives nothing to warn about, and asks again at the
-// reconcile cadence, so the restart costs the purge a reconcile interval rather
-// than a tick. A node with no reconciler yet reads as one whose reconciler has
-// not ticked, which the posture reads as waiting too.
+// has returned, and long before that reconciler's first tick. A node booted on
+// the revision the pointer names serves it already: the company it boots on
+// carries that activation's instant, and that is what says a node serves the
+// fleet's revision ([Engine.servedFleetRevision]), reconciler or none. A node
+// booted on a revision the fleet has since moved past — another node activated
+// a newer one while this one was down — does not, and neither does an apply
+// that builds the native runtime, which arms the duty inside its own tick. None
+// of that is a fault: the turn declines at DEBUG, gives nothing to warn about,
+// and asks again at the reconcile cadence, so the restart costs the purge a
+// reconcile interval rather than a tick. A node with no reconciler yet reads as
+// one whose reconciler has not ticked, which the posture reads as waiting too.
 //
 // Mutations: log the boot's decline as unknown (the base) and the restart
-// warns; drop [dutyDecline.next] and the restart waits a whole tick.
+// behind the fleet warns; drop [dutyDecline.next] and it waits a whole tick;
+// judge a node with no reconciler behind whatever company it holds, and the
+// restart on the fleet's own revision declines.
 func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T) {
 	t.Parallel()
-	t.Run("restarted on a fleet already pointed at its revision", func(t *testing.T) {
+	removed := retainedFor(1, "")
+	t.Run("restarted on the fleet's own revision", func(t *testing.T) {
 		t.Parallel()
-		b := config.DefaultBootstrap()
-		dir := t.TempDir()
-		b.Store.Path = filepath.Join(dir, "crewlet.db")
-		b.Stream.StoreDir = filepath.Join(dir, "stream")
-		PinGitLanes(&b)
-		SeedStore(t, &b)
-		removed := retainedFor(1, "")
-		// THE FIRST BOOT: web declared, then removed by an activation the
-		// node applies.
-		first, back := bootCodeNode(t, &b, parseCompany(t, retainedFor(1, webRepo(""))))
-		servesCodeReads(t, first)
-		reconciled(t, first)
-		epoch := activateRevision(t, first, removed)
-		tickApplies(t, first, fleetReconciler(t, first), epoch)
-		first.Stop(context.Background())
-		back.Close(context.Background())
+		b := codeNodeStore(t)
+		applied := removedOnce(t, &b, removed, func(*Engine) {})
 
 		// THE RESTART, in `crewlet run`'s order: the engine on the store's
-		// revision, its duty's first turn running at once — and no
-		// reconciler until New has returned.
-		e, _ := bootCodeNode(t, &b, parseCompany(t, removed))
+		// revision, stamped with its activation — the one the pointer names
+		// — and no reconciler.
+		e, _ := bootCodeNode(t, &b, parseCompany(t, removed), applied.At)
+		p := newPurgeProbe(e)
+		report, ran := p.duty.turn(t.Context())
+		if !ran || !slices.Equal(report.Purged, []string{"web"}) {
+			t.Fatalf("a node restarted on the fleet's revision, with no reconciler yet, ran %v and "+
+				"purged %v, want web purged: it serves the revision the pointer names", ran, report.Purged)
+		}
+		if got := p.duty.declines.next(code.RetentionInterval); got != code.RetentionInterval {
+			t.Fatalf("a turn that ran its pass asks again after %v, want the duty's tick", got)
+		}
+		if lines := p.lines(t); len(lines) != 0 {
+			t.Fatalf("a node serving the fleet's revision logged %+v, want no decline", lines)
+		}
+	})
+	t.Run("restarted behind the fleet's revision", func(t *testing.T) {
+		t.Parallel()
+		b := codeNodeStore(t)
+		// WHILE THE NODE IS DOWN, the fleet activates the revision again —
+		// the rotation gesture: an activation of its own, and one this node's
+		// store never applied.
+		var next coord.Activation
+		applied := removedOnce(t, &b, removed, func(first *Engine) {
+			next = activateRevisionAt(t, first, removed)
+		})
+
+		e, _ := bootCodeNode(t, &b, parseCompany(t, removed), applied.At)
 		d := e.codeRetention
 		if d == nil {
 			t.Fatal("the premise: the restarted node armed no code-retention duty")
@@ -377,8 +414,8 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 		})
 		if reason.key != "propagating" || reason.level != slog.LevelDebug {
 			t.Fatalf("the restarted node's first turn declined for %q at %v, want propagating at "+
-				"DEBUG: every restart would log the warning that names a node that failed an apply",
-				reason.key, reason.level)
+				"DEBUG: every restart onto a revision the fleet moved past would log the warning "+
+				"that names a node that failed an apply", reason.key, reason.level)
 		}
 		if got := d.declines.next(code.RetentionInterval); got != configplane.ReconcileInterval {
 			t.Fatalf("the restarted node asks again after %v, want the reconcile cadence: "+
@@ -388,7 +425,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 		// armed, rather than a race with the loop's own.
 		e.stopCodeRetention()
 		// THE RECONCILER `crewlet run` BUILDS, and its first tick.
-		tickApplies(t, e, fleetReconciler(t, e), epoch)
+		tickApplies(t, e, fleetReconciler(t, e), next.Epoch)
 		if _, ran := d.turn(t.Context()); !ran {
 			t.Fatal("the turn after the reconciler's first tick ran no pass on a node serving " +
 				"the fleet's revision")
@@ -402,12 +439,15 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 		e := newSandboxNode(t, parseCompany(t, retainedFor(1, webRepo(""))))
 		servesCodeReads(t, e)
 		reconciled(t, e)
-		// WHAT A RESTART BOOTS INTO: the pointer names the revision
-		// removing web, and the node serves it from its store — with no
-		// reconciler yet.
-		doc := retainedFor(1, "")
-		epoch := activateRevision(t, e, doc)
-		applyReconciled(t, e, doc)
+		// A NODE BEHIND THE POINTER: it serves the revision removing web from
+		// an activation the fleet has since moved past, with no reconciler
+		// to apply the newer one yet.
+		if status, applied, err := e.Apply(t.Context(), parseCompany(t, removed),
+			time.Now().Add(-time.Hour)); err != nil || status != configplane.StatusOK {
+			t.Fatalf("Apply = (%s, %v, %v), want ok", status, applied, err)
+		}
+		reconciled(t, e)
+		epoch := activateRevision(t, e, removed)
 
 		p := newPurgeProbe(e)
 		end := codeLogEnd(t, e)
@@ -432,10 +472,41 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 	})
 }
 
+// codeNodeStore is a node's Tier A over a store and a stream of its own,
+// seeded, which a restart opens again.
+func codeNodeStore(t *testing.T) config.Bootstrap {
+	t.Helper()
+	b := testBootstrap(t)
+	dir := t.TempDir()
+	b.Store.Path = filepath.Join(dir, "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	PinGitLanes(&b)
+	SeedStore(t, &b)
+	return b
+}
+
+// removedOnce is a node's first boot on Tier A b — web declared, then removed
+// by the activation of doc, which the node applies — and that activation. then
+// runs on the node before it stops.
+func removedOnce(t *testing.T, b *config.Bootstrap, doc string, then func(*Engine)) coord.Activation {
+	t.Helper()
+	first, back := bootCodeNode(t, b, parseCompany(t, retainedFor(1, webRepo(""))),
+		time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC))
+	servesCodeReads(t, first)
+	reconciled(t, first)
+	applied := activateRevisionAt(t, first, doc)
+	tickApplies(t, first, fleetReconciler(t, first), applied.Epoch)
+	then(first)
+	first.Stop(context.Background())
+	back.Close(context.Background())
+	return applied
+}
+
 // bootCodeNode boots a node on Tier A b over backends of its own, as
-// `crewlet run` does up to New's return: the engine on company, activated at a
-// fixed instant, with no reconciler.
-func bootCodeNode(t *testing.T, b *config.Bootstrap, company *config.Company) (*Engine, *Backends) {
+// `crewlet run` does up to New's return: the engine on company, stamped with
+// the instant of the activation it was applied from, with no reconciler.
+func bootCodeNode(t *testing.T, b *config.Bootstrap, company *config.Company,
+	activatedAt time.Time) (*Engine, *Backends) {
 	t.Helper()
 	RequireNodeGit(t, b, company)
 	back, err := OpenBackends(t.Context(), b, company, nil)
@@ -444,7 +515,7 @@ func bootCodeNode(t *testing.T, b *config.Bootstrap, company *config.Company) (*
 	}
 	t.Cleanup(func() { back.Close(context.Background()) })
 	e, err := New(t.Context(), Options{Bootstrap: b, Company: company, Backends: back,
-		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)})
+		ActivatedAt: activatedAt})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

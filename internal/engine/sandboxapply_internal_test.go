@@ -396,8 +396,13 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	PinGitLanes(&b)
 	SeedStore(t, &b)
 	RequireNodeGit(t, &b, company)
+	// ACTIVATED, as the revision `crewlet run` boots on always is: a company
+	// no activation has named reconciles nothing it declares at boot — no
+	// project, no container, no repository of code.repos — and leaves it to
+	// its first activation ([Engine.applyCodeRepos]).
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
+		ActivatedAt:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
 		SandboxPollInterval: 50 * time.Millisecond,
 	})
 	if err != nil {

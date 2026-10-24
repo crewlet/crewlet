@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -114,9 +116,15 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 			// Mounted, as the API this process serves would: a bridge
 			// with no listener mints nothing.
 			bridge.Handler()
+			// BOUND TO THE RUN'S SEAT, as every launch binds it: the bridge
+			// acts as that seat on every call, so it refuses a session whose
+			// surface names none and mints no endpoint for it.
+			dev := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
 			endpoint := bridge.Open(&mcpbridge.Session{
 				RunID: "run-1", Handle: "dev", Role: "Dev",
-				Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+				Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+					ForTurn(&turnctx.Turn{RunID: "run-1", Seat: dev,
+						Org: &org.Organization{Name: "Acme", Roles: []*org.Role{dev}}}),
 			})
 			t.Cleanup(func() { bridge.Close("run-1") })
 			if !strings.HasPrefix(endpoint, want+mcpbridge.PathPrefix) {
