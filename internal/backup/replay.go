@@ -129,14 +129,16 @@ func (w window) owesReplayed(ref reference) bool {
 // superset of what the restored rows name, and the backup never has to decide
 // which records apply. A record this build cannot read that may write a
 // declared table refuses the backup ([objstore.ErrRecordUnreadable]): it may
-// name an object the restore needs, and nobody can tell which.
+// name an object the restore needs, and nobody can tell which. And EVERY
+// RECORD IS A SIGNED FRAME, opened and verified before it is read
+// ([objectPass.noteRecord]).
 func (p *objectPass) readWindow(ctx context.Context, nc *nats.Conn, api jsapi.API,
 	m Manifest, cursors map[string]statelog.FileCursor) error {
 
 	if len(p.required) == 0 {
 		return nil
 	}
-	logs, err := declaringLogs(p.required)
+	logs, err := declaringLogs(p.required, p.verifiers)
 	if err != nil {
 		return err
 	}
@@ -162,19 +164,47 @@ func (p *objectPass) readWindow(ctx context.Context, nc *nats.Conn, api jsapi.AP
 	return nil
 }
 
-// declaringLog is one log a Required table is written by, and every Required
-// table it writes.
+// declaringLog is one log a Required table is written by, every Required table
+// it writes, and the verifier its records' frames are opened with.
 type declaringLog struct {
-	stream, deferred string
-	tables           []objstore.ReferenceTable
+	stream, deferred, domain string
+	tables                   []objstore.ReferenceTable
+	verifier                 *statelog.Verifier
+}
+
+// verifiers is a verifier for the domain of every Required table among
+// tables, keyed by domain, each opening that domain's frames under ring.
+//
+// PER DOMAIN, as the applier's are: a record's signature binds the name of the
+// domain whose log it was appended to, so one verifier for every log would
+// open none of them (statelog's deriveRecordKey).
+func verifiers(tables []objstore.ReferenceTable, ring statelog.Keyring) (map[string]*statelog.Verifier, error) {
+	out := map[string]*statelog.Verifier{}
+	for _, t := range tables {
+		if t.Standing != objstore.Required {
+			continue
+		}
+		if _, made := out[t.Domain]; made {
+			continue
+		}
+		v, err := statelog.NewVerifier(t.Domain, ring)
+		if err != nil {
+			return nil, err
+		}
+		out[t.Domain] = v
+	}
+	return out, nil
 }
 
 // declaringLogs groups the Required tables by the log that writes them, sorted
-// by stream so a refusal names the same log every time. Each was validated to
-// name its log ([objstore.ReferenceTable.ValidateLog]); two tables of one log
-// naming two deferred-record tables are declarations that disagree about one
-// domain, and are refused rather than read twice.
-func declaringLogs(required []objstore.ReferenceTable) ([]declaringLog, error) {
+// by stream so a refusal names the same log every time, each with the verifier
+// of its domain from verified. Each was validated to name its log
+// ([objstore.ReferenceTable.ValidateLog]); two tables of one log naming two
+// deferred-record tables, or two domains, are declarations that disagree about
+// one log, and are refused rather than read twice.
+func declaringLogs(required []objstore.ReferenceTable,
+	verified map[string]*statelog.Verifier) ([]declaringLog, error) {
+
 	byStream := map[string]*declaringLog{}
 	var out []*declaringLog
 	for _, t := range required {
@@ -183,7 +213,13 @@ func declaringLogs(required []objstore.ReferenceTable) ([]declaringLog, error) {
 		}
 		l, seen := byStream[t.Log]
 		if !seen {
-			l = &declaringLog{stream: t.Log, deferred: t.Deferred}
+			v, held := verified[t.Domain]
+			if !held {
+				return nil, fmt.Errorf("backup: no verifier for %s, whose log %s a "+
+					"restore replays — its records cannot be read for the files they name",
+					t.Domain, t.Log)
+			}
+			l = &declaringLog{stream: t.Log, deferred: t.Deferred, domain: t.Domain, verifier: v}
 			byStream[t.Log] = l
 			out = append(out, l)
 		}
@@ -191,6 +227,11 @@ func declaringLogs(required []objstore.ReferenceTable) ([]declaringLog, error) {
 			return nil, fmt.Errorf("backup: %s and %s are both written by %s and name its "+
 				"deferred records %s and %s — one log's domain defers into one table",
 				l.tables[0].Table, t.Table, t.Log, l.deferred, t.Deferred)
+		}
+		if l.domain != t.Domain {
+			return nil, fmt.Errorf("backup: %s and %s are both written by %s and name its "+
+				"domain %s and %s — one log is one domain's, and its records are signed "+
+				"under that domain's name", l.tables[0].Table, t.Table, t.Log, l.domain, t.Domain)
 		}
 		l.tables = append(l.tables, t)
 	}
@@ -210,9 +251,35 @@ func declaringLogs(required []objstore.ReferenceTable) ([]declaringLog, error) {
 	return logs, nil
 }
 
-// noteRecord folds one record of l into the window through every table l
-// writes, naming where it came from in a refusal.
-func (p *objectPass) noteRecord(l declaringLog, where string, payload []byte) error {
+// noteRecord folds one record of l — framed, the bytes the broker stores —
+// into the window through every table l writes, naming where it came from in a
+// refusal.
+//
+// THE FRAME IS OPENED AND VERIFIED FIRST, as statelog's verified log opens one
+// for every reader that decodes a log straight off it (statelog.VerifiedLog):
+// each declaration's Records decodes a record's BODY, and handed the frame it
+// read every signed record as one no build reads. Strict, for the verified
+// log's reason — what the backup decides from a record is which files it
+// carries — so a record under a key this node does not hold refuses the
+// backup ([statelog.ErrRecordUnverified]) rather than being read for files on
+// trust: its node holds a keyring short of the fleet's, whose applier is
+// holding the same record back, and the remedy is the key. A frame the
+// keyring does not open at all is not this fleet's ([statelog.ErrRecordTampered])
+// and is refused for the same reason the applier refuses it.
+func (p *objectPass) noteRecord(l declaringLog, where string, framed []byte) error {
+	payload, verdict := l.verifier.Open(framed)
+	switch verdict {
+	case statelog.Verified:
+	case statelog.KeyUnknown:
+		return fmt.Errorf("backup: %s: %w (this node holds %v) — a restore replays it "+
+			"and it may name a file this backup would not carry; add the key it was "+
+			"signed under to secrets.keys and restart this node, or take the backup "+
+			"from a node that holds it", where, statelog.ErrRecordUnverified,
+			l.verifier.KeyIDs())
+	default:
+		return fmt.Errorf("backup: %s: %w — the log a restore replays holds bytes "+
+			"no node of this fleet signed", where, statelog.ErrRecordTampered)
+	}
 	for _, t := range l.tables {
 		refs, err := t.Records(payload)
 		if err != nil {
@@ -244,7 +311,8 @@ func (p *objectPass) noteRecord(l declaringLog, where string, payload []byte) er
 const deferredPage = statelog.ReprocessPage
 
 // deferredRecord is one record the copy's applier deferred: where it sits on
-// its log, packed, and the bytes the broker stored.
+// its log, packed, and the bytes the broker stored — its signed frame, which
+// is what the framework retains.
 type deferredRecord struct {
 	position int64
 	payload  []byte

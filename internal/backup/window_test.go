@@ -1,6 +1,7 @@
 package backup_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -47,15 +48,39 @@ func trackerLog(t *testing.T, nc *nats.Conn) jetstream.Stream {
 	return stream
 }
 
-// appendRecord publishes payload onto the tracker's log and answers its
-// sequence.
-func appendRecord(t *testing.T, nc *nats.Conn, payload []byte) uint64 {
+// suiteRing is the keyring every record this suite puts on a log is signed
+// under, and the one each backup it takes is handed: a log holds signed frames
+// and nothing else (ADR-0031), so a record a case appends is sealed exactly as
+// the framework's own publisher seals one.
+var suiteRing = statelog.OneKey("suite", "backup-suite-material")
+
+// seal frames body as the tracker's write authority appends it, signed under
+// ring's active key.
+func seal(t *testing.T, ring statelog.Keyring, body []byte) []byte {
+	t.Helper()
+	signer, err := statelog.NewSigner(tracker.Domain{}.Name(), ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer.Seal(body)
+}
+
+// appendRecord publishes body onto the tracker's log, sealed under the suite's
+// keyring, and answers its sequence.
+func appendRecord(t *testing.T, nc *nats.Conn, body []byte) uint64 {
+	t.Helper()
+	return appendFrame(t, nc, seal(t, suiteRing, body))
+}
+
+// appendFrame publishes framed onto the tracker's log as it is — a record a
+// case seals itself, under another key or none — and answers its sequence.
+func appendFrame(t *testing.T, nc *nats.Conn, framed []byte) uint64 {
 	t.Helper()
 	js, err := jetstream.New(nc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ack, err := js.Publish(t.Context(), "crewlet.tracker.log.test", payload)
+	ack, err := js.Publish(t.Context(), "crewlet.tracker.log.test", framed)
 	if err != nil {
 		t.Fatalf("append to the tracker's log: %v", err)
 	}
@@ -365,14 +390,23 @@ func TestABackupCarriesAnObjectNamedAfterItsCopy(t *testing.T) {
 	})
 }
 
-// deferRecord stores payload as a record the copy's tracker applier deferred
-// at seq.
-func deferRecord(t *testing.T, db *store.DB, seq int64, payload []byte) {
+// deferRecord stores body as a record the copy's tracker applier deferred at
+// seq, sealed under the suite's keyring.
+func deferRecord(t *testing.T, db *store.DB, seq int64, body []byte) {
 	t.Helper()
-	env, err := tracker.DecodeEnvelope(payload)
+	deferFrame(t, db, seq, body, seal(t, suiteRing, body))
+}
+
+// deferFrame stores framed — body, as some writer framed it — as a record the
+// copy's tracker applier deferred at seq: the bytes the broker stored, which
+// is what the framework retains (statelog's deferred-record table).
+func deferFrame(t *testing.T, db *store.DB, seq int64, body, framed []byte) {
+	t.Helper()
+	env, err := tracker.DecodeEnvelope(body)
 	if err != nil {
 		t.Fatal(err)
 	}
+	payload := framed
 	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_log_deferred
 			(position, subject, subject_kind, subject_id, version, payload, stored_at)
@@ -467,6 +501,70 @@ func TestABackupRefusesALogRecordItCannotRead(t *testing.T) {
 	}
 }
 
+// A RECORD THIS NODE CANNOT VERIFY REFUSES THE BACKUP. Every record on a log
+// is a signed frame (ADR-0031), and what a declaration reads for the files a
+// record names is the body inside it — so the backup opens each frame as the
+// applier a restore replays it through does, and decides from a body only
+// once its signature holds. One signed under a key this node does not hold is
+// refused naming that verdict, and so is one no key of the fleet opens: read
+// on trust, either could name a file the restore never does, or hide one it
+// does. In the log past the copy and among the records the copy deferred
+// alike, since a restore applies both.
+func TestABackupRefusesARecordItCannotVerify(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		frame func(t *testing.T, body []byte) []byte
+		want  error
+	}{
+		"signed under a key this node does not hold": {
+			frame: func(t *testing.T, body []byte) []byte {
+				return seal(t, statelog.OneKey("rotated-in", "material this node lacks"), body)
+			},
+			want: statelog.ErrRecordUnverified,
+		},
+		"signed by nothing": {
+			frame: func(_ *testing.T, body []byte) []byte { return body },
+			want:  statelog.ErrRecordTampered,
+		},
+		"changed after it was signed": {
+			frame: func(t *testing.T, body []byte) []byte {
+				framed := seal(t, suiteRing, body)
+				// A BYTE OF THE PATH, so the body still decodes and
+				// only the signature can tell.
+				at := bytes.LastIndex(framed, []byte("new.md"))
+				framed[at] = 'x'
+				return framed
+			},
+			want: statelog.ErrRecordTampered,
+		},
+	} {
+		for _, deferred := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, deferred %v", name, deferred), func(t *testing.T) {
+				t.Parallel()
+				db := openStore(t)
+				nc := embeddedNATS(t)
+				trackerLog(t, nc)
+				appendBarriers(t, nc, 3)
+				seedCursor(t, db, trackerLogStream, 1, 3)
+				files, _ := filesStore(t)
+				held := upload(t, files, "named by a record this node cannot verify")
+				body := fileRecord(t, "ENG", "new.md", &held[0])
+				if deferred {
+					deferFrame(t, db, 2, body, tc.frame(t, body))
+				} else {
+					appendFrame(t, nc, tc.frame(t, body))
+				}
+				dir := filepath.Join(t.TempDir(), "unverified")
+				_, err := windowService(t, db, nc, &backup.Objects{Open: files.Open}).Take(t.Context(), dir)
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("Take = %v, want %v", err, tc.want)
+				}
+				noManifest(t, dir)
+			})
+		}
+	}
+}
+
 // A WINDOW WITH A HOLE REFUSES THE BACKUP: a record the log no longer holds
 // between the copy and the snapshot is one whose file nobody can say was
 // carried, and a reader that stepped over it would leave the file uncounted.
@@ -505,12 +603,16 @@ func TestABackupReadsPastARecordAtTheTransportCeiling(t *testing.T) {
 	seedCursor(t, db, trackerLogStream, 1, 3)
 	files, _ := filesStore(t)
 	held := upload(t, files, "written after the largest record a log holds")
+	// THE FRAME IS WHAT REACHES THE CEILING, signature and all, since the
+	// frame is what the broker stores and counts.
+	frame := len(seal(t, suiteRing, nil))
 	head := `{"v":1,"subject":{"kind":"barrier"},"scope":"s","pad":"`
-	largest := []byte(head + strings.Repeat("x", queue.MaxPayloadBytes-len(head)-2) + `"}`)
+	largest := seal(t, suiteRing,
+		[]byte(head+strings.Repeat("x", queue.MaxPayloadBytes-frame-len(head)-2)+`"}`))
 	if len(largest) != queue.MaxPayloadBytes {
 		t.Fatalf("the padded record is %d bytes, want the ceiling %d", len(largest), queue.MaxPayloadBytes)
 	}
-	appendRecord(t, nc, largest)
+	appendFrame(t, nc, largest)
 	appendFile(t, nc, "ENG", "after.md", &held[0])
 	dir := filepath.Join(t.TempDir(), "ceiling")
 	manifest, err := windowService(t, db, nc, &backup.Objects{Open: files.Open}).Take(t.Context(), dir)

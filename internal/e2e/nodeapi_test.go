@@ -196,6 +196,7 @@ func wireAPI(
 		Store: backends.Store, Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
 		Conn: backends.Conn(), API: backends.API(),
 		Holds: backends.Fleet, Backups: backends.Fleet, NodeID: nodeID,
+		Keyring: e.RecordKeyring(),
 		// AS cmd/crewlet WIRES IT, the stream included: a backup of a fleet
 		// whose files ride the broker's bucket snapshots that stream and
 		// checks each object it names, rather than copying them beside it.

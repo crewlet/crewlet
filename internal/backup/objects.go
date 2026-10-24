@@ -21,6 +21,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -246,6 +247,10 @@ type objectPass struct {
 	// deferred, with how many it answered — nil but in a test.
 	deferredRead func(rows int)
 
+	// verifiers opens each declaring log's signed frames, by domain
+	// ([verifiers]), under the service's keyring.
+	verifiers map[string]*statelog.Verifier
+
 	// win is what the records past the copy name, read once the streams
 	// are snapshotted ([objectPass.readWindow]) and only then.
 	win window
@@ -300,6 +305,13 @@ func (s *Service) newObjectPass(ctx context.Context, dir, copyPath string) (*obj
 		if err := t.ValidateLog(); err != nil {
 			return nil, fmt.Errorf("backup: %w", err)
 		}
+	}
+	// EVERY DECLARING LOG'S VERIFIER BEFORE A BYTE IS READ, for the reason
+	// each declaration is held to name its log here: a keyring that cannot
+	// open one is found now, not once the copy has been carried.
+	var err error
+	if p.verifiers, err = verifiers(p.required, s.ring); err != nil {
+		return nil, fmt.Errorf("backup: open the declaring logs' records: %w", err)
 	}
 	if len(p.required) > 0 && !p.inStream() {
 		p.prev = s.previousObjects(ctx, dir)

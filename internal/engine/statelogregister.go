@@ -916,3 +916,11 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 	}
 	return ring
 }
+
+// RecordKeyring is the keyring this node's state-log records are signed and
+// verified under — [recordKeyring] over its own Tier A — for the one reader
+// outside the engine that opens a log's frames itself: the backup, which reads
+// the records a restore replays past its store copy for the files they name
+// (internal/backup, ADR-0048). Handed this rather than reading Tier A again,
+// so the backup and the appliers can never open a record under two keyrings.
+func (e *Engine) RecordKeyring() statelog.Keyring { return recordKeyring(e.boot) }

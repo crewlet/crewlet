@@ -10,10 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// payloadAt is the record the log holds at seq, as the broker stores it.
+// payloadAt is the body of the record the log holds at seq: the signed frame
+// the broker stores, opened and verified as a backup opens it before handing
+// it to the declaration's reader (ADR-0031, ADR-0048).
 func (r *roundTrip) payloadAt(t *testing.T, seq uint64) []byte {
 	t.Helper()
-	_, payload, _, ok, err := r.log.At(t.Context(), seq)
+	_, payload, _, ok, err := statelog.VerifiedLog{Log: r.log, Verifier: r.verifier}.At(t.Context(), seq)
 	if err != nil || !ok {
 		t.Fatalf("read the log at %d: ok %v, %v", seq, ok, err)
 	}

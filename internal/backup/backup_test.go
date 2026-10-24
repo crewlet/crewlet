@@ -180,9 +180,14 @@ func service(t *testing.T, db *store.DB, nc *nats.Conn) *backup.Service {
 }
 
 // build is New for a case that supplies every required field, failing the
-// test on a wiring mistake.
+// test on a wiring mistake — the keyring the suite signs its records under
+// included, for a case that leaves it out: every case reading a log's records
+// reads frames sealed under it, and a case about the keyring itself calls New.
 func build(t *testing.T, opts backup.Options) *backup.Service {
 	t.Helper()
+	if len(opts.Keyring.Keys) == 0 {
+		opts.Keyring = suiteRing
+	}
 	s, err := backup.New(opts)
 	if err != nil {
 		t.Fatalf("backup.New: %v", err)
@@ -480,7 +485,9 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 // node id is the subtler one: it keys the hold
 // and the announced point, so every node that named itself through
 // CREWLET_NODE_ID would share one hold and announce a point the register
-// refuses.
+// refuses. And a node holding the replicated estate needs the KEYRING its
+// logs' records are signed under, or the first file written while a backup
+// runs is a record it cannot read — refused at New, not at that record.
 func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -492,6 +499,9 @@ func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 		"Holds":   {NodeID: "n", Store: db, Estate: held, Backups: fleet},
 		"Backups": {NodeID: "n", Store: db, Estate: held, Holds: fleet},
 		"NodeID":  {NodeID: "  ", Store: db, Estate: held, Holds: fleet, Backups: fleet},
+		// A KEYRING THAT VERIFIES NOTHING, on a node whose backup reads
+		// the signed records a restore replays past its copy.
+		"Keyring": {NodeID: "n", Store: db, Estate: held, Holds: fleet, Backups: fleet},
 	} {
 		svc, err := backup.New(opts)
 		if err == nil {

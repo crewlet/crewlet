@@ -2152,6 +2152,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// own bucket, asked after once its stream is snapshotted.
 		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
 			Stream: e.ObjectsStream()},
+		// The keyring the appliers open every record with: the records a
+		// restore replays past the copy are signed frames, read for the
+		// files they name only once verified, exactly as they are applied.
+		Keyring: e.RecordKeyring(),
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
 		// process would be two sets of series for one fleet.

@@ -381,6 +381,21 @@ type Options struct {
 	// object — see [ErrObjectsUnreachable].
 	Objects *Objects
 
+	// Keyring is the fleet keyring the state logs' records are signed under
+	// (ADR-0031) — the engine's own (engine.Engine.RecordKeyring), never a
+	// second reading of Tier A. Required where the node holds the replicated
+	// estate, and refused at [New] when it cannot verify a record.
+	//
+	// WHAT THE WINDOW IS READ THROUGH: every record a restore replays past
+	// the copy — on its log, and among the records the copy deferred — is a
+	// signed frame, and the domain's reader of one record decodes the body
+	// inside it. So each frame is opened and its signature checked first,
+	// exactly as the applier a restore replays it through does, and a record
+	// this node cannot verify refuses the backup rather than being guessed
+	// at (see [objectPass.noteRecord]). A node holding no replicated estate
+	// reads no log and needs none.
+	Keyring statelog.Keyring
+
 	// Metrics is where the copy's duration is recorded. Nil records
 	// nothing, which is a legal deployment and leaves the `backup_taken`
 	// log line as the only account of how long it took.
@@ -431,7 +446,10 @@ type Service struct {
 	// tables is the declared tables a copy is read against —
 	// references.All, which only a test replaces (export_test.go), since a
 	// table no migration creates can never be in the one list.
-	tables  []objstore.ReferenceTable
+	tables []objstore.ReferenceTable
+	// ring is the keyring each declaring log's records are opened with
+	// ([Options.Keyring]).
+	ring    statelog.Keyring
 	metrics *metrics.Recorder
 	now     func() time.Time
 	// pageRead is called after each read of the copy's references — nil but
@@ -493,13 +511,26 @@ func New(opts Options) (*Service, error) {
 			"stream snapshots are raw requests, and only the API names where " +
 			"they are answered")
 	}
+	if opts.Estate == HoldsReplicated {
+		// ASKED OF EVERY DECLARING LOG'S DOMAIN NOW, rather than when its
+		// first record turns up: a keyring that cannot verify one is a
+		// wiring mistake, and found at the first record past a copy it
+		// would be a backup that works until a file is written while one
+		// runs.
+		if _, err := verifiers(references.All, opts.Keyring); err != nil {
+			return nil, fmt.Errorf("backup: Options.Keyring is required on a node holding "+
+				"the replicated estate — the records a restore replays past the copy are "+
+				"signed, and are read for the files they name only once verified; pass "+
+				"the engine's own: %w", err)
+		}
+	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{store: opts.Store, holding: opts.Estate, conn: opts.Conn, api: opts.API, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
-		tables: references.All, metrics: opts.Metrics, now: now}, nil
+		tables: references.All, ring: opts.Keyring, metrics: opts.Metrics, now: now}, nil
 }
 
 // Take writes a complete backup into dir and returns its manifest.
