@@ -83,6 +83,13 @@ const (
 	// board frames, a bound passed or a field the format does not have. The
 	// message names the place in canvas.json.
 	CodeDesignFormat Code = "design_format"
+
+	// CodeBrandFormat is a brand kit outside the brand format
+	// (internal/artifacts/brandformat): a `brand.json` that does not read, a
+	// field outside its grammar, a logo or face outside its asset rule, or a
+	// file the index does not name. The message names the file, the line
+	// where there is one, and the fix.
+	CodeBrandFormat Code = "brand_format"
 )
 
 // The warnings: legal, and almost certainly not what the author meant.
@@ -128,7 +135,7 @@ func (c Code) Refusing() bool {
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
 		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat, CodeDocFormat,
-		CodeDashboardFormat, CodeDesignFormat,
+		CodeDashboardFormat, CodeDesignFormat, CodeBrandFormat,
 	}, c)
 }
 

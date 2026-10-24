@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
@@ -160,6 +161,7 @@ type Service struct {
 	docs     *formatCache[docindex.Doc]
 	boards   *formatCache[*dashspec.Board]
 	canvases *formatCache[canvasformat.Canvas]
+	brands   *formatCache[brandformat.Brand]
 }
 
 // New builds the surface.
@@ -193,7 +195,8 @@ func New(opts Options) (*Service, error) {
 		objects: opts.Objects, workItems: opts.WorkItems, frames: opts.Frames, ready: opts.Ready, pace: pace,
 		checks: newCheckLimiter(pace),
 		decks:  newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
-		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects)}, nil
+		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects),
+		brands: newBrandCache(opts.Objects)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.

@@ -32,6 +32,7 @@ type Writes interface {
 	Create(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.CreateInput) (artifactsdomain.Published, error)
 	Publish(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.PublishInput) (artifactsdomain.Published, error)
 	AddAsset(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.AssetInput) (artifactsdomain.Asset, artifactsdomain.Written, error)
+	AdoptBrand(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.BrandAdoptInput) (artifactsdomain.Written, error)
 }
 
 // Reads is the artifacts domain's read side as the pipeline asks it.
