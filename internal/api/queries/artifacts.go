@@ -28,7 +28,7 @@ import (
 type ArtifactsReader interface {
 	artifactsapi.Lister
 	artifactsapi.SeenByReads
-	Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
+	artifactsapi.BrandReads
 	Versions(ctx context.Context, id artifacts.ID, cursor string, limit int) (
 		artifactsdomain.VersionPage, error)
 	History(ctx context.Context, id artifacts.ID, cursor string, limit int) (
@@ -71,6 +71,24 @@ func registerArtifacts(r *Registry, src ArtifactsSource, now func() time.Time) {
 	// administrators' record of what happened to all of them, the elevated
 	// reads above all (D09), decided by the company-wide trail's verb.
 	r.Register("artifact_trail", DecidedBy(authz.ActionAuditRead), s.trail)
+	// THE COMPANY'S ADOPTED BRAND, its public face: everybody's.
+	r.Register("brand", DecidedBy(authz.ActionBrandRead), s.brand)
+}
+
+// brand answers the company's adopted brand, `{"brand": null}` when none is
+// adopted, through the one answer the brand route gives
+// ([artifactsapi.Gate.Brand]).
+func (s artifactsAnswers) brand(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	asking, err := caller(ctx, "brand")
+	if err != nil {
+		return nil, err
+	}
+	answer, err := s.Gate.Brand(ctx, s.Reads, asking, fresh)
+	return answer, artifactFailure("brand", err)
 }
 
 // artifactFailure is an admission's or an artifacts read's failure in this

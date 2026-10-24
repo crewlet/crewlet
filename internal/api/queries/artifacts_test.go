@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -82,6 +83,14 @@ func (e *artifactsEstate) History(context.Context, artifacts.ID, string, int) (a
 
 func (e *artifactsEstate) Assets(context.Context, artifacts.ID) ([]artifactsdomain.Asset, error) {
 	return nil, nil
+}
+
+func (e *artifactsEstate) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	return artifactsdomain.Adoption{}, false, nil
+}
+
+func (e *artifactsEstate) BrandFile(context.Context, objstore.Hash) (artifactsdomain.BrandFile, error) {
+	return artifactsdomain.BrandFile{}, artifactsdomain.ErrNotFound
 }
 
 func (e *artifactsEstate) Usage(context.Context) (artifactsdomain.Usage, error) {
@@ -154,6 +163,7 @@ func TestEveryArtifactsQuestionDeclaresWhoAsksIt(t *testing.T) {
 		"artifact_access":   "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":    "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":    "decided_by:" + string(authz.ActionAuditRead),
+		"brand":             "decided_by:" + string(authz.ActionBrandRead),
 	}
 	bare, r := queries.NewRegistry(), queries.NewRegistry()
 	queries.Register(bare, queries.Sources{})
