@@ -235,7 +235,46 @@ func companyResolver(ctx context.Context, environ config.Source, company *config
 		closeStore()
 		return nil, nil, nil, fmt.Errorf("read the secret store: %w", err)
 	}
+	sayWhatAStoppedNodeCannotRead(notes, company, scope, values, boot.Store.Path)
 	return config.WithStore(config.MapSource(values)), boot, closeStore, nil
+}
+
+// sayWhatAStoppedNodeCannotRead names each value the command reads that a
+// stopped node's own table and the environment both leave unset.
+//
+// THE TABLE IS NOT THE FLEET'S STORE. It holds what was stored while the
+// engine was stopped, and the engine moves those rows onto the fleet at its
+// next start and deletes them here ([fleetsecrets.Migrate]); the fleet's own
+// rows are on the coordination KV, which a stopped engine is not serving.
+// So a name in neither place may be one the fleet holds, and this run
+// cannot tell — it resolves it as unset, which for a key a provisioner
+// mints when it resolves empty replaces a working one. Said on every run
+// that meets one, naming the ways to the fleet's values, rather than
+// refused: before a node's first start the table is the whole store, and a
+// value nobody has stored yet is exactly what `crewlet llm login` and a
+// first provisioning run are there to write.
+func sayWhatAStoppedNodeCannotRead(notes io.Writer, company *config.Company,
+	scope readScope, local map[string]string, storePath string) {
+
+	var unread []string
+	for _, name := range scopedNames(company, scope) {
+		if _, stored := local[name]; stored {
+			continue
+		}
+		if _, exported := os.LookupEnv(name); exported {
+			continue
+		}
+		unread = append(unread, "${"+name+"}")
+	}
+	if len(unread) == 0 {
+		return
+	}
+	fmt.Fprintf(notes, "this node's engine is not running, so the fleet's stored "+
+		"values cannot be read: %s — in neither %s, which holds only what was "+
+		"stored while the engine was stopped, nor the environment — resolve as "+
+		"unset here. If the fleet holds any of them, start the engine and re-run, "+
+		"or name a running node with -api.\n",
+		strings.Join(unread, ", "), storePath)
 }
 
 // companyBootstrap is the Tier A a command reading the company runs under,

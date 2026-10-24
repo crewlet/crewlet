@@ -570,6 +570,66 @@ func TestAGitLabProvisionThroughANodeRevealsOnlyItsOwnFields(t *testing.T) {
 	}
 }
 
+// A STOPPED NODE NAMES WHAT IT CANNOT READ. Its own table holds only what
+// was stored while the engine was stopped — the engine moves those rows onto
+// the fleet at its next start — so a value the command reads that neither
+// the table nor the environment holds may be one the fleet has, and the run
+// resolves it as unset: for a signing key, the signal to mint over a working
+// one. Only what THIS command reads is named, and a run that has everything
+// it reads says nothing.
+func TestAStoppedNodeNamesTheValuesItCannotRead(t *testing.T) {
+	cfg := bootstrapWithKeyring(t, "k1")
+	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_URL",
+		"-value", "https://gitlab.example.com"); err != nil {
+		t.Fatalf("seed the store: %v (%s)", err, errs)
+	}
+	t.Setenv("MATTERMOST_URL", "https://chat.example.com")
+
+	for _, tc := range []struct {
+		command      string
+		scope        readScope
+		unread, read []string
+	}{
+		{
+			"crewlet gitlab provision", gitlabProvisionReads,
+			[]string{"${GITLAB_SIGNING_SECRET}"},
+			[]string{"${GITLAB_URL}", "${GITLAB_READ_TOKEN}"},
+		},
+		{
+			"crewlet mattermost doctor", mattermostDoctorReads,
+			[]string{"${MATTERMOST_BOT_CEO}", "${MATTERMOST_BOT_SWE}"},
+			[]string{"${MATTERMOST_URL}"},
+		},
+		{"crewlet mattermost provision", mattermostProvisionReads, nil, nil},
+	} {
+		var notes bytes.Buffer
+		_, _, closeEnv, err := companyResolver(t.Context(), noEnviron, scopeCompany(t),
+			tc.scope, cfg, "", &notes)
+		if err != nil {
+			t.Fatalf("%s: companyResolver on a stopped node: %v", tc.command, err)
+		}
+		closeEnv()
+		if len(tc.unread) == 0 {
+			if notes.Len() > 0 {
+				t.Errorf("%s reads nothing a stopped node lacks, and said %q",
+					tc.command, notes.String())
+			}
+			continue
+		}
+		for _, want := range append([]string{"-api", "index.db"}, tc.unread...) {
+			if !strings.Contains(notes.String(), want) {
+				t.Errorf("%s: the note omits %q: %q", tc.command, want, notes.String())
+			}
+		}
+		for _, answered := range tc.read {
+			if strings.Contains(notes.String(), answered) {
+				t.Errorf("%s: the note names %s, which the table, the environment or "+
+					"another command answers: %q", tc.command, answered, notes.String())
+			}
+		}
+	}
+}
+
 // A READ THE NODE REFUSES SAYS BOTH WHY, AND WHAT THE READ NEEDS.
 //
 // A machine token is refused every reveal, whatever it carries, and the
