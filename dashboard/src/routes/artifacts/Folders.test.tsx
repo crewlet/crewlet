@@ -397,6 +397,9 @@ describe("Move to…", () => {
       "#/artifacts",
     );
     const dialog = screen.getByRole("dialog", { name: "Move “Pricing FAQ”" });
+    // ON A PHONE, THE WHOLE WINDOW: the kit's full-height sheet, so the list
+    // is more than a few rows a screen.
+    expect(dialog.closest(".crewlet-modal-overlay--phone-sheet")).not.toBeNull();
     const options = within(dialog).getAllByRole("option");
     expect(options.map((o) => o.textContent)).toEqual([
       "Top level",
@@ -443,6 +446,8 @@ describe("Move to…", () => {
     fireEvent.click(within(dialog).getByRole("option", { name: "Marketing" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Move here" }));
     const widen = await screen.findByRole("dialog", { name: "Let more people see “Board”?" });
+    // Every step keeps the one shape, so the dialog does not change size between them.
+    expect(widen.closest(".crewlet-modal-overlay--phone-sheet")).not.toBeNull();
     expect(widen.textContent).toContain("Everyone at FairSplit");
     fireEvent.click(within(widen).getByRole("button", { name: "Move it" }));
     await waitFor(() => expect(onMoved).toHaveBeenCalled());

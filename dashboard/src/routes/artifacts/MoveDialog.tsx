@@ -26,6 +26,14 @@
  * see is the one move that changes who sees something (the folder, never
  * what is in it), so the engine refuses it until the reader has seen that
  * said and confirmed it here.
+ *
+ * # On a phone, the whole window
+ *
+ * Under the phone breakpoint every step of the dialog (the list, a new
+ * top-level folder, the widening question) is the kit's full-height sheet
+ * (`phoneSheet`): a dialog inset from every edge left a few rows of the list
+ * on the screen at a time, and one shape for every step keeps the dialog from
+ * changing size while the reader moves between them.
  */
 
 import { useMemo, useState, type ReactNode } from "react";
@@ -347,6 +355,7 @@ export function MoveDialog({
         onClose={onClose}
         title="New folder"
         placement="top"
+        phoneSheet
         onBack={back}
         backLabel="Back to Move to…"
         footer={
@@ -380,6 +389,7 @@ export function MoveDialog({
         onClose={onClose}
         title={`Let more people see “${subject.folder.name}”?`}
         placement="top"
+        phoneSheet
         footer={
           <>
             <Button size="small" variant="ghost" onClick={() => setStep("choose")}>
@@ -414,6 +424,7 @@ export function MoveDialog({
       onClose={onClose}
       title={title}
       placement="top"
+      phoneSheet
       footer={
         <>
           <Button size="small" variant="ghost" onClick={onClose}>
