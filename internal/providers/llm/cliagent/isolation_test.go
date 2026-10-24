@@ -119,11 +119,11 @@ func TestThePiProfileAdmitsNothingFromTheHost(t *testing.T) {
 		}
 	}
 	// --system-prompt REPLACES; --append-system-prompt is the other half of
-	// the pair and would leave the harness's own prompt in front of the
-	// seat's.
-	if joined := strings.Join(p.SystemPromptArgs, " "); strings.Contains(joined, "--append") {
-		t.Errorf("system_prompt_args = %v appends rather than replaces, so the "+
-			"harness's identity sits over the top of the seat's", p.SystemPromptArgs)
+	// the pair and keeps the harness's own prompt in front of the seat's, so
+	// on the replacing channel it would break that channel's one promise.
+	if joined := strings.Join(p.SystemPrompt.Args, " "); strings.Contains(joined, "--append") {
+		t.Errorf("system_prompt.args = %v appends rather than replaces, so the "+
+			"harness's identity sits over the top of the seat's", p.SystemPrompt.Args)
 	}
 	// `--` before the prompt: this is the only built-in whose vendor offers
 	// the separator, and without it a transcript that happens to begin with
@@ -152,7 +152,7 @@ func TestThePiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	for _, a := range p.ModelArgs {
 		args = append(args, strings.ReplaceAll(a, "{model}", "anthropic/claude-sonnet-4.6"))
 	}
-	for _, a := range p.SystemPromptArgs {
+	for _, a := range p.SystemPrompt.Args {
 		args = append(args, strings.ReplaceAll(a, "{system}", "You are Agent CTO."))
 	}
 	args = append(args, p.PromptArgs...)

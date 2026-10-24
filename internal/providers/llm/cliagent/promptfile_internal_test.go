@@ -83,7 +83,8 @@ func TestPromptFileLandsBesideTheSystemPromptAndIsNotIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	systemArgv, err := systemArgs([]string{"--system-prompt-file", "{file}"}, nil, "the identity", dir)
+	systemArgv, err := systemArgs(
+		cliprofile.Channel{Args: []string{"--system-prompt-file", "{file}"}}, "the identity", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,8 +386,8 @@ func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 // [cliprofile.Builtin] promises one because callers merge overrides into what they get,
 // and the table behind it is a package-level map decoded once — so a caller
 // that appends to a slice it was handed rewrites what every later provider
-// reads. Two argv fields were backed by the embedded table this way,
-// SystemPromptArgs and PromptArgs, and the reason to check the whole struct
+// reads. Two argv fields were backed by the embedded table this way, the
+// system prompt's and PromptArgs, and the reason to check the whole struct
 // rather than those two is that adding a field and forgetting to clone it is
 // the actual failure mode.
 func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
@@ -400,7 +401,7 @@ func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
 		// slice header the caller was given.
 		for _, s := range [][]string{
 			first.VersionArgs, first.CompleteArgs, first.ModelArgs,
-			first.SystemPromptArgs, first.PromptArgs, first.LoginArgs,
+			first.SystemPrompt.Args, first.AppendSystemPrompt.Args, first.PromptArgs, first.LoginArgs,
 			first.CaptureTokenArgs, first.StatusArgs, first.LogoutArgs,
 			first.PassthroughEnv, first.CredentialPaths, first.VolatilePaths,
 			first.HostCredentialPaths, first.TextEvents, first.EventTypePath,

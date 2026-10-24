@@ -141,6 +141,35 @@ func TestALoopEndsWhenTheModelStopsAskingForTools(t *testing.T) {
 	}
 }
 
+// Every round of the loop is a seat at work, and says so: a backend that runs a
+// vendor's harness keeps the harness's own system prompt for exactly these
+// calls (llm.Request.Agent). A round sent unmarked runs as a text function,
+// with the vendor's prompt replaced, so a seat would lose the harness on the
+// very calls it exists for — and nothing else would say it had.
+func TestEveryRoundIsSentAsASeatAtWork(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "thinking", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{Content: "finished"},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+
+	if _, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5,
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(p.seen) != 2 {
+		t.Fatalf("the provider saw %d rounds, want 2", len(p.seen))
+	}
+	for i, req := range p.seen {
+		if !req.Agent {
+			t.Errorf("round %d was sent as a text function (Agent false)", i+1)
+		}
+	}
+}
+
 // The per-model token breakdown is built from completions, so the loop bills
 // against the model the ANSWER named, and falls back to the provider's
 // configured identity only for a backend that named nothing. Both directions

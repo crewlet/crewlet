@@ -1519,8 +1519,8 @@ func (p *Profile) problems() []string {
 			// home or the working directory (EISDIR on every call), and
 			// `.crewlet-config/` writes a regular FILE where the CLI and
 			// the engine need a directory, so the system prompt's write
-			// under it fails ENOTDIR on every call. The rule
-			// system_prompt_file.name is held to, for the same reason.
+			// under it fails ENOTDIR on every call. The rule a channel's
+			// file.name is held to, for the same reason.
 			// The same directory spelled as a file name, `.crewlet-config`,
 			// is a conflict between two fields rather than a shape, and
 			// [Profile.validateCollisions] refuses it.

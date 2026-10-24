@@ -30,10 +30,12 @@ func TestASystemPromptFileTemplateWrapsTheSeatsIdentity(t *testing.T) {
 		// The leading "--" is for the FAKE, not for any real profile:
 		// the fake CLI is this test binary and Go's flag package would
 		// refuse --agent-file as an unknown test flag.
-		"system_prompt_args": []any{"--", "--agent-file", "{file}"},
-		"system_prompt_file": map[string]any{
-			"name":     "crewlet-seat.md",
-			"template": "---\nname: crewlet-seat\ndescription: a seat\ntools: []\n---\n{system}",
+		"system_prompt": map[string]any{
+			"args": []any{"--", "--agent-file", "{file}"},
+			"file": map[string]any{
+				"name":     "crewlet-seat.md",
+				"template": "---\nname: crewlet-seat\ndescription: a seat\ntools: []\n---\n{system}",
+			},
 		},
 	})
 	identity := "You are Agent CTO at Nimbus, and the roster below is yours."
@@ -78,10 +80,12 @@ func TestASystemPromptFileTemplateWrapsTheSeatsIdentity(t *testing.T) {
 func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_PROMPT_FILE": "--agent-file"}, map[string]any{
-		"system_prompt_args": []any{"--", "--agent-file", "{file}"},
-		"system_prompt_file": map[string]any{
-			"name":     "crewlet-seat.md",
-			"template": "---\ntools: []\n---\n{system}",
+		"system_prompt": map[string]any{
+			"args": []any{"--", "--agent-file", "{file}"},
+			"file": map[string]any{
+				"name":     "crewlet-seat.md",
+				"template": "---\ntools: []\n---\n{system}",
+			},
 		},
 	})
 	got, err := ask(t, p, llm.Request{Messages: []llm.Message{
@@ -109,20 +113,28 @@ func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
 func TestASystemPromptTemplateWithoutAFileChannelIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, overrides := range map[string]map[string]any{
-		"argv channel": {
-			"system_prompt_args": []any{"--system-prompt", "{system}"},
-			"system_prompt_file": map[string]any{"template": "{system}"},
-		},
-		"no channel at all": {
-			"system_prompt_args": []any{},
-			"system_prompt_file": map[string]any{"template": "{system}"},
-		},
+		"argv channel": {"system_prompt": map[string]any{
+			"args": []any{"--system-prompt", "{system}"},
+			"file": map[string]any{"template": "{system}"},
+		}},
+		"no channel at all": {"system_prompt": map[string]any{
+			"args": []any{},
+			"file": map[string]any{"template": "{system}"},
+		}},
+		"an appending argv channel": {"append_system_prompt": map[string]any{
+			"args": []any{"--append-system-prompt", "{system}"},
+			"file": map[string]any{"template": "{system}"},
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			field := "system_prompt"
+			if _, ok := overrides[field]; !ok {
+				field = "append_system_prompt"
+			}
 			if _, err := cliprofile.Load("claude-code", overrides); err == nil ||
-				!strings.Contains(err.Error(), "system_prompt_file") {
-				t.Fatalf("err = %v, want a refusal naming system_prompt_file", err)
+				!strings.Contains(err.Error(), field+".file is set but the channel writes no file") {
+				t.Fatalf("err = %v, want a refusal naming %s.file", err, field)
 			}
 		})
 	}
@@ -134,7 +146,7 @@ func TestASystemPromptTemplateWithoutAFileChannelIsRefused(t *testing.T) {
 func TestASystemPromptTemplateWithoutThePlaceholderIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := cliprofile.Load("claude-code", map[string]any{
-		"system_prompt_file": map[string]any{"template": "---\ntools: []\n---\nhello"},
+		"system_prompt": map[string]any{"file": map[string]any{"template": "---\ntools: []\n---\nhello"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "{system}") {
 		t.Fatalf("err = %v, want a refusal naming the missing {system}", err)
@@ -147,9 +159,9 @@ func TestASystemPromptFileNameMayNotBeAPath(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"../escape.md", "sub/dir.md", "..", "."} {
 		_, err := cliprofile.Load("claude-code", map[string]any{
-			"system_prompt_file": map[string]any{"name": name, "template": "{system}"},
+			"system_prompt": map[string]any{"file": map[string]any{"name": name, "template": "{system}"}},
 		})
-		if err == nil || !strings.Contains(err.Error(), "system_prompt_file.name") {
+		if err == nil || !strings.Contains(err.Error(), "system_prompt.file.name") {
 			t.Errorf("name %q: err = %v, want a refusal naming the field", name, err)
 		}
 	}
@@ -169,17 +181,18 @@ func TestTheKimiProfilesAgentFileDeniesItsToolsAndKeepsTheWeb(t *testing.T) {
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
-	if p.SystemPromptFile == nil {
-		t.Fatal("kimi-code declares no system_prompt_file, so --agent-file would " +
+	spec := p.SystemPrompt.File
+	if spec == nil {
+		t.Fatal("kimi-code declares no system_prompt.file, so --agent-file would " +
 			"be handed a bare prompt and the CLI would exit on it")
 	}
-	if got := p.SystemPromptFile.Name; filepath.Ext(got) != ".md" {
+	if got := spec.Name; filepath.Ext(got) != ".md" {
 		t.Errorf("name = %q — agent files are Markdown and discovery scans for .md", got)
 	}
 	front, body, found := strings.Cut(
-		strings.TrimPrefix(p.SystemPromptFile.Template, "---\n"), "---\n")
+		strings.TrimPrefix(spec.Template, "---\n"), "---\n")
 	if !found {
-		t.Fatalf("the template carries no YAML frontmatter:\n%s", p.SystemPromptFile.Template)
+		t.Fatalf("the template carries no YAML frontmatter:\n%s", spec.Template)
 	}
 	var meta struct {
 		Name            string   `yaml:"name"`
@@ -284,9 +297,9 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	agentFile := filepath.Join(dir, p.SystemPromptFile.FileName())
+	agentFile := filepath.Join(dir, p.SystemPrompt.File.FileName())
 	if err := os.WriteFile( //nolint:gosec // a test's own temp dir
-		agentFile, []byte(p.SystemPromptFile.Render("You are Agent CTO.")), 0o600,
+		agentFile, []byte(p.SystemPrompt.File.Render("You are Agent CTO.")), 0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +308,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	for _, a := range p.ModelArgs {
 		args = append(args, strings.ReplaceAll(a, "{model}", "kimi-code/k3"))
 	}
-	for _, a := range p.SystemPromptArgs {
+	for _, a := range p.SystemPrompt.Args {
 		args = append(args, strings.ReplaceAll(a, "{file}", agentFile))
 	}
 	args = append(args, p.PromptArgs...)

@@ -81,36 +81,26 @@ func TestTheClaudeProfileKeepsTheSystemPromptOffArgv(t *testing.T) {
 	if !ok {
 		t.Fatal("no built-in claude-code profile")
 	}
-	if len(profile.SystemPromptArgs) == 0 {
-		t.Fatal("the claude-code profile carries no system_prompt_args, so every " +
+	args := profile.SystemPrompt.Args
+	if len(args) == 0 {
+		t.Fatal("the claude-code profile carries no system_prompt.args, so every " +
 			"seat's identity is delivered as an ordinary user message")
 	}
-	joined := strings.Join(profile.SystemPromptArgs, " ")
+	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "{file}") {
-		t.Errorf("system_prompt_args = %v, want a {file} substitution: {system} "+
-			"puts the company's org chart and the seat's memory on argv", profile.SystemPromptArgs)
+		t.Errorf("system_prompt.args = %v, want a {file} substitution: {system} "+
+			"puts the company's org chart and the seat's memory on argv", args)
 	}
 	if strings.Contains(joined, "{system}") {
-		t.Errorf("system_prompt_args = %v puts the prompt text on argv", profile.SystemPromptArgs)
+		t.Errorf("system_prompt.args = %v puts the prompt text on argv", args)
 	}
-	// Replace, not append: the default prompt announces a coding-agent
-	// identity over the top of whatever seat is actually being served.
-	if !strings.Contains(joined, "--system-prompt-file") {
-		t.Errorf("system_prompt_args = %v, want the replacing flag", profile.SystemPromptArgs)
+	// The replacing channel takes the replacing flag: an appending one there
+	// would keep the coding-agent prompt on calls that promised to drop it.
+	if !strings.Contains(joined, "--system-prompt-file") || strings.Contains(joined, "--append") {
+		t.Errorf("system_prompt.args = %v, want the replacing flag", args)
 	}
 }
 
-// EVERY SHIPPED PROFILE'S system_prompt_args IS SUBSTITUTABLE, and says which
-// channel it chose.
-//
-// A placeholder the code does not substitute is the failure mode with no
-// symptom: the CLI is handed the literal "{file}" as its system prompt, takes
-// it without complaint, and every seat on that provider runs with a one-word
-// identity. The two spellings are the whole vocabulary [systemArgs] knows.
-//
-// The table is the SHIPPED set, so adopting a flag for a new CLI has to come
-// through here — which is where the argv trade gets stated rather than
-// stumbled into.
 // envChannel marks a CLI that reads its system prompt from a FILE named by an
 // environment variable rather than from argv — a third channel, and the one
 // `--help` never shows.
@@ -122,6 +112,18 @@ const envChannel = "{env}"
 // placeholder at all.
 const discoveredChannel = "{discovered}"
 
+// EVERY SHIPPED PROFILE'S REPLACING CHANNEL IS SUBSTITUTABLE, and says which
+// carrier it chose.
+//
+// A placeholder the code does not substitute is the failure mode with no
+// symptom: the CLI is handed the literal "{file}" as its system prompt, takes
+// it without complaint, and every seat on that provider runs with a one-word
+// identity. The two spellings are the whole vocabulary [systemArgs] knows.
+//
+// The table is the SHIPPED set, so adopting a flag for a new CLI has to come
+// through here — which is where the argv trade gets stated rather than
+// stumbled into. It records system_prompt, the channel that replaces the
+// CLI's own prompt; the one-shape rules below hold both channels.
 func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing.T) {
 	t.Parallel()
 	// Checked against each CLI's own --help — or, where the vendor
@@ -162,9 +164,9 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		"muse-code": "",
 		// 0.42.x, MoonshotAI's OWN CLI from @moonshot-ai/kimi-code:
 		// --agent-file, a path — but an AGENT FILE rather than a bare
-		// prompt, which is what system_prompt_file exists for. Not the
-		// unscoped `kimi-code` package on npm, which is a Claude Code
-		// wrapper and has none of this.
+		// prompt, which is what a channel's file spec exists for. Not
+		// the unscoped `kimi-code` package on npm, which is a Claude
+		// Code wrapper and has none of this.
 		"kimi-code": "{file}",
 		// No channel. 0.21.2's identity slot is SOUL.md, a file in the
 		// CLI's home rather than a per-call argument — and this
@@ -197,68 +199,60 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 			t.Errorf("no built-in %q profile", name)
 			continue
 		}
-		joined := strings.Join(profile.SystemPromptArgs, " ")
-		// EXACTLY ONE CHANNEL, ever: a profile naming both would write the
-		// prompt to disk and then put it on argv as well, and which copy
-		// the CLI honours is the vendor's business.
-		if joined != "" && profile.SystemPromptEnv != "" {
-			t.Errorf("%s declares BOTH system_prompt_args and system_prompt_env", name)
-			continue
+		// ONE CARRIER PER CHANNEL, ever, on both: a channel naming an
+		// argv and a variable would hand the CLI the prompt twice, and
+		// one naming {file} and {system} would write the prompt to disk
+		// and then put it on argv as well.
+		for field, ch := range map[string]cliprofile.Channel{
+			"system_prompt":        profile.SystemPrompt,
+			"append_system_prompt": profile.AppendSystemPrompt,
+		} {
+			joined := strings.Join(ch.Args, " ")
+			if joined != "" && ch.Env != "" {
+				t.Errorf("%s declares BOTH %s.args and %s.env", name, field, field)
+			}
+			if strings.Contains(joined, "{file}") && strings.Contains(joined, "{system}") {
+				t.Errorf("%s %s.args = %v names both {file} and {system}", name, field, ch.Args)
+			}
 		}
-		if placeholder == envChannel {
-			if profile.SystemPromptEnv == "" {
-				t.Errorf("%s carries no system_prompt_env, so its seats' identities "+
+		ch := profile.SystemPrompt
+		joined := strings.Join(ch.Args, " ")
+		switch placeholder {
+		case envChannel:
+			if ch.Env == "" {
+				t.Errorf("%s carries no system_prompt.env, so its seats' identities "+
 					"go in the transcript although its CLI reads a file", name)
 			}
 			if joined != "" {
 				t.Errorf("%s puts the prompt on argv although its CLI reads a file: %v",
-					name, profile.SystemPromptArgs)
+					name, ch.Args)
 			}
-			continue
-		}
-		if placeholder == discoveredChannel {
-			spec := profile.SystemPromptFile
-			if spec == nil || !spec.Discovered || spec.Name == "" {
-				t.Errorf("%s discovers an agent file, but its system_prompt_file is not "+
-					"a discovered one with a name: %+v", name, spec)
+		case discoveredChannel:
+			if ch.File == nil || ch.File.Discovered != cliprofile.DiscoverySelected || ch.File.Name == "" {
+				t.Errorf("%s discovers an agent file and selects it, but its "+
+					"system_prompt.file is not a selected one with a name: %+v", name, ch.File)
 				continue
 			}
 			if joined == "" || strings.Contains(joined, "{file}") || strings.Contains(joined, "{system}") {
-				t.Errorf("%s system_prompt_args = %v, want the argv that selects the "+
-					"discovered file and nothing that carries it", name, profile.SystemPromptArgs)
+				t.Errorf("%s system_prompt.args = %v, want the argv that selects the "+
+					"discovered file and nothing that carries it", name, ch.Args)
 			}
-			continue
-		}
-		if placeholder == "" {
-			if joined != "" {
-				t.Errorf("%s declares system_prompt_args = %v, but its CLI has no "+
-					"such flag — the text would reach it as a literal argument",
-					name, profile.SystemPromptArgs)
+		case "":
+			if ch.Declared() {
+				t.Errorf("%s declares system_prompt = %+v, but its CLI has no such "+
+					"channel — the text would reach it as a literal argument, or "+
+					"nowhere", name, ch)
 			}
-			if profile.SystemPromptEnv != "" {
-				t.Errorf("%s declares system_prompt_env = %q, but its CLI reads no "+
-					"such variable", name, profile.SystemPromptEnv)
+		default:
+			if joined == "" {
+				t.Errorf("%s carries no system_prompt.args, so every seat's identity "+
+					"is delivered as an ordinary user message", name)
+				continue
 			}
-			continue
-		}
-		if joined == "" {
-			t.Errorf("%s carries no system_prompt_args, so every seat's identity "+
-				"is delivered as an ordinary user message", name)
-			continue
-		}
-		if !strings.Contains(joined, placeholder) {
-			t.Errorf("%s system_prompt_args = %v, want a %s substitution",
-				name, profile.SystemPromptArgs, placeholder)
-		}
-		// Exactly one channel, never both: a profile that names {file} AND
-		// {system} writes the prompt to disk and then puts it on argv too.
-		other := "{system}"
-		if placeholder == "{system}" {
-			other = "{file}"
-		}
-		if strings.Contains(joined, other) {
-			t.Errorf("%s system_prompt_args = %v names both channels",
-				name, profile.SystemPromptArgs)
+			if !strings.Contains(joined, placeholder) {
+				t.Errorf("%s system_prompt.args = %v, want a %s substitution",
+					name, ch.Args, placeholder)
+			}
 		}
 	}
 }
@@ -270,7 +264,7 @@ func TestSystemPromptFileIsPrivateToTheCall(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	args, err := cliagent.SystemArgsForTest(
-		[]string{"--system-prompt-file", "{file}"}, nil, "the seat's whole identity", dir)
+		cliprofile.Channel{Args: []string{"--system-prompt-file", "{file}"}}, "the seat's whole identity", dir)
 	if err != nil {
 		t.Fatal(err)
 	}

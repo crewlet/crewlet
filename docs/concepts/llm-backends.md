@@ -2401,8 +2401,9 @@ nothing but `run ended with Failed`.
 Every field a profile has, and therefore every key `overrides` accepts.
 A key not in this table is refused by name. Every mapping field
 (`config_env`, `work_config_env`, `isolation_env`, `env`, `usage`,
-`stdin_login`, `system_prompt_file`, `credential_store`) merges key by key;
-lists and single values replace wholesale.
+`stdin_login`, `system_prompt`, `append_system_prompt` and their `file`,
+`credential_store`) merges key by key; lists and single values replace
+wholesale.
 
 | Field | What it is |
 |---|---|
@@ -2412,9 +2413,8 @@ lists and single values replace wholesale.
 | `complete_args` | The argv of one completion, before the model and the prompt. |
 | `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with no element carrying `{model}` — none at all, or a flag with a fixed value — is refused. |
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
-| `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
-| `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
-| `system_prompt_file` | `{name, template, discovered}`: the file a `{file}` channel writes, and the text around `{system}`. `discovered: true` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it), selected by `system_prompt_args` without `{file}` or `{system}`. |
+| `system_prompt` | `{args, env, file}`: the channel on which the engine's system prompt **replaces** the CLI's own — taken by the auxiliary passes, and by a seat when the CLI has no `append_system_prompt`. `args` carries `{file}` (preferred) or `{system}`; `env` names a variable the CLI reads a file path from, exclusive with `args`; `file` is `{name, template, discovered}`: the file the channel writes and the text around `{system}`. `discovered: selected` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it) and `args` selects without `{file}` or `{system}`; `discovered: always` is one the CLI reads on every run, which declares the channel by itself. See [The system prompt](#the-system-prompt-in-text-mode). |
+| `append_system_prompt` | The same shape, for the channel on which the CLI's own system prompt stays in force and the engine's is **added** — taken by a seat's phases, and by an auxiliary pass when the CLI has no `system_prompt`. With neither, the system prompt rides the transcript. |
 | `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
 | `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. Only `jsonl` streams. |
 | `text_paths` | Where the answer is in a `json`/`jsonl` document. |

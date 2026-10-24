@@ -72,7 +72,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	for _, a := range p.ModelArgs {
 		args = append(args, strings.ReplaceAll(a, "{model}", "grok-4-latest"))
 	}
-	for _, a := range p.SystemPromptArgs {
+	for _, a := range p.SystemPrompt.Args {
 		args = append(args, strings.ReplaceAll(a, "{system}", "You are Agent CTO."))
 	}
 	args = append(args, p.PromptArgs...)

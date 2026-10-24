@@ -106,7 +106,7 @@ func scriptedEntry(key, endpoint, stateDir string) string {
         binary: %q
         complete_args: ["-test.run=^$"]
         model_args: ["--model", "{model}"]
-        system_prompt_args: [%q, "{file}"]
+        system_prompt: {args: [%q, "{file}"]}
         prompt_mode: stdin
         output: json
         text_paths: [["result"]]

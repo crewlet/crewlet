@@ -3,6 +3,7 @@ package cliagent
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -65,6 +66,14 @@ func runFakeCLI() {
 	if ms := os.Getenv("FAKE_SLEEP_MS"); ms != "" {
 		delay, _ := strconv.Atoi(ms)
 		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
+	if dir := os.Getenv("FAKE_RECORD_ARGV"); dir != "" {
+		// Not a mode: a record of what this invocation was handed, kept
+		// before whichever mode answers, for a case that asks what SEVERAL
+		// calls carried — the doctor's three probes — or what one call's
+		// argv held beside a reply of its own. A file per invocation,
+		// because the calls of one case may overlap.
+		fakeRecordArgv(dir)
 	}
 	switch {
 	case os.Getenv("FAKE_STORE") == "1":
@@ -267,6 +276,48 @@ func runFakeCLI() {
 	}
 	code, _ := strconv.Atoi(os.Getenv("FAKE_EXIT"))
 	os.Exit(code)
+}
+
+// fakeRecordArgv writes this invocation's argv, after the binary, as a JSON
+// array into a new file in dir. A record that cannot be written ends the run
+// non-zero, so the case reads a failed call rather than a missing record.
+func fakeRecordArgv(dir string) {
+	f, err := os.CreateTemp(dir, "argv-*.json")
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+	err = json.NewEncoder(f).Encode(os.Args[1:])
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+}
+
+// recordedArgv reads back every argv [fakeRecordArgv] wrote into dir, in no
+// particular order.
+func recordedArgv(t *testing.T, dir string) [][]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make([][]string, 0, len(entries))
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var argv []string
+		if err := json.Unmarshal(raw, &argv); err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		out = append(out, argv)
+	}
+	return out
 }
 
 // fakeProvider builds a provider whose CLI is this test binary.

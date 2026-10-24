@@ -343,7 +343,9 @@ func TestAnUnknownMarkerScopeIsRefused(t *testing.T) {
 func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := cliprofile.Load("kimi-code", map[string]any{
-		"system_prompt_args": []any{"--agent-file", "{file}", "--system-prompt", "{system}"},
+		"system_prompt": map[string]any{
+			"args": []any{"--agent-file", "{file}", "--system-prompt", "{system}"},
+		},
 	})
 	if err == nil {
 		t.Fatal("an override naming both {file} and {system} was accepted — it writes " +
@@ -361,12 +363,13 @@ func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 	} {
 		base := "kimi-code"
 		if name == "system only" {
-			// kimi-code ships a system_prompt_file, which is refused
-			// without a file channel — a different rule, tested
-			// elsewhere. Use a profile that ships neither.
+			// kimi-code's channel ships a file spec, which is refused
+			// without a file to write — a different rule, tested
+			// elsewhere. Use a profile whose channel has none.
 			base = "grok"
 		}
-		if _, err := cliprofile.Load(base, map[string]any{"system_prompt_args": override}); err != nil {
+		overrides := map[string]any{"system_prompt": map[string]any{"args": override}}
+		if _, err := cliprofile.Load(base, overrides); err != nil {
 			t.Errorf("%s: a single-placeholder override was refused: %v", name, err)
 		}
 	}
