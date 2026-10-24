@@ -31,7 +31,7 @@ import {
   type Service,
   type ServicesRun,
 } from "~/app/nav.ts";
-import { holdsAny } from "~/lib/access.ts";
+import { holdsAny, type Grant } from "~/lib/access.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { DEFAULT_RANGE, rangeOf } from "~/routes/home/model.ts";
 
@@ -106,6 +106,13 @@ export interface WidgetDef {
    * once it does. A widget whose page is hidden goes with the page.
    */
   service?: (params: Readonly<Record<string, string>>) => Service | undefined;
+  /**
+   * What the widget READS beyond its page, where that is narrower than the
+   * page: Integrations is every reader's, and its widget counts the connected
+   * apps, which is an Admin's question. A reader holding none of these is not
+   * offered it ([canUse]). Absent, the page's own access decides.
+   */
+  grants?: readonly Grant[];
   params?: readonly WidgetParam[];
   /** What this copy is called, when its params name it: "Waiting on your decision". */
   nameOf?: (params: Readonly<Record<string, string>>) => string | undefined;

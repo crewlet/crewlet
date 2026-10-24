@@ -356,7 +356,6 @@ describe("the navigation grammar", () => {
       ["live", "a2a"],
       ["live", "events"],
       ["knowledge", "diaries"],
-      ["company", "integrations"],
       ...settingsPaths(),
     ];
     expect(ADMIN_ONLY.length).toBeGreaterThan(10);
@@ -371,6 +370,9 @@ describe("the navigation grammar", () => {
       ["company", "org"],
       ["company", "org", "roster"],
       ["company", "schedules"],
+      // THE SERVICES BUILT INTO CREWLET are the overview every reader holds;
+      // the apps' state and connecting stay an Admin's, on the page itself.
+      ["company", "integrations"],
       ["company", "budgets"],
       ["live"],
       ["live", "runs"],

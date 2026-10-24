@@ -566,9 +566,11 @@ export const WORKSPACES: WorkspaceRow[] = [
     sections: [],
   },
   {
-    // THE SERVICES BUILT INTO CREWLET above the third-party apps the company
-    // connects, on one page: a company sees what it already has before what
-    // it could connect. ADMIN'S, as connecting a tool always was.
+    // THE SERVICES BUILT INTO CREWLET beside the third-party apps the company
+    // connects, in one directory grouped by need. EVERY READER'S: what the
+    // company runs is the overview every reader holds, so a reader without
+    // Admin sees the services in full and the apps with no state, while
+    // connecting and the apps' own state stay an Admin's.
     key: "integrations",
     label: "Integrations",
     icon: "plug",
@@ -578,7 +580,6 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "n",
     place: "company",
     renderer: "none",
-    grants: ["admin"],
     sections: [],
   },
   {
