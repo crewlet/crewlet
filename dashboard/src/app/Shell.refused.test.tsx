@@ -250,14 +250,18 @@ test("Settings' column is locked where a grant is, and nowhere else", async () =
   const rows = within(column).getAllByRole("link");
   const locked = rows.filter((a) => (sections.get(a.getAttribute("href") ?? "") ?? []).length > 0);
   expect(locked.length).toBeGreaterThan(5);
-  for (const a of rows) {
-    const at = a.getAttribute("href") ?? "";
-    if (locked.includes(a)) {
-      expect(a.textContent, at).toMatch(/, Needs (Admin|Worklet) access/);
-    } else {
-      expect(a.textContent, at).not.toMatch(/needs/);
+  // THE LOCKS ARE DRAWN ONCE THE SESSION HAS ANSWERED, a commit after the
+  // column itself, so they are waited for rather than read at once.
+  await waitFor(() => {
+    for (const a of rows) {
+      const at = a.getAttribute("href") ?? "";
+      if (locked.includes(a)) {
+        expect(a.textContent, at).toMatch(/, Needs (Admin|Worklet) access/);
+      } else {
+        expect(a.textContent, at).not.toMatch(/needs/);
+      }
     }
-  }
+  });
 });
 
 // A ROUTE'S OWN LOCK READS THE SESSION TOO: a session whose socket never

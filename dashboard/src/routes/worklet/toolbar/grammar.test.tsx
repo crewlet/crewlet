@@ -443,7 +443,8 @@ test("the saved view is an option in the strip rather than a chip or a menu row"
 // neither control.
 test("the month is the calendar's own control", async () => {
   await listAt("#/worklet?shape=calendar");
-  fireEvent.click(screen.getByRole("button", { name: "The month after" }));
+  // THE CALENDAR IS DRAWN A COMMIT AFTER THE LIST IS: waited for, not read.
+  fireEvent.click(await screen.findByRole("button", { name: "The month after" }));
   await waitFor(() => expect(location.hash).toContain("month="));
   expect(document.querySelector(".crewlet-filter-pill__field")).toBeNull();
 });
