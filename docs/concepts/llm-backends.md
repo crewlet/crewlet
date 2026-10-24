@@ -574,19 +574,23 @@ moves to `key` for that call.
 seat makes a call per round, so without it every round of every seat on the
 entry would start a CLI — seconds of a runtime holding one of the entry's few
 slots — only to hear the same sentence and fall through anyway. Instead every
-call to the entry fails at once as a rate limit, saying `sitting out until …`
-with the CLI's own sentence, until the window ends:
+call to the entry fails at once as a rate limit — one already queued for a slot
+as soon as it gets one — saying `sitting out until …` with the CLI's own
+sentence, until the window ends:
 
 - at the reset instant the CLI named, where its profile can read one, and never
   more than **an hour** away, so a plan you raised or a login you renewed has
   the entry back within the hour even when the vendor's window runs for days;
 - otherwise after **one minute** — which is every shipped profile today: the
-  current Claude Code prints no reset instant at all. A probe costs one process
-  launch a minute per entry; sitting out a plan that has already reset costs
-  the fallback's spend for as long as it sits.
+  current Claude Code prints no reset instant at all. A probe costs at most
+  the entry's `max_concurrent` process launches a minute — the calls that take
+  a slot once the window ends, before the first of them answers; every call
+  queued behind them is refused as soon as one reports the plan still spent.
+  Sitting out a plan that has already reset costs the fallback's spend for as
+  long as it sits.
 
 The sit-out is the entry's own, on the node that heard the sentence: every other
-node pays one call to learn the same thing, once per window. A later sit-out
+node learns the same thing from its own calls, once per window. A later sit-out
 never shortens an earlier one.
 
 **A login is never sat out.** An expired or missing login is `auth`, which also

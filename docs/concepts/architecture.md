@@ -259,9 +259,9 @@ addressed to the turn, the phase and the iteration it happened in, so a chain
 that only flaps under load is visible on the turn that paid for it rather than
 only in aggregate. Exhausting the chain publishes `llm_unavailable` and fails
 the turn. The sit-out is the node's own and is not shared with the fleet: an
-entry holds one login, every other node pays one call to learn the same thing
-once per window, and a coordination read in front of every model call would put
-the store under every turn. What a classified failure *says* — in a log line,
+entry holds one login, every other node learns the same thing from its own
+calls once per window, and a coordination read in front of every model call
+would put the store under every turn. What a classified failure *says* — in a log line,
 `llm_unavailable`, a turn's error — is the backend's own line: how the CLI
 exited and the tail of what it printed, or the vendor's own sentence for a
 spent plan or an expired login.

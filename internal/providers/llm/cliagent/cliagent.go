@@ -256,7 +256,9 @@ func (p *Provider) String() string {
 // An entry its CLI last reported spent is NOT called while it sits out
 // ([Provider.benched]): the call fails at once as a rate limit, naming the
 // instant, so the seat's chain moves to its next model without a process
-// launched to learn again what the last one said.
+// launched to learn again what the last one said. Checked as the call arrives
+// and again once it holds a slot, because a call that queued for one may have
+// waited out the very call that sat the entry out.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if err := p.benched(); err != nil {
 		return nil, err
@@ -283,6 +285,17 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// a timeout rather than fatal: nothing about the request was
 		// wrong, and the chain should be free to try another member.
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
+	}
+	// AGAIN, NOW THAT THE SLOT IS HELD. A call that queued behind a full
+	// entry passed the check above before the sit-out existed, so when the
+	// calls ahead of it report the spent plan it would otherwise take its
+	// slot, check out a home and start a whole CLI only to hear the same
+	// sentence — and every call behind it would wait for that too. Refused
+	// here, the queue drains at once, each call handing its slot to the next
+	// through the release deferred above. The check at the top stays: it
+	// spares a call that arrives during a sit-out the render and the queue.
+	if sitting := p.benched(); sitting != nil {
+		return nil, sitting
 	}
 
 	checkout, err := p.ws.Acquire(ctx, seat, callID, p)

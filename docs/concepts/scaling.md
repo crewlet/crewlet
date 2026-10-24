@@ -308,8 +308,10 @@ seat. See
 - **A spent plan's sit-out.** An entry whose CLI reported a spent plan or a rate
   limit sits out on the node that heard it, until the reset the CLI named (an
   hour at most) or for a minute where it named none. Nothing tells the other
-  nodes: each pays one call to learn the same thing once per window, which is
-  cheaper than a coordination read in front of every model call.
+  nodes: each learns the same thing from its own calls once per window — at
+  most `max_concurrent` of them, since a call queued behind those is refused
+  once one reports — which is cheaper than a coordination read in front of
+  every model call.
 - **A seat's MCP subprocesses.** They are children of the node that claimed the
   seat, and they die with the release.
 - **The tool-skill registry.** It warms a local cache rather than producing

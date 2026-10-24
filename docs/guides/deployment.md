@@ -1417,7 +1417,7 @@ from, and it is per node — so an org's ceiling becomes N × the configured
 value. Size it per node, not per company. And a spent plan: an entry whose CLI
 reported its vendor's rate limit sits out on the node that heard it — until
 the reset the CLI named, an hour at most, or for a minute — while every other
-node pays one call to learn the same thing once per window.
+node learns the same thing from its own calls once per window.
 
 For the model underneath all of this — what a node is, what the fleet shares,
 and where the constants come from — see

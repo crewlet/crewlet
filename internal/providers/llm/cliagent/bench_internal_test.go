@@ -85,6 +85,56 @@ func TestASpentPlanSitsTheEntryOutUntilItsReset(t *testing.T) {
 	}
 }
 
+// A CALL QUEUED FOR A SLOT WHEN THE ENTRY IS SAT OUT LAUNCHES NOTHING. With
+// every slot busy, a call passes the sit-out check before the spent plan is
+// reported and waits for a slot; the call ahead of it then reports the plan
+// spent. Taking the slot and starting a whole CLI to hear the same sentence is
+// what the sit-out exists to prevent, so the call is refused once it holds the
+// slot — and gives the slot back for the next one in the queue.
+//
+// Proved with the CLI taken AWAY: a call that launched one would fail as a
+// missing binary, not as the sit-out.
+//
+// Mutation: drop the check made once the slot is held, and the queued call
+// reaches the missing binary.
+func TestACallQueuedWhenTheEntryIsSatOutLaunchesNothing(t *testing.T) {
+	t.Parallel()
+	p, clock := spentProvider(t, 0)
+	p.profile.Binary = "/nonexistent/crewlet-no-cli"
+	// ONE slot, and it is taken: the call below has to queue for it.
+	p.slots = make(chan struct{}, 1)
+	p.slots <- struct{}{}
+
+	// The clock's first read is the queued call's check on arrival, which it
+	// passes, since nothing has sat the entry out yet.
+	arrived := make(chan struct{})
+	var once sync.Once
+	p.now = func() time.Time {
+		once.Do(func() { close(arrived) })
+		return clock.read()
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ask(t, p, llm.Request{})
+		done <- err
+	}()
+	<-arrived
+
+	// The call holding the slot reports the spent plan, and lets it go.
+	p.bench(time.Minute, "Claude AI usage limit reached")
+	<-p.slots
+
+	err := <-done
+	if llm.KindOf(err) != llm.KindRateLimit || !strings.Contains(err.Error(), "sitting out until") {
+		t.Fatalf("the queued call answered %v, want the sit-out — it took its slot and "+
+			"launched a CLI to hear the spent plan again", err)
+	}
+	if held := len(p.slots); held != 0 {
+		t.Errorf("%d slot(s) still held after the refusal, want the slot handed back", held)
+	}
+}
+
 // A SPENT PLAN THAT NAMED NO RESET SITS OUT A MINUTE — every shipped profile's
 // case — and a reset beyond an hour is held to the hour, so an operator who
 // signs in again or raises the plan has the entry back within it.

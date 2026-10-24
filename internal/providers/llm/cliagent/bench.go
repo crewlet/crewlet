@@ -11,7 +11,9 @@ import (
 // An entry whose CLI reported a spent plan or a rate limit SITS OUT for a
 // while, on this node: every call in that window fails at once as a rate
 // limit, so the seat's chain moves to its next model without launching a
-// process to hear the same sentence again.
+// process to hear the same sentence again — a call that arrives in it, and a
+// call that was already queued for a slot when it began, which is refused
+// once it holds the slot ([Provider.Complete]).
 //
 // # Why the backend benches itself
 //
@@ -39,12 +41,15 @@ import (
 // # On this node, and for not too long
 //
 // The bench is the provider's own and is not shared with the fleet: every
-// other node pays one call to learn the same thing, once per window. It ends
+// other node learns the same thing from its own calls, once per window. It ends
 // at the reset instant the CLI named ([cliprofile.LimitMarker]) where its
 // profile can read one, and after [limitBench] where it cannot — which is
 // every shipped profile — and never later than [maxLimitBench]. Short on
-// purpose: a probe costs one process launch, while sitting out a plan that
-// has already reset costs the fallback's spend for every minute of it.
+// purpose: a probe costs at most the entry's max_concurrent process launches
+// — the calls that take a slot once the window has ended, before the first of
+// them reports; every call queued behind them is refused once that report
+// lands — while sitting out a plan that has already reset costs the
+// fallback's spend for every minute of it.
 //
 // A LOGIN IS NOT BENCHED. `crewlet llm login` mends it — usually from another
 // process this one hears nothing from — and the very next call must find it,
@@ -55,8 +60,8 @@ import (
 // limitBench is how long an entry sits out after its CLI reported a spent plan
 // or a rate limit with no reset instant: one minute, so a window that turns
 // over is noticed within a minute — the fallback's spend for at most that
-// long — while one that has not costs one process launch a minute per entry on
-// this node rather than one per round of every seat.
+// long — while one that has not costs at most max_concurrent process launches
+// a minute per entry on this node rather than one per round of every seat.
 const limitBench = time.Minute
 
 // maxLimitBench caps a reset instant the CLI named: an hour, so an operator
