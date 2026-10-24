@@ -236,7 +236,8 @@ export interface Model {
   base: string | null;
   /** True when the setup listing was refused: a reader with no Admin. */
   guarded: boolean;
-  needs: string[];
+  /** The refusal, when [guarded] — said through `lib/refusal.ts`'s `authorityWords`. */
+  refused: RestError | null;
   managed: string | null;
   admin: boolean;
   trafficKnown: boolean;
@@ -685,7 +686,7 @@ export function useIntegrations(): Model {
     rows,
     base: setup.base?.value ?? null,
     guarded: setup.guarded,
-    needs: setup.needs,
+    refused: setup.refused,
     managed,
     admin: viewer.admin,
     trafficKnown,
