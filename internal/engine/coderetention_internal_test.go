@@ -361,7 +361,7 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 // one whose reconciler has not ticked, which the posture reads as waiting too.
 //
 // Mutations: log the boot's decline as unknown (the base) and the restart
-// behind the fleet warns; drop [dutyDecline.next] and it waits a whole tick;
+// behind the fleet warns; drop [dutyDecline.again] and it waits a whole tick;
 // judge a node with no reconciler behind whatever company it holds, and the
 // restart on the fleet's own revision declines.
 func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T) {
@@ -382,7 +382,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 			t.Fatalf("a node restarted on the fleet's revision, with no reconciler yet, ran %v and "+
 				"purged %v, want web purged: it serves the revision the pointer names", ran, report.Purged)
 		}
-		if got := p.duty.declines.next(code.RetentionInterval); got != code.RetentionInterval {
+		if got := p.duty.wait(); got != code.RetentionInterval {
 			t.Fatalf("a turn that ran its pass asks again after %v, want the duty's tick", got)
 		}
 		if lines := p.lines(t); len(lines) != 0 {
@@ -417,7 +417,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 				"DEBUG: every restart onto a revision the fleet moved past would log the warning "+
 				"that names a node that failed an apply", reason.key, reason.level)
 		}
-		if got := d.declines.next(code.RetentionInterval); got != configplane.ReconcileInterval {
+		if got := d.wait(); got != configplane.ReconcileInterval {
 			t.Fatalf("the restarted node asks again after %v, want the reconcile cadence: "+
 				"a restart would cost its purge a whole tick", got)
 		}
@@ -430,7 +430,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 			t.Fatal("the turn after the reconciler's first tick ran no pass on a node serving " +
 				"the fleet's revision")
 		}
-		if got := d.declines.next(code.RetentionInterval); got != code.RetentionInterval {
+		if got := d.wait(); got != code.RetentionInterval {
 			t.Fatalf("a turn that ran its pass asks again after %v, want the duty's tick", got)
 		}
 	})

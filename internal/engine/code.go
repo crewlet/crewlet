@@ -793,7 +793,7 @@ func (d *codeRetentionDuty) decidesFrom() []string { return []string{code.Domain
 //     repository — would purge that repository by the retention the company
 //     replaced. Stronger than the posture on purpose, and cheap: a node
 //     merely applying the revision, or starting, asks again a reconcile
-//     interval later ([dutyDecline.next]), a node that failed it a
+//     interval later ([codeRetentionDuty.wait]), a node that failed it a
 //     [code.RetentionInterval] later, and a purge is days late by design.
 func (d *codeRetentionDuty) declined(ctx context.Context) bool {
 	reason, _ := copyDeclineReason(ctx, codeRetentionDecline, d.copies, d.decidesFrom())
@@ -804,13 +804,19 @@ func (d *codeRetentionDuty) declined(ctx context.Context) bool {
 }
 
 // tick is one turn of the duty's loop, and how long the loop waits before the
-// next: [code.RetentionInterval], or sooner where the turn declined for a
-// reason that clears by itself ([dutyDecline.next]) — the boot's first turn,
-// which runs before `crewlet run` has built the reconciler, and a turn that
-// meets an activation this node is still applying.
+// next ([codeRetentionDuty.wait]).
 func (d *codeRetentionDuty) tick(ctx context.Context) time.Duration {
 	d.turn(ctx)
-	return d.declines.next(code.RetentionInterval)
+	return d.wait()
+}
+
+// wait is how long the loop waits after the turn that just ran:
+// [code.RetentionInterval], or sooner where the turn declined for a reason
+// that clears by itself ([dutyDecline.again]) — the boot's first turn, which
+// runs before `crewlet run` has built the reconciler, and a turn that meets an
+// activation this node is still applying.
+func (d *codeRetentionDuty) wait() time.Duration {
+	return cmp.Or(d.declines.again(), code.RetentionInterval)
 }
 
 // turn is one turn of the duty: claimed, kept while its pass runs, and the

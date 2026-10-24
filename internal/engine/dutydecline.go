@@ -60,7 +60,7 @@ import (
 // every deploy, which teaches whoever reads the log to ignore the one a node
 // that failed an apply raises. So a reason that clears by itself in seconds is
 // logged at DEBUG, and the duty ASKS AGAIN at the reconcile cadence rather than
-// a whole tick later ([declineReason.again], [dutyDecline.next]); a reason that
+// a whole tick later ([declineReason.again], [dutyDecline.again]); a reason that
 // says something is wrong is a WARN. And a decline is ONE EPISODE however many
 // reasons it passes through: its `_resumed` line is logged at the loudest
 // level any of them asked for, so a node that warned and then went quiet on
@@ -115,7 +115,7 @@ type declineReason struct {
 	detail, resumedDetail string
 	// again is how soon a turn declined for this reason asks again, for a
 	// reason that clears by itself sooner than the duty's own tick; zero is
-	// the duty's interval ([dutyDecline.next]).
+	// the duty's interval ([dutyDecline.again]).
 	again time.Duration
 }
 
@@ -285,15 +285,17 @@ func (d *dutyDecline) record(ctx context.Context, of declinable, reason declineR
 	return reason.key != ""
 }
 
-// next is how long the duty's loop waits before its next turn: interval, the
-// duty's own cadence, unless the turn just declined for a reason that clears
-// sooner and says when to ask again ([declineReason.again]) — so a node that
-// was only applying the fleet's revision, or only starting, takes the duty a
-// reconcile interval after it can rather than a whole tick.
-func (d *dutyDecline) next(interval time.Duration) time.Duration {
+// again is how soon the duty asks again when the turn just declined for a
+// reason that clears sooner than its own cadence and says when
+// ([declineReason.again]) — so a node that was only applying the fleet's
+// revision, or only starting, takes the duty a reconcile interval after it
+// can rather than a whole tick. Zero is no such reason: the duty waits its
+// own cadence, which is the duty's to name ([codeRetentionDuty.wait]) rather
+// than a parameter here, since only the duty knows it.
+func (d *dutyDecline) again() time.Duration {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return cmp.Or(d.out.again, interval)
+	return d.out.again
 }
 
 // giveBack gives the duty back where this node holds it ([Engine.workerGiveBack])
