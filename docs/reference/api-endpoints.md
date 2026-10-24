@@ -6576,7 +6576,10 @@ The API origin **never renders an artifact**:
   `sample` (a deck of every layout once, drawn in that theme, as the same
   canonical tree a version's deck is answered as), `layouts`, each its `id`,
   `name`, `description` and `heading` (the title a slide of it opens with), and
-  `default`, the plan a starter opens with when it names none. The create page
+  `default`, the plan a starter opens with when it names none. Whenever the
+  company has adopted a brand, its theme (`brand`, named for the brand, its
+  colours and typefaces resolved from the adoption) comes first; the answer is
+  composed per request, so an adoption or a clear shows at once. The create page
   draws its theme picker and preview from it, and the deck editor adds a slide
   from the sample of the theme its deck's index names (see
   [Slide Format](slide-format.md#the-index)).
