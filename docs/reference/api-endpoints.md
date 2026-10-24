@@ -6763,22 +6763,23 @@ What a route answers before git is reached:
   `this company does not host code (code.native is not set)`.
 - **A company that sets it, on a node that serves none of it now** — or a
   node that has not yet read whether it does: `503`, saying which of four it
-  is — judged from the configuration the fleet activated, never from what this
-  node last applied, so a company that has just turned `code.native` on is
-  never told it does not host code, and never stating what that configuration
-  says where the node has not read it:
+  is, the line ending with its code in brackets — judged from the
+  configuration the fleet activated, never from what this node last applied,
+  so a company that has just turned `code.native` on is never told it does
+  not host code, and never stating what that configuration says where the
+  node has not read it:
   - the node is **applying** the configuration the fleet activated — its
     first company's code host still being built among it — and answers once
-    the apply ends: `Retry-After: 5`;
+    the apply ends (`applying`): `Retry-After: 5`;
   - its apply of a configuration that hosts code **failed**
     (`config_apply_failed`: a code host that could not be built, a revision
     the node refused — `GET /fleet` and its log say why): no `Retry-After`,
     since waiting clears nothing, and another node serves it;
   - its apply failed **before it could read** the configuration — the
     revision could not be fetched, opened with the node's key or parsed — so
-    it cannot say whether the company hosts code, and says so: the same
-    `config_apply_failed` and no `Retry-After`, the detail naming what it
-    could not read rather than that the company hosts code;
+    it cannot say whether the company hosts code, and says so
+    (`code_unknown`): no `Retry-After`, the line naming what it could not
+    read rather than that the company hosts code;
   - its native runtime was already running when `code.native` was turned on,
     and serves it once **restarted** (`native_backend_needs_restart`): no
     `Retry-After`, for the same reason.
@@ -6829,13 +6830,14 @@ A refusal is the read surface's:
 - and `500 query_failed` for anything else.
 
 A company that hosts code on a node that serves none of it now — or a
-node that has not read whether it does — is the `503 unavailable` the git
-routes answer above, with a `reason` beside the `detail` a script or a
-balancer can act on — `applying` (with `Retry-After: 5`),
-`config_apply_failed` (a failed apply, or one that failed before the node
-could read the configuration, the `detail` saying which) or
-`native_backend_needs_restart` (with none). Every one of them is served
-through a drain.
+node that has not read whether it does — is answered `503` under the code the
+git routes name above, as the envelope's `error`, with its `message` and a
+`detail` saying what this node found: `applying` (with `Retry-After: 5`),
+`config_apply_failed` (a failed apply), `code_unknown` (an apply that failed
+before the node could read the configuration, the `detail` naming what it
+could not read) or `native_backend_needs_restart` — the last three with no
+`Retry-After`, since waiting clears none of them and another node serves the
+read. Every one of them is served through a drain.
 
 ### `POST /code/repos/{name}/verify`
 

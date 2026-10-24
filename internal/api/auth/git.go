@@ -209,18 +209,30 @@ func GitChallenge(w http.ResponseWriter) {
 	GitText(w, http.StatusUnauthorized, gitAuthSentence)
 }
 
+// GitUnavailable is a git route's 503: [GitText] with a Retry-After of
+// retryAfterSeconds, and ZERO MEANS NOT RETRYABLE and writes no header —
+// httpjson.Unavailable's rule, in git's form, so a git route's "come back" and
+// "do not come back" are told apart the same way the API's are.
+//
+// ONE WRITER for the pair, for that function's reason: a 503 whose header was
+// set by hand at each call site is how a dozen of the API's came to say "come
+// back" without saying when. THE SENTENCE SAYS THE WAIT TOO, because git reads
+// no Retry-After: it prints the body and stops, so a person at a terminal
+// learns that a retry will do only from the words, and the header is for the
+// proxy or the CI wrapper that does read one.
+func GitUnavailable(w http.ResponseWriter, retryAfterSeconds int, sentence string) {
+	if retryAfterSeconds > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+	}
+	GitText(w, http.StatusServiceUnavailable, sentence)
+}
+
 // gitIdentityUnavailable is the guard's 503 on a git route: this node could not
 // tell who the credential is, which waiting clears — the same answer
 // `503 identity_unavailable` is everywhere else, with the same
 // [RetryIdentitySeconds] in its Retry-After.
-//
-// THE SENTENCE SAYS THE RETRY, because git reads no Retry-After: it prints the
-// body and stops, so a person at a terminal learns that a retry will do only
-// from the words, and the header is for the proxy or the CI wrapper that does
-// read one.
 func gitIdentityUnavailable(w http.ResponseWriter) {
-	w.Header().Set("Retry-After", strconv.Itoa(RetryIdentitySeconds))
-	GitText(w, http.StatusServiceUnavailable, gitIdentitySentence)
+	GitUnavailable(w, RetryIdentitySeconds, gitIdentitySentence)
 }
 
 // gitIdentitySentence is what git prints beside [gitIdentityUnavailable]'s 503.

@@ -29,7 +29,10 @@ import (
 // else. The operator surface is walked beside them, because its one refusal
 // mapping is what the act route, the human write surface and every tool-less
 // verb answer through: a status it chose by hand would be every write
-// surface's.
+// surface's. And the code host's reads and its cache's verify (code.go), which
+// answered their own `{"error": …}` maps and set their own Retry-After: a git
+// route's refusal beside them is git's text/plain, written through
+// auth.GitText and auth.GitUnavailable, and never the envelope.
 //
 // Each of those shapes is visible in the SOURCE and nowhere else — a route
 // that builds its own body answers correctly on every case somebody thought
@@ -46,7 +49,8 @@ func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 	t.Parallel()
 	surfaces := []string{"configapi", "secretsapi", "setupapi", "workapi",
 		"operator", "webhooks"}
-	walked := 0
+	// THE FILES OF THIS PACKAGE that are a surface of their own.
+	files := []string{"code.go"}
 	for _, dir := range surfaces {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -57,44 +61,47 @@ func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 				continue
 			}
-			path := filepath.Join(dir, name)
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, path, nil, 0)
-			if err != nil {
-				t.Fatalf("parse %s: %v", path, err)
-			}
-			walked++
-			ast.Inspect(file, func(n ast.Node) bool {
-				switch node := n.(type) {
-				case *ast.KeyValueExpr:
-					if lit, ok := node.Key.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-						if key, _ := strconv.Unquote(lit.Value); key == "error" {
-							t.Errorf("%s: a hand-built refusal body — answer through "+
-								"httpjson.Fail/FailWith/FailWithFields so it carries "+
-								"the code's sentence", fset.Position(node.Pos()))
-						}
-					}
-				case *ast.CallExpr:
-					if isSelector(node.Fun, "httpjson", "Code") {
-						t.Errorf("%s: a code minted outside internal/api/httpjson's "+
-							"table, which carries no sentence — declare it there",
-							fset.Position(node.Pos()))
-					}
-				case *ast.SelectorExpr:
-					if isSelector(node, "http", "StatusServiceUnavailable") {
-						t.Errorf("%s: a 503 written without httpjson.Unavailable "+
-							"or UnavailableWith, which set the Retry-After and the "+
-							"envelope together", fset.Position(node.Pos()))
-					}
-				}
-				return true
-			})
+			files = append(files, filepath.Join(dir, name))
 		}
 	}
+	walked := 0
+	for _, path := range files {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		walked++
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.KeyValueExpr:
+				if lit, ok := node.Key.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if key, _ := strconv.Unquote(lit.Value); key == "error" {
+						t.Errorf("%s: a hand-built refusal body — answer through "+
+							"httpjson.Fail/FailWith/FailWithFields so it carries "+
+							"the code's sentence", fset.Position(node.Pos()))
+					}
+				}
+			case *ast.CallExpr:
+				if isSelector(node.Fun, "httpjson", "Code") {
+					t.Errorf("%s: a code minted outside internal/api/httpjson's "+
+						"table, which carries no sentence — declare it there",
+						fset.Position(node.Pos()))
+				}
+			case *ast.SelectorExpr:
+				if isSelector(node, "http", "StatusServiceUnavailable") {
+					t.Errorf("%s: a 503 written without httpjson.Unavailable "+
+						"or UnavailableWith, which set the Retry-After and the "+
+						"envelope together", fset.Position(node.Pos()))
+				}
+			}
+			return true
+		})
+	}
 	// THE CONTROL: a walk that read nothing would pass on every tree.
-	if walked < len(surfaces) {
-		t.Fatalf("walked %d source files across %d surfaces, so the walk "+
-			"certifies nothing", walked, len(surfaces))
+	if walked < len(surfaces)+1 {
+		t.Fatalf("walked %d source files across %d surfaces and code.go, so "+
+			"the walk certifies nothing", walked, len(surfaces))
 	}
 }
 

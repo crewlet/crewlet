@@ -976,6 +976,51 @@ const (
 	CodeCheckBudget Code = "check_budget"
 )
 
+// THE CODE HOST'S OWN (`/code/`): why a node serves none of the code host now,
+// and the refusals of its reads and its cache's verify that no other surface
+// answers. A repository nobody declared, a company hosting no code and a copy
+// this node does not hold are each `not_found` with a `reason` beside it,
+// because none has anything here to answer and a client tells them apart
+// without reading the sentence.
+//
+// THE FOUR UNSERVED CODES ARE FOUR, never `unavailable` with a reason, because
+// a client acts on each a different way: an apply in flight clears by waiting
+// and carries a Retry-After, and the other three clear only when somebody acts
+// — another node serves the request meanwhile — so they carry none.
+const (
+	// CodeApplying is a node applying the configuration the fleet
+	// activated, which answers once that apply ends. 503 with a
+	// Retry-After. It says nothing of what the configuration holds: an
+	// apply in flight may not have decoded the revision yet.
+	CodeApplying Code = "applying"
+	// CodeConfigApplyFailed is a node whose apply of a configuration that
+	// hosts code failed. 503 and no Retry-After, since waiting clears
+	// nothing; `GET /fleet` and the node's log say why.
+	CodeConfigApplyFailed Code = "config_apply_failed"
+	// CodeCodeUnknown is a node whose apply failed before it could read the
+	// configuration the fleet activated, so it cannot say whether the
+	// company hosts code at all. Its own code rather than
+	// config_apply_failed, because that one states the configuration hosts
+	// code, which this node never read. 503 and no Retry-After.
+	CodeCodeUnknown Code = "code_unknown"
+	// CodeNativeBackendNeedsRestart is a node whose native runtime was
+	// running before the configuration turned the code host on, and which
+	// serves it once restarted. 503 and no Retry-After: only a restart
+	// clears it, and another node serves the request meanwhile.
+	CodeNativeBackendNeedsRestart Code = "native_backend_needs_restart"
+	// CodeVerifyRunning is a verify of a repository on a node already
+	// checking it with the other repair setting. 409, the running one
+	// carried beside it; one asking with the same setting is handed the
+	// running check instead.
+	CodeVerifyRunning Code = "verify_running"
+	// CodeNotPermitted is a code read the asker's grant on the repository
+	// does not cover (ADR-0054): the same word a refused push prints, so
+	// one refusal has one spelling on every surface that names it. 403,
+	// the detail naming who asked, the repository and what would admit
+	// them.
+	CodeNotPermitted Code = "not_permitted"
+)
+
 // codes is THE TABLE: every code this engine answers with, each with the one
 // sentence a person is shown for it.
 //
@@ -1324,6 +1369,23 @@ var codes = map[Code]string{
 		"moment Retry-After names, then refresh it.",
 	CodeCheckBudget: "Too many checks at once. Wait the moment Retry-After names, " +
 		"then check the page again.",
+
+	CodeApplying: "This node is applying the configuration the fleet " +
+		"activated. Try again in a moment, or ask another node.",
+	CodeConfigApplyFailed: "This node could not apply the configuration the " +
+		"fleet activated. Ask another node; the fleet view and this node's log " +
+		"say why.",
+	CodeCodeUnknown: "This node could not read the configuration the fleet " +
+		"activated, so it can't say whether this company hosts code. Ask " +
+		"another node.",
+	CodeNativeBackendNeedsRestart: "This node was already running when the " +
+		"configuration turned this on, and serves it once restarted. Ask " +
+		"another node, or restart this one.",
+	CodeVerifyRunning: "A check of this repository with the other repair " +
+		"setting is already running on this node. Wait for it to end, then " +
+		"ask again.",
+	CodeNotPermitted: "Your access to this repository doesn't cover that. The " +
+		"detail says what you hold and what would admit you.",
 }
 
 // Codes is every code in the vocabulary, sorted.

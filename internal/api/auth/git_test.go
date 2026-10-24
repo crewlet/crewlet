@@ -360,6 +360,27 @@ func TestGitTextIsTheFormGitPrints(t *testing.T) {
 	}
 }
 
+// A GIT ROUTE'S 503 SAYS WHETHER TO COME BACK, the way the API's does: a wait
+// is a Retry-After beside git's text, and zero — not retryable — writes no
+// header at all, so a client is never told to come back to a node that will
+// answer the same until somebody acts.
+func TestAGitUnavailableSaysWhetherToComeBack(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		after int
+		want  string
+	}{{5, "5"}, {0, ""}} {
+		rec := httptest.NewRecorder()
+		auth.GitUnavailable(rec, tc.after, "this node is applying its configuration")
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != tc.want ||
+			rec.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+			rec.Body.String() != "this node is applying its configuration\n" {
+			t.Errorf("GitUnavailable(%d) answered %d %v %q, want 503 text/plain with Retry-After %q",
+				tc.after, rec.Code, rec.Header(), rec.Body.String(), tc.want)
+		}
+	}
+}
+
 // A SENTENCE IS ONE LINE: git prints each line of a refusal's body as a
 // `remote:` line of its own, so a sentence spanning two reaches a person as a
 // refusal broken in two. Every caller passes a sentence of its own making, so

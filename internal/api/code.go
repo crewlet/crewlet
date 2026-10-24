@@ -105,15 +105,6 @@ const notHosted = "this company does not host code (code.native is not set)"
 // somebody acts — so neither carries a Retry-After.
 const codeApplyingRetryAfter = stream.HealthInterval
 
-// The reasons a 503 from a code route names, each the log line or the state
-// an operator finds it under, so a script or a balancer can act on it rather
-// than parse the sentence.
-const (
-	reasonApplying     = "applying"
-	reasonApplyFailed  = "config_apply_failed"
-	reasonNeedsRestart = "native_backend_needs_restart"
-)
-
 // THE REASONS a code route's 404 can name: every one is `not_found`, since none
 // has anything here to answer, and the reason is what tells them apart without
 // reading the sentence, because a client acts on each a different way.
@@ -141,54 +132,70 @@ func notDeclared(name string) string {
 	return fmt.Sprintf("no repository named %q is declared in code.repos", name)
 }
 
+// unserved is why a node serves none of the code host now, as a code route
+// answers it ([codeUnserved]).
+type unserved struct {
+	// code is the answer's code: [httpjson.CodeNotFound] for a company that
+	// hosts no code, [httpjson.CodeQueryFailed] for a reason the seam does
+	// not name, and otherwise one of the code host's four 503s.
+	code httpjson.Code
+
+	// retryAfter is the wait a 503 carries, zero where waiting clears
+	// nothing; detail the sentence that says which it is. The sentence
+	// names no code, because each answer names it once: the envelope's
+	// `error` on a /code/ route, and the brackets git's one line ends with.
+	retryAfter time.Duration
+	detail     string
+}
+
 // codeUnserved is how a code route answers a node that serves none of the
 // code host now, by the engine's reason:
 //
-//   - not hosted: 404, [notHosted];
-//   - applying: 503 with Retry-After [codeApplyingRetryAfter] — the node is
-//     applying the configuration the fleet activated and answers once that
-//     apply ends. It says nothing of what that configuration holds: an apply
-//     is in flight before it has decoded the revision too, and a company
-//     that never set code.native must not be told the code host is coming;
-//   - apply failed: 503 and no Retry-After — the node's apply of a
-//     configuration that hosts code failed (config_apply_failed) and nothing
-//     it waits for clears that; another node serves it;
-//   - unknown: the same 503 under the same reason, saying instead that the
+//   - not hosted: 404 `not_found`, [notHosted];
+//   - applying: 503 `applying` with Retry-After [codeApplyingRetryAfter] —
+//     the node is applying the configuration the fleet activated and answers
+//     once that apply ends. It says nothing of what that configuration holds:
+//     an apply is in flight before it has decoded the revision too, and a
+//     company that never set code.native must not be told the code host is
+//     coming;
+//   - apply failed: 503 `config_apply_failed` and no Retry-After — the node's
+//     apply of a configuration that hosts code failed, and nothing it waits
+//     for clears that; another node serves it;
+//   - unknown: 503 `code_unknown` and no Retry-After, saying instead that the
 //     node could not read the configuration the fleet activated and so cannot
 //     say whether the company hosts code — the apply failed before the
-//     revision was decoded, and a sentence that it hosts code would state
-//     what the node never read;
-//   - needs restart: 503 and no Retry-After — the node's native runtime was
-//     running before code.native was set (native_backend_needs_restart), and
+//     revision was decoded, and config_apply_failed's sentence that it hosts
+//     code would state what the node never read;
+//   - needs restart: 503 `native_backend_needs_restart` and no Retry-After —
+//     the node's native runtime was running before code.native was set, and
 //     only its restart clears it; another node serves it.
 //
 // Any other error breaks the seam's contract: 500, logged.
-func codeUnserved(err error) (status int, retryAfter time.Duration, reason, detail string) {
+func codeUnserved(err error) unserved {
 	switch {
 	case errors.Is(err, engine.ErrCodeNotHosted):
-		return http.StatusNotFound, 0, "", notHosted
+		return unserved{code: httpjson.CodeNotFound, detail: notHosted}
 	case errors.Is(err, engine.ErrCodeApplying):
-		return http.StatusServiceUnavailable, codeApplyingRetryAfter, reasonApplying,
-			"this node is applying the configuration the fleet activated and answers once that apply " +
-				"ends: retry in " + strconv.Itoa(int(codeApplyingRetryAfter.Seconds())) +
-				" seconds, or against another node"
+		return unserved{code: httpjson.CodeApplying, retryAfter: codeApplyingRetryAfter,
+			detail: "this node is applying the configuration the fleet activated and answers once that " +
+				"apply ends: retry in " + strconv.Itoa(httpjson.RetrySeconds(codeApplyingRetryAfter)) +
+				" seconds, or against another node"}
 	case errors.Is(err, engine.ErrCodeApplyFailed):
-		return http.StatusServiceUnavailable, 0, reasonApplyFailed,
-			"this node could not apply the configuration the fleet activated, which hosts code " +
-				"(config_apply_failed: GET /fleet and this node's log say why): ask another node, or " +
-				"activate a corrected configuration"
+		return unserved{code: httpjson.CodeConfigApplyFailed,
+			detail: "this node could not apply the configuration the fleet activated, which hosts code " +
+				"(GET /fleet and this node's log say why): ask another node, or activate a corrected " +
+				"configuration"}
 	case errors.Is(err, engine.ErrCodeUnknown):
-		return http.StatusServiceUnavailable, 0, reasonApplyFailed,
-			"this node could not read the configuration the fleet activated, so it cannot say whether " +
-				"this company hosts code (config_apply_failed: GET /fleet and this node's log say why): " +
-				"ask another node"
+		return unserved{code: httpjson.CodeCodeUnknown,
+			detail: "this node could not read the configuration the fleet activated, so it cannot say " +
+				"whether this company hosts code (GET /fleet and this node's log say why): ask another node"}
 	case errors.Is(err, engine.ErrCodeNeedsRestart):
-		return http.StatusServiceUnavailable, 0, reasonNeedsRestart,
-			"this node's native runtime was running before code.native was set, and it serves the code " +
-				"host once restarted (native_backend_needs_restart): ask another node, or restart this one"
+		return unserved{code: httpjson.CodeNativeBackendNeedsRestart,
+			detail: "this node's native runtime was running before code.native was set, and it serves the " +
+				"code host once restarted: ask another node, or restart this one"}
 	}
 	log.Warn("api_code_unserved_unexplained", "error", err)
-	return http.StatusInternalServerError, 0, "", ""
+	return unserved{code: httpjson.CodeQueryFailed}
 }
 
 // servesGit reports whether a node of this Tier A serves git: its roles name
@@ -231,17 +238,20 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, why := a.code.GitRoutes()
 		if why != nil {
-			status, after, reason, detail := codeUnserved(why)
-			if after > 0 {
-				w.Header().Set("Retry-After", strconv.Itoa(int(after.Seconds())))
+			// IN GIT'S FORM, git printing nothing of the envelope: the
+			// sentence, and the code in brackets after it for a script
+			// that greps what git printed.
+			u := codeUnserved(why)
+			switch u.code {
+			case httpjson.CodeNotFound:
+				auth.GitText(w, http.StatusNotFound, u.detail)
+			case httpjson.CodeQueryFailed:
+				auth.GitText(w, http.StatusInternalServerError,
+					"this node could not say why it serves no code host; its log says what it was told")
+			default:
+				auth.GitUnavailable(w, httpjson.RetrySeconds(u.retryAfter),
+					u.detail+" ("+string(u.code)+")")
 			}
-			if status == http.StatusInternalServerError {
-				detail = "this node could not say why it serves no code host; its log says what it was told"
-			}
-			if reason != "" {
-				detail += " (" + reason + ")"
-			}
-			auth.GitText(w, status, detail)
 			return
 		}
 		pick(g).ServeHTTP(w, r)
@@ -249,20 +259,22 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 }
 
 // codeNotServed answers a /code/ route this node serves none of the code host
-// for now, in the read surface's vocabulary, with why ([codeUnserved]).
+// for now, in the refusal envelope, with why ([codeUnserved]): a company
+// hosting no code is `not_found` with the reason that tells it from a
+// repository nobody declared, and every 503 is written by
+// [httpjson.UnavailableWith], which sets its Retry-After — or, where waiting
+// clears nothing, none — with the envelope.
 func codeNotServed(w http.ResponseWriter, why error) {
-	status, after, reason, detail := codeUnserved(why)
-	switch status {
-	case http.StatusNotFound:
-		writeJSON(w, status, map[string]string{"error": stream.CodeNotFound, "reason": reasonNotHosted,
-			"detail": detail})
-	case http.StatusServiceUnavailable:
-		if after > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int(after.Seconds())))
-		}
-		writeJSON(w, status, map[string]string{"error": stream.CodeUnavailable, "reason": reason, "detail": detail})
+	u := codeUnserved(why)
+	switch u.code {
+	case httpjson.CodeNotFound:
+		httpjson.FailWith(w, http.StatusNotFound, u.code,
+			map[string]string{"reason": reasonNotHosted, "detail": u.detail})
+	case httpjson.CodeQueryFailed:
+		httpjson.Fail(w, http.StatusInternalServerError, u.code)
 	default:
-		writeJSON(w, status, map[string]string{"error": stream.CodeQueryFailed})
+		httpjson.UnavailableWith(w, u.code, httpjson.RetrySeconds(u.retryAfter),
+			httpjson.Detail{"detail": u.detail})
 	}
 }
 
@@ -358,14 +370,14 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, r *http.Request) (c
 	return q, nil
 }
 
-// codeRefusal answers a code read's failure in the read surface's ONE
-// vocabulary ([writeQueryError]): a repository that is not declared is
-// `not_found`, naming it; a repository the asker's grant does not cover is
-// `not_permitted` with the reader's own sentence; a level, a cursor or a
-// parameter the reader refuses is `bad_params` with the reader's own sentence;
-// and a read this node could not serve — a state-log refusal, no data node
-// serving — is `unavailable` with its own Retry-After (none where waiting
-// cannot clear it), by [queries.ClassifyFailure], the registry's own
+// codeRefusal answers a code read's failure in the refusal envelope, in the
+// read surface's ONE vocabulary ([writeQueryError]): a repository that is not
+// declared is `not_found`, naming it; a repository the asker's grant does not
+// cover is `not_permitted` with the reader's own sentence; a level, a cursor
+// or a parameter the reader refuses is `bad_params` with the reader's own
+// sentence; and a read this node could not serve — a state-log refusal, no
+// data node serving — is `unavailable` with its own Retry-After (none where
+// waiting cannot clear it), by [queries.ClassifyFailure], the registry's own
 // classification rather than a second list here.
 //
 // NOT PERMITTED IS 403 AND NEVER THE 500 everything unnamed falls into: it is
@@ -373,19 +385,18 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, r *http.Request) (c
 // same grant from the same chart makes alike, so no retry and no other node
 // answers it otherwise, and its sentence — who asked, which repository, the
 // visibility that shut the asker out and who does read it — is the whole of
-// what the caller can act on. The code is the domain's own refusal class,
-// the word a refused push prints, so one refusal has one spelling on every
-// surface that names it.
+// what the caller can act on. [httpjson.CodeNotPermitted] is spelled as the
+// domain's own refusal class, the word a refused push prints
+// ([code.RefusalNotPermitted], held equal by test), so one refusal has one
+// spelling on every surface that names it.
 func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "reason": reasonNotDeclared, "detail": notDeclared(repo),
-		})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"reason": reasonNotDeclared, "detail": notDeclared(repo)})
 	case errors.Is(err, code.ErrNotPermitted):
-		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": string(code.RefusalNotPermitted), "detail": refusalSentence(err, code.ErrNotPermitted),
-		})
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeNotPermitted,
+			map[string]string{"detail": refusalSentence(err, code.ErrNotPermitted)})
 	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
 		errors.Is(err, code.ErrInvalid):
 		writeQueryError(w, what, fmt.Errorf("%w: %w", queries.ErrBadParams, err))
@@ -486,9 +497,8 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	case len(values) == 1 && values[0] == "true":
 		repair = true
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": stream.CodeBadParams, "detail": "repair is true or false",
-		})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": "repair is true or false"})
 		return
 	}
 	// THE CALLER'S FLOOR, where it names one: a position on the code log it
@@ -498,9 +508,8 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("min_position")); raw != "" {
 		at, err := statelog.ParsePosition(raw)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": stream.CodeBadParams, "detail": "min_position: " + err.Error(),
-			})
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+				map[string]string{"detail": "min_position: " + err.Error()})
 			return
 		}
 		floor = at
@@ -523,41 +532,34 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, status, viewOf(v))
 	case errors.Is(err, code.ErrRepoNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "reason": reasonNotDeclared, "detail": notDeclared(name),
-		})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"reason": reasonNotDeclared, "detail": notDeclared(name)})
 	case errors.Is(err, code.ErrInvalid):
 		// A floor on another log than the repositories' rows.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": stream.CodeBadParams, "detail": err.Error(),
-		})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": err.Error()})
 	case errors.Is(err, cache.ErrNotHeld):
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "reason": reasonNotHeld,
-			"detail": fmt.Sprintf("this node holds no copy of %q, so it has "+
-				"nothing to check: verify the git nodes that serve it", name),
-		})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"reason": reasonNotHeld,
+				"detail": fmt.Sprintf("this node holds no copy of %q, so it has "+
+					"nothing to check: verify the git nodes that serve it", name)})
 	case errors.As(err, &running):
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "verify_running", "detail": err.Error(), "running": viewOf(running.Running),
-		})
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeVerifyRunning,
+			httpjson.Detail{"detail": err.Error(), "running": viewOf(running.Running)})
 	case errors.Is(err, host.ErrStopping):
 		// THE STOP'S OWN WAIT, the one every git request a stopping host
 		// refuses is told: what takes the node out of rotation.
-		w.Header().Set("Retry-After", strconv.Itoa(int(host.StoppingRetryAfter.Seconds())))
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": stream.CodeUnavailable, "detail": "this node's code host is stopping: verify against " +
-				"another node's cache, or this one's once it has restarted",
-		})
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(host.StoppingRetryAfter), httpjson.Detail{
+				"detail": "this node's code host is stopping: verify against another node's cache, or " +
+					"this one's once it has restarted"})
 	case errors.Is(err, gitproc.ErrBusy):
 		// REFUSED BEFORE IT READ ANYTHING — the check takes its slot and
 		// its memory first, never waits for either — so the retry costs
 		// what this refusal did: nothing. At the wait a busy git request on
 		// this node is told.
-		w.Header().Set("Retry-After", strconv.Itoa(int(host.BusyRetryAfter.Seconds())))
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": stream.CodeUnavailable, "detail": err.Error(),
-		})
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(host.BusyRetryAfter), httpjson.Detail{"detail": err.Error()})
 	case errors.Is(queries.ClassifyFailure(err), queries.ErrUnavailable):
 		// What clears by waiting — the code log unreadable here, no data
 		// node serving the resolve — with the refusal's own Retry-After.
@@ -566,9 +568,8 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		// The sentence too, for viewOf's reason: a node whose memory
 		// cannot hold the check names the node to run it on.
 		log.Warn("api_code_verify_refused", "repo", name, "repair", repair, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": stream.CodeQueryFailed, "detail": err.Error(),
-		})
+		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeQueryFailed,
+			map[string]string{"detail": err.Error()})
 	}
 }
 
@@ -591,11 +592,10 @@ func (a *App) serveCodeVerification(w http.ResponseWriter, r *http.Request) {
 		v, found = g.Verification(name, id)
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "detail": fmt.Sprintf("this node keeps no verify %s of %q: one is "+
-				"kept for an hour after it ends, until the repository's next verify begins, and never across "+
-				"a restart", r.PathValue("id"), name),
-		})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
+			"detail": fmt.Sprintf("this node keeps no verify %s of %q: one is kept for an hour after it "+
+				"ends, until the repository's next verify begins, and never across a restart",
+				r.PathValue("id"), name)})
 		return
 	}
 	writeJSON(w, http.StatusOK, viewOf(v))

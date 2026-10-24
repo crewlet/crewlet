@@ -50,11 +50,13 @@ dashboard). Then:
   built: the cache directory is another program's, git is older than 2.55 —
   answers git and `/code/` with a `503` naming `config_apply_failed`, never that
   the company hosts no code; `GET /fleet` and the node's log say why, and a
-  node still applying it answers `503` with `Retry-After: 5`. A node whose
-  apply failed before it could even read the revision — it could not fetch it
-  from the coordination store, or open it with its key — answers the same
-  `503 config_apply_failed`, saying it cannot tell whether the company hosts
-  code rather than that it does.
+  node still applying it answers `503 applying` with `Retry-After: 5`. A node
+  whose apply failed before it could even read the revision — it could not
+  fetch it from the coordination store, or open it with its key — answers
+  `503 code_unknown`, saying it cannot tell whether the company hosts code
+  rather than that it does, and with no `Retry-After` either. On `/code/` each
+  is the error code of the API's refusal envelope; on a git route the same
+  sentence ends with the code in brackets.
 
 Turning `code.native` off later deletes nothing: the repositories, their rows
 and their packs stay, served again by the revision that turns it back on.

@@ -264,7 +264,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 	}
 	rec = ask(t, a, http.MethodGet, "/code/repos", true)
 	if code, detail := errorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" ||
-		detail+"\n" != notHosted {
+		detail != httpjson.Sentence(strings.TrimSuffix(notHosted, "\n")) {
 		t.Errorf("a code read before the host answered %d %s %q, want 404 not_found naming code.native",
 			rec.Code, code, detail)
 	}
@@ -286,8 +286,9 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 // route is a 404 naming code.native. Where the fleet activated a configuration
 // that hosts code and this node serves none of it now — or this node has not
 // read whether it does — it is a 503 naming which of four it is, in git's
-// form on a git route, in the read vocabulary with a `reason` on a /code/
-// read, and only the one waiting is sure to clear, an apply in flight, carries
+// form on a git route, its code in brackets, and in the refusal envelope under
+// that code on a /code/ route — and only the one waiting is sure to clear, an
+// apply in flight, carries
 // a Retry-After: an apply that failed and a runtime that needs its restart
 // clear when somebody acts, and a client told to come back in five seconds
 // would ask this node for ever when another node serves it. A reason the seam
@@ -301,7 +302,7 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 //
 // Mutation: answer every reason with the health tick's Retry-After, and the
 // failed apply's and the restart's go red; answer the unread failure with the
-// failed apply's sentence, or an apply in flight with the code host's
+// failed apply's code or sentence, or an apply in flight with the code host's
 // promise, and the unread case and the applying one go red.
 func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 	t.Parallel()
@@ -309,30 +310,31 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 		name   string
 		why    error
 		status int
-		// reason is what both surfaces name — the git route's line and a
-		// read's `reason` — and readReason what a read names, which for a
-		// company hosting no code is a reason the git line, read by nobody
-		// but a person, says in words alone.
-		reason, readReason string
-		detail             string
-		retryAfter         string
+		// code is the envelope's `error` on a /code/ route, and the code
+		// the git route's one line names in brackets after its sentence
+		// for a 503; readReason the `reason` a read names beside it, which
+		// for a company hosting no code is a reason the git line, read by
+		// nobody but a person, says in words alone.
+		code, readReason string
+		detail           string
+		retryAfter       string
 		// claims is what the answer must NOT say: a fact about the
 		// company's configuration the node did not read.
 		claims []string
 	}{
-		{"not hosted", engine.ErrCodeNotHosted, http.StatusNotFound, "", "not_hosted", "code.native is not set", "",
-			nil},
+		{"not hosted", engine.ErrCodeNotHosted, http.StatusNotFound, "not_found", "not_hosted",
+			"code.native is not set", "", nil},
 		{"applying", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplying), http.StatusServiceUnavailable,
-			"applying", "applying", "retry in 5 seconds", "5", []string{"hosts code", "serves the code host"}},
+			"applying", "", "retry in 5 seconds", "5", []string{"hosts code", "serves the code host"}},
 		{"apply failed", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplyFailed), http.StatusServiceUnavailable,
-			"config_apply_failed", "config_apply_failed", "which hosts code", "", nil},
+			"config_apply_failed", "", "which hosts code", "", nil},
 		{"unknown", fmt.Errorf("%w (epoch 4)", engine.ErrCodeUnknown), http.StatusServiceUnavailable,
-			"config_apply_failed", "config_apply_failed", "cannot say whether this company hosts code", "",
-			[]string{"which hosts code", "does not host code", "serves the code host"}},
+			"code_unknown", "", "cannot say whether this company hosts code", "",
+			[]string{"which hosts code", "does not host code", "serves the code host", "config_apply_failed"}},
 		{"needs restart", engine.ErrCodeNeedsRestart, http.StatusServiceUnavailable,
-			"native_backend_needs_restart", "native_backend_needs_restart", "once restarted", "", nil},
+			"native_backend_needs_restart", "", "once restarted", "", nil},
 		{"unexplained", errors.New("a seam that says something else"), http.StatusInternalServerError,
-			"", "", "", "", nil},
+			"query_failed", "", "", "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -346,15 +348,35 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 					}
 				}
 			}
+			// The git line names a 503's code in brackets; a 404 and a 500
+			// carry their words alone.
+			names := ""
+			if tc.status == http.StatusServiceUnavailable {
+				names = "(" + tc.code + ")"
+			}
 			rec := ask(t, a, http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack", true)
 			if rec.Code != tc.status || rec.Header().Get("Retry-After") != tc.retryAfter ||
 				!strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") ||
-				!strings.Contains(rec.Body.String(), tc.detail) || !strings.Contains(rec.Body.String(), tc.reason) {
+				!strings.Contains(rec.Body.String(), tc.detail) || !strings.Contains(rec.Body.String(), names) {
 				t.Errorf("a git route answered %d %q (Retry-After %q), want %d text/plain naming %q and %q "+
 					"(Retry-After %q)", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"), tc.status,
-					tc.detail, tc.reason, tc.retryAfter)
+					tc.detail, names, tc.retryAfter)
 			}
 			unclaimed("a git route", rec.Body.String())
+			// ONCE, AT THE END: the sentence names no code of its own, so
+			// the brackets the line ends with are its one name for it — a
+			// sentence naming a code as well says two where they differ, as
+			// an unread apply's once did.
+			if names != "" {
+				sentence, ends := strings.CutSuffix(rec.Body.String(), " "+names+"\n")
+				for _, code := range []string{"config_apply_failed", "code_unknown", "native_backend_needs_restart"} {
+					if !ends || strings.Contains(sentence, code) {
+						t.Errorf("a git route answered %q, want a sentence naming no code, then %s", rec.Body.String(),
+							names)
+						break
+					}
+				}
+			}
 			for _, req := range []struct{ method, path string }{
 				{http.MethodGet, "/code/repos"},
 				{http.MethodPost, "/code/repos/web/verify"},
@@ -369,13 +391,18 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 					t.Fatalf("%s %s answered %d %q: %v", req.method, req.path, rec.Code, rec.Body.String(), err)
 				}
-				want := map[int]string{http.StatusNotFound: "not_found", http.StatusServiceUnavailable: "unavailable",
-					http.StatusInternalServerError: "query_failed"}[tc.status]
-				if rec.Code != tc.status || body.Error != want || body.Reason != tc.readReason ||
+				if rec.Code != tc.status || body.Error != tc.code || body.Reason != tc.readReason ||
 					!strings.Contains(body.Detail, tc.detail) || rec.Header().Get("Retry-After") != tc.retryAfter {
 					t.Errorf("%s %s answered %d %+v (Retry-After %q), want %d %s, reason %q, naming %q "+
 						"(Retry-After %q)", req.method, req.path, rec.Code, body, rec.Header().Get("Retry-After"),
-						tc.status, want, tc.readReason, tc.detail, tc.retryAfter)
+						tc.status, tc.code, tc.readReason, tc.detail, tc.retryAfter)
+				}
+				// THE ENVELOPE, so a client reads the code's sentence beside
+				// the detail rather than a code alone.
+				if message := httpjson.Code(body.Error).Message(); message == "" ||
+					!strings.Contains(rec.Body.String(), `"message"`) {
+					t.Errorf("%s %s answered %q, which carries no message from the code's table",
+						req.method, req.path, rec.Body.String())
 				}
 				unclaimed(req.method+" "+req.path, body.Detail)
 			}
@@ -400,6 +427,8 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 	t.Parallel()
 	shutOut := `seat "dev" holds no access to repository "secret": it is visibility: unit, read by ` +
 		`the seats of unit "platform" and the leads above it and by persons`
+	// said is the reader's sentence as the envelope writes a detail.
+	said := httpjson.Sentence(shutOut)
 	refused := map[string]error{
 		"secret": fmt.Errorf("%w: %s", code.ErrNotPermitted, shutOut),
 		"routed": fmt.Errorf("estate: data node n2 answered: %w",
@@ -429,8 +458,8 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 	}{
 		{"/code/repos/web", http.StatusNotFound, "not_found", "not_declared", `"web" is declared in code.repos`, "",
 			true},
-		{"/code/repos/secret", http.StatusForbidden, "not_permitted", "", shutOut, "", true},
-		{"/code/repos/routed/pushes", http.StatusForbidden, "not_permitted", "", shutOut, "", true},
+		{"/code/repos/secret", http.StatusForbidden, "not_permitted", "", said, "", true},
+		{"/code/repos/routed/pushes", http.StatusForbidden, "not_permitted", "", said, "", true},
 		{"/code/repos/level", http.StatusBadRequest, "bad_params", "", "stale and consistent_prefix", "", true},
 		{"/code/repos/cursor/pushes", http.StatusBadRequest, "bad_params", "", "not a cursor", "", true},
 		{"/code/repos/behind", http.StatusServiceUnavailable, "unavailable", "", "", "7", true},
@@ -457,8 +486,8 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		if asked := len(reads.queries()) > before; asked != tc.readerAsked {
 			t.Errorf("GET %s asked the reader: %v, want %v", tc.path, asked, tc.readerAsked)
 		}
-		if tc.code == "not_permitted" && detail != shutOut {
-			t.Errorf("GET %s answered the detail %q, want the reader's sentence alone, %q", tc.path, detail, shutOut)
+		if tc.code == "not_permitted" && detail != said {
+			t.Errorf("GET %s answered the detail %q, want the reader's sentence alone, %q", tc.path, detail, said)
 		}
 	}
 
@@ -497,6 +526,19 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		if want := (code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("founder")}); got.Asker != want {
 			t.Errorf("GET %s asked as %+v, want %+v", tc.path, got.Asker, want)
 		}
+	}
+}
+
+// ONE REFUSAL HAS ONE SPELLING: a code read the asker's grant does not cover is
+// refused with the same word a refused push prints on the ref git names, so a
+// script reading either surface branches on one value. Declared twice by
+// necessity — the envelope's table is the API's, the push's refusal class the
+// domain's — so the two are held equal here.
+func TestNotPermittedIsTheDomainsOwnWord(t *testing.T) {
+	t.Parallel()
+	if string(httpjson.CodeNotPermitted) != string(code.RefusalNotPermitted) {
+		t.Errorf("the envelope says %q and a refused push %q", httpjson.CodeNotPermitted,
+			code.RefusalNotPermitted)
 	}
 }
 
@@ -751,7 +793,7 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		name, code, reason, detail, retryAfter string
 		status                                 int
 	}{
-		{"gone", "not_found", "not_declared", `no repository named "gone" is declared in code.repos`, "",
+		{"gone", "not_found", "not_declared", `repository named "gone" is declared in code.repos`, "",
 			http.StatusNotFound},
 		{"elsewhere", "not_found", "not_held", "holds no copy", "", http.StatusNotFound},
 		{"racing", "verify_running", "", running.ID.String(), "", http.StatusConflict},
