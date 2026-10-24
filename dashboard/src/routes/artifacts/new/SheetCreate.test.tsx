@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
+import { TestClient } from "~/test/client.tsx";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "~/lib/keyedWrite.ts";
 import { SheetCreate } from "./SheetCreate.tsx";
 
@@ -66,14 +67,17 @@ afterEach(cleanup);
 
 function mount(hash = "#/artifacts/new/sheet") {
   location.hash = hash;
+  // A CLIENT TO STAND IN: the page reads the folder tree for its Save in.
   return render(
-    <Router>
-      <LayerHost>
-        <ToastProvider>
-          <SheetCreate />
-        </ToastProvider>
-      </LayerHost>
-    </Router>,
+    <TestClient>
+      <Router>
+        <LayerHost>
+          <ToastProvider>
+            <SheetCreate />
+          </ToastProvider>
+        </LayerHost>
+      </Router>
+    </TestClient>,
   );
 }
 

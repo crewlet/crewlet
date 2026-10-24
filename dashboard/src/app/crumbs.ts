@@ -117,6 +117,14 @@ function avatarOfLabel(label: string | undefined): AgentAvatar | undefined {
 export const pageSpaceKey = (id: string) => `\u0000page-space:${id}`;
 export const pageUpKey = (id: string, depth: number) => `\u0000page-up:${id}:${depth}`;
 
+/**
+ * The label keys a folder's page publishes for its trail: the id of each
+ * folder above it, outermost first, whose names are ordinary labels keyed by
+ * their ids. NUL-prefixed for the reason the seat keys are. Artifacts ›
+ * Folders › Marketing › Q4 review.
+ */
+export const folderUpKey = (id: string, depth: number) => `\u0000folder-up:${id}:${depth}`;
+
 export const turnSeatKey = (turnId: string) => `\u0000turn-seat:${turnId}`;
 export const turnHandleKey = (turnId: string) => `\u0000turn-handle:${turnId}`;
 
@@ -355,6 +363,21 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return inside("diaries", named(labels, where.handle));
     case "artifacts":
       return sectionPage(where.section);
+    case "artifact-folders":
+      return sectionPage("folders");
+    case "artifact-folder": {
+      // THE FOLDER'S PLACE, which its id cannot say: every folder above it,
+      // from what the folder's own page publishes under [folderUpKey], each
+      // a way back to its page. Until it has (and for a folder the reader
+      // cannot see), Artifacts › Folders › Folder, never the folder's uuid.
+      const up: Crumb[] = [];
+      for (let i = 0; labels[folderUpKey(where.id, i)] !== undefined; i++) {
+        const ancestor = labels[folderUpKey(where.id, i)]!;
+        up.push({ label: labels[ancestor] || "Folder", path: ["artifacts", "folders", ancestor] });
+      }
+      const folders = inside("folders", { label: labels[where.id] || "Folder" });
+      return [...folders.slice(0, -1), ...up, folders[folders.length - 1]!];
+    }
     case "artifact":
       // WHAT AN ARTIFACT IS CALLED is its own answer, published by its page.
       // Until then, and for one the reader may not open, the trail says

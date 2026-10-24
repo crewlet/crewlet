@@ -68,7 +68,7 @@ import { useWidth } from "~/lib/useWidth.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { DeckLayout, DeckSlide, DeckTheme, SlidesStartersAnswer } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
+import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { AskAgentPanel, askTitleHold, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
@@ -210,6 +210,7 @@ export function SlidesCreate() {
 function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const create = useCreateArtifact();
   const workItem = useWorkItem();
+  const { folder } = useSaveIn();
   const { root, phone, arrangement, stripInMain } = useComposerArrangement();
   const opening = useMemo(() => rowsOf(starters.default), [starters.default]);
   const firstTheme =
@@ -308,6 +309,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
           title: title.trim(),
           deck: planOf(theme.id, rows),
           shares: [{ audience: { kind: "seat", id: agent.handle }, role: "editor" }],
+          ...(folder ? { folder } : {}),
         }),
       );
       id =

@@ -13,7 +13,8 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { ArtifactGallery, noMatch } from "./Gallery.tsx";
+import { ArtifactGallery } from "./Gallery.tsx";
+import { noMatch } from "./listing.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactSection } from "~/app/routes.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -154,7 +155,7 @@ test("a list row draws the kind's mark, the kind and description under the title
     }),
   ];
   mount("all");
-  expect(headers()).toEqual(["Name", "Access", "Owner", "Edited", "Your role", ""]);
+  expect(headers()).toEqual(["Name", "Access", "Owner", "Folder", "Edited", "Your role", ""]);
   const own = screen
     .getByText("Architecture notes")
     .closest(".crewlet-data-grid__row") as HTMLElement;
@@ -175,7 +176,7 @@ test("a list row draws the kind's mark, the kind and description under the title
 test("Yours draws no owner and no role, which would say You and Owner on every row", () => {
   asList();
   mount("yours", "#/artifacts/yours");
-  expect(headers()).toEqual(["Name", "Access", "Edited", ""]);
+  expect(headers()).toEqual(["Name", "Access", "Folder", "Edited", ""]);
 });
 
 test("the trash says when each went in and when it goes for good, and offers a restore and no pin", () => {
