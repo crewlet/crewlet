@@ -1972,6 +1972,26 @@ can still take a minted token: `-capture-token -print-token` writes it to
 stdout, storing nothing, for you to export as `CLAUDE_CODE_OAUTH_TOKEN` in the
 engine's environment.
 
+**Only under a variable a store can hold.** An `overrides.token_env` that is
+not an environment variable name is refused on every write of the document
+([above](#configuration-reference)), but `crewlet llm` loads the document as a
+run does, without the rules only a write applies. So `-capture-token` and
+`-token-stdin` refuse such an entry themselves, in every mode and with
+`-print-token` too, before anything is minted or read, naming the field: a
+token minted for it could be neither stored nor referenced. So do they for a
+CLI whose profile names no token variable at all — every built-in one but
+`claude-code` — which takes no headless token. Under `api-key` either refusal
+is that mode's own, naming the key it reads, with the field beside it where
+the name is outside the grammar, and without `auth.mode: subscription`, under
+which such an entry could read no token either — except an entry whose CLI
+names no key variable, a pairing every write refuses: it is told that the mode
+puts its key in no variable, and to set `auth.mode: subscription` and sign the
+CLI in with a login. Nothing offers either command for such an entry — not
+`-from-host`'s closing advice, `doctor`, the `-username` refusal, `logout`'s
+notice or a [remote coding run's refusal](code-sandbox.md#failure-modes) — and
+the variable is never among those a stopped node's note says the fleet may
+hold.
+
 ### 3. Username / password, where the CLI genuinely has one
 
 ```bash

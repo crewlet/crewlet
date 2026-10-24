@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,25 +411,388 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 	}
 }
 
+// A TOKEN VARIABLE NO STORE CAN HOLD MINTS NOTHING. overrides.token_env can
+// name a variable outside the reference grammar — MY-TOKEN — and `crewlet llm`
+// loads its document only to run, so the admission rule that refuses one on
+// every write never sees this file. The token was minted all the same, and
+// then lost: the store refused the name after the vendor had issued it, and
+// -print-token's next step, a ${MY-TOKEN} or an export of it, cannot be
+// written; -token-stdin read the token and failed at the same write. Each is
+// now refused before the mint or the read, naming the field; the capture
+// script leaves a marker and the token's stdin records a read, so either is
+// seen whatever became of the token. -from-host no longer recommends
+// -capture-token for such an entry, since that is the refusal, and `llm
+// doctor` names the field (which routes it then offers is cliagent's suite).
+// And no run names ${MY-TOKEN} among the values a stopped node cannot read: no
+// store can hold it, so there is nothing for the fleet to hold.
+//
+// Mutation: move the check after the mint, and the marker appears and stdin
+// is read; drop it, and every case is accepted or fails at the store instead;
+// stop leaving such a name out of the command's reads, and stderr names it.
+func TestATokenVariableNoStoreCanHoldMintsNothing(t *testing.T) {
+	t.Parallel()
+	company := func(t *testing.T, marker string) string {
+		t.Helper()
+		return writeFile(t, t.TempDir(), "company.yaml", fmt.Sprintf(`name: Acme
+providers:
+  llm:
+    claude:
+      agent: claude-code
+      model: sonnet
+      state_dir: %q
+      overrides:
+        binary: /bin/sh
+        capture_token_args: ["-c", %q]
+        token_env: MY-TOKEN
+roles:
+  - name: CEO
+    handle: ceo
+    llm: claude
+`, t.TempDir(), fmt.Sprintf("touch '%s' && echo sk-ant-oat01-MINTED", marker)))
+	}
+
+	// refused holds a refusal of a token to the field and to having taken
+	// nothing, and the run's output to naming no ${MY-TOKEN} and no token.
+	refused := func(t *testing.T, err error, out, errOut *bytes.Buffer) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("a token for MY-TOKEN was accepted:\n%s%s", out.String(), errOut.String())
+		}
+		for _, want := range []string{
+			`providers.llm.claude.overrides.token_env is "MY-TOKEN"`,
+			"none was minted, read or stored",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not say %q: %v", want, err)
+			}
+		}
+		for _, bad := range []string{"sk-ant-oat01-MINTED", "sk-ant-oat01-PASTED"} {
+			if strings.Contains(out.String()+errOut.String(), bad) {
+				t.Errorf("a token was written:\n%s%s", out.String(), errOut.String())
+			}
+		}
+		if strings.Contains(errOut.String(), "${MY-TOKEN}") {
+			t.Errorf("stderr names ${MY-TOKEN} as a value the fleet may hold:\n%s", errOut.String())
+		}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		flags []string
+	}{
+		{"into the store", []string{"-capture-token"}},
+		{"to stdout", []string{"-capture-token", "-print-token"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			marker := filepath.Join(t.TempDir(), "minted")
+			args := append([]string{"login", "claude", "-company", company(t, marker),
+				"-config", bootstrapWithKeyring(t, "k1")}, tc.flags...)
+			var out, errOut bytes.Buffer
+			err := runLLM(noEnviron, args, &out, &errOut)
+			refused(t, err, &out, &errOut)
+			if _, statErr := os.Stat(marker); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the token was minted before the refusal (marker: %v)", statErr)
+			}
+		})
+	}
+
+	// -token-stdin through loginLLM, the one way to hand it a stdin of the
+	// test's own: runLLM reads the process's. The entry is built the way
+	// runLLM builds it, from the same run-only file.
+	for _, printToken := range []bool{false, true} {
+		t.Run(fmt.Sprintf("-token-stdin, -print-token=%v", printToken), func(t *testing.T) {
+			t.Parallel()
+			cfg := bootstrapWithKeyring(t, "k1")
+			var out, errOut bytes.Buffer
+			doc, keys, resolver, closeResolver, err := loadLLMConfig(t.Context(), noEnviron,
+				company(t, filepath.Join(t.TempDir(), "minted")), cfg, "", "login", "claude", &errOut)
+			if err != nil {
+				t.Fatalf("loadLLMConfig: %v", err)
+			}
+			defer closeResolver()
+			providers, err := cliAgents(doc, keys, resolver)
+			if err != nil {
+				t.Fatalf("cliAgents: %v", err)
+			}
+			stdin := &recordedReader{r: strings.NewReader("sk-ant-oat01-PASTED\n")}
+			err = loginLLM(t.Context(), noEnviron, loginRequest{
+				providers: providers, key: "claude", tokenStdin: true, printToken: printToken,
+				bootstrapPath: cfg, stdin: stdin,
+			}, &out, &errOut)
+			refused(t, err, &out, &errOut)
+			if stdin.read {
+				t.Error("the token was read from stdin before the refusal")
+			}
+		})
+	}
+
+	t.Run("llm doctor names the field", func(t *testing.T) {
+		t.Parallel()
+		var out, errOut bytes.Buffer
+		err := runLLM(noEnviron, []string{"doctor", "claude", "-no-smoke",
+			"-company", company(t, filepath.Join(t.TempDir(), "minted")),
+			"-config", bootstrapWithKeyring(t, "k1")}, &out, &errOut)
+		if err == nil {
+			t.Fatalf("the doctor found no problem with MY-TOKEN:\n%s", out.String())
+		}
+		if !strings.Contains(out.String(), `providers.llm.claude.overrides.token_env is "MY-TOKEN"`) {
+			t.Errorf("the report does not name the field:\n%s", out.String())
+		}
+		if strings.Contains(errOut.String(), "${MY-TOKEN}") {
+			t.Errorf("stderr names ${MY-TOKEN} as a value the fleet may hold:\n%s", errOut.String())
+		}
+	})
+
+	t.Run("-from-host recommends no capture", func(t *testing.T) {
+		t.Parallel()
+		home := t.TempDir()
+		path := filepath.Join(home, ".claude", ".credentials.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"token":"personal"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(t.TempDir(), "minted")
+		var out, errOut bytes.Buffer
+		err := runLLM(noEnviron, []string{"login", "claude", "-from-host", "-home", home,
+			"-company", company(t, marker), "-config", bootstrapWithKeyring(t, "k1")}, &out, &errOut)
+		if err != nil {
+			t.Fatalf("-from-host: %v\n%s", err, errOut.String())
+		}
+		if !strings.Contains(out.String(), "Adopted") {
+			t.Fatalf("the premise: nothing was adopted:\n%s", out.String())
+		}
+		if strings.Contains(out.String(), "-capture-token") {
+			t.Errorf("recommends -capture-token, which this entry refuses:\n%s", out.String())
+		}
+	})
+}
+
+// A TOKEN FOR A CLI THAT TAKES NONE IS NEITHER MINTED NOR READ. A profile that
+// names no token_env — codex, like every built-in one but claude-code — hands
+// its CLI no headless token, and `-token-stdin` read the token from stdin
+// before it found that out, while a minting command a custom profile declared
+// ran, and the vendor issued a token, before the refusal. Each is now refused
+// first, in every mode and with -print-token too; the minting command leaves a
+// marker and stdin records a read, so either is seen whatever became of the
+// token.
+//
+// Mutation: drop the check, or move it after the read and the mint, and stdin
+// is read, the marker appears and the refusal names no token_env.
+func TestATokenForACLIThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		req  loginRequest
+	}{
+		{"-token-stdin", loginRequest{tokenStdin: true}},
+		{"-token-stdin -print-token", loginRequest{tokenStdin: true, printToken: true}},
+		{"-capture-token", loginRequest{captureToken: true}},
+		{"-capture-token -print-token", loginRequest{captureToken: true, printToken: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			marker := filepath.Join(t.TempDir(), "minted")
+			p, err := cliagent.New(cliagent.Config{
+				Key: "codex", Agent: "codex", StateDir: t.TempDir(),
+				Timeout: 30 * time.Second, MaxConcurrent: 1,
+				Overrides: map[string]any{
+					"binary": "/bin/sh",
+					"capture_token_args": []any{"-c",
+						fmt.Sprintf("touch '%s' && echo sk-MINTED", marker)},
+				},
+			})
+			if err != nil {
+				t.Fatalf("cliagent.New: %v", err)
+			}
+			req := tc.req
+			req.providers, req.key = []cliAgentProvider{{key: "codex", provider: p}}, "codex"
+			req.bootstrapPath = bootstrapWithKeyring(t, "k1")
+			stdin := &recordedReader{r: strings.NewReader("sk-PASTED\n")}
+			req.stdin = stdin
+			var out, errOut bytes.Buffer
+			err = loginLLM(t.Context(), noEnviron, req, &out, &errOut)
+			if err == nil {
+				t.Fatalf("a token for a CLI that takes none was accepted:\n%s%s",
+					out.String(), errOut.String())
+			}
+			for _, want := range []string{
+				`the "codex" profile names no token_env`, "none was minted, read or stored",
+				"`crewlet llm doctor codex`", "providers.llm.codex.overrides.token_env",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			if stdin.read {
+				t.Error("the token was read from stdin before the refusal")
+			}
+			if _, statErr := os.Stat(marker); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the token was minted before the refusal (marker: %v)", statErr)
+			}
+			if said := out.String() + errOut.String(); strings.Contains(said, "sk-") {
+				t.Errorf("a token was written:\n%s", said)
+			}
+		})
+	}
+}
+
+// AN API-KEY ENTRY IS TOLD ITS KEY BEFORE ANYTHING ABOUT ITS TOKEN VARIABLE.
+// The mode removes the token variable from the CLI's environment, so a token
+// reaches nothing under any variable — yet the refusal of a CLI that names
+// none told api-key codex to sign in with a login or to name a token
+// variable, and that of a name outside the grammar told api-key MY-TOKEN to
+// name the variable its CLI reads, as if a token would then reach it. Both
+// are now the api-key refusal, naming the key the mode reads, and offer no
+// subscription where no token could be read under it; MY-TOKEN's names the
+// field as well. inherit-env is judged as before: the refusal of a CLI that
+// names no token variable, which a login signs in under that mode too.
+//
+// Mutation: judge the token variable before the mode, and the api-key cases
+// are told a login or the variable alone; offer subscription whatever the
+// profile names, and they are told it.
+func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, agent   string
+		mode          cliagent.AuthMode
+		overrides     map[string]any
+		want, notWant []string
+	}{
+		{
+			name: "codex under api-key", agent: "codex", mode: cliagent.AuthAPIKey,
+			want: []string{"auth.mode api-key", `the "codex" profile names no token_env`,
+				"providers.llm.sub.auth.api_key, else OPENAI_API_KEY", "`crewlet secrets set`",
+				"none was minted or stored"},
+			notWant: []string{"auth.mode: subscription", "crewlet llm doctor", "overrides.token_env",
+				"a login of its own"},
+		},
+		{
+			name: "MY-TOKEN under api-key", agent: "claude-code", mode: cliagent.AuthAPIKey,
+			overrides: map[string]any{"token_env": "MY-TOKEN"},
+			want: []string{"auth.mode api-key", `removes "MY-TOKEN"`,
+				"providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY", "`crewlet secrets set`",
+				`providers.llm.sub.overrides.token_env is "MY-TOKEN"`, "none was minted or stored"},
+			notWant: []string{"auth.mode: subscription"},
+		},
+		{
+			name: "codex under inherit-env", agent: "codex", mode: cliagent.AuthInheritEnv,
+			want: []string{`the "codex" profile names no token_env`, "`crewlet llm doctor sub`",
+				"providers.llm.sub.overrides.token_env", "none was minted, read or stored"},
+			notWant: []string{"auth.mode api-key"},
+		},
+	} {
+		for _, flag := range []struct {
+			name string
+			req  loginRequest
+		}{
+			{"-capture-token", loginRequest{captureToken: true}},
+			{"-token-stdin", loginRequest{tokenStdin: true}},
+		} {
+			t.Run(tc.name+" "+flag.name, func(t *testing.T) {
+				t.Parallel()
+				marker := filepath.Join(t.TempDir(), "minted")
+				overrides := map[string]any{
+					"binary": "/bin/sh",
+					"capture_token_args": []any{"-c",
+						fmt.Sprintf("touch '%s' && echo sk-MINTED", marker)},
+				}
+				for name, value := range tc.overrides {
+					overrides[name] = value
+				}
+				p, err := cliagent.New(cliagent.Config{
+					Key: "sub", Agent: tc.agent, StateDir: t.TempDir(),
+					Timeout: 30 * time.Second, MaxConcurrent: 1,
+					Overrides: overrides, Auth: cliagent.Auth{Mode: tc.mode},
+				})
+				if err != nil {
+					t.Fatalf("cliagent.New: %v", err)
+				}
+				req := flag.req
+				req.providers, req.key = []cliAgentProvider{{key: "sub", provider: p}}, "sub"
+				req.bootstrapPath = bootstrapWithKeyring(t, "k1")
+				stdin := &recordedReader{r: strings.NewReader("sk-PASTED\n")}
+				req.stdin = stdin
+				var out, errOut bytes.Buffer
+				err = loginLLM(t.Context(), noEnviron, req, &out, &errOut)
+				if err == nil {
+					t.Fatalf("a token the entry never reads was accepted:\n%s%s", out.String(), errOut.String())
+				}
+				for _, want := range tc.want {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("the refusal does not say %q: %v", want, err)
+					}
+				}
+				for _, bad := range tc.notWant {
+					if strings.Contains(err.Error(), bad) {
+						t.Errorf("the refusal says %q, a route this entry cannot take: %v", bad, err)
+					}
+				}
+				if stdin.read {
+					t.Error("the token was read from stdin before the refusal")
+				}
+				if _, statErr := os.Stat(marker); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Errorf("the token was minted before the refusal (marker: %v)", statErr)
+				}
+			})
+		}
+	}
+}
+
+// recordedReader is a stdin that records whether anything read it.
+type recordedReader struct {
+	r    io.Reader
+	read bool
+}
+
+func (r *recordedReader) Read(p []byte) (int, error) {
+	r.read = true
+	return r.r.Read(p)
+}
+
 // -FROM-HOST RECOMMENDS A TOKEN ONLY WHERE THE ENTRY WOULD READ ONE. After an
 // adopted login it says to prefer `-capture-token`, which avoids the shared
 // refresh token — advice that, under api-key or inherit-env, leads to the
-// refusal above. Subscription is the control: it is told.
+// refusal above, and that a CLI with a token variable but no minting command
+// cannot follow at all: `-capture-token` refuses for it. Subscription on a CLI
+// that mints is the control: it is told.
 //
 // Mutation: print the preference whatever the mode, and the api-key and
-// inherit-env cases go red.
+// inherit-env cases go red; whenever the CLI names a token variable, and the
+// case with no minting command does.
 func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
+		name   string
 		mode   cliagent.AuthMode
+		noMint bool
 		prefer bool
 	}{
-		{cliagent.AuthSubscription, true},
-		{cliagent.AuthAPIKey, false},
-		{cliagent.AuthInheritEnv, false},
+		{name: string(cliagent.AuthSubscription), mode: cliagent.AuthSubscription, prefer: true},
+		{name: string(cliagent.AuthAPIKey), mode: cliagent.AuthAPIKey},
+		{name: string(cliagent.AuthInheritEnv), mode: cliagent.AuthInheritEnv},
+		{name: "subscription with no minting command", mode: cliagent.AuthSubscription, noMint: true},
 	} {
-		t.Run(string(tc.mode), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			providers := tokenLoginProvider(t, tc.mode)
+			if tc.noMint {
+				p, err := cliagent.New(cliagent.Config{
+					Key: "claude", Agent: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+					Timeout: 30 * time.Second, MaxConcurrent: 1,
+					Overrides: map[string]any{"capture_token_args": []any{}},
+				})
+				if err != nil {
+					t.Fatalf("cliagent.New: %v", err)
+				}
+				if p.MintsHeadlessToken() || p.Profile().TokenEnv == "" {
+					t.Fatalf("the premise: a token variable and no minting command, got %+v",
+						p.Profile().CaptureTokenArgs)
+				}
+				providers = []cliAgentProvider{{key: "claude", provider: p}}
+			}
 			home := t.TempDir()
 			path := filepath.Join(home, ".claude", ".credentials.json")
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -437,7 +803,7 @@ func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
 			}
 			var out, errOut bytes.Buffer
 			err := loginLLM(t.Context(), noEnviron, loginRequest{
-				providers: tokenLoginProvider(t, tc.mode), key: "claude", home: home,
+				providers: providers, key: "claude", home: home,
 				fromHost: true, stdin: strings.NewReader(""),
 			}, &out, &errOut)
 			if err != nil {

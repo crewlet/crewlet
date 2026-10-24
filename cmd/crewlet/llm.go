@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -278,14 +279,29 @@ func llmEntries(company *config.Company, sub, key, companyPath string) ([]string
 	return []string{key}, nil
 }
 
-// llmEntryReads is every variable these entries read, each once, sorted:
+// llmEntryReads is every stored value these entries read, each once, sorted:
 // building one resolves every ${VAR} it names, and the variables it signs in
 // from without naming them ([config.Company.LLMEntryReads]) — the names a
-// running node is asked to reveal ([companyResolver]).
+// running node is asked to reveal, and a stopped one's note names
+// ([companyResolver]).
+//
+// LESS ANY NAME NO STORE CAN HOLD. An overrides.token_env or api_key_env
+// outside the reference grammar — MY-TOKEN — is a variable the entry signs in
+// from, and one this command, which loads its file only to run, still meets:
+// every write of the document refuses it, but that is an admission rule. No
+// store can hold the name, so it is no stored value: a note naming it among
+// those the fleet may hold sent an operator to start the engine for a value
+// that cannot exist, and asking a node for it is a request the node refuses.
+// The engine reads it, if at all, from its own environment, which the
+// resolver still consults.
 func llmEntryReads(company *config.Company, keys []string) []string {
 	var names []string
 	for _, key := range keys {
-		names = append(names, company.LLMEntryReads(key)...)
+		for _, name := range company.LLMEntryReads(key) {
+			if envref.ValidName(name) {
+				names = append(names, name)
+			}
+		}
 	}
 	return unionReads(names)
 }
@@ -545,16 +561,19 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 			"\nThis is a COPY: your own login is untouched, but both copies now share\n"+
 				"one refresh token, and a vendor that rotates them can log out whichever\n"+
 				"side refreshes second.")
-		// ONLY WHERE THE ENTRY READS A STORED TOKEN: under api-key or
-		// inherit-env the token this would recommend reaches nothing
-		// ([refuseUnreadToken]).
+		// ONLY WHERE THE ENTRY READS A STORED TOKEN AND THE CLI CAN MINT ONE
+		// THERE: under api-key or inherit-env the token this would
+		// recommend reaches nothing ([refuseUnreadToken]); a CLI with no
+		// minting command has no -capture-token to run; and under a
+		// token_env outside the reference grammar the command refuses
+		// before it mints ([cliagent.Provider.MintsHeadlessToken]).
 		if _, fromEnv := p.ModeSignIn(); fromEnv {
 			return nil
 		}
-		if tokenVar, err := cliagent.TokenVarName(p.Profile()); err == nil {
+		if p.MintsHeadlessToken() {
 			fmt.Fprintf(stdout,
 				"Prefer `crewlet llm login %s -capture-token`, which mints a headless\n"+
-					"%s and avoids the shared refresh token entirely.\n", key, tokenVar)
+					"%s and avoids the shared refresh token entirely.\n", key, p.Profile().TokenEnv)
 		}
 		return nil
 
@@ -579,10 +598,8 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 				return err
 			}
 		}
-		tokenVar, err := cliagent.TokenVarName(p.Profile())
-		if err != nil {
-			return fmt.Errorf("cannot store a token for %q: %w", p.Agent(), err)
-		}
+		// Named, and in the grammar: refuseUnreadToken refused any other.
+		tokenVar := p.Profile().TokenEnv
 		if req.printToken {
 			// TO STDOUT, STORING NOTHING. An operator whose secrets live
 			// in somebody else's manager should not have to write the
@@ -657,8 +674,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 }
 
 // refuseUnreadToken refuses `-capture-token` and `-token-stdin` for an entry
-// whose auth mode would never read the token, BEFORE one is minted, read or
-// stored.
+// that would never read the token, BEFORE one is minted, read or stored.
 //
 // THE MODE DECIDES WHAT THE ENTRY READS, and the command used to ask only the
 // CLI. Under api-key the token variable is removed from the CLI's environment
@@ -672,20 +688,55 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 // nothing, which a remote run's refusal and the doctor then reported again.
 //
 // The error says what the mode reads instead, in the words the doctor and the
-// run's refusal use ([cliagent.Provider.ModeSignIn]). A CLI that mints no token
-// at all is left to the mint and the store, which refuse it by name.
+// run's refusal use ([cliagent.Provider.ModeSignIn]).
+//
+// NO TOKEN VARIABLE, OR ONE NO STORE CAN HOLD, is refused before anything
+// else but api-key, whatever the mode and -print-token, since a token reaches
+// the CLI only through that variable. A CLI whose profile names none — every
+// built-in one but claude-code — takes no headless token at all, and it was
+// refused only once the token was in hand: after -token-stdin had read it, or
+// after a minting command a custom profile declared had run. A name outside
+// the reference grammar, which only overrides.token_env can give, is refused
+// by the store, so a token minted for it was lost at the write, after the
+// vendor had issued it; and -print-token's next step, a ${VAR} or an export,
+// cannot spell it either. Every write of the company document refuses such an
+// override, but that is an admission rule and this command loads its file
+// only to run, so the name reaches here.
+//
+// API-KEY IS JUDGED FIRST, because the mode decides what the entry reads before
+// the CLI does ([cliagent.Provider.ModeSignIn]): an api-key entry reads its key
+// and no token under any variable, so it is told its key, as the doctor tells
+// it, whatever the profile names. Judged after them, an api-key codex entry
+// would be told to sign in with a login, which api-key does not sign in with,
+// or to name a token variable the mode would remove; and an api-key MY-TOKEN
+// entry to name the variable its CLI reads, as if a token would then reach
+// it. Its refusal offers subscription as the mode that reads a stored token
+// only under a variable a token can be stored in, and names the field where the
+// name is outside the grammar.
 func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error {
-	sign, fromEnv := p.ModeSignIn()
 	tokenVar := p.Profile().TokenEnv
-	if !fromEnv || tokenVar == "" {
-		return nil
+	sign, fromEnv := p.ModeSignIn()
+	if fromEnv && sign.Mode == cliagent.AuthAPIKey {
+		return refuseAPIKeyToken(p, key, sign)
 	}
-	if sign.Mode == cliagent.AuthAPIKey {
+	switch {
+	case tokenVar == "":
 		return fmt.Errorf(
-			"%s runs under auth.mode api-key, which removes %s from the CLI's environment, so a "+
-				"headless token would reach nothing, and none was minted or stored. The mode %s: "+
-				"%s — or set auth.mode: subscription to sign it in with a token",
-			key, tokenVar, sign.Reads, sign.Supply)
+			"the %q profile names no token_env, so this CLI takes no headless token, and none "+
+				"was minted, read or stored: sign %s in with a login of its own (`crewlet llm "+
+				"doctor %s` names the routes it has), or, if your build of the CLI reads a "+
+				"token from a variable, name that variable in providers.llm.%s.overrides.token_env",
+			p.Agent(), key, key, key)
+	case !p.TokenCanBeStored():
+		return fmt.Errorf(
+			"providers.llm.%s.overrides.token_env is %q, which is not an environment variable "+
+				"name (letters, digits and underscores, not starting with a digit): no secret "+
+				"store or ${VAR} can hold a token under it and no shell can export one, so none "+
+				"was minted, read or stored. Name the variable your build of the CLI reads",
+			key, tokenVar)
+	}
+	if !fromEnv {
+		return nil
 	}
 	if req.printToken {
 		return nil
@@ -701,6 +752,43 @@ func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error
 			"and none was minted or stored. Instead, %s — or set auth.mode: subscription, "+
 			"which reads a stored token",
 		key, sign.Reads, instead)
+}
+
+// refuseAPIKeyToken is [refuseUnreadToken]'s refusal for an api-key entry: the
+// mode removes the token variable from the CLI's environment, so a token
+// reaches nothing under any variable, and the remedy is the key the mode reads
+// — or, on a CLI whose profile names no key variable, a pairing every write of
+// the configuration refuses, the mode's own remedy, a login under subscription
+// ([cliagent.ModeSignIn]).
+//
+// Subscription is offered as the mode that reads a token only where it could
+// read one: a CLI whose profile names no token variable, or one outside the
+// reference grammar, takes none under any mode, so offering it sent an
+// operator to the refusal that names the variable instead.
+func refuseAPIKeyToken(p *cliagent.Provider, key string, sign cliagent.ModeSignIn) error {
+	tokenVar := p.Profile().TokenEnv
+	switch {
+	case tokenVar == "":
+		return fmt.Errorf(
+			"%s runs under auth.mode api-key, which hands the CLI no headless token — and the %q "+
+				"profile names no token_env to hand one in — so a token would reach nothing, and "+
+				"none was minted or stored. The mode %s: %s",
+			key, p.Agent(), sign.Reads, sign.Supply)
+	case !p.TokenCanBeStored():
+		return fmt.Errorf(
+			"%s runs under auth.mode api-key, which removes %q from the CLI's environment, so a "+
+				"headless token would reach nothing, and none was minted or stored. The mode %s: "+
+				"%s. And providers.llm.%s.overrides.token_env is %q, which is not an environment "+
+				"variable name (letters, digits and underscores, not starting with a digit), so "+
+				"no secret store or ${VAR} could hold a token under it in any mode either: name "+
+				"the variable your build of the CLI reads",
+			key, tokenVar, sign.Reads, sign.Supply, key, tokenVar)
+	}
+	return fmt.Errorf(
+		"%s runs under auth.mode api-key, which removes %s from the CLI's environment, so a "+
+			"headless token would reach nothing, and none was minted or stored. The mode %s: "+
+			"%s — or set auth.mode: subscription to sign it in with a token",
+		key, tokenVar, sign.Reads, sign.Supply)
 }
 
 func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider,

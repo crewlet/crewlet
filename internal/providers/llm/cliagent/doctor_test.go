@@ -185,10 +185,11 @@ func TestTheDoctorsRoutesFollowTheEntrysAuthMode(t *testing.T) {
 // which an entry loaded to run still carries. Nothing that keeps a credential
 // can hold such a name, yet the doctor told a subscription entry on a machine
 // with a personal login to mint a headless MY-TOKEN with `-capture-token`
-// (preferred, even), a token that could be neither stored nor referenced; and
-// an api-key entry to store or export a key handed over under MY=KEY. Each is
-// now a problem naming the field, and the routes leave the variable out: an
-// inherit-env entry is told to export only the variable a shell can.
+// (preferred, even), a token that could be neither stored nor referenced, and
+// which `crewlet llm login` refuses before it mints; and an api-key entry to
+// store or export a key handed over under MY=KEY. Each is now a problem naming
+// the field, and the routes leave the variable out: an inherit-env entry is
+// told to export only the variable a shell can.
 //
 // The control is the same subscription entry with its token variable in the
 // grammar, told to mint, so the missing advice is missing by the name.

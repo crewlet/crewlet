@@ -2131,7 +2131,9 @@ engine's answer. Beside a running engine the store's values are read through
 it, as every command that reads the company reads them
 ([Commands](#commands)), so `crewlet llm` runs while the seats do —
 revealing only what the entries it works on read (the one entry a key names,
-or every entry for `list` and a bare `doctor`), with one of Tier A's tokens
+or every entry for `list` and a bare `doctor`) — never a variable no store can
+hold, such as an `overrides.token_env` outside the reference grammar, which a
+stopped node's note does not name either — with one of Tier A's tokens
 in `CREWLET_API_TOKEN` when one of those is stored. **On a `seats` node, which holds no data**, there is no store
 of the company's to read, and the logins of the seats it runs are made there:
 `-api URL` names a node that holds data, which the stored values are read
@@ -2173,8 +2175,23 @@ variable, stored with `crewlet secrets set` or exported. Under `inherit-env` the
 token variable is forwarded from the engine's own environment and the secret
 store is never read, so storing a token is refused while `-capture-token
 -print-token` is not: export what it prints as that variable in the engine's
-environment, which is what the line it ends with says. `-from-host` recommends
-`-capture-token` after it runs only under `subscription`.
+environment, which is what the line it ends with says. `-capture-token` and
+`-token-stdin` are also refused before anything is minted, read or stored, in
+every mode and with `-print-token` too, for an entry no token variable hands
+a token to: one whose CLI names none (every built-in profile but
+`claude-code`), and one whose `overrides.token_env` is not an environment
+variable name (`MY-TOKEN`), under which no store, `${VAR}` or export can carry
+a token. The error names `providers.llm.<key>.overrides.token_env` — except
+under `api-key`, where it is that mode's refusal above, naming the key, with the
+field beside it for a name outside the grammar and without `auth.mode:
+subscription`, under which such an entry could read no token either — except
+an entry whose CLI names no key variable, a pairing every write refuses: it is
+told that the mode puts its key in no variable, and to set `auth.mode:
+subscription` and sign the CLI in with a login. Every write of the company
+document refuses such an override, but `crewlet llm` loads the document as a
+run does, without the rules only a write applies. `-from-host` recommends
+`-capture-token` after it runs only under `subscription`, and only where the
+CLI has a minting command and a token variable a store can hold.
 
 The brokered and `-username` shapes **fail when the CLI left no login** where
 the entry reads one — exiting 0 having stored nothing, as backing out of the
