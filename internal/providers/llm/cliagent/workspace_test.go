@@ -223,28 +223,133 @@ func TestAVolatilePathCannotEscapeTheSeatHome(t *testing.T) {
 	}
 }
 
-// One state directory is one login and one set of homes, which only works for
-// the same CLI: two different ones disagree about which files are credentials
-// and each would prune the other's login.
-func TestTwoDifferentCLIsCannotShareAStateDirectory(t *testing.T) {
+// TWO CLIs ON ONE STATE DIRECTORY NEVER MEET EACH OTHER'S FILES. Each keeps
+// its share under <state dir>/<agent>: its own login, its own seat homes. Keyed
+// by the directory alone, the second CLI was refused for the life of the
+// process, so moving a providers.llm key from claude-code to codex produced a
+// revision every running node refused while a restarted one applied it — and
+// had it been let through, codex would have seeded its seats from, and pruned,
+// a login it cannot read.
+//
+// Mutation: key the registry by the directory alone and root every workspace
+// at it, and the two CLIs share one login here.
+func TestTwoCLIsOnOneStateDirectoryKeepSeparateWorkspaces(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
-	if _, err := Shared(dir, "claude-code", testProfile(t)); err != nil {
+	claude, err := Shared(dir, "claude-code", testProfile(t))
+	if err != nil {
+		t.Fatalf("Shared(claude-code): %v", err)
+	}
+	codex, err := Shared(dir, "codex", testProfile(t))
+	if err != nil {
+		t.Fatalf("a second CLI on one state directory was refused: %v", err)
+	}
+	if claude == codex {
+		t.Fatal("two CLIs on one state directory got one workspace")
+	}
+	for ws, agent := range map[*Workspace]string{claude: "claude-code", codex: "codex"} {
+		if want := filepath.Join(dir, agent); ws.Root() != want {
+			t.Errorf("%s keeps its files in %q, want %q", agent, ws.Root(), want)
+		}
+		if ws.StateDir() != dir {
+			t.Errorf("%s reports state dir %q, want %q", agent, ws.StateDir(), dir)
+		}
+	}
+	if claude.CredentialsDir() == codex.CredentialsDir() {
+		t.Fatalf("two CLIs share the login directory %q", claude.CredentialsDir())
+	}
+
+	writeCreds(t, &Provider{ws: claude}, `{"token":"claude-login"}`)
+	co, err := codex.Acquire(t.Context(), "dev", "call", nil)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if strings.HasPrefix(co.Home, claude.Root()+string(filepath.Separator)) {
+		t.Errorf("codex's seat home %q is inside Claude Code's share %q", co.Home, claude.Root())
+	}
+	if _, err := os.Stat(filepath.Join(co.Home, ".fake", "creds.json")); err == nil {
+		t.Error("codex's seat home was seeded with Claude Code's login")
+	}
+	if err := co.Release(t.Context()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if got := readCreds(t, &Provider{ws: claude}); got != `{"token":"claude-login"}` {
+		t.Errorf("Claude Code's login after a codex call = %q, want it untouched", got)
+	}
+}
+
+// SWITCHING AN ENTRY BACK FINDS ITS OLD LOGIN. A key moved from claude-code to
+// codex and back opens the directory Claude Code left: nothing the codex
+// period did reached it, so the operator does not sign in again.
+func TestSwitchingBackToACLIFindsItsLoginIntact(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	claude, err := Shared(dir, "claude-code", testProfile(t))
+	if err != nil {
 		t.Fatalf("Shared: %v", err)
 	}
-	_, err := Shared(dir, "codex", testProfile(t))
-	if err == nil {
-		t.Fatal("two CLIs were allowed to share one state directory")
+	writeCreds(t, &Provider{ws: claude}, `{"token":"R0"}`)
+
+	// The entry moves to codex, which runs a call and is signed in there.
+	forgetWorkspace(dir)
+	codex, err := Shared(dir, "codex", testProfile(t))
+	if err != nil {
+		t.Fatalf("Shared: %v", err)
 	}
-	if !strings.Contains(err.Error(), "claude-code") {
-		t.Errorf("error %q does not name the CLI already there", err)
+	writeCreds(t, &Provider{ws: codex}, `{"token":"codex-login"}`)
+	co, err := codex.Acquire(t.Context(), "dev", "call", nil)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := co.Release(t.Context()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	// And back, in a fresh process.
+	forgetWorkspace(dir)
+	back, err := Shared(dir, "claude-code", testProfile(t))
+	if err != nil {
+		t.Fatalf("Shared: %v", err)
+	}
+	if !back.HasLogin() {
+		t.Fatal("switching back to Claude Code found no login")
+	}
+	seat, err := back.Acquire(t.Context(), "dev", "call-after", nil)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer func() { _ = seat.Release(t.Context()) }()
+	raw, err := os.ReadFile(filepath.Join(seat.Home, ".fake", "creds.json"))
+	if err != nil {
+		t.Fatalf("the seat home was not seeded with the old login: %v", err)
+	}
+	if string(raw) != `{"token":"R0"}` {
+		t.Errorf("the seat home holds %q, want Claude Code's own login", raw)
+	}
+}
+
+// AN AGENT NAMES ONE DIRECTORY, and a name that could climb out of the state
+// directory, or that two CLIs could both resolve to, is refused rather than
+// written under.
+func TestAnAgentThatIsNotOnePathElementIsRefused(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	for _, agent := range []string{"", ".", "..", "../escape", "a/b", "codex/"} {
+		if _, err := Shared(dir, agent, testProfile(t)); err == nil {
+			t.Errorf("agent %q was given a workspace", agent)
+		}
 	}
 }
 
 // The same CLI over one directory is the SUPPORTED case — it is how per-phase
 // models work off a single login — and both entries must get the one
 // workspace, or each would prune the other's live seat homes.
+//
+// Mutation: key the registry by anything more than the resolved directory and
+// the CLI, and the two entries get two workspaces.
 func TestTwoEntriesOnOneDirectoryShareOneWorkspace(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

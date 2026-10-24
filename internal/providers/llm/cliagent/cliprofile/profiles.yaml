@@ -347,7 +347,7 @@ opencode:
   # PROJECT configuration — `opencode.json`, and `.opencode/` agents, skills
   # and plugins — from the working directory and EVERY ANCESTOR of it, and a
   # project's permissions beat the global ones. The per-call directory is
-  # <state_dir>/seats/<seat>/work/<call>, and state_dir defaults to a
+  # <state_dir>/<agent>/seats/<seat>/work/<call>, and state_dir defaults to a
   # directory under the engine user's home, so whatever sits above it was
   # configuration for every seat. Measured on 2.0.32 with this profile's
   # global seed in place: an ancestor `opencode.json` or

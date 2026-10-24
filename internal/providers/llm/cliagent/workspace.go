@@ -21,17 +21,35 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
-// Workspace owns one state directory: the shared login, and a home per seat.
+// Workspace owns one CLI's share of a state directory: the shared login, and a
+// home per seat, all under <state dir>/<agent>.
 //
-// One per RESOLVED state directory, from a package-level registry, because
-// entries that point at the same directory are meant to share it — that is
-// how per-phase models work off a single `crewlet llm login`. Two Workspace
-// values over one directory would each believe they owned the pruning, and
-// the opus entry's prune would delete the sonnet entry's live session.
+// One per (RESOLVED state directory, CLI), from a package-level registry,
+// because entries that point at the same directory AND drive the same CLI are
+// meant to share it — that is how per-phase models work off a single
+// `crewlet llm login`. Two Workspace values over one directory would each
+// believe they owned the pruning, and the opus entry's prune would delete the
+// sonnet entry's live session.
+//
+// KEYED BY THE CLI TOO, ON DISK AND IN THE REGISTRY, because two CLIs agree
+// on nothing a workspace keeps: which files are credentials, which are
+// conversation memory, how a login is stored. Keyed by the directory alone, a
+// codex entry on a directory Claude Code had written would seed its seats'
+// homes from, and prune, a login it cannot read — so the registry refused the
+// second CLI for the life of the process, and an ordinary edit (moving a key
+// from claude-code to codex) produced a revision every running node refused
+// to apply while a restarted one applied it, splitting the fleet. Under its
+// own subdirectory each CLI's files never meet another's: switching an
+// entry's CLI opens a login directory of its own, signed out until it is
+// signed in, and switching back finds the old login where it was left.
 type Workspace struct {
-	root    string
-	agent   string
-	profile cliprofile.Profile
+	// stateDir is the resolved state directory, as the entry names it, and
+	// root is this CLI's share of it, <stateDir>/<agent>, under which every
+	// file the workspace keeps lives.
+	stateDir string
+	root     string
+	agent    string
+	profile  cliprofile.Profile
 
 	mu    sync.Mutex
 	seats map[string]*seatState
@@ -66,62 +84,86 @@ type seatState struct {
 	held func()
 }
 
-// registry is the process-wide table of workspaces by resolved state dir.
+// workspaceKey is a workspace's identity: the resolved state directory and
+// the CLI that keeps its files there.
+type workspaceKey struct{ dir, agent string }
+
+// registry is the process-wide table of workspaces by [workspaceKey].
 var registry = struct {
 	mu sync.Mutex
-	m  map[string]*Workspace
-}{m: make(map[string]*Workspace)}
+	m  map[workspaceKey]*Workspace
+}{m: make(map[workspaceKey]*Workspace)}
 
-// Shared returns the workspace for a state directory, creating it once.
+// Shared returns the workspace of one CLI in a state directory, creating it
+// once: <stateDir>/<agent>, so two CLIs on one directory never share a file.
 //
-// It refuses two DIFFERENT CLIs over one directory rather than serving both:
-// two CLIs disagree about which files are credentials and which are
-// conversation memory, so each would prune the other's login. Config
-// validation catches this at `crewlet validate`; this is the backstop for a
-// directory two processes reached by different paths.
+// The agent names a directory, so it must be one path element — the profile
+// table's names all are, and a name that could climb out of the state
+// directory or land two CLIs on one subdirectory is refused here rather than
+// written under.
 func Shared(stateDir, agent string, profile cliprofile.Profile) (*Workspace, error) {
-	resolved, err := filepath.Abs(stateDir)
+	key, err := keyOf(stateDir, agent)
 	if err != nil {
-		return nil, fmt.Errorf("cli-agent: resolving state_dir %q: %w", stateDir, err)
+		return nil, err
 	}
-	resolved = filepath.Clean(resolved)
-
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if existing, ok := registry.m[resolved]; ok {
-		if existing.agent != agent {
-			return nil, fmt.Errorf(
-				"cli-agent: state_dir %q is already driving %q — two CLIs cannot share "+
-					"one directory, because each would prune the other's login; give this "+
-					"entry its own state_dir", resolved, existing.agent)
-		}
+	if existing, ok := registry.m[key]; ok {
 		return existing, nil
 	}
 	ws := &Workspace{
-		root:    resolved,
-		agent:   agent,
-		profile: profile,
-		seats:   make(map[string]*seatState),
-		retries: make(map[string]carryRetry),
+		stateDir: key.dir,
+		root:     filepath.Join(key.dir, key.agent),
+		agent:    agent,
+		profile:  profile,
+		seats:    make(map[string]*seatState),
+		retries:  make(map[string]carryRetry),
 	}
-	registry.m[resolved] = ws
+	registry.m[key] = ws
 	return ws, nil
 }
 
-// forgetWorkspace drops a state dir from the registry. Tests only: a process
-// that reopened one directory as a different CLI is the bug Shared refuses,
-// so nothing in the engine has a reason to call it.
+// keyOf resolves a state directory and checks the agent names one directory
+// inside it.
+func keyOf(stateDir, agent string) (workspaceKey, error) {
+	// filepath.Base differs from any name holding a separator and from "",
+	// which it renders "."; "." and ".." are their own base.
+	if agent == "." || agent == ".." || filepath.Base(agent) != agent {
+		return workspaceKey{}, fmt.Errorf(
+			"cli-agent: agent %q cannot name a directory in state_dir %q: it must be one "+
+				"path element", agent, stateDir)
+	}
+	resolved, err := filepath.Abs(stateDir)
+	if err != nil {
+		return workspaceKey{}, fmt.Errorf("cli-agent: resolving state_dir %q: %w", stateDir, err)
+	}
+	return workspaceKey{dir: filepath.Clean(resolved), agent: agent}, nil
+}
+
+// forgetWorkspace drops every CLI's workspace in a state dir from the
+// registry. Tests only: they stand for a process that ended, so that the next
+// Shared opens the directory as a fresh process would.
 func forgetWorkspace(stateDir string) {
 	resolved, err := filepath.Abs(stateDir)
 	if err != nil {
 		return
 	}
+	resolved = filepath.Clean(resolved)
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	delete(registry.m, filepath.Clean(resolved))
+	for key := range registry.m {
+		if key.dir == resolved {
+			delete(registry.m, key)
+		}
+	}
 }
 
-// Root is the workspace's state directory.
+// StateDir is the resolved state directory this workspace keeps its CLI's
+// share of — what the entry's state_dir names, or the one derived for its key.
+func (w *Workspace) StateDir() string { return w.stateDir }
+
+// Root is this CLI's share of the state directory, <state dir>/<agent>: the
+// directory every file the workspace keeps lives under.
 func (w *Workspace) Root() string { return w.root }
 
 // CredentialsDir is where the shared login lives — ONE per workspace.
@@ -148,7 +190,7 @@ const (
 	// generationFile is a seat's open [generation], in its seat directory.
 	generationFile = "generation.json"
 	// loginGenerationFile is the login home's open [generation], in the
-	// state directory. On disk rather than in memory for the reason the
+	// workspace's root. On disk rather than in memory for the reason the
 	// login home has a lock: every `crewlet llm` command is a process of its
 	// own, so what one left open is the NEXT one's to finish.
 	loginGenerationFile = "login-generation.json"
@@ -158,11 +200,11 @@ const (
 	// loginHomeLockFile is the login home's lock — see
 	// [Workspace.lockLoginHome].
 	loginHomeLockFile = "login-home.lock"
-	// loginEpochFile is the shared login's OPERATOR EPOCH, in the state
-	// directory — see [Workspace.bumpLoginEpoch].
+	// loginEpochFile is the shared login's OPERATOR EPOCH, in the
+	// workspace's root — see [Workspace.bumpLoginEpoch].
 	loginEpochFile = "login-epoch"
 	// loggedOutFile records that `crewlet llm logout` removed the shared
-	// login, in the state directory — see [Workspace.markLoggedOut].
+	// login, in the workspace's root — see [Workspace.markLoggedOut].
 	loggedOutFile = "logged-out"
 )
 
@@ -962,7 +1004,7 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 // seat's broken export into every seat's outage.
 //
 // THE SEATS ARE LISTED, NEVER GLOBBED: the state directory is the operator's
-// path (state_dir, CREWLET_CLI_HOME or HOME), and a pattern built from it
+// path (state_dir, CREWLET_LLM_CLI_HOME or HOME), and a pattern built from it
 // reads a `[`, `*` or `?` in it as syntax — `crewlet[prod]` matched nothing,
 // and an unclosed `[` was a malformed pattern whose error was dropped — so
 // every seat was seeded with the token a kept refresh had rotated away. A
@@ -1274,8 +1316,9 @@ const seatHolder = "another process running a call in this seat's home — an en
 // login still waiting on its browser flow, which then stored its credential in
 // a database nothing could find again and was told it had written a login.
 //
-// ONE PER STATE DIRECTORY, not per entry: entries that share a state_dir
-// share one login home, so a command for one refuses a command for the other.
+// ONE PER WORKSPACE — a state directory and a CLI — not per entry: entries
+// that share a state_dir and drive one CLI share one login home, so a command
+// for one refuses a command for the other.
 //
 // NOT WAITED ON. The holder may be a person part way through a sign-in, for
 // minutes, and a `crewlet llm status` that sat silent behind it would read as
@@ -1358,7 +1401,7 @@ func (w *Workspace) bumpLoginEpoch() error {
 // bundle restores into: with nothing beside it, the engine's next boot or
 // apply, or the next `crewlet llm status`, put back the very login the operator
 // had just removed — revoking a compromised login lasted until the next
-// command. IN THE STATE DIRECTORY, beside the operator epoch and outside
+// command. IN THE WORKSPACE'S ROOT, beside the operator epoch and outside
 // credentials/, so no bundle and no coding box ever carries it — and so a
 // fresh state volume holds none, and its bundle restores there, which is what a
 // container rebuilt on every deploy is configured for.
@@ -1372,7 +1415,7 @@ func (w *Workspace) markLoggedOut() error {
 
 // loggedOutNote is what the logout's record says to an operator who finds it.
 // Nothing reads it back: the record is its existence.
-const loggedOutNote = "`crewlet llm logout` removed this state directory's login; a configured " +
+const loggedOutNote = "`crewlet llm logout` removed the login kept here; a configured " +
 	"credential bundle is not restored into it until a login is written again\n"
 
 // clearLoggedOut removes the logout's record ([Workspace.markLoggedOut]), under

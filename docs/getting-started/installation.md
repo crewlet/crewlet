@@ -49,9 +49,9 @@ Install the release line the engine's built-in profile was written for:
 `crewlet llm doctor` prints it as `written for` beside the version it found,
 and a profile that no longer matches its CLI fails there rather than at a
 seat's first turn. Each CLI keeps its login and its per-seat homes under the
-entry's `state_dir` — by default `~/.crewlet/llm-cli/<key>`, or under
-`CREWLET_LLM_CLI_HOME` — so that directory belongs on storage that outlives the
-process.
+entry's `state_dir`, in a subdirectory named for the CLI — by default
+`~/.crewlet/llm-cli/<key>/<agent>`, or under `CREWLET_LLM_CLI_HOME` — so that
+directory belongs on storage that outlives the process.
 
 **The container image ships no coding CLI.** It is the engine and the userland
 it needs (see below), and a CLI is a Node or Rust runtime of a few hundred

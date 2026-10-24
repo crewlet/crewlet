@@ -208,68 +208,11 @@ func (p *Providers) validate(path Path) error {
 		}
 		probs.wrap(provider.validate(entry(llmPath, key)))
 	}
-	probs.wrap(p.validateSharedStateDirs(llmPath))
 	if p.Embeddings != nil {
 		probs.wrap(p.Embeddings.validate(at(path, "embeddings")))
 	}
 	if p.Sandbox != nil {
 		probs.wrap(p.Sandbox.validate(at(path, "sandbox")))
-	}
-	return probs.err()
-}
-
-// validateSharedStateDirs holds the rule that two entries sharing one
-// state_dir must drive the SAME CLI.
-//
-// Sharing a directory is the supported way to run several models off a
-// single login — an "opus" entry for the executor and a "sonnet" entry for
-// the reviewer pointed at one directory means one `crewlet llm login`
-// instead of two.
-// That works only because both entries then agree on which files are
-// credentials and which are conversation memory. Two different CLIs over
-// one directory agree on neither, so each prunes the other's state and
-// seeds credentials the other cannot read.
-//
-// Compared on the CLI each entry DRIVES ([LLMProvider.AgentName]), not on the
-// field as written: an entry that leaves `agent` out drives Claude Code, so it
-// shares a directory with one that names `claude-code` as safely as two that
-// both name it. Comparing the raw field refused exactly that pair.
-//
-// Caught here so it fails `crewlet validate` rather than at the first turn
-// of whichever seat lost the race.
-func (p *Providers) validateSharedStateDirs(path Path) error {
-	type claim struct {
-		key   string
-		agent string
-	}
-	byDir := map[string]claim{}
-	var probs problems
-	// Sorted so the error names the same pair whichever way a map
-	// iteration happens to run; an error that changes between runs is one
-	// nobody can write a test against.
-	for _, key := range sortedKeys(p.LLM) {
-		cfg := p.LLM[key]
-		if cfg.StateDir == "" || (cfg.Agent != "" && !cfg.Agent.Valid()) {
-			continue
-		}
-		// Cleaned before comparison: "/var/lib/x" and "/var/lib/x/" are
-		// one directory, and comparing the raw strings let that pair
-		// through validation to fail at the first turn instead.
-		dir := filepath.Clean(cfg.StateDir)
-		agent := cfg.AgentName()
-		prev, seen := byDir[dir]
-		if seen && prev.agent != agent {
-			probs.add(at(entry(path, key), "state_dir"), ErrConflict,
-				"shares %q with providers.llm.%s but drives a different CLI "+
-					"(%q vs %q). One state directory is one login and one set "+
-					"of per-seat homes, which only works for the same CLI: "+
-					"give them separate state_dirs",
-				cfg.StateDir, prev.key, agent, prev.agent)
-			continue
-		}
-		if !seen {
-			byDir[dir] = claim{key: key, agent: agent}
-		}
 	}
 	return probs.err()
 }
@@ -324,15 +267,20 @@ type LLMProvider struct {
 	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where an agent-mode run happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
-	// its per-seat homes. Empty derives one per key, so unrelated
+	// its per-seat homes, under a subdirectory named for the CLI it drives
+	// (<state_dir>/<agent>). Empty derives one per key, so unrelated
 	// providers never collide.
 	//
-	// ENTRIES POINTING AT ONE DIRECTORY SHARE ONE LOGIN — and one set of
-	// per-seat homes, and one generation. That is how per-phase models
-	// work off a single `crewlet llm login`. Entries that should share
-	// have to say so, and must drive the same CLI; see
-	// [Providers.validateSharedStateDirs].
-	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory. Entries sharing one share a login."`
+	// ENTRIES POINTING AT ONE DIRECTORY AND DRIVING ONE CLI SHARE ONE LOGIN
+	// — and one set of per-seat homes, and one generation. That is how
+	// per-phase models work off a single `crewlet llm login`, and entries
+	// that should share have to say so. Entries on one directory that drive
+	// DIFFERENT CLIs share nothing: each CLI keeps its own subdirectory,
+	// because two CLIs agree on neither which files are credentials nor
+	// which are conversation memory. That is also what lets an entry move
+	// to another CLI in a live revision: the new CLI opens a login
+	// directory of its own, and moving back finds the old one intact.
+	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login."`
 
 	// TimeoutSeconds caps one CLI invocation, wall clock: a process launch
 	// (a Node runtime costs seconds before its first byte), the model's
@@ -566,8 +514,9 @@ const CLIHomeEnv = "CREWLET_LLM_CLI_HOME"
 // defaultCLIHome is the per-user fallback root, under the operator's home.
 const defaultCLIHome = ".crewlet/llm-cli"
 
-// ResolvedStateDir is where this entry keeps its login and its per-seat
-// homes, applying the derivation when the operator named none.
+// ResolvedStateDir is the directory under which this entry keeps its login and
+// its per-seat homes — in a subdirectory named for its CLI, which the backend
+// adds — applying the derivation when the operator named none.
 //
 // Derived PER PROVIDER KEY, which is what makes sharing a login an explicit
 // act: two unrelated entries must not silently land on one directory and

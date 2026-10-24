@@ -267,7 +267,8 @@ providers:
       run_in: ""                     # agent mode only: direct | container | e2b
 
       state_dir: /var/lib/crewlet/llm-cli/claude
-      # Where the login and the per-seat homes live. Empty uses
+      # Where the login and the per-seat homes live, each CLI in a
+      # subdirectory of its own (<state_dir>/<agent>). Empty uses
       # $CREWLET_LLM_CLI_HOME/<key>, falling back to ~/.crewlet/llm-cli/<key>.
       # Point it at a persistent volume when the engine runs in an
       # ephemeral container. A LITERAL PATH — unlike the credential fields
@@ -487,12 +488,17 @@ entries that should share must say so. They also share one set of per-seat
 homes and one generation, so a call on one entry never wipes a live call on the
 other.
 
-Entries sharing a `state_dir` must drive the **same** CLI: two different
-CLIs disagree about which files are credentials and which are
-conversation memory, so each would prune the other's state.
-`crewlet validate` rejects that combination by name, comparing the CLI each
-entry *drives* — an entry that leaves `agent` out shares safely with one that
-names `claude-code`.
+**Sharing is per CLI.** Each CLI keeps its files in a subdirectory of the
+`state_dir` named for it (`<state_dir>/claude-code`, `<state_dir>/codex`, …),
+because two CLIs disagree about which files are credentials and which are
+conversation memory. So entries on one `state_dir` share a login only when they
+drive the same CLI — an entry that leaves `agent` out drives `claude-code` and
+shares with one that names it — and entries on different CLIs share the
+directory and nothing in it. That is also what makes **moving an entry to
+another CLI** an ordinary revision, applied live on every node: the key keeps
+its `state_dir`, the new CLI opens a login directory of its own, signed out
+until you sign it in (`crewlet llm login <key>`, or its bundle), and moving
+back finds the old CLI's login where it was left.
 
 **Keep the key entry's directory apart.** `claude-key` above takes the default
 `state_dir`, so its seats' homes are seeded with no plan login: with one, which
@@ -664,14 +670,15 @@ its own place to run:
 
 ```
 <state_dir>/
-├── credentials/                  # the login — ONE per provider
-└── seats/
-    ├── sarah-chen/
-    │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
-    │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
-    │   └── work/<call-id>/       # cwd for one call, then deleted
-    └── marcus-rivera/
-        └── …
+└── <agent>/                          # one per CLI: claude-code/, codex/, …
+    ├── credentials/                  # the login — ONE per state_dir and CLI
+    └── seats/
+        ├── sarah-chen/
+        │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
+        │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
+        │   └── work/<call-id>/       # cwd for one call, then deleted
+        └── marcus-rivera/
+            └── …
 ```
 
 **Between seats.** Every seat gets its own `home`. `HOME`,
@@ -713,7 +720,7 @@ directory that is removed afterwards — so a CLI that reads `AGENTS.md` /
 anyone else.
 
 **An empty directory is not enough for a CLI that also walks *up* from
-it.** The per-call directory is `<state_dir>/seats/<seat>/work/<call>`, and
+it.** The per-call directory is `<state_dir>/<agent>/seats/<seat>/work/<call>`, and
 `state_dir` defaults to a directory under the engine user's home, so whatever
 sits above it — that home, or a repository you pointed `state_dir` into —
 is an ancestor of every call. OpenCode reads project configuration from every
@@ -1747,7 +1754,7 @@ token env     : unset
 sign-in       : none
 problems:
   - no sign-in for "default": no credential files in
-    /var/lib/crewlet/llm-cli/default/credentials, and nothing in the
+    /var/lib/crewlet/llm-cli/default/claude-code/credentials, and nothing in the
     environment the CLI is given authenticates it — this machine has
     a login at /home/you/.claude/.credentials.json: adopt it with
     `crewlet llm login default -from-host`, or mint a headless
@@ -1767,8 +1774,9 @@ crewlet llm login default
 Runs the real `claude auth login` / `codex login` / `opencode auth login`
 attached to your terminal — follow its prompts exactly as you would by
 hand. The only thing Crewlet controls is *where* the credential lands:
-in the provider's isolated `credentials/` directory, separate from your
-personal CLI login on the same machine.
+in the provider's isolated `credentials/` directory
+(`<state_dir>/<agent>/credentials`), separate from your personal CLI login on
+the same machine.
 
 Each profile names its vendor's own one-shot **auth subcommand**, which
 prints its OAuth URL and returns once you have signed in. A profile that
@@ -1786,14 +1794,14 @@ CLI exited without leaving one and writes nothing, rather than printing
 `Login written to …` over an empty directory. Backing out of the vendor's
 sign-in is the usual way to get there; run the login again.
 
-**One `crewlet llm` command at a time per state directory.** `login`,
+**One `crewlet llm` command at a time per state directory and CLI.** `login`,
 `status` and a vendor's own `logout` all run the CLI in the same login home,
 rebuilt from the shared login for each command and emptied after it, so a
 second one started while the first is running — a `status` in another terminal
 while a login waits on its browser flow — is refused at once with a message
 saying so, rather than pruning the database the sign-in is about to store its
-login in. Entries that share a `state_dir` share one login home, so a
-command for one refuses a command for the other.
+login in. Entries that share a `state_dir` and drive one CLI share one login
+home, so a command for one refuses a command for the other.
 
 **`pi` is the one CLI where the REPL *is* the login**, and its profile says
 so rather than pretending otherwise: `/login` there is a slash command and
@@ -1832,8 +1840,8 @@ credential_store:
 ```
 
 The document `auth export` prints is the login of record, kept as
-`credentials/exported-credentials`. `crewlet llm login` runs OpenCode's own
-`auth login` in a home rebuilt from it and exports what it holds afterwards;
+`<state_dir>/opencode/credentials/exported-credentials`. `crewlet llm login`
+runs OpenCode's own `auth login` in a home rebuilt from it and exports what it holds afterwards;
 each seat's generation starts from an **empty** database with the document
 imported into it, and ends by exporting the database and carrying the export
 back when OpenCode changed it — so a token OpenCode refreshed mid-call reaches
@@ -1867,9 +1875,9 @@ writes back only over that very login, so a call or a `status` running while
 `crewlet llm logout` ran cannot put the login back — for a credential file as
 much as a document — and an export holding no login never replaces one.
 
-`crewlet llm logout` also **records the logout** in the state directory
-(`logged-out`, beside `credentials/` rather than in it, so no bundle carries
-it), and while that record stands the entry's configured
+`crewlet llm logout` also **records the logout** in the CLI's share of the
+state directory (`<state_dir>/<agent>/logged-out`, beside `credentials/` rather
+than in it, so no bundle carries it), and while that record stands the entry's configured
 [bundle](#4-move-a-login-onto-another-host) is not restored into the directory
 the logout emptied — not at the engine's next boot or apply, and not by
 `list`, `status`, `export` or `doctor`, each of which says so, naming the
@@ -2140,8 +2148,9 @@ terminal — because the later of two sign-ins is the one you asked for.
 **A refreshed login that cannot be carried out is kept, not pruned.** If the
 export fails — a host too busy to finish it inside its 30-second bound, a CLI
 killed mid-export — the home is left exactly as it is, with its generation
-recorded beside it (`seats/<seat>/generation.json`), and the next generation
-to open in that state directory carries the login out before it seeds
+recorded beside it (`<state_dir>/<agent>/seats/<seat>/generation.json`), and
+the next generation to open in that CLI's share of the state directory carries
+the login out before it seeds
 anything: the seat's own next call, or **any other seat's** first call,
 whichever comes first, so every seat starting meanwhile is not seeded with the
 refresh token the vendor has just rotated away. A home a call is running in is
@@ -2163,7 +2172,7 @@ the seat's next call starts from the shared one.
 The login home works the same way. A `crewlet llm login` whose export failed
 after you finished the browser flow keeps the login there
 (`login-generation.json` beside it), and the next `crewlet llm` command that
-runs the CLI for that state directory carries it out before anything else —
+runs the same CLI on that state directory carries it out before anything else —
 over a refresh a seat made meanwhile, since it is your sign-in, but never over
 a login of record you replaced after it finished: a `-from-host`, a `crewlet
 llm import` or a `crewlet llm logout` since then wins, and the kept login is
@@ -2441,7 +2450,7 @@ written for   : Claude Code CLI 2.1.x (`claude --version`)
 state dir     : /var/lib/crewlet/llm-cli/default
 credentials   : present
 token env     : set
-sign-in       : credential files in /var/lib/crewlet/llm-cli/default/credentials; headless token in CLAUDE_CODE_OAUTH_TOKEN
+sign-in       : credential files in /var/lib/crewlet/llm-cli/default/claude-code/credentials; headless token in CLAUDE_CODE_OAUTH_TOKEN
 token usage   : reported by CLI
 smoke test    : ok — 812 in / 34 out
 local tools   : denied by profile — probe: refused

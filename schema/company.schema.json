@@ -1255,7 +1255,7 @@
           ]
         },
         "state_dir": {
-          "description": "Credential + per-seat home directory. Entries sharing one share a login.",
+          "description": "Credential + per-seat home directory, each CLI under \u003cstate_dir\u003e/\u003cagent\u003e. Entries sharing one and a CLI share a login.",
           "type": [
             "string",
             "number",

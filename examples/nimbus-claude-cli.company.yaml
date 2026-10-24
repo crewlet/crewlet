@@ -176,8 +176,9 @@ providers:
       # sets of per-seat homes.  Naming the same path on both is how
       # entries say they share, and it is deliberately explicit: two
       # unrelated providers must never silently collide and prune each
-      # other's state.  Entries that share one must also drive the SAME
-      # CLI, which `crewlet validate` checks.
+      # other's state.  The login is shared per CLI: each keeps its files
+      # in a subdirectory named for it (here .../claude/claude-code), so
+      # an entry on this path that drove another CLI would share nothing.
       #
       # A LITERAL PATH — unlike every credential field here it is not
       # ${VAR}-expanded, because it names where the engine keeps files

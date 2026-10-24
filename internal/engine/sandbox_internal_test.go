@@ -370,7 +370,7 @@ func TestASubscriptionSeatCarriesItsLoginIntoTheBox(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, state)
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-travelling")
 
-	credentials := filepath.Join(state, "subscription", "credentials")
+	credentials := filepath.Join(state, "subscription", "claude-code", "credentials")
 	if err := os.MkdirAll(credentials, 0o700); err != nil {
 		t.Fatal(err)
 	}

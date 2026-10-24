@@ -303,7 +303,7 @@ func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout,
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.key, p.provider.Agent(), model,
-			p.provider.SignInState(), p.provider.Workspace().Root())
+			p.provider.SignInState(), p.provider.Workspace().StateDir())
 	}
 	return w.Flush()
 }

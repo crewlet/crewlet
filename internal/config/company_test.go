@@ -78,11 +78,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      mode: agent\n      run_in: self\n",
 			"providers.llm.sub.run_in", ErrUnknownValue,
 		},
-		{
-			"shared state dir driving two CLIs",
-			"name: Acme\nproviders:\n  llm:\n    big:\n      agent: claude-code\n      model: opus\n      state_dir: /var/lib/one\n    small:\n      agent: codex\n      model: gpt\n      state_dir: /var/lib/one\n",
-			"state_dir", ErrConflict,
-		},
 
 		// embeddings + sandbox
 		{
@@ -626,6 +621,18 @@ func TestMinimalCompanyLoads(t *testing.T) {
 	if org.Name != "Acme" {
 		t.Fatalf("org name = %q", org.Name)
 	}
+}
+
+// ENTRIES ON ONE STATE DIRECTORY MAY DRIVE DIFFERENT CLIs. Each CLI keeps its
+// files in a subdirectory of its own (<state_dir>/<agent>), so the two share
+// nothing and there is no hazard to refuse. The rule that refused this pair
+// guarded a layout that is gone — and with it, moving one key to another CLI
+// was an ordinary edit every running node refused to apply.
+func TestEntriesOnOneStateDirMayDriveDifferentCLIs(t *testing.T) {
+	t.Parallel()
+	mustCompany(t, "name: Acme\nproviders:\n  llm:\n"+
+		"    big:\n      agent: claude-code\n      model: opus\n      state_dir: /var/lib/one\n"+
+		"    small:\n      agent: codex\n      model: gpt-5\n      state_dir: /var/lib/one/\n")
 }
 
 // A DISABLED BLOCK SKIPS ITS OWN REQUIRED FIELDS.

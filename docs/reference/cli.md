@@ -2119,8 +2119,9 @@ The brokered and `-username` shapes **fail when the CLI left no login** where
 the entry reads one — exiting 0 having stored nothing, as backing out of the
 vendor's sign-in does — rather than printing that a login was written. `login`,
 `status` and a vendor's own `logout` run the CLI one at a time per state
-directory (entries sharing a `state_dir` share one login home): a second
-started while the first is running is refused, saying so. Only the commands
+directory and CLI (entries sharing a `state_dir` and driving one CLI share one
+login home): a second started while the first is running is refused, saying
+so. Only the commands
 that make a login create the shared one; `status` and a seat's call write back
 only a refresh of the very login they started from, so neither reverts a newer
 login nor brings back one `logout` removed — and the bundle restore `status`
@@ -2152,8 +2153,8 @@ it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
 mean to replace it.
 
 **`logout`** removes the login (and revokes it with the vendor where the CLI
-has a logout of its own), and **records the logout** in the state directory,
-so the configured bundle below is not restored into the directory it emptied —
+has a logout of its own), and **records the logout** in the CLI's share of the
+state directory (`<state_dir>/<agent>/logged-out`), so the configured bundle below is not restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that
 directory again: `login` (brokered or `-username`), `-from-host` or `import`. A

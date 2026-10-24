@@ -357,12 +357,15 @@ providers:
                                         #   (claude-code and opencode only)
       run_in: ""                        # agent mode only — direct | container | e2b; empty takes
                                         #   providers.sandbox.default_run_in
-      state_dir: ""                     # optional — the login + per-seat CLI homes. Empty:
+      state_dir: ""                     # optional — the login + per-seat CLI homes, each CLI
+                                        #   under <state_dir>/<agent>. Empty:
                                         #   $CREWLET_LLM_CLI_HOME/<key>, else ~/.crewlet/llm-cli/<key>.
                                         #   Use a persistent volume in an ephemeral container.
-                                        #   Entries naming the SAME dir share one login (how
-                                        #   per-phase models run off one `crewlet llm login`);
-                                        #   they must then also drive the same CLI
+                                        #   Entries naming the SAME dir and driving the same CLI
+                                        #   share one login (how per-phase models run off one
+                                        #   `crewlet llm login`); on different CLIs they share
+                                        #   nothing, so moving an entry to another CLI applies
+                                        #   live and starts that CLI signed out
       timeout_seconds: 600              # optional — one CLI invocation, wall clock (default 600):
                                         #   the process launch, the model's whole answer and the
                                         #   CLI's own retries. A breach is a retryable `timeout`
@@ -420,8 +423,8 @@ providers:
 ```
 
 **One entry is one CLI on one model, signed in one way.** Per-phase models
-are one entry per model, and entries that share a `state_dir` share one
-login. A seat's `llm` takes a list, which is how a plan and a key compose:
+are one entry per model, and entries that share a `state_dir` and drive one
+CLI share one login. A seat's `llm` takes a list, which is how a plan and a key compose:
 `llm: [default, claude-key]` runs on the plan and falls through to the key while
 the plan is spent — see [Falling back between
 entries](../concepts/llm-backends.md#falling-back-between-entries).

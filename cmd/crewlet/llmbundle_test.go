@@ -63,7 +63,7 @@ roles:
     llm: sub
 `, state, binary, status, signIn, logoutArgs))
 	return []string{"-company", company, "-config", filepath.Join(dir, "absent.yaml")},
-		filepath.Join(state, "credentials", "creds.json")
+		filepath.Join(state, "custom", "credentials", "creds.json")
 }
 
 // llmBundle packs one creds.json the way `crewlet llm export` does.

@@ -153,7 +153,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	d := Diagnosis{
 		Provider: p.key, Agent: p.agent, Mode: p.modeName(), Model: p.model,
 		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
-		StateDir: p.ws.Root(),
+		StateDir: p.ws.StateDir(),
 	}
 	d.AgentRuntime, d.Problems = p.agentRuntime(opts)
 

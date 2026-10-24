@@ -75,7 +75,9 @@ type Config struct {
 	// AgentMode runs a seat's executor as the CLI's own agentic run
 	// rather than as a text completion. See [Provider.AgentMode].
 	AgentMode bool
-	// StateDir is the resolved credential + per-seat home directory.
+	// StateDir is the resolved state directory. The CLI keeps its login and
+	// its per-seat homes under <StateDir>/<Agent> ([Shared]), so entries on
+	// one directory share a login only when they drive one CLI.
 	StateDir string
 	// Overrides are the operator's profile edits.
 	Overrides map[string]any
@@ -240,7 +242,8 @@ func (p *Provider) CodingAgent() string { return p.agent }
 // Profile is the resolved profile, for `crewlet llm doctor`.
 func (p *Provider) Profile() cliprofile.Profile { return p.profile }
 
-// Workspace is the state directory this provider shares.
+// Workspace is this provider's CLI's share of its state directory, which every
+// entry on the same directory and CLI shares.
 func (p *Provider) Workspace() *Workspace { return p.ws }
 
 // Agent is which CLI this provider drives.

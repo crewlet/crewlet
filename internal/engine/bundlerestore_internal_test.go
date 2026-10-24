@@ -63,7 +63,7 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	login := filepath.Join(stateDir, "credentials", name)
+	login := filepath.Join(stateDir, "claude-code", "credentials", name)
 	if _, err := os.Stat(login); !os.IsNotExist(err) {
 		t.Fatalf("building the epoch wrote the bundle's login (%v) — validating a document "+
 			"would write onto the host", err)
@@ -250,7 +250,7 @@ func bundledLogin(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(stateDir, "credentials", name)
+	return filepath.Join(stateDir, "claude-code", "credentials", name)
 }
 
 // bundleNode boots an engine over a fresh store on company, nil for none.
