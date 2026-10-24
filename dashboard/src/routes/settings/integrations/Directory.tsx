@@ -58,6 +58,7 @@ import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { CATALOG, type Entry } from "./catalogue.tsx";
@@ -111,7 +112,7 @@ function AdminPage({ kind }: { kind?: string | undefined }) {
       )}
       {model.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          {needsWords("Reading the integrations' setup state", model.needs)}
+          {authorityWords("Reading the integrations' setup state", model.refused)}
         </Callout>
       )}
       <QueryState error={model.error} refusal={model.refusal} loading={false}>

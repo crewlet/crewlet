@@ -110,12 +110,14 @@ describe("the words", () => {
     );
   });
 
-  // NOTHING THE ENGINE ACCEPTED WAS PRESENTED — a 401 — so the repair is to
-  // sign in, not to ask an admin for access.
-  test("a refusal naming no access asks for a credential, not an admin", () => {
+  // A LOCK NAMING NO ACCESS SAYS ONLY THAT THERE IS NONE: it said "Sign in
+  // to see this.", the 401's sentence, so a signed-in person a rule refused
+  // naming nothing was told to sign in. Which refusal it was is
+  // `authorityWords`', which is told what refused.
+  test("a lock naming no access never asks a signed-in reader to sign in", () => {
     const said = needsWords("Reading one pass", []);
-    expect(said).toBe("Sign in to see this.");
-    expect(said).not.toMatch(/admin|operator|token/);
+    expect(said).toBe("You don’t have access to this.");
+    expect(said).not.toMatch(/sign in|admin|operator|token/i);
   });
 });
 

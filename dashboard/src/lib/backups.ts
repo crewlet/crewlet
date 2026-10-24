@@ -22,7 +22,7 @@ import type {
   BackupPolicy,
 } from "~/contract/backups.ts";
 import { RestError } from "~/protocol/rest.ts";
-import { needsWords } from "./access.ts";
+import { authorityWords } from "./refusal.ts";
 
 /**
  * How long the dashboard waits for a copy, in milliseconds.
@@ -176,7 +176,7 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
   if (err.unauthorized) {
     // THE ACCESS THE REFUSAL NAMED — Admin — or, for nobody signed in, that
     // somebody has to be.
-    return { field: false, message: needsWords("Taking a backup", err.grants) };
+    return { field: false, message: authorityWords("Taking a backup", err) };
   }
   if (err.status === 0) {
     return {

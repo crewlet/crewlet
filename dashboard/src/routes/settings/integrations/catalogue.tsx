@@ -68,6 +68,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { rest, RestError } from "~/protocol/index.ts";
 import { ADMIN, needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
 import {
@@ -1065,8 +1066,8 @@ export function useSetup(): {
   byKey: Map<string, SetupToolState>;
   base: SetupListing["external_url"] | null;
   guarded: boolean;
-  /** The access the refusal named, when [guarded] — see `lib/access.ts`'s `needsWords`. */
-  needs: string[];
+  /** The refusal, when [guarded] — said through `lib/refusal.ts`'s `authorityWords`. */
+  refused: RestError | null;
   /**
    * True until this read has answered ONCE, however it answered.
    *
@@ -1117,7 +1118,7 @@ export function useSetup(): {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
     base: listing?.external_url ?? null,
     guarded: setup.error?.unauthorized ?? false,
-    needs: setup.error?.grants ?? [],
+    refused: setup.error?.unauthorized ? setup.error : null,
     // ANSWERED, not answered WELL. A refusal is a state the screen can render
     // honestly, with the banner and no buttons; waiting is not.
     loading: setup.loading,
@@ -1393,7 +1394,7 @@ function useSetupRuns(kinds: string[]): {
   runs: SetupRun[];
   scope: string;
   guarded: boolean;
-  needs: string[];
+  refused: RestError | null;
   loading: boolean;
 } {
   // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
@@ -1441,7 +1442,7 @@ function useSetupRuns(kinds: string[]): {
     runs,
     scope: answer.data?.scope ?? "",
     guarded: answer.error?.unauthorized ?? false,
-    needs: answer.error?.grants ?? [],
+    refused: answer.error?.unauthorized ? answer.error : null,
     loading: answer.loading,
   };
 }
@@ -1471,7 +1472,7 @@ function useSetupRun(
   run: SetupRun | null;
   missing: boolean;
   guarded: boolean;
-  needs: string[];
+  refused: RestError | null;
   loading: boolean;
 } {
   // FOLLOWED TO ITS END, and only while it is going: the row that opened this
@@ -1494,7 +1495,7 @@ function useSetupRun(
     run,
     missing: answer.error?.status === 404,
     guarded: answer.error?.unauthorized ?? false,
-    needs: answer.error?.grants ?? [],
+    refused: answer.error?.unauthorized ? answer.error : null,
     loading: answer.loading,
   };
 }
@@ -1594,7 +1595,7 @@ function concludedLine(run: SetupRun): string {
  */
 export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   const now = useNow();
-  const { runs, scope, guarded, needs, loading } = useSetupRuns(kinds);
+  const { runs, scope, guarded, refused, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
   // its own could not say which surface's pass it was once the listing that
@@ -1614,7 +1615,7 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
         <Card.Header icon={<RotateCwGlyph size="sm" />}>
           <Card.Title>Provisioning passes</Card.Title>
         </Card.Header>
-        <span className="t-caption">{needsWords("Seeing passes", needs)}</span>
+        <span className="t-caption">{authorityWords("Seeing passes", refused)}</span>
       </Card>
     );
   }
@@ -1773,7 +1774,7 @@ function PassDetail({
   name: string;
   now: number;
 }) {
-  const { run, missing, guarded, needs, loading } = useSetupRun(kind, id);
+  const { run, missing, guarded, refused, loading } = useSetupRun(kind, id);
 
   if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
@@ -1790,7 +1791,7 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-row-note-when">{needsWords("Reading one pass", needs)}</span>
+          <span className="int-row-note-when">{authorityWords("Reading one pass", refused)}</span>
         </span>
       </div>
     );

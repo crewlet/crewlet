@@ -233,11 +233,13 @@ export function groupLock(reasons: readonly (string | undefined)[]): string | un
  * "Search needs Doclet access. An admin can give it to you."
  *
  * FROM THE ANSWER WHERE THERE IS ONE: a refusal's `grants` are the engine's
- * own (`refusedGrants`), and a lock's are the navigation table's. With none,
- * nothing the engine accepted was presented — a 401 — and the repair is to
- * sign in rather than to ask an admin.
+ * own (`refusedGrants`), and a lock's are the navigation table's. A refusal
+ * that names none is `lib/refusal.ts`'s `authorityWords`, which tells a 401
+ * from a rule's refusal: this said "Sign in to see this." for any empty list,
+ * so a signed-in person a rule refused was told to sign in. With none, it says
+ * only that there is no access.
  */
 export function needsWords(what: string, needs: readonly string[]): string {
-  if (needs.length === 0) return "Sign in to see this.";
+  if (needs.length === 0) return "You don’t have access to this.";
   return `${what} needs ${accessNames(needs)} access. An admin can give it to you.`;
 }

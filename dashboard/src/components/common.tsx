@@ -44,7 +44,7 @@ import {
   queryErrorCode,
 } from "~/protocol/index.ts";
 import { goSignIn, page } from "~/lib/session.ts";
-import { needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { remedyFor, type AuthorityAction } from "~/lib/authorityRemedy.ts";
 import {
   activityOf,
@@ -63,7 +63,6 @@ import {
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import { REFUSAL_SENTENCES } from "~/contract/authority.ts";
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
@@ -501,10 +500,7 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
       icon={<KeyGlyph size="md" />}
       action={remedy.action ? <AuthorityRemedy action={remedy.action} /> : undefined}
     >
-      {remedy.namesAccess
-        ? needsWords("This answer", refusal.grants)
-        : (REFUSAL_SENTENCES[refusal.reason] ??
-          "You can’t see this, and no access would change that.")}{" "}
+      {authorityWords("This answer", refusal)}{" "}
       <span className="t-caption">
         Refused as <InlineCode>{refusal.reason}</InlineCode>.
       </span>

@@ -10,7 +10,7 @@
 
 import { expect, test } from "vitest";
 
-import { refusalText } from "./refusal.ts";
+import { authorityWords, refusalText } from "./refusal.ts";
 import { RestError, refusedGrants } from "~/protocol/rest.ts";
 
 // THE SIGN-IN SURFACE'S WORDS ARE THE ENGINE'S. A failed sign-in is one
@@ -77,4 +77,63 @@ test("the grants are read off the envelope, and nothing else is taken for one", 
   expect(refusedGrants({ error: "unauthorized" })).toEqual([]);
   expect(refusedGrants(null)).toEqual([]);
   expect(refusedGrants("not a body")).toEqual([]);
+});
+
+// A REFUSAL ON AUTHORITY IS TOLD BY WHAT REFUSED, never by whether it named
+// access: only a 401 asks for a sign-in. A 403 naming no access went to the
+// sign-in sentence too, so on Audit, Secrets, the backups dialog and
+// Integrations a signed-in person a rule refused was told to sign in, while
+// every screen drawing the same refusal through QueryState said no access.
+//
+// Mutation: answer a 403 naming no access with the sign-in sentence, or tell
+// a socket refusal apart from the same refusal over REST, and a row goes red.
+test("only a 401 asks for a sign-in; a rule's refusal is the rule's own words", () => {
+  const signIn = "Sign in to see this.";
+  const rows: [string, RestError | Parameters<typeof authorityWords>[1], string][] = [
+    ["a 401", new RestError(401, { error: "unauthorized" }), signIn],
+    [
+      "a rule naming access",
+      new RestError(403, { error: "unauthorized", reason: "no_grant", grants: ["admin"] }),
+      "Taking a backup needs Admin access. An admin can give it to you.",
+    ],
+    [
+      "the same rule on the socket",
+      { reason: "no_grant", grants: ["admin"] },
+      "Taking a backup needs Admin access. An admin can give it to you.",
+    ],
+    [
+      "a rule naming none",
+      new RestError(403, { error: "unauthorized", reason: "token_refused", grants: [] }),
+      "Access tokens can’t do this. Sign in as yourself.",
+    ],
+    [
+      "a refusal saying nothing more",
+      new RestError(403, { error: "unauthorized" }),
+      "You don’t have access to this.",
+    ],
+    ["a socket refusal saying nothing more", null, "You don’t have access to this."],
+  ];
+  for (const [what, refused, said] of rows) {
+    expect(authorityWords("Taking a backup", refused), what).toBe(said);
+  }
+  for (const [what, refused] of rows.slice(1)) {
+    expect(authorityWords("Taking a backup", refused), what).not.toBe(signIn);
+  }
+});
+
+// A PROOF GONE STALE NAMES THE ACCESS THAT ADMITTED THE READER, so a step-up
+// they did not confirm is the engine's sentence for it, never "needs Admin
+// access" to an admin. Mutation: name the access any 403 carries and this
+// fails.
+test("a 403 whose rule access does not clear is the engine's sentence, whatever it names", () => {
+  const stale = new RestError(403, {
+    error: "step_up_required",
+    message: "Confirm it's you to do this, then try again.",
+    reason: "step_up",
+    window: "step_up",
+    grants: ["admin"],
+  });
+  expect(authorityWords("Taking a backup", stale)).toBe(
+    "Confirm it's you to do this, then try again.",
+  );
 });
