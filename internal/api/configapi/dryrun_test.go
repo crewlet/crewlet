@@ -37,6 +37,11 @@ func (c *countingRevisions) InsertOn(ctx context.Context, base, r store.Revision
 	return c.RevisionStore.InsertOn(ctx, base, r)
 }
 
+func (c *countingRevisions) Insert(ctx context.Context, r store.Revision) (string, error) {
+	c.inserts.Add(1)
+	return c.RevisionStore.Insert(ctx, r)
+}
+
 func (c *countingRevisions) NoteActivation(ctx context.Context, revisionID string, at time.Time) error {
 	c.noted.Add(1)
 	return c.RevisionStore.NoteActivation(ctx, revisionID, at)

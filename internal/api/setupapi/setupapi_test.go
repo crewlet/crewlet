@@ -252,7 +252,7 @@ func newConfigSurface(t *testing.T, writers ...string) configFixture {
 	f := configFixture{db: db, cipher: testCipher(t), plane: gate, gate: gate}
 	cfg, err := configapi.New(configapi.Options{
 		Store: db, Plane: f.plane, Cipher: f.cipher,
-		Holders: func(context.Context, []string, time.Time) (
+		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
 			return nil, nil

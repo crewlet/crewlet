@@ -148,20 +148,22 @@ const (
 	// whole, and a screen called a binned sheet one that does not exist.
 	CodeArtifactTrashed = "artifact_trashed"
 
-	// The four answers to a question about a configuration revision this
+	// The five answers to a question about a configuration revision this
 	// node cannot open, under the REST routes' own codes and in their words
 	// (internal/api/configapi's UnreadableRevisionError): a revision this
 	// node keeps sealed under a key its keyring lost, one it keeps stored
-	// without a seal, and the fleet's revision met only through its pointer,
+	// without a seal, the fleet's revision met only through its pointer,
 	// sealed under a key this node was never given or put there without a
-	// seal. The frame's `detail` says what happened and what fixes it; each
-	// cause is fixed in a different place, which is why they are four codes
-	// and not one. Answered `query_failed`, the config screen called a
+	// seal, and a revision of either origin sealed in a form this build does
+	// not read. The frame's `detail` says what happened and what fixes it;
+	// each cause is fixed in a different place, which is why they are five
+	// codes and not one. Answered `query_failed`, the config screen called a
 	// missing key a failure nobody could explain.
 	CodeUnreadableRevision      = "unreadable_revision"
 	CodeUnsealedRevision        = "unsealed_revision"
 	CodeUnreadableFleetRevision = "unreadable_fleet_revision"
 	CodeUnsealedFleetRevision   = "unsealed_fleet_revision"
+	CodeUnknownSealRevision     = "unknown_seal_revision"
 )
 
 // The failures a query surface reports precisely; everything else is a
@@ -299,7 +301,7 @@ func (e *BadParamsError) Unwrap() error { return ErrBadParams }
 
 // RevisionError is a question about a configuration revision this node cannot
 // open, carrying the code and the sentence the REST route answers it with: one
-// of the four Code…Revision codes, and the detail that names what fixes it.
+// of the five Code…Revision codes, and the detail that names what fixes it.
 //
 // A TYPE FOR [BadParamsError]'s REASON: the frame has to carry something the
 // code alone cannot, and here it is which key or which document to restore.

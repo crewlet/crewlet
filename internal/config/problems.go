@@ -99,6 +99,53 @@ func Problems(err error) []Problem {
 	return out
 }
 
+// WithoutFaultsAt is err with every fault located at one of paths left out,
+// and nil when nothing else is left.
+//
+// FOR A CALLER THAT KNOWS WHY those places are wrong better than the rule that
+// found them, and reports them in its own words beside every OTHER fault: a
+// write replacing a revision nothing was read from knows a masked credential
+// had nothing to be restored from, while [Company.Validate] can only list the
+// causes a restore leaves behind. Dropped here, a fault at such a place is
+// reported once, in the caller's words, and the rest of the document is still
+// judged whole. It walks what [Problems] walks: a join is split into its
+// parts, a fault is matched by its own path, and an error the company located
+// is matched by the problems it is, every one of which has to be at one of
+// paths (a rule about several entities is kept whole). Anything else is kept
+// as it was.
+func WithoutFaultsAt(err error, paths []Path) error {
+	at := func(p Path) bool {
+		return slices.ContainsFunc(paths, func(q Path) bool { return slices.Equal(p, q) })
+	}
+	if err == nil {
+		return nil
+	}
+	if l, ok := err.(*located); ok { //nolint:errorlint // As [Problems] reads one: see leafFault.
+		if len(l.problems) > 0 && !slices.ContainsFunc(l.problems,
+			func(p Problem) bool { return !at(p.Segments) }) {
+			return nil
+		}
+		return err
+	}
+	if f, ok := leafFault(err); ok {
+		if at(f.Path) {
+			return nil
+		}
+		return err
+	}
+	parts, ok := joinedParts(err)
+	if !ok {
+		return err
+	}
+	kept := make([]error, 0, len(parts))
+	for _, part := range parts {
+		if left := WithoutFaultsAt(part, paths); left != nil {
+			kept = append(kept, left)
+		}
+	}
+	return errors.Join(kept...)
+}
+
 // holdsProblems reports whether err carries anything this package located.
 func holdsProblems(err error) bool {
 	var f *Fault

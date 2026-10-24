@@ -1848,8 +1848,10 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
 	// AND IT SAYS WHERE THE BODY CAME FROM: the coordination store, where
-	// anything that reaches the broker could have written it.
-	for _, says := range []string{"coordination store", "without a seal", "forged"} {
+	// anything that reaches the broker could have written it; and what
+	// replaces it, an admin's whole document.
+	for _, says := range []string{"coordination store", "without a seal",
+		"anything that reaches the broker", "An admin", "whole document", "PUT /config"} {
 		if !strings.Contains(err.Error(), says) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}
@@ -1916,13 +1918,62 @@ func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
 	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
-	for _, says := range []string{"this node's own copy", id, "crewlet config import"} {
+	for _, says := range []string{"this node's own copy", id, "An admin",
+		"whole document", "crewlet config import"} {
 		if !strings.Contains(err.Error(), says) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}
 	}
-	if strings.Contains(err.Error(), "forged") {
+	if strings.Contains(err.Error(), "broker") {
 		t.Errorf("this node's own copy was answered as a forgery: %v", err)
+	}
+}
+
+// A PEER'S REVISION SEALED IN A FORM THIS BUILD DOES NOT READ IS NOT UNSEALED.
+//
+// A newer build's seal (here a successor's `enc:v2:`) is wrapped exactly as
+// this build's is, and the reader took every seal it could not parse for no
+// seal at all: the recorded error told the operator the body came from
+// outside the fleet and that a whole document replaces it, which would
+// discard what the newer peer wrote. It is refused, neither applied nor kept,
+// as every body that does not open is, and the error names the remedy, the
+// build that sealed it.
+//
+// Mutation: answer every seal secrets cannot parse as ErrUnsealedWithKey, or
+// drop openRefusal's arm for it, and the refusal speaks of a missing seal.
+func TestAPeersRevisionSealedInAFormThisBuildDoesNotReadIsNotUnsealed(t *testing.T) {
+	t.Parallel()
+	author, node := fleetPeers(t)
+
+	newer, err := author.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "0192f00d-0000-7000-8000-00000000f0f1", Summary: "from a newer build",
+		Payload: []byte(`{"__encrypted__":"enc:v2:k2:QUJDREVGR0hJSktMTU5PUA=="}`),
+		At:      pinnedNow, Origin: anOrigin,
+	})
+	if err != nil {
+		t.Fatalf("publish the newer build's revision: %v", err)
+	}
+	err = node.recon.Tick(t.Context())
+	if !errors.Is(err, secrets.ErrUnknownEnvelope) || errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("Tick = %v, want a seal this build does not read, never an unsealed body", err)
+	}
+	for _, says := range []string{newer.RevisionID, "form this build doesn't read",
+		"newer build", "upgrade this node"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+	for _, never := range []string{"without a seal", "PUT /config"} {
+		if strings.Contains(err.Error(), never) {
+			t.Errorf("the refusal says %q, which sends the operator to replace "+
+				"a document somebody sealed: %v", never, err)
+		}
+	}
+	if got := node.recon.Applied(); got == newer.Epoch {
+		t.Error("the node applied the epoch a revision it cannot read was published at")
+	}
+	if _, held, err := node.store.Configs().Get(t.Context(), newer.RevisionID); err != nil || held {
+		t.Errorf("the revision is in the node's own history (held=%v err=%v)", held, err)
 	}
 }
 

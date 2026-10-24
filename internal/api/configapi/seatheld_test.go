@@ -50,6 +50,9 @@ units:
         kind: human
 `
 
+// heldHandles is every seat handle heldDoc names, its agents' included.
+var heldHandles = []string{"ceo", "jane", "sam", "cto", "ana"}
+
 // withoutSeat is heldDoc with one seat's three lines taken out.
 func withoutSeat(t *testing.T, name string) string {
 	t.Helper()
@@ -153,6 +156,15 @@ func TestRemovingAHeldSeatIsRefusedNamingThePerson(t *testing.T) {
 		s, before := heldSurface(t)
 		res := s.do(t, http.MethodPut, "/config", withoutSeat(t, "Jane Doe"), summaryHeader)
 		assertSeatHeld(t, s, before, res.Code, res.Body.String(), "jane", "jane.doe")
+		// A REMOVAL SAYS SO, read off the revision it replaces; only a
+		// replacement of one nothing was read from is worded otherwise
+		// (TestReplacingAnUnsealedRevisionKeepsEveryHeldSeat).
+		body := decode(t, res)
+		if detail := str(body["detail"]); !strings.Contains(detail,
+			`removes human seats that somebody still holds: jane (held by jane.doe)`) {
+			t.Errorf("the refusal says %q, want the seat it removes and who holds it",
+				detail)
+		}
 	})
 
 	t.Run("a patch", func(t *testing.T) {
@@ -217,8 +229,10 @@ func TestRemovingAHeldSeatIsRefusedNamingThePerson(t *testing.T) {
 		if s.activeID(t) == before {
 			t.Error("the write landed and the active revision did not move")
 		}
-		if len(s.asked) != 1 || strings.Join(s.asked[0], ",") != "sam" {
-			t.Errorf("the directory was asked about %v, want the one seat leaving", s.asked)
+		if len(s.asked) != 1 || !slices.Equal(s.admitted(0, heldHandles...), []string{"sam"}) {
+			t.Errorf("the directory was asked %d times, the first about %v of %v, "+
+				"want once about the one seat leaving", len(s.asked),
+				s.admitted(0, heldHandles...), heldHandles)
 		}
 	})
 }
@@ -340,7 +354,7 @@ func TestAnUnreadableDirectoryRefusesARemovalAndNothingElse(t *testing.T) {
 	}
 	if len(s.asked) != asked {
 		t.Errorf("an edit that removes nobody's seat asked the directory about %v",
-			s.asked[asked:])
+			s.admitted(asked, heldHandles...))
 	}
 }
 

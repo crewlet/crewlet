@@ -401,7 +401,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	}
 	plane := coordmemory.NewFleet()
 	configs, err := configapi.New(configapi.Options{Store: db, Plane: plane,
-		Cipher: cipher, Node: "core-1", Holders: func(context.Context, []string, time.Time) (
+		Cipher: cipher, Node: "core-1", Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 			return nil, nil
 		}})

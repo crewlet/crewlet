@@ -1085,22 +1085,36 @@ func (r *Reconciler) fleetRevision(ctx context.Context, target coord.Activation)
 //
 // A body stored or published UNSEALED is refused whatever its origin: the seal
 // is what says a node of this fleet wrote it, so a plaintext one could have
-// been authored by anything that reaches the store or the broker. A body
-// sealed under a key this keyring does not hold is a keyring that is missing a
-// key the fleet seals under.
+// been authored by anything that reaches the store or the broker, and what
+// replaces it is an admin's whole document, which reads nothing from it
+// (internal/api/configapi). A body sealed under a key this keyring does not
+// hold is a keyring that is missing a key the fleet seals under. And a body
+// SEALED IN A FORM THIS BUILD DOES NOT READ is neither of those: most likely a
+// newer build sealed it, so it is not unsealed, no write replaces it, and the
+// fix is that build.
 func openRefusal(revisionID string, local bool, err error) error {
 	switch {
+	case errors.Is(err, secrets.ErrUnknownEnvelope) && local:
+		return fmt.Errorf("engine: this node's own copy of revision %s is sealed "+
+			"in a form this build doesn't read, so it is not applied. A newer "+
+			"build of Crewlet most likely sealed it here: run that build on this "+
+			"node again: %w", revisionID, err)
+	case errors.Is(err, secrets.ErrUnknownEnvelope):
+		return fmt.Errorf("engine: the fleet's revision %s is sealed in a form "+
+			"this build doesn't read, so it is neither applied nor kept. A newer "+
+			"build of Crewlet most likely sealed it: upgrade this node to the "+
+			"build the rest of the fleet runs: %w", revisionID, err)
 	case errors.Is(err, secrets.ErrUnsealedWithKey) && local:
 		return fmt.Errorf("engine: this node's own copy of revision %s is stored "+
-			"without a seal, so it is not applied; import the document again "+
-			"(`crewlet config import` or PUT /config), which stores it sealed: %w",
-			revisionID, err)
+			"without a seal, so it is not applied. An admin replaces it by "+
+			"sending the whole document again with PUT /config or `crewlet "+
+			"config import`, which stores it sealed: %w", revisionID, err)
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
 		return fmt.Errorf("engine: the fleet's revision %s arrived through the "+
 			"coordination store without a seal, so it is neither applied nor "+
-			"kept: every node of this fleet seals what it publishes, so this body "+
-			"could have been forged by anything that reaches the broker: %w",
-			revisionID, err)
+			"kept. Every node of this fleet seals what it publishes, so anything "+
+			"that reaches the broker could have written it. An admin replaces it "+
+			"by sending the whole document with PUT /config: %w", revisionID, err)
 	default:
 		return fmt.Errorf("engine: revision %s does not open under this node's "+
 			"keyring, so it is neither applied nor kept; every node has to hold "+

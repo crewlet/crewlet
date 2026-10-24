@@ -245,6 +245,73 @@ func TestSealedIsStructuralNotASearch(t *testing.T) {
 	}
 }
 
+// A SEAL THIS BUILD DOES NOT READ IS NOT "UNSEALED".
+//
+// A payload wrapped as a sealed document whose seal is in another form (a
+// successor's `enc:v2:`, or the member holding something other than a token)
+// was refused as unsealed, because [Sealed] said no and [Open] took every "no"
+// for plaintext. The two answers send their callers opposite ways: a write may
+// replace a document nothing vouches for having read nothing from it, and that
+// replaced a newer peer's sealed document with whatever the writer typed. So
+// three answers come back before any decrypt, from [Open] and [CheckSealed]
+// alike: unsealed, a form this build does not read, and this build's form
+// damaged, which is a decrypt failure like any tampered ciphertext.
+//
+// Mutation: answer every payload [Sealed] refuses as ErrUnsealedWithKey (the
+// rule before), and the wrapped rows fail; read only a string member as
+// wrapped, and the object row does.
+func TestASealThisBuildDoesNotReadIsNotUnsealed(t *testing.T) {
+	t.Parallel()
+	cipher, err := NewCipher(testRing(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := Seal(cipher, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, raw string
+		want      error
+	}{
+		{"a seal this build reads", string(sealed), nil},
+		{"a plain document", string(document), ErrUnsealedWithKey},
+		{"the key beside another field", `{"__encrypted__":"enc:v1:a:Yg==","n":1}`,
+			ErrUnsealedWithKey},
+		{"not json at all", `nonsense`, ErrUnsealedWithKey},
+		{"a successor's format", `{"__encrypted__":"enc:v2:k2:QUJDREVGR0hJSktMTU5PUA=="}`,
+			ErrUnknownEnvelope},
+		{"a token in no format", `{"__encrypted__":"just a string"}`, ErrUnknownEnvelope},
+		{"an object where the token goes", `{"__encrypted__":{"v":2}}`, ErrUnknownEnvelope},
+		{"this build's format, damaged", `{"__encrypted__":"enc:v1:k1:not base64!"}`,
+			ErrDecrypt},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CheckSealed([]byte(tc.raw)); !errors.Is(got, tc.want) ||
+				(tc.want == nil) != (got == nil) {
+				t.Errorf("CheckSealed = %v, want %v", got, tc.want)
+			}
+			opened, got := Open(cipher, []byte(tc.raw))
+			if !errors.Is(got, tc.want) || (tc.want == nil) != (got == nil) {
+				t.Errorf("Open = %v, want %v", got, tc.want)
+			}
+			if tc.want != nil && opened != nil {
+				t.Errorf("a refused Open still produced %s", opened)
+			}
+			// NEVER BOTH: a caller branching on unsealed must not reach
+			// a seal it cannot read.
+			if errors.Is(got, ErrUnknownEnvelope) && errors.Is(got, ErrUnsealedWithKey) {
+				t.Errorf("Open = %v, which reads as unsealed too", got)
+			}
+			if _, named := EnvelopeKeyIDOf([]byte(tc.raw)); named != (tc.want == nil) {
+				t.Errorf("EnvelopeKeyIDOf named a key = %v, want %v", named, tc.want == nil)
+			}
+		})
+	}
+}
+
 func TestOpeningARealEnvelopeYieldsUsableJSON(t *testing.T) {
 	t.Parallel()
 	// The point of the round trip: what comes out is parseable as the

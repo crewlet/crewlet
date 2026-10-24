@@ -31,15 +31,18 @@ export type QueryErrorCode =
    *  (`not_found`, the answer for a reader it is not disclosed to). */
   | "artifact_trashed"
   /** A configuration revision this node cannot open: sealed under a key the
-   *  keyring lost, stored without a seal, or the fleet's active revision met
+   *  keyring lost, stored without a seal, the fleet's active revision met
    *  only through its pointer, sealed under a key this node was never given or
-   *  put there without a seal. The REST route's own four codes; the frame's
-   *  `detail` names the key or the document that brings it back, which only
-   *  an administrator can do, so a screen shows it and never retries. */
+   *  put there without a seal, or a revision of either origin sealed in a form
+   *  this build does not read (most likely a newer build's). The REST route's
+   *  own five codes; the frame's `detail` names the key, the document or the
+   *  build that brings it back, which only an administrator can do, so a
+   *  screen shows it and never retries. */
   | "unreadable_revision"
   | "unsealed_revision"
   | "unreadable_fleet_revision"
   | "unsealed_fleet_revision"
+  | "unknown_seal_revision"
   | "timeout"
   | "closed";
 

@@ -63,6 +63,15 @@
 // those tokens and every other credential is refused a change to it, here,
 // on every path onto it — ADR-0030, and managed.go for what counts as a
 // change.
+//
+// A REVISION THIS NODE CANNOT OPEN IS REFUSED by every reader and by every
+// write built from it ([RefuseUnreadable]), under a code naming its cause and
+// origin. One stored WITHOUT A SEAL is the one a write replaces: a whole
+// document sent with PUT /config reads nothing from it and goes on, as an
+// offline `crewlet config import` does ([Service.prepare]), and the refusal's
+// hint names exactly that. One SEALED, under a key the keyring lacks or in a
+// form this build does not read, is replaced by nothing: it is somebody's
+// document, which the key or the build that sealed it recovers whole.
 package configapi
 
 import (
@@ -122,10 +131,16 @@ const (
 // once its engine has applied a revision. A write here stores its revision as
 // history and moves the pointer; the reconciler makes it what each node boots
 // on as each applies it.
+//
+// A WRITE IS STORED ON ITS BASE ([store.Configs.InsertOn]), which keeps the
+// base first where this node holds no row for it. Insert, which keeps nothing
+// but the write, is for the one base that is never kept: a body the pointer
+// carried without a seal, which a whole document replaces ([Service.commit]).
 type revisionStore interface {
 	Get(ctx context.Context, revisionID string) (store.Revision, bool, error)
 	List(ctx context.Context, limit, offset int) ([]store.Revision, error)
 	InsertOn(ctx context.Context, base, r store.Revision) (string, error)
+	Insert(ctx context.Context, r store.Revision) (string, error)
 	NoteActivation(ctx context.Context, revisionID string, at time.Time) error
 	Restorable(ctx context.Context) (store.Revision, bool, error)
 }
@@ -1007,16 +1022,22 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 		// the one remedy this used to name, unbinding them, was refused by
 		// the very directory it sent an administrator to. Each `held` entry
 		// says which kind holds its seat.
+		hint := "move each person to another human seat (PATCH " +
+			"/iam/people/{person} with seat) or remove them, unbind a " +
+			"service account (PATCH /iam/people/{person} with no seat), " +
+			"cancel an open invitation (DELETE /iam/invitations/{id}), " +
+			"each an admin's gesture, then send the write again"
+		if held.Replacing {
+			// KEEPING THE SEAT FIRST, for a whole document replacing an
+			// unsealed revision: the seats are ones its document does not
+			// keep, which may be a seat it never meant to drop, and keeping
+			// one is the remedy that needs nothing of this node, where moving
+			// a person needs a company running here.
+			hint = "keep each seat in the document as a human seat, or free it " +
+				"first: " + hint
+		}
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeSeatHeld,
-			httpjson.Detail{
-				"detail": held.Error(),
-				"held":   held.Held,
-				"hint": "move each person to another human seat (PATCH " +
-					"/iam/people/{person} with seat) or remove them, unbind a " +
-					"service account (PATCH /iam/people/{person} with no seat), " +
-					"cancel an open invitation (DELETE /iam/invitations/{id}), " +
-					"each an admin's gesture, then send the write again",
-			})
+			httpjson.Detail{"detail": held.Error(), "held": held.Held, "hint": hint})
 	case errors.As(err, &unanswered):
 		RefuseActivationUnknown(w, unanswered, nil)
 	case errors.As(err, &unknown):
@@ -1028,14 +1049,28 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 		// 503 is told (auth.UnavailableIdentity). A fixed sentence told a
 		// stuck refusal only that waiting wouldn't help, never what would.
 		said, ok := statelog.ConditionSentence(unknown.Err)
-		if !ok {
+		switch {
+		case ok:
+		case unknown.Replacing:
+			// A WHOLE DOCUMENT REPLACING A REVISION NOBODY CAN READ, which
+			// asked about every seat its document does not keep and so names
+			// none (seatheld.go).
+			said = "This change replaces a revision this node can't read, so it " +
+				"checks who holds every seat your document doesn't keep as a human " +
+				"seat. This node couldn't read who holds them, so nothing was " +
+				"written. Try again in a moment."
+		default:
 			said = "This node couldn't read who holds the human seats this " +
 				"change removes, so nothing was written. Try again in a moment."
 		}
+		body := httpjson.Detail{"detail": said}
+		// NAMED ONLY WHERE THE WRITE COULD LIST THEM: an empty list would
+		// read as a write that removes no seat.
+		if len(unknown.Seats) > 0 {
+			body["seats"] = unknown.Seats
+		}
 		httpjson.UnavailableWith(w, httpjson.CodeSeatHoldersUnavailable,
-			auth.RetryIdentity(unknown.Err), httpjson.Detail{
-				"seats": unknown.Seats, "detail": said,
-			})
+			auth.RetryIdentity(unknown.Err), body)
 	default:
 		s.fail(w, r, "apply the config", err)
 	}
@@ -1581,8 +1616,11 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, what string, err 
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 
-// UnreadableRevisionError is a stored revision this node's keyring does not
-// open: stored without a seal, or sealed under a key the keyring does not hold.
+// UnreadableRevisionError is a revision this node's keyring does not open:
+// stored without a seal, sealed under a key the keyring does not hold, or
+// sealed in a form this build does not read — and any of them this node's OWN
+// copy, or a body it met only through the fleet's pointer
+// ([UnreadableRevisionError.Fleet]).
 type UnreadableRevisionError struct {
 	ID string
 	// Fleet reports a body this node holds no copy of: the fleet's revision,
@@ -1602,15 +1640,31 @@ func (e *UnreadableRevisionError) Error() string {
 func (e *UnreadableRevisionError) Unwrap() error { return e.Err }
 
 // Unsealed reports whether the revision was stored without a seal, rather
-// than sealed under a key this keyring does not hold.
+// than sealed in any way: under a key this keyring does not hold, or in a form
+// this build does not read ([UnreadableRevisionError.UnknownSeal]).
+//
+// THE ONE CAUSE A WRITE MAY REPLACE, reading nothing ([Service.prepare]), so
+// it answers for no seal at all and never for a seal this build cannot parse:
+// that is a newer build's document, and a replacement would discard it.
 func (e *UnreadableRevisionError) Unsealed() bool {
 	return errors.Is(e.Err, secrets.ErrUnsealedWithKey)
 }
 
+// UnknownSeal reports whether the revision is sealed in a form this build does
+// not read ([secrets.ErrUnknownEnvelope]): most likely a newer build's, which
+// the build that sealed it reads.
+func (e *UnreadableRevisionError) UnknownSeal() bool {
+	return errors.Is(e.Err, secrets.ErrUnknownEnvelope)
+}
+
 // Code is the refusal code: one per cause and origin, because an envelope's
-// message is the code's sentence and the four share no remedy.
+// message is the code's sentence and no two of them share a remedy. A seal
+// this build does not read is one code for either origin, since its remedy,
+// the build that sealed it, is the same for both.
 func (e *UnreadableRevisionError) Code() httpjson.Code {
 	switch {
+	case e.UnknownSeal():
+		return httpjson.CodeUnknownSealRevision
 	case e.Fleet && e.Unsealed():
 		return httpjson.CodeUnsealedFleetRevision
 	case e.Fleet:
@@ -1627,6 +1681,11 @@ func (e *UnreadableRevisionError) Code() httpjson.Code {
 // changes and goes to the log.
 func (e *UnreadableRevisionError) Said() string {
 	switch {
+	case e.Fleet && e.UnknownSeal():
+		return "The fleet's revision is sealed in a form this build of Crewlet doesn't read."
+	case e.UnknownSeal():
+		return "This node's copy of that revision is sealed in a form this build " +
+			"of Crewlet doesn't read."
 	case e.Fleet && e.Unsealed():
 		return "The fleet's revision arrived without a seal, so this node won't read it."
 	case e.Fleet:
@@ -1640,20 +1699,44 @@ func (e *UnreadableRevisionError) Said() string {
 }
 
 // Remedy is what brings the revision's document back: the refusal's `hint`.
+//
+// AN UNSEALED REVISION NAMES THE TWO WRITES THAT REPLACE ONE, and only those:
+// a whole document sent with PUT /config, which reads nothing from the revision
+// it replaces ([Service.prepare]), and `crewlet config import`, which is that
+// same PUT through a running node and writes this node's store while the node
+// is stopped. Every other write is built from the active document and is
+// refused over one exactly as this read is, so the hint used to send whoever
+// read it to a PUT that was refused in the same words. AN ADMIN'S, because a
+// document replacing a revision nobody can read is judged as replacing nothing,
+// which reaches every setting a lead's subtree write may not.
+//
+// A SEAL THIS BUILD DOES NOT READ NAMES THE BUILD THAT SEALED IT, and no write:
+// it is somebody's document, and every write here would replace it unread.
 func (e *UnreadableRevisionError) Remedy() string {
 	switch {
+	case e.Fleet && e.UnknownSeal():
+		return "a newer build of Crewlet most likely sealed it, and no write here " +
+			"replaces it, since that would discard it unread; upgrade this node " +
+			"to the build the rest of the fleet runs"
+	case e.UnknownSeal():
+		return "a newer build of Crewlet most likely sealed it here, and no write " +
+			"here replaces it, since that would discard it unread; run that " +
+			"build on this node again"
 	case e.Fleet && e.Unsealed():
 		return "every node seals what it activates, so this body came from " +
-			"outside the fleet; send the document again with PUT /config, which " +
-			"activates it sealed"
+			"outside the fleet and is neither shown nor edited; to replace it, an " +
+			"admin sends the whole document with PUT /config, or imports it with " +
+			"`crewlet config import`, either of which stores it sealed and " +
+			"activates it"
 	case e.Fleet:
 		return "add the key the fleet seals under to this node's secrets.keys " +
 			"and restart it"
 	case e.Unsealed():
 		return "it is stored without a seal, so nothing vouches for who wrote it " +
-			"and it is neither shown nor reverted to; to have its document again, " +
-			"import it from your own copy with PUT /config or `crewlet config " +
-			"import`, which stores it sealed"
+			"and it is neither shown, edited nor reverted to; to replace it, an " +
+			"admin sends the whole document from your own copy with PUT /config, " +
+			"or imports it with `crewlet config import`, either of which stores " +
+			"it sealed"
 	default:
 		return "it is sealed under a key that is no longer in the keyring; " +
 			"restore that key to the node's secrets.keys first"
@@ -1665,7 +1748,9 @@ func (e *UnreadableRevisionError) Remedy() string {
 // reads the fleet's revision through [Service.FleetCompany].
 //
 // 409 under the code its cause and origin name ([UnreadableRevisionError.Code])
-// — four codes and not one with four hints, because an envelope's message is
+// — one code per cause and origin, a seal this build does not read one code
+// for either origin since its remedy is the same for both, and never one code
+// carrying every hint, because an envelope's message is
 // the table's sentence and always wins: under one code, an unsealed revision
 // was answered with a message telling the caller to put a key back that was
 // never involved, and a body this node never held with one telling it to put
