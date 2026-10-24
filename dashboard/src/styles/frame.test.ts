@@ -1494,3 +1494,21 @@ test("no screen's column caps itself at the content maximum the frame lifted", (
   }
   expect(offenders).toEqual([]);
 });
+
+/*
+ * A HEADER'S SENTENCE IS A STATEMENT, NOT PROSE. The kit's page and object
+ * headers held it at `--size-measure` (68ch), so Company › Integrations' one
+ * sentence (70.3ch, measured at its 13px compact size) broke onto a second
+ * line at every width, with most of the header's row empty beside it. The
+ * wide measure is the token for a statement read once, and the two headers
+ * say the same thing. Mutation: pin the kit back to 0.47.0 and both fail.
+ */
+test("a page or object header's sentence takes the wide measure", () => {
+  const kit = kitSheet();
+  for (const selector of [
+    ".crewlet-page-header__description",
+    ".crewlet-object-header__description",
+  ]) {
+    expect(block(kit, selector), selector).toMatch(/max-width:\s*var\(--size-measure-wide\)/);
+  }
+});
