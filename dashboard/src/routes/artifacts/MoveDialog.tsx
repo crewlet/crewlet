@@ -67,6 +67,11 @@ import {
   useNewFolderForm,
   useVisibilityWords,
 } from "./FolderDialogs.tsx";
+// THE FOLDERS' OWN SHEET, imported here because every surface that draws a
+// folder imports this dialog: the gallery, a folder's page, the Details panel
+// and a create page's Save in. It arrives with them rather than in the first
+// paint.
+import "~/styles/folders.css";
 
 /**
  * What a move files: artifacts (their id, title and the folder each is in

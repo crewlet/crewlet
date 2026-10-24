@@ -1,0 +1,112 @@
+/* ---- Artifact folders --------------------------------------------------------
+   The folders' own sheet: their tiles, a row's folder, the selection bar's
+   place, the folder and Move to… dialogs, an empty folder's actions and the
+   Details panel's Folder fact. Imported by `routes/artifacts/MoveDialog.tsx`,
+   which every surface that draws a folder imports (the gallery, a folder's
+   page, the Details panel, a create page's Save in), so it arrives with them
+   rather than in the first paint. Every rule selects a folder class; the one
+   rule that pads the frame's own content for the docked selection bar stays
+   in screens.css, with the frame's sheets. */
+
+/* THE FOLDERS' TILES (`FolderTile`): four across a laptop's page and three on
+   a narrower one, as the cards under them, and one column under the phone
+   breakpoint, where each tile takes the 44px row shape on its own. A count by
+   the page's width, for the reason the cards take one. */
+.artifacts-folders {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* ONE HEIGHT A ROW: a tile whose words wrap ("Everyone" over "Nothing you
+   can open yet") stood taller than its neighbours, so each tile fills the
+   row's cell rather than its own content's height. */
+.artifacts-folders > li {
+  display: flex;
+  min-width: 0;
+}
+.artifacts-folders > li > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+@container page (width < 1000px) {
+  .artifacts-folders {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-3);
+  }
+}
+@container page (width < 640px) {
+  .artifacts-folders {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--spacing-2);
+  }
+}
+
+/* A ROW'S FOLDER in the list: its path in words, cut with the whole of it on
+   hover, in the tertiary step beside the edited time. */
+.artifacts-folder {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+}
+
+/* THE SELECTION BAR sits under the toolbar it replaces the use of. */
+.artifacts-selection {
+  margin-top: calc(-1 * var(--spacing-2));
+}
+/* A FOLDER DIALOG'S BODY: the field, the choice of who sees it, and the
+   sentence every folder gesture ends on, in the tertiary step. */
+.artifacts-folder-form,
+.artifacts-move {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.artifacts-folder-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* ONE PLACE IN MOVE TO…'S LIST: its glyph, the folders above it quietly,
+   then its own name, on one line cut at the end. */
+.artifacts-move-place {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifacts-move-glyph {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.artifacts-move-words {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifacts-move-above {
+  color: var(--color-text-tertiary);
+}
+
+/* AN EMPTY FOLDER'S TWO WAYS ON, side by side. */
+.artifacts-empty-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-2);
+}
+
+/* THE FOLDER FACT: where it is kept, then Move… beside it on the same line
+   while there is room, under it where there is not. */
+.artifact-facts .artifact-folder-fact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+}
