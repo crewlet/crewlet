@@ -87,6 +87,14 @@ func signInCases() []signInCase {
 			without: "endpoint that takes no key",
 		},
 		{
+			// Gemini CLI declares no login subcommand, so `crewlet llm
+			// login sub` refuses for it: the route that works is a login
+			// made with the CLI by hand, adopted.
+			name: "a CLI with no login command of its own", agent: "gemini-cli",
+			problem: "`crewlet llm login sub -from-host`",
+			without: "run `crewlet llm login sub`",
+		},
+		{
 			// The operator wrote a token reference; that it resolved to
 			// nothing is the fault to name, ahead of the routes they did
 			// not take.

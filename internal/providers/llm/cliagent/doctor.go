@@ -291,16 +291,10 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 		problem += " — auth.token is set, but the ${VAR} it references resolved " +
 			"to nothing: export it, or store it with `crewlet secrets set`"
 	}
-	if len(hostLogin) > 0 {
-		problem += fmt.Sprintf(
-			" — this machine has a login at %s: adopt it with "+
-				"`crewlet llm login %s -from-host`", strings.Join(hostLogin, ", "), p.key)
-		if len(p.profile.CaptureTokenArgs) > 0 {
-			problem += fmt.Sprintf(", or mint a headless %s with `-capture-token` "+
-				"(preferred: no shared refresh token)", p.profile.TokenEnv)
-		}
-	} else {
-		problem += fmt.Sprintf(" — run `crewlet llm login %s`", p.key)
+	problem += " — " + p.loginRemedy(hostLogin)
+	if len(hostLogin) > 0 && len(p.profile.CaptureTokenArgs) > 0 {
+		problem += fmt.Sprintf(", or mint a headless %s with `-capture-token` "+
+			"(preferred: no shared refresh token)", p.profile.TokenEnv)
 	}
 	// Offered only when env does not already try it: an entry whose
 	// reference resolved to nothing was told so above, and being told to
@@ -319,6 +313,27 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 			"key, run the doctor without -no-smoke: an answered smoke test clears this"
 	}
 	return problem
+}
+
+// loginRemedy is how to write this entry a login of its own: adopt the one this
+// machine already has, else run the CLI's own login command.
+//
+// NEVER A COMMAND THE CLI DOES NOT HAVE. Gemini CLI, Qwen Code and Grok declare
+// no login subcommand, and `crewlet llm login <key>` refuses for them, saying to
+// sign the CLI in by hand and adopt that login — so a doctor that offered the
+// command sent the operator to a refusal whose remedy it could have named
+// itself ([Provider.BrokerLogin] words the same route).
+func (p *Provider) loginRemedy(hostLogin []string) string {
+	switch {
+	case len(hostLogin) > 0:
+		return fmt.Sprintf("this machine has a login at %s: adopt it with "+
+			"`crewlet llm login %s -from-host`", strings.Join(hostLogin, ", "), p.key)
+	case len(p.profile.LoginArgs) > 0:
+		return fmt.Sprintf("run `crewlet llm login %s`", p.key)
+	default:
+		return fmt.Sprintf("the %q CLI declares no login subcommand: sign it in by hand "+
+			"and adopt that login with `crewlet llm login %s -from-host`", p.agent, p.key)
+	}
 }
 
 // modeName is how this entry runs, for the report.

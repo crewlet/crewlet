@@ -300,7 +300,10 @@ func TestDoctorNamesTheLogoutThatKeepsABundleOut(t *testing.T) {
 		t.Errorf("credentials = %q, want the logout that keeps the bundle out named", d.Credentials)
 	}
 	joined := strings.Join(d.Problems, "\n")
-	if !strings.Contains(joined, "removed its login") || !strings.Contains(joined, "`crewlet llm login sub`") {
+	// The way back is one this profile has: it declares no login command,
+	// so `crewlet llm login sub` would refuse, and adopting a login is the
+	// route that writes one.
+	if !strings.Contains(joined, "removed its login") || !strings.Contains(joined, "`crewlet llm login sub -from-host`") {
 		t.Errorf("the no-sign-in problem names neither the logout nor the way back:\n%s", joined)
 	}
 }
