@@ -106,7 +106,16 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 	return nil
 }
 
-// LoadCompany reads and validates Tier B from a YAML file.
+// PriorRevision answers the company a file may be a redacted read of: the
+// revision active where the file is about to be written or run, or nil where
+// there is none. It is asked only of a file that carries a redaction mask.
+//
+// A FUNCTION RATHER THAN A COMPANY because answering it opens a store, which
+// a file with no mask in it — the overwhelming case — has no reason to do.
+type PriorRevision func() (*Company, error)
+
+// LoadCompany reads and validates Tier B from a YAML file that is written into
+// the store as a revision.
 //
 // Used by `crewlet config import` to populate a revision from a file on
 // disk. At runtime the engine reads Tier B from the store, never from YAML.
@@ -117,8 +126,19 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 // revision, a YAML export and the dashboard free of resolved secrets. It is
 // also what lets `crewlet validate` check a config on a laptop where no
 // credential exists.
-func LoadCompany(path string) (*Company, error) {
-	return loadCompanyFile(path, (*Company).Validate)
+//
+// A REDACTED READ IS RESTORED FIRST, against prior ([PriorRevision]; nil
+// where the caller has no revision to offer): the file may be `GET /config`,
+// the dashboard's Copy as YAML or `crewlet config show`, every one of which
+// masks an inline credential, and writing it back is the round trip `PUT
+// /config` makes work by restoring each mask from the revision it replaces
+// ([Company.RestoreRedacted]). An import that refused the masks instead made
+// a file kept in sync from those reads impossible to import over the company
+// it was read from. A mask the prior cannot answer — a member that is new,
+// renamed or ambiguous, or no prior at all — is left standing, and the
+// validation that follows names its field.
+func LoadCompany(path string, prior PriorRevision) (*Company, error) {
+	return loadCompanyFile(path, prior, (*Company).Validate)
 }
 
 // LoadCompanyToRun reads Tier B from a YAML file that is RUN or acted on
@@ -136,18 +156,39 @@ func LoadCompany(path string) (*Company, error) {
 // admission rules apply where the file IS written as a revision, which the
 // seed decides and checks with [Company.ValidateAdmission] before it imports,
 // and `crewlet config import` and `crewlet validate` use [LoadCompany].
-func LoadCompanyToRun(path string) (*Company, error) {
-	return loadCompanyFile(path, (*Company).ValidateRunnable)
+//
+// A file it reads is RESTORED against prior first, as [LoadCompany] restores
+// one: `crewlet run` seeds the store from it and runs it, and a redacted read
+// kept as the node's company.yaml must start the node it was read from. The
+// commands that act on a file and write no revision — `crewlet llm` and the
+// vendor commands, which beside a running node can reach no revision but the
+// redacted one its API serves — pass nil, and a mask in the file is refused
+// by name.
+func LoadCompanyToRun(path string, prior PriorRevision) (*Company, error) {
+	return loadCompanyFile(path, prior, (*Company).ValidateRunnable)
 }
 
-// loadCompanyFile reads and parses a Tier B file, then holds it to validate,
-// naming the file in every failure.
-func loadCompanyFile(path string, validate func(*Company) error) (*Company, error) {
+// loadCompanyFile reads and parses a Tier B file, restores what a redacted
+// read masked from prior, then holds it to validate, naming the file in every
+// failure.
+func loadCompanyFile(path string, prior PriorRevision, validate func(*Company) error) (*Company, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("company config %s: %w", path, err)
 	}
 	cfg, err := ParseCompanyDocument(data)
+	if err == nil && prior != nil && len(cfg.UnresolvedMasks()) > 0 {
+		// RESTORED BEFORE THE RULES, as the config surface restores a
+		// document sent back to it: a masked credential is judged as the
+		// value it stands for, and one left standing is the rule's to name.
+		var was *Company
+		if was, err = prior(); err != nil {
+			err = fmt.Errorf("it carries redacted credentials, and the "+
+				"revision they would be restored from cannot be read: %w", err)
+		} else {
+			cfg.RestoreRedacted(was)
+		}
+	}
 	if err == nil {
 		err = validate(cfg)
 	}
@@ -173,11 +214,12 @@ func ParseCompany(data []byte) (*Company, error) {
 //
 // The shape is still enforced — an unknown field, a list where a mapping
 // belongs, a malformed value all fail here — and only the whole-document rules
-// are deferred. It exists for the one caller that cannot validate yet: the
-// config write path, where a submitted document may carry redaction masks in
-// place of credentials and has to have them resolved against the previous
-// revision first. Validating before that would reject an operator's document
-// for carrying "__redacted__" in a field they never touched.
+// are deferred. It exists for the callers that cannot validate yet: the
+// config write path and the file loaders ([LoadCompany], [LoadCompanyToRun]),
+// where a document may carry redaction masks in place of credentials and has
+// to have them resolved against the previous revision first. Validating
+// before that would reject an operator's document for carrying
+// "__redacted__" in a field they never touched.
 //
 // Everything else uses [ParseCompany]. A caller that skipped validation and
 // forgot to run it later would be a config that fails at the first turn, and

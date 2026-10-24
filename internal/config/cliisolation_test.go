@@ -6,26 +6,26 @@ import (
 	"testing"
 )
 
-// OPENCODE'S ISOLATION IS NOT AN OPERATOR'S TO UNDO FROM cli.env.
+// OPENCODE'S ISOLATION IS NOT AN OPERATOR'S TO UNDO FROM env.
 //
 // The opencode profile sets OPENCODE_CONFIG_PROJECT_DISABLE=1 so OpenCode reads
 // no configuration from the call's working directory or any ancestor of it:
 // with the walk on, an allow-all opencode.json above the state directory handed
 // every seat a shell and an ancestor plugin ran its code (measured on 2.0.32).
-// cli.env is layered over the profile's environment, so a value written there —
+// env is layered over the profile's environment, so a value written there —
 // "0", or an empty one, which OpenCode reads as off — reopened the walk for
 // every seat on the entry while validating clean. The switch is an isolation
-// variable now, and cli.env naming it is refused as HOME is: on a write, and
+// variable now, and env naming it is refused as HOME is: on a write, and
 // warned about on apply, because the entry still runs. OPENCODE_CONFIG_DIR, the
 // call's own configuration directory, is refused the same way.
 //
 // And the refusal names the field that DOES take each of them. It named
-// cli.overrides.config_env for every isolation variable, which refuses both of
+// overrides.config_env for every isolation variable, which refuses both of
 // these: OPENCODE_CONFIG_DIR as work_config_env's, the switch as a variable
 // "the engine already points at a directory" — so an operator who followed it
 // met a second refusal.
 //
-// A passthrough of the engine's own value through cli.overrides is refused by
+// A passthrough of the engine's own value through overrides is refused by
 // the profile's validator, at the overrides.
 func TestOpenCodesIsolationCannotBeUndoneFromCLIEnv(t *testing.T) {
 	t.Parallel()
@@ -35,12 +35,12 @@ func TestOpenCodesIsolationCannotBeUndoneFromCLIEnv(t *testing.T) {
 		values   []string
 		takenBy  string
 	}{
-		{"OPENCODE_CONFIG_PROJECT_DISABLE", []string{`"0"`, `""`, `"1"`}, "cli.overrides.isolation_env"},
-		{"OPENCODE_CONFIG_DIR", []string{"/srv/opencode", `""`}, "cli.overrides.work_config_env"},
+		{"OPENCODE_CONFIG_PROJECT_DISABLE", []string{`"0"`, `""`, `"1"`}, "overrides.isolation_env"},
+		{"OPENCODE_CONFIG_DIR", []string{"/srv/opencode", `""`}, "overrides.work_config_env"},
 	} {
 		for _, value := range tc.values {
 			doc := opencodeEntry(model, "env: {"+tc.variable+": "+value+"}")
-			path := "providers.llm.oc.cli.env." + tc.variable
+			path := "providers.llm.oc.env." + tc.variable
 			err := rejects(t, doc, path)
 			if !errors.Is(err, ErrConflict) {
 				t.Errorf("%s=%s: want %v, got %v", tc.variable, value, ErrConflict, err)
@@ -52,8 +52,8 @@ func TestOpenCodesIsolationCannotBeUndoneFromCLIEnv(t *testing.T) {
 				t.Errorf("%s=%s: the refusal does not name %s, the field that takes it:\n%v",
 					tc.variable, value, tc.takenBy, err)
 			}
-			if strings.Contains(err.Error(), "cli.overrides.config_env") {
-				t.Errorf("%s=%s: the refusal sends the operator to cli.overrides.config_env, "+
+			if strings.Contains(err.Error(), "overrides.config_env") {
+				t.Errorf("%s=%s: the refusal sends the operator to overrides.config_env, "+
 					"which refuses this variable:\n%v", tc.variable, value, err)
 			}
 			assertAdmissionOnly(t, doc, path)
@@ -61,7 +61,7 @@ func TestOpenCodesIsolationCannotBeUndoneFromCLIEnv(t *testing.T) {
 	}
 
 	doc := opencodeEntry(model, `overrides: {passthrough_env: [OPENCODE_CONFIG_PROJECT_DISABLE]}`)
-	err := rejects(t, doc, "providers.llm.oc.cli.overrides")
+	err := rejects(t, doc, "providers.llm.oc.overrides")
 	if !strings.Contains(err.Error(), "passthrough_env names OPENCODE_CONFIG_PROJECT_DISABLE") {
 		t.Errorf("a passthrough of the switch is not refused by name:\n%v", err)
 	}
@@ -70,7 +70,7 @@ func TestOpenCodesIsolationCannotBeUndoneFromCLIEnv(t *testing.T) {
 	mustCompany(t, opencodeEntry(model, "env: {OPENCODE_LOG_LEVEL: WARN}"))
 }
 
-// A cli.env ISOLATION REFUSAL NAMES THE FIELD THAT TAKES THE VARIABLE, AND
+// A env ISOLATION REFUSAL NAMES THE FIELD THAT TAKES THE VARIABLE, AND
 // FOLLOWING IT LOADS. Each isolation variable is set by one layer — the
 // engine's own home variables, a profile's config_env, its work_config_env or
 // its isolation_env — and the three fields refuse each other's variables, so a
@@ -88,8 +88,8 @@ func TestACLIEnvIsolationRefusalNamesTheFieldThatTakesIt(t *testing.T) {
 		agent, model, variable string
 		names                  []string
 		// alone moves only the variable, which the remedy says is not
-		// enough; follow is everything the remedy describes. Both are cli
-		// lines, and empty where the remedy describes no field.
+		// enough; follow is everything the remedy describes. Both are the
+		// entry's overrides, and empty where the remedy describes no field.
 		alone, follow string
 	}{
 		"the engine's own home variable": {
@@ -105,49 +105,50 @@ func TestACLIEnvIsolationRefusalNamesTheFieldThatTakesIt(t *testing.T) {
 			names: []string{
 				"points it at .codex under the seat's home with config_env",
 				"moving the credential_paths and volatile_paths kept under .codex beneath it",
-				"cli.overrides.config_env",
+				"overrides.config_env",
 			},
-			alone: "cli: {agent: codex, overrides: {config_env: {CODEX_HOME: .codex-elsewhere}}}",
-			follow: "cli: {agent: codex, overrides: {config_env: {CODEX_HOME: .codex-elsewhere}, " +
-				"credential_paths: [.codex-elsewhere/auth.json], volatile_paths: [.codex-elsewhere/sessions]}}",
+			alone: "{config_env: {CODEX_HOME: .codex-elsewhere}}",
+			follow: "{config_env: {CODEX_HOME: .codex-elsewhere}, " +
+				"credential_paths: [.codex-elsewhere/auth.json], volatile_paths: [.codex-elsewhere/sessions]}",
 		},
 		"a work_config_env relocation": {
 			agent: "opencode", model: "anthropic/claude-sonnet-5", variable: "OPENCODE_CONFIG_DIR",
 			names: []string{
 				"points it at .crewlet-config under the call's working directory with work_config_env",
 				"moving the seed_files and system_prompt_file.name kept under .crewlet-config beneath it",
-				"cli.overrides.work_config_env",
+				"overrides.work_config_env",
 			},
-			alone: "cli: {agent: opencode, overrides: {work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}}}",
-			follow: "cli: {agent: opencode, overrides: {work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}, " +
+			alone: "{work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}}",
+			follow: "{work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}, " +
 				"system_prompt_file: {name: .elsewhere/agents/crewlet-seat.md}, " +
-				"seed_files: [{path: .elsewhere/opencode.json, in: work, content: '{}'}]}}",
+				"seed_files: [{path: .elsewhere/opencode.json, in: work, content: '{}'}]}",
 		},
 		"a custom profile's relocation, with nothing kept under it": {
 			agent: "custom", model: "m", variable: "VENDOR_HOME",
 			names: []string{
 				"points it at .vendor under the seat's home with config_env; a different " +
-					"directory is set with cli.overrides.config_env",
+					"directory is set with overrides.config_env",
 			},
-			follow: "cli: {agent: custom, overrides: {" + custom + ", config_env: {VENDOR_HOME: .vendor-elsewhere}}}",
+			follow: "{" + custom + ", config_env: {VENDOR_HOME: .vendor-elsewhere}}",
 		},
 		"an isolation switch": {
 			agent: "opencode", model: "anthropic/claude-sonnet-5", variable: "OPENCODE_CONFIG_PROJECT_DISABLE",
-			names:  []string{`it is the profile's isolation switch, which the profile sets to "1"`, "cli.overrides.isolation_env"},
-			follow: `cli: {agent: opencode, overrides: {isolation_env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}}}`,
+			names:  []string{`it is the profile's isolation switch, which the profile sets to "1"`, "overrides.isolation_env"},
+			follow: `{isolation_env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}}`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			entry := func(cli string) string {
-				return strings.Replace(cliEntry(cli), "model: m", "model: "+tc.model, 1)
+			entry := func(lines ...string) string {
+				return strings.Replace(cliEntry(append([]string{"agent: " + tc.agent}, lines...)...),
+					"model: m", "model: "+tc.model, 1)
 			}
-			overrides := ""
+			var profile []string
 			if tc.agent == "custom" {
-				overrides = "overrides: {" + custom + ", config_env: {VENDOR_HOME: .vendor}}, "
+				profile = []string{"overrides: {" + custom + ", config_env: {VENDOR_HOME: .vendor}}"}
 			}
-			doc := entry("cli: {agent: " + tc.agent + ", " + overrides + "env: {" + tc.variable + ": /srv/elsewhere}}")
-			err := rejects(t, doc, "providers.llm.sub.cli.env."+tc.variable)
+			doc := entry(append(profile, "env: {"+tc.variable+": /srv/elsewhere}")...)
+			err := rejects(t, doc, "providers.llm.sub.env."+tc.variable)
 			if !strings.Contains(err.Error(), "so drop it — ") {
 				t.Errorf("the refusal does not say to drop it:\n%v", err)
 			}
@@ -160,15 +161,15 @@ func TestACLIEnvIsolationRefusalNamesTheFieldThatTakesIt(t *testing.T) {
 				// No field changes it: each that could take a variable
 				// refuses this one.
 				for _, field := range []string{"config_env", "work_config_env", "isolation_env"} {
-					rejects(t, entry("cli: {agent: "+tc.agent+", overrides: {"+field+": {"+
-						tc.variable+": x}}}"), "providers.llm.sub.cli.overrides")
+					rejects(t, entry("overrides: {"+field+": {"+tc.variable+": x}}"),
+						"providers.llm.sub.overrides")
 				}
 				return
 			}
 			if tc.alone != "" {
-				rejects(t, entry(tc.alone), "providers.llm.sub.cli.overrides")
+				rejects(t, entry("overrides: "+tc.alone), "providers.llm.sub.overrides")
 			}
-			mustCompany(t, entry(tc.follow))
+			mustCompany(t, entry("overrides: "+tc.follow))
 		})
 	}
 }

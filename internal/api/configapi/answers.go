@@ -118,6 +118,11 @@ func (s *Service) activeCompany(ctx context.Context) (*config.Company, store.Rev
 // mask there, and an index built from that mask would tell an operator that
 // nothing points at TOKEN just before they delete it.
 //
+// And it counts a variable the company reads WITHOUT naming it — an entry's
+// empty credential field, filled from a conventional variable
+// ([config.Company.VariablesRead]) — because removing that row signs the
+// entry out just as surely.
+//
 // The revision travels with the answer because the index is derived from it
 // and changes exactly when it does, which is what the route's entity-tag
 // needs and what a caller comparing two answers has to key on.
@@ -126,7 +131,7 @@ func (s *Service) References(ctx context.Context) ([]config.Reference, store.Rev
 	if err != nil {
 		return nil, store.Revision{}, err
 	}
-	return config.References(company), revision, nil
+	return company.VariablesRead(), revision, nil
 }
 
 // ActiveRevision is the id of the revision the fleet is running.

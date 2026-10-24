@@ -30,9 +30,9 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-literal-key", "${ROTATED_KEY}"]
+      auth: {mode: api-key, api_key: sk-literal-key}
+      env: {ROTATED_KEY: "${ROTATED_KEY}"}
   embeddings:
     type: openai
     model: text-embedding-3-small
@@ -161,7 +161,7 @@ func TestRedactionKeepsEveryToggle(t *testing.T) {
 name: Acme
 providers:
   llm:
-    zulu: {type: anthropic, model: claude-sonnet-5, api_keys: ["sk-literal-key"]}
+    zulu: {model: claude-sonnet-5, auth: {mode: api-key, api_key: sk-literal-key}}
 turn_engine:
   extension_enabled: false
 mcp_servers:
@@ -245,7 +245,7 @@ func TestRedactionDoesNotTouchTheOriginal(t *testing.T) {
 	// something.
 	original := credentialCompany(t)
 	_ = original.Redact()
-	if got := original.Providers.LLM["zulu"].APIKeys[0]; got != "sk-literal-key" {
+	if got := original.Providers.LLM["zulu"].Auth.APIKey; got != "sk-literal-key" {
 		t.Fatalf("the original was masked in place: api key = %q", got)
 	}
 	if got := original.Roles[0].Integrations.Mattermost.BotToken; got != "mm-literal-bot-token" {
@@ -279,10 +279,10 @@ func TestAMaskedConfigCanBeSentBack(t *testing.T) {
 	if edited.Name != "Acme Renamed" {
 		t.Errorf("the edit was lost: name = %q", edited.Name)
 	}
-	if got := edited.Providers.LLM["zulu"].APIKeys[0]; got != "sk-literal-key" {
+	if got := edited.Providers.LLM["zulu"].Auth.APIKey; got != "sk-literal-key" {
 		t.Errorf("api key = %q, want the one the prior revision held", got)
 	}
-	if got := edited.Providers.LLM["zulu"].APIKeys[1]; got != "${ROTATED_KEY}" {
+	if got := edited.Providers.LLM["zulu"].Env["ROTATED_KEY"]; got != "${ROTATED_KEY}" {
 		t.Errorf("the reference was disturbed: %q", got)
 	}
 	if got := edited.Roles[0].Integrations.Mattermost.BotToken; got != "mm-literal-bot-token" {
@@ -467,51 +467,41 @@ func TestATaggedArrayIsMaskedAndRestored(t *testing.T) {
 	}
 }
 
-func TestAShortenedKeyListRefusesToGuess(t *testing.T) {
-	t.Parallel()
-	// Removing a key moves every later slot. Restoring by position would
-	// write one credential into another's place — and the result
-	// authenticates as the wrong account rather than failing, which is the
-	// worst available outcome.
-	original := credentialCompany(t)
-	edited := original.Redact()
-	provider := edited.Providers.LLM["zulu"]
-	provider.APIKeys = provider.APIKeys[:1]
-	edited.Providers.LLM["zulu"] = provider
-	edited.RestoreRedacted(original)
-
-	if got := edited.Providers.LLM["zulu"].APIKeys[0]; got != Redacted {
-		t.Errorf("api key = %q, want the mask left standing rather than a "+
-			"credential resolved against a list that changed shape", got)
-	}
+// AN ANONYMOUS LIST THAT CHANGED LENGTH IS NOT RESTORED BY POSITION. Removing
+// or adding a member moves every later slot, so position would write one
+// credential into another's place — and the result authenticates as the wrong
+// account rather than failing, the worst available outcome. Held on a type of
+// its own because the document carries no such list
+// ([TestEveryCredentialCarryingCollectionCanNameItself] keeps it so); the
+// restorer's rule is what keeps the first one honest.
+type keyring struct {
+	Keys []string `secret:"true"`
 }
 
-func TestAReorderedKeyListRefusesToGuess(t *testing.T) {
+func TestAnAnonymousListThatChangedLengthRefusesToGuess(t *testing.T) {
 	t.Parallel()
-	// A list has no correspondence but position. A caller who added or
-	// removed a key has changed which slot means what, so resolving masks
-	// by position would write one credential into another's place — and
-	// the result would authenticate as the wrong account rather than fail.
-	original := credentialCompany(t)
-	edited := original.Redact()
-	provider := edited.Providers.LLM["zulu"]
-	provider.APIKeys = append(provider.APIKeys, "${THIRD_KEY}")
-	edited.Providers.LLM["zulu"] = provider
-	edited.RestoreRedacted(original)
-
-	if got := edited.Providers.LLM["zulu"].APIKeys[0]; got != Redacted {
-		t.Errorf("api key = %q, want the mask left standing so validation "+
-			"reports it rather than a credential landing in the wrong slot", got)
+	prior := keyring{Keys: []string{"sk-one", "sk-two"}}
+	for name, keys := range map[string][]string{
+		"shortened":  {Redacted},
+		"lengthened": {Redacted, Redacted, "${THIRD_KEY}"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			edited := keyring{Keys: keys}
+			var r restorer
+			r.restore(reflect.ValueOf(&edited).Elem(), reflect.ValueOf(prior), false)
+			if edited.Keys[0] != Redacted {
+				t.Errorf("first slot = %q, want the mask left standing rather than a "+
+					"credential resolved against a list that changed shape", edited.Keys[0])
+			}
+		})
 	}
-	// And validation DOES report it. Refusing to guess is right; storing the
-	// result silently is not — the literal would be handed to a provider as
-	// an API key and fail hours later with an error naming nothing.
-	err := edited.Validate()
-	if err == nil {
-		t.Fatal("a config still holding a redaction mask validated")
-	}
-	if !strings.Contains(err.Error(), "api_keys") {
-		t.Errorf("the error does not name the field: %v", err)
+	// The counterfactual: the same length restores, slot for slot.
+	edited := keyring{Keys: []string{Redacted, Redacted}}
+	var r restorer
+	r.restore(reflect.ValueOf(&edited).Elem(), reflect.ValueOf(prior), false)
+	if !slices.Equal(edited.Keys, prior.Keys) {
+		t.Errorf("an unchanged list restored to %q, want %q", edited.Keys, prior.Keys)
 	}
 }
 
@@ -540,22 +530,13 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	exempt := map[string]bool{
 		// Numeric caps that merely count tokens (a token budget is a
 		// mapping of them, one per calendar window).
-		"TokenBudget": true, "BudgetTokens": true, "SummarizeMaxTokens": true,
-		"CompactionBudgetTokens": true, "MaxTokens": true, "TokenExpiryDays": true,
-		"ReasoningBudgetTokens": true, "MinTokensPerTask": true,
-		"SandboxMinBudgetTokens": true,
+		"TokenBudget": true, "MinTokensPerTask": true, "SandboxMinBudgetTokens": true,
 		// An embedding model's limits, counted in tokens.
 		"MaxInputTokens": true, "MaxBatchTokens": true,
 		// Scope NAMES minted onto a token, not the token.
 		"TokenScopes": true,
-		// A path on disk, not the material at it.
-		"StateDir": true,
-		// Tuning for how a dead credential is retried.
-		"Cooldowns": true,
-		// The Forge app's public identifier: it is the JWT audience, and
-		// it is in every manifest the operator installs.
-		"ForgeAppID": true,
 	}
+	usedNames := map[string]bool{}
 
 	// The exemptions by Type.Field, for a name that is a credential's
 	// somewhere else: a BLOCK or a LIST whose credential is tagged on the
@@ -628,6 +609,9 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 				if exemptField && strings.Contains(name, needle) && !tagged {
 					usedFields[rt.Name()+"."+field.Name] = true
 				}
+				if exempt[field.Name] && strings.Contains(name, needle) && !tagged {
+					usedNames[field.Name] = true
+				}
 				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] && !exemptField {
 					t.Errorf("%s.%s looks like a credential and is not tagged "+
 						"secret:\"true\", so the config read surface publishes it "+
@@ -643,6 +627,12 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	walk(reflect.TypeOf(Bootstrap{}), "", map[reflect.Type]bool{})
 	// An exemption that excuses nothing is one that would silently excuse
 	// whatever field takes its name next.
+	for name := range exempt {
+		if !usedNames[name] {
+			t.Errorf("exemption %s names no untagged credential-looking field "+
+				"the walk reached: delete it", name)
+		}
+	}
 	for field, reason := range exemptFields {
 		if !usedFields[field] {
 			t.Errorf("exemption %s (%s) names no untagged credential-looking "+
@@ -659,9 +649,8 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-literal-key"]
+      auth: {mode: api-key, api_key: sk-literal-key}
 mcp_servers:
   - name: notion
     command: notion-mcp
@@ -830,7 +819,7 @@ const movingDoc = `
 name: Acme
 providers:
   llm:
-    zulu: {type: anthropic, model: claude-sonnet-5, api_keys: ["sk-literal-key"]}
+    zulu: {model: claude-sonnet-5, auth: {mode: api-key, api_key: sk-literal-key}}
 mcp_servers:
   - {name: tracker, command: tracker-mcp, shared: false}
 roles:
@@ -1135,6 +1124,13 @@ units:
 // matchable by identity, because position will otherwise hand one member's
 // credential to another. Nothing fails when a new one forgets — it just
 // silently goes back to the old, wrong correspondence.
+//
+// A LIST OF BARE CREDENTIALS is the same fault with nothing to give an
+// identity to: a removed or reordered entry moves every later one, so a
+// restore can only refuse, and the operator who edited one key gets every
+// key's mask back as a refusal. The document has none; a credential that
+// comes in several is a map keyed by what it is for, or a list of members
+// that name themselves.
 func TestEveryCredentialCarryingCollectionCanNameItself(t *testing.T) {
 	t.Parallel()
 	seen := map[reflect.Type]bool{}
@@ -1160,13 +1156,35 @@ func TestEveryCredentialCarryingCollectionCanNameItself(t *testing.T) {
 		case reflect.Struct:
 			for i := range typ.NumField() {
 				field := typ.Field(i)
-				if field.IsExported() {
-					walk(field.Type, path+"."+field.Name)
+				if !field.IsExported() {
+					continue
 				}
+				if list := bareList(field.Type); list && secrets.Field(field) {
+					t.Errorf("%s.%s is a list of bare credentials — its masks can only "+
+						"be restored by POSITION, so editing one entry strands every "+
+						"later one", path, field.Name)
+				}
+				walk(field.Type, path+"."+field.Name)
 			}
 		}
 	}
 	walk(reflect.TypeOf(Company{}), "Company")
+}
+
+// bareList reports whether a field is a list of plain values — strings,
+// numbers — rather than of members that could carry an identity.
+func bareList(typ reflect.Type) bool {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Slice && typ.Kind() != reflect.Array {
+		return false
+	}
+	switch typ.Elem().Kind() {
+	case reflect.Struct, reflect.Pointer, reflect.Map, reflect.Slice, reflect.Array, reflect.Interface:
+		return false
+	}
+	return true
 }
 
 // holdsCredential reports whether a type carries a secret-tagged field
@@ -1195,10 +1213,9 @@ func holdsCredential(t reflect.Type, seen map[reflect.Type]bool) bool {
 
 // A STANDING MASK SAYS EVERY REASON IT COULD NOT BE MATCHED, AND WHAT TO DO.
 //
-// The refusal once named only a new or renamed member and a bare list that
-// changed length. A stored revision with two units called "Platform" leaves
-// masks standing on units nobody created or renamed, and an operator told
-// only those two causes has nothing to act on.
+// The refusal once named only a new or renamed member. A stored revision with
+// two units called "Platform" leaves masks standing on units nobody created or
+// renamed, and an operator told only that cause has nothing to act on.
 func TestAStandingMaskNamesEveryCauseAndTheRemedy(t *testing.T) {
 	t.Parallel()
 	original, err := ParseCompanyDocument([]byte(`
@@ -1223,7 +1240,6 @@ units:
 		"units[0].mcp_env.tracker.TOKEN",
 		"new or was renamed",
 		"more than one member",
-		"changed length",
 		"${VAR} reference",
 	} {
 		if !strings.Contains(err.Error(), want) {

@@ -114,17 +114,17 @@
    agent, and worse at nine rounds. So a round is BRACKETED by a rail that
    runs from its numbered node down its own content, and adjacent rounds are
    told apart by an alternating surface tint that is two steps rather than N.
-   Colour inside a round is reserved for what it can actually distinguish:
-   thinking from speech, and a failed call from a successful one.
+   Colour inside a round is reserved for what it can actually distinguish: a
+   failed call from a successful one.
 
    Those are two different jobs and it took a reader to notice only one of
    them was being done. The rail used to be drawn strictly BETWEEN rounds and
    the tint only on even ones, so both devices described the SEQUENCE and
    neither bounded a round: a phase with a single round — the common case, and
    the one a reader complained about — got neither, and rendered as a bare
-   numeral in the gutter beside a flat stack of look-alike disclosure rows,
-   where `Thinking` and `submit_work` read as two siblings rather than as a
-   thought and the call it asked for. */
+   numeral in the gutter beside a flat stack of look-alike rows, where the
+   model's words and `submit_work` read as two siblings rather than as a
+   sentence and the call it asked for. */
 .round-ledger {
   list-style: none;
   margin: 0;
@@ -175,8 +175,8 @@
   position: relative;
 }
 /* Drawn from under the node to the bottom of THIS round's own content, on
-   every round including the last — the bracket that says the thinking, the
-   speech and the calls beside it are one round.
+   every round including the last — the bracket that says the speech and the
+   calls beside it are one round.
 
    It used to stop short of the last round (`:not(:last-child)`) and to bleed
    past its own content into the gap below, which is the shape you draw when
@@ -215,7 +215,6 @@
    other half of "these do not belong together". */
 .round-body > .prose,
 .round-body > .abandoned,
-.round-body > .round-thinking,
 .round-body > .round-note {
   margin-inline: var(--spacing-2);
 }
@@ -235,12 +234,6 @@
 }
 .round-note.caution {
   color: var(--color-feedback-warning-ink);
-}
-/* A ROUND THAT DID NOT FINISH — cut off at the output cap, refused, out of
-   context, paused. DANGER, unlike a declined round: this round ended the phase
-   and its turn, and nothing follows it. */
-.round-note.critical {
-  color: var(--color-feedback-danger-ink);
 }
 
 /* ---- A phase's prompt: a map, an outline and one section -----------------
@@ -680,10 +673,10 @@
   overflow-y: auto;
 }
 
-/* PROSE. The model's reasoning and its speech are natural language, and were
+/* PROSE. The model's speech is natural language, and was
    set in the monospace code block that tool JSON uses — 11px, tight
-   leading, unbounded measure. That is a wall of text nobody reads. Here they
-   get a proportional face, real leading and a bounded measure, while
+   leading, unbounded measure. That is a wall of text nobody reads. Here it
+   gets a proportional face, real leading and a bounded measure, while
    monospace stays where it means something. `pre-wrap` keeps the model's own
    paragraph breaks, which are load-bearing in a long answer. */
 .prose {
@@ -7199,9 +7192,9 @@ a.work-cal-chip {
 .prose.md > * + .md-heading {
   margin-top: var(--spacing-4);
 }
-/* Inside dimmed words — a round's thinking — it keeps the dimming: emphasis
-   within a block the reader can skip by its shape, never a line louder than
-   the block it is in. */
+/* Inside dimmed words — the palette's answer — it keeps the dimming: emphasis
+   within a block set quieter than the page, never a line louder than the
+   block it is in. */
 .prose.md.muted .md-heading {
   color: var(--color-text-secondary);
 }
@@ -10167,45 +10160,21 @@ a.live-row:focus-visible {
 
 /* ---- Settings › Models & keys ------------------------------------------ */
 
-/* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the vendor id under it:
-   the key is what a seat's `llm:` names, the id is what the vendor bills. The
-   id line cuts at its end rather than wrapping a long gateway model name
-   across the row. */
+/* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the CLI and the model
+   under it: the key is what a seat's `llm:` names, the CLI and the model are
+   what runs. The second line cuts at its end rather than wrapping a long model
+   id across the row. The sign-in cell is the same pair: the mode over where
+   its credential comes from. */
 .model-name {
   min-width: 0;
   gap: 2px;
 }
 
-/* A key's mark: its variable in the mono face, and a cooling key's time left
-   beside it in the tag's own ink — one number, read at a glance down a list. */
-.model-key {
-  font-size: var(--font-size-xs);
-}
-.model-key-left {
-  font-variant-numeric: tabular-nums;
-}
-
-/* One key per row in the edit form: the field (or, for a key written inline,
-   the locked sentence standing where the field would be) and its remove
-   button, which sits on the field's baseline. A slot is the row and, under
-   the last locked row, the one sentence about it — kept WITH the row, since
-   under Add key it read as a rule about the new key. */
-.model-key-slot {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.model-key-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--spacing-2);
-  align-items: end;
-}
-/* THE INPUT'S OWN SIZE (the kit's `compact` step), not the body's: it stands
-   where a field would, and at the body step it read as a different component
-   among the inputs. */
-.model-key-locked {
+/* A credential written into the document, in the edit form: the locked
+   sentence stands where the field would be, at THE INPUT'S OWN SIZE (the
+   kit's `compact` step), not the body's — at the body step it read as a
+   different component among the inputs. */
+.model-credential-locked {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
@@ -10217,41 +10186,30 @@ a.live-row:focus-visible {
   font-size: var(--font-size-compact);
   line-height: var(--font-line-height-normal);
 }
-.model-key-locked-text {
+.model-credential-locked-text {
   flex: 1 1 auto;
   min-width: 0;
 }
-.model-key-locked > button {
+.model-credential-locked > button {
   flex: none;
 }
 
-/* A FACT IN PARTS, each kept whole — a model's two bench times, or its ready
-   keys and its duplicates. On a row they stay on one line; in a header fact
-   they stack, one per line with no separator, since a wrapped "·" dangled at
-   the end of the first line and a count split from its noun. */
-.model-parts {
-  display: inline-flex;
-  flex-wrap: nowrap;
-  column-gap: 0.35em;
-}
-.model-parts.is-stacked {
+/* The variables a model's CLI is handed, one per line: a name and the
+   reference it reads, which wrap at the reference rather than mid-name. */
+.model-env {
+  display: flex;
   flex-direction: column;
-  min-width: 0;
-  max-width: 100%;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
 }
-/* AND A STACKED PART THAT STILL DOES NOT FIT ENDS IN AN ELLIPSIS, its whole
-   words on its title: a grid cell clips, and a clipped "auth 24h" read as
-   "auth 2" — a different value, with nothing to say it was cut. */
-.model-parts.is-stacked > .model-part {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.model-parts-sep {
-  color: var(--color-text-tertiary);
-}
-.model-part {
-  white-space: nowrap;
+
+/* The way out to Configuration, under the sign-in it changes: inside the
+   card's own padding, a step below the list it follows. */
+.model-signin-change {
+  margin: var(--spacing-3) 0 0;
 }
 
 /* ---- Signing in ----------------------------------------------------------

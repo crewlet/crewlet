@@ -71,36 +71,6 @@ func TestPriorToolCallsRenderInTheContractShape(t *testing.T) {
 	}
 }
 
-// Thinking blocks are one provider's opaque structures, valid only when
-// handed back to that provider on its own wire. Pasting them into a prompt
-// for a different model is prose that looks like data.
-func TestThinkingBlocksAreNotPastedIntoTheTranscript(t *testing.T) {
-	t.Parallel()
-	got, err := RenderPrompt(llm.Request{Messages: []llm.Message{
-		{Role: llm.RoleAssistant, Content: "the answer", ThinkingBlocks: []llm.ThinkingBlock{
-			{Type: "thinking", Thinking: "secret deliberation"},
-		}},
-	}})
-	if err != nil {
-		t.Fatalf("RenderPrompt: %v", err)
-	}
-	for _, leaked := range []string{"secret deliberation", "sig-abc"} {
-		if strings.Contains(got, leaked) {
-			t.Errorf("a provider's opaque block reached the transcript: %q", leaked)
-		}
-	}
-	// Reasoning PROSE is kept, because it reads as prose to any model.
-	withProse, err := RenderPrompt(llm.Request{Messages: []llm.Message{
-		{Role: llm.RoleAssistant, ReasoningContent: "I checked the log", Content: "done"},
-	}})
-	if err != nil {
-		t.Fatalf("RenderPrompt: %v", err)
-	}
-	if !strings.Contains(withProse, "I checked the log") {
-		t.Errorf("reasoning prose was dropped:\n%s", withProse)
-	}
-}
-
 // The catalogue carries the schema, or the model guesses argument names.
 func TestTheToolCatalogueCarriesTheSchema(t *testing.T) {
 	t.Parallel()

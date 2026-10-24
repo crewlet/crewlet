@@ -3,8 +3,9 @@
 One `crewlet run` is a whole company. Everything below is about running
 more than one, and the honest summary is: you probably do not need to.
 A single engine handles many concurrent turns — agent handlers are
-goroutines, so the practical ceiling is LLM provider rate limits and
-host memory, not process count. **Scale up before you scale out.**
+goroutines, so the practical ceiling is your model plans' and keys' rate
+limits and host memory — every model call is a coding CLI process — not the
+engine's own process count. **Scale up before you scale out.**
 
 Run a fleet when one of these is true:
 
@@ -105,6 +106,23 @@ provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
 provisioner follows the same rule, and both take `-api URL` to name the node
 to write through. The process environment remains the fallback every node
 resolves from, so a platform secret projected as env still works unchanged.
+
+**Every `seats` node runs its seats' models, so every one needs their CLIs.**
+A [`providers.llm` entry](../concepts/llm-backends.md) is a coding CLI that the
+node holding the seat starts, and its login lives in a state directory on that
+node's own disk. So a fleet installs each CLI on every `seats` node and signs it
+in there, and the sign-ins that reach every node at once are the ones that
+travel through the secret store: a headless token (`crewlet llm login <key>
+-capture-token` writes it into the store every node reads), an
+`auth.mode: api-key` entry's key, or a credential bundle (`crewlet llm export`,
+set as `auth.credential_bundle` or `CREWLET_LLM_CLI_<KEY>_CREDENTIALS`), which
+each node restores into an empty credential directory when it builds the
+company. A plain `crewlet llm login` signs in the host it ran on and no other.
+A `seats` node holds no data, so `crewlet llm` run on it names a node that
+does with `-api URL` — the company's stored values are read through that
+node, and a captured token is stored there — with one of Tier A's tokens in
+`CREWLET_API_TOKEN`.
+See [LLM Backends § Authentication](../concepts/llm-backends.md#authentication).
 
 **One keyring and one `api.external_url` on every node that serves the API.**
 A browser behind a load balancer signs in on whichever node it reaches and

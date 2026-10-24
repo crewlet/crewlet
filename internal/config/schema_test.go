@@ -110,16 +110,16 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		def, field string
 		want       []string
 	}{
-		{"LLMProvider", "type", strs(LLMProviderTypes)},
-		{"LLMProvider", "reasoning_effort", strs(ReasoningEfforts)},
+		{"LLMProvider", "agent", strs(CLIAgentNames)},
+		{"LLMProvider", "mode", strs(CLIAgentModes)},
+		{"CLIAgentAuth", "mode", strs(CLIAgentAuthModes)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
 		// TWO DIFFERENT CLOSED SETS, deliberately. A seat may name `self`
 		// — code work inside its own agent-mode executor run — and a
 		// company default may not, because it would silently turn code
 		// work off for every seat that is not in agent mode.
 		{"SandboxProvider", "default_run_in", strs(BackendPlacements())},
-		{"CLIAgent", "run_in", strs(BackendPlacements())},
-		{"CLIAgent", "mode", strs(CLIAgentModes)},
+		{"LLMProvider", "run_in", strs(BackendPlacements())},
 		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
 		{"RoleSandbox", "run_in", strs(Placements)},
 		{"RoleAvatar", "character", strs(AvatarCharacters)},
@@ -457,14 +457,17 @@ skill_variables:
 providers:
   llm:
     default:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
-      cooldowns: {rate_limit_seconds: 3600, auth_seconds: 300}
+      timeout_seconds: 900
+      auth: {mode: api-key, api_key: "${ANTHROPIC_API_KEY}"}
     sub:
-      type: cli-agent
       model: sonnet
-      cli: {agent: claude-code, max_concurrent: 2}
+      agent: claude-code
+      max_concurrent: 2
+    oc:
+      agent: opencode
+      model: anthropic/claude-sonnet-5
+      env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}
   embeddings: {type: openai, model: text-embedding-3-small, api_key: "${OPENAI_API_KEY}", dimensions: 1536}
   sandbox:
     local: {image: acme/box, runtime: auto}
@@ -525,6 +528,7 @@ units:
     roles:
       - name: CTO
         handle: cto
+        llm_sandbox: oc
         integrations: {mattermost: {bot_token: "${MM_CTO}", username: cto-bot}}
         sandbox:
           enabled: true
@@ -1144,8 +1148,9 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	t.Parallel()
 	schema := compileSchema(t, TierCompany)
 	// BOTH, because they exercise different halves of the model: the
-	// full-stack one every integration block, the subscription one the
-	// cli-agent provider, its sandbox cell and the seat-level `run_in`.
+	// full-stack one every integration block, the subscription one a
+	// signed-in CLI, agent mode, its sandbox cell and the seat-level
+	// `run_in`.
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

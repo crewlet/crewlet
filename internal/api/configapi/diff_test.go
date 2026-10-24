@@ -165,7 +165,7 @@ func wideCompanyDoc(model string) string {
 	doc := strings.Builder{}
 	doc.WriteString("name: Acme\nproviders:\n  llm:\n")
 	for i := range configapi.MaxChanges + 10 {
-		fmt.Fprintf(&doc, "    p%04d: {type: anthropic, model: %s, api_keys: [\"${K}\"]}\n", i, model)
+		fmt.Fprintf(&doc, "    p%04d: {model: %s}\n", i, model)
 	}
 	doc.WriteString("mcp_servers:\n  - {name: tracker, command: tracker-mcp}\n")
 	return doc.String()
@@ -283,13 +283,13 @@ func TestAChangeInsideAListElementIsFound(t *testing.T) {
 func TestARotatedCredentialIsReportedWithoutEitherValue(t *testing.T) {
 	t.Parallel()
 	base := companyFrom(t, companyDoc)
-	rotated := companyFrom(t, strings.Replace(companyDoc, `"sk-literal"`, `"sk-rotated-literal"`, 1))
+	rotated := companyFrom(t, strings.Replace(companyDoc, "token: sk-literal", "token: sk-rotated-literal", 1))
 
 	changes, err := configapi.Changes(base, rotated)
 	if err != nil {
 		t.Fatal(err)
 	}
-	change, present := pathsOf(changes)["providers.llm.zulu.api_keys[0]"]
+	change, present := pathsOf(changes)["providers.llm.zulu.auth.token"]
 	if !present {
 		t.Fatalf("a rotated credential diffed to nothing: %+v", changes)
 	}

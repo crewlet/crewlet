@@ -1120,11 +1120,13 @@ Two things the config expects of you, both once:
   `provisioning.username_prefix` unset: the handles already start with
   `agent-`, and a prefix would produce `@agent-agent-ceo`.
 - **A model.** `providers.llm.default` is a
-  [`cli-agent`](../concepts/subscription-llm-backends.md) entry driving the
+  [Claude Code entry](../concepts/llm-backends.md) driving the
   `claude` CLI on your own Claude subscription, so the binary has to be on
   the machine running `crewlet run` and Crewlet needs its own copy of the
-  login. Swap it for an `anthropic` / `openai` entry with an `api_keys` list
-  if you would rather spend a metered key.
+  login. Set its `auth.mode: api-key` if you would rather spend a metered
+  key — `ANTHROPIC_API_KEY`, read from the secret store or the environment —
+  or point it at another CLI ([Picking a
+  CLI](../concepts/llm-backends.md#picking-a-cli)).
 
 Then, from the repo root:
 
@@ -1172,8 +1174,8 @@ username, and the variables it would mint. Step 2 already wrote
 `…_AI` into `.env`, which the engine reads on boot; nothing has to be
 re-sourced. Every step is idempotent, so re-run any of them freely.
 
-Step 4 is the one that has no analogue in an API-key deployment, and
-`crewlet llm doctor` is the half that matters: a `cli-agent` entry can be
+Step 4 is the one a company's first model always needs, and
+`crewlet llm doctor` is the half that matters: a `providers.llm` entry can be
 configured perfectly and still not work — a missing binary, a profile whose
 flags drifted from the installed CLI, an expired login, or the one nothing
 else catches, a model that answers prose instead of the tool-call envelope.
@@ -1187,8 +1189,8 @@ avoids the shared refresh token `-from-host` leaves you with — writes into
 the [encrypted secret store](../concepts/secret-store.md), sealed under the
 Tier A keyring `examples/nimbus-claude-cli.config.yaml` already declares
 (every node needs one: `crewlet secrets keygen -key-id 2026-01` prints the
-key to export). Worth doing before you run this anywhere but a laptop. See [Subscription LLM
-Backends](../concepts/subscription-llm-backends.md#authentication) for the
+key to export). Worth doing before you run this anywhere but a laptop. See [LLM
+Backends](../concepts/llm-backends.md#authentication) for the
 other login shapes (a token on stdin, a username/password where the CLI has
 one, a bundle moved onto another host).
 
@@ -1229,7 +1231,7 @@ If a bot stays silent, check in this order:
    no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
 4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml` — on a
-   `cli-agent` provider this is the other half of the same symptom: a turn
+   coding-CLI entry this is the other half of the same symptom: a turn
    that never reached a model, or one whose model answered prose instead of
    the tool-call envelope, ends with nothing posted.
 

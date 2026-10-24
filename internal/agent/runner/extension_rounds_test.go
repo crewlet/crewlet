@@ -44,8 +44,8 @@ func TestAnExtensionContinuesTheRoundCountInsteadOfRestartingIt(t *testing.T) {
 //
 // A consumer keys the ledger on the round number and the partial overwrites
 // the block it lands on, so an unshifted partial from extension round 1 is
-// written into the phase's committed round 1: that round's thinking and prose
-// replaced by text the model is writing twenty rounds later, sitting directly
+// written into the phase's committed round 1: that round's prose replaced by
+// text the model is writing twenty rounds later, sitting directly
 // above round 1's own tool calls, and no block at all for the round actually
 // running. The abandoned attempts carry the same number and travel with it.
 func TestTheRoundInFlightIsShiftedWithTheRoundsBehindIt(t *testing.T) {
@@ -55,7 +55,7 @@ func TestTheRoundInFlightIsShiftedWithTheRoundsBehindIt(t *testing.T) {
 		Narration:  []toolloop.Narration{{Round: 1, Content: "again"}},
 		Partial: &toolloop.Partial{
 			Round:     2,
-			Reasoning: "still writing",
+			Content:   "still writing",
 			Abandoned: []toolloop.Narration{{Round: 2, Content: "half a sentence"}},
 		},
 	}

@@ -66,15 +66,14 @@ func (p *auxProvider) request(t *testing.T, i int) llm.Request {
 	return p.seen[i]
 }
 
-// wantLowEffort fails unless req caps its effort at low. EVERY LEARNING PASS
-// is extraction — a short classification or a draft the next pass refines —
-// and on a thinking model the thinking is spent out of the same cap as the
-// answer, so a pass at its entry's level comes back empty and reads as
-// "nothing to learn".
-func wantLowEffort(t *testing.T, req llm.Request) {
+// wantNoTools fails unless req offers the model no tools. EVERY LEARNING PASS
+// wants text back — a classification or a draft in the content — and a tool
+// on the surface invites a model to call it and answer nothing, which the
+// pass reads as "nothing to learn" with no error anywhere to say why.
+func wantNoTools(t *testing.T, req llm.Request) {
 	t.Helper()
-	if req.Effort != llm.EffortLow {
-		t.Errorf("effort = %q, want a ceiling of low", req.Effort)
+	if len(req.Tools) != 0 {
+		t.Errorf("%d tools offered; the contract is text in the content", len(req.Tools))
 	}
 }
 
@@ -692,26 +691,13 @@ func TestDescribeSenderIsOneRendering(t *testing.T) {
 
 // --- how the call is made -------------------------------------------------
 
-func TestTheClassifierCallIsToollessBoundedAndNearlyDeterministic(t *testing.T) {
+func TestTheClassifierCallIsToollessUnderOneFixedSystemPrompt(t *testing.T) {
 	t.Parallel()
 	p := says(`{"kind":"NOOP"}`)
 	mustDecide(t, decider(t, p, &fakeDiary{}), pdTurn())
 
 	req := p.request(t, 0)
-	if len(req.Tools) != 0 {
-		t.Errorf("%d tools offered; the contract is a JSON object in the content", len(req.Tools))
-	}
-	if req.Temperature == nil {
-		t.Fatal("no temperature set; the provider default would make the tier drift between identical turns")
-	}
-	if got := *req.Temperature; got != 0.2 {
-		t.Errorf("temperature = %v, want 0.2", got)
-	}
-	wantLowEffort(t, req)
-	if req.MaxTokens != learning.DefaultAuxTokens {
-		t.Errorf("max tokens = %d, want %d — a tighter cap is spent thinking and returns empty content",
-			req.MaxTokens, learning.DefaultAuxTokens)
-	}
+	wantNoTools(t, req)
 	if len(req.Messages) != 2 || req.Messages[0].Role != llm.RoleSystem || req.Messages[1].Role != llm.RoleUser {
 		t.Fatalf("messages = %+v, want one system and one user message", req.Messages)
 	}
@@ -730,24 +716,17 @@ func TestTheClassifierCallIsToollessBoundedAndNearlyDeterministic(t *testing.T) 
 	}
 }
 
-// The defaults are asserted as BANDS with the failure behind each, not as the
-// numbers themselves: an assertion that reads the constant back passes for
-// any value the constant is ever changed to, which is exactly the mutation it
-// is supposed to catch.
-func TestTheAuxDefaultsStayInsideTheBandsTheyWereChosenFor(t *testing.T) {
+// The default is asserted as a BAND with the failure behind each edge, not as
+// the number itself: an assertion that reads the constant back passes for any
+// value the constant is ever changed to, which is exactly the mutation it is
+// supposed to catch.
+func TestTheAuxTimeoutStaysInsideTheBandItWasChosenFor(t *testing.T) {
 	t.Parallel()
-	// Under a thousand tokens an extended-thinking model spends the whole
-	// cap reasoning and returns empty content: every turn then degrades to
-	// NOOP with no error anywhere to say why. Above twenty thousand buys
-	// nothing for an answer that is one small JSON object.
-	if learning.DefaultAuxTokens < 1000 || learning.DefaultAuxTokens > 20000 {
-		t.Errorf("DefaultAuxTokens = %d, outside the band it was chosen for",
-			learning.DefaultAuxTokens)
-	}
-	// Under 30s an ordinary round trip to a small model is cut off and
-	// reported as "nothing to persist". Over 5 minutes it stops being a
-	// deadline for a dispatcher that consumes completed turns one at a
-	// time — a hung provider would stall the company's whole reflection.
+	// Under 30s a CLI's cold launch plus an ordinary answer from a small
+	// model is cut off and reported as "nothing to persist". Over 5 minutes
+	// it stops being a deadline for a dispatcher that consumes completed
+	// turns one at a time — a hung provider would stall the company's whole
+	// reflection.
 	if learning.DefaultAuxTimeout < 30*time.Second || learning.DefaultAuxTimeout > 5*time.Minute {
 		t.Errorf("DefaultAuxTimeout = %s, outside the band it was chosen for",
 			learning.DefaultAuxTimeout)

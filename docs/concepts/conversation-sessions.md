@@ -20,12 +20,7 @@ and it deliberately follows the same doctrine one scope wider.
 
 **Not a transcript replay.** The engine can already round-trip a whole LLM
 conversation — the detached run's `execute_state` persists the full message
-list, each assistant turn kept as the vendor's own content blocks (signed
-thinking included, in the order the model wrote them) or an OpenAI-wire host's
-own reasoning fields, beside the backend and model that wrote it and a digest
-of what its reasoning is bound to (the tools it was written under, or the
-endpoint that wrote it), and splices it back into a running loop, which replays
-those turns [exactly as they were written](turn-engine.md#the-conversation-only-grows).
+list and splices it back into a running loop, which re-enters it as it was.
 That is right for a turn *parked* on a question whose dangling tool call
 is waiting for one answer. It is wrong here: a conversation's next turn
 arrives against a thread that has **moved**, and replaying raw prior context
@@ -52,7 +47,7 @@ embedding, no aux LLM), so it renders there regardless.
 
 **It is not the same thing as [the thread block](agent-runtime.md#the-thread-a-turn-was-woken-in), and neither replaces the other.** `## The thread so far` is what *everyone* said on the chat surface, read back live from the vendor. A conversation session is what *this seat* said and did, across turns, recorded by the engine — the plan, the tool calls, the reply and the reviewer's verdict, none of which is visible in a chat thread. A seat reading only the thread cannot tell which of its own replies it has already reasoned through; a seat reading only the ledger does not know what the other five people in the thread have said since. Chat is also only one surface: a Jira comment, a GitHub review and a scheduled fire all have a conversation session and no thread to read.
 
-**Not a second, invisible memory.** The [`cli-agent` workspace](subscription-llm-backends.md)
+**Not a second, invisible memory.** The [coding-CLI workspace](llm-backends.md#isolation-the-part-that-actually-matters)
 deletes a coding CLI's own sessions before and after every call, precisely so
 that one task's context cannot leak into the next through a channel nobody can
 see. This ledger is the inverse shape of what that rule rejects: engine-owned
@@ -233,8 +228,9 @@ feeding it prior turns invites judging work this turn never promised.
 
 ## Cost
 
-The block is re-sent on every executor and reviewer round, and Anthropic bills
-cache reads at full token value, so its cost multiplies by rounds used. Two
+The block is re-sent on every executor and reviewer round, and every round's
+input is charged to the token budget whole, cache reads included, so its cost
+multiplies by rounds used. Two
 things bound that product, and which one applies where is the whole design:
 
 - **`max_entries`, at write time** — how many turns of a conversation are kept

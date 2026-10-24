@@ -33,7 +33,6 @@ import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
-import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
@@ -276,7 +275,6 @@ export interface PromptMessage {
  */
 export interface PartialRound {
   round?: number;
-  reasoning?: string;
   content?: string;
   abandoned?: RoundNarration[] | null;
 }
@@ -284,7 +282,6 @@ export interface PartialRound {
 /** One round's model turn, as the engine recorded it. */
 export interface RoundNarration {
   round?: number;
-  reasoning?: string;
   content?: string;
   /**
    * The model answered this round in prose and called no tool, in a phase
@@ -309,9 +306,9 @@ export interface PhaseRound {
   cache_write_tokens: number;
   tool_calls: number;
   /**
-   * Why the model stopped writing this round's response. Absent where its
-   * backend reported none — "not reported", never "ended normally". `max_tokens`, `refusal`, `context_exceeded` and
-   * `paused` each END the phase; see `contract/stops.ts`.
+   * Why the model stopped writing this round's response: `end` or
+   * `tool_use` (see `contract/stops.ts`). Absent where its backend reported
+   * none — "not reported", never "ended normally".
    */
   stop_reason?: StopReason;
 }
@@ -425,7 +422,7 @@ export interface LiveCall {
   total_tokens: number;
   tool_executions?: ToolExecution[] | null;
   /**
-   * Per-round model turns — `{round, reasoning, content}` — where `round`
+   * Per-round model turns — `{round, content}` — where `round`
    * matches `tool_executions[].round`, which is what lets the two lists
    * interleave into one ledger. Absent on a phase this engine recorded
    * before it sent them.
@@ -6400,7 +6397,6 @@ export interface QueryMap {
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
   mcp_servers_status: McpServersStatusAnswer;
-  credential_pool: CredentialPoolAnswer;
   backups: BackupsAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;

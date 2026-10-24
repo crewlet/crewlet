@@ -319,7 +319,6 @@ name: Acme
 providers:
   llm:
     fast:
-      type: anthropic
       model: claude-golden
 integrations:
 ` + atlassian + `  ` + block + `:

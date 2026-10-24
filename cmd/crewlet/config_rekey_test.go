@@ -150,7 +150,7 @@ func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
 // and a test reaches that state the same way: by a write that did not seal.
 func plantPlaintextRevision(t *testing.T, dir string) string {
 	t.Helper()
-	company, err := config.LoadCompany(companyFile(t, dir, "company.yaml", nil))
+	company, err := config.LoadCompany(companyFile(t, dir, "company.yaml", nil), nil)
 	if err != nil {
 		t.Fatalf("load the fixture company: %v", err)
 	}

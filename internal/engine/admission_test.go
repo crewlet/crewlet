@@ -25,7 +25,7 @@ import (
 // edited.
 var duplicateStepsRevision = json.RawMessage(`{"name":"Acme",
   "providers":{
-    "llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}},
+    "llm":{"zulu":{"model":"m"}},
     "sandbox":{"default_run_in":"direct","local":{},"setup":[
       {"name":"git-auth","commands":["true"]},
       {"name":"git-auth","commands":["false"]}]}}}`)

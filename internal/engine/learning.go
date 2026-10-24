@@ -85,7 +85,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	if models != nil && cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
 		decider, err := learning.NewPersistDecider(models,
 			learning.NewDiary(db, learning.WithEmbed(e.embedText)),
-			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
+			learning.PersistOptions{})
 		if err != nil {
 			log.Warn("persist_decider_unavailable", "error", err,
 				"detail", "turns will not be classified and nothing will be "+
@@ -171,7 +171,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 
 	if models != nil && cfg.Counterparty.Enabled.Or(true) {
 		profiler, err := learning.NewProfiler(models, learning.NewCounterparties(db),
-			learning.ProfilerOptions{MaxTokens: cfg.Counterparty.BudgetTokens})
+			learning.ProfilerOptions{})
 		if err != nil {
 			log.Warn("counterparty_profiler_unavailable", "error", err,
 				"detail", "no profile will be written, so the prefetch's "+
@@ -199,7 +199,6 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 	return learning.RefinerOptions{
 		OnSuccess:    &onSuccess,
 		OnFailure:    &onFailure,
-		MaxTokens:    cfg.BudgetTokens,
 		MaxBodyChars: cfg.MaxBodyChars,
 		KeepVersions: cfg.MaxVersionsKept,
 	}
@@ -543,7 +542,6 @@ func synthesizerOptions(cfg config.SkillSynthesis) learning.SynthesizerOptions {
 		MinToolCalls:              cfg.MinToolCalls,
 		MaxSkillsPerAgent:         cfg.MaxSkillsPerAgent,
 		DuplicateJaccardThreshold: cfg.DuplicateJaccardThreshold,
-		MaxTokens:                 cfg.BudgetTokens,
 		ClusterMinSize:            cfg.ClusterMinSize,
 		ClusterJaccardThreshold:   cfg.ClusterJaccardThreshold,
 		EpisodeFetchLimit:         cfg.EpisodeFetchLimit,
@@ -725,9 +723,6 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 				{Role: llm.RoleSystem, Content: system},
 				{Role: llm.RoleUser, Content: user},
 			},
-			Temperature: llm.Temp(compactionTemperature),
-			Effort:      compactionEffort,
-			MaxTokens:   e.compactionTokens(c),
 		})
 		if err != nil {
 			return "", fmt.Errorf("engine: compaction on %s: %w", member.Key, err)
@@ -769,28 +764,6 @@ func (e *Engine) episodeFit(c *Company) learning.FitFunc {
 		}
 		return res.Text, nil
 	}
-}
-
-// compactionTemperature keeps a cluster summary reproducible.
-//
-// The same 0.2 the other auxiliary passes use, and for the same reason: a
-// summary is a description of rows that already exist, so there is nothing
-// for sampling to explore — but zero makes some providers degenerate into
-// repeating the input. Honoured only where the model takes a sampling
-// parameter and the call is not thinking.
-const compactionTemperature = 0.2
-
-// compactionEffort is the most thinking a cluster summary is worth: it
-// describes rows that already exist, which is extraction, and on a thinking
-// model the thinking comes out of the same cap as the summary.
-const compactionEffort = llm.EffortLow
-
-// compactionTokens caps one cluster summary.
-func (e *Engine) compactionTokens(c *Company) int {
-	if n := c.Config.Learning.EpisodeLifecycle.CompactionBudgetTokens; n > 0 {
-		return n
-	}
-	return learning.DefaultAuxTokens
 }
 
 // anySeatHasAuxiliary reports whether at least one seat can answer an

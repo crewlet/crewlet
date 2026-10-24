@@ -127,12 +127,13 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 		{"a valid put", http.MethodPut, companyDoc, true, http.StatusOK},
 		{"a valid put creating the company", http.MethodPut, companyJSONDoc, false, http.StatusOK},
 		{"a put the validator refuses", http.MethodPut,
-			strings.Replace(companyDoc, "type: anthropic", "type: nowhere", 1),
+			strings.Replace(companyDoc, "      model: claude-sonnet-5\n",
+				"      agent: nowhere\n      model: claude-sonnet-5\n", 1),
 			true, http.StatusBadRequest},
 		{"a put that does not parse", http.MethodPut, "name: [", true, http.StatusBadRequest},
 		{"a valid patch", http.MethodPatch, `{"mission": "checked"}`, true, http.StatusOK},
 		{"a patch the validator refuses", http.MethodPatch,
-			`{"providers": {"llm": {"zulu": {"type": "nowhere", "model": "m"}}}}`,
+			`{"providers": {"llm": {"zulu": {"agent": "nowhere", "model": "m"}}}}`,
 			true, http.StatusBadRequest},
 		{"a patch naming an unknown key", http.MethodPatch, `{"missionn": "typo"}`, true, http.StatusBadRequest},
 		// THE ORG IS PART OF THE DOCUMENT, so a dry run checks it too.
@@ -410,9 +411,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-literal"]
   sandbox:
     fake: true
     setup:
@@ -530,15 +529,15 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	}
 
 	// A refusal is the write's own, located at the key to correct.
-	provider["type"] = "nonsense"
+	provider["agent"] = "nonsense"
 	broken, err := json.Marshal(provider)
 	if err != nil {
 		t.Fatal(err)
 	}
 	refused := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=true", string(broken), nil)
 	if refused.Code != http.StatusBadRequest ||
-		!strings.Contains(refused.Body.String(), "providers.llm.zulu.type") {
-		t.Errorf("a check of an unknown type = %d %s, want 400 located at the key", refused.Code, refused.Body)
+		!strings.Contains(refused.Body.String(), "providers.llm.zulu.agent") {
+		t.Errorf("a check of an unknown agent = %d %s, want 400 located at the key", refused.Code, refused.Body)
 	}
 	if got := s.writes(); got != (writeCounts{}) {
 		t.Errorf("a refused entity check wrote %+v, want nothing", got)

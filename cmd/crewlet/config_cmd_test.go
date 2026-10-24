@@ -18,9 +18,8 @@ name: Nimbus
 providers:
   llm:
     main:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
+      auth: {mode: api-key, api_key: "${ANTHROPIC_API_KEY}"}
 roles:
   - name: CEO
     handle: ceo
@@ -311,8 +310,7 @@ func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
 			doc := strings.Builder{}
 			doc.WriteString("name: Nimbus\nproviders:\n  llm:\n")
 			for i := range configapi.MaxChanges + 10 {
-				fmt.Fprintf(&doc, "    p%04d: {type: anthropic, model: %s, api_keys: [\"${K}\"]}\n",
-					i, model)
+				fmt.Fprintf(&doc, "    p%04d: {model: %s}\n", i, model)
 			}
 			doc.WriteString("roles:\n  - {name: CEO, handle: ceo}\n")
 			return doc.String()
@@ -521,8 +519,8 @@ func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	literal := companyFile(t, dir, "literal.yaml", func(doc string) string {
-		return strings.Replace(doc, `["${ANTHROPIC_API_KEY}"]`,
-			`["sk-ant-a-real-looking-literal"]`, 1)
+		return strings.Replace(doc, `"${ANTHROPIC_API_KEY}"`,
+			`"sk-ant-a-real-looking-literal"`, 1)
 	})
 	if _, errs, err := configCmd(t, cfg, "import", literal); err != nil {
 		t.Fatalf("import: %v (%s)", err, errs)
@@ -540,8 +538,8 @@ func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
 
 	// ...and so is a diff, on BOTH sides, with no flag to turn it off.
 	changed := companyFile(t, dir, "changed.yaml", func(doc string) string {
-		doc = strings.Replace(doc, `["${ANTHROPIC_API_KEY}"]`,
-			`["sk-ant-a-second-literal"]`, 1)
+		doc = strings.Replace(doc, `"${ANTHROPIC_API_KEY}"`,
+			`"sk-ant-a-second-literal"`, 1)
 		return strings.Replace(doc, "name: Nimbus", "name: Nimbus Two", 1)
 	})
 	if _, _, err := configCmd(t, cfg, "import", changed); err != nil {
@@ -559,7 +557,7 @@ func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
 	// AND THE ROTATION IS STILL THERE. Masked on both sides it is the same
 	// marker, and a diff that compared masks reported the rotated key as no
 	// change at all.
-	if !strings.Contains(diff, "api_keys[0]") {
+	if !strings.Contains(diff, "auth.api_key") {
 		t.Errorf("the diff does not report the rotated credential:\n%s", diff)
 	}
 

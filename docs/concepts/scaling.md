@@ -232,7 +232,7 @@ what a lock fixes**:
 | **1** | **Control plane** — config activation, secret rotation, identity maps were delivered over a competing-consumer subscription, so exactly one replica applied a revision and the rest ran the previous company forever | An append-only activation epoch every node polls — see [Control Plane](control-plane.md) |
 | **2** | **Process-bound resources** — a seat's stdio MCP servers are child processes of the engine holding its credentials. A seat's tools live where its subprocesses live, so "any node can serve any seat" is false unless placement decides tools *and* routing together | Seat leases: claiming a seat is what spawns its MCP children — see [Seat Ownership](seat-ownership.md) |
 | **3** | **Per-seat exclusion** — two nodes attached to one seat's durable consumer split its traffic, running one agent's conversation as two interleaved turn streams that neither can see | A TTL lease with an epoch fencing token. **This is the class a lock fixes**, and it is one of five |
-| **4** | **Shared mutable counters** — budgets, concurrency, webhook dedupe, credential cooldowns were per-process, so an org cap of 500 k tokens silently became N × 500 k | Shared storage, not exclusion — see [what the fleet shares](#what-the-fleet-shares) below |
+| **4** | **Shared mutable counters** — budgets, concurrency and webhook dedupe were per-process, so an org cap of 500 k tokens silently became N × 500 k | Shared storage, not exclusion — see [what the fleet shares](#what-the-fleet-shares) below |
 | **5** | **Boot walks with external side effects** — schema migration, sandbox recovery, skill clustering all ran unconditionally at boot, where "abandoned by a dead engine" is a valid inference only when there is exactly one engine | Singleton duty leases, an advisory lock on `migrate()`, and per-seat recovery inside the acquire hook |
 
 Class 3 is the one everybody expects and the only one a mutex addresses. The
@@ -255,7 +255,6 @@ stopping it.
 | `config` · `status` | Which company revision is current, and which nodes have reached it | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
 | `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, and that GitHub and GitLab did not have at all | [Event System](event-system.md) |
-| `cooldowns` | Which provider key is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `rate` | The notification valve | [Event System](event-system.md) |
 | `budgets` | Org and per-seat spend against the cap. Caps stay config-derived in memory; only *usage* is shared | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 | `objects` | Which store the company's files are in (recorded by the first node, so a node configured with another refuses to boot), and what the object store's collector and the trash reaper last did | [Object Store](object-store.md#one-store-per-fleet) |
@@ -303,9 +302,16 @@ seat. See
 - **`max_concurrent`.** Tier A's `node.max_concurrent` (default 32) is the gate
   every agent turn passes through, and it is per node — so an org's ceiling is
   N × the configured value. Size it per node, not per company. This is the one
-  knob a fleet genuinely changes the meaning of. (A cli-agent provider's own
-  `max_concurrent`, under `providers.llm.<name>.cli`, is a different knob: it
-  caps that provider's subprocesses.)
+  knob a fleet genuinely changes the meaning of. (A `providers.llm` entry's own
+  `max_concurrent` is a different knob: it caps that entry's CLI processes,
+  also per node.)
+- **A spent plan's sit-out.** An entry whose CLI reported a spent plan or a rate
+  limit sits out on the node that heard it, until the reset the CLI named (an
+  hour at most) or for a minute where it named none. Nothing tells the other
+  nodes: each learns the same thing from its own calls once per window — at
+  most `max_concurrent` of them, since a call queued behind those is refused
+  once one reports — which is cheaper than a coordination read in front of
+  every model call.
 - **A seat's MCP subprocesses.** They are children of the node that claimed the
   seat, and they die with the release.
 - **The tool-skill registry.** It warms a local cache rather than producing

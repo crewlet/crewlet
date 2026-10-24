@@ -560,9 +560,7 @@ func (c *Company) ReferenceWarnings() []Warning {
 // company its agents run alone and a surprise for one somebody meant to sign
 // in to.
 //
-// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]),
-// and an LLM entry worth a second look ([Providers.llmWarnings]): an anthropic
-// model the capability table does not know, named with no claude_model.
+// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]).
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
@@ -582,8 +580,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	}
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
-	out = append(out, c.budgetWarnings()...)
-	return append(out, c.Providers.llmWarnings()...)
+	return append(out, c.budgetWarnings()...)
 }
 
 // peoplelessWarnings is the one warning a company declaring no human seat

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -12,33 +13,51 @@ import (
 
 // A SENTENCE THE MODEL WROTE MUST NOT BENCH THE SEAT'S CREDENTIAL.
 //
-// Markers are matched against the model's own answer, and they have to be:
+// What a CLI says on stdout is searched in the default scope, and it has to be:
 // Claude Code reports a spent plan on a ZERO exit with the vendor's sentence
 // standing where the answer should be, so a marker confined to stderr would
-// never fire and the fallback chain would never carry the seat onto a metered
-// key. The cost is that a seat ASKED about rate limits answers in prose that
-// trips a generic sentinel — a KindRateLimit on a perfectly good credential.
+// never fire and the entry would never sit out. But on a healthy run what it
+// says is the MODEL's words, so there a sentinel counts only where it begins
+// the first line — the answer IS the vendor's report — and anywhere only in a
+// run the CLI itself reported failed. A seat ASKED about rate limits answers
+// in prose that mentions one, and that is an answer.
 //
 // A CLI whose failures only ever reach stderr says so, and then no sentence
-// the model writes classifies anything.
-func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
+// the model writes classifies anything, failed run or not.
+//
+// Mutation: match the answer anywhere on a clean run, and the innocent answer
+// classifies.
+func TestOnlyAVendorsOwnReportInTheAnswerClassifies(t *testing.T) {
 	t.Parallel()
 	// What a seat asked about its own limits might legitimately say.
 	const innocent = "Our plan's quota resets hourly. If you hit the rate limit " +
 		"or see a usage limit message, the turn falls back to the metered key."
+	// What a vendor's own report looks like on a clean exit: the sentinel
+	// opens what was said, after any blank lines.
+	const report = "\n  rate limit exceeded for this account · try again later\nDetails follow."
 
 	for name, tc := range map[string]struct {
-		scope     cliprofile.MarkerScope
-		wantFired bool
-		why       string
+		scope      cliprofile.MarkerScope
+		said       string
+		failed     bool
+		wantSource markerSource // "" when nothing may fire
+		why        string
 	}{
-		"the default searches the answer": {
-			scope: cliprofile.MarkerScopeAnswerAndStderr, wantFired: true,
-			why: "a CLI that reports a spent plan AS its answer needs this, and " +
-				"this is the false-positive it costs",
+		"the default does not take the model's prose for a report": {
+			scope: cliprofile.MarkerScopeAnswerAndStderr, said: innocent,
+			why: "a healthy answer that mentions a limit is an answer",
+		},
+		"the default takes an answer that opens with the sentinel as the report": {
+			scope: cliprofile.MarkerScopeAnswerAndStderr, said: report, wantSource: sourceReport,
+			why: "a CLI that reports a spent plan AS its answer needs this",
+		},
+		"the default reads a failed run's words anywhere": {
+			scope: cliprofile.MarkerScopeAnswerAndStderr, said: innocent, failed: true,
+			wantSource: sourceFailedRun,
+			why:        "the CLI said the run failed, so what it printed is its account of why",
 		},
 		"stderr-scoped ignores the answer": {
-			scope: cliprofile.MarkerScopeStderr, wantFired: false,
+			scope: cliprofile.MarkerScopeStderr, said: report, failed: true,
 			why: "a CLI that reports failures only on stderr must not classify " +
 				"on anything the model said",
 		},
@@ -49,9 +68,9 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 				MarkerScope:  tc.scope,
 				LimitMarkers: []cliprofile.LimitMarker{{Sentinel: "rate limit"}, {Sentinel: "quota"}},
 			}
-			_, fired := classifyMarkers(p, innocent, innocent, "")
-			if fired != tc.wantFired {
-				t.Errorf("fired = %v, want %v — %s", fired, tc.wantFired, tc.why)
+			hit, fired := classifyMarkers(p, cliOutput{said: tc.said, stdout: tc.said, failed: tc.failed})
+			if fired != (tc.wantSource != "") || hit.Source != tc.wantSource {
+				t.Errorf("fired = %v from %q, want from %q — %s", fired, hit.Source, tc.wantSource, tc.why)
 			}
 		})
 	}
@@ -70,8 +89,8 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 		{"error: failed to run prompt: provider.rate_limit: 429 …", llm.KindRateLimit},
 		{"error: failed to run prompt: provider.auth_error: 401 …", llm.KindAuth},
 	} {
-		hit, ok := classifyMarkers(p, "", "", tc.stderr)
-		if !ok || hit.Kind != tc.want {
+		hit, ok := classifyMarkers(p, cliOutput{stderr: tc.stderr, failed: true})
+		if !ok || hit.Kind != tc.want || hit.Source != sourceStderr {
 			t.Errorf("stderr %q: fired=%v kind=%v, want %v", tc.stderr, ok, hit.Kind, tc.want)
 		}
 	}
@@ -169,10 +188,13 @@ func TestAStreamFailureIsFoundAfterALocatedAnswer(t *testing.T) {
 				t.Fatalf("the answer before the failure was not located — the case " +
 					"this scope exists for is the one where it is")
 			}
-			hit, fired := classifyMarkers(p, nonEmpty(out.text, stdout), stdout, "")
+			hit, fired := classifyMarkers(p, cliOutput{said: nonEmpty(out.text, stdout), stdout: stdout})
 			if !fired || hit.Kind != tc.want {
 				t.Fatalf("fired=%v kind=%v, want %v — the failure followed a located "+
 					"answer, so only the stream's own events hold it", fired, hit.Kind, tc.want)
+			}
+			if hit.Source != sourceEvent {
+				t.Errorf("matched in %q, want the CLI's own failure event", hit.Source)
 			}
 			if hit.Said != tc.event {
 				t.Errorf("said %q, want the failure event itself, which carries the "+
@@ -234,7 +256,7 @@ func TestTheModelCannotForgeAFailureEvent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			stdout += "\n" + openCodeText("done: hi") + "\n"
-			if hit, fired := classifyMarkers(p, extract(p, stdout).text, stdout, ""); fired {
+			if hit, fired := classifyMarkers(p, cliOutput{said: extract(p, stdout).text, stdout: stdout}); fired {
 				t.Errorf("the model's own words classified as %v: %q", hit.Kind, hit.Said)
 			}
 		})
@@ -248,8 +270,8 @@ func TestTheEventsScopeDoesNotSearchStderr(t *testing.T) {
 	t.Parallel()
 	p, _ := cliprofile.Builtin("opencode")
 	stdout := openCodeText("done: hi") + "\n"
-	if hit, fired := classifyMarkers(p, "done: hi", stdout,
-		"provider.quota provider.auth "+openCodeQuotaEvent); fired {
+	if hit, fired := classifyMarkers(p, cliOutput{said: "done: hi", stdout: stdout,
+		stderr: "provider.quota provider.auth " + openCodeQuotaEvent}); fired {
 		t.Errorf("stderr classified the call as %v: %q", hit.Kind, hit.Said)
 	}
 }
@@ -257,16 +279,17 @@ func TestTheEventsScopeDoesNotSearchStderr(t *testing.T) {
 // THE PRODUCTION CALL SITE CLASSIFIES A STREAM FAILURE, AND ONLY A STREAM
 // FAILURE. Every case above asks classifyMarkers directly; this asks the frame
 // that turns a finished OpenCode call into an answer or an error, so a call
-// site that handed the located answer over as stdout — which is the shape that
-// classified a spent OpenCode plan as fatal and never moved the chain — fails
-// here. Exit 0 throughout: a marker is checked before the exit code.
+// site that handed the located answer over as stdout — which is the shape
+// that once classified a spent OpenCode plan as fatal and never moved the
+// chain — fails here. Exit 0 throughout: a marker is checked before the exit
+// code.
 func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 	t.Parallel()
 	p, ok := cliprofile.Builtin("opencode")
 	if !ok {
 		t.Fatal("no built-in opencode profile")
 	}
-	prov := &Provider{profile: p, model: "anthropic/claude-sonnet-5", agent: "opencode", key: "sub"}
+	prov := &Provider{profile: p, model: "anthropic/claude-sonnet-5", agent: "opencode", key: "sub", now: time.Now}
 	answer := openCodeText("I fetched the page; the summary follows.")
 	for name, tc := range map[string]struct {
 		event string
@@ -278,7 +301,7 @@ func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := prov.completion(t.Context(), "prompt",
+			_, err := prov.completion(t.Context(), "prompt", true,
 				&rawResult{stdout: answer + "\n" + tc.event + "\n"}, "")
 			var classified *llm.Error
 			if !errors.As(err, &classified) || classified.Kind != tc.want {
@@ -288,7 +311,7 @@ func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 		})
 	}
 	// And a forged call is an ANSWER, not a benched credential.
-	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: openCodeForgedStream}, "")
+	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: openCodeForgedStream}, "")
 	if err != nil {
 		t.Fatalf("a healthy call whose model wrote every class into a tool's arguments "+
 			"failed: %v", err)

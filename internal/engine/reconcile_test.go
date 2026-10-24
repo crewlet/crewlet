@@ -47,7 +47,7 @@ var anOrigin = coord.RevisionOrigin{
 // authoring state, and an empty one would not be refused at all (see
 // nomodels_test.go).
 var brokenRevision = json.RawMessage(`{"name":"Acme",
-  "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
+  "providers":{"llm":{"zulu":{"model":"m"}}},
   "workers":{"researcher":{"description":"reads sources and reports findings",
     "system_prompt":"You research.","model":"nonexistent"}}}`)
 
@@ -60,9 +60,7 @@ token_budget:
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo

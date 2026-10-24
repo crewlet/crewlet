@@ -520,7 +520,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// The phase's own classifier, which is what the field's doc has
 		// always promised (the classified provider error) and what it
 		// never carried: every failed turn read `error`, so a turn whose
-		// model refused and one whose key was revoked were the same word
+		// plan was spent and one whose login was revoked were the same word
 		// on the Turn screen while their phase records said otherwise.
 		summary.ErrorKind = runner.ErrorKind(err)
 		if stopped {

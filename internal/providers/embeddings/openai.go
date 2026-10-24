@@ -13,8 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/respjson"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
-	llmopenai "github.com/crewlet/crewlet/internal/providers/llm/openai"
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // Defaults.
@@ -121,8 +120,7 @@ type Config struct {
 //
 // ONE BACKEND for both configured types, because the difference between
 // `openai` and `openai-compatible` is a base URL rather than a protocol —
-// the same reasoning the chat backend states, and the reason a local
-// embedding server works with no code here at all.
+// and the reason a local embedding server works with no code here at all.
 type Provider struct {
 	client   sdk.Client
 	model    string
@@ -161,19 +159,19 @@ func New(cfg Config) (*Provider, error) {
 		baseURL = DefaultBaseURL
 	}
 
-	// NOTHING FROM THE PROCESS ENVIRONMENT — the chat backend's rule and its
-	// one implementation (an admin key, organization and project headers and
-	// custom headers would otherwise reach whatever server this embedder
-	// points at). Applied first, so the key below is the one that authorizes.
-	opts := append(llmopenai.WithoutAmbientEnvironment(),
+	// NOTHING FROM THE PROCESS ENVIRONMENT ([withoutAmbientEnvironment]: an
+	// admin key, organization and project headers and custom headers would
+	// otherwise reach whatever server this embedder points at). Applied
+	// first, so the key below is the one that authorizes.
+	opts := append(withoutAmbientEnvironment(),
 		option.WithBaseURL(baseURL),
 		// The client's ceiling is the single call's; every request states
 		// its own (EmbedTimeout, BatchTimeout), so this is never the one in
 		// force — it is here so no request can go out with none.
 		option.WithRequestTimeout(EmbedTimeout),
-		// NO SDK RETRIES, for the reason the chat backend gives: its
-		// defaults fire on the whole 429/5xx set, which is exactly what a
-		// caller needs to see rather than have spent for it. The callers
+		// NO SDK RETRIES: its defaults fire on the whole 429/5xx set,
+		// which is exactly what a caller needs to see rather than have
+		// spent for it. The callers
 		// here each have their own answer — a turn degrades, the corpus
 		// asks again on its next tick — and the classified error is what
 		// lets them choose it (see the package doc).
@@ -187,12 +185,19 @@ func New(cfg Config) (*Provider, error) {
 	)
 
 	// A transport the caller supplied is used as given; otherwise the
-	// engine's shared one. NOTHING HERE OWNS IT — see [httpapi.NewHTTPClient]
-	// for why this provider has no Close.
+	// engine's shared one ([httpx.Client]). NOTHING HERE OWNS IT, which is
+	// why this provider has no Close: http.Client.CloseIdleConnections
+	// forwards to its transport, the process's ONE transport, so closing it
+	// would drop every other client's warm connections — every vendor
+	// client, every remote MCP server and the sandbox control plane. The
+	// shared transport's idle timeout is what reaps a connection nobody
+	// wants. No client-level Timeout either: each request states its own
+	// (EmbedTimeout, BatchTimeout), which is the one that produces a
+	// context.DeadlineExceeded [Provider.classify] can read as transient.
 	if cfg.HTTPClient != nil {
 		opts = append(opts, option.WithHTTPClient(cfg.HTTPClient))
 	} else {
-		opts = append(opts, option.WithHTTPClient(httpapi.NewHTTPClient()))
+		opts = append(opts, option.WithHTTPClient(httpx.Client(0)))
 	}
 
 	return &Provider{
@@ -344,7 +349,7 @@ func (p *Provider) named(err error) error {
 // unclassified: it says nothing about the provider, and errors.Is(err,
 // context.Canceled) still answers through the wrap.
 //
-// WITH WHAT THE ENDPOINT SAID ([llmopenai.Detail]) wherever it answered: the
+// WITH WHAT THE ENDPOINT SAID ([detail]) wherever it answered: the
 // SDK's error names the status alone, and the class is decided by the status —
 // but an operator told "it will refuse this request again unchanged" needs the
 // endpoint's reason to tell a context length from a `dimensions` the model does
@@ -352,7 +357,7 @@ func (p *Provider) named(err error) error {
 func (p *Provider) classify(err error) error {
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
-		detail := llmopenai.Detail(apiErr)
+		detail := detail(apiErr)
 		if class := classForStatus(apiErr.StatusCode); class != nil {
 			return &Error{Model: p.model, Status: apiErr.StatusCode, Class: class, Err: err,
 				Detail: detail}

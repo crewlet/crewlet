@@ -50,7 +50,7 @@ import (
 //     make the event log mostly intermediate states of rows it also holds
 //     finished. Published TWICE per round and ONCE PER CALL — once the model
 //     has spoken, before its tools run; before each call, naming it as
-//     `running_call`; and once they return — so the model's reasoning reaches
+//     `running_call`; and once they return — so what the model said reaches
 //     a screen without waiting on the slowest tool, and the slowest tool is
 //     on the screen while it is slow.
 //   - agent_phase_completed — the durable record: the prompts verbatim, the
@@ -92,9 +92,8 @@ type Turn struct {
 	// CONVERSATION IDENTITY, never the inbox partition key beside it
 	// ([notify.Prompt.ConversationIdentity]), so a direct message's phases
 	// are one thread however the messages in it were threaded. It is the
-	// only way to ask the store for one thread's phases: the reasoning is
-	// durably kept as the <think> prefix of a phase response, and without
-	// this it is addressable by agent and time alone.
+	// only way to ask the store for one thread's phases: without it a phase
+	// response is addressable by agent and time alone.
 	ConversationKey string
 
 	// Trace is the span context stamped on every event this turn emits.
@@ -679,24 +678,9 @@ func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) 
 	return m, failure
 }
 
-// seedBytes is what a parked conversation weighs: every message's text, the
-// reasoning each assistant round carries, and the arguments of the tool calls
-// in it. It returns what it managed to count alongside any failure, because
-// the row goes out regardless.
-//
-// THE THINKING TERM IS COUNTED ONCE PER MESSAGE, and that is the whole of the
-// arithmetic here. [llm.Message] carries a model's reasoning in two shapes and
-// a backend sets either or both: the Anthropic backend fills ThinkingBlocks —
-// the neutral copy of the blocks it hands straight back into the next call
-// (verbatim, from llm.Message.Raw) and is billed for — and ALSO renders that
-// same thinking text into ReasoningContent
-// as prose, while the OpenAI backend fills ReasoningContent alone and the
-// cli-agent text backend writes exactly that prose into the prompt it builds.
-// So summing both would double the largest term a parked Anthropic turn
-// carries, on the one backend that actually pays for it, and dropping either
-// would report a resumed phase as having thought nothing on the other. The
-// blocks win wherever there are blocks; the prose stands in where there are
-// none.
+// seedBytes is what a parked conversation weighs: every message's text and
+// the arguments of the tool calls in it. It returns what it managed to count
+// alongside any failure, because the row goes out regardless.
 //
 // A tool call's id and name are out of the sum: bounded identifiers beside
 // arguments that run to kilobytes, which would make this figure move with a
@@ -705,16 +689,6 @@ func seedBytes(seed []llm.Message) (int, error) {
 	total := 0
 	for _, msg := range seed {
 		total += len(msg.Content)
-		if len(msg.ThinkingBlocks) > 0 {
-			for _, tb := range msg.ThinkingBlocks {
-				// Data is the redacted-thinking payload, which is the
-				// whole of such a block: it has no readable Thinking,
-				// and it is still handed back and still billed.
-				total += len(tb.Thinking) + len(tb.Data)
-			}
-		} else {
-			total += len(msg.ReasoningContent)
-		}
 		for _, tc := range msg.ToolCalls {
 			if len(tc.Arguments) == 0 {
 				total += emptyArgsBytes
@@ -735,10 +709,9 @@ func seedBytes(seed []llm.Message) (int, error) {
 	return total, nil
 }
 
-// emptyArgsBytes is what an argument-less tool call weighs on the wire: the two
-// bytes of `{}` both HTTP backends send for one, rather than the four
-// json.Marshal answers for a nil map. A `null` there is a shape no provider
-// ever receives.
+// emptyArgsBytes is what an argument-less tool call weighs: the two bytes of
+// `{}` its arguments are written as, rather than the four json.Marshal answers
+// for a nil map. A `null` there is a shape no model is ever shown.
 const emptyArgsBytes = len(`{}`)
 
 // toolDefBytes is the compact JSON size of a tool-definition array.
@@ -751,14 +724,10 @@ const emptyArgsBytes = len(`{}`)
 // exists for.
 //
 // WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
-// reader of the row will find it: every backend sends MORE than this. OpenAI
-// wraps each entry as {"type":"function","function":{…}}, Anthropic spells
-// the schema `input_schema` and puts a cache breakpoint on the last entry,
-// both write an absent schema out as {"type":"object","properties":{}} where
-// the omitempty below drops it, and the cli-agent text backend renders the
-// same definitions indented inside a fenced catalogue. An empty DESCRIPTION
-// is the one thing genuinely dropped on both — neither vendor sends a field
-// for it.
+// reader of the row will find it: the backend sends MORE than this. The
+// cli-agent text backend renders the same definitions indented inside a
+// fenced catalogue, and an agent-mode run's CLI reads them over MCP in its own
+// vendor's wrapping.
 func toolDefBytes(defs []llm.ToolDef) (int, error) {
 	if len(defs) == 0 {
 		return 0, nil
@@ -1225,7 +1194,6 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// operator not shortened but ABSENT. See events.MaxDiagnosticBytes.
 		ev.Error = events.ClipDiagnostic(rec.Err.Error())
 		ev.ErrorKind = ErrorKind(rec.Err)
-		ev.Refusal = phaseRefusal(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
@@ -1237,8 +1205,8 @@ const StoppedKind = "stopped"
 
 // ErrorKind names a failure's CLASS, for the one-word reason a dashboard
 // prints beside a failed phase or turn — ONE classifier for both records, so a
-// turn that died of its phase's refusal says `refusal` on both rather than the
-// turn's record falling back to a generic word the phase's never uses.
+// turn that died of its phase's failure says the same word on both rather than
+// the turn's record falling back to a generic word the phase's never uses.
 //
 // The classified kinds are the ones an operator can act on: rotate a key,
 // raise a cap, wait out a provider. Everything else is "error", deliberately.
@@ -1249,15 +1217,9 @@ const StoppedKind = "stopped"
 // specific-looking constant.
 func ErrorKind(err error) string {
 	var provider *llm.Error
-	var stop *toolloop.StopError
 	switch {
 	case errors.As(err, &provider):
 		return provider.Kind.String()
-	case errors.As(err, &stop):
-		// The stop reason itself — `max_tokens`, `context_exceeded`,
-		// `paused` — because each sends an operator somewhere different,
-		// and none of them is the provider failing.
-		return string(stop.Reason)
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		return "budget_exhausted"
 	case turn.Stopped(err):
@@ -1270,17 +1232,6 @@ func ErrorKind(err error) string {
 		return "canceled"
 	}
 	return "error"
-}
-
-// phaseRefusal is the refusal a phase ended on, in its wire shape, or nil for
-// every other failure. Read off the error rather than carried beside it, so a
-// refusal that reached the record by any path says so the same way.
-func phaseRefusal(err error) *types.PhaseRefusal {
-	var refusal *llm.Refusal
-	if !errors.As(err, &refusal) {
-		return nil
-	}
-	return &types.PhaseRefusal{Category: refusal.Category, Explanation: refusal.Explanation}
 }
 
 // publish sends one event, or logs why it could not.
@@ -1473,7 +1424,7 @@ func promptSections(ctx context.Context, ph phase.Phase, p prompts.Prompt) []typ
 }
 
 // roundNarration renders the loop's per-round model turns in the wire shape
-// consumers read: round, reasoning, content, and `declined` on a round that
+// consumers read: round, content, and `declined` on a round that
 // answered in prose where the phase had to end in a call.
 //
 // The round number matches the one on that round's tool executions, which is
@@ -1489,9 +1440,8 @@ func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 	out := make([]types.RoundNarration, 0, len(narr))
 	for _, n := range narr {
 		row := types.RoundNarration{
-			"round":     n.Round,
-			"reasoning": n.Reasoning,
-			"content":   n.Content,
+			"round":   n.Round,
+			"content": n.Content,
 		}
 		if n.Declined {
 			row["declined"] = true
@@ -1512,9 +1462,8 @@ func partialRound(p *toolloop.Partial) map[string]any {
 		return nil
 	}
 	out := map[string]any{
-		"round":     p.Round,
-		"reasoning": tail(p.Reasoning),
-		"content":   tail(p.Content),
+		"round":   p.Round,
+		"content": tail(p.Content),
 	}
 	if len(p.Abandoned) > 0 {
 		out["abandoned"] = roundNarration(p.Abandoned)
@@ -1553,7 +1502,7 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 // client falls behind and a consumer that had missed one would splice the
 // remaining fragments into nonsense. Republishing the accumulation is
 // therefore the correct shape for a lossy channel, and it is also quadratic in
-// the length of the round: a thirteen-thousand-character reasoning block costs
+// the length of the round: a thirteen-thousand-character round costs
 // a seat about four megabytes over its life, times every open dashboard.
 //
 // The tail is what a reader is actually watching — text appears at the END —

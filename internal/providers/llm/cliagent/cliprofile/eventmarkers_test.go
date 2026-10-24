@@ -28,8 +28,8 @@ func eventScope(extra map[string]any) map[string]any {
 // stream to have events in, the discriminator that tells the CLI's failure
 // event from one carrying the model's words, which events those are, and where
 // the class is in one. A profile missing any of them would match nothing — a
-// spent plan classified fatal, silently — or, on a text profile, match against
-// the model's own reply.
+// spent plan never recognised as one, so the entry never sits out, silently —
+// or, on a text profile, match against the model's own reply.
 func TestTheEventsMarkerScopeIsRefusedUnlessWhole(t *testing.T) {
 	t.Parallel()
 	if _, err := loadCustom(eventScope(nil)); err != nil {

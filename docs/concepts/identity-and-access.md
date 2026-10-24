@@ -450,8 +450,8 @@ run that seat launched). The company-wide trail stays admin's.
 it confers rather than a side effect of it. It is one permission by decision,
 and the configuration it writes runs code — a stdio `mcp_servers` entry is a
 `command` the engine starts as its own user on every node that runs seats; a
-seat's per-phase model keys (`llm_*`) name a `cli-agent` provider, a binary the
-engine runs, and a `sandbox` cell of `run_in: self` does its code work inside
+seat's per-phase model keys (`llm_*`) name `providers.llm` entries, each a
+coding CLI the engine runs, and a `sandbox` cell of `run_in: self` does its code work inside
 it; a `run_in: direct` sandbox cell runs a coding agent, and every setup step,
 as that user; a seat's `mcp_env` decides which credentials its children are
 handed; and a seat's worker grants decide which of its tools a worker holds.
@@ -476,9 +476,10 @@ a tool server, and does nothing about an administrator, who chose that server.
 leads as well ([A lead edits their own team](#a-lead-edits-their-own-team)),
 and a lead may change every field of a seat in their team but a credential and
 a keyed field — its model chain and its sandbox among them. What they choose
-from is what the settings declare, which stay admin's: if the company offers a
-`cli-agent` provider or a sandbox cell that runs on the engine host, a lead can
-give one to their own seats, and through them run code there. Declare those
+from is what the settings declare, which stay admin's: every `providers.llm`
+entry is a coding CLI that runs on the engine host, and so is a sandbox cell
+there, so a lead can give either to their own seats, and through them run code
+there. Declare those
 only where every lead may use them.
 
 **Connecting an integration is admin's and nothing more.** `/setup` performs
@@ -2466,9 +2467,9 @@ document — an orphan nobody leads until an administrator
 declares it again, since a lead may not. It takes authority away and gives
 none. A seat edited within the lead's subtree may otherwise change anything —
 its model chain, its sandbox, its schedules — among what the company's settings
-offer, which stay admin's: whether a `cli-agent` provider or a sandbox
-cell on the engine host exists for a lead to choose is the administrator's
-decision.
+offer, which stay admin's: which `providers.llm` entries — each a coding CLI
+on the engine host — and which sandbox cells on the engine host exist for a
+lead to choose is the administrator's decision.
 
 A refused write is `403 unauthorized` naming `admin` — the permission that
 would admit all of it — and a `refused` list of every part that is not the

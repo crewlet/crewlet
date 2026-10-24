@@ -33,8 +33,8 @@ const (
 	directAndImg  = "    local: {image: img}\n    default_run_in: direct\n"
 	e2bOnly       = "    e2b: {api_key: k}\n"
 	directAndE2B  = "    local: {}\n    e2b: {api_key: k}\n    default_run_in: direct\n"
-	agentModeLLM  = "    sub:\n      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent}\n"
-	agentModeE2B  = "    sub:\n      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent, run_in: e2b}\n"
+	agentModeLLM  = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n"
+	agentModeE2B  = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n      run_in: e2b\n"
 	plainSeat     = "  - name: SWE\n    sandbox: {enabled: true}\n"
 	agentSeat     = "  - name: SWE\n    llm: sub\n"
 	seatStepsHead = "  - name: SWE\n    sandbox:\n      enabled: true\n"
@@ -310,9 +310,9 @@ func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 	cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n"+
 		"    local: {image: img}\n    e2b: {api_key: k}\n    default_run_in: direct\n"+
 		"    setup:\n      - {name: shared, brief: b}\n"+
-		"  llm:\n    main:\n      type: anthropic\n      model: claude-golden\n"+
-		"    sub:\n      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent, run_in: e2b}\n"+
-		"    deflt:\n      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent}\n"+
+		"  llm:\n    main:\n      model: claude-golden\n"+
+		"    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n      run_in: e2b\n"+
+		"    deflt:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n"+
 		"roles:\n"+
 		// The gate's own cell.
 		"  - name: Named\n    llm: main\n    sandbox:\n      enabled: true\n      run_in: container\n"+

@@ -51,8 +51,7 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 	const (
 		rounds      = 30
 		streamed    = 40 // frames a round streams: eight seconds at five a second
-		reasoning   = 1500
-		content     = 300
+		content     = 1800
 		argBytes    = 400
 		resultBytes = 3000
 	)
@@ -111,13 +110,12 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 			p := snapshot()
 			p.RoundNum, p.RoundStartedAt = round-2, roundAt
 			p.PartialRound = map[string]any{
-				"round": round, "reasoning": strings.Repeat("t", reasoning*i/streamed),
-				"content": strings.Repeat("c", content*i/streamed),
+				"round": round, "content": strings.Repeat("c", content*i/streamed),
 			}
 			frame(p)
 		}
 		narration = append(narration, types.RoundNarration{
-			"round": round, "reasoning": strings.Repeat("t", reasoning), "content": strings.Repeat("c", content),
+			"round": round, "content": strings.Repeat("c", content),
 		})
 		timed = append(timed, types.PhaseRound{Round: round, StartedAt: roundAt, DurationMS: 8000, InputTokens: 40_000})
 		p := snapshot()
@@ -201,8 +199,8 @@ func TestARunningPhasePushesWhatMovedAndTheTabHoldsTheWholeCall(t *testing.T) {
 	if lean*10 > whole {
 		t.Errorf("the phase pushed %d bytes, against %d whole; want under a tenth", lean, whole)
 	}
-	// A streaming frame is the round being written (two 4 KB tails at most)
-	// and the call's light fields.
+	// A streaming frame is the round being written (a 4 KB tail at most) and
+	// the call's light fields.
 	if largestStreaming > 16<<10 {
 		t.Errorf("a streaming frame weighed %d bytes; want the round being written and the light fields only",
 			largestStreaming)

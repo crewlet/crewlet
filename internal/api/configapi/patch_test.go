@@ -76,8 +76,8 @@ func TestAPatchReachesANestedSectionWithoutItsSiblings(t *testing.T) {
 	}
 	// The sibling keys of the thing that changed are still there — a
 	// shallow merge would have replaced the whole provider with a model.
-	if !strings.Contains(document, "anthropic") {
-		t.Errorf("the provider's type was dropped by a nested patch: %s", document)
+	if !strings.Contains(document, "credential_bundle") {
+		t.Errorf("the provider's auth was dropped by a nested patch: %s", document)
 	}
 }
 

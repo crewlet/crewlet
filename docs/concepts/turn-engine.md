@@ -11,7 +11,7 @@ The engine used to plan in one conversation and act in another. That split cost 
 One agentic loop removes the reconciliation rather than improving it. What remains:
 
 - **Onboarding** (first turn only, conditional) runs *before* the executor when the agent has no onboarding marker for its current org chain. It reads the team's `Onboarding` pages, captures conventions via `reflect_and_persist`, and calls `mark_onboarded`. It has its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10) so onboarding never competes with the turn's own budget — if it ran inside the executor it could consume every round before the agent ever called `submit_work`, silently dropping a first-turn request. Skipped on resume turns and once the agent is marked. See [First-turn onboarding](#first-turn-onboarding).
-- **Executor** decides what to do and does it, in one conversation. It starts with every first-party tool in its reach — all but `mark_onboarded`, and `run_sandbox` unless the seat's gate is enabled and its executor is not in [agent mode](subscription-llm-backends.md#agent-mode) — and the *slim* catalogue (builtin names + MCP server names); it discovers and activates MCP tools as it turns out to need them. It ends by calling `submit_work` with an outcome, a summary, and the deliveries it claims.
+- **Executor** decides what to do and does it, in one conversation. It starts with every first-party tool in its reach — all but `mark_onboarded`, and `run_sandbox` unless the seat's gate is enabled and its executor is not in [agent mode](llm-backends.md#agent-mode) — and the *slim* catalogue (builtin names + MCP server names); it discovers and activates MCP tools as it turns out to need them. It ends by calling `submit_work` with an outcome, a summary, and the deliveries it claims.
 - **Reviewer** judges the work. No domain tools; a single `submit_review` structured-output tool forces the decision enum. There is no handoff decision, and no *waiting* decision either. When the turn cannot finish without a manager or peer, the reviewer splits on whether they have been told — a fact the tool log settles, not the agent's prose. **Not yet** → `self_iterate`, and the note tells the next round to reach them with its own colleague-surface tools, the same tools a human teammate would use (there is no special escalation mechanism). **Already asked** → `done`: their reply is what re-triggers the agent, so no further round of *this* turn can produce it, and sending it back burns the iterations the real work needs while posting the same question a second time. Being blocked is the **executor's** word for what happened — the `blocked` outcome, whose `evidence` the schema demands — and `done` / `self_iterate` / `failed` are the **reviewer's** for whether that was good enough. One thing a handoff never buys: whoever triggered the turn is still owed a reply where *they* asked, which is why a turn that asks a colleague while the requester hears nothing is overturned (see [Who is waiting](#who-is-waiting-and-how-they-get-an-answer) below).
 
 **Workers** (`delegate`) are short-lived helpers the executor hands narrowly-scoped work to — web research, a bounded read, summarising something large — without it counting as colleague delegation. See [Workers](#workers) below.
@@ -25,7 +25,7 @@ Each phase gets a filtered view over the shared `tools.Registry` through a `tool
 | Phase | Tools | System prompt | Notes |
 |-------|---------------|---------------|-------|
 | **Onboarding** | `reflect_and_persist` and `mark_onboarded` active from the first round, plus the `activate_tool` / `list_mcp_server_tools` discovery meta-tools | One-line identity + the onboarding instructions (which pages to read, persist conventions, then `mark_onboarded`) + slim discovery catalogue | Runs only on a first turn for an unmarked agent, on its own budget. Discovers its knowledge-base tools via `list_mcp_server_tools` → `activate_tool` exactly like the executor. **No required-skill guard**: onboarding is a fixed read → persist → mark workflow and the prompt is its own guidance, so the load-before-use tax is skipped. Terminates on `mark_onboarded`; on budget exhaustion the agent stays unmarked and retries next turn. |
-| **Executor** | Every first-party tool except `mark_onboarded` — and `run_sandbox` unless the seat's gate is enabled and its executor is not in [agent mode](subscription-llm-backends.md#agent-mode) — plus `submit_work`, `activate_tool`, `list_mcp_server_tools`, `delegate` where the seat may hand work to [workers](#workers), and any MCP tool it has activated this turn | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks + **slim** tool catalogue (builtin tool names + MCP server names only) | The slim catalogue lists the first-party tools of the universe the surface is built from — not `submit_work`, the discovery pair or `delegate`, which the phase adds and which reach the model as tool definitions, `delegate` with a `## Your workers` block beside it where the company publishes worker templates — but only the NAMES of MCP servers. A tool left out of that universe is out of the catalogue too, and `activate_tool` cannot reach it; individual MCP tool names (often 50 to 150 per role) stay out of the prompt. To use one the agent calls `list_mcp_server_tools(server)` for discovery, then `activate_tool(name)` to promote it into the phase's active tool list so its schema arrives on the next round. Nothing is named in advance, so nothing has to be reconciled afterwards. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the prompt from the in-memory `Organization` model, with no database seed step. `mark_onboarded` is the whole phase-scoped denylist, kept from every executor: a seat that could mark itself here would permanently skip orientation. `run_sandbox` is left out only where the seat is offered no box. |
+| **Executor** | Every first-party tool except `mark_onboarded` — and `run_sandbox` unless the seat's gate is enabled and its executor is not in [agent mode](llm-backends.md#agent-mode) — plus `submit_work`, `activate_tool`, `list_mcp_server_tools`, `delegate` where the seat may hand work to [workers](#workers), and any MCP tool it has activated this turn | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks + **slim** tool catalogue (builtin tool names + MCP server names only) | The slim catalogue lists the first-party tools of the universe the surface is built from — not `submit_work`, the discovery pair or `delegate`, which the phase adds and which reach the model as tool definitions, `delegate` with a `## Your workers` block beside it where the company publishes worker templates — but only the NAMES of MCP servers. A tool left out of that universe is out of the catalogue too, and `activate_tool` cannot reach it; individual MCP tool names (often 50 to 150 per role) stay out of the prompt. To use one the agent calls `list_mcp_server_tools(server)` for discovery, then `activate_tool(name)` to promote it into the phase's active tool list so its schema arrives on the next round. Nothing is named in advance, so nothing has to be reconciled afterwards. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the prompt from the in-memory `Organization` model, with no database seed step. `mark_onboarded` is the whole phase-scoped denylist, kept from every executor: a seat that could mark itself here would permanently skip orientation. `run_sandbox` is left out only where the seat is offered no box. |
 | **Review** | `submit_review` meta-tool only | One-line identity + the round's intent, outcome, tool log and produced text + decision-enum contract | No catalogue, no policies, no prefetch. Whether anything was DELIVERED is settled before this prompt is built — the reviewer's question is whether the work is any good. |
 | **Worker** | The task's (or its template's) allowlist minus the engine-control denylist (`delegate`, `run_sandbox`, `a2a_ask`, the discovery meta-tools) **and** minus any tool whose [MCP annotations](tool-capabilities.md) mark it a write to a shared surface, **and** minus anything the parent cannot itself call — plus `submit_result` always | Persona (template or inline) + mandated preamble + slim catalogue | Fresh context; a wall-clock timeout; runtime-clamped `max_turns`. A worker CAN discover and activate more *read-only* tools itself, against the safety-filtered universe its grant was cut from — so discovery cannot widen it into a write or a control tool. External writes are denied by *capability* (derived from MCP annotations), not by a hardcoded name list, so the guard holds for any tool stack. |
 
@@ -77,7 +77,7 @@ type Work struct {
 
 To hand a task off to a colleague the executor reaches them where the work lives — a chat mention, an issue comment or reassignment, or `a2a_ask` — and reports that as the delivery. There is no dedicated `delegate` outcome: a handoff is just a colleague-surface tool call.
 
-**Real code work** is the `run_sandbox` tool. For a role gated with `role.sandbox.enabled` whose executor is not in [agent mode](subscription-llm-backends.md#agent-mode), the executor calls it to run a coding agent (Claude Code / OpenCode) in an isolated sandbox. The call **suspends** the tool loop (detached run); when the run completes the engine **resumes the same loop** with the result spliced in as that call's reply, so the agent reports and acts in the same turn. An agent-mode executor is never offered it: it already holds a shell, and its code work rides its own run. See [Code Sandbox](code-sandbox.md).
+**Real code work** is the `run_sandbox` tool. For a role gated with `role.sandbox.enabled` whose executor is not in [agent mode](llm-backends.md#agent-mode), the executor calls it to run a coding agent (Claude Code / OpenCode) in an isolated sandbox. The call **suspends** the tool loop (detached run); when the run completes the engine **resumes the same loop** with the result spliced in as that call's reply, so the agent reports and acts in the same turn. An agent-mode executor is never offered it: it already holds a shell, and its code work rides its own run. See [Code Sandbox](code-sandbox.md).
 
 ### Who is waiting, and how they get an answer
 
@@ -122,7 +122,7 @@ In both, the flat question is the answer — so the check is strictly stricter t
 
 `no_action` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** — informational triggers, passing references, broadcasts where the addressee was clearly someone else. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), it must instead post a brief explanation via the originating channel's reply tool and report that as `delivered`. A direct request answered with silence looks like the ping was lost; the one-line decline closes the loop. The executor's contract enforces this in prose, the decoder enforces it in code, and each third-party app's notification prompt carries the same rule on the triage side.
 
-The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `internal/agent/prompts/budget_test.go` holds them under explicit token budgets (executor < 2,200, review < 800, and the whole turn < 4,000) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so it is cached and re-read cheaply rather than re-billed each round — and on the Anthropic provider the conversation the loop has grown is cached behind it, so a round re-reads the history the round before it wrote as well. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
+The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `internal/agent/prompts/budget_test.go` holds them under explicit token budgets (executor < 2,200, review < 800, and the whole turn < 4,000) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so the CLI's harness caches it and re-reads it cheaply rather than re-billing it each round. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
 
 ---
 
@@ -221,7 +221,7 @@ It used not to be. Six further limits sat beside the ones below, cutting each of
 
 Whether a value is past its budget is judged in **characters**, so an identifier in a script whose characters are several bytes each — a channel name, a page title — is never handed to a model to paraphrase. There is no longer a budget on a call's serialised argument object as a whole: it existed to drop whole keys once every value had been *cut*, and with each value rewritten to its own budget a call's line is bounded by its argument count.
 
-A prior round's **produced text** is kept whole in the record and rewritten at `RenderedArtifactLimit` only when *rendered* into the next round's block — `Work.Text` is that round's whole tool loop concatenated (thinking included), and the block accumulates one of those per `self_iterate` and is re-sent on every round of both phases that follow, so the product is what the bound answers.
+A prior round's **produced text** is kept whole in the record and rewritten at `RenderedArtifactLimit` only when *rendered* into the next round's block — `Work.Text` is every assistant message of that round's tool loop concatenated, and the block accumulates one of those per `self_iterate` and is re-sent on every round of both phases that follow, so the product is what the bound answers.
 
 The full text of every payload is on the phase event the ledger line summarises.
 
@@ -266,11 +266,9 @@ A turn can also end `failed` without the reviewer choosing it. Every failed turn
 | A panic, in a phase or around one | `turn.guard_breach` with `unhandled_exception` | `unhandled_exception` |
 | The token budget refused a charge | `budget_exhausted` | `budget_exhausted` |
 | Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | the last member's kind (`rate_limit`, `server`, …) |
-| The model **declined** the request on policy grounds | `turn_trigger_skipped` per trigger — the turn is abandoned, not redelivered | `refusal` |
-| A round [did not finish](#a-round-that-did-not-finish): cut off at the output cap, out of context window, or paused | none | `max_tokens`, `context_exceeded` or `paused` |
 | Any other broken phase | none | the provider's classified kind where there is one, else `error` |
 
-The `error_kind` on the turn's summary is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so the two records of one failure name it alike. It used to read `error` for every cause but a guard, while the phase record beside it said `refusal` or `auth`.
+The `error_kind` on the turn's summary is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so the two records of one failure name it alike. It used to read `error` for every cause but a guard, while the phase record beside it said `auth` or `rate_limit`.
 
 Those dedicated events are what the seat's `last_error` is taken from, and `llm_unavailable` is also what reads the seat as `stopped` with the reason `provider` (see [Agent States](agent-runtime.md#agent-states)). A reviewer's own `failed` fired no guard, so it publishes none of them.
 
@@ -510,7 +508,7 @@ the model to fix. So a round that ends with **no tool call** is never a
 finish there, however it reads — no submission can have succeeded yet,
 or the phase would already have ended. It is a model that wrote its
 report where nobody reads it. The measured case was an executor on a
-`cli-agent` text backend whose last reply was one fenced JSON block
+text-mode CLI entry whose last reply was one fenced JSON block
 holding `submit_work`'s *arguments*: the phase ended on it, the engine
 rescued it as `incomplete`, and the reviewer then read the fenced JSON
 as "what the agent produced".
@@ -541,22 +539,16 @@ the rescue below takes over.
 
 **No request forces a call, the corrective included.** A request offers
 tools and never names a tool choice — the provider contract has no field
-for one — so the executor, the reviewer, onboarding and every worker get
-each vendor's default, which is the model deciding, on their corrective
-rounds too. Forcing a call is not something the engine can rely on: some
-endpoints ignore `tool_choice`, and several current
-models refuse a forced one outright — Claude Opus 5.5, Sonnet 5.5, Fable
-5.1 and Mythos 5.1 answer `400 tool_choice: type "tool" and "any" are not
-supported for this model`, with `auto` plus an instruction naming the
-tool as the documented replacement, which is exactly the corrective. A
-400 is not retried down the [fallback chain](architecture.md#2-inside-one-node), so the
-reviewer and onboarding, which used to ask for a forced call, failed
-outright on those models — every turn at its review, and the onboarding
-pass on every turn the seat took — before the corrective that actually
-enforces the call could run. The loop is what enforces the call, and the
-forced choice was retired from the contract altogether rather than kept
-for a caller that might want it: nothing that remained could use it
-safely on the current models.
+for one, and no CLI takes one: in text mode the tools ride the prompt as a
+catalogue whose response contract never demands a call, and in agent mode
+the CLI's own loop decides — so the executor, the reviewer, onboarding and
+every worker get the model deciding, on their corrective rounds too. The
+loop is what enforces the call. The forced choice was retired from the
+contract while the engine still called vendors' APIs itself, because
+several current models refuse a forced one outright — Claude Opus 5.5,
+Sonnet 5.5, Fable 5.1 and Mythos 5.1 among them — and the reviewer and
+onboarding, which used to ask for one, failed on those models before the
+corrective that actually enforces the call could run.
 
 Before the finishing corrective, a reviewer that thought and stopped fell through
 to the rescue, which sends the whole turn back for another executor
@@ -599,7 +591,7 @@ decision. With extensions off, or a ceiling equal to the budget, the cap
 stays hard: the phase ends on the declined round, and is rescued.
 
 **The agent-mode executor is not covered.** An executor that runs as a
-[coding CLI's own agentic loop](subscription-llm-backends.md#agent-mode)
+[coding CLI's own agentic loop](llm-backends.md#agent-mode)
 makes its rounds inside the CLI, so the engine's loop never sees a round
 end in prose and cannot ask again. Its submission arrives over the
 bridge or not at all; a run that ends without one is rescued exactly as
@@ -687,39 +679,13 @@ The judge covers **the executor and onboarding**; each has its own base cap and 
 `role.llm_judge` → `role.llm` → `"default"` → first provider. If
 unset, the judge runs on whatever the role's primary model is.
 
-### A round that did not finish
+### How a round ends
 
-Every completion carries a **stop reason** — why the model stopped writing — normalised across vendors (`llm.StopReason`): `end`, `tool_use`, `max_tokens`, `refusal`, `context_exceeded`, `paused`. Each backend maps its own words onto these (Anthropic's `end_turn`/`stop_sequence` → `end`, `model_context_window_exceeded` → `context_exceeded`, `pause_turn` → `paused`; OpenAI's `length` → `max_tokens`, `content_filter` → `refusal`); a missing or unrecognised reason reads as an ordinary end, because a backend that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record).
+Every completion carries a **stop reason** (`llm.StopReason`): `end` — the model answered — or `tool_use` — it asked for calls to run. Those are the two a CLI can honestly report: in text mode it is asked for an envelope that is either an answer or a set of calls, and the backend names whichever it got. A missing reason reads as an ordinary end, because a backend that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record).
 
-The loop reads it **before the correctives and before the round's tools**, because the last four are rounds that did not finish and nothing a corrective appends can fix them:
+There is no reason for a response cut short. A CLI whose model hit its output ceiling, filled its context window or declined the request says so its own way — as prose, which the loop reads like any other answer (and a phase that has to end in a call meets the [finishing corrective](#round-cap-extension-judge) over it), or as a failed run, which the backend reports as `server` — unless the CLI's words match one of its profile's limit or login markers — so the seat's chain hands the call to its next model. What each model does at those edges is its vendor's harness to keep current, which is the reason the CLI is the backend.
 
-- **`max_tokens`** — the response was cut off at the model's output cap. The phase **fails by name** (`error_kind: max_tokens`) and **the round's tool calls are not run**: a call the cap cut off is not the call the model meant, and on the Anthropic stream its half-written arguments arrive as `{}`, so it used to run with no arguments at all. An empty truncated round used to draw the empty-answer corrective, which re-asked with a longer conversation.
-- **`context_exceeded`** — the conversation filled the model's context window. A named failure; re-asking can only make the conversation longer.
-- **`paused`** — a vendor pausing a long server-tool turn for the caller to continue. The engine sends no server tools, so it is an unexpected protocol state, reported and never continued.
-- **`refusal`** — the model **declined** the request on policy grounds. A backend never returns it as an answer: it returns a classified error (`KindRefusal`) carrying the vendor's category and explanation (Anthropic's `stop_details`; OpenAI's refusal message) and the billed completion, so a caller that reads only the text cannot mistake a refusal for one. It is **not retryable** — the fallback chain does not hand it to the next model, because walking a refused request round the models until one answers is circumventing the decision — and it benches no credential. The loop records and charges the refused round (the prompt was billed), sends **no corrective**, and ends the phase. Every other frame that meters a model call charges a refusal the same way — the auxiliary passes, the knowledge answer and the round-cap judge — by reading what was billed through `llm.Billed` rather than only a returned completion. The record carries `error_kind: refusal` and a `refusal` object; the executor is **not** rescued as `incomplete` and the reviewer does **not** send the turn round again as `self_iterate`; and the turn is **abandoned rather than redelivered** (`turn.Abandon`), since a redelivery would put the same request in front of the same model up to its whole delivery budget. Server-side refusal fallbacks (routing a refused request to another model at the vendor) are not used.
-
-**A call whose arguments did not parse is answered, not run.** The per-call half of the same rule: a tool call on a complete round whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why — sent with `is_error` on Anthropic — instead of running the tool with `{}`. The model reads it and calls again. Every backend marks such a call: Anthropic and OpenAI from the arguments the vendor returned, and the `cli-agent` text mode from the reply's envelope, where an `arguments` value that is a number, a list or a string holding no single JSON object is the same unreadable request. Every failed tool result now carries that flag, not only this one.
-
-
-### The conversation only grows
-
-Within a phase the conversation is **append-only**: every request the loop makes is the previous one with messages added at the end, and the conversation a phase hands back — which an extension's nudge, a withheld finishing corrective and a suspension all continue from — extends the last request too. Correctives, a person's [steering notes](#steering-a-running-turn), the extension nudge and a resumed run's tool result are all *new* messages; nothing rewrites, trims or reorders one already sent. The system prompt is frozen for the phase, and a resumed executor re-enters the conversation it parked, system prompt included, rather than rendering a new one.
-
-That matters because Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 **bind each thinking block to the conversation before it**: the system prompt, the tools, and every earlier message, byte for byte. An earlier turn that comes back different invalidates every block after it, and on an Anthropic account the vendor enforces (every account created on or after 2026-08-31) that is a 400 — which the fallback chain does not retry.
-
-**Each assistant turn goes back as the model wrote it.** The Anthropic backend keeps every response's content blocks verbatim (`llm.Message.Raw`, beside the neutral `Content` / `ToolCalls` / `ThinkingBlocks` the engine itself reads) and replays them unchanged on every later round: interleaved `[thinking, text, thinking, tool_use]` keeps its order, a tool call's `input` keeps the digits the model wrote, and a field or block type the engine does not model is kept rather than dropped. The rebuild this replaced put every thinking block first, joined the texts and re-encoded each call's input — an edit on every round. Two exceptions, both ones the vendor's check ignores by rule: the request encoder drops whitespace *between* JSON tokens, and a text block of nothing but whitespace (which the API refuses on input) is left out.
-
-**Which model reads which block is the vendor's call.** A turn one Claude model wrote is replayed whole to whichever Claude model serves the next round — a chain's fallback member, or a resumed run after the entry's model changed. The API drops a block the serving model cannot read, unbilled, without failing the call; stripping it client-side would remove blocks from the *middle* of the conversation's sequence, which invalidates every later block when the conversation returns to the model that wrote them. A turn **another backend** wrote (an OpenAI or `cli-agent` member of the chain) is rebuilt from the neutral view as text and `tool_use` with no thinking, which the vendor accepts anywhere.
-
-The blocks travel with the conversation through a suspension: [`execute_state`](conversation-sessions.md#what-it-is-not) carries them, with the backend and model that wrote each turn (`llm.Message.Origin`), so the resumed loop replays them as the suspended one would have.
-
-**On the OpenAI wire format, a turn goes back to the endpoint that wrote it with the reasoning it came with.** That format has no field for reasoning, so each host carries it in one of its own, and the reasoning models behind them read it again on every later round: Kimi K3 was trained that way and cannot be told otherwise, and DeepSeek and Gemini 3 answer a tool loop without theirs with a 400. The `openai` backend keeps, verbatim, whatever a response carried beside the schema (`reasoning_content`, `reasoning`, OpenRouter's `reasoning_details` with their signatures and encrypted payloads, LiteLLM's `thinking_blocks`, a thought signature on a tool call, a `content` sent as a list of chunks) in `llm.Message.Raw`, and adds it back to the turn on every later request. A streamed response is put back together into the shape a whole one would have had. It goes back only to the same endpoint (`llm.Message.Binding` is a digest of the `base_url`), whatever the model, because a field one host emits is one another may refuse. A turn another endpoint or another backend wrote is rebuilt without its reasoning — with an empty `reasoning_content` once a turn this host wrote shows it speaks that field, or from the first request on DeepSeek's and Moonshot's own APIs, because Moonshot and DeepSeek refuse a turn without one, and, on a Gemini 3 endpoint, with `skip_thought_signature_validator` as the thought signature of each tool-call step's first call, the value Google documents for a call it did not generate, because Google refuses a step without one — a field the host sent empty goes back empty, and a response with no such field keeps nothing, so OpenAI's own endpoint sees the requests it always saw. The record travels through a suspension like the Anthropic blocks do. [Reasoning models behind an OpenAI-compatible endpoint](../getting-started/configuration.md#reasoning-models-behind-an-openai-compatible-endpoint) lists each host's field and rule.
-
-**The tool list does not only grow, so the reasoning a change invalidates is shed.** The tools are part of what a thinking block is bound to: compared as a set, each definition whole (name, description and schema), in no particular order. An executor's set changes mid-conversation. `activate_tool` puts a new definition on the next round's request, and onboarding activates on most rounds. A resumed executor renders its definitions again from the registry it resumes against, where an MCP server may have reworded or withdrawn one while the run was parked. So every assistant turn records a digest of the system prompt and the tool set its request carried (`llm.Message.Binding`), which travels through a suspension with the turn. On a model that runs the check (Fable 5.1, Opus 5.5, Sonnet 5.5, and any id the [capability table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling) does not know), every turn up to and including the **last** one whose thinking was written under a different digest is replayed without its thinking. Its text and calls go back exactly as written. What is kept is a run from the end of the conversation's thinking, every block of it written under exactly this request's system prompt and tools. What is shed is a run from the front, which is the one removal the check accepts. A turn whose reasoning was written under the current tools but sits before a shed one is shed too, because keeping it would leave a gap in the sequence, and a gap invalidates every block after it. A turn that carries no digest is shed as well, since nothing can show its blocks match.
-
-**What it costs is the reasoning written before a tool change.** After an `activate_tool`, the next round starts without the reasoning of every earlier round, and the rounds after it keep their own. That includes the round that asked for the activation, whose call is still being answered: the vendor prefers that such a turn keep its thinking, but it was written under the old tools and would be refused. A resume that renders any definition differently costs the reasoning of the whole pre-suspend half. The same definitions in another order cost nothing. On a model that runs no check (Mythos 5.1, and every model before the three above), nothing is shed, because every block is still valid there and shedding one would only lose what it reasoned. A turn such a model writes while replaying reasoning that a check would have shed records no digest, though. So when a fallback chain moves the conversation back to a model that checks, that turn's thinking is shed with everything before it, rather than kept on the strength of a tool set that matched while the messages before it did not. The full argument for why what is kept is always valid is in `internal/providers/llm/anthropic/binding.go`.
-
-**Keeping that reasoning would take the vendor's append-only form of a tool change, which is not implemented.** That form declares every definition in the first request with `defer_loading: true`, and announces each one with a `tool_addition` block in a mid-conversation `role: "system"` message when it becomes available. It is a beta (`mid-conversation-tool-changes-2026-07-01`). It is offered on the Claude API, Claude Platform on AWS, Amazon Bedrock (through InvokeModel, not ARN-versioned models) and Google Cloud Vertex AI, and not on Microsoft Foundry or Claude Sonnet 5. It also covers only a tool that *arrives*: a resume that rewords a definition needs a second beta (`inline-tools-2026-09-15`), which only the Claude API serves. The vendor's own `drop_block` setting (`thinking-binding-controls-2026-08-01`) is not used either. It is a beta too, and it drops the first mismatched block *and every block after it*, so after one activation it would discard the reasoning of every later round as well.
+**A call whose arguments did not parse is answered, not run.** A tool call whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why instead of running the tool with `{}` — a write the model never asked for. The model reads it and calls again. The text backend marks such a call from the reply's envelope, where an `arguments` value that is a number, a list or a string holding no single JSON object is the same unreadable request. Every failed tool result is marked as failed on the conversation (`llm.Message.Failed`), not only this one.
 
 ---
 
@@ -790,7 +756,7 @@ sequenceDiagram
   directs, so a note offered while a worker runs waits for the executor's next
   round. The onboarding pass and the extension judge do not read notes either.
   A turn whose executor runs as a [coding CLI's own agentic
-  loop](subscription-llm-backends.md) cannot take a note at all — its rounds are
+  loop](llm-backends.md) cannot take a note at all — its rounds are
   the CLI's — and says so: `steer_unsupported`.
 - **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
   or an administrator (`admin`) — never a seat, and never any reader,
@@ -1153,10 +1119,9 @@ the sentinel keeps it at zero rather than claiming a round).
 
 **Twice per round, and once per call**, because a round has more than
 one moment worth showing. The first fires the instant the model has
-answered, before any of that round's tools run: the model's prose and its
-reasoning are what explain the tool call that is about to happen, and
-holding them back until the round's slowest tool returns is holding them
-back for exactly as long as they are most useful. Then one frame
+answered, before any of that round's tools run: the model's prose is what
+explains the tool call that is about to happen, and holding it back until the round's slowest tool returns is holding it back
+for exactly as long as it is most useful. Then one frame
 **before each call**, naming it as `running_call` — `{round, name,
 arguments, started_at}` — because a round's calls are serial and an
 execution is recorded only once its call has answered: a sandbox launch
@@ -1175,11 +1140,7 @@ answer streams at all.
 **The same text either way.** Both events build their `response` with
 `internal/agent/toolloop` over the same
 message list, so what streams live is what you read when you expand the
-finished turn — not a second assembly of it that can disagree. Reasoning
-from an extended-thinking model rides in that string wrapped in
-`<think>...</think>` (the wire format is
-`internal/events/types`, shared with the
-[auxiliary-LLM telemetry](agent-learning.md)).
+finished turn — not a second assembly of it that can disagree.
 
 **A round is published while it is being written.** `llm.Request.OnDelta` asks
 a backend to stream; the tool loop accumulates the fragments into the round in
@@ -1190,15 +1151,13 @@ live-only, so nothing persists a half-written sentence — and is cleared the
 instant the round commits, because from then on its narration is
 authoritative. Watching is opt-in per CALL: only the tool loop sets `OnDelta`,
 because every other provider call in the engine (reflection, summaries, the
-extension judge) wants an answer rather than a running commentary. The
-Anthropic backend streams those too, with nobody listening, because what a
-stream buys there is the bound — its silence rather than its length — and
-every call carries the model's whole output cap. An endpoint that accepts a
-streaming request and answers without streaming is negotiated down to the
-unary call, once per process — and the answer it gave that first time is the
-round's answer, usage and all, rather than thrown away and asked for again:
-the endpoint billed it, and a second request paid for the round twice while
-the first answer reached no budget counter and no spend rollup.
+extension judge) wants an answer rather than a running commentary. And a
+round streams only where its CLI can: the text backend forwards fragments
+for a profile that reads the CLI's output as JSON lines, each event's text a
+piece of the answer, while a CLI whose answer is extracted from the whole of
+what it printed — a fenced block, one JSON document — delivers it in one
+piece at the end. Nothing above the backend reads the absence of fragments
+as a failure.
 
 **A tab is sent what moved.** Five frames a second would otherwise mean the
 whole call five times a second to every open dashboard — the prompt, every
@@ -1220,23 +1179,19 @@ executor hands its reviewer its report once rather than three times, and a
 worker's `no_result` hands its parent the same. Every one of those rounds is
 still in `round_narration`, marked `declined`. And the join cannot
 be undone — its parts are separated by a blank line and prose contains
-blank lines. A reader that split it on the leading `<think>` tag therefore
-showed the FIRST round's thinking as "the reasoning" and every later
-round's thinking as "the answer", tags and all. So both events also carry
-`round_narration`: one `{round, reasoning, content}` per round, recorded
+blank lines, so a reader handed only the string cannot say which round
+said what. So both events also carry
+`round_narration`: one `{round, content}` per round, recorded
 where the round's assistant message is appended, which is the last frame
 that knows which round the turn belongs to — plus `declined: true` on a
 round that answered in prose where the phase had to end in a call (see
 [a phase that finishes by a call is asked again](#round-cap-extension-judge)). Its `round` matches
 `tool_executions[].round`, and that shared number is the whole contract —
 it is what lets a consumer interleave the two lists into one ledger of
-"what it thought, what it said, what it called" without a second ordering
-rule. The reasoning stays collapsed by default: it is long, it is not the
-answer, and a reader scanning a turn for what it DID should not have to
-scroll past what it considered. The three builders of that field used to be three
-hand-written assemblies, and the live one omitted reasoning entirely: a
-thinking model's live row streamed tool calls against an empty response
-and only grew its reasoning once the phase was over.
+"what it said, what it called" without a second ordering
+rule. The three builders of that field used to be three hand-written
+assemblies, and the live one streamed a round's tool calls against an
+empty response whose prose arrived only once the phase was over.
 
 **A prompt carries its outline.** `agent_phase_completed` publishes
 `system_sections` and `user_sections` beside `system_prompt` and
@@ -1302,7 +1257,7 @@ find.
 **Every phase, workers included.** A [delegated worker](#workers) publishes
 the same `subagent` phase event with the same pair, because its card is the
 same round ledger and reads it the same way: its narration is what puts the
-worker's reasoning and prose beside the tool calls each round made, where its
+worker's prose beside the tool calls each round made, where its
 executions alone would leave the ledger as bare tool rows with nothing that
 asked for them.
 
@@ -1388,7 +1343,7 @@ Each phase row in that view leads with its **phase word** on the neutral pill (e
 | `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens` (and its halves `subagent_input_tokens` / `subagent_output_tokens`; on a resumed segment these include the workers its agent-mode run delegated to over the tool bridge, which ran while no segment was running), `cache_read_tokens` / `cache_write_tokens` over the turn's own phases, `work_item` / `work_item_basis` (see [Which work a turn is on](#which-work-a-turn-is-on) — the one record that can name a `sole_write`), `suspended` on a segment that parked rather than ended, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base). `turn_completed`, the learning subsystem's record of the same turn, carries the same `work_item`, `work_item_basis` and `suspended`, and `ask` — what the turn was asked, without the integration's wrapping — on a wake whose `interactions` do not already say it (a colleague's question, a schedule's task, a resumed segment); it has no `task_id` |
 | `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`, `scheduled_timeout`, `unhandled_exception`) and `detail` carries its message |
 | `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic, the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain`. Each record names the turn that published it in `turn_id` / `work_key`, which is what draws the exchange on that turn's page; a close performed by the idle sweep carries neither, because no turn finished it |
-| `prompt.size` | The size of one phase's OPENING prompt — the system and user text, the conversation a resumed phase re-enters instead of them, and the **tool-definition array** (as compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it — so prompt growth is measurable across builds without reading every phase payload back. The figures are **bytes**, under keys that say so (`system_bytes`, `user_bytes`, `message_bytes`, `tool_bytes`): that is what the engine can measure without a tokenizer and what a vendor bounds a request body in, and a byte count agrees with a character count on ASCII while diverging on a prompt carrying non-Latin names, emoji or CJK. The array is counted because both HTTP providers bill it as input and the `cli-agent` text backend writes it into the prompt literally; the figure is **round one's**, since a mid-phase `activate_tool` adds to what later rounds send. It is measured in one **canonical** shape (`{name, description, parameters}` per tool) rather than in any backend's own, so that one number is comparable across providers — which makes it a **floor**: OpenAI wraps each entry in `{"type":"function","function":{…}}`, Anthropic spells the schema `input_schema` and adds a cache breakpoint, and the `cli-agent` catalogue is larger again, so every backend sends more than the row says. A resumed phase's conversation is counted with the **reasoning** each parked round carries and the arguments of its tool calls, for the same reason: Anthropic hands the thinking blocks back into the request and is billed for them, and the `cli-agent` text backend writes the reasoning prose into the prompt. On Anthropic that is every block unless the resume renders a tool definition differently, which [sheds the reasoning written before it](#the-conversation-only-grows); the figure still counts it, because what it measures is the conversation the phase re-enters rather than one backend's request, so on that resume it is an upper bound for this term. The reasoning counts **once** per round — the structured blocks where a round has them, the prose where it does not — because on Anthropic the prose is a rendering of those same blocks |
+| `prompt.size` | The size of one phase's OPENING prompt — the system and user text, the conversation a resumed phase re-enters instead of them, and the **tool-definition array** (as compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it — so prompt growth is measurable across builds without reading every phase payload back. The figures are **bytes**, under keys that say so (`system_bytes`, `user_bytes`, `message_bytes`, `tool_bytes`): that is what the engine can measure without a tokenizer and what a vendor bounds a request body in, and a byte count agrees with a character count on ASCII while diverging on a prompt carrying non-Latin names, emoji or CJK. The array is counted because a text-mode CLI is handed it in its prompt literally and an agent-mode CLI reads it over the tool bridge; the figure is **round one's**, since a mid-phase `activate_tool` adds to what later rounds send. It is measured in one **canonical** shape (`{name, description, parameters}` per tool) rather than in any CLI's own, so that one number is comparable across a chain that moved a seat between CLIs — which makes it a **floor**: the text backend renders the same definitions indented inside a fenced catalogue followed by a response contract, and an agent-mode CLI reads them in its vendor's own wrapping, so the backend always sends more than the row says. A resumed phase's conversation is counted as every message's text and the arguments of its tool calls, for the same reason: the text backend writes them into the prompt it builds |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
 | `budget_exhausted` | The token budget ended the turn: a charge it refused, or a call the turn did not make because its meter already knew the budget would refuse it ([invariant 4](#runtime-invariants)); published by the engine beside `agent_turn_completed` when the tool loop's budget check returns `toolloop.BudgetError`. Names the scope, the refusing window (`period`, `window`, `resets_at`) and that window's spend and ceiling — the spend with the refused round counted, so a window a charge refused reads past its ceiling by that round, and one a round filled reads at or past it. Where the company's window and the seat's are both full the company's is named, because the company is judged first: a seat's refusal that left the company's day full is reported as the company's |
 | `llm_unavailable` | Every member of the seat's provider chain failed retryably; carries the chain it tried and the last error |
@@ -1454,7 +1409,7 @@ All fields are optional; defaults apply when absent.
 | `internal/agent/ledger/conversation.go` | The cross-turn ledger — what this seat already said in one thread |
 | `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
 | `internal/agent/extension/` | Round-cap extension judge |
-| `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through. Also the correctives that decide how a phase finishing by a call ends: the [finishing corrective](#round-cap-extension-judge) that re-asks a round ended without the submission the round offered (and hands one back when the budget has no round left), the empty-answer corrective for a loop whose prose is a finish — and, ahead of both, the [stop reasons](#a-round-that-did-not-finish) that end a phase instead (`StopError`, a refusal), and the failed result a call whose arguments did not parse is answered with |
+| `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through. Also the correctives that decide how a phase finishing by a call ends: the [finishing corrective](#round-cap-extension-judge) that re-asks a round ended without the submission the round offered (and hands one back when the budget has no round left), the empty-answer corrective for a loop whose prose is a finish — and the failed result a call whose arguments did not parse is answered with (see [How a round ends](#how-a-round-ends)) |
 | `internal/agent/steer/` | A running turn's note box: what an offer is answered, the bounds on a note, and the wire a note crosses to reach the node running the turn |
 | `internal/engine/steer.go` | Each node's desk of its running turns' boxes: serving the scatter, answering only for its own turns, and recording the notes a turn never read |
 | `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |

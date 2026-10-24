@@ -419,14 +419,17 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	var stops teardown
 	fail := func(err error) (*node, teardown, error) { return nil, stops, err }
 
-	model := newScriptedModel(t)
+	// ITS CLI KEEPS ITS STATE ON THE MEMBER'S OWN DISK, beside its store, as
+	// each machine of a fleet keeps its own: a directory [memberBootstrap]
+	// made on the test's goroutine, since this one may not fail the test.
+	model := newScriptedModelIn(t, filepath.Join(filepath.Dir(boot.Store.Path), "llm-cli"))
 	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
 	// constructor registers a t.Cleanup as well, which is right for the
 	// single-node cases — but a cluster case that retries three times would
 	// otherwise leave one live server per member per failed attempt running
 	// until the case ends. Close is idempotent, so both fire safely.
 	stops.backends = append(stops.backends, model.close)
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	cfg, err := config.ParseCompany([]byte(goldenCompany(model)))
 	if err != nil {
 		// THE SAME FILE PARSES THE SAME WAY on every attempt.
 		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))

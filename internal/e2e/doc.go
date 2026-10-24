@@ -10,8 +10,10 @@
 // So the tests here run the real thing: a real engine on a real embedded
 // stream, the real API in front of it, a real turn driven by a scripted model,
 // and the dashboard's OWN modules consuming the frames that come out. Nothing
-// is stubbed except the vendor endpoint, because a stub anywhere else is a
-// stub of the thing under test.
+// is stubbed except the model itself: the CLI every model call goes through is
+// a real backend launching a real process — this test binary, re-executed,
+// answering from the script — because a stub anywhere else is a stub of the
+// thing under test.
 //
 // The package has no exported surface. It exists as a package rather than as
 // more files under internal/api because its subject is the composition, and a

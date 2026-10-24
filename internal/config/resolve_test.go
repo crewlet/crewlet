@@ -21,14 +21,13 @@ name: Acme
 providers:
   llm:
     default:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${ACME_KEY}"]
+      auth: {mode: api-key, api_key: "${ACME_KEY}"}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Providers.LLM["default"].APIKeys[0]; got != "${ACME_KEY}" {
+	if got := cfg.Providers.LLM["default"].Auth.APIKey; got != "${ACME_KEY}" {
 		t.Fatalf("parsing resolved a Tier B reference: %q", got)
 	}
 }

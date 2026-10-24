@@ -97,15 +97,19 @@ func TestShippedCompanyExamplesLoad(t *testing.T) {
 					name, strings.Join(missing, "\n  "))
 			}
 
-			// Every credential in a committed example must be a
+			// Every model credential in a committed example must be a
 			// reference. A literal here would be published,
 			// permanently, in git history and in every artifact
-			// built from it.
+			// built from it. Only auth's fields: env holds settings
+			// beside keys, and a literal "1" there is a setting.
 			for key, provider := range cfg.Providers.LLM {
-				for i, raw := range provider.APIKeys {
-					if _, whole := wholeRef(raw); !whole {
-						t.Fatalf("providers.llm.%s.api_keys[%d] is a literal: %q",
-							key, i, raw)
+				for field, raw := range map[string]string{
+					"auth.token":             provider.Auth.Token,
+					"auth.api_key":           provider.Auth.APIKey,
+					"auth.credential_bundle": provider.Auth.CredentialBundle,
+				} {
+					if _, whole := wholeRef(raw); raw != "" && !whole {
+						t.Fatalf("providers.llm.%s.%s is a literal: %q", key, field, raw)
 					}
 				}
 			}
@@ -420,8 +424,8 @@ func quickstartCompanyBlock(t *testing.T) string {
 // THE PROVIDERS REFERENCE VALIDATES. The block under "Providers" in the
 // configuration reference shows every field an entry takes, so it is the one
 // operators copy whole — and nothing read it, so a rule added to the validator
-// (reasoning_effort refused while reasoning is off) left the documented
-// example refused by `crewlet validate` with no test going red. Checked
+// left the documented example refused by `crewlet validate` with no test going
+// red. Checked
 // through the whole company path: the reference block replaces the
 // quickstart's providers, so the seats that select `default` still resolve.
 func TestTheProvidersReferenceValidates(t *testing.T) {

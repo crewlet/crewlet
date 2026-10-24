@@ -689,8 +689,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	// The acting seat travels the same way, and for the same reason: the
-	// only consumer is a leaf. A cli-agent provider gives every seat its
-	// own CLI home, because seven seats on one subscription sharing one
+	// only consumer is a leaf. A provider gives every seat its own CLI
+	// home, because seven seats on one subscription sharing one
 	// home would read each other's transcripts — and an unbound call would
 	// silently put them all back in one. Bound HERE, at the single place a
 	// turn's context is built, rather than at each phase, so a new phase

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -238,6 +239,27 @@ func CredentialAt(
 		}
 	}
 	return Credential{}, ""
+}
+
+// CredentialReads is every variable [CredentialAt] may read from one seat's
+// mcp_env for this product: each spelling of the token it tries, in each
+// block it tries, and the address keys it pairs a token with. Unsorted, and a
+// name may repeat.
+//
+// FROM THE TABLES THE SCAN LOOPS OVER, for a caller that has to know what it
+// will read before it runs: `crewlet jira provision` asks a running node for
+// exactly these, each a reveal logged by name. A product's reads stop at its
+// own spellings, so a Data Center PAT for the other product, which never
+// authenticates this one, is never among them.
+func CredentialReads(p Product, env map[string]map[string]string) []string {
+	var names []string
+	for _, server := range p.servers() {
+		block := env[server]
+		for _, key := range slices.Concat(p.tokenKeys(server == sharedServer), p.emailKeys()) {
+			names = append(names, envref.Names(block[key])...)
+		}
+	}
+	return names
 }
 
 // credentialOfHeader reads a value that may be a whole `Authorization` header,

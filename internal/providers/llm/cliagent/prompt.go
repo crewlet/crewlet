@@ -18,11 +18,6 @@ import (
 // reasoning blocks. So the conversation becomes a LABELLED TRANSCRIPT — every
 // message under a heading naming its author — and the tool channel rides in
 // the prompt as a catalogue plus a response contract.
-//
-// Thinking blocks are deliberately dropped rather than rendered. They are one
-// provider's opaque structures, valid only when handed back to that same
-// provider on its own wire; pasting them into a prompt for a different model
-// is prose that looks like data.
 func RenderPrompt(req llm.Request) (string, error) {
 	var b strings.Builder
 
@@ -113,12 +108,6 @@ func renderMessage(msg llm.Message) string {
 			role = llm.RoleUser
 		}
 		fmt.Fprintf(&body, "## %s\n\n", role)
-		if msg.ReasoningContent != "" {
-			// Kept, unlike thinking blocks: this is prose the model
-			// wrote, and it reads as prose to any other model.
-			body.WriteString(strings.TrimSpace(msg.ReasoningContent))
-			body.WriteString("\n\n")
-		}
 		body.WriteString(strings.TrimSpace(msg.Content))
 		body.WriteString("\n")
 		if len(msg.ToolCalls) > 0 {

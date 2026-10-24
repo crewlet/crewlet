@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -584,5 +585,39 @@ func TestCLIClientsRideTheSharedTransport(t *testing.T) {
 	}
 	if patient.http.Timeout != time.Hour {
 		t.Errorf("patiently(1h) timeout = %v, want 1h", patient.http.Timeout)
+	}
+}
+
+// A FLEET OF HUNDREDS OF STORED VALUES IS LISTED WHOLE. The listing names
+// every stored secret and holds no value, and it used to share the bound of
+// one credential's answer: about 300 rows passed it, and every command that
+// resolves a company through a running node — they all start with the
+// listing — failed before reading one, blaming a credential. A credential's
+// answer keeps its own bound, since a clipped one would be worse than none.
+func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	var rows []string
+	for i := range 2000 {
+		rows = append(rows, fmt.Sprintf(`{"name":"SEAT_TOKEN_%04d","key_id":"k1",`+
+			`"updated_at":"2026-01-01T00:00:00Z","updated_by":"token:ops",`+
+			`"updated_by_kind":"operator","source":"api"}`, i))
+	}
+	node.body = `{"secrets":[` + strings.Join(rows, ",") + `]}`
+	if len(node.body) <= maxSecretResponseBytes {
+		t.Fatalf("the premise: a listing of %d bytes is within one credential's bound", len(node.body))
+	}
+	listed, err := node.client(t).List(t.Context())
+	if err != nil {
+		t.Fatalf("a listing of %d rows was refused: %v", len(rows), err)
+	}
+	if len(listed) != len(rows) || listed[len(listed)-1].Name != "SEAT_TOKEN_1999" {
+		t.Errorf("listed %d rows, want all %d", len(listed), len(rows))
+	}
+
+	node.body = `{"value":"` + strings.Repeat("x", maxSecretResponseBytes) + `"}`
+	if _, err := node.client(t).Get(t.Context(), "TOO_LONG"); err == nil ||
+		!strings.Contains(err.Error(), "a credential this long") {
+		t.Errorf("a reveal past one credential's bound = %v, want it refused as one", err)
 	}
 }

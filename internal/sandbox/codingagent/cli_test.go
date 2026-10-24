@@ -51,7 +51,7 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	cmd := claude().Command(sandbox.RunRequest{
 		Brief:  "x",
 		Limits: sandbox.Limits{MaxTurns: 30, MaxBudgetUSD: 2.5},
-		LLM:    &sandbox.AgentLLM{Model: "claude-opus-5"},
+		Model:  "claude-opus-5",
 	}, codingagent.Paths{}, "/box/.crewlet/mcp.json")
 	for _, want := range []string{
 		"--max-turns 30", "--max-budget-usd 2.5", "--model 'claude-opus-5'",
@@ -220,32 +220,6 @@ func TestTheOpenCodeInvocationRunsAgainstItsOwnServer(t *testing.T) {
 	}
 }
 
-// AN API ENTRY'S MODEL IS ADDRESSED IN OPENCODE'S GRAMMAR: a custom base URL
-// means the run's own declared provider, and otherwise the OpenCode provider
-// of the entry's wire, whose key variable the run environment carries.
-func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		llm  sandbox.AgentLLM
-		want string
-	}{
-		{sandbox.AgentLLM{Model: "claude-opus-5", ProviderType: "anthropic"}, "anthropic/claude-opus-5"},
-		{sandbox.AgentLLM{Model: "gpt-5", ProviderType: "openai"}, "openai/gpt-5"},
-		// A gateway: the catalogue cannot resolve it, so the run declares
-		// its own provider and addresses the model there.
-		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai-compatible", BaseURL: "https://example.com/v1"},
-			codingagent.OpenCodeProviderID + "/house-model"},
-		{sandbox.AgentLLM{Model: "house-model", ProviderType: "anthropic", BaseURL: "https://example.com"},
-			codingagent.OpenCodeProviderID + "/house-model"},
-	}
-	for _, c := range cases {
-		script := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &c.llm}, codingagent.Paths{}, ""))
-		if !strings.Contains(script, "--model '"+c.want+"'") {
-			t.Fatalf("%+v gave:\n%s\nwant --model %q", c.llm, script, c.want)
-		}
-	}
-}
-
 // AN OPENCODE ENTRY'S MODEL REACHES THE BOX AS WRITTEN.
 //
 // It is the string every text call on the same entry passes to `opencode run
@@ -260,8 +234,7 @@ func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
 		"anthropic/claude-sonnet-5",
 		"openrouter/anthropic/claude-sonnet-5",
 	} {
-		llm := sandbox.AgentLLM{Model: model, CLI: codingagent.OpenCodeName}
-		script := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &llm}, codingagent.Paths{}, ""))
+		script := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x", Model: model}, codingagent.Paths{}, ""))
 		if !strings.Contains(script, "--model '"+model+"'") {
 			t.Errorf("%q gave:\n%s\nwant the model as written", model, script)
 		}
@@ -281,15 +254,8 @@ type openCodeConfig struct {
 	Rules     []struct {
 		Action, Resource, Effect string
 	} `json:"permissions"`
-	Providers map[string]struct {
-		Package  string   `json:"package"`
-		Env      []string `json:"env"`
-		Settings struct {
-			BaseURL string `json:"baseURL"`
-		} `json:"settings"`
-		Models map[string]any `json:"models"`
-	} `json:"providers"`
-	MCP *struct {
+	Providers map[string]any `json:"providers"`
+	MCP       *struct {
 		Servers map[string]struct {
 			Type        string            `json:"type"`
 			Command     []string          `json:"command"`
@@ -320,61 +286,23 @@ func writeOpenCodeConfig(t *testing.T, req sandbox.RunRequest) (openCodeConfig, 
 	return cfg, string(blob)
 }
 
-// The secret is never written into a file inside the box where the agent
-// could read it back and echo it into its report: the provider names the
-// VARIABLE it is read from.
-func TestTheOpenCodeConfigNamesTheKeysVariableRatherThanInliningIt(t *testing.T) {
+// NO CREDENTIAL IS WRITTEN INTO THE BOX, where the agent could read it back
+// and echo it into its report. The key rides the run env under the variable
+// of the provider the model names, which OpenCode's own provider reads — so
+// the config declares no provider at all, and a run naming a model is
+// written exactly as one naming none.
+func TestTheOpenCodeConfigCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{
-		LLM: &sandbox.AgentLLM{Model: "house-model", ProviderType: "anthropic", BaseURL: "https://example.com"},
-		Env: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-secret-value"},
+		Model: "anthropic/claude-sonnet-5",
+		Env:   map[string]string{"ANTHROPIC_API_KEY": "sk-ant-secret-value"},
 	})
-	got := cfg.Providers[codingagent.OpenCodeProviderID]
-	if !slices.Equal(got.Env, []string{"ANTHROPIC_API_KEY"}) {
-		t.Fatalf("the key is not read from the environment: env = %v\n%s", got.Env, body)
-	}
 	if strings.Contains(body, "sk-ant-secret-value") {
 		t.Fatalf("the key was written into the box:\n%s", body)
 	}
-	if _, ok := got.Models["house-model"]; !ok {
-		t.Fatalf("the model was not declared:\n%s", body)
-	}
-	if cfg.Share != "disabled" {
-		t.Fatalf("sharing was left on — a run's transcript is company work:\n%s", body)
-	}
-}
-
-// THE DECLARED ENDPOINT IS WHERE EACH PACKAGE EXPECTS IT.
-//
-// An `anthropic` entry's base_url is the host root, which the engine's own
-// provider and Claude Code's ANTHROPIC_BASE_URL both append /v1/messages to;
-// OpenCode's anthropic-compatible package posts to `<baseURL>/messages`, so the
-// root handed to it as written sent every request on an Anthropic gateway to a
-// path that does not exist. An OpenAI-wire base_url already ends in its
-// version and passes through untouched.
-func TestTheOpenCodeProviderEndpointIsWhereItsPackageExpectsIt(t *testing.T) {
-	t.Parallel()
-	const (
-		anthropic = "@opencode/ai/providers/anthropic-compatible"
-		openai    = "@opencode/ai/providers/openai-compatible"
-	)
-	for _, tc := range []struct {
-		providerType, baseURL, pkg, keyVar, want string
-	}{
-		{"anthropic", "https://gateway.example.com", anthropic, "ANTHROPIC_API_KEY", "https://gateway.example.com/v1"},
-		{"anthropic", "https://gateway.example.com/", anthropic, "ANTHROPIC_API_KEY", "https://gateway.example.com/v1"},
-		{"openai-compatible", "https://llm.example.com/v1", openai, "OPENAI_API_KEY", "https://llm.example.com/v1"},
-		{"openai", "https://llm.example.com/v1/", openai, "OPENAI_API_KEY", "https://llm.example.com/v1/"},
-	} {
-		cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{LLM: &sandbox.AgentLLM{
-			Model: "house-model", ProviderType: tc.providerType, BaseURL: tc.baseURL,
-		}})
-		got := cfg.Providers[codingagent.OpenCodeProviderID]
-		if got.Package != tc.pkg || got.Settings.BaseURL != tc.want || !slices.Equal(got.Env, []string{tc.keyVar}) {
-			t.Errorf("%s entry at %q declared %s at %q reading %v, want %s at %q reading %s:\n%s",
-				tc.providerType, tc.baseURL, got.Package, got.Settings.BaseURL, got.Env,
-				tc.pkg, tc.want, tc.keyVar, body)
-		}
+	if cfg.Providers != nil {
+		t.Fatalf("the run declared a provider of its own, which would shadow the "+
+			"one the model names and the key variable it reads:\n%s", body)
 	}
 }
 
@@ -539,21 +467,21 @@ func derefOr[T any](p *T, absent string) any {
 	return *p
 }
 
-// The config carries the run's POSTURE, not just its provider and servers, and
+// The config carries the run's POSTURE, not just its servers, and
 // this CLI reads it from the checkout rather than from a flag — so a run that
 // wrote none would not fall back to the vendor's defaults. It would inherit
 // whatever the previous run left on a reused box, MCP block and dead per-run
 // bridge URL included.
-func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
+func TestAnOpenCodeConfigIsWrittenEvenWithNoModelAndNoServers(t *testing.T) {
 	t.Parallel()
 	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{})
 	if len(cfg.Rules) == 0 || cfg.Share != "disabled" || cfg.Schema == "" {
 		t.Errorf("a minimal run lost its posture:\n%s", body)
 	}
 	// And it states ONLY the posture: a provider block for a run that named
-	// no endpoint would point the agent at nothing.
+	// no model would point the agent at nothing.
 	if cfg.Providers != nil {
-		t.Errorf("a run with no base URL declared a provider:\n%s", body)
+		t.Errorf("a run with no model declared a provider:\n%s", body)
 	}
 	if cfg.MCP != nil {
 		t.Errorf("a run with no servers declared an mcp block:\n%s", body)

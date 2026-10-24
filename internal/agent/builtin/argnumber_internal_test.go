@@ -6,9 +6,8 @@ import (
 )
 
 // EVERY DECODER ON THIS PATH READS THROUGH json.Number, so that is the shape a
-// model's number actually arrives in — `httpapi.DecodeArgs` has done it for
-// the HTTP providers all along, `mcpbridge` does it for a bridged run, and the
-// subscription CLI backend does it now too.
+// model's number actually arrives in — the CLI backend's envelope decoder does
+// it for a text call, and `mcpbridge` does it for a bridged run.
 //
 // These readers only knew float64, and the failure was SILENT in both
 // directions: a `limit` fell through to its fallback, so a search quietly

@@ -2191,7 +2191,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
  * Which phases ran, one line each.
  *
  * NOT `PhaseCard`. That is the page's, and it is a transcript — a model's
- * reasoning, its arguments and its results — which in a rail 420 px wide is a
+ * words, its arguments and its results — which in a rail 420 px wide is a
  * page in a narrow column, and the reason the rail exists is that the list
  * behind it stays on screen. What a reader wants HERE is the shape of the
  * turn: which phases it ran, what each decided, and what each cost. The

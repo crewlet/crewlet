@@ -371,7 +371,6 @@ name: Acme
 providers:
   llm:
     fast:
-      type: anthropic
       model: claude-golden
 integrations:
   datadog:
@@ -455,7 +454,6 @@ name: Acme
 providers:
   llm:
     fast:
-      type: anthropic
       model: claude-golden
 integrations:
   datadog:

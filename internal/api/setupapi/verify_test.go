@@ -109,7 +109,7 @@ func (v *vault) put(t *testing.T, name, value string) {
 // both keys in the sealed store.
 const datadogDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {
     "datadog": {"enabled": true, "route_to": "sre-lead", "webhook_token": "${DATADOG_WEBHOOK_TOKEN}",
                 "provisioning": {"site": "datadoghq.eu", "api_key": "${DATADOG_API_KEY}",
@@ -345,7 +345,7 @@ func TestAVerifyCarriesTheDeclaredAtlassianDeployment(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {
     "atlassian": {"deployment": "data_center"},
     "jira": {"url": "https://jira.acme.internal", "token": "${JIRA_TOKEN}",

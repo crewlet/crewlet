@@ -117,6 +117,13 @@ config — rungs 2 and 3 especially:
   each is whatever zone the host reading it happens to be set to. There
   is ONE company clock, the top-level `timezone`: no block under
   `tracker:` or `scheduling:` takes a zone of its own.
+- **An LLM entry names its CLI's model in that CLI's grammar.** The schema
+  sees a string; `crewlet validate` refuses an `opencode` model with no
+  `<provider>/` and a credential the entry's CLI would never read (an
+  `auth.api_key` outside `auth.mode: api-key`, an `auth.token` on any CLI but
+  `claude-code`, an `api-key` entry on `opencode`, `hermes` or `pi`, whose keys
+  go in `env`). Nothing validates the host: whether the CLI is installed and
+  signed in is `crewlet llm doctor`'s to say.
 - **Cron expressions are valid.** The schema takes a cron as plain text,
   so it checks neither the field count nor the values — `99 * * * *` and
   `0 9 * *` both pass it. `crewlet validate` is what checks one.
@@ -164,7 +171,34 @@ live-editable, so the first version does not need to be the last.
    seat's `space`, `knowledge.root_space`, or the tool-skills container),
    exactly as the tracker files work only in a declared project.
 5. **What model, and what budget?** One `providers.llm` entry is enough
-   to start. Ask whether they want a cost ceiling, and on which window:
+   to start. Every model is reached through the vendor's own **coding
+   CLI**, which the engine drives as a process, so ask *whose* models and
+   *how they pay*, then write the entry for that CLI:
+
+   - **Anthropic's, on a Claude Pro / Max plan** — `model: sonnet` (Claude
+     Code is the default `agent`). No key; the founder signs the CLI in once
+     on the engine host with `crewlet llm login <key> -from-host` (or
+     `-capture-token`).
+   - **Anthropic's, on an API key** — `model: sonnet` plus
+     `auth: {mode: api-key}`, which reads `ANTHROPIC_API_KEY` from the secret
+     store or the environment. Name another variable with
+     `auth.api_key: "${VAR}"` only if theirs is called something else.
+   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth` for an
+     `OPENAI_API_KEY`; leave `auth` out for a ChatGPT login.
+   - **Open models** (OpenRouter, a hosted provider, a local server) —
+     `agent: opencode`, `model: <provider>/<model>` (a bare id is refused), and
+     the provider's key in `env` under that provider's own variable, e.g.
+     `env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}`.
+
+   Whichever it is, the CLI must be installed on the machine running
+   `crewlet run`, and `crewlet llm doctor` is what proves the entry works —
+   tell the founder to run it. If they want a plan with a key behind it, that
+   is two entries on the same CLI and a list: `llm: [plan, key]`. A cheap,
+   fast entry for `llm_auxiliary` is worth suggesting once the company grows:
+   every auxiliary call pays a CLI launch under a fixed deadline. See
+   [LLM Backends](https://docs.crewlet.ai/engine/latest/concepts/llm-backends/).
+
+   Ask whether they want a cost ceiling, and on which window:
    `token_budget` is a mapping of `day`, `week` and `month` ceilings on the
    company's clock, each optional — a month for the bill, a day as the fuse
    that stops a runaway loop — e.g. `token_budget: {day: 3000000, month:
@@ -209,12 +243,13 @@ reinvent them:
 - [Quickstart](https://docs.crewlet.ai/engine/latest/getting-started/quickstart/) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
-  a complete seven-seat company with Jira + Confluence + GitLab + Mattermost
-  + sandbox.
+  a complete seven-seat company with GitLab + Mattermost + sandbox on the
+  engine's own tracker and knowledge base, its model open models through
+  OpenCode on an OpenRouter key.
 - [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml) —
   the SAME seven seats with everything but chat removed: Mattermost alone, on
-  a coding-CLI subscription rather than a metered key. The one to copy when a
-  founder has no tracker, wiki or code host yet.
+  Claude Code with the founder's Claude plan rather than a metered key. The one
+  to copy when a founder has no tracker, wiki or code host yet.
 
 ## Invariants
 

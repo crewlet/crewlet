@@ -40,9 +40,7 @@ name: Nimbus
 providers:
   llm:
     scripted:
-      type: anthropic
       model: claude-x
-      api_keys: ["sk-test"]
   embeddings:
     type: openai
     model: text-embedding-3-small
@@ -62,9 +60,7 @@ name: Nimbus
 providers:
   llm:
     scripted:
-      type: anthropic
       model: claude-x
-      api_keys: ["sk-test"]
 roles:
   - name: CEO
     handle: ceo
@@ -299,9 +295,7 @@ name: Nimbus
 providers:
   llm:
     scripted:
-      type: anthropic
       model: claude-x
-      api_keys: ["sk-test"]
   embeddings:
     type: openai-compatible
     model: %s

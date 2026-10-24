@@ -372,6 +372,39 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 	return res, nil
 }
 
+// SeatCredentialReads is every variable the reconcile's identity scan reads
+// ([atlassian.CredentialOf] for Jira over [agentSeats]), each name once,
+// sorted: the Jira spellings of each seat's token in the blocks Jira reads,
+// and the addresses beside them.
+//
+// For `crewlet jira provision`, which asks a running node for exactly these,
+// each a reveal logged by name: a seat's Confluence-only credential is not
+// one of them, though it may sit in the same `mcp_env.atlassian` block.
+func SeatCredentialReads(o *org.Organization) []string {
+	var names []string
+	for _, seat := range agentSeats(o) {
+		names = append(names, atlassian.CredentialReads(atlassian.ProductJira, seat.MCPEnv)...)
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// agentSeats is every seat of the organization that is not a person, in the
+// order [org.Organization.AllRoles] walks them: the seats whose credentials
+// the reconcile reads.
+func agentSeats(o *org.Organization) []*org.Role {
+	if o == nil {
+		return nil
+	}
+	var seats []*org.Role
+	for seat := range o.AllRoles() {
+		if !seat.IsHuman() {
+			seats = append(seats, seat)
+		}
+	}
+	return seats
+}
+
 // resolveSeats asks each seat's own credential who it is.
 //
 // CONCURRENTLY, because sequentially this is one round trip per seat against
@@ -399,12 +432,7 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	if opts.Org == nil {
 		return nil, nil
 	}
-	var seats []*org.Role
-	for seat := range opts.Org.AllRoles() {
-		if !seat.IsHuman() {
-			seats = append(seats, seat)
-		}
-	}
+	seats := agentSeats(opts.Org)
 	out := make([]SeatIdentity, len(seats))
 
 	// The credentials are read first so the fan-out below runs over the

@@ -26,9 +26,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-literal"]
 mcp_servers:
   - name: github
     command: github-mcp

@@ -44,10 +44,10 @@ const (
 )
 
 // companyDoc is a company carrying one credential of each kind this surface
-// has to keep out of a response: a literal provider key, a ${VAR} reference
-// that must survive an edit, and an integration secret. The integration is
-// GitLab because its signing secret has a SHAPE the validator checks, which
-// makes it the one whose redaction cannot be faked by a fixture.
+// has to keep out of a response: a literal subscription token, a ${VAR}
+// reference that must survive an edit, and an integration secret. The
+// integration is GitLab because its signing secret has a SHAPE the validator
+// checks, which makes it the one whose redaction cannot be faked by a fixture.
 //
 // IT HAS NO ORG CHART: the cases written over it are about the settings
 // around one, and the seats and units have a fixture of their own (orgDoc, in
@@ -57,9 +57,10 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-literal", "${ROTATED}"]
+      auth:
+        token: sk-literal
+        credential_bundle: "${ROTATED}"
 integrations:
   gitlab:
     enabled: true
@@ -175,7 +176,7 @@ func (s *surface) service() *configapi.Service { return s.svc }
 // companyJSONDoc is the smallest document PUT /config accepts, for the cases
 // that write to a node with nothing on it yet.
 const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
-	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}}}`
+	`{"model":"claude-sonnet-5"}}}}`
 
 func (s *surface) activeDocument(t *testing.T) string {
 	t.Helper()
@@ -638,8 +639,8 @@ func TestAMaskedDocumentCanBeSentBack(t *testing.T) {
 	if stored.Name != "Acme Renamed" {
 		t.Errorf("name = %q", stored.Name)
 	}
-	if got := stored.Providers.LLM["zulu"].APIKeys[0]; got != "sk-literal" {
-		t.Errorf("api key = %q, want the one the previous revision held", got)
+	if got := stored.Providers.LLM["zulu"].Auth.Token; got != "sk-literal" {
+		t.Errorf("token = %q, want the one the previous revision held", got)
 	}
 	if got := stored.Integrations.GitLab.SigningSecret; got != signingSecret {
 		t.Errorf("signing secret = %q", got)
@@ -649,7 +650,8 @@ func TestAMaskedDocumentCanBeSentBack(t *testing.T) {
 func TestAnInvalidDocumentIsRefusedWithItsReason(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	broken := strings.Replace(companyDoc, "type: anthropic", "type: nonexistent", 1)
+	broken := strings.Replace(companyDoc, "      model: claude-sonnet-5\n",
+		"      agent: nonexistent\n      model: claude-sonnet-5\n", 1)
 	res := s.do(t, http.MethodPut, "/config", broken,
 		map[string]string{"X-Summary": "break it"})
 	if res.Code != http.StatusBadRequest {
@@ -1040,14 +1042,14 @@ func TestADiffAgainstTheActiveOfAnUnconfiguredNode(t *testing.T) {
 	}
 }
 
-func TestAReshapedKeyListIsRefusedRatherThanStored(t *testing.T) {
+func TestAMaskWithNothingToResolveItFromIsRefusedRatherThanStored(t *testing.T) {
 	t.Parallel()
-	// The end of the round-trip story. A caller who fetched the config,
-	// added an api key and sent it back has changed which slot means what,
-	// so the masks cannot be matched to what they hid — and this surface
-	// refuses rather than storing the literal "__redacted__" as a
-	// credential, which would fail at the first provider call with an error
-	// naming nothing about where it came from.
+	// The end of the round-trip story. A caller who fetched the config and
+	// renamed a provider entry sent its masks back under a key the previous
+	// revision never held, so there is nothing to resolve them from — and
+	// this surface refuses rather than storing the literal "__redacted__" as
+	// a credential, which would fail at the first provider call with an
+	// error naming nothing about where it came from.
 	s := newSurface(t)
 	s.seed(t, companyDoc)
 
@@ -1056,18 +1058,19 @@ func TestAReshapedKeyListIsRefusedRatherThanStored(t *testing.T) {
 	providers, _ := document["providers"].(map[string]any)
 	llm, _ := providers["llm"].(map[string]any)
 	zulu, _ := llm["zulu"].(map[string]any)
-	keys, _ := zulu["api_keys"].([]any)
-	if len(keys) == 0 || keys[0] != config.Redacted {
-		t.Fatalf("the fetched document carried no mask to reshape: %v", keys)
+	auth, _ := zulu["auth"].(map[string]any)
+	if auth["token"] != config.Redacted {
+		t.Fatalf("the fetched document carried no mask to move: %v", zulu)
 	}
-	zulu["api_keys"] = append([]any{"${THIRD}"}, keys...)
+	delete(llm, "zulu")
+	llm["yankee"] = zulu
 
 	edited, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
 	res := s.do(t, http.MethodPut, "/config", string(edited),
-		map[string]string{"X-Summary": "add a key"})
+		map[string]string{"X-Summary": "rename the provider"})
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400 — a mask that could not be resolved was stored: %s",
 			res.Code, res.Body)
@@ -1194,7 +1197,7 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 		{"a patch", http.MethodPatch, "/config",
 			opening + "mission: checked\nnonsense: true\n", true, 5},
 		{"an entity", http.MethodPut, "/config/llm-providers/zulu",
-			opening + "type: anthropic\nmodel: claude-sonnet-5\napi_keys: [\"k\"]\nmodell: haiku\n", true, 7},
+			opening + "agent: claude-code\nmodel: claude-sonnet-5\nmode: text\nmodell: haiku\n", true, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1609,7 +1612,7 @@ func TestEveryWriteRouteTakesTheSummaryFromEitherChannel(t *testing.T) {
 		{"put", http.MethodPut, "/config", "_summary: %s\n" + companyDoc, false},
 		{"patch", http.MethodPatch, "/config", `{"_summary":%q,"mission":"ship it"}`, true},
 		{"entity", http.MethodPut, "/config/llm-providers/zulu",
-			`{"_summary":%q,"type":"anthropic","model":"claude-sonnet-5"}`, true},
+			`{"_summary":%q,"model":"claude-sonnet-5"}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1721,8 +1724,8 @@ func TestReloadRefusesWhenNothingIsActive(t *testing.T) {
 
 // GET /config/references answers which fields name a ${VAR}, which is what an
 // operator needs before they remove a credential. The fixture's `${ROTATED}`
-// sits in a list of api keys beside a literal, so the route has to report the
-// reference and only the reference.
+// sits in the same auth block as a literal token, so the route has to report
+// the reference and only the reference.
 func TestReferencesReportsEveryPathThatNamesAVariable(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, companyDoc)
@@ -1738,7 +1741,7 @@ func TestReferencesReportsEveryPathThatNamesAVariable(t *testing.T) {
 		row, _ := entry.(map[string]any)
 		got[fmt.Sprint(row["path"])] = fmt.Sprint(row["name"])
 	}
-	want := map[string]string{"providers.llm.zulu.api_keys[1]": "ROTATED"}
+	want := map[string]string{"providers.llm.zulu.auth.credential_bundle": "ROTATED"}
 	if len(got) != len(want) {
 		t.Fatalf("references = %v, want %v", got, want)
 	}
@@ -1763,7 +1766,7 @@ func TestReferencesNeverReportsALiteralCredential(t *testing.T) {
 	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/references", "", nil)
-	if body := res.Body.String(); strings.Contains(body, "api_keys[0]") ||
+	if body := res.Body.String(); strings.Contains(body, "auth.token") ||
 		strings.Contains(body, "sk-literal") ||
 		strings.Contains(body, signingSecret) {
 		t.Errorf("a literal credential reached the reference index: %s", body)

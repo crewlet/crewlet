@@ -53,8 +53,8 @@ func TestInputTokensCarryTheWholePromptIncludingCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	prov := &Provider{profile: p, model: "sonnet"}
-	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: claudeCodeAnswer}, "")
+	prov := &Provider{profile: p, model: "sonnet", now: time.Now}
+	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: claudeCodeAnswer}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
@@ -122,8 +122,8 @@ func TestUnreportedUsageIsMarkedRatherThanReportedAsZero(t *testing.T) {
 		t.Fatal("a profile that read no usage claimed it had")
 	}
 
-	prov := &Provider{profile: p, model: "m"}
-	comp, err := prov.completion(t.Context(), "a prompt of some length", &rawResult{stdout: `{"result":"hi"}`}, "")
+	prov := &Provider{profile: p, model: "m", now: time.Now}
+	comp, err := prov.completion(t.Context(), "a prompt of some length", true, &rawResult{stdout: `{"result":"hi"}`}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
@@ -142,22 +142,33 @@ func TestTextOutputIsTakenVerbatim(t *testing.T) {
 }
 
 // A vendor that reports a failure INSIDE a zero exit must not be read as a
-// successful answer.
-func TestAFailureFlagInsideAZeroExitIsAFailure(t *testing.T) {
+// successful answer — and, saying nothing a marker recognises, it is a SERVER
+// failure the seat's chain walks past, not a fatal that stops it: the next
+// member is another login or vendor, which this run's failure says nothing
+// about.
+//
+// Mutation: classify a failed run as fatal again, and the kind is wrong.
+func TestAFailureFlagInsideAZeroExitIsAServerFailure(t *testing.T) {
 	t.Parallel()
 	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	prov := &Provider{profile: p, model: "sonnet"}
-	_, err = prov.completion(t.Context(), "prompt", &rawResult{
+	prov := &Provider{profile: p, model: "sonnet", agent: "claude-code", now: time.Now}
+	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{
 		stdout: `{"is_error":true,"result":"the model refused","type":"result"}`,
 	}, "")
 	if err == nil {
 		t.Fatal("a CLI-reported failure was returned as a completion")
 	}
-	if got := llm.KindOf(err); got != llm.KindFatal {
-		t.Errorf("kind = %v, want fatal", got)
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Errorf("kind = %v, want server", got)
+	}
+	if !strings.Contains(err.Error(), "the model refused") {
+		t.Errorf("err = %v, want what the CLI said", err)
+	}
+	if err := prov.benched(); err != nil {
+		t.Errorf("a failed run sat the entry out: %v", err)
 	}
 }
 
@@ -226,8 +237,8 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 		t.Fatalf("Truncated = %d, want %d", buf.Truncated(), len(body)-64)
 	}
 
-	p := &Provider{profile: cliprofile.Profile{}, model: "m"}
-	_, err := p.completion(t.Context(), "prompt", &rawResult{
+	p := &Provider{profile: cliprofile.Profile{}, model: "m", now: time.Now}
+	_, err := p.completion(t.Context(), "prompt", true, &rawResult{
 		stdout: buf.String(), droppedStdout: buf.Truncated(),
 	}, "")
 	if err == nil {
@@ -247,8 +258,8 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 // stderr overrunning costs diagnosis, not correctness, so it must NOT refuse.
 func TestAClippedStderrStillReturnsTheAnswer(t *testing.T) {
 	t.Parallel()
-	p := &Provider{profile: cliprofile.Profile{}, model: "m"}
-	comp, err := p.completion(t.Context(), "prompt", &rawResult{
+	p := &Provider{profile: cliprofile.Profile{}, model: "m", now: time.Now}
+	comp, err := p.completion(t.Context(), "prompt", true, &rawResult{
 		stdout: "the answer", stderr: "noise", droppedStderr: 4096,
 	}, "")
 	if err != nil {
@@ -286,8 +297,7 @@ const claudeCodeEmptyAnswer = `{"duration_api_ms":11377,"stop_reason":"end_turn"
 // Two invariants in one case, because they are the same decision seen from
 // two sides: what the envelope must NOT become (the sentence a seat speaks),
 // and what an empty answer IS (a completion with no content, charged, for the
-// tool loop to correct — the shape both API backends return for a model that
-// thought and said nothing).
+// tool loop to correct — what a model that thought and said nothing gave).
 func TestAnEmptyResultIsAChargedCompletionAndNotTheCLIsOwnTelemetry(t *testing.T) {
 	t.Parallel()
 	p, err := cliprofile.Load("claude-code", nil)
@@ -302,8 +312,8 @@ func TestAnEmptyResultIsAChargedCompletionAndNotTheCLIsOwnTelemetry(t *testing.T
 		t.Error("`result` is present in the output, so the profile DID locate the answer")
 	}
 
-	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
-	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: claudeCodeEmptyAnswer}, "")
+	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
+	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: claudeCodeEmptyAnswer}, "")
 	if err != nil {
 		t.Fatalf("an empty answer was reported as a failure: %v", err)
 	}
@@ -338,12 +348,12 @@ func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 		t.Fatal("a document with no matching path reported that it located the answer")
 	}
 
-	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding"}
-	if _, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: drifted}, ""); err == nil {
+	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding", now: time.Now}
+	if _, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: drifted}, ""); err == nil {
 		t.Fatal("a drifted profile produced a completion")
 	} else {
 		for _, want := range []string{"text_paths", "result", "crewlet llm doctor",
-			"providers.llm.coding.cli.overrides.text_paths"} {
+			"providers.llm.coding.overrides.text_paths"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the message never mentions %q — an operator cannot act on it:\n%v",
 					want, err)
@@ -404,8 +414,8 @@ func TestAnUnrecognisedStreamIsAFailureRatherThanItsOwnLog(t *testing.T) {
 	if got := extract(p, log); got.located || got.text != "" {
 		t.Fatalf("an unrecognised stream extracted text = %q located = %v", got.text, got.located)
 	}
-	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding"}
-	if _, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: log}, ""); err == nil {
+	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding", now: time.Now}
+	if _, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: log}, ""); err == nil {
 		t.Fatal("an unrecognised stream produced a completion")
 	} else if !strings.Contains(err.Error(), "text_paths") {
 		t.Errorf("the message does not name the field to change: %v", err)
@@ -421,8 +431,8 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
-	_, err = prov.completion(t.Context(), "prompt", &rawResult{stdout: "  \n ", stderr: "node: bad flag"}, "")
+	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
+	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{stdout: "  \n ", stderr: "node: bad flag"}, "")
 	if err == nil {
 		t.Fatal("a silent CLI produced a completion")
 	}
@@ -439,24 +449,56 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 
 // A spent plan is the vendor's own sentence, and whether THIS build's profile
 // can find the answer field says nothing about whether the vendor said it.
-// Classified off the whole of stdout, so a drifted profile still yields a real
-// rate limit rather than burning the chain's next member on a server fault.
+// Classified off the whole of stdout when no answer was located, so a drifted
+// profile still yields a real rate limit — on the terms an answer is read on:
+// the vendor's report opens what the CLI printed, or the CLI said the run
+// failed.
+//
+// And only on those terms. A drifted profile cannot tell the model's words from
+// the vendor's either — the model's answer is somewhere in that stdout — so a
+// sentinel in a field this build does not read, on a run the CLI did not report
+// failed, is the profile drift it looks like: a server failure, which still
+// moves the chain on, and not a spent plan that sits the entry out.
 func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 	t.Parallel()
 	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
-	// Valid JSON with no `result` field: nothing for text_paths to find, and
-	// the vendor's sentinel sitting in a field this build never reads.
-	_, err = prov.completion(t.Context(), "prompt", &rawResult{
-		stdout: `{"note":"Usage limit reached \u00b7 continuing automatically"}`}, "")
-	if err == nil {
-		t.Fatal("a spent plan produced a completion")
-	}
-	if got := llm.KindOf(err); got != llm.KindRateLimit {
-		t.Fatalf("kind = %v, want rate limit", got)
+	for name, tc := range map[string]struct {
+		stdout string
+		want   llm.ErrorKind
+	}{
+		// Prose where the document should be, and a document with no
+		// `result` field after it: nothing for text_paths to find.
+		"the report printed where the document should be": {
+			stdout: "Usage limit reached \u00b7 resets 3pm (Europe/Berlin)\n" +
+				`{"type":"result","subtype":"error"}`,
+			want: llm.KindRateLimit,
+		},
+		"the sentinel in a run the CLI reported failed": {
+			stdout: `{"is_error":true,"note":"Usage limit reached \u00b7 continuing automatically"}`,
+			want:   llm.KindRateLimit,
+		},
+		"the sentinel in a field nothing reads, on a clean run": {
+			stdout: `{"note":"Usage limit reached \u00b7 continuing automatically"}`,
+			want:   llm.KindServer,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
+			if out := extract(p, tc.stdout); out.located {
+				t.Fatalf("the answer was located (%q) — this case is about one that is not", out.text)
+			}
+			_, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: tc.stdout}, "")
+			if got := llm.KindOf(err); err == nil || got != tc.want {
+				t.Fatalf("kind = %v (err %v), want %v", got, err, tc.want)
+			}
+			if sat := prov.benched() != nil; sat != (tc.want == llm.KindRateLimit) {
+				t.Errorf("sat out = %v, want it only for a spent plan", sat)
+			}
+		})
 	}
 }
 
@@ -469,8 +511,8 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 // went with its 1.x prose — so pinning this to one would be pinning it to a
 // string no vendor prints, which is how the sentinel it replaced went stale
 // unnoticed. The mechanism is live and operator-reachable through
-// `cli.overrides`, so it is tested on its own terms.
-func TestAMarkerThatCarriesAResetInstantYieldsARealRetryAfter(t *testing.T) {
+// `overrides`, so it is tested on its own terms.
+func TestAMarkerThatCarriesAResetInstantSitsTheEntryOutUntilIt(t *testing.T) {
 	t.Parallel()
 	p, err := cliprofile.Load("claude-code", map[string]any{
 		"limit_markers": []any{map[string]any{
@@ -480,13 +522,13 @@ func TestAMarkerThatCarriesAResetInstantYieldsARealRetryAfter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
+	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
 	// Computed rather than pinned: the profile reads it as a Unix epoch, so a
 	// literal would quietly become a reset in the past and turn this into a
 	// test that asserts nothing.
-	reset := time.Now().Add(90 * time.Minute).Unix()
-	_, err = prov.completion(t.Context(), "prompt", &rawResult{stdout: fmt.Sprintf(
-		`{"note":"quota spent|%d"}`, reset)}, "")
+	reset := time.Now().Add(45 * time.Minute).Unix()
+	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{stdout: fmt.Sprintf(
+		`{"type":"result","result":"quota spent|%d"}`, reset)}, "")
 	if err == nil {
 		t.Fatal("a spent plan produced a completion")
 	}
@@ -497,7 +539,7 @@ func TestAMarkerThatCarriesAResetInstantYieldsARealRetryAfter(t *testing.T) {
 	if failure.Kind != llm.KindRateLimit {
 		t.Errorf("kind = %v, want rate limit", failure.Kind)
 	}
-	if failure.RetryAfter <= 0 {
-		t.Error("the reset instant the sentinel carried was not read")
+	if left := time.Until(prov.sitOut.until); left < 40*time.Minute || left > 46*time.Minute {
+		t.Errorf("the entry sits out %v, want the reset instant the sentinel carried", left)
 	}
 }

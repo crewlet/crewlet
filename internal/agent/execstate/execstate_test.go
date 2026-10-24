@@ -1,11 +1,9 @@
 package execstate_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -36,8 +34,8 @@ func suspended() execstate.State {
 		ToolExecutions:  []types.ToolExecution{{"name": "read_file", "success": true, "round": 1}},
 		RoundsUsed:      2,
 		RoundNarration: []types.RoundNarration{
-			{"round": 1, "reasoning": "read it first", "content": ""},
-			{"round": 2, "reasoning": "", "content": "Starting a coding run."},
+			{"round": 1, "content": "Reading it first."},
+			{"round": 2, "content": "Starting a coding run."},
 		},
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
 		Task:       "fix the flake",
@@ -81,8 +79,8 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	if got.RoundsUsed != 2 || len(got.RoundNarration) != 2 {
 		t.Fatalf("the pre-suspend rounds were lost: %+v", got)
 	}
-	if got.RoundNarration[0]["reasoning"] != "read it first" {
-		t.Fatalf("round 1's thinking did not survive: %+v", got.RoundNarration)
+	if got.RoundNarration[0]["content"] != "Reading it first." {
+		t.Fatalf("round 1's narration did not survive: %+v", got.RoundNarration)
 	}
 	if got.Task != "fix the flake" {
 		t.Fatalf("task = %q", got.Task)
@@ -121,15 +119,11 @@ func withVersion(t *testing.T, blob json.RawMessage, version int) json.RawMessag
 // snowflake — and the resumed loop replays that call to the provider and
 // reads it back into its own ledger. Read as a float64 the snowflake below
 // becomes ...800, which is an argument the model never wrote, a replayed turn
-// the provider sees edited, and an id that names something else. The thinking
-// rides along beside it, and comes back as it went in.
+// the provider sees edited, and an id that names something else.
 func TestNumbersSurviveASuspensionExactly(t *testing.T) {
 	t.Parallel()
 	const snowflake = "1234567890123456789"
 	state := suspended()
-	state.Messages[2].ThinkingBlocks = []llm.ThinkingBlock{{
-		Type: "thinking", Thinking: "find the row <first> & then fix it",
-	}}
 	state.Messages[2].ToolCalls[0].Arguments = map[string]any{
 		"brief": "fix it",
 		"row":   json.Number(snowflake),
@@ -151,9 +145,6 @@ func TestNumbersSurviveASuspensionExactly(t *testing.T) {
 	if ratio, _ := args["ratio"].(json.Number); ratio.String() != "0.1000000000000000055511151231257827" {
 		t.Errorf("ratio = %v (%T), want its digits unchanged", args["ratio"], args["ratio"])
 	}
-	if blocks := got.Messages[2].ThinkingBlocks; len(blocks) != 1 || blocks[0] != state.Messages[2].ThinkingBlocks[0] {
-		t.Errorf("thinking blocks = %+v, want them unchanged", blocks)
-	}
 
 	// And a second suspension of the resumed conversation writes the same
 	// bytes: what a resume reads is exactly what the next suspend writes,
@@ -165,93 +156,6 @@ func TestNumbersSurviveASuspensionExactly(t *testing.T) {
 	if string(again) != string(blob) {
 		t.Errorf("a decoded state re-encodes differently:\n first %s\nsecond %s", blob, again)
 	}
-}
-
-// THE VENDOR'S OWN BLOCKS COME BACK FROM A SUSPENSION AS THEY WENT IN, with
-// the origin that says whose they are. A resumed executor replays them to the
-// provider, and a model that preserves its thinking binds every block to the
-// conversation before it — so a parked turn that came back with a block
-// missing, reordered or re-spelled would be an edited conversation the vendor
-// refuses on the first round after the resume.
-//
-// Held to the TOKENS: the row's encoder drops the whitespace between them and
-// escapes <, > and & inside strings, exactly as the request encoder does on
-// the way out, and neither changes a key, its order, a number's digits or a
-// string. The tags are held too — they are a wire format the node that
-// resumes the run reads — and so is the turn's binding, which says which tools
-// its reasoning was written under.
-func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
-	t.Parallel()
-	written := []string{
-		`{"signature":"EqQBCgIYAhIM+/=","type":"thinking","thinking":"find <it> & fix it"}`,
-		`{"type":"text","text":"  Starting.  ","citations":null}`,
-		`{"type":"tool_use","id":"call-1","name":"run_sandbox","input":{"brief": "fix it", "row": 1234567890123456789, "z": 1.0}}`,
-	}
-	state := suspended()
-	state.Messages[2].Origin = llm.Origin{Provider: "anthropic", Model: "claude-opus-5-5"}
-	state.Messages[2].Binding = "9f2c"
-	for _, b := range written {
-		state.Messages[2].Raw = append(state.Messages[2].Raw, json.RawMessage(b))
-	}
-
-	blob, err := execstate.Encode(state)
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	for _, tag := range []string{
-		`"Origin":{"Provider":"anthropic","Model":"claude-opus-5-5"}`, `"Raw":[`, `"Binding":"9f2c"`,
-	} {
-		if !strings.Contains(string(blob), tag) {
-			t.Errorf("the row does not carry %s — a renamed tag is a parked turn the resume cannot read:\n%s", tag, blob)
-		}
-	}
-	// A turn with no origin writes none: every message but the assistant's
-	// is one, and an empty object on each is bytes for nothing.
-	if strings.Count(string(blob), `"Origin"`) != 1 {
-		t.Errorf("the row carries an origin on a message that has none:\n%s", blob)
-	}
-
-	got, ok, err := execstate.Decode(blob)
-	if err != nil || !ok {
-		t.Fatalf("Decode = %v, %v", ok, err)
-	}
-	turn := got.Messages[2]
-	if turn.Origin != state.Messages[2].Origin {
-		t.Errorf("origin = %+v, want %+v", turn.Origin, state.Messages[2].Origin)
-	}
-	// The binding comes back too: without it the resumed loop cannot tell
-	// reasoning written under the tools it resumes with from reasoning a
-	// re-rendered definition invalidated, and sheds all of it.
-	if turn.Binding != state.Messages[2].Binding {
-		t.Errorf("binding = %q, want %q", turn.Binding, state.Messages[2].Binding)
-	}
-	if strings.Count(string(blob), `"Binding"`) != 1 {
-		t.Errorf("the row carries a binding on a message that has none:\n%s", blob)
-	}
-	if len(turn.Raw) != len(written) {
-		t.Fatalf("raw = %d blocks, want the %d written", len(turn.Raw), len(written))
-	}
-	for i := range written {
-		if got, want := tokens(t, turn.Raw[i]), tokens(t, []byte(written[i])); got != want {
-			t.Errorf("block %d came back as\n  %s\nwant\n  %s", i, got, want)
-		}
-	}
-	if again, err := execstate.Encode(got); err != nil || string(again) != string(blob) {
-		t.Errorf("a decoded state re-encodes differently (%v):\n first %s\nsecond %s", err, blob, again)
-	}
-}
-
-// tokens is a JSON value with the whitespace between its tokens dropped and
-// <, > and & escaped — the form both the row's encoder and the request's give
-// it, which changes no token.
-func tokens(t *testing.T, raw []byte) string {
-	t.Helper()
-	var compact, escaped bytes.Buffer
-	if err := json.Compact(&compact, raw); err != nil {
-		t.Fatalf("%s is not JSON: %v", raw, err)
-	}
-	json.HTMLEscape(&escaped, compact.Bytes())
-	return escaped.String()
 }
 
 // A rolling upgrade means the node that resumes is routinely not the build

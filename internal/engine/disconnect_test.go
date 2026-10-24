@@ -111,9 +111,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-zulu-key"]
 integrations:
   atlassian:
     org_id: "f1240761-c455-41b5-a7f5-4a64f9c6e729"

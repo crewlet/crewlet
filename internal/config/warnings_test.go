@@ -577,8 +577,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 	t.Parallel()
 	const agents = "name: Acme\nproviders:\n  llm:\n    main:\n" +
-		"      type: anthropic\n      model: claude-sonnet-5\n" +
-		"      api_keys: [\"${K}\"]\n"
+		"      model: claude-sonnet-5\n"
 	for name, tc := range map[string]struct {
 		doc     string
 		advised bool

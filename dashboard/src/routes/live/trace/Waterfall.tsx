@@ -506,7 +506,7 @@ function SpanDetail({
 function ModelDetail({ span, record }: { span: Span; record: PhaseRecord }) {
   const timed = record.timedRounds.find((r) => r.round === span.round);
   const said = rounds(record.tools, record.narration).find((r) => r.round === span.round);
-  const words = said?.content.trim() || said?.reasoning.trim() || "";
+  const words = said?.content.trim() ?? "";
   return (
     <>
       <Facts
@@ -539,7 +539,7 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
   const call = span.toolIndex >= 0 ? record.tools[span.toolIndex] : undefined;
   const round = rounds(record.tools, record.narration).find((r) => r.round === span.round);
   const asked = round?.tools.length ?? 0;
-  const why = round?.content.trim() || round?.reasoning.trim() || "";
+  const why = round?.content.trim() ?? "";
   const running = !call && record.runningCall?.round === span.round ? record.runningCall : null;
   return (
     <>

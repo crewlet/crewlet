@@ -266,12 +266,16 @@ func TestAcquireFailuresAreClassifiedByWhatFailed(t *testing.T) {
 		err  error
 		want llm.ErrorKind
 	}{
-		"the auxiliary bound":      {&auxiliaryTimeoutError{command: "cli import"}, llm.KindTimeout},
-		"the call's own deadline":  {fmt.Errorf("x: %w", context.DeadlineExceeded), llm.KindTimeout},
-		"the call cancelled":       {fmt.Errorf("x: %w", context.Canceled), llm.KindTimeout},
-		"a lock held too long":     {&hostbox.LockWaitError{Path: "credentials.lock", Wait: time.Second}, llm.KindTimeout},
-		"an import refused":        {&loginRefusedError{path: "doc", err: exit}, llm.KindAuth},
-		"an export that failed":    {fmt.Errorf("carrying out: %w", exit), llm.KindServer},
+		"the auxiliary bound":     {&auxiliaryTimeoutError{command: "cli import"}, llm.KindTimeout},
+		"the call's own deadline": {fmt.Errorf("x: %w", context.DeadlineExceeded), llm.KindTimeout},
+		"the call cancelled":      {fmt.Errorf("x: %w", context.Canceled), llm.KindTimeout},
+		"a lock held too long":    {&hostbox.LockWaitError{Path: "credentials.lock", Wait: time.Second}, llm.KindTimeout},
+		"an import refused":       {&loginRefusedError{path: "doc", err: exit}, llm.KindAuth},
+		"an export that failed":   {fmt.Errorf("carrying out: %w", exit), llm.KindServer},
+		"an export not seen to its end": {
+			fmt.Errorf("carrying out: %w", &auxiliaryUnfinishedError{command: "cli export", why: "held"}),
+			llm.KindServer,
+		},
 		"the filesystem":           {os.ErrPermission, llm.KindFatal},
 		"a shared file not a file": {errors.New("cli-agent: shared login is not a regular file"), llm.KindFatal},
 	} {

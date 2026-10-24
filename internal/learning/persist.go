@@ -44,10 +44,9 @@ type PersistDecider struct {
 	models Models
 	diary  DiaryStore
 
-	timeout   time.Duration
-	maxTokens int
-	now       func() time.Time
-	newID     func() string
+	timeout time.Duration
+	now     func() time.Time
+	newID   func() string
 }
 
 // Models resolves the model one seat's auxiliary work runs on: the engine's
@@ -106,54 +105,23 @@ const (
 )
 
 const (
-	// DefaultAuxTokens caps the classifier's output on a call that does
-	// not think.
-	//
-	// Generous for an answer that is one JSON object because a learning
-	// pass that writes prose into it (a synthesis, a refined entry) must
-	// never be cut off mid-object: a truncated object does not parse, and
-	// every turn then degrades to NOOP with no error anywhere to say why.
-	// A THINKING call is not given this cap at all — its thinking is spent
-	// from the same budget, which is that same empty-answer failure — and
-	// is sent the model's own ceiling instead (llm.Request.MaxTokens),
-	// with auxEffort keeping it short.
-	DefaultAuxTokens = 5000
-
 	// DefaultAuxTimeout bounds one auxiliary call.
 	//
 	// A dispatcher pass runs inside the completed-turn consumer, so a
 	// provider that hangs stops the company's reflection entirely rather
-	// than just this turn's. 60s is sized for an HTTP round trip to a
-	// small fast model; a backend whose own per-call budget is larger —
-	// a locally launched coding CLI, where process start alone costs
-	// seconds — needs [PersistOptions.CallTimeout] raised to match, or
-	// every one of its calls is cut off here and silently reported as
-	// "nothing to persist".
+	// than just this turn's. 60s is sized for a small fast model behind its
+	// CLI: a cold launch costs seconds (`crewlet llm doctor` allows ten for
+	// a Node runtime's), which leaves the model fifty for an answer that is
+	// one JSON object. A call cut off here is reported as "nothing to
+	// persist", which is what [PersistOptions.CallTimeout] is for when the
+	// seat's auxiliary model is slower than that.
 	DefaultAuxTimeout = 60 * time.Second
-
-	// auxTemperature keeps the classification reproducible. Not zero: the
-	// tier is a judgement, and greedy decoding on a judgement makes the
-	// model commit hard to a first token it would otherwise reconsider.
-	// Every learning classifier asks for this value, and gets it where the
-	// model takes a sampling parameter and the call is not thinking.
-	auxTemperature = 0.2
-
-	// auxEffort is the most thinking a learning pass is worth. Every one of
-	// them reads a finished turn or a handful of drafts and writes a short
-	// classification or a page the next pass refines — extraction, not
-	// open-ended work — and on a thinking model the thinking is spent out
-	// of the same output cap as the answer, so a pass running at its
-	// entry's level comes back empty and reads as "nothing to persist".
-	auxEffort = llm.EffortLow
 )
 
 // PersistOptions configure a decider. The zero value is the shipped one.
 type PersistOptions struct {
 	// CallTimeout bounds one auxiliary call; zero takes DefaultAuxTimeout.
 	CallTimeout time.Duration
-
-	// MaxTokens caps the classifier's output; zero takes DefaultAuxTokens.
-	MaxTokens int
 
 	// Now and NewID are injectable so the suite can pin the clock and the
 	// row id. Nil takes the real ones, so the zero-value path is the one
@@ -175,14 +143,10 @@ func NewPersistDecider(models Models, d DiaryStore, opts PersistOptions) (*Persi
 	}
 	p := &PersistDecider{
 		models: models, diary: d,
-		timeout: opts.CallTimeout, maxTokens: opts.MaxTokens,
-		now: opts.Now, newID: opts.NewID,
+		timeout: opts.CallTimeout, now: opts.Now, newID: opts.NewID,
 	}
 	if p.timeout <= 0 {
 		p.timeout = DefaultAuxTimeout
-	}
-	if p.maxTokens <= 0 {
-		p.maxTokens = DefaultAuxTokens
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now().UTC() }
@@ -309,9 +273,6 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// No tools, deliberately. The contract is a JSON object in the
 		// content; a tool on the surface invites a model to call it and
 		// answer nothing, and there is no tool this pass could use.
-		Temperature: llm.Temp(auxTemperature),
-		Effort:      auxEffort,
-		MaxTokens:   d.maxTokens,
 	})
 	if err != nil {
 		return Decision{Tier: types.PersistNOOP},
@@ -337,9 +298,8 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// The preview is the only diagnosis available for a model that
 		// has stopped honouring the contract — a bare tier count would
 		// say classification collapsed to NOOP without saying why.
-		// WHOLE: it is bounded by the classifier's own MaxTokens, and an
-		// opening cut away from the part that broke the contract is a
-		// diagnosis that names nothing.
+		// WHOLE: the contract is one JSON object, and an opening cut away
+		// from the part that broke it is a diagnosis that names nothing.
 		log.WarnContext(ctx, "persist_decider_unparseable",
 			"turn_id", t.Event.TurnID, "response", text)
 		return Decision{Tier: types.PersistNOOP}, nil

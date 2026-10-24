@@ -67,7 +67,7 @@ func TestAnOldCharterFaultNeverLocksTheCompanyOut(t *testing.T) {
 			func(*surface) map[string]string { return summary }, http.StatusCreated},
 		"PUT /config/llm-providers/{id}": {http.MethodPut, "/config/llm-providers/zulu",
 			func(*surface) string {
-				return `{"type":"anthropic","model":"claude-opus-5","api_keys":["sk-literal","${ROTATED}"]}`
+				return `{"model":"claude-opus-5"}`
 			},
 			func(*surface) map[string]string { return summary }, http.StatusCreated},
 	}

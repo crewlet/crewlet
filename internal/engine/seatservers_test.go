@@ -52,9 +52,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
 mcp_servers:
   - name: tracker
     shared: false
@@ -204,9 +202,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
 integrations:
   atlassian:
     org_id: "${ATLASSIAN_ORG_ID}"

@@ -4,8 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -134,7 +137,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 		"nested/creds.json",
 		"unexpected.json",
 	} {
-		err := p.RestoreBundle(t.Context(), bundleOf(t, name, "pwned"))
+		err := p.RestoreBundle(t.Context(), bundleOf(t, p.agent, name, "pwned"))
 		if err == nil {
 			t.Errorf("RestoreBundle accepted %q", name)
 			continue
@@ -156,15 +159,229 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	err := p.RestoreBundle(t.Context(), bundleOf(t, "creds.json", strings.Repeat("x", maxBundle+1)))
+	err := p.RestoreBundle(t.Context(), bundleOf(t, p.agent, "creds.json", strings.Repeat("x", maxBundle+1)))
 	if err == nil {
 		t.Fatal("an oversized bundle was accepted")
 	}
 	if !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("the refusal does not say why: %v", err)
 	}
+	// The command takes the entry's KEY: naming the CLI ("custom") sent the
+	// operator to `crewlet llm export` for a provider that does not exist.
+	if !strings.Contains(err.Error(), "`crewlet llm export sub`") {
+		t.Errorf("the refusal does not name the export that replaces it: %v", err)
+	}
 	if p.Workspace().HasLogin() {
 		t.Error("a refused bundle still wrote a credential")
+	}
+}
+
+// A BUNDLE RESTORES ONLY INTO THE CLI IT NAMES. A bundle is keyed by the
+// entry — CREWLET_LLM_CLI_<KEY>_CREDENTIALS, or the entry's
+// auth.credential_bundle — not by its CLI, so an entry moved to another CLI
+// still restores the bundle it was configured with. Judged by its files' names
+// alone, that bundle was refused only where the two CLIs keep different names:
+// six keep an `auth.json` and two an `oauth_creds.json`, so codex's bundle was
+// written into pi's empty login, where it is a credential pi cannot read and,
+// as a login already present, turned every later restore away — the right
+// bundle included.
+//
+// Every built-in CLI's bundle, restored and imported into every other CLI's
+// empty login on the same state directory — the move — is refused naming the
+// CLI it came from, the move and the export that replaces it, and leaves that
+// login's directory empty; and it restores into its own CLI byte for byte,
+// with nothing beside its login files.
+//
+// Mutation: skip the manifest's check in restoreBundle, and every pair that
+// shares a file name restores (codex into pi, qwen-code into gemini-cli), and
+// every other pair is refused as a file it does not keep rather than as
+// another CLI's bundle.
+func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
+	t.Parallel()
+	var clis []string
+	keptBy := map[string][]string{}
+	for _, name := range cliprofile.BuiltinNames() {
+		profile, _ := cliprofile.Builtin(name)
+		names := profileLoginNames(profile)
+		if len(names) == 0 {
+			continue
+		}
+		clis = append(clis, name)
+		for _, file := range names {
+			keptBy[file] = append(keptBy[file], name)
+		}
+	}
+	var shared []string
+	for file, by := range keptBy {
+		if len(by) > 1 {
+			shared = append(shared, fmt.Sprintf("%s (%s)", file, strings.Join(by, ", ")))
+		}
+	}
+	if len(shared) == 0 {
+		t.Fatal("the premise: no two built-in CLIs keep a login file under one name, so no " +
+			"pair here is one a file name alone would have let through")
+	}
+	t.Logf("login file names more than one CLI keeps: %s", strings.Join(slices.Sorted(slices.Values(shared)), "; "))
+
+	build := func(t *testing.T, dir, agent string) *Provider {
+		t.Helper()
+		p, err := New(Config{Key: "k", Agent: agent, StateDir: dir, Timeout: time.Second, MaxConcurrent: 1})
+		if err != nil {
+			t.Fatalf("New(%s): %v", agent, err)
+		}
+		return p
+	}
+	for _, from := range clis {
+		t.Run(from, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			source := build(t, dir, from)
+			want := map[string]string{}
+			for _, file := range profileLoginNames(source.profile) {
+				want[file] = fmt.Sprintf(`{"cli":%q,"file":%q}`, from, file)
+				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
+			}
+			blob, err := source.ExportBundle()
+			if err != nil {
+				t.Fatalf("ExportBundle: %v", err)
+			}
+
+			for _, to := range clis {
+				if to == from {
+					continue
+				}
+				target := build(t, dir, to)
+				for op, restore := range map[string]func(context.Context, string) error{
+					"a restore": target.RestoreBundle, "an import": target.ImportBundle,
+				} {
+					err := restore(t.Context(), blob)
+					if !errors.Is(err, ErrForeignBundle) {
+						t.Errorf("%s of %s's bundle into %s = %v, want ErrForeignBundle", op, from, to, err)
+						continue
+					}
+					for _, say := range []string{fmt.Sprintf("it names %q", from),
+						fmt.Sprintf(`"k" moved to %q`, to), "`crewlet llm export k`"} {
+						if !strings.Contains(err.Error(), say) {
+							t.Errorf("%s of %s's bundle into %s does not say %q: %v", op, from, to, say, err)
+						}
+					}
+					if got := credentialEntries(t, target); len(got) != 0 {
+						t.Errorf("%s of %s's bundle into %s was refused and still wrote %v", op, from, to, got)
+					}
+				}
+			}
+
+			home := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(home) })
+			own := build(t, home, from)
+			if err := own.RestoreBundle(t.Context(), blob); err != nil {
+				t.Fatalf("%s's bundle into %s: %v", from, from, err)
+			}
+			if got, files := credentialEntries(t, own), slices.Sorted(maps.Keys(want)); !slices.Equal(got, files) {
+				t.Errorf("%s's bundle restored %v into its own CLI, want exactly its login files %v", from, got, files)
+			}
+			for file, body := range want {
+				got, err := os.ReadFile(filepath.Join(own.ws.CredentialsDir(), file)) //nolint:gosec // the test's own state directory
+				if err != nil || string(got) != body {
+					t.Errorf("%s's %s restored as %q (%v), want %q", from, file, got, err, body)
+				}
+			}
+		})
+	}
+}
+
+// profileLoginNames are the file names a profile's credential directory keeps
+// a login under: each credential path's, and a credential store's document.
+func profileLoginNames(profile cliprofile.Profile) []string {
+	var names []string
+	for _, rel := range profile.CredentialPaths {
+		names = append(names, filepath.Base(rel))
+	}
+	if profile.CredentialStore != nil {
+		names = append(names, cliprofile.CredentialStoreDocument)
+	}
+	return names
+}
+
+// A BUNDLE THAT NAMES NO CLI IS REFUSED AS ONE THAT NAMES ANOTHER: nothing in
+// it says whose its files are, and a file's name is the guess the manifest
+// replaced. So is one that names a file or the manifest twice — two answers to
+// one question, the last winning by accident — and one that holds no login,
+// which an import reported "Restored" over an empty directory. A manifest with
+// a key this build does not know still restores: a later build may add one,
+// and a node still on this build would otherwise run its entry signed out.
+//
+// Mutation: drop the refusal of a missing manifest, a repeated name or an
+// empty bundle from restoreBundle, and its case is red.
+func TestABundleThatDoesNotSayWhoseItIsIsRefused(t *testing.T) {
+	t.Parallel()
+	creds := bundleFile{name: "creds.json", data: []byte(`{"token":"k-bundled"}`)}
+	manifest := func(body string) bundleFile {
+		return bundleFile{name: cliprofile.BundleManifest, data: []byte(body)}
+	}
+	ours := manifest(`{"agent":"custom"}`)
+	for name, tc := range map[string]struct {
+		entries []bundleFile
+		// foreign is whether it is refused as naming no CLI.
+		foreign bool
+		say     string
+	}{
+		"no manifest": {
+			entries: []bundleFile{creds}, foreign: true,
+			say: "it names none (it holds no " + cliprofile.BundleManifest + ")",
+		},
+		"a manifest that does not parse": {
+			entries: []bundleFile{manifest("custom"), creds}, foreign: true, say: "does not parse",
+		},
+		"a manifest naming no agent": {
+			entries: []bundleFile{manifest(`{}`), creds}, foreign: true, say: "names no agent",
+		},
+		"two manifests": {
+			entries: []bundleFile{ours, creds, manifest(`{"agent":"codex"}`)},
+			say:     `holds "` + cliprofile.BundleManifest + `" twice`,
+		},
+		"a login file twice": {
+			entries: []bundleFile{ours, creds, creds}, say: `holds "creds.json" twice`,
+		},
+		"no login file": {
+			entries: []bundleFile{ours}, say: "holds no \"custom\" login file",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for op, restore := range map[string]func(*Provider, string) error{
+				"a restore": func(p *Provider, blob string) error { return p.RestoreBundle(t.Context(), blob) },
+				"an import": func(p *Provider, blob string) error { return p.ImportBundle(t.Context(), blob) },
+			} {
+				p := loginProvider(t)
+				err := restore(p, rawBundle(t, tc.entries...))
+				if err == nil {
+					t.Errorf("%s accepted it", op)
+					continue
+				}
+				if errors.Is(err, ErrForeignBundle) != tc.foreign {
+					t.Errorf("%s = %v, want ErrForeignBundle %v", op, err, tc.foreign)
+				}
+				for _, say := range []string{tc.say, "`crewlet llm export sub`"} {
+					if !strings.Contains(err.Error(), say) {
+						t.Errorf("%s does not say %q: %v", op, say, err)
+					}
+				}
+				if got := credentialEntries(t, p); len(got) != 0 {
+					t.Errorf("%s was refused and still wrote %v", op, got)
+				}
+			}
+		})
+	}
+
+	p := loginProvider(t)
+	if err := p.RestoreBundle(t.Context(), rawBundle(t,
+		manifest(`{"agent":"custom","exported_by":"a later build"}`), creds)); err != nil {
+		t.Fatalf("a manifest carrying a key this build does not know: %v", err)
+	}
+	if got := readCreds(t, p); got != `{"token":"k-bundled"}` {
+		t.Errorf("a manifest carrying a key this build does not know restored %q", got)
 	}
 }
 
@@ -175,34 +392,18 @@ func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
 	// A good entry FIRST, then one the name check refuses.
-	var raw bytes.Buffer
-	zw := gzip.NewWriter(&raw)
-	tw := tar.NewWriter(zw)
-	for _, e := range []struct{ name, body string }{
-		{"creds.json", `{"token":"real"}`},
-		{"../../.ssh/authorized_keys", "pwned"},
-	} {
-		if err := tw.WriteHeader(&tar.Header{
-			Name: e.name, Mode: 0o600, Size: int64(len(e.body)), Typeflag: tar.TypeReg,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tw.Write([]byte(e.body)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := tw.Close(); err != nil {
+	blob, err := packBundle(p.agent, []bundleFile{
+		{name: "creds.json", data: []byte(`{"token":"real"}`)},
+		{name: "../../.ssh/authorized_keys", data: []byte("pwned")},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := p.RestoreBundle(t.Context(), base64.StdEncoding.EncodeToString(raw.Bytes())); err == nil {
+	if err := p.RestoreBundle(t.Context(), blob); err == nil {
 		t.Fatal("a bundle holding a path traversal was accepted")
 	}
-	if p.Workspace().HasLogin() {
-		t.Error("the entry before the refused one was written anyway")
+	if got := credentialEntries(t, p); len(got) != 0 {
+		t.Errorf("the entry before the refused one was written anyway: %v", got)
 	}
 }
 
@@ -216,7 +417,7 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 	if _, err := p.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
-	if err := p.RestoreBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"stale"}`)); err != nil {
+	if err := p.RestoreBundle(t.Context(), bundleOf(t, p.agent, "creds.json", `{"token":"stale"}`)); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json"))
@@ -228,7 +429,7 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 	}
 	// The operator's form of the same restore SAYS it restored nothing,
 	// rather than leaving `crewlet llm import` to print "Restored".
-	if err := p.ImportBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"stale"}`)); !errors.Is(err, ErrLoginPresent) {
+	if err := p.ImportBundle(t.Context(), bundleOf(t, p.agent, "creds.json", `{"token":"stale"}`)); !errors.Is(err, ErrLoginPresent) {
 		t.Errorf("ImportBundle over a live login = %v, want ErrLoginPresent", err)
 	}
 }
@@ -308,19 +509,33 @@ func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 	}
 }
 
-// bundleOf builds a one-file bundle with an arbitrary entry name.
-func bundleOf(t *testing.T, name, body string) string {
+// bundleOf builds a one-file bundle with an arbitrary entry name, naming agent
+// as the CLI it was exported from, through the export's own writer.
+func bundleOf(t *testing.T, agent, name, body string) string {
+	t.Helper()
+	blob, err := packBundle(agent, []bundleFile{{name: name, data: []byte(body)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return blob
+}
+
+// rawBundle packs entries exactly as given, with no manifest of its own: a
+// bundle no export writes, for the cases that refuse one.
+func rawBundle(t *testing.T, entries ...bundleFile) string {
 	t.Helper()
 	var raw bytes.Buffer
 	zw := gzip.NewWriter(&raw)
 	tw := tar.NewWriter(zw)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: name, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write([]byte(body)); err != nil {
-		t.Fatal(err)
+	for _, e := range entries {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: e.name, Mode: 0o600, Size: int64(len(e.data)), Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(e.data); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -329,6 +544,26 @@ func bundleOf(t *testing.T, name, body string) string {
 		t.Fatal(err)
 	}
 	return base64.StdEncoding.EncodeToString(raw.Bytes())
+}
+
+// credentialEntries names everything in the entry's credential directory,
+// whatever it is — nil where the directory holds nothing or does not exist.
+// Read from the directory rather than through LoginFiles, which sees only the
+// names the profile keeps: a manifest written there would be invisible to it.
+func credentialEntries(t *testing.T, p *Provider) []string {
+	t.Helper()
+	entries, err := os.ReadDir(p.ws.CredentialsDir())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
 }
 
 // An auth command must be a SUBCOMMAND the CLI runs and exits from, never a
@@ -513,7 +748,7 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 	if err := build("").RestoreConfiguredBundle(t.Context()); err != nil {
 		t.Fatalf("an entry with no bundle: %v", err)
 	}
-	p := build(bundleOf(t, "creds.json", `{"token":"configured"}`))
+	p := build(bundleOf(t, "custom", "creds.json", `{"token":"configured"}`))
 	if p.Workspace().HasLogin() {
 		t.Fatal("building the entry restored its bundle — `crewlet validate` would write a login onto the host")
 	}
@@ -550,7 +785,7 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	p.bundle = bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
 		t.Fatalf("the boot's restore: %v", err)
 	}
@@ -570,7 +805,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	}
 	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
-		"fresh volume", "crewlet secrets unset " + BundleVarName("sub")} {
+		"fresh volume", "crewlet secrets unset " + cliprofile.BundleVarName("sub")} {
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("the decline does not name %q: %v", want, err)
 		}
@@ -591,7 +826,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	// from: the conventional secret here, the field where one is set — and
 	// that a headless token, which writes no login there, does not end it.
 	notice := logoutNotice(t, p)
-	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub -from-host`",
+	for _, want := range []string{cliprofile.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub -from-host`",
 		"`-token-stdin` signs it in without ending this"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the logout notice does not name %q: %s", want, notice)
@@ -601,7 +836,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 		t.Errorf("the notice names a brokered login the profile does not have: %s", notice)
 	}
 	p.bundleConfigured = true
-	if notice := logoutNotice(t, p); !strings.Contains(notice, "providers.llm.sub.cli.auth.credential_bundle") {
+	if notice := logoutNotice(t, p); !strings.Contains(notice, "providers.llm.sub.auth.credential_bundle") {
 		t.Errorf("the notice for a bundle named in the document does not name the field: %s", notice)
 	}
 	p.bundle = ""
@@ -671,7 +906,7 @@ func TestALogoutsRemedyNamesOnlyTheLoginsTheProfileHas(t *testing.T) {
 func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	p.bundle = bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 	if notice := logoutNotice(t, p); notice != "" {
 		t.Errorf("an entry nobody logged out was told its bundle is held back: %s", notice)
 	}
@@ -689,7 +924,7 @@ func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
 	if p.Workspace().HasLogin() {
 		t.Fatalf("the premise: a failed vendor logout left the login: %v", p.Workspace().LoginFiles())
 	}
-	if notice := logoutNotice(t, p); !strings.Contains(notice, BundleVarName("sub")) {
+	if notice := logoutNotice(t, p); !strings.Contains(notice, cliprofile.BundleVarName("sub")) {
 		t.Errorf("after a logout whose vendor half failed, the notice says nothing of the bundle "+
 			"it holds back: %q", notice)
 	}
@@ -709,7 +944,7 @@ func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
 func TestAHeadlessTokenDoesNotEndALogout(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	p.bundle = bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
 		t.Fatalf("the boot's restore: %v", err)
 	}
@@ -778,13 +1013,13 @@ func TestALoginOfRecordEndsALogout(t *testing.T) {
 			return err
 		},
 		"import": func(t *testing.T, p *Provider) error {
-			return p.ImportBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"k-imported"}`))
+			return p.ImportBundle(t.Context(), bundleOf(t, p.agent, "creds.json", `{"token":"k-imported"}`))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			p := fileProvider(t, map[string]string{"FAKE_LOGIN_KEY": "k-login"})
-			p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+			p.bundle = bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 			writeCreds(t, p, `{"token":"k-old"}`)
 			if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 				t.Fatalf("Logout: %v", err)

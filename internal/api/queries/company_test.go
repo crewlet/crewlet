@@ -53,9 +53,8 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
+      auth: {mode: api-key, api_key: "${K}"}
 integrations:
   mattermost:
     enabled: true
@@ -1550,7 +1549,7 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 func TestTheMemoryOverviewListsEveryAgentSeat(t *testing.T) {
 	t.Parallel()
 	var doc strings.Builder
-	doc.WriteString("name: Acme\nproviders:\n  llm:\n    z: {type: anthropic, model: m, api_keys: [\"${K}\"]}\nroles:\n")
+	doc.WriteString("name: Acme\nproviders:\n  llm:\n    z: {model: m}\nroles:\n")
 	for i := range 14 {
 		fmt.Fprintf(&doc, "  - name: Agent %02d\n    handle: agent-%02d\n    llm: z\n", i, 13-i)
 	}
@@ -2325,9 +2324,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
 integrations:
   mattermost:
     enabled: true

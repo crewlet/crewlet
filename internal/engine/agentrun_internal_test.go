@@ -46,8 +46,7 @@ func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placem
 		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
 		Config: &config.Company{Providers: config.Providers{
 			LLM: map[string]config.LLMProvider{"sub": {
-				Type: config.LLMCLIAgent,
-				CLI:  &config.CLIAgent{Agent: config.CLIAgentName(agent), Mode: mode, RunIn: runIn},
+				Agent: config.CLIAgentName(agent), Mode: mode, RunIn: runIn,
 			}},
 		}},
 	}, seat
@@ -56,8 +55,8 @@ func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placem
 // A TYPED NIL IS NOT A NIL INTERFACE, and this is the bug that class of
 // mistake produces here: a nil *agentLauncher assigned into the runner's
 // AgentLauncher field is a NON-nil interface, so every seat in the company —
-// every API seat, every text-mode seat — takes the agent branch and
-// dereferences nothing on its first turn.
+// every text-mode seat included — takes the agent branch and dereferences
+// nothing on its first turn.
 func TestATextModeSeatGetsNoAgentLauncher(t *testing.T) {
 	t.Parallel()
 	c, _ := modeCompany(t, "claude-code", false, "")
@@ -239,8 +238,8 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 		Models: models,
 		Config: &config.Company{Providers: config.Providers{
 			LLM: map[string]config.LLMProvider{
-				"thinker": {Type: config.LLMCLIAgent, Model: "opus"},
-				"coder":   {Type: config.LLMCLIAgent, Model: "haiku"},
+				"thinker": {Model: "opus", Mode: config.CLIModeAgent},
+				"coder":   {Model: "haiku"},
 			},
 		}},
 	}
@@ -250,15 +249,15 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	// that named the phase itself would pass whatever the launcher did.
 	launcher := &agentLauncher{seat: seat, codingAgent: "claude-code"}
 	executor, err := launcher.executorRun(c, nil)
-	if err != nil || executor.llm == nil || executor.llm.Model != "opus" {
-		t.Fatalf("an agent-mode run resolved to %+v (err %v), want the executor's own model",
-			executor.llm, err)
+	if err != nil || executor.model != "opus" {
+		t.Fatalf("an agent-mode run resolved to %q (err %v), want the executor's own model",
+			executor.model, err)
 	}
 	// And a run_sandbox call still goes to the model the seat chose for it.
 	delegated, err := newCodingRun(c, seat, phase.Sandbox, "claude-code", nil)
-	if err != nil || delegated.llm == nil || delegated.llm.Model != "haiku" {
-		t.Fatalf("a delegated coding run resolved to %+v (err %v), want llm_sandbox's model",
-			delegated.llm, err)
+	if err != nil || delegated.model != "haiku" {
+		t.Fatalf("a delegated coding run resolved to %q (err %v), want llm_sandbox's model",
+			delegated.model, err)
 	}
 }
 
@@ -525,9 +524,19 @@ func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Rol
 	if err != nil {
 		t.Fatalf("cliagent.New: %v", err)
 	}
+	// The key is what a launch on it carries, so it is a real provider in
+	// api-key mode rather than a fake that names no credential at all.
+	api, err := cliagent.New(cliagent.Config{
+		Key: "api", Agent: "claude-code", Model: "claude-golden",
+		StateDir: t.TempDir(), Timeout: time.Minute,
+		Auth: cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
 	models, err := phase.NewRegistry([]phase.Entry{
 		{Key: "codex", Provider: codex},
-		{Key: "api", Provider: &answeringProvider{}},
+		{Key: "api", Provider: api},
 	})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -540,10 +549,13 @@ func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Rol
 		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
 		Config: &config.Company{Providers: config.Providers{
 			LLM: map[string]config.LLMProvider{
-				"codex": {Type: config.LLMCLIAgent, CLI: &config.CLIAgent{
-					Agent: "codex", Mode: config.CLIModeAgent, RunIn: config.PlacementE2B,
-				}},
-				"api": {Type: config.LLMAnthropic, Model: "claude-golden"},
+				"codex": {
+					Agent: config.CLICodex, Mode: config.CLIModeAgent, RunIn: config.PlacementE2B,
+				},
+				"api": {
+					Model: "claude-golden",
+					Auth:  config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
+				},
 			},
 		}},
 	}, seat

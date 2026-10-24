@@ -31,9 +31,7 @@ name: Nimbus
 providers:
   llm:
     p:
-      type: anthropic
-      model: m
-      api_keys: ["${K}"]
+      model: sonnet
 roles:
   - name: Agent CEO
     handle: agent-ceo

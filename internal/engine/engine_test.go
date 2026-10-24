@@ -16,13 +16,9 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
     alpha:
-      type: anthropic
       model: claude-haiku-4-5
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo
@@ -158,7 +154,7 @@ func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 	negative := -1
 	handbuilt.TokenBudget = config.TokenBudget{Day: &negative}
 	handbuilt.Providers.LLM = map[string]config.LLMProvider{
-		"a": {Type: config.LLMAnthropic, Model: "m", APIKeys: []string{"k"}},
+		"a": {Model: "m"},
 	}
 	handbuilt.Roles = []config.Role{{Name: "CEO", Handle: "ceo"}}
 	if _, err := engine.NewCompany(&handbuilt); err == nil {
@@ -196,21 +192,19 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 	}
 }
 
-func TestACLIAgentProviderBuildsWithoutALogin(t *testing.T) {
-	// Like every other backend, it must BUILD without credentials: the
-	// call then fails with the vendor's own "not authenticated", which
-	// names the CLI, while a constructor that refused to exist would take
-	// the whole company down at boot over one provider's login.
+func TestAProviderBuildsWithoutALogin(t *testing.T) {
+	// It must BUILD without credentials: the call then fails with the
+	// vendor's own "not authenticated", which names the CLI, while a
+	// constructor that refused to exist would take the whole company down
+	// at boot over one provider's login.
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
   llm:
     local:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
 roles:
   - name: CEO
     handle: ceo
@@ -220,23 +214,23 @@ roles:
 		t.Fatalf("parse: %v", err)
 	}
 	if _, err := engine.NewCompany(c); err != nil {
-		t.Fatalf("a cli-agent provider with no login refused to build: %v", err)
+		t.Fatalf("a provider with no login refused to build: %v", err)
 	}
 }
 
 // The state directory is derived PER PROVIDER KEY, which is what makes
 // sharing a login an explicit act: two unrelated entries landing on one
 // directory would prune each other's seat homes.
-func TestCLIAgentStateDirsAreDerivedPerProviderKey(t *testing.T) {
+func TestStateDirsAreDerivedPerProviderKey(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(config.CLIHomeEnv, root)
 
-	var cli config.CLIAgent
-	opus, err := cli.ResolvedStateDir("opus-sub")
+	var entry config.LLMProvider
+	opus, err := entry.ResolvedStateDir("opus-sub")
 	if err != nil {
 		t.Fatalf("ResolvedStateDir: %v", err)
 	}
-	sonnet, err := cli.ResolvedStateDir("sonnet-sub")
+	sonnet, err := entry.ResolvedStateDir("sonnet-sub")
 	if err != nil {
 		t.Fatalf("ResolvedStateDir: %v", err)
 	}
@@ -249,7 +243,7 @@ func TestCLIAgentStateDirsAreDerivedPerProviderKey(t *testing.T) {
 
 	// An explicit state_dir is honoured verbatim — that is how two entries
 	// deliberately share one login.
-	shared := config.CLIAgent{StateDir: "/var/lib/crewlet/llm-cli/claude"}
+	shared := config.LLMProvider{StateDir: "/var/lib/crewlet/llm-cli/claude"}
 	for _, key := range []string{"opus-sub", "sonnet-sub"} {
 		got, err := shared.ResolvedStateDir(key)
 		if err != nil {
@@ -266,7 +260,7 @@ func TestCLIAgentStateDirsAreDerivedPerProviderKey(t *testing.T) {
 // store BEFORE the environment. Without it, every operator would have to wire
 // up a ${VAR} by hand for a value `crewlet llm login -capture-token` just
 // wrote into the store itself.
-func TestACLIAgentReadsItsConventionalTokenWhenTheEntryNamesNone(t *testing.T) {
+func TestAnEntryReadsItsConventionalTokenWhenItNamesNone(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-from-the-convention")
 
@@ -275,10 +269,8 @@ name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
 roles:
   - name: CEO
     handle: ceo

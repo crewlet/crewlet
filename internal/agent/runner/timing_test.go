@@ -37,9 +37,9 @@ func cached(c llm.Completion, read, write int) llm.Completion {
 func TestAPhaseRecordCarriesItsRoundsCallsAndCache(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		cached(thinkAndCall(t, "read_file", `{"path":"/a"}`, "start"), 50, 10),
-		cached(thinkAndCall(t, "read_file", `{"path":"/b"}`, "again"), 55, 0),
-		cached(thinkAndCall(t, runner.SubmitWorkTool,
+		cached(sayAndCall(t, "read_file", `{"path":"/a"}`, "start"), 50, 10),
+		cached(sayAndCall(t, "read_file", `{"path":"/b"}`, "again"), 55, 0),
+		cached(sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"read both"}`, "enough"), 58, 0),
 		text("done"),
 	}}
@@ -101,9 +101,9 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 	// record states the cap the phase ENDED under, not the one it began
 	// with, and the ceiling it could have reached.
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"read both"}`, "three"),
 		text("done"),
 	}}
@@ -135,9 +135,9 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"read both"}`, "three"),
 		text("done"),
 	}}
@@ -199,8 +199,8 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 func TestAResumedPhaseStatesItsOwnSegmentStart(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"shipped it","deliveries":["slack_post"]}`,
 			"the box did the work"),
 		text("done"),

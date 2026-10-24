@@ -616,7 +616,7 @@ func TestTheRateValveFollowsTheAppliedConfig(t *testing.T) {
 	// would change what the running company reads with no apply at all,
 	// which would also make this test pass against a captured cap.
 	raised, err := config.ParseCompany([]byte(strings.Replace(
-		fmt.Sprintf(companyDoc, n.model.url),
+		goldenCompany(n.model),
 		"name: Nimbus", "name: Nimbus\nnotification_rate_limit: 500", 1)))
 	if err != nil {
 		t.Fatalf("company config: %v", err)

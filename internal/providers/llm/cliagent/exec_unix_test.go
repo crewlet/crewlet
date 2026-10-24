@@ -5,6 +5,7 @@ package cliagent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
 // fakeStubborn is the fake CLI's SIGTERM-survivor mode.
@@ -242,5 +244,304 @@ func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
 	}
 	if _, statErr := os.Stat(marker); statErr == nil {
 		t.Fatal("the child ran before the refusal, holding the engine's environment")
+	}
+}
+
+// fakeLeaveHolder is the fake CLI's leave-a-helper mode: it starts a
+// descendant that holds ONE of its streams — "stdout", "stderr" or "stdin" —
+// and returns, so the CLI goes on to answer and exit 0 with the stream still
+// open behind it.
+//
+// The shape a launcher has when it exits before a helper it forked with that
+// stream inherited, and the one thing that tells the streams apart: a helper
+// holding all three, as [fakeStubborn]'s grandchild does, could not show that
+// a held stderr leaves the answer standing. The others go to the null device.
+// It stays in the CLI's group, as a runtime's helper does, and announces its
+// pid ([fakeGrandchild]) so a case can end it — or see it ended.
+//
+// The CLI WAITS FOR THAT ANNOUNCEMENT before it answers. Exiting at once would
+// let the call's grace run out while the holder is still starting, and a
+// holder reaped before it wrote its pid is one no case can account for: it
+// would read as a holder that never ran.
+func fakeLeaveHolder(stream string) {
+	holder := exec.Command(os.Args[0], "-test.run=TestCLIAgentFakeCLI")
+	holder.Env = append(os.Environ(), "FAKE_HOLD_STREAM=", "FAKE_GRANDCHILD=1")
+	switch stream {
+	case "stdout":
+		holder.Stdout = os.Stdout
+	case "stderr":
+		holder.Stderr = os.Stderr
+	case "stdin":
+		holder.Stdin = os.Stdin
+	default:
+		fmt.Fprintf(os.Stderr, "fake CLI: no stream %q to leave held\n", stream)
+		os.Exit(1)
+	}
+	if err := holder.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "fake CLI could not fork: %v\n", err)
+		os.Exit(1)
+	}
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		if raw, err := os.ReadFile(os.Getenv("FAKE_PIDFILE")); err == nil && len(raw) > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fmt.Fprintln(os.Stderr, "fake CLI: the holder never announced itself")
+	os.Exit(1)
+}
+
+// fakeExitZeroOnTerm is a CLI that ends CLEANLY when it is asked to stop: on
+// SIGTERM it exits 0 having printed nothing, as a Node CLI with a shutdown
+// handler does. Until then it holds.
+func fakeExitZeroOnTerm() {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM)
+	go func() {
+		<-stop
+		os.Exit(0)
+	}()
+	procgrouptest.Hold()
+}
+
+// holderOf leaves nothing behind once a case that made a holder ends: the
+// holder outlives the call that made it — that is what it is for — and holds
+// for ten minutes unless something ends it.
+func holderOf(t *testing.T, pidFile string) {
+	t.Helper()
+	t.Cleanup(func() { reapTree(awaitPidFile(t, pidFile)) })
+}
+
+// A STDOUT A HELPER STILL HELD IS NOT AN ANSWER, AND NOT A FATAL EITHER.
+//
+// The CLI printed and exited 0, but something it started kept the stream open
+// past the grace, so what was read is cut wherever the grace ran out: a
+// launcher whose runtime was still writing the answer looks exactly like
+// this. No reading of it can be shown to be whole, so it is refused, as a
+// clipped stdout is, and as a SERVER failure, retryable and not sat out —
+// nothing about it says the engine could not make the call. It used to come
+// back from run as os/exec's ErrWaitDelay, which Complete read as a CLI that
+// could not start: fatal, the seat's chain stopped at the head.
+//
+// Mutation: report a held stdout as run's error again, or stop refusing it in
+// completion, and the kind is wrong or the answer comes back.
+func TestAStdoutAHelperHeldIsAServerFailure(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "holder.pid")
+	p := fakeProvider(t, map[string]string{
+		"FAKE_HOLD_STREAM": "stdout", "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": "the answer",
+	}, nil)
+	p.termGrace = witnessGrace
+	holderOf(t, pidFile)
+
+	comp, err := ask(t, p, llm.Request{})
+	if err == nil {
+		t.Fatalf("a stdout a helper held was read as the answer %q", comp.Content)
+	}
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Fatalf("kind = %v, want server (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "held its stdout open") {
+		t.Errorf("err = %v, want it to say the stdout was held", err)
+	}
+	if err := p.benched(); err != nil {
+		t.Errorf("a held stdout sat the entry out: %v", err)
+	}
+}
+
+// A STDERR A HELPER STILL HELD COSTS ONLY DIAGNOSIS: the answer stands.
+//
+// The stdout reached its end when the CLI exited, so the answer on it is
+// whole; what the grace cut was the CLI's own commentary. Refusing it would
+// throw away a completion the operator paid for over a stream nothing reads
+// from a call that succeeded.
+//
+// Mutation: treat a held stderr as a held stdout, and the answer is refused.
+func TestAStderrAHelperHeldLeavesTheAnswerStanding(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "holder.pid")
+	p := fakeProvider(t, map[string]string{
+		"FAKE_HOLD_STREAM": "stderr", "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": "the answer",
+	}, nil)
+	p.termGrace = witnessGrace
+	holderOf(t, pidFile)
+
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("a call whose stderr a helper held failed: %v", err)
+	}
+	if comp.Content != "the answer" {
+		t.Errorf("Content = %q, want the answer", comp.Content)
+	}
+}
+
+// THE CHAIN CARRIES THE SEAT PAST A HEAD WHOSE STDOUT A HELPER HELD. When the
+// held stream was a fatal, the walk stopped there, and every call of the seat
+// failed against a CLI that had exited 0.
+//
+// Mutation: report a held stdout as run's error again, and the backup is never
+// called.
+func TestAChainWalksPastAHeadWhoseStdoutAHelperHeld(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "holder.pid")
+	head := fakeProvider(t, map[string]string{
+		"FAKE_HOLD_STREAM": "stdout", "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": "from the head",
+	}, nil)
+	head.termGrace = witnessGrace
+	holderOf(t, pidFile)
+	backup := fakeProvider(t, map[string]string{"FAKE_STDOUT": "from the backup"}, nil)
+	var seen []chain.Fallback
+	walk, err := chain.New([]chain.Member{{Key: "plan", Provider: head}, {Key: "key", Provider: backup}},
+		chain.Options{OnFallback: func(f chain.Fallback) { seen = append(seen, f) }})
+	if err != nil {
+		t.Fatalf("chain.New: %v", err)
+	}
+	comp, err := walk.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("the chain stopped at the head: %v", err)
+	}
+	if comp.Content != "from the backup" || comp.ProviderKey != "key" {
+		t.Errorf("answered %q from %q, want the backup's answer", comp.Content, comp.ProviderKey)
+	}
+	if len(seen) != 1 || seen[0].From != "plan" || seen[0].To != "key" || seen[0].Kind != llm.KindServer {
+		t.Errorf("fallbacks = %+v, want one from plan to key, of kind server", seen)
+	}
+}
+
+// A WAIT THAT FAILED IS A SERVER FAILURE. A helper holding the CLI's stdin
+// with the prompt unread past the grace — more of it than a pipe buffers —
+// leaves os/exec's own copy of the prompt blocked, and Wait reports
+// ErrWaitDelay for a CLI that exited 0: a run that did not finish as one,
+// whose answer was given to part of a prompt at most.
+//
+// Mutation: report a wait error as run's error again, and the kind is fatal.
+func TestAPromptAHelperHeldUnreadIsAServerFailure(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "holder.pid")
+	p := fakeProvider(t, map[string]string{
+		"FAKE_HOLD_STREAM": "stdin", "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": "the answer",
+	}, nil)
+	p.termGrace = witnessGrace
+	holderOf(t, pidFile)
+
+	_, err := ask(t, p, llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: strings.Repeat("a prompt longer than a pipe holds ", 1<<15)},
+	}})
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Fatalf("kind = %v, want server (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "waiting for it to finish failed") {
+		t.Errorf("err = %v, want it to say the wait failed", err)
+	}
+}
+
+// A CLI THAT EXITS 0 WHEN ITS DEADLINE ARRIVES TIMED OUT. Its SIGTERM handler
+// ends it cleanly, so Wait reports the deadline rather than an exit status —
+// and run handed that back as its error, which Complete read as a CLI that
+// could not start: fatal, a call that had simply run out of time stopping the
+// seat's chain instead of moving to the next member.
+//
+// Mutation: report a wait error as run's error again, and the kind is fatal.
+func TestACLIThatEndsCleanlyAtItsDeadlineTimedOut(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_EXIT_0_ON_TERM": "1"}, nil)
+	p.termGrace = witnessGrace
+	// Long enough for the fake to have its handler in before the deadline;
+	// one that arrives first kills it, which reads as a timeout as well.
+	p.timeout = 2 * time.Second
+
+	_, err := ask(t, p, llm.Request{})
+	if got := llm.KindOf(err); got != llm.KindTimeout {
+		t.Fatalf("kind = %v, want timeout (err %v)", got, err)
+	}
+}
+
+// AN AUXILIARY COMMAND WHOSE STDOUT A HELPER HELD IS NOT READ. What it printed
+// may be a login document with its end missing, and an export read as whole
+// would carry that out over the shared login. It fails as the SERVER failure
+// an exit is — not as a refused login, since the CLI refused nothing — and
+// repeats none of what it printed.
+//
+// Mutation: accept a held stdout as a finished command, and the document comes
+// back.
+func TestAnAuxiliaryCommandWhoseStdoutAHelperHeldIsNotRead(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "holder.pid")
+	document := exampleDocument(t)
+	p := fakeProvider(t, map[string]string{
+		"FAKE_HOLD_STREAM": "stdout", "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": document,
+	}, nil)
+	p.termGrace = witnessGrace
+	holderOf(t, pidFile)
+
+	out, err := p.runAuxiliary(t.Context(), []string{"-test.run=TestCLIAgentFakeCLI"},
+		t.TempDir(), p.probeEnv(), "")
+	if err == nil {
+		t.Fatalf("an export whose stdout a helper held was read (%d bytes)", len(out))
+	}
+	var unfinished *auxiliaryUnfinishedError
+	if !errors.As(err, &unfinished) {
+		t.Errorf("err is %T, want an auxiliaryUnfinishedError: %v", err, err)
+	}
+	if kind := acquireFailureKind(err); kind != llm.KindServer {
+		t.Errorf("kind = %v, want server", kind)
+	}
+	assertNoSecret(t, err, document)
+}
+
+// NO VERSION IS READ OFF A PROBE WHOSE STDOUT A HELPER HELD: the first line of
+// a cut stream is not known to be a whole version.
+//
+// Mutation: read the probe's stdout whether or not it was held, and the
+// version comes back.
+func TestTheVersionProbeReadsNoHeldStdout(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "holder.pid")
+	p := fakeProvider(t, map[string]string{
+		"FAKE_HOLD_STREAM": "stdout", "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": "fake-cli 1.2.3",
+	}, map[string]any{"version_args": []any{"-test.run=TestCLIAgentFakeCLI"}})
+	p.termGrace = witnessGrace
+	holderOf(t, pidFile)
+
+	if got := p.probeVersion(t.Context()); got != "" {
+		t.Errorf("version = %q, want none from a stdout a helper held", got)
+	}
+}
+
+// A HELPER THAT HELD THE CALL'S PIPES PAST THE GRACE IS ENDED WITH THE CALL.
+//
+// Closing a pipe under it ends nothing: the helper is attached to a call that
+// is over, and a Node runtime ignores the SIGPIPE its next write raises, so it
+// held the seat's memory and sockets for as long as it liked — the leak the
+// group kill on a timeout exists to prevent, reached by a CLI that exited 0.
+// Every stream a helper can hold is a case, stdin among them: os/exec reports
+// that one as a failed wait rather than as a held stream.
+//
+// Mutation: drop the reap after a held stream, and each holder outlives the
+// call.
+func TestAHelperThatHeldTheCallsPipesIsReapedWithIt(t *testing.T) {
+	t.Parallel()
+	for _, stream := range []string{"stdout", "stderr", "stdin"} {
+		t.Run(stream, func(t *testing.T) {
+			t.Parallel()
+			pidFile := filepath.Join(t.TempDir(), "holder.pid")
+			p := fakeProvider(t, map[string]string{
+				"FAKE_HOLD_STREAM": stream, "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": "the answer",
+			}, nil)
+			p.termGrace = witnessGrace
+			holderOf(t, pidFile)
+
+			// More prompt than a pipe holds, so a holder of stdin is one
+			// that kept os/exec's copy of it waiting.
+			_, _ = ask(t, p, llm.Request{Messages: []llm.Message{
+				{Role: llm.RoleUser, Content: strings.Repeat("a prompt longer than a pipe holds ", 1<<15)},
+			}})
+			holder := awaitPidFile(t, pidFile)
+			if !procgrouptest.AwaitGone(t, holder, 10*time.Second) {
+				t.Fatalf("the helper %d that held the call's %s outlived the call", holder, stream)
+			}
+		})
 	}
 }

@@ -101,8 +101,15 @@ export type ConfigRefusal =
  * sentence says where to change it.
  */
 export function managedSentence(managedBy: readonly string[]): string {
-  const who = managedBy.length > 0 ? managedBy.join(", ") : "another system";
-  return `Managed by ${who}. Change it there.`;
+  return `Managed by ${managerOf(managedBy)}. Change it there.`;
+}
+
+/**
+ * Who manages a company document, as a sentence names it: the writers the
+ * engine reported, or "another system" where it named none.
+ */
+export function managerOf(managedBy: readonly string[]): string {
+  return managedBy.length > 0 ? managedBy.join(", ") : "another system";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
