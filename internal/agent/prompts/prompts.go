@@ -11,21 +11,41 @@
 //     full policies + roster (team-member profiles for leads, for as many
 //     reports as the ONE roster allowance pays for; then names; then a line
 //     naming the tool that finds the rest — see rosterAllowanceTokens, the
-//     only budget in this package the prompt itself enforces) + tool-skills
-//     catalogue + tool catalogue + the executor's contract.
-//   - Review — one-line identity + the round's evidence + the decision enum.
-//     No policies, no roster, no catalogue: the reviewer judges one round's
-//     record and needs nothing else.
-//   - Onboarding — one-line identity + the one-time setup contract.
-//   - Sub-agent — parent-provided task prompt + the mandated runtime preamble.
+//     only budget in this package the prompt itself enforces) + the
+//     executor's contract + prefetch blocks + tool-skills catalogue + the
+//     tools it can still discover.
+//   - Review — one-line identity + the rules that decide its decision + the
+//     round's evidence. No policies, no roster, no catalogue: the reviewer
+//     judges one round's record and needs nothing else.
+//   - Onboarding — one-line identity + the one-time setup contract + the
+//     tools it can discover.
+//   - Sub-agent — parent-provided task prompt + the tools it can discover +
+//     the mandated runtime rules.
 //
-// # The English is the specification
+// # The engine states only what the model cannot know
 //
-// Every prose constant here is FROZEN TEXT. These strings were tuned against
-// observed model behaviour and most of them replaced a production failure: a
-// reworded instruction is a behaviour change that no test in this repository
-// can catch. Restructure the assembly around them freely; do not edit the
-// words.
+// A seat's phase runs inside a vendor's coding CLI, whose own harness and
+// whose model already know how to be an agent. So the prompt carries what
+// nothing else can: the seat's identity and chart, the company's own words,
+// what the engine prefetched for this turn, and the phase's contract — and
+// each rule once. A tool's semantics are its description and a field's are
+// its schema, both of which reach the model with the tool on every round, so
+// a rule about a tool or a field lives there and not here as well. The one
+// protocol fact no harness can teach — that in text mode an action is a call
+// in the engine's own envelope, and prose performs nothing — is stated here,
+// once. Generic agent behaviour, worked examples and restated emphasis are
+// not: a second copy of a rule is two texts that drift, and a model reads
+// whichever it saw last.
+//
+// # Prompt text is behaviour
+//
+// The prose was tuned against observed model behaviour, and nearly every rule
+// left in it is a production failure that already happened once — the
+// comment beside each says which. A reworded sentence is therefore a
+// behaviour change, made deliberately: with the tests that pin what it must
+// still say, the docs that describe it, and a reason a reviewer can weigh.
+// What no test here can show is how a model reads the new words, so a change
+// says in its own record what it expects and why.
 //
 // # Byte-stability across rounds
 //
@@ -214,23 +234,21 @@ type SkillCatalogue interface {
 }
 
 const skillCatalogueHeader = "\n## Tool skills" +
-	"\nGuidance on how to use specific tools / MCP servers.  Each entry " +
-	"below is one line summarising a skill; call `load_tool_skill(key)` " +
-	"to fetch the rich body (workflow examples, mention markup, handoff " +
-	"conventions) when the summary is not enough."
+	"\nHow this company uses specific tools and MCP servers, one line per " +
+	"skill. `load_tool_skill(key)` fetches a skill's full body when the " +
+	"summary is not enough."
 
 // skillCatalogueReviewHeader is the catalogue's header in Review, which has no
 // load_tool_skill: the loading instruction the other phases get would point
 // the reviewer at a tool it does not have, on a surface whose only tool is its
 // submission and whose loop asks again until it makes that call.
 const skillCatalogueReviewHeader = "\n## Tool skills" +
-	"\nHow this company uses specific tools / MCP servers, one line per " +
-	"skill.  Weigh the work you are reviewing against these conventions."
+	"\nHow this company uses specific tools and MCP servers, one line per " +
+	"skill: weigh the work you are reviewing against these conventions."
 
-const skillCatalogueRequiredNote = "\nEntries marked `(required — load before use)` are enforced: the " +
-	"engine rejects calls to the tools they cover until you have loaded " +
-	"the skill with `load_tool_skill(key)` in the current session.  Load " +
-	"them before your first call to those tools."
+const skillCatalogueRequiredNote = "\nThe engine rejects calls to the tools " +
+	"an entry marked `(required — load before use)` covers until you have " +
+	"loaded that skill with `load_tool_skill` in this session."
 
 const requiredMarker = " (required — load before use)"
 

@@ -225,7 +225,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 Within a phase, catalogue entries are sorted in **alphabetical key order** so the prompt prefix stays byte-stable across turns (LLM prefix-cache stability).
 
-Catalogue position: skills land **immediately before the `## Available tools` block** in Execute — one conceptual section, how-to then names — and **immediately after the review header** in Review, so guidance precedes the evidence it is meant to be weighed against. Review's catalogue has its own header: it asks the reviewer to weigh the work against the conventions listed and names no loader, because the reviewer's only tool is its submission.
+Catalogue position: skills land **immediately before the `## Tools to discover` block** in Execute — one conceptual section, how-to then what else the seat can reach — and **immediately after the review header** in Review, so guidance precedes the evidence it is meant to be weighed against. Review's catalogue has its own header: it asks the reviewer to weigh the work against the conventions listed and names no loader, because the reviewer's only tool is its submission.
 
 **Every rendered catalogue is recorded.** Each prompt that carries a catalogue — the executor's, the reviewer's, and each delegate worker's — publishes one [`knowledge_read`](knowledge-system.md#what-agents-read) with `via: skill_injected`, naming the page behind every skill it listed, so "which skill pages reach our agents" counts the pages a catalogue shows as well as the ones a model loads.
 

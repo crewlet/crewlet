@@ -1,43 +1,42 @@
 package prompts
 
-// ReviewHeader is the reviewer's contract: the decision enum plus the rules
-// that decide it.
+// ReviewHeader is the reviewer's contract: the rules that decide its one
+// decision.
 //
-// Every rule below is a turn-ending bug that has actually happened. The
-// sandbox rule stops the reviewer reading a run_sandbox-delegated
-// investigation as fabrication (the absence of shell calls is the DESIGN) and
-// looping the turn to max_iterations. The duplicate rule is keyed on target
-// and content rather than tool name because keyed on the name it fired on the
-// in-thread follow-up the prior-work header explicitly asks for — every
-// corrected turn then looped until it terminated failed.
+// Every rule below is a turn-ending bug that has actually happened, and each
+// is stated once, here. What the three decisions MEAN, and what `notes` and
+// `completed_work` carry, is the submission schema's to say
+// (runner/schema.go), beside the fields — a rule about judging the work lives
+// in the prompt, a fact about a field lives on the field. The duplicate rule
+// is keyed on target and content rather than tool name because keyed on the
+// name it fired on the in-thread follow-up the prior-work header explicitly
+// asks for — every corrected turn then looped until it terminated failed.
 //
-// THE BLOCKED RULE IS THE NEWEST, and it had contradicted itself in one
-// breath: it named a single outcome, `self_iterate`, and then said the
-// colleague "reply asynchronously and that re-triggers the agent". Both
-// halves cannot hold — if the reply is what wakes the seat, then no round
-// of THIS turn can produce it, and sending the round back asks a question
-// that has already been asked. A seat that put a clarifying question to its
-// founder in the founder's own thread was returned by the reviewer, asked
-// the same question again two minutes later, and ended on the
-// max-iterations guard: three rounds, a duplicate nag at a person who had
-// answered nothing yet, and a turn that did exactly the right thing
-// recorded as a breach.
+// THE BLOCKED RULE had contradicted itself in one breath: it named a single
+// outcome, `self_iterate`, and then said the colleague "reply asynchronously
+// and that re-triggers the agent". Both halves cannot hold — if the reply is
+// what wakes the seat, then no round of THIS turn can produce it, and sending
+// the round back asks a question that has already been asked. A seat that put
+// a clarifying question to its founder in the founder's own thread was
+// returned by the reviewer, asked the same question again two minutes later,
+// and ended on the max-iterations guard.
 //
 // So the rule splits on the one fact the TOOL LOG holds — has the person
 // been told — rather than on how stuck the agent sounds. What it must never
 // become is a decision of its own: being blocked is the EXECUTOR's word for
-// what happened (see turn.OutcomeBlocked, whose own doc already casts the
-// reviewer's job here as exactly this yes/no), and `done` / `self_iterate`
-// / `failed` are the REVIEWER's for whether that was good enough. A fourth
+// what happened (see turn.OutcomeBlocked), and `done` / `self_iterate` /
+// `failed` are the REVIEWER's for whether that was good enough. A fourth
 // decision spelling "blocked, and rightly so" would copy one axis onto the
 // other, and the next kind of blocked would want a fifth.
 //
-// What the reviewer is NOT asked any more is whether the delivery happened.
-// That question is settled before this prompt is built: the engine checks the
+// What the reviewer is NOT asked is whether the delivery happened. That
+// question is settled before this prompt is built: the engine checks the
 // executor's own claims against its record of the turn, refuses a bad one
 // inside the loop where the model can still fix it, and overturns a `done`
 // that delivered nothing. Asking a model to re-derive a fact the engine holds
-// is how a real delivery got read as no delivery and posted twice.
+// is how a real delivery got read as no delivery and posted twice — and the
+// submission schema asked it anyway, in words this header had retired, until
+// the two were made one contract.
 //
 // THE RECORD IS THE TURN'S, and the note says so because the evidence log
 // below it is only this round's: a reviewer looking at a round that re-read
@@ -46,58 +45,58 @@ package prompts
 // further delivery — a correction the first answer needs — is a question about
 // the work's merits, which is the reviewer's.
 const ReviewHeader = "\n## REVIEW phase" +
-	"\nJudge the work below. Submit exactly one `submit_review` call with " +
-	"one decision:" +
-	"\n- **done** — this turn is over: the work meets the ask, or it is " +
-	"honestly blocked on somebody already told. Return the artifact." +
-	"\n- **self_iterate** — incomplete or wrong; send it back with notes " +
-	"saying what the next round must do differently." +
-	"\n- **failed** — it cannot be completed at all, and another round " +
-	"would not change that." +
+	"\nJudge the work below, then call `submit_review` exactly once." +
 	"\n" +
-	"\n`## What the agent did` is the evidence — each line shows the call " +
-	"and its success/error outcome — not the narration in `## What the " +
-	"agent produced`, which is the agent's own account of itself. Calls " +
-	"marked `→ success` happened; `→ error` calls did not take effect." +
-	"\n**Whether anything was DELIVERED is already settled** — the engine " +
-	"checked the agent's delivery claims against this turn's whole log, " +
-	"earlier rounds included, and will overturn a `done` when no round " +
-	"reached the person waiting. Judge the work on its merits instead: is " +
-	"it right, is it complete, is it what was asked for." +
-	"\n**Incomplete rule:** an outcome of `incomplete` was written by the " +
-	"engine, not by the agent — the pass ended without reporting at all. " +
-	"Nobody stands behind it. Judge the tool log and the produced text on " +
-	"their own, and choose `self_iterate` unless the record already shows " +
-	"the work finished." +
-	"\n**Sandbox rule:** a successful `run_sandbox` call IS the code work " +
-	"— a coding agent cloned the repo and ran the shell / tests inside " +
-	"an isolated sandbox; its report is in `## What the agent produced`. " +
-	"The absence of `git`/`shell`/`pytest`/`file` calls is NOT " +
-	"fabrication — that work happens inside the sandbox, never as tool " +
-	"calls here. Judge the report on its merits." +
-	"\n**Duplicate-delivery rule:** judge by target and content, not tool " +
-	"name. The same thing sent twice to the same place — in one round, " +
-	"or again after `## Earlier rounds` — is a duplicate: choose " +
-	"`self_iterate`. A follow-up that ADDS to an earlier delivery " +
-	"(threaded reply, edit) is correct." +
-	"\n**On `self_iterate`, set `completed_work`:** one sentence on what " +
-	"ALREADY landed, so the next round adds to it instead of re-firing " +
-	"it." +
-	"\n**Missing-tool rule:** if the agent narrates that it lacks a tool " +
-	"(e.g. \"I don't have access to the tool needed to deliver this\"), " +
-	"choose `self_iterate` and name the tool in `notes` — the next round " +
-	"can discover and activate it." +
-	"\n**Blocked / needs-a-colleague rule — has the person BEEN TOLD?** " +
-	"The tool log answers that, not the agent's prose. Not yet → " +
-	"`self_iterate`, naming who to reach in `notes`; the next round " +
-	"reaches them with its own tools — a chat mention, an issue comment, " +
-	"a doc comment, `a2a_ask` — wherever the work lives. Already asked → " +
-	"`done`: their reply is what re-triggers this agent, so no round of " +
-	"THIS turn can produce it and sending it back only asks twice. " +
-	"Nothing anyone replies would finish it → `failed`. Never leave a " +
-	"direct request unanswered: whoever triggered this turn is owed a " +
-	"reply where they asked, even one that only says who you are waiting " +
-	"on."
+	"\n`## What the agent did` is the evidence: calls marked `→ success` " +
+	"happened, and `→ error` calls did not take effect. `## What the agent " +
+	"produced` is the agent's own account of itself." +
+	"\n**Delivery is already settled:** the engine checked the agent's " +
+	"delivery claims against this turn's whole log, earlier rounds " +
+	"included, and overturns a `done` when no round reached the person " +
+	"waiting. Judge the work on its merits — is it right, is it complete, is " +
+	"it what was asked for." +
+	"\n**An `incomplete` outcome was written by the engine**, not by the " +
+	"agent: the pass ended without reporting. Nobody stands behind it, so " +
+	"choose `self_iterate` unless the record already shows the work finished." +
+	"\n**Duplicates:** the same thing sent twice to the same place — in one " +
+	"round, or again after `## Earlier rounds` — is a duplicate: " +
+	"`self_iterate`. Judge by target and content, not tool name: a follow-up " +
+	"that ADDS to an earlier delivery (a threaded reply, an edit) is correct." +
+	"\n**A missing tool:** an agent that narrates it lacks one (\"I don't " +
+	"have access to the tool needed to deliver this\") is `self_iterate`, " +
+	"naming the tool in `notes` — the next round can discover and activate it." +
+	"\n**Blocked on somebody — have they BEEN TOLD?** The tool log answers " +
+	"that, not the agent's prose. Not yet → `self_iterate`, naming who to " +
+	"reach in `notes`; the next round reaches them with its own tools, " +
+	"wherever the work lives."
+
+// reviewA2ARule names the agent-to-agent tool among the ways the next round
+// can reach somebody, rendered only where the seat holds it
+// ([ReviewInput.OffersA2A]): a reviewer told to send a round to a tool the
+// seat does not have writes notes the next round can only fail to follow.
+const reviewA2ARule = " An agent colleague is reached with `a2a_ask`."
+
+// reviewBlockedOutcome closes the blocked rule: the two answers past "not
+// yet", and the one obligation no handoff discharges.
+const reviewBlockedOutcome = " Already asked → `done`: their reply " +
+	"re-triggers this agent, so no round of THIS turn can produce it and " +
+	"sending it back only asks twice. Nothing anyone replies would finish it " +
+	"→ `failed`. Whoever triggered this turn is still owed a reply where " +
+	"they asked, even one that only says who you are waiting on."
+
+// reviewSandboxRule is rendered only where the executor is offered
+// run_sandbox ([ReviewInput.OffersSandbox]), like the executor's own sandbox
+// section.
+//
+// It stops the reviewer reading a run_sandbox-delegated investigation as
+// fabrication — the absence of shell calls is the DESIGN — and looping the
+// turn to max_iterations. Unconditional, it was prose about a tool on every
+// review of every seat in the company, nearly none of which can call it.
+const reviewSandboxRule = "\n**A successful `run_sandbox` call IS the code " +
+	"work:** a coding agent ran the shell and the tests inside its own " +
+	"sandbox, and its report is in `## What the agent produced`. No " +
+	"`git` / shell / test calls here is not fabrication — judge the report " +
+	"on its merits."
 
 // ReviewInput is the evidence the reviewer judges against.
 //
@@ -155,6 +154,16 @@ type ReviewInput struct {
 	// the header refers to it conditionally.
 	EarlierIterations string
 
+	// OffersSandbox is whether the executor this reviews is offered
+	// run_sandbox, which gates the rule on reading a sandbox run's report —
+	// the caller's answer, read off the executor's universe, as
+	// [ExecutorInput.OffersSandbox] is.
+	OffersSandbox bool
+
+	// OffersA2A is whether the seat holds a2a_ask, which gates the blocked
+	// rule's naming it among the ways the next round reaches a colleague.
+	OffersA2A bool
+
 	// Skills is the tool-skill registry. Review-phase skills are
 	// operator-scoped: a skill listing the review phase surfaces here,
 	// keyed on the role's MCP servers, even though Review has no domain
@@ -166,9 +175,12 @@ type ReviewInput struct {
 
 // BuildReview renders the Review-phase system prompt, and its outline.
 //
-// The reviewer sees the decision enum, what the agent said it set out to do,
-// the tool-call log, and the text it produced — so it judges against evidence
-// rather than self-narration. No domain tools, no catalogue, no policies /
+// The reviewer sees the rules that decide its decision (what each decision
+// means is `submit_review`'s schema, beside the field), what the agent said
+// it set out to do, the tool-call log, and the text it produced — so it
+// judges against evidence rather than self-narration. The sandbox rule renders
+// only where the executor was offered run_sandbox, and `a2a_ask` is named only
+// where the seat holds it. No domain tools, no catalogue, no policies /
 // roster / backstory: the reviewer's question is whether this round's work is
 // right, and everything it needs to answer that is in front of it.
 //
@@ -179,7 +191,7 @@ type ReviewInput struct {
 func BuildReview(seat Seat, in ReviewInput) Prompt {
 	b := NewBuilder("\n")
 	b.Lead("identity", "Identity", BuildIdentityLine(seat))
-	b.Heading("review_phase", ReviewHeader)
+	b.Heading("review_phase", reviewHeader(in))
 	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseReview, Surface{
 		MCPServers: seat.mcpServers(),
 	})...)
@@ -206,6 +218,23 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 		b.Heading("produced", "\n## What the agent produced", in.Produced)
 	}
 	return b.Build()
+}
+
+// reviewHeader is [ReviewHeader] with the rules that hold only for some seats.
+//
+// A FUNCTION OF THE SEAT'S SURFACE, never of the round: both gates are frozen
+// for the turn, so the review prompt stays byte-identical across the rounds of
+// its phase.
+func reviewHeader(in ReviewInput) string {
+	header := ReviewHeader
+	if in.OffersA2A {
+		header += reviewA2ARule
+	}
+	header += reviewBlockedOutcome
+	if in.OffersSandbox {
+		header += reviewSandboxRule
+	}
+	return header
 }
 
 // outcomeLine renders the outcome word with who wrote it.

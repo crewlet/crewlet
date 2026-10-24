@@ -412,34 +412,31 @@ const OnboardingPageTitle = "Onboarding"
 // knowledge-base search. Naming scopes rather than page ids is what keeps the
 // hint valid across a knowledge base that gets reorganised: an id goes stale
 // silently and sends the agent to a 404, a scope name is what a search is for.
+//
+// THE STEPS AND NOTHING ELSE. How the pass reaches its knowledge-base tools is
+// the onboarding header's, and that `mark_onboarded` ends the pass for good is
+// that tool's own description, which reaches the model with the tool. This is
+// the one place that names the order — read, keep, mark — and the pages that
+// are this seat's alone.
 func Hint(o *org.Organization, r *org.Role) string {
 	if o == nil || r == nil {
 		return ""
 	}
 	var bullets []string
 	add := func(scope string) {
-		bullets = append(bullets, fmt.Sprintf("- '%s' page in the **%s** area of "+
-			"the knowledge base", OnboardingPageTitle, scope))
+		bullets = append(bullets, "- **"+scope+"**")
 	}
 	add(o.Name)
 	for _, unit := range o.UnitChainFor(r) {
 		add(unit.Name)
 	}
 
-	return "You have not yet completed onboarding for this team configuration.\n\n" +
-		"Before doing other work, read the following pages (each is a page in " +
-		"your team knowledge base, literally titled '" + OnboardingPageTitle + "'):\n" +
+	return "Read the page titled '" + OnboardingPageTitle + "' in each of these " +
+		"areas of the team knowledge base, searching for it with your " +
+		"knowledge-base tools and skipping an area that has none:\n" +
 		strings.Join(bullets, "\n") + "\n\n" +
-		"How:\n" +
-		"- Use your knowledge-base search tool (or a get-page tool if you know " +
-		"the id) to locate each page. If a page is missing for some scope, " +
-		"that's fine — skip it.\n" +
-		"- For each page, capture conventions you should apply going forward " +
-		"via `reflect_and_persist`. Write declarative facts, not instructions " +
-		"to yourself.\n" +
-		"- When you have read all available pages and persisted what matters, " +
-		"call `mark_onboarded` with a one-line summary. That ends this " +
-		"pass, and it does not run again for this team configuration.\n\n" +
-		"If a page changes later you can re-read it any time — the onboarding " +
-		"marker only re-fires when the org structure itself changes."
+		"Keep each convention you should apply from now on with " +
+		"`reflect_and_persist`, as a declarative fact rather than an " +
+		"instruction to yourself. Then call `mark_onboarded` with a one-line " +
+		"summary."
 }

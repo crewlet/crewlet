@@ -706,21 +706,22 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		}
 	}
 
-	// The catalogue is rendered only for a worker that can act on it.
-	// Listing tools to one with no activate_tool is an invitation to call
-	// a name it was never offered, which costs a round and produces a
-	// refusal.
-	var catalogue string
+	// The tools to discover are rendered only for a worker that can act on
+	// them. Listing tools to one with no activate_tool is an invitation to
+	// call a name it was never offered, which costs a round and produces a
+	// refusal. And only what it was NOT granted: a granted tool's whole
+	// definition reaches the worker with every request already.
+	var discoverable string
 	if cfg.Discovery != nil {
-		catalogue = renderCatalogue(grant.Universe)
+		discoverable = grant.Universe.Discoverable(surface.Active())
 	}
 	res.SystemPrompt = prompts.BuildSubagent(cfg.Seat, prompts.SubagentInput{
 		ParentSystemPrompt: task.systemPrompt,
-		// Both the offered set AND the discoverable catalogue, so a skill
+		// Both the offered set AND what it can discover, so a skill
 		// covering a tool the worker may later activate is in the prompt
 		// before the first call rather than after the guard blocks it.
 		AvailableTools: union(surface.Active(), grant.Universe.Names()),
-		ToolCatalogue:  catalogue,
+		Discoverable:   discoverable,
 		Submits:        submit != nil,
 		Skills:         cfg.Skills,
 	})
@@ -1124,34 +1125,6 @@ func indexOfID(tasks []resolved, id string) int {
 		}
 	}
 	return 0
-}
-
-// renderCatalogue is the slim catalogue a discovery-capable child is shown:
-// first-party tools by name and one-line description, MCP servers by name
-// only.
-//
-// Servers are named rather than expanded for the same reason the parent's
-// catalogue names them — a real server publishes dozens of tools and a wall
-// of them is what discovery exists to avoid.
-func renderCatalogue(safe tools.Snapshot) string {
-	var lines []string
-	var servers []string
-	for _, e := range safe.Entries() {
-		if server, ok := e.FromMCP(); ok {
-			if !slices.Contains(servers, server) {
-				servers = append(servers, server)
-			}
-			continue
-		}
-		lines = append(lines, tools.CatalogueLine(e.Name(), e.Tool.Description()))
-	}
-	for _, server := range servers {
-		lines = append(lines, "- MCP server `"+server+"` (use the discovery tools to list its tools)")
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
 }
 
 // union merges two name lists, deduplicated and sorted.

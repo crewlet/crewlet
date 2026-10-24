@@ -2,6 +2,7 @@ package prompts
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -9,76 +10,48 @@ import (
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
 // account for it.
 //
-// Carried verbatim from the two headers it replaces, because nearly every
-// paragraph is a production failure that has already happened once:
+// It states only what the model cannot learn from anything else it is sent,
+// and each rule once. Every sentence left is a production failure that has
+// already happened:
 //
 //   - "writing about an action does not perform it" — a turn that ended with
-//     a composed reply nobody was sent;
-//   - the discovery paragraph — an actor that gave up when the tool it needed
+//     a composed reply nobody was sent. It stays here, not only in
+//     `submit_work`'s description, because in text mode the tool protocol is
+//     the engine's own envelope and no CLI harness can teach it;
+//   - the discovery sentence — an actor that gave up when the tool it needed
 //     was not already on its surface;
-//   - the originating-channel rule — a Jira-create task triggered from chat
-//     hit an unresolvable assignee and the requester got silence;
 //   - the full-arc rule — routed comment triggers produced recon only, and
 //     the turn ended with the model writing "I don't have write tools";
-//   - the no_action rule — the old `skip`, which on a direct @mention reads
-//     to a human exactly like the message never arriving.
+//   - the originating-channel rule — a tracker-create task triggered from
+//     chat hit an unresolvable assignee and the requester got silence; and a
+//     founder's direct message was "answered" with a work item they never
+//     heard about.
 //
-// What is NOT carried is everything the two-phase split needed and one loop
-// does not: naming tools in advance against a catalogue the namer was never
-// shown, and the reconciliation of those names with reality. The executor
-// discovers what it needs when it turns out to need it.
+// What is NOT here is everything another channel already carries. What an
+// outcome means and that `deliveries` are checked is the submission schema's
+// to say (runner/schema.go), beside the fields it describes, and the decoder
+// enforces both; how discovery works is the two discovery tools' own
+// descriptions; the mission, policies and roster need no sentence saying they
+// are present, because they are. A second copy of a rule is not emphasis: it
+// is two texts that drift, and the model reads whichever it saw last.
 const ExecutorHeader = "\n## Your turn" +
-	"\nYou decide what to do about the task below and you do it, in this " +
-	"one pass. Use tool calls for every action — writing about an action " +
-	"does not perform it. End by calling `submit_work` exactly once, " +
-	"reporting what you actually did." +
+	"\nDecide what to do about the task below and do it, in this one pass. " +
+	"Use tool calls for every action — writing about an action does not " +
+	"perform it. End by calling `submit_work` exactly once, reporting what " +
+	"you actually did." +
 	"\n" +
-	"\n**Your `tools=[...]` starts with your first-party tools and the " +
-	"discovery meta-tools (`activate_tool`, `list_mcp_server_tools`).** " +
-	"Everything your team's MCP servers publish is reachable but not yet " +
-	"loaded: the catalogue below lists those servers by NAME only. Call " +
-	"`list_mcp_server_tools(server=...)` to see what a server offers, " +
-	"then `activate_tool(name=...)` to promote the one you want — its " +
-	"schema appears on the next message and you call it directly. " +
-	"Prefer discovery over giving up: only report that you cannot act if " +
-	"discovery fails or the tool genuinely does not exist." +
+	"\n**Finish the arc in this pass:** read, decide, then call the tool " +
+	"that delivers — the reply, the comment, the status change, the create. " +
+	"A turn that gathers data and stops has delivered nothing. If a tool you " +
+	"need is not among your tools, discover it (`list_mcp_server_tools`, then " +
+	"`activate_tool`) before reporting that you cannot act." +
 	"\n" +
-	"\n**Finish the arc in this pass.** Recon and action belong to the " +
-	"same turn: read the thread, decide, and then call the tool that " +
-	"delivers — the reply, the comment, the status change, the create. A " +
-	"turn that gathers data and stops has delivered nothing. A reviewer " +
-	"runs after you and can send the turn back for another round, but " +
-	"that is a second pass over work one pass should have finished." +
-	"\n" +
-	"\n**Stay reachable on the channel the trigger arrived on — even when " +
-	"the work itself is on a different system.** Whichever transport " +
-	"delivered this task is how you stay in touch with the requester. You " +
-	"may need to: (a) ask a follow-up when something is missing or " +
-	"ambiguous (a referenced item that doesn't resolve, an assignee whose " +
-	"handle isn't a valid account id), (b) confirm completion with a " +
-	"short status, (c) report a partial failure. Without a reply the " +
-	"requester gets silence." +
-	"\n" +
-	"\n**`outcome=\"no_action\"` means \"nobody was actually asking me to " +
-	"do anything\" — not \"I'm ignoring a direct ping\".** Use it for " +
-	"informational triggers, passing references, and messages addressed " +
-	"to someone else. When you were directly asked / @mentioned / " +
-	"assigned but are declining (out of scope, wrong owner, already " +
-	"handled), do NOT use `no_action`: post a brief decline via the " +
-	"originating channel's reply tool — name the right owner or point at " +
-	"where the work lives — and report that as `delivered`. Silence on a " +
-	"direct ping looks like the message was lost; a one-liner closes the " +
-	"loop." +
-	"\n" +
-	"\n**`deliveries` must name calls you actually made, on the surface " +
-	"this arrived from.** The engine checks them against its own log of " +
-	"this turn, and a claim it cannot find comes straight back to you. " +
-	"Work filed somewhere else is not a reply: creating the ticket is " +
-	"the work, and the requester still has to be told it exists." +
-	"\n" +
-	"\nMission, vision, policies, your role profile, your unit context, " +
-	"and your team roster are already in this prompt -- no lookup " +
-	"needed."
+	"\n**Stay reachable on the channel the trigger arrived on**, even when " +
+	"the work lives on another system: filing the ticket is the work, and " +
+	"the requester still has to be told. Ask a follow-up when something is " +
+	"missing, confirm completion, report a partial failure, or decline in " +
+	"one line through the originating channel's reply tool, naming the right " +
+	"owner. Without a reply the requester gets silence."
 
 // untrustedTextHeading titles the standing sentence about fenced text.
 const untrustedTextHeading = "\n## Text somebody else wrote"
@@ -86,37 +59,20 @@ const untrustedTextHeading = "\n## Text somebody else wrote"
 // KeyUntrustedText is the outline key of that section.
 const KeyUntrustedText = "untrusted_text"
 
-// executorKnowledgeNote points the executor at the prefetched documentation.
-//
-// APPENDED ONLY WHEN THERE IS A BLOCK. It used to be part of the header and
-// therefore unconditional, which made it a false statement on every turn the
-// search was gated off, found nothing, or had no backend to run against — and
-// an agent told the documentation is already here is one that does not go
-// looking for it.
-const executorKnowledgeNote = "  Relevant team documentation was surfaced in the " +
-	"`## Relevant knowledge` block below."
-
 // executorSandboxSection is rendered only where the executor is offered
 // run_sandbox ([ExecutorInput.OffersSandbox]).
 //
 // Gated because it is absent for very nearly every role: unconditional, it
-// would be ~200 tokens of prose about a tool the seat does not have, on every
-// executor prompt in the company.
-const executorSandboxSection = "\n## Sandbox code work (the `run_sandbox` tool)" +
-	"\nFor **real code work** — implement or modify code, run tests, " +
-	"reproduce a bug, run a script — you have a `run_sandbox` tool: a " +
-	"real computer with a shell and a git checkout where a coding agent " +
-	"works autonomously on a brief you give it and returns a structured " +
-	"report." +
-	"\n" +
-	"\nThe sandbox runs detached: this turn pauses and resumes " +
-	"automatically with the result, keeping full context. So after " +
-	"`run_sandbox` returns, report the outcome — or open / link the PR, " +
-	"file a ticket, reply on the channel — in the SAME turn. Don't leave " +
-	"it for a separate report turn." +
-	"\n" +
-	"\nKeep everything else native: reply on Slack, update a ticket, " +
-	"read docs, answer a question — those need no sandbox."
+// would be prose about a tool the seat does not have, on every executor prompt
+// in the company. What the tool does and takes is its own description; what
+// this adds is the one fact about the TURN — it pauses for the run and resumes
+// with its report — which is what stops a seat ending the turn to "report
+// later" and leaving the requester waiting on a run nobody follows up.
+const executorSandboxSection = "\n## Sandbox code work" +
+	"\nReal code work — changing code, running tests, reproducing a bug — " +
+	"goes to `run_sandbox`. This turn pauses while the run works and resumes " +
+	"with its report as the call's result, so act on it in the SAME turn: " +
+	"report the outcome, link the pull request, update the ticket."
 
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.
@@ -126,12 +82,14 @@ const executorSandboxSection = "\n## Sandbox code work (the `run_sandbox` tool)"
 // which is what the provider's prefix cache is priced on. Work that
 // accumulates DURING the turn belongs in [BuildPhaseUserMessage].
 //
-// The zero value renders the plain contract with no catalogue and no
+// The zero value renders the plain contract with nothing to discover and no
 // prefetch blocks, which is what most tests want.
 type ExecutorInput struct {
-	// ToolCatalogue is the rendered slim catalogue: builtin tools by name
-	// with a one-line description, MCP servers by name only.
-	ToolCatalogue string
+	// Discoverable is what the executor can reach but does not hold yet,
+	// rendered by [github.com/crewlet/crewlet/internal/tools.Snapshot.Discoverable]:
+	// on the executor, which holds every first-party tool from its first
+	// round, that is its MCP servers by name. Empty renders no section.
+	Discoverable string
 
 	// AvailableTools is every name on the surface built for this phase,
 	// the tools the phase adds to it included (`submit_work`, the
@@ -192,19 +150,6 @@ type ExecutorInput struct {
 	OffersSandbox bool
 }
 
-// workersPreamble frames the list that follows it.
-//
-// Two sentences, and both are load-bearing. The first says a worker is a
-// PARALLEL leaf rather than a colleague, which is the confusion that sends an
-// executor to delegate something it should have asked a teammate. The second
-// says the answer comes back in this turn, which is what stops it treating a
-// delegation as fire-and-forget and ending the turn before reading anything.
-const workersPreamble = "Short-lived workers you can hand narrowly-scoped work " +
-	"to with `delegate`. Each one runs its own tool loop with a slice of your " +
-	"tools, cannot write anywhere, and reports back to you inside this turn — " +
-	"so you still finish the job yourself. They are not colleagues: work that " +
-	"belongs to another seat goes to that seat."
-
 // BuildExecutor renders the executor's system prompt, and its outline.
 //
 // The executor gets the whole static picture inline — identity, mission,
@@ -259,11 +204,7 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 		b.Add("")
 	}
 
-	header := ExecutorHeader
-	if in.RelevantKnowledge != "" {
-		header += executorKnowledgeNote
-	}
-	b.Heading("your_turn", header)
+	b.Heading("your_turn", ExecutorHeader)
 	// RIGHT AFTER THE CONTRACT, because it is part of how a turn ends:
 	// the header says finish the arc, and this says the one case where
 	// finishing means stopping on a branch until somebody answers.
@@ -313,21 +254,44 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// about how to do the work rather than about which tool to call, and
 	// the executor reads this prompt top-down: what it is, what it knows,
 	// who it can hand work to, then what it can call itself.
+	//
+	// THE LIST ALONE: what a worker is, what it may not do and that it
+	// answers inside this turn is `delegate`'s own description, which
+	// reaches the model with the tool on every round.
 	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
-		b.Heading("workers", "\n## Your workers", workersPreamble, in.Workers)
+		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
 
-	// The tool-skills catalogue lands adjacent to the tool catalogue so the
-	// executor reads "here is how to use these tools" immediately before
-	// "here are the tools" — the two are conceptually one section.
+	// The tool-skills catalogue lands adjacent to the tools to discover so
+	// the executor reads "here is how to use these tools" immediately before
+	// "here is what else you can reach" — the two are conceptually one
+	// section.
 	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseExecute, Surface{
 		Tools:      in.AvailableTools,
 		MCPServers: seat.mcpServers(),
 	})...)
-	if in.ToolCatalogue != "" {
-		b.Heading("available_tools", "\n## Available tools", in.ToolCatalogue)
-	}
+	b.Heading(KeyDiscoverableTools, discoverableSection(in.Discoverable)...)
 	return b.Build()
+}
+
+// KeyDiscoverableTools is the outline key of the tools a phase can reach but
+// does not hold yet.
+const KeyDiscoverableTools = "discoverable_tools"
+
+// discoverableSection is the heading and the list of what a phase can still
+// discover, or nil when there is nothing — a phase that holds everything it
+// can reach has no section, rather than a heading over "(none)".
+//
+// NOT "Available tools", which is what it was titled while it listed every
+// tool the phase already held. That is the heading a text-mode prompt gives
+// the JSON definitions of the tools the phase DOES hold, in the same
+// conversation, and two sections under one heading saying different things
+// is a model reading whichever it saw last.
+func discoverableSection(list string) []string {
+	if strings.TrimSpace(list) == "" {
+		return nil
+	}
+	return []string{"\n## Tools to discover", list}
 }
 
 // The keys of the executor's PREFETCHED blocks: the prefixes of the

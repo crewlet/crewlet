@@ -4659,9 +4659,9 @@ rules fix it, and each one names a specific mechanism:
    operands makes equal rows trade places on each render.
 11. **A prompt is a document, not a wall of text — and it is read through a
    map, an outline and one section.** Both halves of a phase's prompt were one
-   code block each, and a seat's system prompt runs to tens of kilobytes:
+   code block each, and a seat's system prompt ran to tens of kilobytes:
    identity, mission, policies, the roster, the turn contract, whatever the
-   turn prefetched, the workers, the skills and the tool catalogue. An
+   turn prefetched, the workers, the skills and a tool catalogue. An
    operator asking the question this screen exists for — *what was the
    reviewer actually told about self-iterating?* — scrolled 30 kB looking for
    a heading. The first answer was a stack of closed folds, one per `##`, and

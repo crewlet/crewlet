@@ -898,10 +898,10 @@ type phaseRecord struct {
 	Notes string
 
 	// Available is the tools whose schemas were actually passed in the
-	// call — what the model could invoke. Catalogue is the prose list of
-	// names the executor was shown, with no schemas: sending every MCP
-	// server's tool definitions is what made a turn expensive, and this is
-	// what replaced it.
+	// call — what the model could invoke. Catalogue is the rest of what it
+	// could reach, by discovery and with no schemas: sending every MCP
+	// server's tool definitions is what made a turn expensive, and
+	// discovery is what replaced it. The two are disjoint.
 	Available []string
 	Catalogue []string
 
