@@ -244,6 +244,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
 	// they remove a credential. See [Service.References].
 	read("GET /config/references", s.references)
+	// THE CHARTER, one resource of three fields: what Company › Principles
+	// edits in place. See charter.go for why it is not PATCH /config.
+	read("GET /config/charter", s.getCharter)
+	write("PUT /config/charter", s.putCharter)
 	read("GET /config/revisions", s.listRevisions)
 	read("GET /config/revisions/{id}", s.getRevision)
 	read("GET /config/revisions/{id}/diff", s.diff)

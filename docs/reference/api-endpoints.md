@@ -1600,6 +1600,7 @@ one is the managing system's to hold, not the caller's to retry with. See
 | `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
 | `GET` | `/config/references` | Every `${VAR}` the active document names, each with the config path of the field that names it, plus the `revision` they were read from |
+| `GET` | `/config/charter` | The company's mission, vision and policies, with an `ETag` of their content. See [The charter](#the-charter-mission-vision-and-policies) |
 
 The dashboard reads four of those facts over the query channel rather than
 these routes — `config`, `config_audit`, `config_diff` and `config_entities`,
@@ -1633,6 +1634,7 @@ does.
 | `PATCH` | `/config` | Merge one or more sections into the active revision, see [below](#patch-config--the-narrower-write). `?dry_run=true` checks it and stores nothing |
 | `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
+| `PUT` | `/config/charter` | Replace the mission, vision and policies, as a new revision of the whole document. Requires `If-Match`. See [The charter](#the-charter-mission-vision-and-policies) |
 
 #### `PATCH /config` — the narrower write
 
@@ -1871,6 +1873,98 @@ Independently of any header, every write names the revision it derived from as t
 
 **Nothing under `/config` is cacheable.** Every response the surface writes carries `Cache-Control: no-store`: reads, `304`s, writes, refusals and error bodies, and the `404` and `405` it answers for a path or method it does not serve. A body here is the company's settings: which integrations are wired and where, and the `${VAR}` name behind every credential, and a stored copy would outlive the session and the token that read it. Revalidation still works, because it never depended on a cache: a client that wants a `304` sends `If-None-Match` with the `ETag` it kept.
 
+#### The charter: mission, vision and policies
+
+The company's **charter** is the part of the document every seat is handed
+word for word on every turn: `mission`, `vision` and `policies`. It has a
+resource of its own, which is what Company › Principles edits in place.
+
+```http
+GET /config/charter
+
+200 OK
+ETag: "charter-5f0c…"
+
+{"mission": "Help friends split costs fairly.",
+ "vision": "Splitting a bill is never the awkward part again.",
+ "policies": ["Every amount is exact to the cent.", "Work is tracked on the board."]}
+```
+
+Every field is always sent: `""` and `[]` when nothing is written.
+
+```http
+PUT /config/charter
+If-Match: "charter-5f0c…"
+X-Summary: tighten the money policy
+
+{"mission": "…", "vision": "…", "policies": ["…", "…"]}
+
+200 OK
+ETag: "charter-91ab…"
+
+{"charter": {"mission": "…", "vision": "…", "policies": ["…", "…"]},
+ "changed": true, "revision_id": "0192…", "epoch": 42}
+```
+
+- **The body names all three fields and nothing else**, and replaces the
+  charter whole: `policies` is the list in the order every seat reads it.
+  A missing or unknown field is `400 invalid_body`. Each value is trimmed of
+  the space around it, and an empty mission or vision is removed from the
+  document.
+- **`If-Match` is required** (`428 bad_if_match` without it) and its tag is
+  the charter's **content**, not the revision's. A write elsewhere in the
+  document is not a conflict, so a draft of the mission is not refused because
+  somebody connected an integration meanwhile. A charter that changed since
+  the tag was read is `412 version_moved`, carrying the charter now as
+  `current` and its tag as `etag` (and in `ETag`): show the draft beside it,
+  then send the draft again with that tag to keep it. `If-Match: *` writes
+  whatever the charter says now.
+- **It is a revision like any other write.** The same pipeline as `PATCH
+  /config`: the managed-document check, the whole document validated, a sealed
+  revision recording its author and credential, the fleet's compare-and-set
+  and the `config_revision_activated` event. `X-Summary` is optional here: one
+  left out is derived from what changed (`edited the company's mission and
+  policies`). A revision that moved for another reason between the read and
+  the compare-and-set is merged onto, up to three attempts, after which the
+  answer is `409 revision_advanced`.
+- **A charter that changes nothing writes nothing**: `200` with
+  `"changed": false` and the active `revision_id`, because a new revision
+  re-activates every node and rebuilds every seat. This is asked before
+  `If-Match`, which makes a save safe to send again: a retry whose first
+  answer was lost finds the charter already saying what it asks for, and is
+  answered rather than refused.
+- `?dry_run=true` judges the write and stores nothing, answering
+  `{"valid": true, "charter": …, "changed": …}`.
+- It is `admin`'s, read and written (`config.read`, `config.write`), and the
+  write asks a recent proof as every write here does.
+
+**The bounds**, in characters (Unicode code points, the count an editor shows),
+because every character is in every seat's prompt on every round. A charter
+past one is `400 validation_error` with the problem located at `mission`,
+`vision`, `policies` or `policies[i]` (`segments` `["policies", 3]`):
+
+| Field | Bound |
+|-------|-------|
+| `mission` | at most 1024 characters, on one line |
+| `vision` | at most 2048 characters; paragraphs allowed |
+| `policies` | at most 25 entries |
+| each policy | at most 1024 characters, on one line, not blank, and not a repeat of another |
+
+The mission and each policy are one line because a seat reads the mission
+inline after its label and each policy as one item of a list; a line break is
+refused with kind `shape`. A vision in paragraphs is quoted line by line in the
+prompt, so no line of it reads as the prompt's own.
+
+Each bound is counted on the trimmed value. Every write of the document
+through the API (`PUT` and `PATCH /config`, a per-entity write, `/setup`)
+holds them too, judged on [what the write
+changes](../concepts/configuration.md#mission-vision-and-policies): a write
+that leaves a faulty part untouched is admitted, with a warning naming it in
+its answer, so an old fault never locks a company out of its other settings.
+Here, the parts the charter write changes are judged, and the parts it leaves
+as they were are not. An import at boot or into a stopped node is never
+refused for the charter, and says its faults as warnings.
+
 #### Per-entity read and write
 
 Four collections, `GET` and `PUT`:
@@ -2054,15 +2148,16 @@ On a `409`, re-read `/config` and send the edit again.
 
 ### Status codes
 
-- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`)
+- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`), or a [charter](#the-charter-mission-vision-and-policies) write (`{"charter", "changed", "revision_id", "epoch"}`), which replaces a resource rather than creating one
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key — asked last, once the write is admitted and its document checked, so a caller who may not make the change is answered the `403` first; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`; and `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them — a person's session, a machine token and a lead's write among them — with `managed_by`, `detail` and `hint`, a write and its dry run alike, never a read or a reload, and asked before the body is read (see [Managed configuration](../concepts/configuration.md#managed-configuration))
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
-- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
-- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
+- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH`, a charter write or a per-entity write on an unconfigured node, or a reload)
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's `If-Match` names a charter that has changed, carrying the charter now as `current` and its `etag`
+- `428 Precondition Required`: `bad_if_match` for a charter write with no `If-Match`
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
 - `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
 

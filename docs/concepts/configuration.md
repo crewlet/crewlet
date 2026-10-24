@@ -68,6 +68,12 @@ policies:
   - Work is tracked on the board, and nothing ships without acceptance criteria.
 ```
 
+An administrator edits them in place on **Company › Principles**, which writes
+through [`PUT /config/charter`](../reference/api-endpoints.md#the-charter-mission-vision-and-policies):
+a new revision of the whole document like any other write, conditional on the
+charter itself rather than on the revision, so a draft is refused only when
+somebody changed the charter meanwhile.
+
 Because every character reaches every prompt, the charter is bounded, in
 characters: the mission at 1024, the vision at 2048, at most 25 policies of at
 most 1024 each. The mission and each policy are one line, since a seat reads
