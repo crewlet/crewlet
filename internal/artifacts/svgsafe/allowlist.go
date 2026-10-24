@@ -72,9 +72,33 @@ var refAttributes = map[string]bool{"fill": true, "stroke": true, "clip-path": t
 // lowercased: each is how a value becomes a request or script.
 var forbidden = []string{"javascript:", "data:", "<", "expression", "@import"}
 
+// transformAttributes take a list of transform functions.
+var transformAttributes = map[string]bool{"transform": true, "gradientTransform": true,
+	"patternTransform": true}
+
+// colorAttributes take a colour, which may be written as a colour function.
+var colorAttributes = map[string]bool{"fill": true, "stroke": true, "stop-color": true,
+	"flood-color": true, "color": true}
+
+// textAttributes hold words for a person, which nothing reads as CSS.
+var textAttributes = map[string]bool{"aria-label": true}
+
 var (
 	idPattern  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
 	refPattern = regexp.MustCompile(`^url\(\s*#([A-Za-z][A-Za-z0-9_.-]{0,63})\s*\)$`)
+
+	// THE VALUE GRAMMAR. A presentation attribute is parsed as CSS, where an
+	// escape spells any word (`u\72l(` is `url(`) and a function reaches
+	// outside the drawing (`image-set()`, `var()`, `url()` itself), so a value
+	// is held to what a drawing needs and nothing a browser would read as more:
+	// a parenthesis only in `url(#id)`, a transform function or a colour
+	// function, and everything else numbers, lengths, percentages, #hex
+	// colours and keywords.
+	transformPattern = regexp.MustCompile(
+		`^\s*(?:(?:matrix|translate|scale|rotate|skewX|skewY)\s*\([-+0-9.eE,\s]*\)[\s,]*)*$`)
+	colorFunctionPattern = regexp.MustCompile(`^\s*(?:rgba?|hsla?)\([-+0-9.%,/\sa-z]*\)\s*$`)
+	fontFamilyPattern    = regexp.MustCompile(`^[\p{L}\p{N}\s,'"_.-]*$`)
+	plainPattern         = regexp.MustCompile(`^[A-Za-z0-9\s.,%#+_-]*$`)
 )
 
 // Element is the SVG spelling of an element the HTML tokenizer reads as lower,
@@ -186,6 +210,11 @@ func (d *Drawing) Attr(tag, key, val string, line int, bad func(string, ...any))
 			return "", "", false
 		}
 	}
+	if !textAttributes[name] && strings.ContainsRune(val, '\\') {
+		bad("<%s %s=%q>: a drawing's values carry no backslash, since a CSS escape can spell "+
+			"what the value may not say; write the value out plainly", tag, key, val)
+		return "", "", false
+	}
 	switch {
 	case name == "id":
 		if !idPattern.MatchString(val) {
@@ -204,6 +233,8 @@ func (d *Drawing) Attr(tag, key, val string, line int, bad func(string, ...any))
 			return "", "", false
 		}
 		d.refs = append(d.refs, reference{id: id, line: line})
+	case textAttributes[name]:
+		// Words for a person: nothing reads them as CSS.
 	case strings.Contains(low, "url("):
 		m := refPattern.FindStringSubmatch(strings.TrimSpace(val))
 		if m == nil || !refAttributes[name] {
@@ -212,8 +243,40 @@ func (d *Drawing) Attr(tag, key, val string, line int, bad func(string, ...any))
 			return "", "", false
 		}
 		d.refs = append(d.refs, reference{id: m[1], line: line})
+	default:
+		if hint, ok := valueHint(name, val, low); !ok {
+			bad("<%s %s=%q>: %s", tag, key, val, hint)
+			return "", "", false
+		}
 	}
 	return name, val, true
+}
+
+// valueHint holds the value of the attribute name (SVG's spelling) to the
+// grammar a drawing allows it ([transformPattern] and the rest), and says
+// what the attribute takes when it does not hold. low is val lowercased.
+func valueHint(name, val, low string) (string, bool) {
+	switch {
+	case transformAttributes[name]:
+		return "a transform is a list of matrix, translate, scale, rotate, skewX and skewY " +
+			"of numbers", transformPattern.MatchString(val)
+	case name == "font-family":
+		return "a font family list is family names, quoted or not, separated by commas",
+			fontFamilyPattern.MatchString(val)
+	case plainPattern.MatchString(val):
+		return "", true
+	case colorAttributes[name] && colorFunctionPattern.MatchString(low):
+		return "", true
+	case colorAttributes[name]:
+		return "a colour is a #hex value, rgb(), rgba(), hsl(), hsla(), url(#id) of the " +
+			"drawing's own gradient or pattern, or a keyword such as none or currentColor", false
+	case refAttributes[name]:
+		return "this takes url(#id) of the drawing's own element or a keyword such as none: " +
+			"a CSS function draws what the drawing does not hold, so draw it with the drawing's " +
+			"own filter, clip or mask", false
+	}
+	return "a value is numbers, lengths, percentages, #hex colours and keywords: a CSS " +
+		"function or punctuation beyond those is not allowed in a drawing", false
 }
 
 // Resolve reports every reference to an id the drawing does not declare.

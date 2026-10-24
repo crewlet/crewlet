@@ -230,7 +230,15 @@ A drawing reaches nothing outside itself: no `<script>`, no event attribute,
 no `<foreignObject>`, no `<style>` element or `style` attribute (use
 presentation attributes), and every reference (`href`, `url(#…)`) is to an id
 the same drawing declares. Ids are a letter then letters, digits, `_`, `.`
-and `-`. The dashboard gives each drawn copy of a drawing its own id prefix,
+and `-`. A presentation attribute is read as CSS, where an escape or a
+function could reach outside the drawing, so an attribute value carries no
+backslash (an `aria-label` excepted), a parenthesis only in `url(#id)`, a
+transform (`matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`) or a
+colour (`rgb()`, `rgba()`, `hsl()`, `hsla()`), and is otherwise numbers,
+lengths, percentages, hex colours and keywords; a `font-family` list may
+quote its names. A filter, clip or mask is the drawing's own element, named
+by `url(#id)`, never a CSS function such as `blur()` or `inset()`. The
+dashboard gives each drawn copy of a drawing its own id prefix,
 so a slide drawn twice (its thumbnail and the stage) never resolves the other
 copy's gradients.
 

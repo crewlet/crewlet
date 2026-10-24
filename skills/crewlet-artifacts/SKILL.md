@@ -168,7 +168,9 @@ is refused at publish with its file, line and rule, never dropped.
   `a href="https://..."`; `div` containers (at most 15 deep); `img` with `src`,
   `alt` and a sized `style`; `table` of `tr`, `th` and `td`; `hr`; an inline
   `svg` with `aria-label` (no script, no `style`, references only to its own
-  `#id`s, 52 KB at most); `x-shape kind` and `x-icon name`. At most 200
+  `#id`s, attribute values plain numbers, lengths, colours and keywords with
+  no backslash and no CSS function but `url(#id)`, a transform, `rgb()` or
+  `hsl()`, 52 KB at most); `x-shape kind` and `x-icon name`. At most 200
   elements a slide. An `x-icon` draws its glyph at half its box, centred, so
   size the box at twice the glyph you want (64px for a 32px glyph).
 - **Styles are inline and closed.** Lengths in px (a bare number is px), hex,

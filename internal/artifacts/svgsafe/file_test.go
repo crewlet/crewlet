@@ -149,6 +149,54 @@ func TestNothingThatRunsLoadsOrExpandsIsStored(t *testing.T) {
 	}
 }
 
+// A VALUE SAYS ONLY WHAT A DRAWING NEEDS. A presentation attribute is parsed
+// as CSS, where an escape spells `url(` without writing it and a function
+// reaches outside the drawing, so each of these is refused although none
+// writes `url(` to an outside address in so many words.
+//
+// Mutation: drop the backslash refusal and `u\72l(` is stored; let any value
+// with a parenthesis through and `image-set()` is.
+func TestAValueSaysOnlyWhatADrawingNeeds(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ src, want string }{
+		"escaped url in fill":   {wrap(`<rect fill="u\72l(https://x.test/p.svg#a)"/>`), "backslash"},
+		"escaped url in filter": {wrap(`<rect filter="u\72l(https://x.test/f.svg#a)"/>`), "backslash"},
+		"escaped in a keyword":  {wrap(`<rect display="no\6e e"/>`), "backslash"},
+		"image-set mask":        {wrap(`<rect mask="image-set('https://x.test/a.png' 1x)"/>`), "url(#id)"},
+		"var fill":              {wrap(`<rect fill="var(--x)"/>`), "a colour is"},
+		"env stroke-width":      {wrap(`<rect stroke-width="env(safe-area-inset-top)"/>`), "a value is"},
+		"blur filter":           {wrap(`<rect filter="blur(2px)"/>`), "own filter"},
+		"inset clip-path":       {wrap(`<rect clip-path="inset(0)"/>`), "url(#id)"},
+		"attr in font-family":   {wrap(`<text font-family="attr(x)">a</text>`), "font family"},
+		"function in transform": {wrap(`<rect transform="translate(var(--x))"/>`), "a transform is"},
+		"semicolon":             {wrap(`<rect fill="red;x"/>`), "a colour is"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, refused := parse(t, c.src)
+			if refused == nil {
+				t.Fatalf("the drawing was stored")
+			}
+			if !strings.Contains(refused.Error(), c.want) {
+				t.Errorf("the refusal says %q, want it to name %q", refused.Error(), c.want)
+			}
+		})
+	}
+
+	// WHAT AN EDITOR EXPORTS STILL READS: colour functions, transforms, a
+	// font list with quotes, path data, dashes, a filter by reference, and
+	// words for a person that are not CSS.
+	honest := wrap(`<defs><filter id="f"><feGaussianBlur stdDeviation="1.5 2"/></filter></defs>` +
+		`<g transform="matrix(1 0 0 1 -10.5 2e1) rotate(-45, 5 5)" filter="url(#f)">` +
+		`<path d="M0 0L10-5.5h3v2z" fill="rgba(36, 80, 230, 0.5)" stroke="hsl(240deg 50% 40% / 80%)" ` +
+		`stroke-dasharray="4, 2" stroke-width="1.5px" aria-label="Acme (logo) \ mark"/>` +
+		`<text font-family="'Helvetica Neue', Inter, sans-serif" font-size="12" fill="currentColor">` +
+		`a</text></g>`)
+	if _, refused := parse(t, honest); refused != nil {
+		t.Errorf("an honest drawing was refused: %v", refused)
+	}
+}
+
 // A REFUSAL NAMES THE LINE: an author fixes the line the finding names.
 //
 // Mutation: report every finding at line 0 and the line is lost.

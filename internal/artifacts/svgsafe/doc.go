@@ -15,6 +15,14 @@
 // to an id the same drawing declares. Each attribute value is refused when it
 // carries `javascript:`, `data:`, `<`, `expression` or `@import`.
 //
+// A VALUE IS HELD TO A GRAMMAR, NOT A DENYLIST. A presentation attribute is
+// parsed as CSS, where an escape spells any word (`u\72l(` is `url(`) and a
+// function reaches outside the drawing (`image-set()`, `var()`), so no value
+// but an `aria-label` carries a backslash, a parenthesis appears only in
+// `url(#id)` on an attribute that refers, in a transform function or in a
+// colour function, and every other value is numbers, lengths, percentages,
+// #hex colours and keywords (a font family list may quote its names).
+//
 // THE STANDALONE FRONT END IS STRICTER THAN A BROWSER, ON PURPOSE. A file is
 // read with encoding/xml in strict mode with no entity table, so a DOCTYPE or
 // ENTITY declaration (the billion laughs, an external entity) is refused before
