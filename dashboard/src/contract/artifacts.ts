@@ -211,6 +211,39 @@ export const BRAND_CONTRAST_PAIRS = [
   { foreground: "primary_on_dark", ground: "dark_ground", min: 3, refuses: false },
 ] as const;
 
+/**
+ * An uploaded family's name (`brandformat.FamilyPattern`): an ASCII letter, then
+ * letters, digits, single spaces and hyphens. Its length is held apart, by
+ * `BRAND_FAMILY_NAME_MAX_BYTES`.
+ */
+export const BRAND_FAMILY_NAME_PATTERN = "^[A-Za-z](?:[A-Za-z0-9-]| [A-Za-z0-9-])*$";
+
+/** The longest uploaded family name, in bytes (`brandformat.MaxFamilyNameBytes`), the slide format's family bound. */
+export const BRAND_FAMILY_NAME_MAX_BYTES = 40;
+
+/** The most WOFF2 files one uploaded family holds (`brandformat.MaxFontFilesPerFamily`). */
+export const BRAND_FONT_FILES_MAX = 4;
+
+/** The largest WOFF2 file, in bytes (`brandformat.MaxFontFileBytes`, 2 MiB). */
+export const BRAND_FONT_FILE_MAX_BYTES = 2097152;
+
+/** The largest SVG logo, in bytes (`brandformat.MaxSVGBytes`, 512 KiB). */
+export const BRAND_SVG_MAX_BYTES = 524288;
+
+/** The largest PNG or WebP logo, in bytes (`brandformat.MaxImageBytes`, 2 MiB). */
+export const BRAND_IMAGE_MAX_BYTES = 2097152;
+
+/** The longest side of a PNG or WebP logo, in pixels (`brandformat.MaxImageSide`). */
+export const BRAND_IMAGE_MAX_SIDE = 4096;
+
+/** The weights a face's file may draw: the whole hundreds from the least to the most (`brandformat.MinFontWeight`, `MaxFontWeight`, `FontWeightStep`). */
+export const BRAND_FONT_WEIGHT_MIN = 100;
+export const BRAND_FONT_WEIGHT_MAX = 900;
+export const BRAND_FONT_WEIGHT_STEP = 100;
+
+/** The styles a face's file may draw (`brandformat.FontStyles`). */
+export const BRAND_FONT_STYLES = ["normal", "italic"] as const;
+
 /** Every column type a datastore validates (`artifacts.ColumnTypes`). */
 export const COLUMN_TYPES = [
   "text",

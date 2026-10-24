@@ -179,9 +179,10 @@ const (
 	SlotLogoOnDark  Slot = "logo.on_dark"
 	SlotLogoMark    Slot = "logo.mark"
 
-	// SlotFontHeading and SlotFontBody name a face as a whole in
-	// `from_brand`, which copies every file of the family; the brand files
-	// table keeps each file of a family under [FontFileSlot].
+	// SlotFontHeading and SlotFontBody name a face in `from_brand`, which
+	// copies the face's regular file (artifactupload.FaceFile), as a deck
+	// names a face by one file; each file of an uploaded family is also its
+	// own slot under [FontFileSlot], which the brand files table keys it by.
 	SlotFontHeading Slot = "font.heading"
 	SlotFontBody    Slot = "font.body"
 )

@@ -11,18 +11,31 @@
 // face from the kit or the system is a closed name.
 //
 // A CLOSED FORMAT, REFUSED RATHER THAN DROPPED. Every key `brand.json` may
-// carry is a field of [Brand]; an unknown key, a value outside its grammar or
-// bound, a path the version does not hold, and an asset outside its rules are
-// each refused at publish with a [Finding] naming the file, the line where
-// there is one, the rule and the fix. Nothing is silently stripped except the
-// metadata an asset rule names (PNG ancillary chunks, WebP EXIF and XMP).
+// carry is a field of [Brand]; the index is decoded strictly (no key the format
+// does not carry, no key twice in any object, since encoding/json keeps the
+// last of two where another reader keeps the first, nothing after the object),
+// and an unknown key, a value outside its grammar or bound, a path the version
+// does not hold, and an asset outside its rules are each refused at publish
+// ([Read]) with a [Finding] naming the file, the line where there is one, the
+// rule and the fix, every finding of the kit in one pass.
+//
+// THE STORED FORM. A logo or a face is stored as [Sanitize] writes it: an SVG
+// re-serialised by internal/artifacts/svgsafe, a PNG without the ancillary
+// chunks that carry metadata, a WebP without its EXIF and XMP, a WOFF2 as it
+// came once its header is inside the bounds. Nothing else is ever stripped. The
+// publish pipeline stores that form, and an adoption sanitizes every file it
+// copies again, so what the public brand route serves is always this build's
+// form; [Read] therefore holds a file to its rule, not to byte equality with
+// the form, and a later build's form never blocks adopting an earlier version.
 //
 // THE FIELD RULES, which [Brand]'s field docs state one by one and the
 // validator holds:
 //
 //   - `v` is [Version].
 //   - `name` is 1 to [MaxNameBytes] bytes; `tagline` 0 to [MaxTaglineBytes].
-//     Plain text: no control or format character, no URL.
+//     Plain text: NFC, trimmed, no control or format character, no `<` or
+//     `>`, no link (a scheme and `//`, `javascript:`, a `data:` address, a
+//     `www.` host).
 //   - `logos.primary` is required; `logos.on_dark` and `logos.mark` are
 //     optional. Each is the path of an SVG ([MaxSVGBytes], sanitised by
 //     internal/artifacts/svgsafe, a `viewBox` required), a PNG or a WebP
@@ -40,18 +53,28 @@
 //     (`kit`: one of [KitFaces]), a curated system stack (`stack`: one of
 //     [SystemStacks]), or an uploaded family (`family`, 1 to
 //     [MaxFamilyNameBytes] bytes, an ASCII letter then letters, digits, single
-//     spaces and hyphens, with 1 to [MaxFontFilesPerFamily] WOFF2 `files`, each at most
-//     [MaxFontFileBytes], and `licensed` true: the publisher attests the
-//     company may embed it).
+//     spaces and hyphens, with 1 to [MaxFontFilesPerFamily] WOFF2 `files`,
+//     each at most [MaxFontFileBytes], a weight a whole hundred from 100 to
+//     900 and a style `normal` or `italic`, no weight and style twice, and
+//     `licensed` true: the publisher attests the company may embed it). Both
+//     faces are required.
 //   - `voice.summary` is 0 to [MaxVoiceSummaryBytes] bytes; `voice.write_like`
 //     and `voice.avoid` are each up to [MaxVoiceExamples] lines of at most
 //     [MaxVoiceExampleBytes] bytes. No URL anywhere in the voice. The voice
 //     reaches a model only through `get_company_brand`, fenced under the
 //     `company` provenance trust.
 //
-// THE SLOTS. A file the adopted brand serves fills one [Slot]; the `from_brand`
-// file source an agent copies into a version names a slot, never a path, so a
-// copy reads only the adopted snapshot.
+// THE SLOTS. A file the adopted brand serves fills one [Slot] ([ReadKit]
+// answers them in the order the brand serves them); the `from_brand` file
+// source an agent copies into a version names a slot, never a path, so a copy
+// reads only the adopted snapshot.
+//
+// WHAT AN ADOPTION MAKES OF A KIT: the canonical index it snapshots
+// ([Canonical], read back with [Decode]), the one stylesheet generated from it
+// ([CSS]: `--brand-*` inputs on `:root` and `@font-face` rules, every value
+// re-checked as it is written), the extensions the public route serves its
+// files under ([Ext], [ServedExts], [ContentType]), and the slide theme a deck
+// begun in the brand copies ([SlideTheme]).
 //
 // PURE. It reads no store and holds no clock: the publish pipeline hands it
 // the files' bytes through an [artifacts.FileSource], and the adoption and the

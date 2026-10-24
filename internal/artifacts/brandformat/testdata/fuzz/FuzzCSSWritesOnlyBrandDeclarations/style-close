@@ -1,0 +1,8 @@
+go test fuzz v1
+string("</style><script>")
+string("#2450e6\n")
+string("Acme\u202eSans")
+string("system-sans")
+string("0000000000000000000000000000000000000000000000000000000000000000")
+float64(1e+300)
+int(450)
