@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -55,12 +56,21 @@ import (
 //go:embed commonpasswords.txt
 var commonList string
 
-// common is the blocklist, already folded, built once.
+// common is the blocklist, already folded, built once — at its FIRST USE.
 //
-// A MAP BUILT AT INIT rather than a scan of the file per call: the check runs
-// on every password anybody sets, and a linear walk of the file would be the
-// one part of this package whose cost grows with the list.
-var common = buildCommon(commonList)
+// A MAP rather than a scan of the file per call: the check runs on every
+// password anybody sets, and a linear walk of the file would be the one part
+// of this package whose cost grows with the list.
+//
+// BUILT AT FIRST USE rather than at init, because this package is linked into
+// the one binary every process of the engine is, the code host's
+// proc-receive hook among them — exec'd once a push, and running every linked
+// package's init before its first statement. Folding the file's 1 348 entries is
+// about 140 KB and 2 200 allocations, which that hook paid on every push for a
+// table only a password change reads (cmd/crewlet's
+// TestTheHookPaysLittleForTheEnginesInit holds the module's init to its
+// bound). The first password a node checks pays it instead, once.
+var common = sync.OnceValue(func() map[string]bool { return buildCommon(commonList) })
 
 func buildCommon(raw string) map[string]bool {
 	out := make(map[string]bool, 512)
@@ -98,7 +108,7 @@ func CheckStrength(password string, min int) error {
 		return fmt.Errorf("%w: it has %d characters, and it needs at least "+
 			"%d. Length is the only rule", ErrWeak, n, floor)
 	}
-	if common[fold(password)] {
+	if common()[fold(password)] {
 		return fmt.Errorf("%w: it's too easy to guess. Avoid a word with "+
 			"digits after it, keyboard runs and repeated blocks",
 			ErrWeak)
@@ -164,4 +174,4 @@ func Fold(s string) string { return fold(s) }
 // check refuses most of the file's own entries before the list is ever
 // consulted, so a test that went through [CheckStrength] could not tell the
 // embed working from the floor doing all the work.
-func Blocked(candidate string) bool { return common[fold(candidate)] }
+func Blocked(candidate string) bool { return common()[fold(candidate)] }
