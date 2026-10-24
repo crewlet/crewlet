@@ -63,9 +63,9 @@ func TestATurnEmbedsWhatItWasAskedOnceForBothSearches(t *testing.T) {
 }
 
 // THE THREE AUXILIARY JUDGEMENTS READ THE ASK. The memory filter would have
-// matched the roles the scaffolding's worked examples name, the query writer
-// would have been handed those examples as search terms, and the episode
-// summary would have judged past work against boilerplate.
+// matched the roles the scaffolding names, the query writer would have been
+// handed them as search terms, and the episode summary would have judged past
+// work against boilerplate.
 func TestTheAuxiliaryJudgementsReadWhatWasAskedNotTheBrief(t *testing.T) {
 	t.Parallel()
 	model := &aux{answers: []string{"[0]"}}

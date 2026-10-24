@@ -55,7 +55,9 @@ func buildObjectPrompt(kind ObjectKind, n notify.Inbound, parties notify.Parties
 // AN ADDRESSED WAKE, and the only non-task kind the plan marks "a seat starts
 // it, or says why not". Being told what to do next by somebody above you is an
 // instruction, and a seat that absorbed it silently would leave the person who
-// wrote the list unable to tell whether it was seen.
+// wrote the list unable to tell whether it was seen. That it may not end in
+// silence is the delivery check's to enforce; what this says is how each
+// answer is given, which only the tracker knows.
 func promptPriorities(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	meta := n.Metadata
 	who := promptSender(n, parties)
@@ -103,7 +105,5 @@ func promptPriorities(b *strings.Builder, n notify.Inbound, parties notify.Parti
 		" instead." +
 		"\n3. **Do not reorder the list back.** You may write your own" +
 		" priorities, but quietly undoing somebody else's is how two people" +
-		" end up believing different things about what you are working on." +
-		"\n\nGoing silent is the one wrong answer here: an unacknowledged" +
-		" priority looks exactly like a message that was lost.\n")
+		" end up believing different things about what you are working on.\n")
 }

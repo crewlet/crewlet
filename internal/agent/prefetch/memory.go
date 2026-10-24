@@ -248,13 +248,16 @@ func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
 // memoryFilterPrompt renders the task, the sender and the numbered pool.
 //
 // THE TASK IS WHAT THE TURN WAS ASKED ([Request.Ask]), not the brief the
-// executor is handed. The brief wraps a chat message in triage guidance whose
-// worked examples name roles and people ("@PM open a ticket for @SWE"), and
-// the filter's rule 3 admits a per-subject memory about anyone "named in the
-// task body" — so read against the brief, a preference about the PM was
-// relevant to every chat turn the scaffolding was wrapped around. What the
-// brief adds that the filter needs is the surface, and the ask carries it in
-// the notification's subject ("Slack message", an issue's key and title).
+// executor is handed. The brief wraps a chat message in scaffolding that is
+// the same on every turn of that surface — the seat's handle and marker, the
+// collectives, a role group in the triage — and the filter's rule 3 admits a
+// per-subject memory about anyone "named in the task body", so read against
+// the brief, a memory about whoever the scaffolding names is relevant to every
+// chat turn it wraps. It was found that way: while the triage carried worked
+// examples ("@PM open a ticket for @SWE"), a preference about the PM matched
+// every chat turn. What the brief adds that the filter needs is the surface,
+// and the ask carries it in the notification's subject ("Slack message", an
+// issue's key and title).
 func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 	var b strings.Builder
 	b.WriteString("Agent's current task:\n" + r.Ask + "\n")

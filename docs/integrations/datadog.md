@@ -201,7 +201,7 @@ The prompt differs by why the seat was reached, because the two are not the same
 - A seat named by a **tag** owns the monitor. It is told this is its service and its call.
 - A seat reached through **`route_to`** is told that nothing named an owner, and asked to establish whether the alert is theirs before working it, handing it on if it is not.
 
-A **recovery** reaches the same seats as the alert it recovers from: the seat woken to investigate is the one that has to be told to stand down. What differs is the ask. A recovery is asked to confirm the recovery is real (a monitor with no data recovers exactly like one whose problem was fixed), close out anything it reported, and say so plainly if it cleared for reasons nobody understands.
+A **recovery** reaches the same seats as the alert it recovers from: the seat woken to investigate is the one that has to be told to stand down. What differs is the ask. A firing alert is asked to decide whether it is real and, if it is, to say what is affected and what is being done in the channel the team reads — or to say the threshold is the thing to fix, which is a complete answer too. A recovery is asked to confirm the recovery is real (a monitor with no data recovers exactly like one whose problem was fixed) and to close out anything that was reported about it, where it was reported, with the cause if known.
 
 A monitor's trigger, recovery and re-trigger are **one conversation**, so a seat sees that this is the fourth time tonight rather than four unrelated pages. The thread is keyed on the monitor's own id (`$ALERT_ID` in the [payload template](#the-payload-template)), not on its title, because a Datadog title carries the alert state and would put a trigger and its recovery in two threads.
 

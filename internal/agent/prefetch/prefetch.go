@@ -222,11 +222,11 @@ type Request struct {
 	//
 	// NOT THE TASK, because the wrapping is what the task is mostly made
 	// of on the commonest wake. A chat message reaches the executor behind
-	// about 1.5 kB of triage scaffolding that is byte-identical on every
-	// turn of that surface: embedded, it dominates the vector, so every
-	// chat turn looked alike; read by the knowledge-query writer, its
-	// worked examples ("@PM open a ticket for @SWE") became search terms;
-	// and read by the memory filter, the roles those examples name read as
+	// triage scaffolding that is byte-identical on every turn of that
+	// surface: embedded, it dominates the vector, so every chat turn looked
+	// alike; read by the knowledge-query writer, the worked examples it
+	// carried then ("@PM open a ticket for @SWE") became search terms; and
+	// read by the memory filter, the roles those examples named read as
 	// people the task involves. An empty Ask is a trigger with nothing in
 	// it to judge — the searches treat it as a thin trigger.
 	Ask string

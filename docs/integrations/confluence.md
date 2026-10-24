@@ -402,13 +402,12 @@ When the **only** candidate recipient is the trigger user (the sole subscriber, 
 
 ### Lead-fallback prompt hint
 
-When a lead receives an event via `routed_via = "space_lead"` (steps 1-2 produced no recipient), the Confluence notification prompt adds a `## Why You Received This` section that names the space, warns the lead that no one else is watching the page, and lays out three explicit decisions:
+When a lead receives an event via `routed_via = "space_lead"` (steps 1-2 produced no recipient), the Confluence notification prompt says so — the lead was reached because nobody was named on the page and no seat has worked on it — and its `## How to handle this` section tells it two things:
 
-- **Delegate** — `@mention` the right teammate in a **comment** on the page. The mention subscribes them, so the next event on the page reaches them instead. Commenting does not subscribe the lead; *editing* the page would.
-- **Act yourself** — if the page concerns the lead's own work or needs a lead-level response, reply directly.
-- **Escalate** — if the page is outside the team's scope or the lead can't identify the right reviewer, `@mention` their own manager (named in the identity prompt) in a comment, which subscribes the manager and lets them decide where the page belongs. Space-lead fallback fires only when nobody else is involved, so silently walking away would leave the page with no subscriber at all.
+- **Staying silent is the ordinary outcome.** Documentation changing is not a request: the lead acts only if the change bears on work in flight, and does not comment to acknowledge it, because a wiki whose comments are acknowledgements is a wiki whose comments nobody reads.
+- **Delegate by mention.** If the page belongs to a teammate, the lead `@mention`s them in a **comment** rather than answering it itself. The mention subscribes them, so the next event on the page reaches them instead. Commenting does not subscribe the lead; *editing* the page would — which is why this sentence is in the prompt at all: without it a lead that answers by hand keeps receiving every later event on the page.
 
-The hint is suppressed for `watcher` / `mention` routings — those carry their own signal of personal involvement.
+The hint is suppressed for `watcher` / `mention` routings — those carry their own signal of personal involvement. A **subscriber** is told it follows the page because it edited it or was mentioned on it, and gets the same "staying silent is the ordinary outcome" section, without the delegation sentence, which would be false for it: a mention subscribes the teammate, but the subscriber stays subscribed, so the next change still reaches it. A **mention** is the one routing the prompt frames as an ask, and the turn engine holds it to an answer (see [Who is waiting](../concepts/turn-engine.md#who-is-waiting-and-how-they-get-an-answer)).
 
 **Example 1**: Agent SWE edits a page, which subscribes it. A human then comments:
 - Agent SWE gets the notification (`routed_via: watcher`)

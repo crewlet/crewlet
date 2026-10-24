@@ -79,24 +79,29 @@ func TestEachReasonAsksForSomethingDifferent(t *testing.T) {
 		says   []string
 		quiet  []string
 	}{
+		// A review is declined by moving it, which only the code host
+		// knows; that an ask may not end in silence is the executor's
+		// contract and is not restated.
 		{gitlab.MRReview,
-			[]string{"requested to review", "Read the diff", "not to review"},
-			[]string{"deliberately", "Evaluate Before Acting"}},
+			[]string{"requested to review", "If you are not the right reviewer"},
+			[]string{"deliberately", "Evaluate Before Acting", "go quiet"}},
 		{gitlab.MRAssigned,
-			[]string{"been assigned a merge request", "push and update"},
-			[]string{"requested to review", "coding runtime"}},
+			[]string{"been assigned a merge request", "reassign it"},
+			[]string{"requested to review", "coding runtime", "go quiet"}},
 		{gitlab.IssueAssigned,
 			[]string{"been assigned an issue", "coding runtime"},
-			[]string{"push and update the merge request"}},
+			[]string{"go quiet"}},
+		// A MENTION IS ADDRESSED: the delivery check holds it to an
+		// answer, so it is not told silence is fine when nothing was asked.
 		{gitlab.NoteMention,
-			[]string{"mentioned in a comment", "Evaluate Before Acting"},
-			[]string{"been assigned", "requested to review"}},
+			[]string{"mentioned in a comment"},
+			[]string{"been assigned", "requested to review", "Evaluate Before Acting"}},
 		{gitlab.MRMention,
-			[]string{"mentioned in a issue or merge-request description"},
-			[]string{"been assigned"}},
+			[]string{"mentioned in an issue or merge-request description"},
+			[]string{"been assigned", "Evaluate Before Acting"}},
 		{gitlab.PipelineFailed,
-			[]string{"has FAILED", "Read the job log", "deliberately"},
-			[]string{"Evaluate Before Acting"}},
+			[]string{"has FAILED", "**Pipeline:**", "deliberately"},
+			[]string{"Evaluate Before Acting", "**Merge request:**"}},
 		{gitlab.IssueClosed,
 			[]string{"was CLOSED", "Stop any in-flight work"},
 			[]string{"Evaluate Before Acting"}},
@@ -121,9 +126,10 @@ func TestAnUnknownReasonFallsBackToWatching(t *testing.T) {
 		"take part in this thread", "nimbus/api!42")
 }
 
-// THE ONE EXCEPTION TO THE SELF-ACTION RULE, and the only one in the engine.
-// A build runs minutes after the push and reports something nobody could
-// have predicted; every other event here reports what somebody DID.
+// THIS HOST'S ONE EXCEPTION TO THE SELF-ACTION RULE (the hosted host's failed
+// run and the tracker's unblocked notice are the engine's others). A build
+// runs minutes after the push and reports something nobody could have
+// predicted; every other event here reports what somebody DID.
 func TestOnlyAFailedPipelineWakesItsActor(t *testing.T) {
 	t.Parallel()
 	if !(gitlab.Prompt{}).WakesActor(gitlab.PipelineFailed) {

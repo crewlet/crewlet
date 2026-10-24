@@ -204,10 +204,12 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 // knowledgeQuery asks the auxiliary model for a search query.
 //
 // WRITTEN FROM WHAT THE TURN WAS ASKED ([Request.Ask]), not from the brief the
-// executor is handed: the brief wraps a chat message in triage guidance with
-// worked examples of its own (a new hire welcomed, a ticket opened for an
-// engineer), and a query writer handed the brief is handed those as candidate
-// search terms beside the one sentence the turn is about.
+// executor is handed: the brief wraps a chat message in scaffolding that is
+// the same on every turn of that surface — the seat's handle, the collectives,
+// a role group in the triage — and a query writer handed the brief is handed
+// those as candidate search terms beside the one sentence the turn is about,
+// as it was handed the worked examples the triage carried then (a new hire
+// welcomed, a ticket opened for an engineer).
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
 		"Task the agent is about to work on:\n\""+r.Ask+
