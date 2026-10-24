@@ -300,11 +300,18 @@ func (d *dutyDecline) next(interval time.Duration) time.Duration {
 // — on every tick that declines, so a give-back the store did not answer is
 // tried again a tick later rather than left to the lease's TTL. Nil release
 // gives back nothing: a node with no fleet holds no lease.
+//
+// It reports whether the store ANSWERED that this node no longer holds the
+// duty — it gave the lease back, or held none to give — so a duty that keeps
+// state as its holder (the collector's gauges and alarm) can let it go as a
+// claim that answered "not held" lets it go. False is no such answer: a
+// give-back the store did not answer says nothing about who holds the duty,
+// and neither does a node with no lease to give, which runs the duty alone.
 func (d *dutyDecline) giveBack(ctx context.Context, of declinable,
-	release func(context.Context) (bool, error)) {
+	release func(context.Context) (bool, error)) (notHeld bool) {
 
 	if release == nil {
-		return
+		return false
 	}
 	logger := cmp.Or(d.log, log)
 	released, err := release(ctx)
@@ -314,9 +321,11 @@ func (d *dutyDecline) giveBack(ctx context.Context, of declinable,
 			"detail", "this node declines "+of.duty+" and could not give its lease "+
 				"back, so the next tick tries again — or a node that does not decline it "+
 				"takes it once the lease lapses")
+		return false
 	case released:
 		logger.InfoContext(ctx, of.event+"_given_back",
 			"detail", "this node declined "+of.duty+" and gave its lease back, so a "+
 				"node that does not decline it takes it at its next tick")
 	}
+	return true
 }

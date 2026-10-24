@@ -1255,3 +1255,77 @@ func TestTheBucketUsageIsReportedOnlyByTheDutyHolder(t *testing.T) {
 		t.Errorf("a node that gave the duty up still reports a reservation of %d", r.ObjectsBucketMaxBytes)
 	}
 }
+
+// A HOLDER THAT DECLINES THE DUTY AND GIVES IT BACK LETS THE BUCKET'S GAUGES
+// GO, as a holder told by its claim that another node holds the duty does: it
+// stopped reading the bucket, and a gauge holds its last write, so kept they
+// went on exporting this node's last reading — and raising the near-ceiling
+// alarm from it — beside the reading of the node that took the duty over. A
+// give-back the store did not answer is no answer about who holds the duty,
+// and keeps them, as an unknown claim does.
+func TestADecliningHolderLetsTheBucketsGaugesGo(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		giveBack func(context.Context) (bool, error)
+		kept     bool
+	}{
+		{"given_back", func(context.Context) (bool, error) { return true, nil }, false},
+		{"held_none", func(context.Context) (bool, error) { return false, nil }, false},
+		{"unanswered", func(context.Context) (bool, error) {
+			return false, errors.New("the coordination store did not answer")
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, duty, _ := collectorNode(t, &namedNothing{})
+			backend := &reservedBackend{Backend: memobj.New(),
+				usage: objstore.Usage{Bytes: 9 << 30, MaxBytes: 10 << 30}}
+			store, err := objstore.NewStore(backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.objects.store = store
+			rec, err := metrics.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.metrics = rec
+			duty.giveBack = tc.giveBack
+			gauges := func() (reading statelog.Reading, exported int) {
+				e.objectsReading(time.Now(), &reading)
+				for _, s := range rec.Read() {
+					if s.Name == metrics.ObjectsBucketBytes || s.Name == metrics.ObjectsBucketMaxBytes {
+						exported++
+					}
+				}
+				return reading, exported
+			}
+			e.collectorTurn(t.Context(), nil, duty)
+			if r, exported := gauges(); r.ObjectsBucketMaxBytes != 10<<30 || exported != 2 {
+				t.Fatalf("the holder reads a reservation of %d and exports %d of the bucket's "+
+					"two gauges, want 10 GiB and both", r.ObjectsBucketMaxBytes, exported)
+			}
+
+			// ITS COPY OF THE TRACKER GOES OUT OF SERVICE, so it declines.
+			withCore(e)
+			e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict {
+				return wrongOn(trackerName)
+			})
+			e.collectorTurn(t.Context(), func(context.Context) (bool, error) {
+				t.Error("a node whose tracker copy is out of service claimed the collector")
+				return false, nil
+			}, duty)
+			r, exported := gauges()
+			switch {
+			case tc.kept && (r.ObjectsBucketMaxBytes != 10<<30 || exported != 2):
+				t.Errorf("a give-back the store did not answer left a reservation of %d and "+
+					"%d gauges; an unknown answer keeps what the node reported",
+					r.ObjectsBucketMaxBytes, exported)
+			case !tc.kept && (r.ObjectsBucketMaxBytes != 0 || exported != 0):
+				t.Errorf("a node that gave the duty back still reads a reservation of %d and "+
+					"exports %d of the bucket's gauges", r.ObjectsBucketMaxBytes, exported)
+			}
+		})
+	}
+}

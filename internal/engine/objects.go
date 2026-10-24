@@ -231,7 +231,19 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 
 	if _, out := duty.declines.check(ctx, collectorDecline, e.copyOutOfService,
 		duty.decidesFrom); out {
-		duty.declines.giveBack(ctx, collectorDecline, duty.giveBack)
+		// A NODE THAT GAVE THE DUTY BACK IS NO LONGER ITS HOLDER, and
+		// lets go of what only the holder reports — the bucket's gauges,
+		// its near-ceiling alarm and the missing count — exactly as a
+		// claim that answered "not held" does ([Engine.settleCollector]):
+		// kept, they went on describing the bucket from a node that had
+		// stopped reading it, beside the node that took the duty over.
+		// A give-back the store did not answer settles nothing, as an
+		// unknown claim does; it only forgets the resume, since the next
+		// holder may record a newer pass meanwhile.
+		if duty.declines.giveBack(ctx, collectorDecline, duty.giveBack) {
+			e.settleCollector(duty, false, nil)
+			return
+		}
 		duty.mu.Lock()
 		duty.resumed = false
 		duty.mu.Unlock()
