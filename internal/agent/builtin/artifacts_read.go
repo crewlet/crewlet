@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
@@ -689,6 +690,14 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 		o := canvas.Outline()
 		text = designOutline(o)
 		out = map[string]any{"boards": o.Count}
+	case artifacts.FormatBrand:
+		b, err := brandformat.Read(src)
+		if err != nil {
+			r := sourceFailure(ctx, t.Name(), brandformat.EntryPath, err)
+			return nil, &r
+		}
+		text = brandOutline(b)
+		out = map[string]any{"name": b.Name}
 	default:
 		r := failed(fmt.Sprintf("get_artifact: a %s artifact has no outline; read its files "+
 			"by `path`.", h.Kind))
@@ -697,6 +706,46 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 	read.fence(fieldPath{}.key("outline").key("text"), provenance.SourceArtifactFile, writers, partial, text)
 	out["text"] = text
 	return out, nil
+}
+
+// brandOutline is a brand kit's index as one text: its name and tagline, its
+// colour roles, its faces, its logos by path and its voice. A kit is a draft
+// until an administrator adopts it; the company's adopted brand is
+// get_company_brand's answer, never a kit's.
+func brandOutline(b brandformat.Brand) string {
+	var w strings.Builder
+	fmt.Fprintf(&w, "Brand kit: %s\n", b.Name)
+	if b.Tagline != "" {
+		fmt.Fprintf(&w, "Tagline: %s\n", b.Tagline)
+	}
+	c := b.Colors
+	for _, role := range []struct{ name, value string }{
+		{"primary", c.Primary}, {"secondary", c.Secondary}, {"text", c.Text},
+		{"light_ground", c.LightGround}, {"dark_ground", c.DarkGround}, {"primary_on_dark", c.PrimaryOnDark},
+	} {
+		if role.value != "" {
+			fmt.Fprintf(&w, "Colour %s: %s\n", role.name, role.value)
+		}
+	}
+	fmt.Fprintf(&w, "Heading face: %s\nBody face: %s\n", brandformat.FontStack(b.Type.Heading),
+		brandformat.FontStack(b.Type.Body))
+	for _, logo := range []struct{ name, path string }{
+		{"primary", b.Logos.Primary}, {"on_dark", b.Logos.OnDark}, {"mark", b.Logos.Mark},
+	} {
+		if logo.path != "" {
+			fmt.Fprintf(&w, "Logo %s: %s\n", logo.name, logo.path)
+		}
+	}
+	if b.Voice.Summary != "" {
+		fmt.Fprintf(&w, "Voice: %s\n", b.Voice.Summary)
+	}
+	for _, line := range b.Voice.WriteLike {
+		fmt.Fprintf(&w, "Write like: %s\n", line)
+	}
+	for _, line := range b.Voice.Avoid {
+		fmt.Fprintf(&w, "Avoid: %s\n", line)
+	}
+	return w.String()
 }
 
 // docOutline is a doc's tabs as one text, each its title, file and size.

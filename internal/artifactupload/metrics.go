@@ -24,7 +24,7 @@ var Refusals = []string{
 	"edit_refused", "policy_refused", "upload_missing", "upload_mismatch", "upload_not_found",
 	"upload_expired", "upload_consumed", "uploads_outstanding", "turn_quota", "quota_exceeded",
 	"version_moved", "carried_object_gone", "label_taken", "trashed", "not_found", "conflict",
-	"folder_not_found", "other",
+	"folder_not_found", "brand_contrast", "other",
 }
 
 // reasonOf is a refusal's reason, from [Refusals].
@@ -78,6 +78,8 @@ func reasonOf(err error) string {
 		return "upload_consumed"
 	case errors.Is(err, artifactsdomain.ErrLabelTaken):
 		return "label_taken"
+	case errors.Is(err, artifactsdomain.ErrBrandContrast):
+		return "brand_contrast"
 	case errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrPurged):
 		return "trashed"
 	case errors.Is(err, artifactsdomain.ErrNotFound):

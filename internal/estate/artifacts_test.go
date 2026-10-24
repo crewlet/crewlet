@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -257,7 +258,10 @@ func (v *vault) Move(_ context.Context, c artifactsdomain.Call, _ artifacts.ID, 
 func (v *vault) AdoptBrand(_ context.Context, c artifactsdomain.Call, in artifactsdomain.BrandAdoptInput) (
 	artifactsdomain.Written, error) {
 	if in.Version == 99 {
-		return artifactsdomain.Written{}, artifactsdomain.ErrBrandContrast
+		return artifactsdomain.Written{}, &artifactsdomain.BrandContrast{Pair: brandformat.ContrastResult{
+			ContrastPair:    brandformat.ContrastPairs[0],
+			ForegroundColor: "#999999", GroundColor: "#f6f7fb", Ratio: 2.66,
+		}}
 	}
 	return v.wrote(fmt.Sprintf("adopt_brand:%d", in.Version), c), nil
 }
@@ -378,9 +382,11 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 		Names: []string{"Reports", "Weekly"}, Parents: true}); err != nil || got.Created != 2 {
 		t.Errorf("create folders = (%+v, %v)", got, err)
 	}
-	if _, err := a.AdoptBrand(ctx, jane, artifactsdomain.BrandAdoptInput{Version: 99}); !errors.Is(err,
-		artifactsdomain.ErrBrandContrast) {
-		t.Errorf("a contrast refusal crossed as %v", err)
+	_, err = a.AdoptBrand(ctx, jane, artifactsdomain.BrandAdoptInput{Version: 99})
+	var contrast *artifactsdomain.BrandContrast
+	if !errors.Is(err, artifactsdomain.ErrBrandContrast) || !errors.As(err, &contrast) ||
+		contrast.Pair.Ratio != 2.66 || contrast.Pair.ForegroundColor != "#999999" {
+		t.Errorf("a contrast refusal crossed as %v, without the pair that refused it", err)
 	}
 	for name, write := range map[string]func() error{
 		"patch": func() error { _, err := a.Patch(ctx, jane, id, artifactsdomain.Patch{}); return err },

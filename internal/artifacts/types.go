@@ -92,12 +92,6 @@ const (
 	// may exist; the company's brand is the one version an administrator
 	// ADOPTED (internal/artifactsdomain's `brand` subject), never whichever
 	// kit was published last.
-	//
-	// DECLARED, NOT YET SERVED: the kind enters [Kinds] (its row in the kind
-	// table) in the change that serves it end to end, the publish pipeline's
-	// format check and the dashboard's view included, as the kind table
-	// requires. Until then a create naming it is refused as a kind this
-	// build does not serve.
 	KindBrand Kind = "brand"
 )
 

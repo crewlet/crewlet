@@ -359,6 +359,18 @@ var kindSpecs = []KindSpec{
 
 		Documents: DocumentsEach,
 	},
+	{
+		Kind:    KindBrand,
+		Summary: "is a brand kit: the company's logos, colours, type and voice, which an administrator adopts",
+		Render:  RenderNative,
+		Entry: EntryRule{Indexes: []EntryIndex{{Path: "brand.json", Essence: "application/json"}},
+			Defaults: []string{"brand.json"}},
+		Store:  StoreNone,
+		Format: FormatBrand,
+		Search: SearchFormat,
+
+		Documents: DocumentsNone,
+	},
 }
 
 // Kinds are every kind this build serves, in the table's order.

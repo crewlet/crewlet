@@ -363,7 +363,8 @@ func (h *harness) named() map[objstore.Key]bool {
 	out := map[objstore.Key]bool{}
 	if err := h.domain.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		for _, q := range []string{`SELECT object FROM artifact_objects`,
-			`SELECT object FROM artifact_assets WHERE object IS NOT NULL`} {
+			`SELECT object FROM artifact_assets WHERE object IS NOT NULL`,
+			`SELECT object FROM artifact_brand_files`} {
 			rows, err := tx.QueryContext(h.t.Context(), q)
 			if err != nil {
 				return err

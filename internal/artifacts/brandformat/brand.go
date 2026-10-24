@@ -1,8 +1,10 @@
 package brandformat
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -81,6 +83,15 @@ type Brand struct {
 	Colors Colors `json:"colors"`
 	Type   Type   `json:"type"`
 	Voice  Voice  `json:"voice"`
+}
+
+// Text is what a kit says, for the gallery's search: its name, its tagline
+// and its voice, one line each.
+func (b Brand) Text() string {
+	parts := []string{b.Name, b.Tagline, b.Voice.Summary}
+	parts = append(parts, b.Voice.WriteLike...)
+	parts = append(parts, b.Voice.Avoid...)
+	return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), "\n")
 }
 
 // Logos are the kit's logo files, each the path of a file of the version.
@@ -234,6 +245,14 @@ func (f Finding) String() string {
 type Refused struct {
 	Findings []Finding
 }
+
+// ErrRefused is every refusal this package answers, wrapped by [*Refused], so
+// a reader of a stored kit tells a kit outside the format from a file it could
+// not read.
+var ErrRefused = errors.New("brandformat: refused")
+
+// Unwrap makes every refusal an [ErrRefused].
+func (r *Refused) Unwrap() error { return ErrRefused }
 
 func (r *Refused) Error() string {
 	lines := make([]string, len(r.Findings))

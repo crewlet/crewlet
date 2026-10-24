@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
@@ -48,6 +49,18 @@ type OutlineAnswer struct {
 
 	// Doc is a doc's tabs and the opening of its first, drawn at card size.
 	Doc *docindex.Outline `json:"doc,omitempty"`
+
+	// Brand is a brand kit's index, which its card draws: the name, the
+	// colours and the faces, and the logos by path (each read through the
+	// version's file route).
+	Brand *BrandOutline `json:"brand,omitempty"`
+}
+
+// BrandOutline is a brand kit's outline: its whole `brand.json` as the brand
+// format reads it, which is small (at most brandformat.MaxIndexBytes) and holds
+// nothing a reader of the kit may not see.
+type BrandOutline struct {
+	Document brandformat.Brand `json:"document"`
 }
 
 // DocAnswer is a version's whole doc (`GET /artifacts/{id}/versions/{n}/doc`):
@@ -140,6 +153,12 @@ func (s *Service) outline(w http.ResponseWriter, r *http.Request) {
 		}
 		o := canvas.Outline()
 		out.Design = &o
+	case artifacts.FormatBrand:
+		kit, ok := s.brands.read(w, r, a, v)
+		if !ok {
+			return
+		}
+		out.Brand = &BrandOutline{Document: kit}
 	case artifacts.FormatNone:
 	}
 	httpjson.Write(w, http.StatusOK, out)

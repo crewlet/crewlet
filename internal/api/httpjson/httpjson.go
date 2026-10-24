@@ -915,6 +915,10 @@ const (
 	// CodeLabelTaken is a label another version of the artifact holds, or
 	// one past the labelled versions an artifact keeps. 409.
 	CodeLabelTaken Code = "label_taken"
+	// CodeBrandContrast is an adoption of a brand whose body text does not
+	// contrast enough with its light ground to be read. 422, the detail's
+	// `contrast` naming the pair, its two colours, the ratio and the floor.
+	CodeBrandContrast Code = "brand_contrast"
 	// CodeArtifactOriginUnset is a frame asked of a deployment that serves
 	// no artifact origin (`api.artifacts.external_url` unset). 409: an
 	// operator sets one; no retry here changes it.
@@ -1298,6 +1302,9 @@ var codes = map[Code]string{
 		"published. The detail lists every problem to fix.",
 	CodeSourceTaken: "Another of your artifacts already uses that source " +
 		"address. Publish to that artifact, or choose another address.",
+	CodeBrandContrast: "The brand's text colour does not stand out enough from its " +
+		"light background to be read, so it was not adopted. Darken the text or " +
+		"lighten the background, then adopt it again.",
 	CodeLabelTaken: "Another version already has that label, or this " +
 		"artifact keeps no more labels. Choose another label.",
 	CodeArtifactOriginUnset: "This engine has no address to open pages on, so " +
