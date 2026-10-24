@@ -195,7 +195,10 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 					"tracker's tools are served = %v, and this node serves them = %v",
 					arm.toolReader, n.trackerReader != nil)
 			}
-			estates := n.objectEstates()
+			// THE ESTATES THE COLLECTOR IS BUILT OVER, as [Engine.startCollectorOver]
+			// builds them: the native half's and the artifacts log's, which
+			// every data node runs ([objectEstatesFor]).
+			estates := objectEstatesFor(n, e.ArtifactsReader())
 			offered := map[string]bool{}
 			for _, estate := range estates {
 				if offered[estate.Name()] {
