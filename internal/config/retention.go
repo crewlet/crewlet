@@ -232,16 +232,16 @@ const (
 	// code.BarrierRecordBytes), at the reference company once its seats
 	// push:
 	//
-	//   - the mutation log about 11.4 MB a day: 9.7 MB of records,
+	//   - the mutation log about 12.1 MB a day: 9.9 MB of records,
 	//     MEASURED for the reference company's tasks, comments, edits and
 	//     turns (internal/tracker's "What a day costs the log, measured",
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
-	//     sized at, tracker.TrackerLogMaxBytes), and 1.7 MB of barriers, its
+	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 5.8–7.7 MB a day: 3 000 pushes at 1 292 bytes,
+	//   - the code log 6.4–9.0 MB a day: 3 000 pushes at 1 332 bytes,
 	//     MEASURED for a push alone in its record (internal/code's
-	//     BenchmarkPushLogBytes; 742.7 a push in a burst group commit holds
-	//     together), 3.9 MB; and the barriers of its git clients, 1.9–3.8 MB
+	//     BenchmarkPushLogBytes; 744.0 a push in a burst group commit holds
+	//     together), 4.0 MB; and the barriers of its git clients, 2.4–5.0 MB
 	//     — a push asks the log twice (its advertisement and its receive's
 	//     sync) and the fetch before it once (its ls-refs, whose sync brings
 	//     every want), so a seat's push three times, 9 000 a day, beside
@@ -249,18 +249,29 @@ const (
 	//     and, where one runs, a CI polling ten repositories a minute
 	//     (14 400).
 	//
-	// So the code log takes 0.51–0.68 of the mutation log's day — 0.34 on
+	// Every figure is of SIGNED records (ADR-0031), each about forty bytes
+	// longer than the records the ratio was first set from: the frame grows
+	// a barrier by about three tenths and a push or a gesture by a few
+	// percent, so it moved the code log, whose day is half barriers, more
+	// than the mutation log.
+	//
+	// So the code log takes 0.53–0.74 of the mutation log's day — 0.33 on
 	// its push records alone (0.40 of the tracker's records), which is what
 	// the 1.5–2 KiB a record this ratio was first set from overstated — and
-	// TWO THIRDS is taken near the top of that range rather than its middle,
-	// because the changes, reviews and checks that later releases put on
-	// this same log come on top and a log keeps the ceiling it was created
-	// with: an operator who wants more room later pays for it with `crewlet
-	// retention set-capacity`. A JUDGEMENT on an ESTIMATE of git traffic no
-	// deployment has reported yet: the reading that would say otherwise is
-	// the code log's crewlet.statelog.barrier.applied, and a company that
-	// knows its git clients read far less sets stream.code_log_max_bytes
-	// before its first boot.
+	// TWO THIRDS is taken past the middle of that range, never past its
+	// top. Past the middle because the changes, reviews and checks that
+	// later releases put on this same log come on top and a log keeps the
+	// ceiling it was created with: an operator who wants more room later
+	// pays for it with `crewlet retention set-capacity`. Not raised to the
+	// top the frame moved it to (0.51–0.68 unsigned, two thirds near its
+	// top then), because the frame grew the git barriers most, and they are
+	// the softest term in the day: a JUDGEMENT on an ESTIMATE of git traffic
+	// no deployment has reported yet, while every byte of ratio above it is
+	// taken from the other logs on every volume whose logs are scaled into
+	// their share. The reading that would say otherwise is the code log's
+	// crewlet.statelog.barrier.applied, and a company that knows its git
+	// clients read far less sets stream.code_log_max_bytes before its first
+	// boot.
 	DerivedCodeLogNumerator   = 2
 	DerivedCodeLogDenominator = 3
 

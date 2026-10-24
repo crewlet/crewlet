@@ -1206,7 +1206,7 @@ stream:
                                     #   barriers take about half to seven
                                     #   tenths of the bytes a day its tracker
                                     #   writes and its seats' reads do, and
-                                    #   the ratio sits near the top because
+                                    #   the ratio sits past the middle because
                                     #   later releases add changes, reviews
                                     #   and checks to this log, so a blocked
                                     #   trim fills either one in about the

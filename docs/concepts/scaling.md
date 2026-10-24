@@ -265,12 +265,12 @@ push's pack.
 whole estate, and the code host's rows with it. A person's push of one commit
 leaves a push row of about 395 bytes, kept 181 days, and its pack's row of
 about 357, kept as long as the repository is; the code log, which keeps only
-the trim's window of records, takes 1 292 bytes for a push in a record of its
+the trim's window of records, takes 1 332 bytes for a push in a record of its
 own and about 740 for each of a burst group commit holds together. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 215 MB | about 390 MB | about 27 MB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 215 MB | about 390 MB | about 28 MB |
 | 250 000 — a company of thousands of seats | about 45 million, 17.9 GB | about 32.6 GB | 1.3 to 2.3 GB |
 
 These rows come on top of what the tracker, the knowledge base and the rest of

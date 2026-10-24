@@ -1727,7 +1727,7 @@ type Stream struct {
 	// the byte rate: once seats push, a company's push records and the
 	// barriers its git clients' reads append take about half to seven
 	// tenths of what its tracker writes and its seats' reads take a day,
-	// and the ratio is taken near the top of that range
+	// and the ratio is taken past the middle of that range
 	// ([DerivedCodeLogNumerator] has the arithmetic and the reason), so a
 	// blocked trim reaches either ceiling in about the same time.
 	//

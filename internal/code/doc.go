@@ -184,13 +184,14 @@
 // THE PUSH ON THE LOG (BenchmarkPushLogBytes, the same figure every count):
 // the code log's growth over the records the committer forms for that same
 // person's push — its one command, its bundle named and its one introduced
-// id — is 1 292 bytes a push in a record of its own, and 742.7 a push for
+// id — is 1 332 bytes a push in a record of its own, and 744.0 a push for
 // sixty-four at once to one repository, which group commit lands as two
-// records: a record's envelope is about 570 bytes, and each push it carries
+// records: a record's envelope is about 610 bytes, forty of them the signed
+// frame every record is appended in (ADR-0031), and each push it carries
 // about 725 more. The log keeps the trim's window of records rather than the
-// history, so 3 000 pushes a day hold about 27 MB of it over the default
-// seven-day min_age, a fortieth of the log's 1 GiB floor, and the bytes of
-// a push's pack are never on it: a record names its bundle.
+// history, so 3 000 pushes a day hold about 28 MB of it over the default
+// seven-day min_age, about a fortieth of the log's 1 GiB floor, and the bytes
+// of a push's pack are never on it: a record names its bundle.
 //
 // # The activation fence
 //

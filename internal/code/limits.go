@@ -69,9 +69,9 @@ const BarrierRecordBytes = 176
 // AN ALLOWANCE, NOT THE SPLIT THE CEILING WAS SIZED BY. The ceiling's own
 // ratio (config's DerivedCodeLogNumerator, which [CodeLogMaxBytes] below is
 // spelled from) already counts the reference company's git barriers beside its
-// pushes: 1.9–3.8 MB a day, 13–27 MB over the default seven days — under a
-// fortieth of the tenth of a derived 10⅔ GiB ceiling, and a quarter of the
-// tenth of even the 1 GiB floor. So the tenth is not what git was expected
+// pushes: 2.4–5.0 MB a day, 17–35 MB over the default seven days — under a
+// thirtieth of the tenth of a derived 10⅔ GiB ceiling, and about a third of
+// the tenth of even the 1 GiB floor. So the tenth is not what git was expected
 // to take: it is room that git traffic well past that estimate grows into, and
 // census_drift, at twice the census, says when even that is outgrown and every
 // sizing decision under the log is stale. A JUDGEMENT: smaller fires
@@ -136,13 +136,13 @@ const (
 	// so the log the suites provision and the log a node creates are sized
 	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
 	// what this log takes a day at the reference company once seats push:
-	// 3 000 pushes at the MEASURED 1 292 bytes a push alone in its record
-	// (BenchmarkPushLogBytes), 3.9 MB, and its git clients' barriers at
-	// BarrierRecordBytes, 1.9–3.8 MB, against the tracker's measured 9.7 MB
-	// of records and 1.7 MB of barriers. It was the tracker's whole sixteen,
-	// on an estimate of 2 KiB a push and no barriers, which put the two
-	// logs on "the same order" rather than at the ratio a blocked trim
-	// fills both in the same time.
+	// 3 000 pushes at the MEASURED 1 332 bytes a push alone in its record
+	// (BenchmarkPushLogBytes), 4.0 MB, and its git clients' barriers at
+	// BarrierRecordBytes, 2.4–5.0 MB, against the tracker's measured 9.9 MB
+	// of records and 2.2 MB of barriers, every record in its signed frame.
+	// It was the tracker's whole sixteen, on an estimate of 2 KiB a push and
+	// no barriers, which put the two logs on "the same order" rather than at
+	// the ratio a blocked trim fills both in the same time.
 	CodeLogMaxBytes = (16 << 30) * config.DerivedCodeLogNumerator / config.DerivedCodeLogDenominator
 
 	// CodeLogDuplicates is the window the broker collapses a repeated

@@ -136,32 +136,35 @@
 // gesture costed by the stream's own growth, which is what the broker counts
 // against the ceiling (TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay,
 // which holds each figure here to within a hundredth of what it measures, and
-// TestTheDocsPrintTheMeasuredDay, which holds every page that prints one):
+// TestTheDocsPrintTheMeasuredDay, which holds every page that prints one).
+// Every record is appended in the signed frame ADR-0031 puts round it — its
+// magic, version and key id's length, the key id and a 32-byte MAC, forty bytes
+// under the suite's two-byte key id — so each figure carries one frame a record:
 //
-//   - a task filed: 5 089 bytes, in two records — the project's counter and
+//   - a task filed: 5 266 bytes, in two records — the project's counter and
 //     the task — at a 2 KiB description, which the task record carries whole
 //     and its notification's excerpt again up to [MaxExcerpt];
-//   - a comment: 2 997 bytes at 1 KiB, carried twice the same way, with the
+//   - a comment: 3 037 bytes at 1 KiB, carried twice the same way, with the
 //     commenter's watch;
-//   - an edit: 1 117 bytes for a status change — the change itself is a few
-//     bytes, and the rest the record's envelope and the routing snapshot
-//     every notification takes;
-//   - a turn charged to its task: 1 568 bytes with its summary at
+//   - an edit: 1 157 bytes for a status change — the change itself is a few
+//     bytes, and the rest the record's envelope, its frame and the routing
+//     snapshot every notification takes;
+//   - a turn charged to its task: 1 608 bytes with its summary at
 //     [MaxTurnSummary].
 //
-// So the day is 9.7 MB of records — 1.39 MB of tasks, 2.46 of comments, 1.12
-// of edits and 4.70 of turns: half of it is the turns, whose every field is
+// So the day is 9.9 MB of records — 1.44 MB of tasks, 2.50 of comments, 1.16
+// of edits and 4.82 of turns: half of it is the turns, whose every field is
 // capped, so the text a company writes moves it less than its rate of turns
-// does (a 1 KiB description and a 512-byte comment make it 8.9 MB). Its keys
+// does (a 1 KiB description and a 512-byte comment make it 9.1 MB). Its keys
 // are a new project's, one or two digits, where a project of the reference
 // company's writes five by its fifth year: three bytes more wherever a key is
 // written, about 8 kB of the day. Beside the records the seats' 12 500
-// linearizable reads and the object collector's 25 append 1.7 MB of barriers,
-// at 136 bytes each from a log's second generation to its tenth (128 at its
-// first; TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt) — 11.4 MB a
-// day in all, which the trim's seven-day min_age holds about 80 MB of on a
+// linearizable reads and the object collector's 25 append 2.2 MB of barriers,
+// at 176 bytes each from a log's second generation to its tenth (168 at its
+// first; TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt) — 12.1 MB a
+// day in all, which the trim's seven-day min_age holds about 85 MB of on a
 // fleet that trims. [TrackerLogMaxBytes] is nearly five years of the records,
-// and a little over four years of the whole day, barriers included.
+// and nearly four years of the whole day, barriers included.
 package tracker
 
 import (

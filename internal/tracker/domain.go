@@ -32,14 +32,16 @@ func (Domain) Name() string { return "tracker" }
 // is data loss with a tidy name.
 //
 // SIXTEEN GIBIBYTES IS FIVE YEARS OF THE REFERENCE COMPANY'S RECORDS,
-// MEASURED: its day takes 9.7 MB of this log (the package doc's "What a day
-// costs the log, measured"), which fills it in 4.9 years, and
+// MEASURED: its day takes 9.9 MB of this log (the package doc's "What a day
+// costs the log, measured"), which fills it in 4.7 years, and
 // TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay holds that day within a
-// tenth of this ceiling's five years. Its seats' linearizable reads add 1.7 MB
-// a day of barriers, so a completely blocked trim reaches it in a little over
-// four years — an unmistakable operator failure rather than a surprise — and
-// the operator dial is real because at a three-year-old company whose trim
-// never ran the ceiling is about a year away.
+// tenth of this ceiling's five years — signed records included, which ADR-0031
+// made forty bytes longer each and which moved the day from 9.7 MB, inside
+// that tenth, so the ceiling stays. Its seats' linearizable reads add 2.2 MB
+// a day of barriers, so a completely blocked trim reaches it in nearly four
+// years — an unmistakable operator failure rather than a surprise — and the
+// operator dial is real because at a three-year-old company whose trim never
+// ran the ceiling is under a year away.
 const TrackerLogMaxBytes = 16 << 30
 
 // TrackerMaxRecordBytes is the largest record this domain publishes

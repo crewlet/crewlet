@@ -2065,49 +2065,54 @@ The bytes of the packs are not here: they are the
 [object store's](../concepts/object-store.md).
 
 The mutation log itself, on a healthily-trimming fleet, holds **about
-80 MB** — the `min_age` window's worth of records, not a year's: seven days,
-`min_age`'s default, of the 11.4 MB a day the reference company writes to it.
+85 MB** — the `min_age` window's worth of records, not a year's: seven days,
+`min_age`'s default, of the 12.1 MB a day the reference company writes to it.
 `min_age` is the term that binds on a fleet that trims, because the trim
 removes only what all six terms permit and every other one sits nearer the
 log's head: the backup floor at the newest verified backup, which is at most a
 day old (`backup_max_age`) or the trim would be blocked, the snapshot floor
 within a day, and the rest where the nodes and the wake feed already are. The
-day is 9.7 MB of records and 1.7 MB of read barriers:
+day is 9.9 MB of records and 2.2 MB of read barriers:
 
 | In a day | Each | Of the log |
 |---|---|---|
-| 274 tasks filed, at a 2 KiB description | 5 089 bytes, in two records | 1.39 MB |
-| 822 comments, at 1 KiB | 2 997 bytes | 2.46 MB |
-| 1 000 edits, each a status change | 1 117 bytes | 1.12 MB |
-| 3 000 turns charged to a task, a summary at its 600-byte cap | 1 568 bytes | 4.70 MB |
-| 12 525 read barriers: the seats' 12 500 and the object collector's 25 | 136 bytes | 1.70 MB |
+| 274 tasks filed, at a 2 KiB description | 5 266 bytes, in two records | 1.44 MB |
+| 822 comments, at 1 KiB | 3 037 bytes | 2.50 MB |
+| 1 000 edits, each a status change | 1 157 bytes | 1.16 MB |
+| 3 000 turns charged to a task, a summary at its 600-byte cap | 1 608 bytes | 4.82 MB |
+| 12 525 read barriers: the seats' 12 500 and the object collector's 25 | 176 bytes | 2.20 MB |
 
 The records are measured on a real broker, written as a seat's tools write
 them: a task filed into the team the org chart gives its project, and every
 change with the notification the engine attaches, which names the project's
 lead and that team's lead for the change to fall back on
-(`internal/tracker`'s "What a day costs the log, measured"). Their keys are a
+(`internal/tracker`'s "What a day costs the log, measured"), each in the signed
+frame every state-log record is appended in
+([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)): about forty
+bytes a record — the frame's own head and a 32-byte MAC around the active
+key's id, measured with a two-byte id, so each character more of yours adds a
+byte to every record. Their keys are a
 new project's, one or two digits, where a project of the reference company's
 reaches four in its first year and five by its fifth: three bytes more by then
 wherever a key is written — three times in a filed task, once in a comment or
 an edit — about 8 kB of the day, under a tenth of one percent. A record
 carries a description or a comment whole and its notification's excerpt of it
 again, so the text a company writes is part of the figure: with half of it — a
-1 KiB description, a 512-byte comment — the records come to 8.9 MB.
+1 KiB description, a 512-byte comment — the records come to 9.1 MB.
 `blocked_by` is the field that says whether this fleet is one that trims; if
 it is set, the log is growing without bound and the forecast above does not
 apply to it.
 
-The read barriers add about **620 MB a year** to the log's throughput — 12 500
-a day at 136 bytes, 15 % of what the log takes. That figure is a term in the
+The read barriers add about **800 MB a year** to the log's throughput — 12 500
+a day at 176 bytes, 18 % of what the log takes. That figure is a term in the
 log's own size, so it is printed with its derivation rather than assumed: it
 comes from an assumed 125 linearizable reads a day per agent seat, which is
-12 500 for the reference company's 100 seats, at 136 bytes a barrier — the
+12 500 for the reference company's 100 seats, at 176 bytes a barrier — the
 code log's `code.BarrierRecordBytes`, which a mutation-log barrier costs too
-from the log's second generation to its tenth (128 bytes at its first). On a
-fleet that trims they are about 12 MB of the 80. On one whose trim is blocked
-the log keeps the whole day, about 4.2 GB a year, so a log created at 16 GiB
-fills in a little over four years — nearly five on its records alone — and one
+from the log's second generation to its tenth (168 bytes at its first). On a
+fleet that trims they are about 15 MB of the 85. On one whose trim is blocked
+the log keeps the whole day, about 4.4 GB a year, so a log created at 16 GiB
+fills in nearly four years — nearly five on its records alone — and one
 created at 4 GiB in about a year. The [`census_drift`](../reference/alarms.md)
 alarm holds every log to that assumption: each log is expected to take 125 reads a day per agent seat (a
 company with none is counted as one), plus what the engine reads on its own —
