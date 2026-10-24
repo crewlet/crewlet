@@ -1570,8 +1570,9 @@ takes neither, and its own configuration of the model is the CLI's (see
 
 A CLI that exits while something it started still holds its output open — a
 helper forked with the CLI's standard output or error inherited — is waited for
-five seconds, and then the stream is read as far as it got. Which stream decides
-the call:
+five seconds. Then whatever still holds it is ended with the CLI's process
+group, as on a timeout, since closing the pipe under a Node runtime ends nothing,
+and the stream is read as far as it got. Which stream decides the call:
 
 - **standard error held**: the answer on standard output is whole, so it
   stands; the cut costs only the CLI's own commentary, and
@@ -1582,9 +1583,10 @@ the call:
   and the entry is not sat out. `cli_agent_output_held` is logged with
   `stream: stdout`.
 
-A CLI whose wait fails another way after it started, as a prompt left unread on
-standard input by a helper does, is `server` too; one that exits 0 when its
-deadline's signal arrives is a `timeout`.
+A CLI whose wait fails another way after it started is `server` too. A helper
+that holds standard input with the prompt unread is one such case, and it is
+ended the same way. A CLI that exits 0 when its deadline's signal arrives is a
+`timeout`.
 
 ### Token accounting
 

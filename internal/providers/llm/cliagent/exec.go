@@ -177,7 +177,9 @@ func (r *rawResult) unfinished() string {
 	}
 }
 
-// run executes one invocation, terminating the whole process TREE on timeout.
+// run executes one invocation, terminating the whole process TREE when its
+// call ends first, and when something the CLI left behind holds the call's
+// pipes past the grace.
 //
 // The tree, not the process: a coding CLI is a launcher over a Node or Bun
 // runtime that forks helpers, and signalling only the process Go started
@@ -291,24 +293,41 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	//
 	// res.timedOut keeps its narrower meaning — cliagent.go classifies a
 	// deadline as KindTimeout and a cancellation is not one.
+	reap := func(reason error) {
+		if killErr := procgroup.Kill(pgid); killErr != nil && !errors.Is(killErr, errors.ErrUnsupported) {
+			log.WarnContext(ctx, "cli_agent_group_kill_failed",
+				"pgid", pgid, "reason", reason, "error", killErr)
+		}
+	}
 	if err := callCtx.Err(); err != nil {
 		// The group was signalled by Cancel and given WaitDelay to go;
 		// anything still alive after Wait returned is a survivor that
 		// ignored SIGTERM, and it holds a concurrency slot until killed.
-		if killErr := procgroup.Kill(pgid); killErr != nil && !errors.Is(killErr, errors.ErrUnsupported) {
-			log.WarnContext(ctx, "cli_agent_group_kill_failed",
-				"pgid", pgid, "reason", err, "error", killErr)
-		}
+		// Before the pipes are drained, so the tree's last words arrive.
+		reap(err)
 	}
 
 	res := &rawResult{
 		timedOut: errors.Is(callCtx.Err(), context.DeadlineExceeded),
 		grace:    in.grace,
 	}
-	// Decided AT THE DEADLINE, before the read ends are closed: a copy that
-	// stops because its pipe was closed under it is one that was cut.
+	// Decided AT THE DEADLINE, before its holder is killed or the read ends
+	// are closed: a stream that reached its end only because of either is
+	// one that was cut.
 	res.heldStdout = !outPipe.endedBy(letGoBy)
 	res.heldStderr = !errPipe.endedBy(letGoBy)
+	// A HOLDER IS A SURVIVOR, and it goes with the group. Something the CLI
+	// started that still held one of the call's pipes a grace after the CLI
+	// was done — its stdout or stderr, or its stdin with the prompt unread,
+	// which os/exec reports as ErrWaitDelay — is attached to a call that is
+	// over, and closing the pipe under it ends none of it: a Node runtime
+	// ignores the SIGPIPE its next write raises and holds the seat's memory
+	// and sockets for as long as it likes. Killed BEFORE the pipes are
+	// closed, which is os/exec's own order, so it dies of the SIGKILL rather
+	// than of the pipe.
+	if callCtx.Err() == nil && (res.heldStdout || res.heldStderr || errors.Is(waitErr, exec.ErrWaitDelay)) {
+		reap(errors.New("it held the call's output past the grace"))
+	}
 	outPipe.release()
 	errPipe.release()
 

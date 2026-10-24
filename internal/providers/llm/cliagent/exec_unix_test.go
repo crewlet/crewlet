@@ -257,7 +257,12 @@ func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
 // holding all three, as [fakeStubborn]'s grandchild does, could not show that
 // a held stderr leaves the answer standing. The others go to the null device.
 // It stays in the CLI's group, as a runtime's helper does, and announces its
-// pid ([fakeGrandchild]) so a case can end it.
+// pid ([fakeGrandchild]) so a case can end it — or see it ended.
+//
+// The CLI WAITS FOR THAT ANNOUNCEMENT before it answers. Exiting at once would
+// let the call's grace run out while the holder is still starting, and a
+// holder reaped before it wrote its pid is one no case can account for: it
+// would read as a holder that never ran.
 func fakeLeaveHolder(stream string) {
 	holder := exec.Command(os.Args[0], "-test.run=TestCLIAgentFakeCLI")
 	holder.Env = append(os.Environ(), "FAKE_HOLD_STREAM=", "FAKE_GRANDCHILD=1")
@@ -276,6 +281,14 @@ func fakeLeaveHolder(stream string) {
 		fmt.Fprintf(os.Stderr, "fake CLI could not fork: %v\n", err)
 		os.Exit(1)
 	}
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		if raw, err := os.ReadFile(os.Getenv("FAKE_PIDFILE")); err == nil && len(raw) > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fmt.Fprintln(os.Stderr, "fake CLI: the holder never announced itself")
+	os.Exit(1)
 }
 
 // fakeExitZeroOnTerm is a CLI that ends CLEANLY when it is asked to stop: on
@@ -494,5 +507,41 @@ func TestTheVersionProbeReadsNoHeldStdout(t *testing.T) {
 
 	if got := p.probeVersion(t.Context()); got != "" {
 		t.Errorf("version = %q, want none from a stdout a helper held", got)
+	}
+}
+
+// A HELPER THAT HELD THE CALL'S PIPES PAST THE GRACE IS ENDED WITH THE CALL.
+//
+// Closing a pipe under it ends nothing: the helper is attached to a call that
+// is over, and a Node runtime ignores the SIGPIPE its next write raises, so it
+// held the seat's memory and sockets for as long as it liked — the leak the
+// group kill on a timeout exists to prevent, reached by a CLI that exited 0.
+// Every stream a helper can hold is a case, stdin among them: os/exec reports
+// that one as a failed wait rather than as a held stream.
+//
+// Mutation: drop the reap after a held stream, and each holder outlives the
+// call.
+func TestAHelperThatHeldTheCallsPipesIsReapedWithIt(t *testing.T) {
+	t.Parallel()
+	for _, stream := range []string{"stdout", "stderr", "stdin"} {
+		t.Run(stream, func(t *testing.T) {
+			t.Parallel()
+			pidFile := filepath.Join(t.TempDir(), "holder.pid")
+			p := fakeProvider(t, map[string]string{
+				"FAKE_HOLD_STREAM": stream, "FAKE_PIDFILE": pidFile, "FAKE_STDOUT": "the answer",
+			}, nil)
+			p.termGrace = witnessGrace
+			holderOf(t, pidFile)
+
+			// More prompt than a pipe holds, so a holder of stdin is one
+			// that kept os/exec's copy of it waiting.
+			_, _ = ask(t, p, llm.Request{Messages: []llm.Message{
+				{Role: llm.RoleUser, Content: strings.Repeat("a prompt longer than a pipe holds ", 1<<15)},
+			}})
+			holder := awaitPidFile(t, pidFile)
+			if !procgrouptest.AwaitGone(t, holder, 10*time.Second) {
+				t.Fatalf("the helper %d that held the call's %s outlived the call", holder, stream)
+			}
+		})
 	}
 }
