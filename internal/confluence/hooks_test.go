@@ -1476,7 +1476,7 @@ func TestADataCenterRecreateThatCannotDeleteDoesNotRegisterASecondHook(t *testin
 		},
 		Sink:        sink,
 		WebhookBase: "https://engine.example.com",
-		Recreate:    true,
+		Recreate:    "-recreate-webhooks",
 	})
 	if err != nil {
 		t.Fatalf("a refused delete failed the whole pass: %v", err)

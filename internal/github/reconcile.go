@@ -105,7 +105,12 @@ type Options struct {
 	// secret, for the case where the existing one's secret was lost.
 	// Destructive: it invalidates the secret every other deployment of
 	// this company holds.
-	RecreateWebhooks bool
+	//
+	// Spelled as the caller spells its switch ([provision.FreshSwitch]):
+	// `-recreate-webhooks` from `crewlet github provision`,
+	// `recreate_webhooks` from the setup route. A refusal of it names
+	// that spelling, never this package's guess at one.
+	RecreateWebhooks provision.FreshSwitch
 }
 
 // IdentityOutcome is what one run learned about a seat's own code-host
@@ -848,7 +853,7 @@ func ensureOrgWebhook(
 		if hook.URL != target {
 			continue
 		}
-		if opts.RecreateWebhooks {
+		if opts.RecreateWebhooks.Asked() {
 			if err := opts.Client.DeleteOrgWebhook(ctx, org, hook.ID); err != nil {
 				return state, err
 			}
@@ -940,7 +945,7 @@ func ensureRepoWebhook(
 		if hook.URL != target {
 			continue
 		}
-		if opts.RecreateWebhooks {
+		if opts.RecreateWebhooks.Asked() {
 			if err := opts.Client.DeleteRepoWebhook(ctx, t.Owner, t.Repo, hook.ID); err != nil {
 				state.Detail = err.Error()
 				return state
@@ -1013,7 +1018,7 @@ type webhookKey struct {
 func webhookSecret(
 	ctx context.Context, opts Options, target string,
 ) (webhookKey, error) {
-	if !opts.RecreateWebhooks {
+	if !opts.RecreateWebhooks.Asked() {
 		var resolved string
 		if opts.Value != nil {
 			resolved = opts.Value(opts.Config.WebhookSecret)
@@ -1031,12 +1036,24 @@ func webhookSecret(
 		}
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
+	if !ok && opts.RecreateWebhooks.Asked() {
+		// A VALUE THE DOCUMENT OWNS, which the switch asked to replace:
+		// refused naming the switch as its caller spells it and both
+		// ways on ([provision.RefuseFresh]), never as a slot that
+		// resolved to nothing, which is what the refusal below is about.
+		if err := provision.RefuseFresh("integrations.github.webhook_secret",
+			opts.RecreateWebhooks, opts.Config.WebhookSecret); err != nil {
+			return webhookKey{}, fmt.Errorf("github: %w", err)
+		}
+	}
 	if !ok {
-		// THE VALUE IS NOT QUOTED. It is normally a ${VAR} and quoting it
-		// would be helpful, but the case this refusal exists for is a
-		// slot holding a LITERAL — so the one time the message is
-		// reached, the thing it would print is the credential. The path
-		// is what an operator needs, and the path is what it says.
+		// THE VALUE IS NOT QUOTED, the rule [provision.Shape] states for
+		// every refusal of a slot like this one. What reaches here holds
+		// no value to register, but it can still hold text a credential
+		// sits in — a reference embedded in other text, or a literal a
+		// run handed no resolver could not read — and this error becomes
+		// State.LastError. The path is what an operator needs, and the
+		// path is what it says.
 		return webhookKey{}, fmt.Errorf(
 			"github: integrations.github.webhook_secret holds neither a value "+
 				"this run could resolve nor a whole ${VAR} reference to mint "+
@@ -1049,7 +1066,7 @@ func webhookSecret(
 	// so the only property that matters is that it is unguessable — there
 	// is no shape to satisfy, unlike the self-hosted host's whsec_ form.
 	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
-		opts.RecreateWebhooks, opts.Unvouched,
+		opts.RecreateWebhooks.Asked(), opts.Unvouched,
 		func() (string, error) { return rand.Text(), nil })
 	if err != nil {
 		return webhookKey{}, fmt.Errorf("github: %w", err)
@@ -1059,7 +1076,7 @@ func webhookSecret(
 		note := fmt.Sprintf(
 			"a fresh webhook secret was minted into %s — %s", secretVar,
 			opts.Sink.NextStep())
-		if opts.RecreateWebhooks {
+		if opts.RecreateWebhooks.Asked() {
 			note += ". The previous secret is now invalid on every other " +
 				"deployment of this company"
 		}

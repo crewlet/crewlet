@@ -63,12 +63,22 @@ type provisionRequest struct {
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
 	// deployments, so the dashboard gates it behind a typed confirmation
 	// and this route names that in its own answer.
+	//
+	// The pass is handed it spelled as this field is ([recreateSwitch]).
 	Recreate bool `json:"recreate_webhooks"`
 	// OperatorCredential is the transient third-party app administrator credential
 	// a pass may need. Never stored, never logged, and zeroed as soon as
 	// the pass returns.
 	OperatorCredential string `json:"operator_credential"`
 }
+
+// recreateSwitch is how this route spells the switch for a fresh webhook
+// secret: the JSON name of [provisionRequest.Recreate], which is what a caller
+// of this route sent. A pass is handed it as the switch itself
+// ([provision.FreshSwitch]), so a refusal of the switch — over a secret the
+// company document holds as a literal — names the field this caller can
+// change rather than the command line's `-recreate-webhooks`.
+const recreateSwitch provision.FreshSwitch = "recreate_webhooks"
 
 // provision serves POST /setup/integrations/{kind}/provision.
 //
@@ -151,7 +161,6 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	}
 
 	in := setup.PassInput{
-		Recreate: req.Recreate,
 		Operator: req.OperatorCredential,
 		// THE ADDRESS EVERY RUN GETS, INCLUDING A READ-ONLY ONE.
 		//
@@ -177,6 +186,9 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// at all — and, for the second, which Tier A key to set.
 		WebhookBase:    s.webhookBase,
 		WebhookBaseKey: s.webhookBaseKey,
+	}
+	if req.Recreate {
+		in.Recreate = recreateSwitch
 	}
 	if !readOnly {
 		if in.WebhookBase == "" {

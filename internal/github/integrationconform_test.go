@@ -105,10 +105,10 @@ const (
 // A literal here made [countingSink] unreachable and the harness's loudest
 // claim — "a freshly minted webhook secret sealed" — untestable: with a value
 // in the slot [github.Reconcile] returns at the already-resolved arm, and
-// forcing the mint branch died at provision.SoleVar ("holds neither a value
-// this run could resolve nor a whole ${VAR}") BEFORE the sink was ever
-// called. A re-minting regression still went red, but as a config refusal
-// rather than through the counter that exists to see it.
+// forcing the mint branch is refused for the literal, which has no variable
+// to mint into ([provision.RefuseFresh]), BEFORE the sink is ever called. A
+// re-minting regression still went red, but as a config refusal rather than
+// through the counter that exists to see it.
 //
 // A `${VAR}` that RESOLVES is the shape a real company has and the only one
 // where both arms are reachable: the converged pass takes the resolved value
@@ -469,10 +469,10 @@ func newConvergedWorld(
 		// verifying with.
 		Sink:        countingSink{TokenSink: newSealingSink(), log: &world.routeLog},
 		WebhookBase: convergedBase,
-		// NEVER TRUE. The loop never sets it, and true forces a delete
-		// and a create on every target — a converged pass that could not
-		// possibly be converged.
-		RecreateWebhooks: false,
+		// NEVER ASKED. The loop never sets it, and asking forces a
+		// delete and a create on every target — a converged pass that
+		// could not possibly be converged.
+		RecreateWebhooks: "",
 	}
 	if withOrgToken {
 		cfg.Token = orgToken

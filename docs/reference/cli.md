@@ -134,7 +134,9 @@ each variable a whole `${VAR}` names without asking the rows or the shell what
 they hold. A literal is the document's own, which no row has a say in, and no
 flag mints over one: wherever the run registers it, `gitlab provision -rotate`
 does so as it is, with a note, and `-recreate-webhooks` and `-recreate-webhook`
-refuse the run rather than replace it. Two decisions read no
+refuse the run rather than replace it, naming the two ways on: point the field
+at a whole `${VAR}` and re-run with the flag, or run without it, which
+registers the literal as it is. Two decisions read no
 answer to refuse on, so they are the same on every route: `-print` and
 `-env-file` decide a seat's token from what they hold, and a seat whose
 account the run creates is minted its first token whichever the sink, since
@@ -2438,7 +2440,7 @@ The Atlassian tracker's reconcile, and it is a different shape from its peers: *
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
 | `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/jira`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
-| `-recreate-webhook` | Delete and remake the hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off the hook — and destructive for every other deployment holding the old one. |
+| `-recreate-webhook` | Delete and remake the hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off the hook — and destructive for every other deployment holding the old one. A literal `webhook_secret` has no variable to mint into, so the run is refused: point the field at a whole `${VAR}`, or run without the flag to register the literal as it is. |
 | `-config PATH` / `-api URL` | The Tier A file (default `./crewlet.yaml`), and a running node to go through in place of the one it names. The company's `${VAR}`s resolve from the secret store they lead to, and `-secret-store` records into the same one; on a stopped node a variable its own rows lack is unknown, so nothing is minted into it and nothing the shell exports for it is registered with the vendor — short of `-recreate-webhook`, which mints a fresh secret into it whatever the rows hold. See [where a command reads the company's values](#where-a-command-reads-the-companys-values). |
 | `-dry-run` | Read the instance and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
 
@@ -2470,7 +2472,7 @@ The hosted code host's reconcile, and it is the same shape as Jira's for the sam
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
 | `-public-url` | This deployment's public base URL; the hooks are registered at `<url>/webhooks/github`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because GitHub then reports a healthy integration that delivers into the void. |
-| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off a hook — and destructive for every other deployment holding the old one. |
+| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off a hook — and destructive for every other deployment holding the old one. A literal `webhook_secret` has no variable to mint into, so the run is refused: point the field at a whole `${VAR}`, or run without the flag to register the literal as it is. |
 | `-config PATH` / `-api URL` | The Tier A file (default `./crewlet.yaml`), and a running node to go through in place of the one it names. The company's `${VAR}`s resolve from the secret store they lead to, and `-secret-store` records into the same one; on a stopped node a variable its own rows lack is unknown, so nothing is minted into it and nothing the shell exports for it is registered with the vendor — short of `-recreate-webhooks`, which mints a fresh secret into it whatever the rows hold. See [where a command reads the company's values](#where-a-command-reads-the-companys-values). |
 | `-dry-run` | Read GitHub and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
 
@@ -2588,7 +2590,7 @@ is, and one event this instance refuses is reported without stopping the rest.
 |---|---|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted token or secret goes. The same three sinks every provisioning command takes; a run with none of them refuses rather than minting a credential it cannot record. |
 | `-public-url URL` | This deployment's public base URL, which the hooks are registered against. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty. |
-| `-recreate-webhooks` | Delete and remake every hook with a fresh token or secret. **Destructive across deployments**: the previous value stops working everywhere else this company runs, so it is the recovery for a leaked or lost credential rather than part of an ordinary run. |
+| `-recreate-webhooks` | Delete and remake every hook with a fresh token or secret. **Destructive across deployments**: the previous value stops working everywhere else this company runs, so it is the recovery for a leaked or lost credential rather than part of an ordinary run. A literal `webhook_token` or `webhook_secret` has no variable to mint into, so the run is refused: point the field at a whole `${VAR}`, or run without the flag to register the literal as it is. |
 | `-config PATH` / `-api URL` | The Tier A file (default `./crewlet.yaml`), and a running node to go through in place of the one it names. The company's `${VAR}`s resolve from the secret store they lead to, and `-secret-store` records into the same one; on a stopped node a variable its own rows lack is unknown, so nothing is minted into it and nothing the shell exports for it is registered with the vendor — short of `-recreate-webhooks`, which mints a fresh token or secret into it whatever the rows hold. See [where a command reads the company's values](#where-a-command-reads-the-companys-values). |
 | `-dry-run` | Read and report; register nothing. |
 

@@ -111,7 +111,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		Client: client, Config: cfg, Org: organization,
 		Value:           env.Value,
 		Unvouched:       env.Unvouched,
-		RecreateWebhook: recreate.asked(),
+		RecreateWebhook: recreate.switched(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,

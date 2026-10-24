@@ -114,7 +114,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		Client: client, Config: cfg, Org: organization,
 		Value:            env.Value,
 		Unvouched:        env.Unvouched,
-		RecreateWebhooks: recreate.asked(),
+		RecreateWebhooks: recreate.switched(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,

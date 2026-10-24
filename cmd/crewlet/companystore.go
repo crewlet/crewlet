@@ -148,6 +148,17 @@ func addFreshFlag(fs *flag.FlagSet, name, usage string) freshFlag {
 // declares none.
 func (f freshFlag) asked() bool { return f.on != nil && *f.on }
 
+// switched is the flag as a pass takes it ([provision.FreshSwitch]): spelled
+// as the operator typed it, so a refusal of it names `-recreate-webhooks`
+// rather than another surface's switch, and empty where the run did not pass
+// it.
+func (f freshFlag) switched() provision.FreshSwitch {
+	if !f.asked() {
+		return ""
+	}
+	return provision.FreshSwitch("-" + f.name)
+}
+
 // addStoreFlags adds `-config` and `-api`.
 //
 // EVERY command that reads Tier B takes them, not only the ones that WRITE a

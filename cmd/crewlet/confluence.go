@@ -321,7 +321,7 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	// states: a dry run registers nothing and has nothing to record.
 	opts := confluence.Options{
 		Client: client, Config: cfg, Value: env.Value, Unvouched: env.Unvouched,
-		Recreate: recreate.asked(),
+		Recreate: recreate.switched(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,
