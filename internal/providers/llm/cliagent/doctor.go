@@ -106,6 +106,11 @@ type Diagnosis struct {
 	// TokenUsage is "reported by CLI" or "estimated", because a budget
 	// built on estimates is a different promise.
 	TokenUsage string
+	// SystemPrompt is where a seat's system prompt goes and where an
+	// auxiliary pass's does — beside the CLI's own, in place of it, or in the
+	// transcript under it — so an operator can see which vendor prompt their
+	// seats run under without reading the profile.
+	SystemPrompt []string
 	// Smoke is the result of a real completion with a real tool.
 	Smoke string
 	// LocalTools is the profile's stance on the CLI's own shell and file
@@ -215,6 +220,11 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.Problems = append(d.Problems, fmt.Sprintf(
 			"the %q profile reads no usage figures, so budgets for seats on this "+
 				"provider run on estimates", p.agent))
+	}
+
+	d.SystemPrompt = []string{
+		"seats: " + describeRoute(p.profile.RouteFor(true)),
+		"side passes: " + describeRoute(p.profile.RouteFor(false)),
 	}
 
 	signIn := p.signIn()
@@ -431,9 +441,7 @@ func (p *Provider) localToolsStance() string {
 // refused is good news worth printing. The second return is the problem line,
 // empty when there is none.
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
-	comp, err := p.Complete(ctx, llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: shellProbePrompt}},
-	})
+	comp, err := p.Complete(ctx, probeRequest(shellProbePrompt))
 	if err != nil {
 		return "probe failed — " + err.Error(), ""
 	}
@@ -464,9 +472,7 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 // and the cause is usually a vendor sandbox flag that also cut the network,
 // or an egress proxy the child environment was not told about.
 func (p *Provider) webProbe(ctx context.Context) string {
-	comp, err := p.Complete(ctx, llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: webProbePrompt}},
-	})
+	comp, err := p.Complete(ctx, probeRequest(webProbePrompt))
 	if err != nil {
 		return "failed — " + err.Error()
 	}
@@ -606,21 +612,56 @@ func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool
 	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
 }
 
+// probeSystemPrompt is the system prompt every probe carries.
+//
+// A probe proves what a SEAT runs under, so it is sent as a seat's call is:
+// an agent call with a system prompt, on the channel a seat's prompt takes.
+// A probe with none passed no channel at all on most profiles, so the vendor's
+// default ran instead — and the doctor reported on a configuration no seat
+// ever had (it said a WebFetch still fetched with Claude Code's prompt
+// replaced, while the probe ran with it in force).
+const probeSystemPrompt = "You are the probe `crewlet llm doctor` runs to check this " +
+	"entry. Answer exactly as the message asks, with nothing else."
+
+// probeRequest is one probe's call: a seat's shape, with the probe's text as
+// the message.
+func probeRequest(text string) llm.Request {
+	return llm.Request{
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: probeSystemPrompt},
+			{Role: llm.RoleUser, Content: text},
+		},
+		Agent: true,
+	}
+}
+
+// describeRoute says where one kind of call's system prompt goes, naming the
+// profile field an operator would override.
+func describeRoute(r cliprofile.Route) string {
+	switch {
+	case r.Field == "":
+		return "in the transcript, under the CLI's own (the profile declares no channel)"
+	case r.KeepsDefault:
+		return "added to the CLI's own (" + r.Field + ")"
+	default:
+		return "replaces the CLI's own (" + r.Field + ")"
+	}
+}
+
 // smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
 // tool offered, and the instruction that names it.
 func smokeRequest() llm.Request {
-	return llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: smokePrompt}},
-		Tools: []llm.ToolDef{{
-			Name:        "crewlet_smoke",
-			Description: "Confirm the tool channel works.",
-			Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
-				"required":   []any{"ok"},
-			},
-		}},
-	}
+	req := probeRequest(smokePrompt)
+	req.Tools = []llm.ToolDef{{
+		Name:        "crewlet_smoke",
+		Description: "Confirm the tool channel works.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
+			"required":   []any{"ok"},
+		},
+	}}
+	return req
 }
 
 // Healthy reports whether the diagnosis found nothing wrong.
@@ -648,6 +689,13 @@ func (d Diagnosis) Render(w io.Writer) {
 	line("token env", d.TokenEnv)
 	line("sign-in", d.SignIn)
 	line("token usage", d.TokenUsage)
+	for i, entry := range d.SystemPrompt {
+		label := ""
+		if i == 0 {
+			label = "system prompt"
+		}
+		line(label, entry)
+	}
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
 	line("web", d.Web)

@@ -65,7 +65,8 @@ claude-code:
   # `claude --help` on 2.1.263 but accepted (the help text names it in
   # passing, under --add-dir); an operator on a build that drops it overrides
   # this with ["--system-prompt", "{system}"].
-  system_prompt_args: ["--system-prompt-file", "{file}"]
+  system_prompt:
+    args: ["--system-prompt-file", "{file}"]
   prompt_mode: stdin
   output: json
   text_paths: [["result"]]
@@ -244,7 +245,8 @@ gemini-cli:
   # backend wants for the same reason claude-code's profile records: an
   # appended seat identity sits underneath the vendor's own coding-agent
   # persona. There is no append variant here in any case.
-  system_prompt_env: "GEMINI_SYSTEM_MD"
+  system_prompt:
+    env: "GEMINI_SYSTEM_MD"
   prompt_mode: stdin
   output: json
   text_paths: [["response"]]
@@ -299,7 +301,8 @@ qwen-code:
   # the seat. Note this CLI still appends its own QWEN.md context after
   # either one — that is the vendor's, and not something the profile can
   # switch off here.
-  system_prompt_env: "QWEN_SYSTEM_MD"
+  system_prompt:
+    env: "QWEN_SYSTEM_MD"
   prompt_mode: stdin
   output: json
   text_paths: [["response"]]
@@ -420,16 +423,17 @@ opencode:
   # interpolated — `{env:…}` and `{file:…}` in it reach the model as
   # written, so nothing a seat's prompt quotes can make the CLI read a file
   # or a variable into it.
-  system_prompt_args: ["--agent", "crewlet-seat"]
-  system_prompt_file:
-    name: .crewlet-config/agents/crewlet-seat.md
-    discovered: true
-    template: |
-      ---
-      description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
-      mode: primary
-      ---
-      {system}
+  system_prompt:
+    args: ["--agent", "crewlet-seat"]
+    file:
+      name: .crewlet-config/agents/crewlet-seat.md
+      discovered: selected
+      template: |
+        ---
+        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        mode: primary
+        ---
+        {system}
   # On stdin, read verbatim. On argv 2.0 re-quotes the message, so a prompt
   # carrying quotes reached the model altered — and argv is readable by every
   # account on the machine and bounded by ARG_MAX, which a long transcript
@@ -687,7 +691,8 @@ grok:
   # Replace, not --rules (which appends): the same reasoning as claude-code
   # and qwen-code. Inline because this flag takes a string and there is no
   # file variant, so the seat's prompt is on argv — see the qwen-code note.
-  system_prompt_args: ["--system-prompt-override", "{system}"]
+  system_prompt:
+    args: ["--system-prompt-override", "{system}"]
   prompt_mode: argv
   # `-p` TAKES THE PROMPT AS ITS VALUE, so it has to be the last thing before
   # the prompt rather than sitting in complete_args. It used to sit there, and
@@ -1027,23 +1032,24 @@ kimi-code:
   # prompt", which is the replace-rather-than-append decision every other
   # profile here makes for the same reason — a coding-agent identity over the
   # top of whatever seat is actually being served.
-  system_prompt_args: ["--agent-file", "{file}"]
-  system_prompt_file:
-    # `.md`: agent files are Markdown, and the discovery pass scans for that
-    # extension. The default `.txt` name is not worth betting the channel on.
-    name: crewlet-seat.md
-    # `name` is stated rather than left to the file name, so the channel does
-    # not depend on what this package happens to call the file, and
-    # `description` is stated because the CLI requires it.
-    template: |
-      ---
-      name: crewlet-seat
-      description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
-      tools:
-        - WebSearch
-        - FetchURL
-      ---
-      {system}
+  system_prompt:
+    args: ["--agent-file", "{file}"]
+    file:
+      # `.md`: agent files are Markdown, and the discovery pass scans for that
+      # extension. The default `.txt` name is not worth betting the channel on.
+      name: crewlet-seat.md
+      # `name` is stated rather than left to the file name, so the channel does
+      # not depend on what this package happens to call the file, and
+      # `description` is stated because the CLI requires it.
+      template: |
+        ---
+        name: crewlet-seat
+        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        tools:
+          - WebSearch
+          - FetchURL
+        ---
+        {system}
   # `--prompt` TAKES THE PROMPT AS ITS VALUE, so it goes in prompt_args rather
   # than complete_args — the same shape as grok's `-p`, and the same failure
   # if it sits earlier: the next flag becomes the prompt.
@@ -1418,7 +1424,8 @@ pi:
   # too, so on a shared host both are readable through /proc/<pid>/cmdline and
   # both count against ARG_MAX. `overrides.system_prompt_args: []` puts
   # the identity back in the transcript for an operator who would rather.
-  system_prompt_args: ["--system-prompt", "{system}"]
+  system_prompt:
+    args: ["--system-prompt", "{system}"]
   prompt_mode: argv
   # `--` stops option parsing, so a transcript that happens to begin with a
   # dash is a prompt rather than an unknown flag. This CLI is the only one

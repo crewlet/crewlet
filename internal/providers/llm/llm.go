@@ -191,6 +191,19 @@ type Request struct {
 	// with a request to call something.
 	Tools []ToolDef
 
+	// Agent marks a call made by a seat at work — a round of one phase of
+	// its turn — rather than a text function the engine runs on its behalf
+	// (a relevance filter, a classifier, a rewrite, a judge).
+	//
+	// The difference is what the call is FOR, and only the backend knows
+	// what that changes: a backend that runs a vendor's own harness keeps
+	// the harness's system prompt for an agent call and adds the engine's
+	// after it — the vendor writes that prompt for an agent and moves it
+	// with every model it ships — and replaces it for any other call, whose
+	// system prompt is the whole instruction and whose answer is parsed.
+	// False is a text function, which is every caller but the tool loop.
+	Agent bool
+
 	// OnDelta, when set, asks the backend to stream and calls this as text
 	// arrives. Nil — the common case — takes the ordinary unary path.
 	//

@@ -282,10 +282,16 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
-	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
-	// before the transcript is rendered, so it is never both.
+	// THE SYSTEM PROMPT ON THE CHANNEL THIS KIND OF CALL TAKES: beside the
+	// CLI's own for a seat at work, in place of it for a text function —
+	// see [cliprofile.Profile.RouteFor]. Lifted before the transcript is
+	// rendered, so it is never both.
+	route := p.profile.RouteFor(req.Agent)
+	if route.KeepsDefault {
+		req = withHarnessNote(req)
+	}
 	var system string
-	if p.profile.HasSystemChannel() {
+	if route.Channel.Declared() {
 		system, req = SplitSystem(req)
 	}
 	prompt, err := RenderPrompt(req)
@@ -398,27 +404,18 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
-	// have something to put in it — see [cliprofile.SystemPromptFile]. A profile whose
-	// prompt channel is a vendor agent file declares that CLI's tool
-	// denial in the same file, so skipping it on a request with no system
-	// prompt would hand the vendor's default agent, and every tool it has,
-	// to exactly the probes that exist to prove the tools are off.
-	if system != "" || p.profile.SystemPromptFile != nil {
-		// One channel or the other — the profile validator refuses a
-		// build that declares both.
+	// have something to put in it — see [cliprofile.SystemPromptFile]. A
+	// channel that is a vendor agent file declares that CLI's tool denial in
+	// the same file, so skipping it on a request with no system prompt
+	// would hand the vendor's default agent, and every tool it has, to
+	// exactly the calls that would never notice.
+	if ch := route.Channel; system != "" || ch.File != nil {
+		// One shape or the other — the profile validator refuses a
+		// channel that declares both.
 		switch {
-		case len(p.profile.SystemPromptArgs) > 0:
+		case ch.Env != "":
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			args, err := systemArgs(
-				p.profile.SystemPromptArgs, p.profile.SystemPromptFile, system, checkout.Work)
-			if err != nil {
-				return nil, p.fail(llm.KindFatal, err)
-			}
-			in.args = append(in.args, args...)
-		case p.profile.SystemPromptEnv != "":
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			pair, err := systemEnv(
-				p.profile.SystemPromptEnv, p.profile.SystemPromptFile, system, checkout.Work)
+			pair, err := systemEnv(ch, system, checkout.Work)
 			if err != nil {
 				return nil, p.fail(llm.KindFatal, err)
 			}
@@ -426,6 +423,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// allowlist and the profile's own config_env above, and the
 			// last assignment of a name is the one exec applies.
 			in.env = append(in.env, pair)
+		case len(ch.Args) > 0 || ch.File.ReadAlways():
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			args, err := systemArgs(ch, system, checkout.Work)
+			if err != nil {
+				return nil, p.fail(llm.KindFatal, err)
+			}
+			in.args = append(in.args, args...)
 		}
 	}
 	// THE PROMPT LAST, and after the system args for the same reason the
@@ -521,7 +525,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	return p.completion(ctx, prompt, len(req.Tools) > 0, res, usageDoc)
+	return p.completion(ctx, system+prompt, len(req.Tools) > 0, res, usageDoc)
 }
 
 // newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
@@ -562,11 +566,18 @@ func (p *Provider) argv() []string {
 // and the one place that can say so is here, where the token counts that
 // explain it are still in hand.
 //
+// sent is everything the engine handed the CLI — the system prompt on its
+// channel and the rendered prompt — and is read only for the estimate a CLI
+// that reports no usage is charged. The system prompt is in it because a
+// budget charged for the transcript alone undercounts every call by the
+// largest stable thing in it; what is NOT in it is a vendor's own system
+// prompt kept beside the engine's, which the engine never sees.
+//
 // offeredTools says whether the prompt carried the response contract, which
 // [RenderPrompt] appends exactly when the request offered tools. Only then is
 // the reply read as an envelope: see the read below.
 func (p *Provider) completion(
-	ctx context.Context, prompt string, offeredTools bool, res *rawResult, usageDoc string,
+	ctx context.Context, sent string, offeredTools bool, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
@@ -805,7 +816,7 @@ func (p *Provider) completion(
 		comp.CacheRead = out.cacheRead
 		comp.CacheWrite = out.cacheWrite
 	} else {
-		comp.InputTokens = EstimateTokens(prompt)
+		comp.InputTokens = EstimateTokens(sent)
 		comp.OutputTokens = EstimateTokens(out.text)
 	}
 

@@ -61,7 +61,8 @@ func (p Profile) Clone() Profile {
 	out.VersionArgs = append([]string(nil), p.VersionArgs...)
 	out.CompleteArgs = append([]string(nil), p.CompleteArgs...)
 	out.ModelArgs = append([]string(nil), p.ModelArgs...)
-	out.SystemPromptArgs = append([]string(nil), p.SystemPromptArgs...)
+	out.SystemPrompt = p.SystemPrompt.clone()
+	out.AppendSystemPrompt = p.AppendSystemPrompt.clone()
 	out.PromptArgs = append([]string(nil), p.PromptArgs...)
 	out.UsageFileArgs = append([]string(nil), p.UsageFileArgs...)
 	out.SessionArgs = append([]string(nil), p.SessionArgs...)
@@ -94,10 +95,6 @@ func (p Profile) Clone() Profile {
 	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
 	out.IsolationEnv = cloneMap(p.IsolationEnv)
 	out.Env = cloneMap(p.Env)
-	if p.SystemPromptFile != nil {
-		spec := *p.SystemPromptFile
-		out.SystemPromptFile = &spec
-	}
 	if p.StdinLogin != nil {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)
