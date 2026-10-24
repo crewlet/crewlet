@@ -52,6 +52,17 @@ import (
 // scheduler is in. SIGTERM needs no such care, because the runtime installs
 // its own handler for SIGTERM whatever the process inherited, so handing it
 // back always leaves the default action.
+//
+// A HANGUP THE PROCESS STARTED IGNORING (`nohup crewlet run`) STAYS IGNORED
+// HERE, AND IS NOT HANDED ON. The runtime keeps an inherited SIG_IGN for
+// SIGHUP and every process the engine starts inherits it, and a
+// non-interactive sh may not trap a signal it started ignoring, so a box's run
+// script under nohup could neither trap a SIGHUP nor die of one: the export a
+// hangup gives a run (and its exit 129) never happened. Caught on a channel
+// nothing reads, SIGHUP still does nothing to the engine, which is what nohup
+// asked for, and the runtime starts every child with its default, as it does
+// any signal it handles. One the process did not start ignoring keeps its
+// default, which ends the engine as it always has.
 type interrupts struct {
 	// sigintIgnored says SIGINT was ignored when the process started. Read
 	// BEFORE the first Notify, which clears what signal.Ignored reports.
@@ -62,6 +73,10 @@ type interrupts struct {
 	// ignored, in which case it stays on its channel for [interrupts.caught]
 	// to end the process from.
 	sigint, sigterm chan os.Signal
+
+	// sighup holds a SIGHUP the process started ignoring, read by nothing,
+	// so its children start with the default; nil where it did not.
+	sighup chan os.Signal
 
 	cancel context.CancelFunc
 
@@ -90,6 +105,10 @@ func interruptContext() (context.Context, *interrupts) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	held.cancel = cancel
+	if signal.Ignored(syscall.SIGHUP) {
+		held.sighup = make(chan os.Signal, 1)
+		signal.Notify(held.sighup, syscall.SIGHUP)
+	}
 	signal.Notify(held.sigint, syscall.SIGINT)
 	signal.Notify(held.sigterm, syscall.SIGTERM)
 	go held.watch()
@@ -160,6 +179,9 @@ func (i *interrupts) end() {
 		<-i.watched
 		signal.Stop(i.sigint)
 		signal.Stop(i.sigterm)
+		if i.sighup != nil {
+			signal.Stop(i.sighup)
+		}
 		i.cancel()
 	})
 }

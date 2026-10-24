@@ -722,6 +722,13 @@ number). That is the status a shell reports for a process SIGINT killed, so
 from a kill sees an exit with 130 instead of the SIGINT. SIGTERM is not
 affected: the runtime handles SIGTERM itself whatever the process inherited,
 so a second SIGTERM always kills.
+
+A process started with **SIGHUP ignored** (`nohup crewlet run`) goes on
+ignoring a hangup, which is what nohup asks for, but does not hand the ignore
+on: every process it starts, a local box's run script among them, gets
+SIGHUP's default. Handed on, a run script could neither trap a hangup nor die
+of one, since a non-interactive shell can't trap a signal it started
+ignoring. A node started without nohup ends on a hangup as it always has.
 A boot that fails once the engine is up runs the same drain. An embedded
 broker that is still recovering a large store cannot be interrupted, so a
 first Ctrl+C during that recovery waits for it to finish (the log says
