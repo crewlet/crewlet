@@ -3,6 +3,7 @@ package cliagent_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,35 +70,52 @@ func TestSplitSystemReportsNothingToLift(t *testing.T) {
 	}
 }
 
-// THE SHIPPED CLAUDE PROFILE USES THE FILE VARIANT, NOT THE INLINE ONE.
+// THE SHIPPED CLAUDE PROFILE USES THE FILE VARIANTS, NOT THE INLINE ONES, on
+// both of its channels.
 //
 // A seat's system prompt carries the org chart, its policies, its roster and
 // its own memory. On argv that is readable by every account on the machine
 // through /proc/<pid>/cmdline, and bounded by ARG_MAX. Swap {file} for
-// {system} here and this fails.
+// {system} on either channel and this fails.
 func TestTheClaudeProfileKeepsTheSystemPromptOffArgv(t *testing.T) {
 	t.Parallel()
 	profile, ok := cliprofile.Builtin("claude-code")
 	if !ok {
 		t.Fatal("no built-in claude-code profile")
 	}
-	args := profile.SystemPrompt.Args
-	if len(args) == 0 {
-		t.Fatal("the claude-code profile carries no system_prompt.args, so every " +
-			"seat's identity is delivered as an ordinary user message")
-	}
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "{file}") {
-		t.Errorf("system_prompt.args = %v, want a {file} substitution: {system} "+
-			"puts the company's org chart and the seat's memory on argv", args)
-	}
-	if strings.Contains(joined, "{system}") {
-		t.Errorf("system_prompt.args = %v puts the prompt text on argv", args)
-	}
-	// The replacing channel takes the replacing flag: an appending one there
-	// would keep the coding-agent prompt on calls that promised to drop it.
-	if !strings.Contains(joined, "--system-prompt-file") || strings.Contains(joined, "--append") {
-		t.Errorf("system_prompt.args = %v, want the replacing flag", args)
+	for _, tc := range []struct {
+		field     string
+		args      []string
+		flag      string
+		replacing bool
+	}{
+		{"system_prompt", profile.SystemPrompt.Args, "--system-prompt-file", true},
+		{"append_system_prompt", profile.AppendSystemPrompt.Args, "--append-system-prompt-file", false},
+	} {
+		if len(tc.args) == 0 {
+			t.Errorf("the claude-code profile carries no %s.args, so the calls that take "+
+				"that channel deliver the seat's identity as an ordinary user message", tc.field)
+			continue
+		}
+		joined := strings.Join(tc.args, " ")
+		if !strings.Contains(joined, "{file}") {
+			t.Errorf("%s.args = %v, want a {file} substitution: {system} puts the "+
+				"company's org chart and the seat's memory on argv", tc.field, tc.args)
+		}
+		if strings.Contains(joined, "{system}") {
+			t.Errorf("%s.args = %v puts the prompt text on argv", tc.field, tc.args)
+		}
+		if !slices.Contains(tc.args, tc.flag) {
+			t.Errorf("%s.args = %v, want %s", tc.field, tc.args, tc.flag)
+		}
+		// Each channel takes its own flag: an appending one on the replacing
+		// channel would keep the coding-agent prompt on a side pass that
+		// promised to drop it, and a replacing one on the appending channel
+		// would drop the vendor's prompt a seat was meant to keep.
+		if appends := strings.Contains(joined, "--append"); appends == tc.replacing {
+			t.Errorf("%s.args = %v, want the %s flag", tc.field, tc.args,
+				map[bool]string{true: "replacing", false: "appending"}[tc.replacing])
+		}
 	}
 }
 
@@ -134,7 +152,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// agent file the working directory holds — and an empty entry here is
 	// that fact rather than an omission.
 	want := map[string]string{
-		"claude-code": "{file}", // 2.1.263: --system-prompt-file
+		"claude-code": "{file}", // 2.1.303 and 2.1.310: --system-prompt-file
 		// 1.0.13, xAI's OWN CLI from x.ai/cli:
 		// --system-prompt-override, string only. NOT the same-named
 		// community package on npm, which has no such flag — both put a

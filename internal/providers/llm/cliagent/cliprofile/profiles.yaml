@@ -12,21 +12,63 @@
 
 claude-code:
   binary: claude
-  written_for: "Claude Code CLI 2.1.x (`claude --version`)"
+  written_for: "Claude Code CLI 2.1.x, measured on 2.1.303 and 2.1.310 (`claude --version`)"
   version_args: ["--version"]
-  # --no-session-persistence and --safe-mode are the isolation the rest of
-  # this backend depends on: no transcript on disk to leak between turns, and
-  # no CLAUDE.md, skill, plugin, hook or MCP server admitted from a host the
-  # engine does not control. The tool denials make it a text model — Crewlet's
-  # tools ride the prompt envelope, and a CLI editing files in its own sandbox
-  # is invisible to the tool registry, the permission model and redaction.
+  # EVERY FLAG BELOW KEEPS THE CLI TO ITS CALL. Measured on 2.1.303 and
+  # 2.1.310 through the engine's own code path, with the state directory
+  # inside a git checkout and every level above the call holding a CLAUDE.md,
+  # CLAUDE.local.md, .claude/CLAUDE.md, .claude/rules, AGENTS.md, a skill, a
+  # custom agent, hooks, an .mcp.json, settings files and a .env: none of
+  # them reached a request, no hook or MCP server ran, and the two web tools
+  # were the only tools offered. 2.1.263 accepted every flag here and held
+  # the same through the same path.
   #
-  # Web is the one local tool that stays ON, and it has to be ALLOWED rather
-  # than merely not denied: print mode never prompts, and a permission-gated
-  # tool that is not on the allow list is refused, so a seat that was told it
-  # could fetch would have found it could not. A fetch is a read — it never
-  # gates delivery — and a subscription seat must not have less reach than the
-  # same CLI at a terminal.
+  #   --safe-mode               keeps the project files out. Without it every
+  #                             CLAUDE.md of every level arrived ahead of the
+  #                             prompt — every AGENTS.md where there was no
+  #                             CLAUDE.md — and a memory section naming a
+  #                             per-project path sat before the engine's text.
+  #                             The `.git` file the engine writes into the
+  #                             call's directory does not end this CLI's walk
+  #                             for those files; this flag does. A machine-wide
+  #                             managed settings file, which only an
+  #                             administrator of the host can write, still
+  #                             applies.
+  #   --strict-mcp-config       no MCP server but the ones --mcp-config names,
+  #                             and it names none.
+  #   --disable-slash-commands  no skill or command.
+  #   --no-session-persistence  no transcript on disk for a later call to find.
+  #   --tools                   the tools that EXIST for the call: the two web
+  #                             tools and nothing else. The deny list alone
+  #                             does not get there — with every file and shell
+  #                             tool denied, 2.1.303 still offered fourteen
+  #                             tools (scheduling, worktrees, agent messaging,
+  #                             workflows), and a CronCreate the model asked
+  #                             for ran; 2.1.310 offered the same set, most of
+  #                             it behind ToolSearch, WebFetch and WebSearch
+  #                             included. With --tools both builds offer
+  #                             exactly WebFetch and WebSearch, directly (2.1.310
+  #                             adds an inert placeholder its own description
+  #                             says never to call), and any other tool a
+  #                             model asks for is "No such tool available".
+  #   --allowedTools            the web tools have to be ALLOWED as well as
+  #                             present: print mode never prompts, and a
+  #                             permission-gated tool that is not on the allow
+  #                             list is refused, so a seat that was told it
+  #                             could fetch would have found it could not. A
+  #                             fetch is a read — it never gates delivery — and
+  #                             a subscription seat must not have less reach
+  #                             than the same CLI at a terminal.
+  #   --disallowedTools         beside the allowlist, the file, shell and
+  #                             subagent tools, by the names these builds give
+  #                             them: Agent is the subagent tool (Task, its
+  #                             older name, still matches it). Glob, Grep and
+  #                             TodoWrite are offered by neither build and are
+  #                             not listed.
+  #
+  # Crewlet's own tools ride the prompt envelope, and a CLI editing files in
+  # its own sandbox would be invisible to the tool registry, the permission
+  # model and redaction — which is why only the web stays on.
   complete_args:
     - "-p"
     - "--output-format"
@@ -35,6 +77,8 @@ claude-code:
     - "--safe-mode"
     - "--strict-mcp-config"
     - "--disable-slash-commands"
+    - "--tools"
+    - "WebFetch,WebSearch"
     - "--allowedTools"
     - "WebFetch"
     - "WebSearch"
@@ -43,30 +87,66 @@ claude-code:
     - "Read"
     - "Write"
     - "Edit"
-    - "Glob"
-    - "Grep"
-    - "Task"
     - "NotebookEdit"
-    - "TodoWrite"
+    - "Agent"
   local_tools: denied
   model_args: ["--model", "{model}"]
-  # THE SYSTEM PROMPT ON ITS OWN CHANNEL, replacing Claude Code's default
-  # rather than appending to it. Measured against 2.1.263: with --append-,
-  # the model still opens with "I'm Claude Code, here to help with your
-  # software engineering tasks" — a coding-agent identity over the top of
-  # whatever seat it is actually serving — and the default prose costs ~3.5k
-  # input tokens on every round of every phase for guidance about tools this
-  # profile denies. Replacing it leaves the web tools working (measured: a
-  # WebFetch probe still fetches).
+  # BOTH SYSTEM-PROMPT CHANNELS, each a FILE: a seat's system prompt carries
+  # the org chart, its policies, its roster and its own memory, and argv is
+  # readable by every account on the machine. `claude --help` names the two
+  # -file flags only in passing, under --bare, on both builds measured, and
+  # accepts both; an operator on a build that drops them overrides a channel
+  # with ["--system-prompt", "{system}"] or ["--append-system-prompt",
+  # "{system}"].
   #
-  # The -file variant, not the inline one: a seat's system prompt carries the
-  # org chart, its policies, its roster and its own memory, and argv is
-  # readable by every account on the machine. It is undocumented in
-  # `claude --help` on 2.1.263 but accepted (the help text names it in
-  # passing, under --add-dir); an operator on a build that drops it overrides
-  # this with ["--system-prompt", "{system}"].
+  # Measured on 2.1.303 and 2.1.310, both identically, with claude-opus-5-5
+  # and claude-sonnet-4-5. The request's system blocks are a billing header
+  # (no cache_control), an identity line, and then the vendor's default and
+  # the engine's text:
+  #
+  #   system_prompt         REPLACES the default. What remains is the
+  #                         identity line "You are a Claude agent, built on
+  #                         Anthropic's Claude Agent SDK.", which no flag
+  #                         removes, and the engine's text alone in its own
+  #                         cached block. For a side pass, whose system prompt
+  #                         is the whole instruction and whose answer is
+  #                         parsed.
+  #   append_system_prompt  KEEPS the default, under the identity line "You
+  #                         are Claude Code, Anthropic's official CLI for
+  #                         Claude, running within the Claude Agent SDK.", and
+  #                         puts the engine's text after it in the same cached
+  #                         block. For a seat at work. The default is the
+  #                         vendor's per model; as this channel sends it,
+  #                         about 3,300 characters (some 800 tokens) for
+  #                         claude-opus-5-5, whose size claude-sonnet-5-5's
+  #                         matched, and about 13,400 (some 3,300 tokens) for
+  #                         claude-sonnet-4-5.
+  #
+  # Nothing per call comes before the engine's text on either channel: two
+  # calls with different working directories sent identical system blocks up
+  # to and including it, the billing header aside. The working directory,
+  # whether it is a git repository, the platform, the model and the date
+  # travel in the messages instead, outside the system prompt.
+  #
+  # --exclude-dynamic-system-prompt-sections rides the append channel only
+  # (the replacing prompt ignores it). It is the vendor's switch for keeping
+  # the working directory, the environment, memory paths and git status out
+  # of the system prompt; on the builds measured they are already out, and
+  # its one visible effect is dropping a line about the interactive /fast
+  # command. It is passed so that a seat's text stays a cacheable prefix by
+  # the vendor's own guarantee rather than by today's placement: the working
+  # directory is per call, and anything per call ahead of the engine's text
+  # would make every call's copy of that text a cache miss.
+  #
+  # CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT is deliberately NOT set. The vendor
+  # already picks its compact prompt per model; forcing it would replace the
+  # prompt it wrote for an older model (claude-sonnet-4-5: 13,613 characters
+  # down to 3,341) with one written for a newer, and the point of the append
+  # channel is the vendor's own prompt.
   system_prompt:
     args: ["--system-prompt-file", "{file}"]
+  append_system_prompt:
+    args: ["--exclude-dynamic-system-prompt-sections", "--append-system-prompt-file", "{file}"]
   prompt_mode: stdin
   output: json
   text_paths: [["result"]]
@@ -78,8 +158,36 @@ claude-code:
     cache_write: [["usage", "cache_creation_input_tokens"]]
   config_env:
     CLAUDE_CONFIG_DIR: ".claude"
+  env:
+    # The vendor's switch for every connection that is not the call's own —
+    # its telemetry, error reporting and update checks among them. Measured on
+    # 2.1.303 and 2.1.310: without it every call opened four connections to
+    # api.anthropic.com whatever ANTHROPIC_BASE_URL said, and left a telemetry
+    # file in the seat's home; with it, none, and the request the model
+    # receives is byte-identical. A WebFetch still makes the domain check that
+    # is part of the fetch.
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    # No repository status in a seat's call. Claude Code runs git in its
+    # working directory and attaches the branch, the status and the recent
+    # commits to the first message of a call that keeps its own prompt. The
+    # call's directory is not a repository: the engine's `.git` file there
+    # names a git directory that never exists, so git reports none and the
+    # CLI an empty one ("Current branch: HEAD", "(clean)"). Before that file,
+    # a state directory inside a checkout handed every seat that checkout's
+    # branch, status and last commit. Measured on 2.1.303 and
+    # 2.1.310: this switch drops that block, about 550 characters of every
+    # seat's call, and leaves the system prompt byte-identical on
+    # claude-opus-5-5 and claude-sonnet-4-5. The environment section still
+    # says "Is a git repository: true", which is the CLI reading the `.git`
+    # file and nothing more.
+    CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1"
   credential_paths: [".claude/.credentials.json"]
   volatile_paths:
+    # The directory TMPDIR names, which the engine points inside the seat's
+    # home. Claude Code leaves a `claude-<uid>/fswatch-probe-*` directory there
+    # on almost every call (measured on 2.1.303 and 2.1.310), one per call for
+    # the life of the seat; nothing in it is read by a later call.
+    - "tmp"
     # .claude.json is not merely settings: it carries a `projects` map whose
     # entries hold per-directory conversation HISTORY. Observed on disk after
     # a real call, which is why it is pruned rather than trusted — the
@@ -152,6 +260,9 @@ claude-code:
   # there is no reset_separator: resetAfter then returns 0 and the entry sits
   # out the backend's one minute, which is the honest answer rather than an
   # invented window.
+  #
+  # The CLI's own wordings below, the limit line's variants and the auth
+  # failures alike, are present in the 2.1.303 and 2.1.310 binaries.
   limit_markers:
     - sentinel: "Usage limit reached"
     - sentinel: '"type":"rate_limit_error"'
