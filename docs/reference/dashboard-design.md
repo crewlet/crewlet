@@ -6759,7 +6759,11 @@ Knowledge is the approved **Home** layout. No column of navigation stands
 beside the screen (the workspace's section renderer is `none`, `app/nav.ts`):
 the spaces are ONE ROW at the top of every Knowledge screen, the search sits in
 the page bar of every Knowledge screen, and a page is read at the full width
-of the sheet. Agent skills and Agent diaries are reached from the landing, the
+of the sheet. The landing, a space and the search's answer take the sheet's
+whole width as every screen's column does, with no cap of their own: capped at
+the kit's content maximum, they sat in a 1600px column against the left edge
+of a 2560px screen (`styles/frame.test.ts` refuses a screen that caps itself
+that way). Agent skills and Agent diaries are reached from the landing, the
 palette and the trail.
 
 - **The spaces row** (`SpacesRow`) is a navigation landmark named Spaces: a
@@ -6972,7 +6976,10 @@ page is one column and the outline is not drawn.
 
 `#/knowledge/new` writes a new page, with where it is filed in the address
 (`?space=…&parent=…`): **New page** in the bar, a space's Create row and a
-page's **New sub-page** each open it filed where they were pressed.
+page's **New sub-page** each open it filed where they were pressed. The page is
+written at the measure it is read at (`--size-measure`, the page's own reading
+column), with Similar pages and Labels beside it, so a draft's lines are the
+lines its readers will see.
 
 - **File it in** names the space and the page it goes under (or the space's
   top), and the writer can change either. **Start from** offers a blank page
