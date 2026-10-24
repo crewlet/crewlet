@@ -465,8 +465,9 @@ func (s *Service) patchFolder(w http.ResponseWriter, r *http.Request) {
 		}
 		if !body.ConfirmWiden && widens(a.Folder, into) {
 			httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeFolderWidens, httpjson.Detail{
-				"detail": "moving it there makes this folder and everything in it visible by name to " +
-					"people who cannot see it now; send confirm_widen to move it anyway",
+				"detail": "moving it there makes this folder and the folders in it visible by name to " +
+					"people who cannot see them now (the artifacts in them keep their own access); " +
+					"send confirm_widen to move it anyway",
 				"op_id": key})
 			return
 		}

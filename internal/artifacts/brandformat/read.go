@@ -373,7 +373,7 @@ func plainText(s string, newlines bool) string {
 	for _, c := range s {
 		switch {
 		case c == '\n' && newlines:
-		case unicode.Is(unicode.Cc, c), unicode.Is(unicode.Cf, c), c == ' ', c == ' ':
+		case unicode.Is(unicode.Cc, c), unicode.Is(unicode.Cf, c), c == '\u2028', c == '\u2029':
 			return fmt.Sprintf("holds the invisible or control character %U: write plain text", c)
 		}
 	}

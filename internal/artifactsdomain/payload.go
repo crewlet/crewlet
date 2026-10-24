@@ -324,10 +324,11 @@ type BrandFile struct {
 	Slot        string `json:"slot"`
 	ContentType string `json:"content_type"`
 
-	// Object is the stored bytes: the kit version's own object for a logo
-	// or a face (still named by that version when the adoption applies),
-	// and a fresh upload for the generated stylesheet. Its hash (SHA-256 in
-	// hex) is the path the artifact listener serves the file at.
+	// Object is the stored bytes: a fresh object this adoption uploaded,
+	// for the generated stylesheet and for every logo and face copied out of
+	// the kit's version (never the kit's own object, which its retention may
+	// remove). Its hash (SHA-256 in hex) is the path the artifact listener
+	// serves the file at.
 	Object objstore.Object `json:"object"`
 }
 

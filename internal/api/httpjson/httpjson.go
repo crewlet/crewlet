@@ -948,8 +948,9 @@ const (
 	// one folder holds. 409.
 	CodeFolderLimit Code = "folder_limit"
 	// CodeFolderWidens is a folder move into a tree whose audience reaches
-	// somebody the folder's present one does not: everything beneath it
-	// becomes visible to them by name. 409 until the request confirms it
+	// somebody the folder's present one does not: the folder and every
+	// folder beneath it become visible to them by name, while the artifacts
+	// in them keep their own access. 409 until the request confirms it
 	// (`confirm_widen`).
 	CodeFolderWidens Code = "folder_widens"
 	// CodeFolderAmbiguous is a folder path that names more than one folder
@@ -1320,8 +1321,9 @@ var codes = map[Code]string{
 	CodeFolderCycle: "A folder can't move into itself or a folder inside it.",
 	CodeFolderDepth: "That would place a folder deeper than folders go. Choose a place higher up.",
 	CodeFolderLimit: "There are already as many folders there as there may be. Remove some first.",
-	CodeFolderWidens: "Moving this folder there makes it, and everything in it, visible by " +
-		"name to more people. Confirm the move to go ahead.",
+	CodeFolderWidens: "Moving this folder there makes it, and the folders in it, visible by " +
+		"name to more people. The artifacts in them keep their own access. Confirm the move " +
+		"to go ahead.",
 	CodeFolderAmbiguous: "That path names more than one folder you can see. Choose one " +
 		"of the folders the detail lists, by its id.",
 	CodeDataQuota: "This would take the data past its size limit, so nothing " +

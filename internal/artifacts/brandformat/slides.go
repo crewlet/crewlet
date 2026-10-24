@@ -35,7 +35,9 @@ const maxSlideFamilies = 8
 func SlideTheme(b Brand) slideformat.Theme {
 	c := Effective(b)
 	featureInk := Fallbacks.DarkText
-	if r, _ := Ratio(featureInk, c.DarkGround); r < 4.5 {
+	// THE TEXT FLOOR the adoption holds body text to, held here by the ink
+	// a cover's words are set in.
+	if r, _ := Ratio(featureInk, c.DarkGround); r < MinTextContrast {
 		featureInk = OnColor(c.DarkGround)
 	}
 	return slideformat.Theme{
