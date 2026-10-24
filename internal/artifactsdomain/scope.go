@@ -247,8 +247,10 @@ func subjectPath(s Subject) string {
 		return ScopeTerm{Kind: TermSource, ID: s.ID}.Path()
 	case KindReader:
 		return ScopeTerm{Kind: TermReader, ID: s.ID}.Path()
-	case KindBarrier:
-		// THE FRAMEWORK'S OWN SCOPE, so a barrier never intersects any
+	case KindBarrier, KindTrimmed:
+		// THE FRAMEWORK'S OWN SCOPE, so a framework record — the read
+		// index's barrier, or the trim's trimmed record, which writes no
+		// row of this domain's either — never intersects any
 		// read's closure.
 		return statelog.FrameworkScope
 	}
