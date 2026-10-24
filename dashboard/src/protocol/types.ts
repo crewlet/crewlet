@@ -5275,7 +5275,7 @@ export interface ArtifactFolderCreated {
   created: number;
   op_id: string;
   outcome: string;
-  position: string;
+  position: LogPosition;
 }
 
 /** `PATCH /artifact-folders/{id}`: a rename, a move, or both. */
@@ -5293,10 +5293,11 @@ export interface ArtifactFolderPatchRequest {
 
 /** What `PATCH /artifact-folders/{id}` answers. */
 export interface ArtifactFolderPatched {
-  folder: ArtifactFolder;
+  /** The folder as it is now, absent while the write is still pending here. */
+  folder?: ArtifactFolder;
   op_id: string;
   outcome: string;
-  position: string;
+  position: LogPosition;
 }
 
 /** `PUT /artifacts/{id}/folder`: file one artifact; an empty string files it at the top level. */
@@ -5316,7 +5317,7 @@ export interface ArtifactMoved {
   folder: string;
   op_id: string;
   outcome: string;
-  position: string;
+  position: LogPosition;
 }
 
 /** One item's outcome in `POST /artifacts/folder-moves`. */
@@ -5324,7 +5325,7 @@ export interface ArtifactMoveResult {
   artifact: string;
   /**
    * `moved`, or the refusal's code: `not_found`, `unauthorized`,
-   * `folder_not_found`, `artifact_trashed` or `unavailable`.
+   * `folder_not_found`, `artifact_trashed`, `invalid` or `unavailable`.
    */
   outcome: string;
   /** What to do about a refusal, in a sentence. */
