@@ -113,7 +113,7 @@ func TestAGitCacheDirMustNotHoldTheStore(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := ParseBootstrap([]byte(tc.doc), EnvOnly()); err != nil {
+			if _, err := ParseRunnableBootstrap([]byte(tc.doc), EnvOnly()); err != nil {
 				t.Fatalf("refused: %v", err)
 			}
 		})
@@ -142,7 +142,7 @@ func TestGitSettingsRefuseNegatives(t *testing.T) {
 		})
 	}
 	ok := "git:\n  cache_max_bytes: 1073741824\n  max_processes: 1024\n  max_transfers: 65536\n"
-	if _, err := ParseBootstrap([]byte(ok), EnvOnly()); err != nil {
+	if _, err := ParseRunnableBootstrap([]byte(ok), EnvOnly()); err != nil {
 		t.Fatalf("the bounds themselves are refused: %v", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestAGitBlockOnANodeThatServesNoGitWarns(t *testing.T) {
 	t.Parallel()
 	gitWarnings := func(t *testing.T, doc string) []Warning {
 		t.Helper()
-		b, err := ParseBootstrap([]byte(doc), EnvOnly())
+		b, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 		if err != nil {
 			t.Fatalf("refused: %v", err)
 		}

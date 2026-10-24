@@ -159,14 +159,14 @@ func TestTheGitRoleNeedsIngress(t *testing.T) {
 		"[data, git, ingress]": "node:\n  roles: [data, git, ingress]\n",
 		"undeclared roles":     "",
 	} {
-		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+		if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Errorf("%s refused: %v", name, err)
 		}
 	}
 	leaf := "node:\n  roles: [git, ingress]\nstore:\n  scratch: true\n" +
 		"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
 		"coordination:\n  type: embedded-kv\n"
-	_, err = ParseBootstrap([]byte(leaf), EnvOnly())
+	_, err = ParseRunnableBootstrap([]byte(leaf), EnvOnly())
 	problems := Problems(err)
 	if len(problems) != 1 || !strings.Contains(problems[0].Message, `"ingress" needs "data"`) {
 		t.Fatalf("[git, ingress] on a leaf: problems %+v, want the one ingress-needs-data refusal", problems)
