@@ -472,7 +472,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	return p.completion(ctx, prompt, res, usageDoc)
+	return p.completion(ctx, prompt, len(req.Tools) > 0, res, usageDoc)
 }
 
 // newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
@@ -512,8 +512,12 @@ func (p *Provider) argv() []string {
 // EMPTY is a real outcome rather than an error (see the fall-through below),
 // and the one place that can say so is here, where the token counts that
 // explain it are still in hand.
+//
+// offeredTools says whether the prompt carried the response contract, which
+// [RenderPrompt] appends exactly when the request offered tools. Only then is
+// the reply read as an envelope: see the read below.
 func (p *Provider) completion(
-	ctx context.Context, prompt string, res *rawResult, usageDoc string,
+	ctx context.Context, prompt string, offeredTools bool, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf(
@@ -645,19 +649,29 @@ func (p *Provider) completion(
 	// from being reported as an outage of a CLI that demonstrably answered.
 	//
 	// Falls through rather than returning early so the round is charged:
-	// ParseEnvelope("") yields Message:"" and Parsed:false, so Content
-	// becomes "" with the vendor's real usage attached below — an empty
-	// answer costs tokens, and it was previously the one outcome that spent
-	// them without ever reaching a budget.
-	env := ParseEnvelope(out.text)
+	// Content becomes "" with the vendor's real usage attached below — an
+	// empty answer costs tokens, and it was previously the one outcome that
+	// spent them without ever reaching a budget.
 	comp := &llm.Completion{
 		Model:      p.model,
 		Provider:   providerName,
-		Content:    env.Message,
+		Content:    out.text,
 		StopReason: llm.StopEnd,
 	}
-	if !env.Parsed {
-		comp.Content = out.text
+	// AN ENVELOPE ONLY WHERE ONE WAS ASKED FOR. A call that offered no tools
+	// sent no contract, so its reply is the answer verbatim — and reading it
+	// as an envelope anyway is not harmless forgiveness: the envelope reader
+	// accepts `content`, `text`, `message` and `response` as the message key,
+	// so an auxiliary answer that IS a JSON object carrying one of them
+	// (the persist decider's `{"kind": "LONG", "content": "..."}`) came back
+	// as that one field, its caller's decode failed, and the decision was
+	// silently dropped.
+	var env Envelope
+	if offeredTools {
+		env = ParseEnvelope(out.text)
+		if env.Parsed {
+			comp.Content = env.Message
+		}
 	}
 	for i, call := range env.ToolCalls {
 		comp.ToolCalls = append(comp.ToolCalls, llm.ToolCall{
