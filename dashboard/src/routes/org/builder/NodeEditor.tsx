@@ -812,6 +812,7 @@ function CompanyEditor({
       <ConfigField
         label="Mission"
         kind="multiline"
+        autoFocus={section === "mission" && !disabled}
         value={form.mission}
         onChange={(mission) => set({ mission })}
         required={false}
@@ -821,6 +822,7 @@ function CompanyEditor({
       <ConfigField
         label="Vision"
         kind="multiline"
+        autoFocus={section === "vision" && !disabled}
         value={form.vision}
         onChange={(vision) => set({ vision })}
         required={false}

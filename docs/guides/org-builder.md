@@ -83,7 +83,7 @@ two seats may share one:
 | `unit=<key>` | that unit's editor |
 | `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level (the org chart's **Add seat** is `add=agent`) |
 | `unit=<key>` and `add=…` | the Add under that unit |
-| `edit=charter` or `edit=policies` | the company's charter, at its top or with the focus in its **Policies** list ready for the next policy (Company › Overview's **Edit charter** and Company › Policies' **Edit policies**) |
+| `edit=charter`, `edit=mission`, `edit=vision` or `edit=policies` | the company's charter, at its top or with the focus in that field (in **Policies**, the box for the next policy). Company › Principles' **Edit principles** is `edit=charter`, and its **Add a mission**, **Add a vision** and **Add a policy** are the other three |
 | `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Work's **New project** continues here, and saving it is what creates the project. Setting a project takes `admin`, so a reader without it finds the field held with that reason |
 
 It happens once, on arrival, and only when the builder can edit: once the
@@ -749,7 +749,7 @@ A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
 revision and go on serving the previous one. Until this node has
-applied it, the org chart, Teams and Company › Overview still draw the
+applied it, the org chart, Teams and Company › Principles still draw the
 previous organization, and say so.
 
 The strip under the toolbar follows the revision:

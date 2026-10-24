@@ -98,9 +98,9 @@ describe("navigation identity", () => {
   test("a detail resolves to the workspace that holds it", () => {
     expect(workspaceOf(["company", "org", "seats", "pm"])).toBe("org");
     // THE LONGEST PREFIX A ROW OWNS DECIDES: every Company row is under
-    // `#/company`, and the bare address is the Overview's.
+    // `#/company`, and the bare address is Principles', the Company landing.
     expect(workspaceOf(["company"])).toBe("company");
-    expect(workspaceOf(["company", "policies"])).toBe("policies");
+    expect(workspaceOf(["company", "principles"])).toBe("company");
     expect(workspaceOf(["company", "schedules", "role", "ceo", "standup"])).toBe("schedules");
     expect(workspaceOf(["company", "integrations", "github"])).toBe("integrations");
     expect(workspaceOf(["settings", "spend", "tasks"])).toBe("settings");
@@ -161,7 +161,6 @@ describe("navigation identity", () => {
       inbox: "i",
       me: "m",
       company: "c",
-      policies: "o",
       org: "a",
       schedules: "d",
       integrations: "n",
@@ -214,30 +213,27 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // FOURTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // THIRTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
-  // is a second column of navigation arriving one row at a time. The FIFTEENTH
+  // is a second column of navigation arriving one row at a time. The FOURTEENTH
   // is the reader's own Account, which has no row (the user block at the
   // sidebar's foot is the reader, and its menu links it) and is a workspace
   // all the same, so the palette and its chord reach it.
-  test("the sidebar's rows are fourteen workspaces, in the story's order, and the menu holds the fifteenth", () => {
+  test("the sidebar's rows are thirteen workspaces, in the story's order, and the menu holds the fourteenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
-    expect(run("company")).toEqual([
-      "company",
-      "policies",
-      "org",
-      "schedules",
-      "integrations",
-      "budgets",
-    ]);
+    expect(run("company")).toEqual(["company", "org", "schedules", "integrations", "budgets"]);
     expect(run("workspace")).toEqual(["work", "knowledge", "artifacts", "live"]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
-    // THE COMPANY'S FIRST ROW IS "Overview", the same name in the sidebar,
-    // the trail and the palette, which finds it by "company" too.
-    expect(workspaceRow("company")?.label).toBe("Overview");
-    expect(DESTINATIONS.find((d) => d.key === "company")?.keywords).toContain("company");
+    // THE COMPANY'S FIRST ROW IS "Principles", the same name in the sidebar,
+    // the trail and the palette, which finds it by what the page holds.
+    expect(workspaceRow("company")?.label).toBe("Principles");
+    expect(DESTINATIONS.find((d) => d.key === "company")?.keywords).toEqual(
+      expect.arrayContaining(["mission", "vision", "policies", "charter", "timezone"]),
+    );
+    // ONE ROW FOR THE TWO PAGES IT REPLACED, and their addresses gone with them.
+    expect(DESTINATIONS.some((d) => d.label === "Overview" || d.label === "Policies")).toBe(false);
   });
 
   // SETTINGS IS FOUR GROUPS, in this order, and lists only what lives in it.
@@ -366,7 +362,7 @@ describe("the navigation grammar", () => {
     const OVERVIEW = [
       [],
       ["company"],
-      ["company", "policies"],
+      ["company", "principles"],
       ["company", "org"],
       ["company", "org", "roster"],
       ["company", "schedules"],
@@ -713,10 +709,13 @@ describe("the breadcrumb", () => {
       "Roster",
     ]);
     // THE COMPANY'S LANDING IS ITS GROUP, THEN THE PAGE: the row reads
-    // Overview under the Company heading, and the trail says both.
-    expect(crumbsFor(["company"]).map((c) => c.label)).toEqual(["Company", "Overview"]);
-    expect(crumbsFor(["company"])[0]?.path).toBeUndefined();
-    expect(titleOf(crumbsFor(["company"]))).toBe("Overview");
+    // Principles under the Company heading, and the trail says both, at the
+    // bare address and at the page's own.
+    for (const path of [["company"], ["company", "principles"]]) {
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+      expect(crumbsFor(path)[0]?.path).toBeUndefined();
+      expect(titleOf(crumbsFor(path))).toBe("Principles");
+    }
     expect(crumbsFor(["company", "integrations"]).map((c) => c.label)).toEqual(["Integrations"]);
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",

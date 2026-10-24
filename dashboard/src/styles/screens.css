@@ -11593,11 +11593,27 @@ a.live-row:focus-visible {
   height: 100%;
 }
 
-/* ---- The company's own pages (Overview, Policies) --------------------------
-   ONE READABLE COLUMN. The company's own words are read rather than scanned,
-   and across the whole canvas a policy ran to a line no reader follows while
-   a lone card sat in an empty field. The column is the reading measure plus
-   the card's own inset and the policy numbers' gutter. */
-.charter-page {
-  max-width: calc(var(--size-measure) + var(--spacing-10));
+/* ---- Company › Principles ----------------------------------------------------
+   The layout is the kit's (ObjectHeader, AsideLayout, Statement); what is
+   left is this page's own content inside it. */
+
+/* A POLICY IS READ: the body's own step and the relaxed leading, so a rule
+   that runs to two lines reads as one sentence. */
+.principles-policies > li {
+  font-size: var(--font-size-md);
+  line-height: var(--font-line-height-relaxed);
+}
+
+/* The zone, and the time it reads there now under it. */
+.principles-clock {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+/* The label over its sentence, a small step apart, as the rail's groups. */
+.principles-uses {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }

@@ -198,8 +198,7 @@ test("a link that asks for an add opens it once, on that kind, and leaves the ad
 });
 
 /*
- * "EDIT POLICIES" IS THE CHARTER, AT ITS POLICIES. Company › Policies links to
- * `edit=policies`: the builder opens the company's editor with the focus in
+ * `edit=policies` IS THE CHARTER, AT ITS POLICIES: the builder opens the company's editor with the focus in
  * the Policies list's new-item box, and takes the request out of the address
  * as it takes `add=`. `edit=charter` opens the same editor at its top, and a
  * value naming neither opens nothing.
@@ -214,12 +213,26 @@ test("a link that asks for the policies opens the charter there, once, and leave
   expect(new URLSearchParams(location.hash.split("?")[1]).has("edit")).toBe(false);
 });
 
+// `edit=mission` AND `edit=vision` open the charter AT THAT FIELD: Company ›
+// Principles' Add a mission lands in the box it asked to fill.
+test.each([
+  ["mission", "Mission"],
+  ["vision", "Vision"],
+])("a link that asks for the %s opens the charter with the focus in it", async (part, label) => {
+  mount(`#/company/org/edit?view=table&edit=${part}`);
+  const dialog = await screen.findByRole("dialog", { name: /Acme/ });
+  await waitFor(() =>
+    expect(document.activeElement).toBe(within(dialog).getByLabelText(new RegExp(`^${label}`))),
+  );
+  expect(new URLSearchParams(location.hash.split("?")[1]).has("edit")).toBe(false);
+});
+
 test("a link that asks for the charter opens it at its top, and one naming neither opens nothing", async () => {
   mount("#/company/org/edit?view=table&edit=charter");
   const dialog = await screen.findByRole("dialog", { name: /Acme/ });
   expect(document.activeElement).not.toBe(within(dialog).getByLabelText("New policy"));
   cleanup();
-  mount("#/company/org/edit?view=table&edit=mission");
+  mount("#/company/org/edit?view=table&edit=values");
   // The draft is loaded (its rows are drawn) and the request was read.
   await screen.findAllByRole("row");
   await waitFor(() =>

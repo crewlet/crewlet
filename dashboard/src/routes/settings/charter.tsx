@@ -1,6 +1,6 @@
 /**
- * The frame both of the company's own pages draw in: Company › Overview (who
- * the company is) and Company › Policies (what every agent is told).
+ * The frame Company › Principles draws in: who the company is and what every
+ * agent is told.
  *
  * # Read from the org projection, by every reader
  *
@@ -19,22 +19,19 @@
  */
 
 import type { ReactNode } from "react";
-import { Card, Skeleton, Stack } from "@crewlethq/ui";
+import { Card, Skeleton } from "@crewlethq/ui";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { EditCharterButton, type CharterPart } from "~/routes/agents/header.tsx";
+import { EditCharterButton } from "~/routes/agents/header.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
 
 export function CharterPage({
   loading,
-  edits,
   children,
 }: {
-  /** What the skeleton says it is waiting for: "Loading the company's charter". */
+  /** What the skeleton says it is waiting for: "Loading the company's principles". */
   loading: string;
-  /** What the page's edit control opens: the whole charter, or its policies. */
-  edits: CharterPart;
   /** The page's body, drawn only from a chart the engine has sent. */
   children: (org: OrgProjection) => ReactNode;
 }) {
@@ -45,17 +42,12 @@ export function CharterPage({
           page edits: "Edit org" over a page of policies opened the whole
           chart and left the reader to find the company card. */}
       <PageActions>
-        <EditCharterButton part={edits} />
+        <EditCharterButton />
       </PageActions>
       <PreviousRevisionNote />
       {org ? (
-        // ONE READABLE COLUMN for the company's own words: across the whole
-        // canvas a policy ran to a line no reader follows, and a lone card
-        // sat in an empty field. See `.charter-page`. In the page's own
-        // rhythm, the 20px every screen's blocks stand apart.
-        <Stack gap={5} className="charter-page">
-          {children(org)}
-        </Stack>
+        // THE PAGE LAYS ITSELF OUT: its heading, then its own columns.
+        children(org)
       ) : (
         <div aria-busy="true">
           <Card>

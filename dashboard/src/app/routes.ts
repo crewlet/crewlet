@@ -172,8 +172,7 @@ export type FramedScreen =
   | { screen: "work-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
-  | { screen: "overview" }
-  | { screen: "policies" }
+  | { screen: "principles" }
   | { screen: "org-chart" }
   | { screen: "roster" }
   | { screen: "teams"; unit?: string }
@@ -368,16 +367,17 @@ function work(rest: string[], screen: Make, under: Under): Route {
 }
 
 /**
- * Company's rows, each under `#/company`: the Overview at the bare address,
- * then Policies, the Org chart, Schedules, Integrations and Budgets.
+ * Company's rows, each under `#/company`: Principles, at its own address and
+ * at the bare one, which is the Company landing, then the Org chart,
+ * Schedules, Integrations and Budgets.
  */
 function company(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "overview" });
+  if (first === undefined) return screen({ screen: "principles" });
   const none = (row: Workspace, label: string) => missing(row, under(label));
   switch (first) {
-    case "policies":
-      return tail.length ? none("policies", "Policies") : screen({ screen: "policies" });
+    case "principles":
+      return tail.length ? none("company", "Principles") : screen({ screen: "principles" });
     case "org":
       return org(tail, screen, under);
     case "schedules":

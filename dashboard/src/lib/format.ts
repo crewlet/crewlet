@@ -685,6 +685,21 @@ export function zoneOffset(at: number, tz: string): number {
   return asUTC - at;
 }
 
+/**
+ * The time of day an instant reads on a zone's own clock, "14:05", 24-hour as
+ * every clock this dashboard prints is: the company's clock beside its zone.
+ * Null for a zone `Intl` does not know, which the caller says rather than
+ * printing the reader's own time under the company's name.
+ */
+export function clockIn(at: number, tz: string): string | null {
+  try {
+    const p = wallParts(at, tz);
+    return `${p.hour}:${p.minute}`;
+  } catch {
+    return null;
+  }
+}
+
 /** One instant's calendar fields in a zone, zero-padded. */
 function wallParts(at: number, tz: string): Record<string, string> {
   const out: Record<string, string> = {};

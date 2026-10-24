@@ -78,7 +78,6 @@ export type Workspace =
   | "inbox"
   | "me"
   | "company"
-  | "policies"
   | "org"
   | "schedules"
   | "integrations"
@@ -471,34 +470,31 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
-    // THE COMPANY'S OWN PAGE: its name, mission, vision and clock, which
-    // every signed-in reader reads (the charter is the org projection's).
+    // THE COMPANY'S PRINCIPLES: who it is (its name, mission, vision and
+    // clock) and the standing policies every agent reads on every turn, in the
+    // order an agent reads them, which every signed-in reader reads (the
+    // charter is the org projection's). The Company landing: `#/company`
+    // opens it too. The caps the engine holds a turn to are engine settings,
+    // and live once, in Settings › Limits.
     key: "company",
-    // ONE NAME EVERYWHERE: the row reads "Overview" under the Company
-    // heading, and the page it opened was titled "Company", so the active row
-    // and the page disagreed. The trail says both, Company › Overview
-    // (`crumbs.ts`), and the palette finds it by either.
-    label: "Overview",
+    label: "Principles",
     icon: "building-complex",
-    path: ["company"],
-    hint: "Who the company is: its name, mission, vision and clock",
-    keywords: ["company", "charter", "mission", "vision", "timezone", "general"],
+    path: ["company", "principles"],
+    // THE COMPANY LANDING IS THIS PAGE, so the row owns the bare `#/company`
+    // too: the longest prefix decides, and every other Company row is longer.
+    owns: ["company"],
+    hint: "Who the company is and the policies every agent reads on every turn",
+    keywords: [
+      "principles",
+      "mission",
+      "vision",
+      "policies",
+      "charter",
+      "values",
+      "timezone",
+      "company name",
+    ],
     chord: "c",
-    place: "company",
-    renderer: "none",
-    sections: [],
-  },
-  {
-    // THE STANDING POLICIES every agent reads on every turn, in plain words.
-    // The caps the engine holds a turn to are engine settings, and live once,
-    // in Settings › Limits.
-    key: "policies",
-    label: "Policies",
-    icon: "shield",
-    path: ["company", "policies"],
-    hint: "The standing policies every agent reads on every turn",
-    keywords: ["policy", "rules", "values", "charter"],
-    chord: "o",
     place: "company",
     renderer: "none",
     sections: [],
@@ -1073,7 +1069,7 @@ export function framelessOf(path: readonly string[]): FramelessRoute | null {
  */
 export const RESERVED_SEGMENTS: string[] = [
   "company",
-  "policies",
+  "principles",
   "org",
   "tasks",
   "views",

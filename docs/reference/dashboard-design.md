@@ -667,8 +667,7 @@ Settings and Preferences as glyphs beside them.
 | **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+"). It moves the moment the person's inbox does: the frame watches their own record and asks again within half a second of an `inbox_changed` frame, and the minute-long poll behind it is only the fallback |
 | **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | *Company* | | |
-| **Overview** | `#/company` | none: the company's name, clock, mission and vision are every reader's |
-| **Policies** | `#/company/policies` | none |
+| **Principles** | `#/company/principles` (and `#/company`) | none: the company's name, clock, mission, vision and policies are every reader's |
 | **Org chart** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
 | **Integrations** | `#/company/integrations` | none; every reader opens it, and an app's state and connecting are an Admin's on the page itself |
@@ -795,7 +794,7 @@ does not exist, so an operator on a fresh browser would conclude the product
 has nowhere to configure anything. ONE RULE decides every lock, `sectionOpen`
 in `nav.ts`, over three kinds of section (ADR-0033). The reader's own, their
 Account, needs nothing. The OVERVIEW needs nothing beyond being signed in:
-Home, Company › Overview and Policies, the Org chart (the chart, the roster,
+Home, Company › Principles, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
 Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
@@ -1061,7 +1060,7 @@ it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace: `g h`, `g i` and `g m` for the first
-run; `g c` for Company's Overview, `g o` for Policies, `g a` for the Org chart,
+run; `g c` for Company's Principles, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
 `g k`, `g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u`
 for your Account. A chord to a hidden place is not answered, as its row is not
@@ -1157,12 +1156,11 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/company` | **Company › Overview** (the sidebar's **Overview** row): who the company is, its name and its clock (the zone every day the engine cuts is cut on), its mission and its vision, read from the org projection by every reader. The standing policies are their own row | |
-| `#/company/policies` | **Policies**: the standing policies every agent reads on every turn, in plain words, numbered in a readable column, with **Edit policies** opening the builder at them. The caps the engine holds a turn to are not policies, and are Settings › Limits, offered as a related row to a reader who may open it | |
+| `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): who the company is, its name, its clock (the zone every day the engine cuts is cut on), its mission and its vision in one card, then the standing policies every agent reads on every turn, numbered in a readable column, then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so. **Edit principles** opens the builder at the charter. Read from the org projection by every reader | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
-| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the charter and the standing policies are written too *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `edit=charter\|policies` (opens the company's charter once, at its top or at its Policies, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
+| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the charter and the standing policies are written too *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `edit=charter\|mission\|vision\|policies` (opens the company's charter once, at its top or at that field, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory grouped by need (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence, and the address apps deliver to at its foot; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what needs a look. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
@@ -3268,10 +3266,10 @@ On a phone Edit org folds into the bar's More menu, so Add seat stays in view.
 It is the same bar on every section of the Org chart. **Edit org is one
 control** (`EditOrgButton`): the chart's bar draws it as a secondary button,
 asked the builder's own gate, so a reader who may not write the chart sees it
-held with the reason rather than a link to a refusal. Company › Overview and
-Company › Policies draw the same button named for what they edit
-(`EditCharterButton`: **Edit charter** and **Edit policies**), which opens the
-company's editor in the builder (`edit=charter`, `edit=policies`) rather than
+held with the reason rather than a link to a refusal. Company › Principles
+draws the same button named for what it edits (`EditCharterButton`: **Edit
+principles**), which opens the company's editor in the builder
+(`edit=charter`) rather than
 the whole chart, asked the company's gate, since the charter is the company
 grant's and not a unit lead's. Company › Schedules is its own row and its bar is its own:
 it carries none of the chart's controls.
@@ -7354,15 +7352,35 @@ hands the frame the reading it already polls every 15 s (`usePublishFleet`),
 so "*n* behind on config" and the screen's "Behind on config" tile are one
 reading rather than two polls on two clocks that disagreed for up to 30 s.
 
-**The charter is Company's, not Settings'.** **Company › Overview**
-(`#/company`, the sidebar's **Overview** row, once Settings › General) is who
-the company is: its name, its clock, its mission and its vision. **Company ›
-Policies** (`#/company/policies`) is the standing policies every executor is
-given verbatim, and only those, numbered (a reader cites "policy 2") with a
-rule between them. Both are read from the org projection, so every signed-in
-reader can open them: they are the overview's, like the org chart. Both stand
-in one readable column (the reading measure) rather than across the canvas,
-and both are edited in the org builder (**Edit charter**, **Edit policies**).
+**The charter is Company's, not Settings'.** **Company › Principles**
+(`#/company/principles`, the sidebar's **Principles** row and the Company
+landing at `#/company`, once Settings › General, then Company › Overview and
+Company › Policies) is what every agent is told about the company, in the
+order an agent reads it. It is read from the org projection, so every
+signed-in reader can open it: it is the overview's, like the org chart. Under
+its heading (the kit's `ObjectHeader`: *Who the company is and the rules every
+agent works by.*) it is a main column and an aside (the kit's `AsideLayout`,
+the aside beside the main column from 56rem of the page's own width and under
+it, past one hairline, below that):
+
+- **The main column** is the three things the company says, each a kit
+  `Statement` under the same small label: the **Mission** and the **Vision**,
+  set a step over the body at the reading measure with their author's line
+  breaks kept, and the **Standing policies**, numbered (a reader cites "policy
+  2") and divided in one card. A mission and a vision are statements to read,
+  never a key and a value beside "Clock: UTC".
+- **An unwritten part says so**, as an inline empty state with its own way to
+  write it (**Add a mission**, **Add a vision**, **Add a policy**), which opens
+  the company's editor in the builder with the focus in that field
+  (`edit=mission`, `edit=vision`, `edit=policies`). Those controls are offered
+  only to a reader who may write the charter: for anybody else the page bar's
+  **Edit principles** says once, disabled, why it is not theirs to edit.
+- **The aside** holds the company's facts (its name, and its clock with the
+  time it reads there now, the zone every day the engine cuts is cut on), how
+  agents use the page, and **Engine limits** as a related row for a reader who
+  may open Settings › Limits.
+
+It is edited in the org builder (**Edit principles**).
 The caps the engine holds a turn to are not policies the company writes for
 its agents to read: they are **Settings › Limits** (`#/settings/limits`), in
 the Runtime group, the engine's own answer for each (the turn's guardrails,
@@ -7864,7 +7882,7 @@ the fleet broker's membership twice, as the nodes advertise it and as the
 metadata group counts it, with every disagreement named and the removal of a
 dead member behind a typed confirmation; its count is the rows it lists. Under
 the last card, **Backups & retention** is a related row (`RelatedRow`, the
-quiet linked row Company › Policies points at Settings › Limits with, drawn
+quiet linked row Company › Principles points at Settings › Limits with, drawn
 only for a reader who may open the page it names) rather than a footnote,
 since every log's position is where "which node is behind" goes next. See [seat
 ownership](../concepts/seat-ownership.md) and [the fleet guide](../guides/fleet.md).

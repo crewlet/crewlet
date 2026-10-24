@@ -480,12 +480,12 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
 
 /**
  * What an `edit=` asks the company's editor to open at: its top for the
- * charter, its Policies list for `policies`, or `null` for a value that names
- * neither.
+ * charter, one of its parts (`mission`, `vision`, `policies`) at that part's
+ * field, or `null` for a value that names none of them.
  */
 function charterPartOf(value: string): { section?: EditorSectionName } | null {
   if (value === "charter") return {};
-  if (value === "policies") return { section: "policies" };
+  if (value === "mission" || value === "vision" || value === "policies") return { section: value };
   return null;
 }
 
@@ -536,8 +536,9 @@ interface Arrival {
   readonly seat: string;
   readonly add: string;
   /**
-   * The part of the company's charter to open (`charter` or `policies`), from
-   * Company › Overview's Edit charter and Company › Policies' Edit policies.
+   * The part of the company's charter to open (`charter`, from Company ›
+   * Principles' Edit principles, or `mission`, `vision` or `policies`, the
+   * editor at that field, from the page's own Add a mission and its kin).
    * Taken out of the address once answered, as `add=` is: it is a request,
    * never the selection.
    */

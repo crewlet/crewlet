@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  clockIn,
   fmtSetting,
   asSentence,
   configValueKind,
@@ -451,4 +452,20 @@ test("a configured duration reads in the largest unit that divides it", () => {
   expect(fmtSetting(300)).toBe("5 minutes");
   expect(fmtSetting(90)).toBe("1m 30s");
   expect(fmtSetting(0)).toBe("0ms");
+});
+
+// THE COMPANY'S CLOCK, NOT THE READER'S: one instant reads differently in two
+// zones, midnight is 00 rather than 24, and a zone Intl does not know is said
+// as unknown rather than answered in the reader's own zone.
+test.each([
+  ["UTC", "13:05"],
+  ["Asia/Tokyo", "22:05"],
+  ["America/Los_Angeles", "06:05"],
+])("the clock in %s reads %s", (tz, want) => {
+  expect(clockIn(Date.UTC(2026, 6, 1, 13, 5), tz)).toBe(want);
+});
+
+test("midnight is 00 on a zone's clock, and an unknown zone has none", () => {
+  expect(clockIn(Date.UTC(2026, 0, 1, 0, 0), "UTC")).toBe("00:00");
+  expect(clockIn(Date.UTC(2026, 0, 1, 0, 0), "Mars/Olympus")).toBeNull();
 });

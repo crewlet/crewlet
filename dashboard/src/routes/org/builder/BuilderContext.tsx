@@ -100,13 +100,15 @@ export interface BuilderDerived {
  * A part of the node editor it can be opened at: a seat's Reports (whom it
  * manages), a unit's Leadership (its lead), either's Project (the tracker
  * project it owns, where Work's New project arrives), or the company's
- * Policies (where Company › Policies' Edit policies arrives). The editor then
+ * Mission, Vision or Policies (`edit=mission`, `edit=vision`,
+ * `edit=policies`). The editor then
  * starts on that part's first field rather than on the name at the top of a
  * long form, so an action about one field ("Edit reports", a lead chosen
  * outside the unit) lands on it. A part the node does not have opens the
  * editor as usual.
  */
-export type EditorSectionName = "reports" | "leadership" | "project" | "policies";
+export type EditorSectionName =
+  "reports" | "leadership" | "project" | "mission" | "vision" | "policies";
 
 /**
  * What an address asks an opening editor to hold on top of the node's own
