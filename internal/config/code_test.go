@@ -247,10 +247,15 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			doc:  codeRepos("    - name: web\n      owner: {unit: Engineering, seat: swe}\n"),
 			path: "code.repos[0].owner", kind: "conflict",
 		},
+		// EACH UNIT BY THE KEY IT IS REFERENCED BY AND ITS NAME: the write
+		// mints Engineering's key, so the person who typed a name reads the
+		// key beside the name they know, and a unit whose id is not its name
+		// is found by either.
 		"a unit the chart does not have": {
 			doc:  codeRepos("    - name: web\n      owner: {unit: Marketing}\n"),
 			path: "code.repos[0].owner.unit", kind: "unknown_value",
-			says: []string{"Marketing", "Engineering", "platform"},
+			says: []string{`"Marketing"`,
+				"the units are: engineering (Engineering), platform (Platform Team)"},
 		},
 		"a seat the chart does not have": {
 			doc:  codeRepos("    - name: web\n      owner: {seat: cto}\n"),

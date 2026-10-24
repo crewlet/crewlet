@@ -571,9 +571,36 @@ func newCodeOwners(o *org.Organization) *codeOwners {
 	x := o.Index()
 	return &codeOwners{
 		index: x,
-		units: sync.OnceValue(func() string { return listOrNone(x.UnitKeys(), "none") }),
+		units: sync.OnceValue(func() string { return listOrNone(unitRefs(x), "none") }),
 		seats: sync.OnceValue(func() string { return listOrNone(x.Handles(), "none") }),
 	}
+}
+
+// unitRefs is every unit's key in x, in walk order, as a refusal of an owner's
+// unit names it: the key an owner references it by, with the name of the unit
+// that key resolves to beside it where the two differ —
+// "engineering (Engineering)".
+//
+// THE KEY AND THE NAME, because a write mints each unit's key from its name
+// ([MintIdentities]): listed by key alone, a unit everybody knows as
+// Engineering read as "engineering", and the person who typed a name could
+// not tell which key it was; listed by name alone, nothing said what the chart
+// now holds it under. A unit with no key of its own is keyed on its name, and
+// listed once. The name is looked up BY THE KEY ([org.Index.UnitByRef]) rather
+// than walked beside it, so a key two units of an unadmitted chart share is
+// listed with the unit an owner naming it would get.
+func unitRefs(x *org.Index) []string {
+	refs := x.UnitKeys()
+	for i, key := range refs {
+		name := ""
+		if u := x.UnitByRef(key); u != nil {
+			name = strings.TrimSpace(u.Name)
+		}
+		if name != "" && name != key {
+			refs[i] = key + " (" + name + ")"
+		}
+	}
+	return refs
 }
 
 // validate holds an owner at path into p: exactly one of a unit or a seat,
