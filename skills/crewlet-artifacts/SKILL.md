@@ -361,7 +361,7 @@ as any page, framed on its own.
 - **Read before you file.** `list_artifacts` with `prefix` (a folder's path,
   `Marketing/Q3/`) and `delimiter: "/"` lists one level, as S3 does: its
   artifacts in `contents` and its subfolders in `common_prefixes`. Every row
-  names its `folder`.
+  names its `folder` (an id) and `folder_path`.
 - **File where people will look:** the folder the request names, otherwise the
   top level. `create_artifact` takes `folder` (an id, or a path such as
   `Marketing/Q3`) and refuses one that does not exist, naming the nearest; it

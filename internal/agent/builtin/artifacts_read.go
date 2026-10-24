@@ -77,7 +77,7 @@ func (t *listArtifacts) Description() string {
 		"prefixes do: `prefix` is a folder's path (`Marketing/Q4/`, empty for the top level), " +
 		"and with `delimiter: \"/\"` the answer is that one level, its artifacts in `contents` " +
 		"and its subfolders in `common_prefixes`; without it, everything beneath the prefix. " +
-		"Each row names its `folder`. Read one with get_artifact."
+		"Each row names its `folder` (an id) and `folder_path`. Read one with get_artifact."
 }
 
 func (t *listArtifacts) Parameters() map[string]any {
@@ -109,7 +109,7 @@ func (t *listArtifacts) Parameters() map[string]any {
 			"prefix": map[string]any{
 				"type": "string",
 				"description": "A folder's path of names from the top level, each followed by " +
-					"`/` (`Marketing/Q4/`), as `common_prefixes` and each row's `folder` give it. " +
+					"`/` (`Marketing/Q4/`), as `common_prefixes` and each row's `folder_path` give it. " +
 					"Empty or absent is the top level.",
 			},
 			"delimiter": map[string]any{
@@ -227,8 +227,12 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			continue
 		}
 		row := t.deps.listRow(item.Head, dec.Standing.Role)
-		if item.FolderPath != "" && !stranger {
-			row["folder"] = item.FolderPath
+		// THE HTTP LISTING'S SHAPE (S3's, section 3.1 of the folders
+		// design): a row's `folder` is the folder's id and `folder_path` its
+		// path, each answered only for a folder the agent and the requester
+		// both see (the listing has already emptied any other).
+		if item.Folder != "" && !stranger {
+			row["folder"], row["folder_path"] = item.Folder, item.FolderPath
 		}
 		rows = append(rows, row)
 	}
@@ -236,7 +240,7 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !stranger {
 		for _, p := range page.CommonPrefixes {
 			prefixes = append(prefixes, map[string]any{"prefix": p.Prefix, "folder": p.Folder,
-				"name": p.Name, "visibility": string(p.Visibility), "artifacts": p.Items,
+				"name": p.Name, "visibility": string(p.Visibility), "items": p.Items,
 				"folders": p.Folders})
 		}
 	}

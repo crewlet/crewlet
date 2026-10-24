@@ -330,10 +330,14 @@ func TestTheListingTakesPrefixesAndAnswersCommonPrefixes(t *testing.T) {
 	if len(contents) != 1 || len(prefixes) != 1 || out["key_count"] != float64(2) {
 		t.Fatalf("the answer %s", got.Output)
 	}
-	if row := contents[0].(map[string]any); row["folder"] != "Marketing/Campaigns/" {
-		t.Errorf("the row names folder %v", row["folder"])
+	// THE HTTP LISTING'S SHAPE: a row's folder by id and by path, and a
+	// common prefix's count under `items`.
+	if row := contents[0].(map[string]any); row["folder_path"] != "Marketing/Campaigns/" ||
+		row["folder"] != fs["campaigns"].ID {
+		t.Errorf("the row names folder %v at %v", row["folder"], row["folder_path"])
 	}
-	if p := prefixes[0].(map[string]any); p["prefix"] != "Marketing/Campaigns/" || p["folder"] != fs["campaigns"].ID {
+	if p := prefixes[0].(map[string]any); p["prefix"] != "Marketing/Campaigns/" || p["folder"] != fs["campaigns"].ID ||
+		p["items"] == nil || p["artifacts"] != nil {
 		t.Errorf("the common prefix %v", p)
 	}
 
