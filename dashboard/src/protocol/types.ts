@@ -5337,8 +5337,14 @@ export interface BrandAnswer {
     files: BrandFileRef[];
     adopted_by: ArtifactActor;
     adopted_at: string;
-    /** The newest version of the adopted kit, when it is newer than the adopted one: the "Review and adopt" banner. */
+    /**
+     * The newest version of the adopted kit, when it is newer than the
+     * adopted one: the "Review and adopt" banner. Answered only to a reader
+     * who can see the kit or is an administrator.
+     */
     newer_version?: number;
+    /** Who published `newer_version`, answered with it. */
+    newer_by?: ArtifactActor;
   } | null;
 }
 
@@ -5397,6 +5403,12 @@ export interface ArtifactVersionSummary {
   author: ArtifactActor;
   created_at: string;
   position: number;
+  /**
+   * The adopted brand stylesheet's digest this version was published under,
+   * which the artifact origin links at serve time. An HTML page's and a
+   * design's only; absent where none was adopted, and on every other kind.
+   */
+  brand?: string;
 }
 
 /** `artifact_version{id, n}`: one version with its manifest. */
@@ -5760,6 +5772,8 @@ export interface ArtifactOutline {
   design?: DesignOutline;
   /** A board's outline: its widgets and its first stats, never a value (D64). */
   dashboard?: DashboardOutline;
+  /** A brand kit's outline: its `brand.json`, read (`brandformat.Brand`). */
+  brand?: { document: BrandDocument };
 }
 
 // ---- dashboards (`internal/artifacts/dashspec`, `internal/api/datasetsapi`) ----
@@ -6387,6 +6401,7 @@ export interface QueryMap {
   artifact_data_schema: DataSchemaAnswer;
   artifact_data_state: DataStateAnswer;
   artifact_data_usage: DataUsageAnswer;
+  brand: BrandAnswer;
 }
 
 export type QueryName = keyof QueryMap;
