@@ -424,3 +424,29 @@ func TestBothChannelsMayNameOneFileButASeedMayNot(t *testing.T) {
 		t.Errorf("a seed at the appending channel's file: err = %v, want it refused under that channel", err)
 	}
 }
+
+// THE ENGINE OWNS THE CALL'S `.git`. Every call's working directory is made a
+// project root of its own by a `.git` file the engine writes, so a seed at that
+// path would be overwritten before the CLI started — or, written after it,
+// would put a real repository's pointer where the confinement belongs. Refused
+// under a label naming the marker, so the operator is told the path is not
+// theirs to seed rather than that two of their own fields collide.
+func TestASeedMayNotClaimTheCallsProjectRootMarker(t *testing.T) {
+	t.Parallel()
+	_, err := loadCustom(map[string]any{
+		"seed_files": []any{map[string]any{"path": ProjectRootMarker, "in": "work", "content": "gitdir: /srv/repo/.git\n"}},
+	})
+	if err == nil {
+		t.Fatal("a work seed at the call's project-root marker was accepted")
+	}
+	if want := "the call's project-root marker"; !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal does not name %q: %v", want, err)
+	}
+	// The same path in the seat's HOME is the operator's: the marker is
+	// written only where the CLI runs.
+	if _, err := loadCustom(map[string]any{
+		"seed_files": []any{map[string]any{"path": ProjectRootMarker, "in": "home", "content": "x"}},
+	}); err != nil {
+		t.Errorf("a home seed at %s was refused: %v", ProjectRootMarker, err)
+	}
+}

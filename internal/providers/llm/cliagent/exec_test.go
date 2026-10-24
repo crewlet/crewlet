@@ -745,8 +745,10 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 	}
 }
 
-// Each call runs in an EMPTY per-call directory, so a CLI that reads
-// AGENTS.md or CLAUDE.md from cwd finds nothing from anyone else.
+// Each call runs in a per-call directory holding nothing but the engine's own
+// project-root marker, so a CLI that reads AGENTS.md or CLAUDE.md from cwd
+// finds nothing from anyone else — and, stopped at that marker, nothing from
+// the directories above it either.
 //
 // IT ASKS THE CHILD, and that is the whole repair. It read PWD out of the
 // dumped environment and skipped when it was absent, with a comment blaming
@@ -755,7 +757,7 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 // platform including the one CI runs, and this assertion had never once been
 // made. os.Getwd() in the child is the only honest source, and it cannot be
 // unavailable.
-func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
+func TestTheWorkingDirectoryHoldsOnlyTheProjectRootMarker(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_DUMP_CWD": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{})
@@ -771,10 +773,10 @@ func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
 	}
 	// The child listed its own directory, because the parent cannot: the
 	// per-call directory is removed when the call releases.
-	if entries := envValue(comp.Content, "CWD_ENTRIES"); entries != "" {
-		t.Errorf("the call's working directory %q was not empty: %s — a CLI "+
+	if entries := envValue(comp.Content, "CWD_ENTRIES"); entries != cliprofile.ProjectRootMarker {
+		t.Errorf("the call's working directory %q holds %q, want only %s — a CLI "+
 			"reading AGENTS.md or CLAUDE.md from cwd would find somebody "+
-			"else's", dir, entries)
+			"else's", dir, entries, cliprofile.ProjectRootMarker)
 	}
 }
 

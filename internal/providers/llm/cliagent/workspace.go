@@ -374,6 +374,19 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 			return nil, fmt.Errorf("cli-agent: preparing %q: %w", d, err)
 		}
 	}
+	// THE CALL'S DIRECTORY IS ITS OWN PROJECT ROOT. Every vendor CLI here
+	// looks for project files — AGENTS.md, CLAUDE.md, its own rules, skills,
+	// hooks, a project config — from its working directory UP to the nearest
+	// repository root, so a state_dir inside a checkout handed every seat the
+	// instructions of a repository the engine does not control, and some
+	// CLIs ran git in it. A `.git` file here ends that walk where the call
+	// begins: measured, it confines codex, OpenCode, Kimi Code, Qwen Code,
+	// Hermes, Copilot's instruction files and Gemini CLI's GEMINI.md, and it
+	// changes nothing else they send. See [cliprofile.ProjectRootMarker].
+	if err = os.WriteFile(filepath.Join(work, cliprofile.ProjectRootMarker),
+		[]byte(cliprofile.ProjectRootGitdir), 0o600); err != nil {
+		return nil, fmt.Errorf("cli-agent: marking %q as the call's own project root: %w", work, err)
+	}
 	// The working directory is this call's own, so its settings files are
 	// written per call rather than per seat generation — and BEFORE a
 	// generation is opened, so that nothing can fail between the generation

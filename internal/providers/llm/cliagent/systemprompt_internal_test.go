@@ -477,3 +477,38 @@ func TestAnEstimatedCallIsChargedForItsSystemPrompt(t *testing.T) {
 			"(the transcript alone is %d)", comp.InputTokens, want, EstimateTokens(prompt))
 	}
 }
+
+// EVERY CALL IS ITS OWN PROJECT ROOT, before the CLI starts. Vendor CLIs walk
+// from their working directory up to the nearest repository root for project
+// files (AGENTS.md, rules, skills, hooks), so a state_dir inside a checkout
+// would hand every seat a repository's instructions. The engine writes a `.git`
+// file naming a gitdir that never exists, which every measured CLI stops at.
+// Asked from inside the child, because the per-call directory is removed on
+// release.
+func TestEveryCallsDirectoryIsItsOwnProjectRoot(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_READ_DISCOVERED": cliprofile.ProjectRootMarker}, nil)
+	comp, err := ask(t, p, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	parts := strings.SplitN(comp.Content, "|", 3)
+	if len(parts) != 3 {
+		t.Fatalf("the child found no %s in its working directory: %s", cliprofile.ProjectRootMarker, comp.Content)
+	}
+	mode, encoded := parts[1], parts[2]
+	body, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != cliprofile.ProjectRootGitdir {
+		t.Errorf("%s holds %q, want %q", cliprofile.ProjectRootMarker, body, cliprofile.ProjectRootGitdir)
+	}
+	if !strings.HasPrefix(string(body), "gitdir:") {
+		t.Errorf("%s does not open with gitdir:, which Kimi Code needs to stop at it: %q",
+			cliprofile.ProjectRootMarker, body)
+	}
+	if mode != "600" {
+		t.Errorf("%s is mode %s, want 600", cliprofile.ProjectRootMarker, mode)
+	}
+}

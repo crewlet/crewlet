@@ -584,6 +584,24 @@ func (f *SystemPromptFile) FileName() string {
 	return f.Name
 }
 
+// ProjectRootMarker is the file the engine writes into every call's working
+// directory to make it a project root of its own, and ProjectRootGitdir its
+// content.
+//
+// A FILE, and one naming a gitdir, because those are the two shapes every CLI
+// measured stops at: an empty `.git` DIRECTORY is ignored by git and by the
+// CLIs that ask git where the root is (OpenCode, Qwen Code, Copilot), and Kimi
+// Code accepts a `.git` file only when its first line is `gitdir:`. The gitdir
+// is relative, so it names a path inside the call's own 0700 directory that
+// never exists: git reports "not a git repository" there, and nobody else can
+// create it.
+//
+// Reserved: no seed may claim the path ([Profile.claims]).
+const (
+	ProjectRootMarker = ".git"
+	ProjectRootGitdir = "gitdir: .crewlet-not-a-repository\n"
+)
+
 // DefaultSystemPromptFile is what a {file} substitution writes, in the per-call
 // working directory.
 //
@@ -1563,6 +1581,11 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 				file(fmt.Sprintf("credential_paths[%d]", i), rel)
 			}
 		}
+	}
+	if scope == SeedWork {
+		// FIRST, so a seed at the same path is the one refused, under a
+		// label that says the engine owns it.
+		file("the call's project-root marker", ProjectRootMarker)
 	}
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
