@@ -110,6 +110,11 @@ type CreateRequest struct {
 	SourceKey string            `json:"source_key,omitempty"`
 	Shares    []artifacts.Share `json:"shares,omitempty"`
 
+	// Folder is the folder the artifact is created in, by id, empty for the
+	// top level: one the caller's surface already admitted filing into
+	// (contributor on it, through the requester ceiling for a tool).
+	Folder string `json:"folder,omitempty"`
+
 	Upload       string                 `json:"upload,omitempty"`
 	Files        []FileSpec             `json:"files,omitempty"`
 	Entry        string                 `json:"entry,omitempty"`
@@ -202,7 +207,7 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 	published, err := s.writes.Create(ctx, c, artifactsdomain.CreateInput{
 		Kind: req.Kind, Title: req.Title, Description: req.Description, Icon: req.Icon,
 		Owner: req.Owner, OwnerKind: req.OwnerKind, SourceKey: req.SourceKey,
-		First: in, Shares: req.Shares,
+		First: in, Shares: req.Shares, Folder: req.Folder,
 	})
 	if err != nil {
 		return published, Report{}, r.fail(ctx, err)

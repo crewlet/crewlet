@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -216,6 +217,16 @@ func TestEveryHistoryRowIsFiledUnderAHistoryOp(t *testing.T) {
 			return err
 		},
 		func() error { _, err := n.writer.LinkWorkItem(ctx, jane, id, "ENG-12"); return err },
+		func() error {
+			made, err := n.writer.CreateFolders(ctx, jane, artifactsdomain.FolderCreateInput{
+				Names: []string{"Reports"}, Visibility: artifactsdomain.FolderCompany,
+				Owner: "jane", OwnerKind: iam.ActorHuman})
+			if err != nil {
+				return err
+			}
+			_, err = n.writer.Move(ctx, jane, id, made.Folders[0].ID)
+			return err
+		},
 		func() error {
 			_, err := n.writer.ReadElevated(ctx, person("root", artifacts.RoleOwner), id, 3)
 			return err

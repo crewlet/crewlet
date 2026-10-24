@@ -179,12 +179,12 @@ var OpKinds = []OpKind{
 // asset's own name ([historyOp]), so the history tells an asset's create from
 // the artifact's. A folder's records and the brand's are filed in their own
 // histories ([FolderHistoryOps], [BrandHistoryOps]). An artifact's move is
-// filed here, naming folder ids only, and joins this list in the change that
-// writes its row.
+// filed here, naming folder ids only, never a folder's name, so the row tells
+// a reader of the artifact nothing about a folder they cannot see.
 var HistoryOps = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
 	OpTrash, OpRestore, OpPurgeBegin, historyOp(KindAsset, OpCreate), historyOp(KindAsset, OpRemove),
-	OpLinkWorkItem, OpReadElevated,
+	OpLinkWorkItem, OpReadElevated, OpMove,
 }
 
 // FolderHistoryOps are every op a folder history row is filed under
