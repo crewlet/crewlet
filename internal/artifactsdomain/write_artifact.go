@@ -78,8 +78,12 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrPurged, id)
 			}
 			if in.Folder != "" {
-				if live, err := folderLive(ctx, tx, in.Folder); err != nil || !live { //nolint:govet // shadow: scoped to this block; see .golangci.yml
-					return statelog.Decision{}, errors.Join(err, folderAbsent(err, in.Folder))
+				live, liveErr := folderLive(ctx, tx, in.Folder)
+				switch {
+				case liveErr != nil:
+					return statelog.Decision{}, liveErr
+				case !live:
+					return statelog.Decision{}, fmt.Errorf("%w: %s", ErrFolderNotFound, in.Folder)
 				}
 			}
 			plan, refusal, err := planObjects(ctx, tx, id.String(), payload.Version.Manifest.Files, nil) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

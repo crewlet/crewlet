@@ -132,9 +132,9 @@ func (a *Applier) applyFolderCreate(ctx context.Context, tx *sql.Tx, c applyCont
 		return 0, err
 	}
 	for _, f := range p.Folders {
-		exists, err := folderRowExists(ctx, tx, f.ID)
-		if err != nil {
-			return 0, err
+		exists, existsErr := folderRowExists(ctx, tx, f.ID)
+		if existsErr != nil {
+			return 0, existsErr
 		}
 		if exists {
 			return no(RefusedExists)
@@ -160,7 +160,7 @@ func (a *Applier) applyFolderCreate(ctx context.Context, tx *sql.Tx, c applyCont
 	actor := c.record.actor()
 	rows := 0
 	for _, f := range p.Folders {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err = tx.ExecContext(ctx, `
 			INSERT INTO artifact_folders
 				(id, parent, root, name, name_key, owner, owner_kind, max_depth, status,
 				 created_by, created_by_kind, created_at, updated_by, updated_by_kind,
@@ -293,7 +293,7 @@ func (a *Applier) applyFolderRename(ctx context.Context, tx *sql.Tx, c applyCont
 	case tree.named(f.parent, namespaceOf(f.owner, tree.shares[f.id]), p.NameKey, f.id) != nil:
 		return no(RefusedFolderNameTaken)
 	}
-	if err := touchFolder(ctx, tx, c, f.id, `name = ?, name_key = ?`, p.Name, p.NameKey); err != nil {
+	if err = touchFolder(ctx, tx, c, f.id, `name = ?, name_key = ?`, p.Name, p.NameKey); err != nil {
 		return 0, err
 	}
 	n, err := writeFolderHistory(ctx, tx, c, f.id, OpRename, OutcomeApplied, "",
@@ -351,21 +351,19 @@ func (a *Applier) applyFolderMove(ctx context.Context, tx *sql.Tx, c applyContex
 	case tree.named(p.Parent, namespaceOf(f.owner, p.Shares), f.nameKey, f.id) != nil:
 		return no(RefusedFolderNameTaken)
 	}
-	rows := 0
+	var rows, n int
 	if f.parent == "" {
 		// IT WAS A TOP-LEVEL FOLDER: its new top-level folder decides it now.
-		n, err := dropFolderShares(ctx, tx, f.id)
-		if err != nil {
+		if n, err = dropFolderShares(ctx, tx, f.id); err != nil {
 			return 0, err
 		}
 		rows += n
 	}
-	n, err := writeFolderShares(ctx, tx, c, f.id, p.Shares)
-	if err != nil {
+	if n, err = writeFolderShares(ctx, tx, c, f.id, p.Shares); err != nil {
 		return 0, err
 	}
 	rows += n
-	if err := touchFolder(ctx, tx, c, f.id, `parent = ?, root = ?`, p.Parent, root); err != nil {
+	if err = touchFolder(ctx, tx, c, f.id, `parent = ?, root = ?`, p.Parent, root); err != nil {
 		return 0, err
 	}
 	rows++
@@ -435,15 +433,14 @@ func (a *Applier) applyFolderRemove(ctx context.Context, tx *sql.Tx, c applyCont
 	case len(movedUpCollisions(tree, f)) > 0:
 		return no(RefusedFolderNameTaken)
 	}
-	rows := 0
+	var rows, n int
 	kids := tree.kids[f.id]
 	if f.parent == "" {
 		// EACH CHILD BECOMES A TOP-LEVEL FOLDER keeping the removed one's
 		// audience, and roots its own subtree.
 		shares := tree.shares[f.id]
 		for _, kid := range kids {
-			n, err := writeFolderShares(ctx, tx, c, kid.id, shares)
-			if err != nil {
+			if n, err = writeFolderShares(ctx, tx, c, kid.id, shares); err != nil {
 				return 0, err
 			}
 			rows += n
@@ -471,13 +468,12 @@ func (a *Applier) applyFolderRemove(ctx context.Context, tx *sql.Tx, c applyCont
 	}
 	refiled, _ := res.RowsAffected()
 	rows += int(refiled)
-	n, err := dropFolderShares(ctx, tx, f.id)
-	if err != nil {
+	if n, err = dropFolderShares(ctx, tx, f.id); err != nil {
 		return 0, err
 	}
 	rows += n
 	actor := c.record.actor()
-	if err := touchFolder(ctx, tx, c, f.id,
+	if err = touchFolder(ctx, tx, c, f.id,
 		`status = ?, removed_by = ?, removed_by_kind = ?, removed_at = ?`,
 		string(FolderRemoved), actor.Name, string(actor.Kind), c.at()); err != nil {
 		return 0, err
@@ -521,15 +517,15 @@ func (a *Applier) applyMove(ctx context.Context, tx *sql.Tx, c applyContext, id 
 		return no(RefusedTrashed)
 	}
 	if p.To != "" {
-		live, err := folderLive(ctx, tx, p.To)
-		if err != nil {
-			return 0, err
+		live, liveErr := folderLive(ctx, tx, p.To)
+		if liveErr != nil {
+			return 0, liveErr
 		}
 		if !live {
 			return no(RefusedFolderGone)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET folder_id = ?, version = ? WHERE id = ?`,
+	if _, err = tx.ExecContext(ctx, `UPDATE artifacts SET folder_id = ?, version = ? WHERE id = ?`,
 		p.To, c.packed, id); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: file %s in folder %q at %s: %w", id, p.To, c.position, err)
 	}

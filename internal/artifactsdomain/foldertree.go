@@ -100,17 +100,17 @@ func readFolderTree(ctx context.Context, tx *sql.Tx, where string, args ...any) 
 	t := &folderTree{rows: map[string]*folderRow{}, kids: map[string][]*folderRow{},
 		shares: map[string][]artifacts.Share{}}
 	for rows.Next() {
-		f, err := scanFolderRow(rows)
-		if err != nil {
+		f, scanErr := scanFolderRow(rows)
+		if scanErr != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("artifactsdomain: read the folder tree: %w", err)
+			return nil, fmt.Errorf("artifactsdomain: read the folder tree: %w", scanErr)
 		}
 		t.rows[f.id] = f
 		if f.status == FolderLive {
 			t.kids[f.parent] = append(t.kids[f.parent], f)
 		}
 	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("artifactsdomain: read the folder tree: %w", err)
 	}
 	for _, kids := range t.kids {
@@ -322,8 +322,8 @@ func (t *folderTree) resolvePath(path string) ([]*folderRow, error) {
 			return nil, fmt.Errorf("%w: %q is not a folder path: it holds an empty name",
 				ErrInvalid, path)
 		}
-		_, key, err := foldername.Check(segment)
-		if err != nil {
+		key, named := folderKey(segment)
+		if !named {
 			// A NAME NO FOLDER COULD HOLD names no folder: answered as
 			// absent, the same answer a name nobody used gets.
 			return nil, nil
@@ -345,6 +345,13 @@ func (t *folderTree) resolvePath(path string) ([]*folderRow, error) {
 		out[i] = t.rows[id]
 	}
 	return out, nil
+}
+
+// folderKey is the key a path segment is compared by, and false for a segment
+// no folder could be named ([foldername.Check]).
+func folderKey(segment string) (string, bool) {
+	_, key, err := foldername.Check(segment)
+	return key, err == nil
 }
 
 // visibilityOf is a top-level folder's preset, read off its shares: no share is
