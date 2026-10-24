@@ -14,7 +14,7 @@
 
 import type { ReactNode } from "react";
 import {
-  ButtonLink,
+  Button,
   Card,
   ColorSwatch,
   ContrastBadge,
@@ -23,6 +23,8 @@ import {
   LogoSlot,
   Text,
   TypeSpecimen,
+  downloadBlob,
+  useToast,
 } from "@crewlethq/ui";
 import {
   ArrowDownToLineGlyph,
@@ -99,14 +101,15 @@ export function BrandCard({
   );
 }
 
-/** A file's name as a download names it: the brand's name and the slot, in lowercase words. */
+/**
+ * A file's name as a download offers it: the brand's name and the slot, in
+ * lowercase words. `downloadBlob` makes it a safe name (`safeFilename`), which
+ * keeps the letters of every script, so a brand named in any language keeps
+ * its name.
+ */
 function downloadName(brand: string, slot: string, type: string | undefined): string {
   const ext = type === "image/svg+xml" ? "svg" : type === "image/webp" ? "webp" : "png";
-  const stem = `${brand} ${slot}`
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-  return `${stem || "logo"}.${ext}`;
+  return `${brand} ${slot} logo`.toLowerCase() + `.${ext}`;
 }
 
 /** The logo types a download is named by, from the path the document names it at. */
@@ -123,6 +126,7 @@ function typeOfPath(path: string | undefined): string | undefined {
 
 /** The Logos card's body: the brand's name and tagline, and its three logos on their own grounds. */
 export function LogosBody({ document, assets }: { document: BrandDocument; assets: BrandAssets }) {
+  const toast = useToast();
   return (
     <div className="brand-logos">
       <Text as="p" variant="body" className="brand-name">
@@ -132,7 +136,17 @@ export function LogosBody({ document, assets }: { document: BrandDocument; asset
       <div className="brand-logo-slots">
         {BRAND_LOGO_SLOTS.map((spec) => {
           const src = assets.logo(spec.slot);
+          const file = assets.logoFile(spec.slot);
           const type = typeOfPath(document.logos[spec.slot]);
+          // SAVED AT THE PRESS from the bytes the page holds, never a lasting
+          // link: an `<a href="blob:…">` to an SVG on this origin is one a
+          // reader could open as a page here.
+          const save = () => {
+            if (!file) return;
+            const { started } = downloadBlob(file, downloadName(document.name, spec.label, type));
+            if (!started)
+              toast.show({ variant: "warning", title: "The browser did not take the download" });
+          };
           return (
             <LogoSlot
               key={spec.slot}
@@ -147,17 +161,16 @@ export function LogosBody({ document, assets }: { document: BrandDocument; asset
               alt={`${document.name} ${spec.label.toLowerCase()} logo`}
               emptyNote={spec.emptyNote}
               download={
-                src ? (
-                  <ButtonLink
-                    href={src}
-                    download={downloadName(document.name, spec.label, type)}
+                file ? (
+                  <Button
                     size="small"
                     variant="ghost"
                     leadingIcon={<ArrowDownToLineGlyph size="sm" />}
                     aria-label={`Download the ${spec.label.toLowerCase()} logo`}
+                    onClick={save}
                   >
                     {type === "image/svg+xml" ? "SVG" : type === "image/webp" ? "WebP" : "PNG"}
-                  </ButtonLink>
+                  </Button>
                 ) : undefined
               }
             />

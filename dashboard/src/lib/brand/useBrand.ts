@@ -187,8 +187,19 @@ export function logoDigests(source: BrandSource | null): LogoDigests {
 export interface BrandAssets {
   /** The logo in `slot`, or null while it loads, when it failed, or where none is set. */
   logo: (slot: BrandLogoSlot) => string | null;
+  /**
+   * The bytes behind [logo], for a download made at the press (`downloadBlob`),
+   * so no lasting link to an SVG on the dashboard's origin is ever drawn.
+   */
+  logoFile: (slot: BrandLogoSlot) => Blob | null;
   /** The family an uploaded face was registered under in this page, or undefined. */
   face: (role: BrandFaceRole) => string | undefined;
+}
+
+/** One logo loaded: its object URL for an `<img>`, and the bytes it points at. */
+interface LoadedLogo {
+  url: string;
+  blob: Blob;
 }
 
 /** A family name for a face this page registers: unique to the source, never a name a system holds. */
@@ -207,7 +218,7 @@ export function useBrandAssets(
   source: BrandSource | null,
   options: { logos?: boolean } = {},
 ): BrandAssets {
-  const [urls, setUrls] = useState<ReadonlyMap<BrandLogoSlot, string>>(new Map());
+  const [logoFiles, setLogoFiles] = useState<ReadonlyMap<BrandLogoSlot, LoadedLogo>>(new Map());
   const [faces, setFaces] = useState<ReadonlyMap<BrandFaceRole, string>>(new Map());
   const key = source?.key ?? "";
   const logos = options.logos ?? true;
@@ -227,21 +238,24 @@ export function useBrandAssets(
           // reads are shared and ignore the signal, and a URL made after the
           // cleanup ran would never be revoked.
           if (ctl.signal.aborted) return null;
-          const url = URL.createObjectURL(new Blob([blob], { type: file.type }));
+          const typed = new Blob([blob], { type: file.type });
+          const url = URL.createObjectURL(typed);
           made.push(url);
-          return [slot, url] as const;
+          return [slot, { url, blob: typed }] as const;
         } catch {
           return null;
         }
       }),
     ).then((entries) => {
       if (ctl.signal.aborted) return;
-      setUrls(new Map(entries.filter((e): e is readonly [BrandLogoSlot, string] => e !== null)));
+      setLogoFiles(
+        new Map(entries.filter((e): e is readonly [BrandLogoSlot, LoadedLogo] => e !== null)),
+      );
     });
     return () => {
       ctl.abort();
       for (const url of made) URL.revokeObjectURL(url);
-      setUrls(new Map());
+      setLogoFiles(new Map());
     };
     // THE SOURCE'S KEY names its files, so an equal source rebuilt each
     // render reads nothing again.
@@ -292,10 +306,11 @@ export function useBrandAssets(
 
   return useMemo(
     () => ({
-      logo: (slot: BrandLogoSlot) => urls.get(slot) ?? null,
+      logo: (slot: BrandLogoSlot) => logoFiles.get(slot)?.url ?? null,
+      logoFile: (slot: BrandLogoSlot) => logoFiles.get(slot)?.blob ?? null,
       face: (role: BrandFaceRole) => faces.get(role),
     }),
-    [urls, faces],
+    [logoFiles, faces],
   );
 }
 
@@ -354,4 +369,8 @@ export function useAdoptedMark(): { adoption: Adoption | null | undefined; mark:
 }
 
 /** A brand drawn with no file read: no logo, and every face in its fallback. */
-export const NO_BRAND_ASSETS: BrandAssets = { logo: () => null, face: () => undefined };
+export const NO_BRAND_ASSETS: BrandAssets = {
+  logo: () => null,
+  logoFile: () => null,
+  face: () => undefined,
+};
