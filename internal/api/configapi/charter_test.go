@@ -188,7 +188,8 @@ func TestACharterWriteIsANewRevisionOfTheWholeDocument(t *testing.T) {
 		t.Fatalf("published %d events, want the activation", len(pub.sent))
 	}
 	if ev, _ := pub.sent[0].Data.(*types.ConfigRevisionActivated); ev == nil ||
-		ev.RevisionSummary != active.Summary || ev.CreatedBy != "token:ops" {
+		ev.RevisionSummary != active.Summary || ev.CreatedBy != "token:ops" ||
+		ev.RevisionSource != "api" {
 		t.Errorf("the activation event is %+v", pub.sent[0].Data)
 	}
 }

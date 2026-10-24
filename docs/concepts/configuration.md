@@ -98,8 +98,10 @@ replaces, so an old fault never locks a company out:
   migration. A file that ran under an earlier build imports with its faults
   printed as warnings, and every node logs them as `org_admission_warning` when
   it applies the company, because refusing there would leave an upgraded node
-  unable to boot on its own file. An import sent to a running node is a `PUT
-  /config`, and is judged as an edit of the company it replaces.
+  unable to boot on its own file. An import sent to a running node is too: the
+  CLI sends it as `PUT /config?import=true`, which judges the charter
+  warn-only, is `admin`'s alone and records the revision as imported from a
+  file. The dashboard never sends it.
 - **`crewlet validate`** prints the faults as warnings and exits 0: it cannot
   know what the store holds, so it cannot know whether a write of the file
   would edit the faulty part.
@@ -842,7 +844,7 @@ A seat may not be called `none` either — what `integrations.datadog.route_to` 
 
 A written document is refused for breaking one. A revision being applied that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
 
-The [charter's rules](#mission-vision-and-policies) are judged on an edit's **change** rather than on the document it leaves: an API write is refused only for a fault in a part of the charter it changes, judged against the stored revision it replaces, and an import (offline, at boot, a restore) is never refused for one. Every fault an edit leaves untouched, and every fault an import carries, is warned about like an admission rule, on the write's answer, in the import's output and as `org_admission_warning` on every apply.
+The [charter's rules](#mission-vision-and-policies) are judged on an edit's **change** rather than on the document it leaves: an API write is refused only for a fault in a part of the charter it changes, judged against the stored revision it replaces, and an import (offline, at boot, to a running node, a restore) is never refused for one. Every fault an edit leaves untouched, and every fault an import carries, is warned about like an admission rule, on the write's answer, in the import's output and as `org_admission_warning` on every apply.
 
 ### What an applied company is worth knowing
 

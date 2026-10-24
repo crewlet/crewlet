@@ -1629,7 +1629,7 @@ does.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config` | Replace the active revision. The body is JSON or YAML, read the same way whatever `Content-Type` says. Requires a revision summary: an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match`, see [below](#conditional-requests). `?dry_run=true` checks it and stores nothing, see [Dry runs](#dry-runs) |
+| `PUT` | `/config` | Replace the active revision. The body is JSON or YAML, read the same way whatever `Content-Type` says. Requires a revision summary: an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match`, see [below](#conditional-requests). `?dry_run=true` checks it and stores nothing, see [Dry runs](#dry-runs). `?import=true` writes it as an import of a restored file, see [The charter](#the-charter-mission-vision-and-policies) |
 | `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
 | `PATCH` | `/config` | Merge one or more sections into the active revision, see [below](#patch-config--the-narrower-write). `?dry_run=true` checks it and stores nothing |
 | `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
@@ -1962,8 +1962,26 @@ changes](../concepts/configuration.md#mission-vision-and-policies): a write
 that leaves a faulty part untouched is admitted, with a warning naming it in
 its answer, so an old fault never locks a company out of its other settings.
 Here, the parts the charter write changes are judged, and the parts it leaves
-as they were are not. An import at boot or into a stopped node is never
-refused for the charter, and says its faults as warnings.
+as they were are not.
+
+**An import is never refused for the charter.** `PUT /config?import=true`
+writes the document as an import of a restored or migrated file: every other
+rule holds as for any write, and the charter is judged warn-only, its faults
+named in the answer's `warnings`. It is what `crewlet config import` sends to a
+running node, so a file that ran under an earlier build always imports, as it
+does into a stopped node and at boot. It is `admin`'s alone (a lead the route
+admits for their own units is refused `403` before the body is read), asks a
+recent proof as every write does, and records the revision with `source`
+`file`, as an offline import does, and its activation event with
+`revision_source: file`, beside the author and the credential (`operator_id`).
+Decided by `config.write` on the authority table, so a Tier A token may use it
+(fresh by construction), and so may a machine token whose owner holds `admin`;
+on a [managed](../concepts/configuration.md#managed-configuration) document
+only the listed writers may. It relaxes the charter's change rule and nothing
+else: every other rule, `If-Match` and the managed check hold as for any write.
+The flag is `true` or `false`, given once, or `400 invalid_query`. The
+dashboard never sends it (a gate fails if its source does), and the operator's
+MCP and act surfaces serve no `/config` write at all.
 
 #### Per-entity read and write
 

@@ -1,6 +1,7 @@
 package configapi
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -231,6 +232,9 @@ type draft struct {
 	// replaces (nil when nothing is active): [authoredRules] or
 	// [runnableRules].
 	rules func(next, prior *config.Company) error
+	// source is what the revision records as where it came from: empty for
+	// [revisionSource], or [importSource] for an import.
+	source string
 	// principal is who asked for the write, which is admitted on what it
 	// changes (admission.go); nil for the engine's own writes, which no
 	// request made.
@@ -265,6 +269,8 @@ type prepared struct {
 	// by is the draft's party, carried rather than passed again to
 	// [Service.commit], so the author stored is the one prepare judged.
 	by iam.Actor
+	// source is the draft's, resolved: what the revision records.
+	source string
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -355,6 +361,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	p := &prepared{
 		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
+		source: cmp.Or(d.source, revisionSource),
 	}
 	if found {
 		p.base = active.ID
@@ -393,7 +400,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 	}
 	at := s.now()
 	id, err := s.configs.Insert(ctx, store.Revision{
-		ParentID: p.base, Source: revisionSource, CreatedBy: by.Name,
+		ParentID: p.base, Source: p.source, CreatedBy: by.Name,
 		CreatedByKind: by.Kind, OperatorID: by.OperatorID,
 		Summary: summary, Payload: payload, CreatedAt: at,
 	})
@@ -408,7 +415,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		// instant it happened to apply it.
 		Origin: coord.RevisionOrigin{
 			Author: by.Name, AuthorKind: by.Kind, OperatorID: by.OperatorID,
-			Source: revisionSource, CreatedAt: at,
+			Source: p.source, CreatedAt: at,
 		},
 		// A WRITE BUILT ON NOTHING SAYS SO. Every write here names what it
 		// was built on as the activation's expectation, and a write with no
@@ -453,7 +460,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 			"detail", "the fleet is running this revision; this node marks "+
 				"it active when its reconciler applies the epoch")
 	}
-	s.nudge(ctx, id, summary, by)
+	s.nudge(ctx, id, summary, p.source, by)
 	log.InfoContext(ctx, "config_revision_written",
 		"revision", id, "epoch", published.Epoch, "by", by.Name,
 		"operator", by.OperatorID, "summary", summary)
@@ -477,6 +484,14 @@ func authoredRules(next, prior *config.Company) error {
 // build is free to change, since a newer peer may have admitted it.
 func runnableRules(next, _ *config.Company) error {
 	return next.ValidateRunnable()
+}
+
+// importRules is what an import is held to ([Service.mayImport]): every rule
+// [config.Company.Validate] holds, and the charter's as warnings only, which
+// the answer carries, because a restored file must import whatever its charter
+// says.
+func importRules(next, _ *config.Company) error {
+	return next.Validate()
 }
 
 // patchDraft is a JSON Merge Patch over the active document.

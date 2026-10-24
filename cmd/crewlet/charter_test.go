@@ -2,13 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -118,5 +130,83 @@ func TestValidateWarnsAboutAFaultyCharterAndPasses(t *testing.T) {
 		if !strings.Contains(out.String(), place) {
 			t.Errorf("validate did not warn about %s:\n%s", place, out.String())
 		}
+	}
+}
+
+// AN IMPORT TO A RUNNING NODE IS AN IMPORT TOO: the CLI's client marks it as
+// one, and the node takes a file whose charter changes a faulty part and
+// leaves it at fault (restoring an older, longer mission over a stored faulty
+// one), with the warnings in its answer, where the same document sent as an
+// edit is refused.
+func TestAnImportToARunningNodeWarnsAboutTheCharter(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	svc, err := configapi.New(configapi.Options{
+		Store: db, Plane: coordmemory.NewFleet(), Cipher: fixtureCipher,
+		Holders: func(context.Context, []string, time.Time) (map[string]configapi.SeatHolder, error) {
+			return map[string]configapi.SeatHolder{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		t.Fatal(err)
+	}
+	// THE OPERATOR THE GUARD WOULD RESOLVE: a Tier A token, fresh for a step-up.
+	operator := iam.Principal{
+		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
+		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: iam.AllGrants,
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), operator)))
+	}))
+	t.Cleanup(server.Close)
+
+	stored := faultyCharterYAML()
+	document, err := json.Marshal(parse(t, stored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secrets.Seal(fixtureCipher, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+		Source: "file", CreatedBy: testNode, CreatedByKind: iam.ActorSystem,
+		Summary: "the stored company", Payload: sealed, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restored := []byte(strings.Replace(stored, strings.Repeat("m", 1100), strings.Repeat("o", 1200), 1))
+
+	client := &configClient{base: server.URL, http: httpx.Client(apiTimeout), answerCap: maxConfigResponseBytes}
+	if _, _, err := client.Import(t.Context(), restored, "restore last week's file"); err != nil {
+		t.Fatalf("an import to a running node was refused for its charter: %v", err)
+	}
+	active, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Source != "file" || active.CreatedBy != "token:ops" || active.Summary != "restore last week's file" {
+		t.Errorf("the import is recorded as %+v, want an import from a file by token:ops with its summary", active)
+	}
+
+	// THE SAME DOCUMENT AS AN EDIT is judged on what it changes, and refused.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, server.URL+"/config",
+		bytes.NewReader([]byte(strings.Replace(stored, strings.Repeat("m", 1100), strings.Repeat("e", 1300), 1))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Summary", "an edit")
+	res, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("the same change as an edit = %d, want 400", res.StatusCode)
 	}
 }

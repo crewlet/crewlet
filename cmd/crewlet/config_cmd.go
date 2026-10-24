@@ -60,6 +60,10 @@ A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
 dropping a retired key from secrets.keys, or whatever is still sealed under it
 becomes unreadable.
+An import never refuses a company file for its charter (a mission or policy
+past its length, or on two lines): it prints each fault as a warning and
+imports, offline or through a running node, which it reaches as an admin's
+import (PUT /config?import=true) rather than as an edit.
 `
 
 // configSubcommands is every `crewlet config` subcommand. It is what the
