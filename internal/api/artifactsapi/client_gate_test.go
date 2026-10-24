@@ -164,6 +164,81 @@ func TestTheDashboardListsWithTheEnginesDelimiter(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD JUDGES A BRAND'S CONTRAST AS THE ADOPTION DOES: the Brand
+// page's badges block a Save on the pair that refuses an adoption, so they
+// measure the same pairs, in the same order, on the same fallbacks. A pair the
+// page skips is a Save it allows and an adoption refuses; a fallback that
+// differs is a badge passing a text the adoption measures as unreadable.
+func TestTheDashboardJudgesBrandContrastAsTheAdoptionDoes(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	fallbacks, err := clientsource.Literal(tree, "BRAND_COLOR_FALLBACKS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(fallbacks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"text": brandformat.Fallbacks.Text, "light_ground": brandformat.Fallbacks.LightGround,
+		"dark_ground": brandformat.Fallbacks.DarkGround, "dark_text": brandformat.Fallbacks.DarkText,
+	}
+	if len(keys) != len(want) {
+		t.Errorf("the dashboard declares fallbacks %q and the engine fills %d", keys, len(want))
+	}
+	for role, hex := range want {
+		if got := clientsource.Scalars(fallbacks, role); len(got) != 1 || got[0] != hex {
+			t.Errorf("the dashboard fills %s with %q and the engine with %q", role, got, hex)
+		}
+	}
+
+	pairs, err := clientsource.Literal(tree, "BRAND_CONTRAST_PAIRS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fg, ground, floor, refuses []string
+	for _, p := range brandformat.ContrastPairs {
+		fg = append(fg, p.Foreground)
+		ground = append(ground, p.Ground)
+		floor = append(floor, strconv.FormatFloat(p.Min, 'f', -1, 64))
+		refuses = append(refuses, strconv.FormatBool(p.Refuses))
+	}
+	for key, want := range map[string][]string{
+		"foreground": fg, "ground": ground, "min": floor, "refuses": refuses,
+	} {
+		if got := clientsource.Scalars(pairs, key); !slices.Equal(got, want) {
+			t.Errorf("the dashboard's pairs read %s %q and the engine's %q", key, got, want)
+		}
+	}
+}
+
+// THE DASHBOARD DRAWS THE FACES THE BRAND STYLESHEET NAMES: the Brand page's
+// preview sets each face from the dashboard's table, and every artifact page
+// from the generated stylesheet, so a list that differs is a preview showing a
+// face no page shows.
+func TestTheDashboardDrawsTheFacesTheBrandStylesheetNames(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "BRAND_FACE_FAMILIES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(slices.Clone(brandformat.KitFaces), brandformat.SystemStacks...)
+	if !slices.Equal(keys, want) {
+		t.Errorf("the dashboard lists faces %q and the engine resolves %q", keys, want)
+	}
+	for _, name := range want {
+		if got := clientsource.Scalars(body, name); len(got) != 1 || got[0] != brandformat.FaceFamilies[name] {
+			t.Errorf("the dashboard draws %s as %q and the stylesheet as %q", name, got,
+				brandformat.FaceFamilies[name])
+		}
+	}
+}
+
 // names is a closed set's values as the strings the dashboard declares.
 func names[S ~string](set []S) []string {
 	out := make([]string, len(set))
