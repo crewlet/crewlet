@@ -49,7 +49,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Announcer, AppShell, SectionFrame, useMediaMatch } from "@crewlethq/ui";
+import { AppShell, SectionFrame, useMediaMatch } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
@@ -686,9 +686,6 @@ function Frame({ children }: { children: ReactNode }) {
           </LayerBoundary>
         )}
         {legendOpen && <KeyLegend runs={runs} onClose={() => setLegendOpen(false)} />}
-        {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
-            without moving focus (the switcher's "3 projects"). */}
-        <Announcer />
       </PeekNeighbours>
     </NewTaskOpener.Provider>
   );

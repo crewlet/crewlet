@@ -8607,7 +8607,10 @@ brings that carries a design-system rule.
   frame rather than in the shell, so a sign-in does not tear it down; named
   Announcements rather than the package's default, which is also what the
   toast outlet calls its polite region; and portalled into the fullscreen
-  element while there is one.
+  element while there is one. The shell once mounted a second, under the
+  default name, and every add, move and restore was said twice; a case in
+  `app/announcer.test.tsx` now counts the regions that hold a sentence, by
+  what they hold rather than by name.
 - **One stack decides which surface a key belongs to.** Dialogs, sheets,
   menus and listbox popups register on the design system's layer stack
   (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the
