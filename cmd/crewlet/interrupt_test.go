@@ -46,6 +46,65 @@ type interruptProbe struct {
 	// AfterFatal has the run hand the signals back with no signal behind it,
 	// as a node that stops itself does, and press only once.
 	AfterFatal bool
+	// Hangup has the run start a shell that hangs itself up, and then hang
+	// the run up: [TestARunStartedIgnoringHangupGivesItsChildrenTheDefault].
+	Hangup bool
+}
+
+// hangupProbeHeld is what the probe prints when a child it started died of
+// the SIGHUP it sent itself and the run survived one of its own.
+const hangupProbeHeld = "the child died of its hangup and the run survived its own"
+
+// A RUN STARTED IGNORING A HANGUP GIVES ITS CHILDREN THE DEFAULT, and goes on
+// ignoring one itself. Started under nohup, the engine handed the ignore on to
+// every process it started, and a non-interactive sh can neither trap nor die
+// of a signal it started ignoring: a box's run script could not hear the
+// hangup that exports its login, and exited nothing.
+//
+// Mutation: leave SIGHUP alone in interruptContext, and the child sleeps
+// through its own hangup.
+func TestARunStartedIgnoringHangupGivesItsChildrenTheDefault(t *testing.T) {
+	t.Parallel()
+	spec, err := json.Marshal(interruptProbe{Ignored: []syscall.Signal{syscall.SIGHUP},
+		Hangup: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.CommandContext(t.Context(), os.Args[0],
+		"-test.run=^TestARunStartedIgnoringHangupGivesItsChildrenTheDefault$")
+	child.Env = append(os.Environ(), interruptProbeEnv+"="+string(spec))
+	output, err := child.CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte(hangupProbeHeld)) {
+		t.Fatalf("the probe ended with %v; its output:\n%s", err, output)
+	}
+}
+
+// runHangupProbe is the child's half of
+// [TestARunStartedIgnoringHangupGivesItsChildrenTheDefault]: it never returns.
+func runHangupProbe() {
+	if !signal.Ignored(syscall.SIGHUP) {
+		fmt.Println("the probe started with SIGHUP at its default, want it ignored")
+		os.Exit(interruptProbeWrongDisposition)
+	}
+	_, held := interruptContext()
+	defer held.end()
+	err := exec.Command("sh", "-c", "kill -HUP $$; sleep 5").Run()
+	var exit *exec.ExitError
+	status, ok := syscall.WaitStatus(0), false
+	if errors.As(err, &exit) {
+		status, ok = exit.Sys().(syscall.WaitStatus)
+	}
+	if !ok || !status.Signaled() || status.Signal() != syscall.SIGHUP {
+		fmt.Printf("the child ended with %v, want it killed by its own SIGHUP\n", err)
+		os.Exit(interruptProbeSurvived)
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
+		fmt.Println("hanging up the run:", err)
+		os.Exit(interruptProbeLaunchFailed)
+	}
+	time.Sleep(200 * time.Millisecond)
+	fmt.Println(hangupProbeHeld)
+	os.Exit(0)
 }
 
 // A SECOND INTERRUPT KILLS THE PROCESS, from the first moment of a run and
@@ -163,6 +222,9 @@ func runInterruptProbe() {
 	if os.Getenv(interruptProbeLaunchedEnv) == "" {
 		launchInterruptProbe(probe)
 	}
+	if probe.Hangup {
+		runHangupProbe()
+	}
 	// THE DISPOSITION THE CASE ASKED FOR, before the hold's Notify clears
 	// what signal.Ignored reports. SIGINT's only: the runtime replaces an
 	// inherited SIGTERM ignore with its own handler before main, which is
@@ -205,7 +267,7 @@ func runInterruptProbe() {
 // resets one this process catches to its default, so the image it starts
 // holds exactly the case's, whatever this one inherited.
 func launchInterruptProbe(probe interruptProbe) {
-	for _, s := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
+	for _, s := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
 		if slices.Contains(probe.Ignored, s) {
 			signal.Ignore(s)
 		} else {
