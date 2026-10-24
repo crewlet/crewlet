@@ -1,6 +1,7 @@
 package brandformat_test
 
 import (
+	"bytes"
 	"math"
 	"reflect"
 	"strings"
@@ -29,6 +30,20 @@ func TestAnHonestKitIsReadWithEveryFileItServes(t *testing.T) {
 		{Slot: brandformat.SlotLogoMark, Path: "logos/mark.webp", Essence: "image/webp", Ratio: 1},
 		{Slot: brandformat.FontFileSlot(brandformat.SlotFontBody, 0), Path: "fonts/body-0.woff2", Essence: "font/woff2"},
 		{Slot: brandformat.FontFileSlot(brandformat.SlotFontBody, 1), Path: "fonts/body-1.woff2", Essence: "font/woff2"},
+	}
+	// EACH FILE COMES WITH ITS STORED FORM, Sanitize's answer for it, so an
+	// adoption copies it without a second read and a second check.
+	src := kit(t)
+	for i := range k.Files {
+		data, err := src.Read(k.Files[i].Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := brandformat.Sanitize(k.Files[i].Path, k.Files[i].Essence, data)
+		if err != nil || !bytes.Equal(k.Files[i].Stored, stored) {
+			t.Errorf("%s's stored form is not Sanitize's (%v)", k.Files[i].Path, err)
+		}
+		k.Files[i].Stored = nil
 	}
 	if !reflect.DeepEqual(k.Files, want) {
 		t.Errorf("the kit serves\n%+v\nwant\n%+v", k.Files, want)

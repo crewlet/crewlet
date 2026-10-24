@@ -29,11 +29,16 @@ type Kit struct {
 // version, its media type essence, and for a logo its width over its height
 // (an SVG's viewBox, a raster's pixels), which the generated stylesheet hands
 // the kit's `crewlet-logo` class. A face's file has no ratio.
+//
+// Stored is the file's stored form, as [Sanitize] writes it, from the one
+// read and the one check the kit was read with: an adoption copies these
+// bytes rather than reading and sanitising every file a second time.
 type KitFile struct {
 	Slot    Slot
 	Path    string
 	Essence string
 	Ratio   float64
+	Stored  []byte
 }
 
 // The essences a logo and a face's file may be.
@@ -584,5 +589,5 @@ func (r *reader) file(src Source, field, path string, essences []string) (KitFil
 		r.found = append(r.found, findings...)
 		return KitFile{}, false, nil
 	}
-	return KitFile{Path: path, Essence: essence, Ratio: a.ratio()}, true, nil
+	return KitFile{Path: path, Essence: essence, Ratio: a.ratio(), Stored: a.out}, true, nil
 }

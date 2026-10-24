@@ -154,7 +154,7 @@ func (s *Service) AdoptBrand(ctx context.Context, c artifactsdomain.Call, kit ar
 	if done, ok := r.answered(); ok {
 		return artifactsdomain.Written{Result: done.Published.Result}, nil
 	}
-	paths, err := r.copyBrand(src, k)
+	paths, err := r.copyBrand(k)
 	if err != nil {
 		return artifactsdomain.Written{}, r.fail(ctx, err)
 	}
@@ -186,22 +186,15 @@ func (s *Service) AdoptBrand(ctx context.Context, c artifactsdomain.Call, kit ar
 // stylesheet first, then a sanitised copy of every file the kit serves, in
 // the kit's order. It answers their paths in that order: the slot's name and
 // the file's extension, which is all a produced file's path is for.
-func (r *run) copyBrand(src storedSource, k brandformat.Kit) ([]string, error) {
+//
+// THE COPY IS THE STORED FORM THE KIT WAS READ WITH (brandformat.KitFile's
+// Stored): sanitised by this build's rules in the one read brandformat.ReadKit
+// made, never read and sanitised a second time.
+func (r *run) copyBrand(k brandformat.Kit) ([]string, error) {
 	served := make(map[brandformat.Slot]brandformat.ServedFile, len(k.Files))
 	paths := []string{brandStylesheet}
 	for _, kf := range k.Files {
-		data, err := src.Read(kf.Path)
-		if err != nil {
-			return nil, err
-		}
-		out, err := brandformat.Sanitize(kf.Path, kf.Essence, data)
-		var refused *brandformat.Refused
-		if errors.As(err, &refused) {
-			return nil, brandRefusal(refused)
-		}
-		if err != nil {
-			return nil, err
-		}
+		out := kf.Stored
 		ext, ok := brandformat.Ext(kf.Essence)
 		if !ok {
 			return nil, fmt.Errorf("artifactupload: the kit serves %s as %s, which the brand route "+
