@@ -163,8 +163,64 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	if !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("the refusal does not say why: %v", err)
 	}
+	// The command takes the entry's KEY: naming the CLI ("custom") sent the
+	// operator to `crewlet llm export` for a provider that does not exist.
+	if !strings.Contains(err.Error(), "`crewlet llm export sub`") {
+		t.Errorf("the refusal does not name the export that replaces it: %v", err)
+	}
 	if p.Workspace().HasLogin() {
 		t.Error("a refused bundle still wrote a credential")
+	}
+}
+
+// A BUNDLE BELONGS TO THE CLI IT WAS EXPORTED FROM. It is keyed by the entry —
+// CREWLET_LLM_CLI_<KEY>_CREDENTIALS, or the entry's auth.credential_bundle —
+// not by its CLI, so an entry moved from claude-code to codex still restores
+// the Claude bundle it was configured with, and codex refuses Claude's file at
+// every boot and apply. Said only as "not a codex credential file", that read
+// as a corrupt bundle; the refusal names the move as the likely cause and the
+// export that replaces it.
+//
+// Mutation: drop the remedy from the refusal of a plain foreign name, and this
+// is red.
+func TestABundleFromAnotherCLINamesTheExportThatReplacesIt(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	build := func(agent string) *Provider {
+		t.Helper()
+		p, err := New(Config{Key: "k", Agent: agent, StateDir: dir, Timeout: time.Second, MaxConcurrent: 1})
+		if err != nil {
+			t.Fatalf("New(%s): %v", agent, err)
+		}
+		return p
+	}
+	claude := build("claude-code")
+	creds := filepath.Join(claude.Workspace().CredentialsDir(), ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(creds, []byte(`{"token":"claude"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := claude.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+
+	codex := build("codex")
+	err = codex.RestoreBundle(t.Context(), blob)
+	if err == nil {
+		t.Fatal("codex restored a Claude Code bundle")
+	}
+	for _, want := range []string{`".credentials.json"`, "exported from", `"k" moved to "codex"`,
+		"`crewlet llm export k`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	if codex.Workspace().HasLogin() {
+		t.Errorf("a refused bundle wrote a codex credential: %v", codex.Workspace().LoginFiles())
 	}
 }
 

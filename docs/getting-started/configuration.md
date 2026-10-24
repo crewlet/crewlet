@@ -365,7 +365,9 @@ providers:
                                         #   share one login (how per-phase models run off one
                                         #   `crewlet llm login`); on different CLIs they share
                                         #   nothing, so moving an entry to another CLI applies
-                                        #   live and starts that CLI signed out
+                                        #   live and starts that CLI signed out. Its bundle
+                                        #   (auth.credential_bundle) stays the old CLI's and is
+                                        #   refused until re-exported from the new one
       timeout_seconds: 600              # optional — one CLI invocation, wall clock (default 600):
                                         #   the process launch, the model's whole answer and the
                                         #   CLI's own retries. A breach is a retryable `timeout`

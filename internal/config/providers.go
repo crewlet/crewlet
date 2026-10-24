@@ -455,6 +455,9 @@ type CLIAgentAuth struct {
 	// logged in — and withheld after `crewlet llm logout` until a login is
 	// written into the credential directory again (`crewlet llm login`,
 	// `-from-host` or `crewlet llm import`; a headless token does not end it).
+	// It holds ONE CLI's files, though it is keyed by the entry: after the
+	// entry's agent changes, the new CLI refuses it until a bundle exported
+	// from that CLI replaces it.
 	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
 }
 

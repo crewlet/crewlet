@@ -494,11 +494,8 @@ because two CLIs disagree about which files are credentials and which are
 conversation memory. So entries on one `state_dir` share a login only when they
 drive the same CLI — an entry that leaves `agent` out drives `claude-code` and
 shares with one that names it — and entries on different CLIs share the
-directory and nothing in it. That is also what makes **moving an entry to
-another CLI** an ordinary revision, applied live on every node: the key keeps
-its `state_dir`, the new CLI opens a login directory of its own, signed out
-until you sign it in (`crewlet llm login <key>`, or its bundle), and moving
-back finds the old CLI's login where it was left.
+directory and nothing in it, which is what lets an entry [move to another
+CLI](#an-entry-moved-to-another-cli) without a restart.
 
 **Keep the key entry's directory apart.** `claude-key` above takes the default
 `state_dir`, so its seats' homes are seeded with no plan login: with one, which
@@ -508,6 +505,28 @@ entry says.
 **Concurrency is per entry.** `max_concurrent` caps one entry's processes, so
 the four entries above at the default of 4 can run 16 CLI processes at once.
 Size them together against the engine host's memory.
+
+### An entry moved to another CLI
+
+Moving an entry to another CLI (changing its `agent`) is an ordinary revision,
+applied live on every node: the key keeps its `state_dir`, the new CLI opens a
+login directory of its own, signed out until you sign it in (`crewlet llm login
+<key>`, or the CLI's own sign-in adopted with `-from-host`), and moving back
+finds the old CLI's login where it was left.
+
+**A credential bundle does not move with it.** A bundle belongs to the CLI it
+was exported from, but it is keyed by the entry —
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS`, or the secret `auth.credential_bundle`
+references — so after the move it still holds the old CLI's files, which the
+new one does not keep. Wherever the new CLI's credential directory is empty —
+every node you have not signed it in on, and every container on a fresh
+volume — each boot and apply refuses the bundle, logged as
+`cli_agent_bundle_restore_failed`, and `crewlet llm list`, `status`, `export`
+and `doctor` say so too, until it is replaced: sign the new CLI in, then export
+its bundle in the old one's place (`crewlet llm export <key> -secret-store`, or
+pipe `crewlet llm export <key>` into the secret `auth.credential_bundle`
+references). A deployment that relies on the bundle runs the entry signed out
+until then.
 
 ### Auxiliary work and latency
 
@@ -2015,7 +2034,9 @@ tokens two nodes fork it exactly as `-from-host` forks yours — a headless toke
 (option 2) or a key (option 5) is the better answer for a fleet. The blob is
 validated on the way back in — only the
 profile's own credential paths, files only, size-capped — because an
-archive is an execution surface if it is unpacked on trust.
+archive is an execution surface if it is unpacked on trust; so a bundle
+restores only into the CLI it was exported from, and an entry [moved to another
+CLI](#an-entry-moved-to-another-cli) needs its bundle exported again.
 
 Only the credential files — and a CLI's exported login document — travel.
 Sessions, history, and caches never go into a bundle.

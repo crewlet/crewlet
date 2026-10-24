@@ -2193,6 +2193,14 @@ container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).
 
+A bundle **belongs to the CLI it was exported from**, though it is keyed by the
+entry: one exported before the entry moved to another CLI holds files the new
+CLI does not keep, so a restore into the new CLI's empty directory refuses it —
+at boot and apply as `cli_agent_bundle_restore_failed`, and in `list`, `status`,
+`export` and `doctor` — until the new CLI is signed in and its own bundle
+exported in its place: see [an entry moved to another
+CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).
+
 ---
 
 ## `crewlet mattermost provision`

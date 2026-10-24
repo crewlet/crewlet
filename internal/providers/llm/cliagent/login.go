@@ -734,7 +734,7 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 		return fmt.Errorf(
 			"cliagent: the credential bundle is larger than %d bytes decompressed, "+
 				"so it was not unpacked — a bundle this size is not a login; "+
-				"re-export it with `crewlet llm export %s`", maxBundle, p.agent)
+				"re-export it with `crewlet llm export %s`", maxBundle, p.key)
 	}
 
 	// VALIDATED WHOLE, THEN WRITTEN. Every entry is checked and held before
@@ -758,9 +758,23 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 				"regular file", header.Name)
 		}
 		name := filepath.Base(header.Name)
-		if name != header.Name || !allowed[name] {
+		if name != header.Name {
 			return fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"%q credential file", header.Name, p.agent)
+		}
+		if !allowed[name] {
+			// A PLAIN NAME THIS CLI DOES NOT KEEP is, short of a forged
+			// bundle, ANOTHER CLI'S LOGIN. A bundle is keyed by the entry
+			// (CREWLET_LLM_CLI_<KEY>_CREDENTIALS, or the entry's own
+			// auth.credential_bundle), not by its CLI, so the bundle an entry
+			// was configured with before it moved to another CLI is still
+			// the one restored after the move — refused at every boot and
+			// apply until it is replaced, which is the remedy to name.
+			return fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
+				"%q credential file — a bundle restores only into the CLI it was exported "+
+				"from, so one exported before %q moved to %q is refused until it is replaced: "+
+				"sign %q in and export its bundle again (`crewlet llm export %s`)",
+				header.Name, p.agent, p.key, p.agent, p.agent, p.key)
 		}
 		data, err := io.ReadAll(io.LimitReader(tr, maxBundle+1))
 		if err != nil {
