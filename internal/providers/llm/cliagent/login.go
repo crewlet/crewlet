@@ -257,7 +257,7 @@ func (p *Provider) noCredentialLogin() error {
 		"under providers.llm.%s.overrides.stdin_login", p.key)
 	sign, fromEnv := p.ModeSignIn()
 	switch {
-	case fromEnv && sign.Mode == AuthAPIKey && len(sign.Variables) == 0:
+	case fromEnv && sign.Mode == AuthAPIKey && len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 		return fmt.Errorf(lead+": %s", ErrNoLoginCommand, p.agent, sign.Missing())
 	case fromEnv && sign.Mode == AuthAPIKey:
 		return fmt.Errorf(lead+", and a login is not this entry's sign-in: its auth.mode is "+
@@ -733,16 +733,55 @@ var ErrLoggedOut = errors.New("cliagent: the entry was logged out, so its config
 // loggedOutError is [ErrLoggedOut] for this entry.
 //
 // It names the three commands that WRITE A LOGIN into the credential directory,
-// which is what ends a logout, and says that a headless token does not: a
-// token signs the entry in through its environment and writes nothing there,
-// so after `-token-stdin`, or a `-capture-token` whose sign-in left no login
-// file, the logout stands and the bundle stays out.
+// which is what ends a logout, and, for an entry a headless token signs in
+// ([Provider.headlessTokenRoute]), says that a token does not: a token signs
+// the entry in through its environment and writes nothing there, so after
+// `-token-stdin`, or a `-capture-token` whose sign-in left no login file, the
+// logout stands and the bundle stays out.
 func (p *Provider) loggedOutError() error {
+	token := ""
+	if p.headlessTokenRoute() != "" {
+		token = " (a headless token signs the entry in without ending the logout)"
+	}
 	return fmt.Errorf("%w: `crewlet llm logout` removed the login in %s, and the bundle stays out "+
-		"until a login is written there again — sign in with %s (a headless token signs the "+
-		"entry in without ending the logout); a state directory with no record of the logout "+
-		"(a fresh volume) restores it, so to retire the bundle %s",
-		ErrLoggedOut, p.ws.CredentialsDir(), p.loginRoutes(), p.retireBundle())
+		"until a login is written there again — sign in with %s%s; a state directory with no "+
+		"record of the logout (a fresh volume) restores it, so to retire the bundle %s",
+		ErrLoggedOut, p.ws.CredentialsDir(), p.loginRoutes(), token, p.retireBundle())
+}
+
+// headlessTokenRoute is how a headless token signs this entry in, worded for
+// the messages that say one does without ending a logout
+// ([Provider.LogoutNotice], [Provider.loggedOutError]), or "" where none does.
+//
+// ONLY WHERE THE ENTRY TAKES ONE. Said of every entry, it named
+// `-capture-token` and `-token-stdin` to a CLI whose profile names no token
+// variable — codex, like every built-in one but claude-code — which `crewlet
+// llm login` refuses both for; to one whose token variable is outside the
+// reference grammar ([misnamedVariable]), under which a token could be neither
+// stored nor referenced; and to an api-key or inherit-env entry, whose mode
+// that command refuses a stored token for: api-key removes the variable from
+// the CLI's environment, and inherit-env forwards it from the engine's own and
+// never reads the secret store. So a token is named only under a variable a
+// store can hold ([Provider.TokenCanBeStored]), `-capture-token` only where the
+// CLI mints one ([Provider.MintsHeadlessToken]), and by the mode: stored under
+// subscription, exported under inherit-env, and never under api-key.
+func (p *Provider) headlessTokenRoute() string {
+	if !p.TokenCanBeStored() {
+		return ""
+	}
+	sign, fromEnv := p.ModeSignIn()
+	switch {
+	case !fromEnv && p.MintsHeadlessToken():
+		return "a headless token from `-capture-token` or `-token-stdin`"
+	case !fromEnv:
+		return "a headless token from `-token-stdin`"
+	case sign.Mode == AuthInheritEnv && p.MintsHeadlessToken():
+		return fmt.Sprintf("a headless %s exported in the engine's environment, which "+
+			"`-capture-token -print-token` mints,", p.profile.TokenEnv)
+	case sign.Mode == AuthInheritEnv:
+		return fmt.Sprintf("a headless %s exported in the engine's environment", p.profile.TokenEnv)
+	}
+	return ""
 }
 
 // loginRoutes names the commands that write a login into this entry's
@@ -775,7 +814,8 @@ func (p *Provider) loginRoutes() string {
 // LogoutNotice is what `crewlet llm logout` tells the operator about the
 // entry's configured credential bundle while the logout's record stands
 // ([Workspace.markLoggedOut]): that nothing restores the bundle onto this host
-// until a login is written again — which a headless token is not — that a
+// until a login is written again — which a headless token, where one signs the
+// entry in ([Provider.headlessTokenRoute]), is not — that a
 // state directory with no record of the logout, a fresh volume, still does,
 // and what retires it. It is "" for an entry that configures no bundle, and
 // while no record stands: a logout that stopped before writing one leaves a
@@ -794,13 +834,16 @@ func (p *Provider) LogoutNotice() (string, error) {
 	if out, err := p.ws.loggedOut(); err != nil || !out {
 		return "", err
 	}
+	routes := p.loginRoutes()
+	if token := p.headlessTokenRoute(); token != "" {
+		routes += "; " + token + " signs it in without ending this"
+	}
 	return fmt.Sprintf("Its configured credential bundle (%s) is not restored onto this host until "+
-		"a login is written into its credential directory again (%s; a headless token from "+
-		"`-capture-token` or `-token-stdin` signs it in without ending this) — not at the engine's "+
+		"a login is written into its credential directory again (%s) — not at the engine's "+
 		"next boot or apply, and not by `crewlet llm status`, `export`, `doctor` or `list`. A state "+
 		"directory with no record of this logout, such as a fresh volume, still restores it; to "+
 		"retire the bundle, %s.",
-		p.bundleSource(), p.loginRoutes(), p.retireBundle()), nil
+		p.bundleSource(), routes, p.retireBundle()), nil
 }
 
 // bundleSource names where the entry's configured bundle came from.

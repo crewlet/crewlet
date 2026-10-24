@@ -27,8 +27,17 @@ func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 // creditedCompanyAuth is [creditedCompany] signed in under auth.
 func creditedCompanyAuth(t *testing.T, agent string, auth cliagent.Auth) (*Company, *org.Role) {
 	t.Helper()
+	return creditedCompanyOverrides(t, agent, auth, nil)
+}
+
+// creditedCompanyOverrides is [creditedCompanyAuth] with the entry's profile
+// overrides.
+func creditedCompanyOverrides(t *testing.T, agent string, auth cliagent.Auth,
+	overrides map[string]any) (*Company, *org.Role) {
+	t.Helper()
 	provider, err := cliagent.New(cliagent.Config{
 		Key: "sub", Agent: agent, StateDir: t.TempDir(), Timeout: time.Minute, Auth: auth,
+		Overrides: overrides,
 	})
 	if err != nil {
 		t.Fatalf("cliagent.New(%s): %v", agent, err)
@@ -397,5 +406,77 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	// the one fact that says which provider has to sign the run in.
 	if !strings.Contains(err.Error(), `"anthropic", the provider its model names`) {
 		t.Errorf("the refusal does not name the provider whose key is missing: %v", err)
+	}
+}
+
+// A MODE'S REMEDY OFFERS NO VARIABLE NO STORE CAN HOLD. overrides can set
+// token_env or api_key_env to a name outside the reference grammar — MY-TOKEN,
+// MY=KEY — which every write of the configuration refuses and an apply only
+// warns about, so a node can run it. The refusal told such an api-key entry to
+// store or export its key, or give the seat its own in role.sandbox.env, under
+// a name no store, ${VAR} or export can hold; and an inherit-env one to export
+// or set a variable no shell can export. [cliagent.ModeSignIn] now leaves such
+// a variable out and names its field, and the refusal follows: api-key gets the
+// field alone, and no local cell, as no api-key refusal offers an entry that
+// keeps its key — the login seeded there would bill in place of the key the
+// mode names; inherit-env gets the variable a shell can export, or, with none,
+// the field and a local cell, which is seeded with the entry's login.
+//
+// Not parallel: inherit-env reads the engine's process environment, emptied
+// here of the variable it can forward.
+//
+// Mutation: drop the api-key misnamed case, and that refusal falls through to
+// inherit-env's local cell; drop the inherit-env one, and the entry with no
+// variable a shell can export is told to set an empty name in
+// role.sandbox.env.
+func TestAModesRemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	for _, tc := range []struct {
+		name          string
+		mode          cliagent.AuthMode
+		overrides     map[string]any
+		want, notWant []string
+	}{
+		{
+			name: "api-key", mode: cliagent.AuthAPIKey,
+			overrides: map[string]any{"api_key_env": "MY=KEY"},
+			want: []string{"providers.llm.sub.overrides.api_key_env",
+				"name the variable your build of the CLI reads"},
+			notWant: []string{"role.sandbox.env", "crewlet secrets set", "capture-token", "local cell"},
+		},
+		{
+			name: "inherit-env with one variable a shell can export", mode: cliagent.AuthInheritEnv,
+			overrides: map[string]any{"token_env": "MY-TOKEN"},
+			want: []string{"export ANTHROPIC_API_KEY in the engine's environment",
+				"set ANTHROPIC_API_KEY in this seat's role.sandbox.env", string(sandbox.Direct)},
+			notWant: []string{"MY-TOKEN or ANTHROPIC_API_KEY in this seat's", "capture-token"},
+		},
+		{
+			name: "inherit-env with none", mode: cliagent.AuthInheritEnv,
+			overrides: map[string]any{"token_env": "MY-TOKEN", "api_key_env": "MY-KEY"},
+			want: []string{"providers.llm.sub.overrides.token_env and providers.llm.sub.overrides.api_key_env",
+				"seeded with the entry's login", string(sandbox.Direct)},
+			notWant: []string{"role.sandbox.env", "export one in", "capture-token"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, seat := creditedCompanyOverrides(t, "claude-code", cliagent.Auth{Mode: tc.mode}, tc.overrides)
+			err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+			var credErr *SandboxCredentialError
+			if !errors.As(err, &credErr) {
+				t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, a route this entry cannot take: %v", bad, err)
+				}
+			}
+		})
 	}
 }

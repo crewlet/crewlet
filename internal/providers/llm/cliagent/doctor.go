@@ -211,6 +211,13 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	default:
 		d.TokenEnv = "unset"
 	}
+	// A credential variable no store can hold is its own problem, at the
+	// field that names it, whether or not anything signs the entry in: the
+	// routes below leave it out ([misnamedVariable]), and without this line
+	// the report would not say why.
+	for _, variable := range p.misnamedVariables() {
+		d.Problems = append(d.Problems, p.misnamedProblem(variable))
+	}
 
 	if p.profile.ReadsUsage() {
 		d.TokenUsage = "reported by CLI"
@@ -764,10 +771,13 @@ func (p *Provider) SandboxEnv() map[string]string {
 }
 
 // MintsHeadlessToken reports whether this CLI can produce a token that
-// travels to a remote box, for the error that has to distinguish the two
-// cases an operator can be in.
+// travels to a remote box, for the messages that offer `crewlet llm login
+// -capture-token`: it has a minting command, and a token variable a token can
+// be stored and referenced under ([Provider.TokenCanBeStored]). A token minted
+// under any other could be neither, so a message that offered the command
+// there sent the operator to a token nothing could hand the CLI.
 func (p *Provider) MintsHeadlessToken() bool {
-	return p.profile.TokenEnv != "" && len(p.profile.CaptureTokenArgs) > 0
+	return len(p.profile.CaptureTokenArgs) > 0 && p.TokenCanBeStored()
 }
 
 // CredentialEnvNames are the variables that authenticate this CLI inside a

@@ -1915,7 +1915,11 @@ warning). What ends it is a login **written into the credential directory**:
 `-capture-token` whose sign-in also left a login file there. A headless token
 on its own (`-token-stdin`, or the token `-capture-token` mints) signs the
 entry in through its environment and writes nothing there, so the logout stands
-and the bundle stays out. A **fresh** state directory holds no such record, so
+and the bundle stays out. The logout and the refusal name a token only for an
+entry that takes one: a token variable a store can hold, under `subscription`
+or, exported in the engine's environment, under `inherit-env` — never
+`api-key`, which removes it — with `-capture-token` only where the CLI mints
+one. A **fresh** state directory holds no such record, so
 a container that comes up on an empty volume restores the bundle as it always
 did: to retire a bundle for good, remove `auth.credential_bundle` or the
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` secret it was exported to, which `logout`
@@ -2654,6 +2658,16 @@ one `crewlet llm login` names when it refuses a token the mode never reads:
 | `subscription` | a login: adopt this machine's with `-from-host` where it has one — or, preferred where the CLI mints one, a headless token with `-capture-token` — else the CLI's own `crewlet llm login <key>`, or, for a CLI with no login command (`gemini-cli`, `qwen-code`, `grok`), a login made with the CLI by hand and adopted |
 | `api-key` | the key alone: `auth.api_key`, else the CLI's key variable, stored with `crewlet secrets set` or exported in the engine's environment. Never a login, which would sit in every seat's home beside the key and leave which of the two the CLI bills to the vendor's precedence, and never a token, which the mode removes |
 | `inherit-env` | the variables it forwards, exported in the engine's own environment — never the secret store, which it does not read — and a login, as under `subscription` but without `-capture-token`, whose token lands in the secret store |
+
+A token or key variable the entry's `overrides` names outside the reference
+grammar — `token_env: MY-TOKEN`, `api_key_env: "MY=KEY"` — is a problem of its
+own, naming `providers.llm.<key>.overrides.token_env` or `.api_key_env`, and
+no route runs through it: no secret store, `${VAR}` or shell export can hold
+such a name ([Configuration reference](#configuration-reference)). So
+`subscription` is not offered `-capture-token`, `api-key` is told to name the
+variable its CLI reads rather than to store or export a key, and `inherit-env`
+is told to export only a variable a shell can — or, where it forwards no
+other, to name one.
 
 One case is not a fault: a CLI pointed at an
 endpoint that takes no key (an `opencode` entry declaring a local server, or a

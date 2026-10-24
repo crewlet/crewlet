@@ -2120,7 +2120,11 @@ variables it forwards or a login under `inherit-env` — unless
 the smoke test was answered, which proves the CLI authenticates some way the
 engine does not hand it (an endpoint that takes no key, a credential in its
 own configuration). A token `auth.mode: api-key` removes from the child is not
-counted. `${VAR}` references and the variables `inherit-env` forwards are
+counted. A token or key variable the entry's `overrides` names outside the
+reference grammar (`token_env: MY-TOKEN`) is a problem of its own, naming
+`providers.llm.<key>.overrides.token_env` or `.api_key_env`, and no route
+through it is named: no `-capture-token`, and no key or token to store or
+export under it. `${VAR}` references and the variables `inherit-env` forwards are
 resolved in the process running `crewlet llm` — the secret store first, then
 that shell's environment — so run it with the engine's environment to get the
 engine's answer. Beside a running engine the store's values are read through
@@ -2222,7 +2226,11 @@ not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that
 directory again: `login` (brokered or `-username`), `-from-host` or `import`. A
 headless token (`-token-stdin`, or the one `-capture-token` mints, unless its
-sign-in also left a login file) signs the entry in without ending the logout. A
+sign-in also left a login file) signs the entry in without ending the logout,
+where the entry takes one — and `logout` names one only there: under a token
+variable a store can hold, stored under `subscription` or exported in the
+engine's environment under `inherit-env`, never under `api-key`, and
+`-capture-token` only where the CLI mints it. A
 fresh state directory holds no such record and restores the bundle as before,
 so `logout` names the field or secret that retires it when the entry has one —
 even when the CLI's own logout fails, since the login is removed and the logout

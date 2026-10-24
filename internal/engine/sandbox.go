@@ -2912,11 +2912,24 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		lead := fmt.Sprintf("seat %q runs code in %q, and nothing in this run's environment "+
 			"authenticates %q: %s", seat, placement, key, sign.Missing())
 		switch {
-		case len(sign.Variables) == 0:
+		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
 				"%s; that login reaches this seat's box only in a local cell (%s)", lead, localCell)}
+		case len(sign.Variables) == 0 && sign.Mode == cliagent.AuthAPIKey:
+			// Its one variable is outside the grammar, and the lead names
+			// that field as the remedy. Not role.sandbox.env, although it
+			// holds its keys to no grammar: every write refuses the entry
+			// until the field changes, and a name carrying `=` sets a
+			// different variable wherever it is placed.
+			return &SandboxCredentialError{msg: lead}
+		case len(sign.Variables) == 0:
+			// inherit-env whose every variable is such a name: the login
+			// it seeds is the one sign-in left, and only a local cell has it.
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or give this seat a local cell (%s), which is seeded with the entry's login",
+				lead, localCell)}
 		case sign.Mode == cliagent.AuthAPIKey:
 			return &SandboxCredentialError{msg: fmt.Sprintf(
 				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0])}
