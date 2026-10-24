@@ -6,16 +6,20 @@
  * look, by how its kind takes the brand.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
+import { BrandScope } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type ArtifactKind, type BrandAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
-import { BrandAgentNote, BrandFact, BrandMakeChip } from "./brand.tsx";
+import { BRAND_KIT_FACES, BRAND_SYSTEM_STACKS } from "~/contract/artifacts.ts";
+import { faceDrawing } from "~/lib/brand/brand.ts";
+import type { BrandFace } from "~/protocol/types.ts";
+import { AdoptedBrandScope, BrandAgentNote, BrandFact, BrandMakeChip } from "./brand.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -176,4 +180,74 @@ test("a sheet and a brand kit carry no Brand fact", async () => {
   fact("sheet", ADOPTED);
   await new Promise((r) => setTimeout(r, 0));
   expect(screen.queryByText("Brand")).toBeNull();
+});
+
+/** The brand inputs the scope drawn in `container` set, by name. */
+function scopeInput(container: HTMLElement, name: string): string {
+  const scope = container.querySelector<HTMLElement>(".crewlet-brand-scope");
+  return scope?.style.getPropertyValue(name) ?? "";
+}
+
+// EVERY FACE A BRAND MAY NAME REACHES THE REGION IT DRAWS: a kit face, a
+// system stack and an uploaded family (under the name this page registered
+// its bytes by), each as the family list `faceDrawing` writes and the kit's
+// scope admits. A stack the scope's gate refused set no input, and the doc
+// drew in the dashboard's own face whatever the brand said. Mutation: a gate
+// that refuses a name starting with "-" (`-apple-system`) or caps the list
+// below the longest stack fails every row.
+test.each<[string, BrandFace, string | undefined]>([
+  ...BRAND_KIT_FACES.map((kit): [string, BrandFace, undefined] => [
+    `kit ${kit}`,
+    { kit },
+    undefined,
+  ]),
+  ...BRAND_SYSTEM_STACKS.map((stack): [string, BrandFace, undefined] => [
+    `system ${stack}`,
+    { stack },
+    undefined,
+  ]),
+  [
+    "an uploaded family",
+    {
+      family: "Acme Sans",
+      files: [{ path: "fonts/acme.woff2", weight: 400, style: "normal" }],
+      licensed: true,
+    },
+    "crewlet-brand-heading-1a2b",
+  ],
+])("%s sets the region's heading and body faces", (_, face, registered) => {
+  const { stack } = faceDrawing(face, registered);
+  expect(stack).not.toBe("");
+  const { container } = render(
+    <BrandScope colors={{}} headingFamily={stack} bodyFamily={stack}>
+      <p>Body</p>
+    </BrandScope>,
+  );
+  expect(scopeInput(container, "--brand-font-heading")).toContain(stack);
+  expect(scopeInput(container, "--brand-font-body")).toContain(stack);
+  if (registered) expect(scopeInput(container, "--brand-font-heading")).toMatch(`"${registered}"`);
+});
+
+test("the adopted brand's faces restyle a doc's body", async () => {
+  mount(
+    <AdoptedBrandScope>
+      <p>Body</p>
+    </AdoptedBrandScope>,
+    [],
+    {
+      ...ADOPTED,
+      document: {
+        ...ADOPTED.document,
+        type: { heading: { kit: "geist" }, body: { stack: "system-serif" } },
+      },
+    },
+  );
+  await waitFor(() =>
+    expect(scopeInput(document.body, "--brand-font-heading")).toContain(
+      faceDrawing({ kit: "geist" }).stack,
+    ),
+  );
+  expect(scopeInput(document.body, "--brand-font-body")).toContain(
+    faceDrawing({ stack: "system-serif" }).stack,
+  );
 });
