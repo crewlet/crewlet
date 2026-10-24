@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -378,31 +377,11 @@ func dataConditionOrFault(ctx context.Context, tool string, err error) tools.Res
 // turn runs on the node that holds its seat, and every tool call it makes is a
 // call on that node. A call outside a turn (a person's assistant) is held to
 // none of this; its bound is the datastore's own rate limits.
-type DataTurns struct {
-	now func() time.Time
-
-	mu    sync.Mutex
-	turns map[string]*dataTally
-	swept time.Time
-}
-
-// dataTally is one turn's use.
-type dataTally struct {
-	ops     int
-	keys    map[string]bool
-	touched time.Time
-}
-
-// dataTurnIdle is how long an untouched turn's tally is kept: a day, past any
-// turn segment, the publish guardrail's own term.
-const dataTurnIdle = 24 * time.Hour
+type DataTurns struct{ budget *turnBudget }
 
 // NewDataTurns is an empty tally on now; nil is the wall clock.
 func NewDataTurns(now func() time.Time) *DataTurns {
-	if now == nil {
-		now = time.Now
-	}
-	return &DataTurns{now: now, turns: map[string]*dataTally{}}
+	return &DataTurns{budget: newTurnBudget(artifacts.TurnDataOps, now)}
 }
 
 // DataTurnQuota is a write refused because its turn segment has spent its
@@ -422,35 +401,8 @@ func (e *DataTurnQuota) Error() string {
 // bound. An empty turn is a call outside one, charged nothing; a key already
 // charged is a retry, charged nothing again.
 func (g *DataTurns) spend(turn, key string, n int) error {
-	if turn == "" {
-		return nil
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	now := g.now()
-	if now.Sub(g.swept) > time.Minute {
-		for id, t := range g.turns {
-			if now.Sub(t.touched) > dataTurnIdle {
-				delete(g.turns, id)
-			}
-		}
-		g.swept = now
-	}
-	t, ok := g.turns[turn]
-	if !ok {
-		t = &dataTally{keys: map[string]bool{}}
-		g.turns[turn] = t
-	}
-	t.touched = now
-	if key != "" && t.keys[key] {
-		return nil
-	}
-	if t.ops+n > artifacts.TurnDataOps {
-		return &DataTurnQuota{Limit: artifacts.TurnDataOps, Used: t.ops, Asked: n}
-	}
-	t.ops += n
-	if key != "" {
-		t.keys[key] = true
+	if _, used, ok := g.budget.spend(turn, key, n); !ok {
+		return &DataTurnQuota{Limit: artifacts.TurnDataOps, Used: used, Asked: n}
 	}
 	return nil
 }
