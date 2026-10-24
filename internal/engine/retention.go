@@ -458,10 +458,11 @@ func (r *retention) tick(ctx context.Context) {
 // ([retention.sweepAnchors]). Every other term it reads is the fleet's
 // register or the log itself.
 //
-// THE TWO SETS ARE NAMED APART although they are the same logs today — the
-// tracker's, the knowledge base's and the code log — because a log that writes anchors and
-// claims no identity is a domain somebody can add, and a copy of it out of
-// service would have the trim count anchors on rows nobody can trust.
+// THE TWO SETS ARE NAMED APART although they are the same logs today — every
+// strict log the register runs, and neither compacted one — because a log that
+// writes anchors and claims no identity is a domain somebody can add, and a
+// copy of it out of service would have the trim count anchors on rows nobody
+// can trust.
 func (r *retention) decidesFrom() []string {
 	if r.state == nil {
 		return nil
@@ -503,8 +504,9 @@ func (r *retention) evaluate(ctx context.Context) {
 // by the trim's quarter-hour silently raised each of them to fifteen minutes.
 // The expensive measurements stay on the trim's tick and are read back here;
 // what a beat reads is what the report reads — one listing of each fleet
-// fact and one state read per log — plus one observation of the trim floor,
-// which is a single listing (see floorwatch.go).
+// fact and one state read per log — plus one observation of the trim floors,
+// each log's read by its own key, all at once, as the read path reads them
+// (see floorwatch.go).
 func (r *retention) heartbeat(ctx context.Context) {
 	ticker := time.NewTicker(statelog.AlarmInterval)
 	defer ticker.Stop()
