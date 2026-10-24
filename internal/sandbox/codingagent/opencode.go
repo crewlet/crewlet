@@ -224,7 +224,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`v=$(opencode --version < /dev/null 2> /dev/null) || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
 	line(`unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD`)
-	line(`imported= spid= xpid=`)
+	line(`imported= spid= xpid= xout=%s`, loop)
 	b.WriteString(openCodeStops(times.stop))
 	// holds: the file is a whole, non-empty JSON array.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
@@ -318,6 +318,12 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 // probe, which the system could hand out again only by wrapping its whole pid
 // space within that tenth.
 //
+// UNSYNC DROPS THE EXPORTER'S FILE ITSELF ($xout) once end has returned,
+// whatever ended the exporter: one that heard the stop drops it as it goes
+// ([openCodeExporter]), but one still in an export when end's bound ran out
+// is killed with SIGKILL, which runs no trap, and its file stayed beside the
+// document holding a second copy of the login.
+//
 // THE SERVER IS TOLD ONCE. It is stopped long after it starts on every path
 // but a signal in its first instant, where a lost SIGTERM costs the bound and
 // then the kill, and a repeat would tell a server that is already shutting
@@ -325,7 +331,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 func openCodeStops(stop time.Duration) string {
 	return fmt.Sprintf(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); [ -z "$2" ] || { kill -0 "$1" 2> /dev/null && kill "$1" 2> /dev/null; }; done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }
 stop() { end "$spid"; spid=; }
-unsync() { end "$xpid" again; xpid=; }
+unsync() { end "$xpid" again; xpid=; [ -z "$xout" ] || rm -f "$xout"; }
 `, int(stop/(100*time.Millisecond)))
 }
 
@@ -359,8 +365,18 @@ unsync() { end "$xpid" again; xpid=; }
 // were lost and the exporter waited out the whole interval on a sleep it had
 // told to go. SIGKILL has no handler to land on, and a sleep has nothing to
 // shut down.
+//
+// AN EXPORT IT WAS STOPPED IN IS DROPPED WHOLE: its file (`out`, a variable
+// so that no path is quoted inside the quoted trap) is removed as the
+// exporter goes, where it hears the stop. A stop is acted on between
+// commands, so it could land after an export that keep had not yet moved
+// over the document, which left a second copy of the login beside the
+// document for the rest of the box's life, under no rule a teardown follows.
+// After a move there is nothing to remove. An exporter still in an export
+// when the stop's bound runs out is killed, and no trap runs: unsync drops
+// the file for that one ([openCodeStops]).
 func openCodeExporter(sync time.Duration, file string) string {
-	return fmt.Sprintf(`( z= w= s=; trap 'if [ -n "$w" ]; then s=1; else [ -z "$z" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; }; exit 0; fi' TERM; while :; do w=1; sleep %s & z=$!; w=; [ -z "$s" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; exit 0; }; wait "$z"; z=; keep %s --server "$url"; done ) < /dev/null > /dev/null 2>&1`,
+	return fmt.Sprintf(`( z= w= s= out=%[2]s; trap 'if [ -n "$w" ]; then s=1; else [ -z "$z" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; }; rm -f "$out"; exit 0; fi' TERM; while :; do w=1; sleep %[1]s & z=$!; w=; [ -z "$s" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; exit 0; }; wait "$z"; z=; keep "$out" --server "$url"; done ) < /dev/null > /dev/null 2>&1`,
 		strconv.FormatFloat(sync.Seconds(), 'f', -1, 64), file)
 }
 
