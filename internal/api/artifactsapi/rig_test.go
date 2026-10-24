@@ -37,7 +37,8 @@ import (
 // recording what it was asked, so a case can say both what was answered and
 // what was never touched.
 //
-// The company: jane owns `page` (an HTML artifact), `notes` (a doc),
+// The company: jane owns `page` (an HTML artifact), `notes` (a doc, filed in
+// the folder `campaigns`),
 // `handbook` (a doc of two tabs), `deck` (slides), `design` (a canvas of
 // two artboards) and `pulse` (a dashboard of one note), the last five shared
 // with bob as viewer; the
@@ -161,7 +162,8 @@ func heads() map[artifacts.ID]artifactsdomain.Head {
 			Shares: pageShares, AccessEpoch: 4},
 		notes: {ID: notes, Kind: artifacts.KindDoc, Title: "Notes", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
-			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
+			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)},
+			Folder: campaigns},
 		deck: {ID: deck, Kind: artifacts.KindSlides, Title: "Plan", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
 			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},

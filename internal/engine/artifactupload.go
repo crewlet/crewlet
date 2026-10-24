@@ -66,7 +66,7 @@ func (e *Engine) buildArtifactUploads() (*artifactupload.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	kits, err := embeddedReleases(kitTree)
+	kits, err := embeddedKits()
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +105,29 @@ func (e *Engine) artifactLimits() artifacts.Limits {
 		return config.Artifacts{}.Stamp()
 	}
 	return e.boot.Artifacts.Stamp()
+}
+
+// embeddedKits is the artifact kit releases this build embeds: the tree is
+// compiled into the binary, so it is read once and answers the same for the
+// life of the process.
+var embeddedKits = sync.OnceValues(func() (artifactupload.ReleaseSet, error) {
+	return embeddedReleases(kitTree)
+})
+
+// kitVersion is the newest artifact kit release this build embeds, the one
+// version a page linked now is sure to be served at: what a seat's skill names
+// as `${crewlet_kit_version}` and what get_company_brand answers. Empty for a
+// build whose kit tree cannot be read, which the pipeline refuses to be built
+// over anyway; that reason is logged here once per call.
+func kitVersion() string {
+	kits, err := embeddedKits()
+	if err != nil {
+		log.Warn("artifact_kit_tree_unreadable", "error", err.Error(),
+			"detail", "skills render ${crewlet_kit_version} literally and the brand tool "+
+				"answers no kit version")
+		return ""
+	}
+	return kits.Latest()
 }
 
 // embeddedReleases is the releases one embedded tree holds.

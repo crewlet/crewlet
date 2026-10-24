@@ -82,6 +82,11 @@ type run struct {
 	// nothing, so a CDN file is named where its copy would be served and
 	// never fetched.
 	dry bool
+
+	// brand is the adopted brand the run's copies come from, read at the
+	// first one ([run.adoption]) so every copy of one version is of one
+	// adoption.
+	brand *artifactsdomain.Adoption
 }
 
 // pending is one file of the new version, as the run assembles it.
@@ -335,7 +340,7 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 		}
 		if spec.sources() != 1 {
 			return fmt.Errorf("%w: %q names %d sources for its bytes and a file names exactly one "+
-				"(upload, carry, from, remove or inline)", ErrInvalid, p, spec.sources())
+				"(upload, carry, from, remove, inline or brand)", ErrInvalid, p, spec.sources())
 		}
 		if r.files[p] != nil || r.removes[p] {
 			return fmt.Errorf("%w: %q is named twice in one publish", ErrInvalid, p)
@@ -411,6 +416,10 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 			}
 			e.Carried = true
 			f.entry, f.hasObj, f.carried, f.script = e, true, true, e.Script
+		case spec.Brand != "":
+			if err := r.brandFile(ctx, f, spec.Brand); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+				return err
+			}
 		default:
 			inline += int64(len(spec.Inline))
 			if inline > artifacts.MaxInlineBytes {

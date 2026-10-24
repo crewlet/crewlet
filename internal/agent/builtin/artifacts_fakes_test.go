@@ -49,6 +49,14 @@ type fakeArtifacts struct {
 	elevated  []int
 	assets    []string
 
+	// The folder tree, the adopted brand and the folder writes.
+	folders       []artifactsdomain.Folder
+	adoption      *artifactsdomain.Adoption
+	folderCreates []artifactsdomain.FolderCreateInput
+	moves         [][2]string
+	queries       []artifactsdomain.ListQuery
+	prefixes      []artifactsdomain.CommonPrefix
+
 	// The refusals a case injects.
 	publishErr  error
 	elevatedErr error
@@ -168,9 +176,21 @@ func (f *fakeArtifacts) List(_ context.Context, v artifactsdomain.Viewer,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listed = append(f.listed, v)
-	page := artifactsdomain.ListPage{Complete: true}
+	f.queries = append(f.queries, q)
+	if q.Prefix != "" {
+		within := []artifactsdomain.Viewer{v}
+		if q.Requester != nil {
+			within = append(within, *q.Requester)
+		}
+		if _, err := f.resolve(strings.TrimSuffix(q.Prefix, "/"), within); err != nil {
+			return artifactsdomain.ListPage{}, err
+		}
+	}
+	page := artifactsdomain.ListPage{Prefix: q.Prefix, Delimiter: q.Delimiter, Complete: true,
+		CommonPrefixes: f.prefixes}
 	for _, h := range f.heads {
-		page.Contents = append(page.Contents, artifactsdomain.ListItem{Head: h})
+		page.Contents = append(page.Contents, artifactsdomain.ListItem{Head: h,
+			FolderPath: f.pathOf(h.Folder)})
 	}
 	slices.SortFunc(page.Contents, func(a, b artifactsdomain.ListItem) int {
 		return strings.Compare(a.ID.String(), b.ID.String())
@@ -461,6 +481,8 @@ func artifactDeps(f *fakeArtifacts, chart artifactChart, req requesters) builtin
 		Link: func(id artifacts.ID) string {
 			return "https://crewlet.example.com/dashboard#/artifacts/" + id.String()
 		},
-		Now: func() time.Time { return fakeAt },
+		Now:         func() time.Time { return fakeAt },
+		KitVersion:  func() string { return "0.47.0" },
+		FolderTurns: builtin.NewFolderTurns(func() time.Time { return fakeAt }),
 	}
 }

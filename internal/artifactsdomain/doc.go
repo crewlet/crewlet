@@ -75,6 +75,18 @@
 // read moves everything ([MoveReset]). No record wakes a seat in this release, so
 // the domain declares no feed.
 //
+// # An artifact lives in one folder, and a folder grants nothing
+//
+// ADR-0047. The company's folders are one tree on one subject ([FolderSubject]),
+// and each artifact sits in at most one folder. Who may open an artifact is its
+// owner and its own shares whatever folder it is in; a folder's own visibility
+// is its top-level folder's owner and shares, so a tree is seen whole or not at
+// all ([FolderObject]). The listing places every row in the tree as its reader
+// sees it, and the listing, its total and every folder count are filtered by
+// one predicate ([visibleClause]). A removal moves what the folder held up a
+// level in one record, and the applier enforces the bounds stamped in each
+// record rather than its own constants.
+//
 // # The adopted brand is a snapshot
 //
 // A brand kit is an artifact; the company's brand is an adoption on the one

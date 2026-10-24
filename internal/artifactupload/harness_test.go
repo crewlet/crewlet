@@ -117,6 +117,27 @@ type harness struct {
 
 	mu     sync.Mutex
 	limits artifacts.Limits
+
+	// adopted is the company's adopted brand the domain answers, nil for
+	// none: what a brand copy and a deck begun in the brand read.
+	adopted *artifactsdomain.Adoption
+}
+
+// brandReads is the domain's reader answering the case's adopted brand: an
+// adoption is the brand change's own record, so a case about what the
+// pipeline copies from one states it rather than writing it.
+type brandReads struct {
+	*artifactsdomain.Reader
+	h *harness
+}
+
+func (r brandReads) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	r.h.mu.Lock()
+	defer r.h.mu.Unlock()
+	if r.h.adopted == nil {
+		return artifactsdomain.Adoption{}, false, nil
+	}
+	return *r.h.adopted, true, nil
 }
 
 // options shape a harness.
@@ -160,7 +181,8 @@ func newHarness(t *testing.T, o options) *harness {
 		t.Fatal(err)
 	}
 	deps := artifactupload.Deps{
-		Objects: store, Reservations: h.fleet, Writes: h.domain.writer, Reads: h.domain.reader,
+		Objects: store, Reservations: h.fleet, Writes: h.domain.writer,
+		Reads: brandReads{Reader: h.domain.reader, h: h},
 		Limits: func() artifacts.Limits {
 			h.mu.Lock()
 			defer h.mu.Unlock()

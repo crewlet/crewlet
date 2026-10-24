@@ -21,10 +21,6 @@ import (
 // letter, at most eight names): `-apple-system` is dropped there, never
 // quoted into a family that does not exist.
 
-// SlideThemeID is the brand theme's id: the theme a deck's index names when
-// it began in the company's brand rather than one of the starter's own looks.
-const SlideThemeID = "brand"
-
 // slideFamily is one name the slide format's font-family grammar takes.
 var slideFamily = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,39}$`)
 
@@ -43,7 +39,7 @@ func SlideTheme(b Brand) slideformat.Theme {
 		featureInk = OnColor(c.DarkGround)
 	}
 	return slideformat.Theme{
-		ID: SlideThemeID, Name: b.Name, Tag: "Your company brand",
+		ID: slideformat.BrandTheme, Name: b.Name, Tag: "Your company brand",
 
 		Feature: c.DarkGround, FeatureInk: featureInk, FeatureMuted: mix(featureInk, c.DarkGround, 0.3),
 

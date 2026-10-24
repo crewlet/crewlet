@@ -5182,10 +5182,13 @@ export interface ArtifactCommonPrefix {
 }
 
 /**
- * `artifacts{prefix, delimiter, max-keys, continuation-token, scope, kind, q, sort, status, pinned, work_item}`:
+ * `artifacts{prefix | folder, delimiter, max-keys, continuation-token, scope, kind, q, sort, status, pinned, work_item}`:
  * one page in S3's ListObjectsV2 terms. With `delimiter: "/"` the page is one
  * level (the prefix's artifacts and its child folders as `common_prefixes`);
- * without it, everything beneath the prefix.
+ * without it, everything beneath the prefix. `folder` (an id) names the
+ * folder in place of `prefix`, which the answer then echoes as the resolved
+ * path: a path may name two folders a reader sees (a company "Drafts" and
+ * their own private one, `409 folder_ambiguous`), and an id never does.
  */
 export interface ArtifactListAnswer {
   /** The query's prefix, echoed; empty for the top level. */
@@ -5220,6 +5223,10 @@ export interface ArtifactFolder {
   depth: number;
   max_depth: number;
   visibility: ArtifactFolderVisibility;
+  /** The top-level folder's owner, whom its visibility is decided on. */
+  root_owner?: string;
+  root_owner_kind?: string;
+  /** Answered only to a reader whose `role` on the folder is `owner`. */
   shares?: ArtifactShare[];
   status: "live" | "removed";
   created_by: ArtifactActor;
@@ -5233,7 +5240,17 @@ export interface ArtifactFolder {
 export interface ArtifactFolderItem extends ArtifactFolder {
   artifacts: number;
   folders: number;
+  /**
+   * What the reader may do with the folder, as the engine decided it:
+   * `owner` renames, moves, removes and unfiles (the folder's owner, the
+   * owner's lead, or an administrator), `contributor` files into it and makes
+   * subfolders, `viewer` sees it only.
+   */
+  role: ArtifactFolderRole;
 }
+
+/** A reader's decided relation to one folder (`ArtifactFolderItem.role`). */
+export type ArtifactFolderRole = "owner" | "contributor" | "viewer";
 
 /** `artifact_folders{}` and `GET /artifact-folders`: every folder the reader can see (`artifactsdomain.FolderTree`). */
 export interface ArtifactFoldersAnswer {
@@ -5254,8 +5271,11 @@ export type ArtifactFolderCreateRequest =
 /** What a folder create answers (`artifactsdomain.FolderCreated`): the chain, parents first. */
 export interface ArtifactFolderCreated {
   folders: ArtifactFolder[];
-  /** How many of them this request made. */
+  /** How many of them this request made: 0 (answered `200`) when the whole path was already there. */
   created: number;
+  op_id: string;
+  outcome: string;
+  position: string;
 }
 
 /** `PATCH /artifact-folders/{id}`: a rename, a move, or both. */
@@ -5263,6 +5283,20 @@ export interface ArtifactFolderPatchRequest {
   name?: string;
   /** The new parent's id; an empty string moves it to the top level. */
   parent?: string;
+  /**
+   * The reader saw and accepted that the move widens who sees the folder (a
+   * private tree into a company one): without it such a move is refused
+   * `409 folder_widens`.
+   */
+  confirm_widen?: boolean;
+}
+
+/** What `PATCH /artifact-folders/{id}` answers. */
+export interface ArtifactFolderPatched {
+  folder: ArtifactFolder;
+  op_id: string;
+  outcome: string;
+  position: string;
 }
 
 /** `PUT /artifacts/{id}/folder`: file one artifact; an empty string files it at the top level. */
@@ -5275,10 +5309,23 @@ export interface ArtifactMovesRequest {
   items: { artifact: string; folder: string }[];
 }
 
+/** What `PUT /artifacts/{id}/folder` answers. */
+export interface ArtifactMoved {
+  artifact: string;
+  /** The folder it is filed in now, `""` for the top level. */
+  folder: string;
+  op_id: string;
+  outcome: string;
+  position: string;
+}
+
 /** One item's outcome in `POST /artifacts/folder-moves`. */
 export interface ArtifactMoveResult {
   artifact: string;
-  /** `moved`, or the refusal's code (`not_found`, `forbidden`, `folder_gone`, ...). */
+  /**
+   * `moved`, or the refusal's code: `not_found`, `unauthorized`,
+   * `folder_not_found`, `artifact_trashed` or `unavailable`.
+   */
   outcome: string;
   /** What to do about a refusal, in a sentence. */
   message?: string;
@@ -5447,6 +5494,9 @@ export interface ArtifactHistorySummary {
   limit?: number;
   usage?: number;
   key?: string;
+  /** A move's folders by id, absent for the top level: never a folder's name. */
+  from_folder?: string;
+  to_folder?: string;
 }
 
 /** One row of an artifact's change record (`artifactsdomain.HistoryEntry`). */
@@ -6263,7 +6313,11 @@ export interface ArtifactJoined {
 /** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
 export interface ArtifactChangedPush {
   artifact: string;
-  /** `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset`. */
+  /**
+   * `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`,
+   * `transfer`, `reset` or `folder` (it was filed in another folder; a
+   * folder's removal moves its artifacts up and pushes nothing per artifact).
+   */
   what: string;
   head?: number;
   position: LogPosition;
@@ -6371,6 +6425,7 @@ export interface QueryMap {
   config_diff: ConfigDiff;
   config_entities: { kind: string; ids?: string[]; id?: string; entity?: unknown };
   artifacts: ArtifactListAnswer;
+  artifact_folders: ArtifactFoldersAnswer;
   artifact: ArtifactDetail;
   artifact_versions: ArtifactVersionsAnswer;
   artifact_version: ArtifactVersion;

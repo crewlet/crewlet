@@ -509,6 +509,24 @@ describe("the resolver", () => {
     expect(resolve(["artifacts", "new", "doc", "x"]).resolved).toBe(false);
   });
 
+  // A FOLDER BY THE ID THE ENGINE MINTED, never by its path or a word, so a
+  // rename or a move breaks no link; and its page is in the Folders section.
+  test("the Folders section and a folder's page, by id", () => {
+    expect(resolve(["artifacts", "folders"])).toMatchObject({ screen: "artifact-folders" });
+    expect(resolve(["artifacts", "folders", uuid])).toMatchObject({
+      screen: "artifact-folder",
+      id: uuid,
+    });
+    expect(resolve(["artifacts", "folders", "Marketing"]).resolved).toBe(false);
+    expect(resolve(["artifacts", "folders", uuid, "x"]).resolved).toBe(false);
+    expect(RESERVED_SEGMENTS).toContain("folders");
+    expect(sectionOf(["artifacts", "folders", uuid])?.key).toBe("folders");
+    expect(crumbsFor(["artifacts", "folders"]).map((c) => c.label)).toEqual([
+      "Artifacts",
+      "Folders",
+    ]);
+  });
+
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
     expect(resolve(["work", "ENG"])).toMatchObject({ screen: "project", key: "ENG" });
     expect(resolve(["work", "ENG-42"])).toMatchObject({ screen: "item", id: "ENG-42" });

@@ -151,6 +151,8 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   diaries: "knowledge",
   diary: "knowledge",
   artifacts: "artifacts",
+  "artifact-folders": "artifacts",
+  "artifact-folder": "artifacts",
   artifact: "artifacts",
   "new-artifact": "artifacts",
   live: "live",

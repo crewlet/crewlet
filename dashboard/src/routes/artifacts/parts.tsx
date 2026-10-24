@@ -12,6 +12,7 @@ import {
   ButtonLink,
   type AccessDeniedReason,
   type ArtifactAccess,
+  type ArtifactCardProps,
   type ArtifactCardSize,
   type ToastApi,
 } from "@crewlethq/ui";
@@ -50,6 +51,7 @@ export function ListedArtifactCard({
   now,
   size = "card",
   actions,
+  selection,
 }: {
   item: ArtifactListItem;
   people: ArtifactPeople;
@@ -57,6 +59,18 @@ export function ListedArtifactCard({
   size?: ArtifactCardSize;
   /** The card's own menu, drawn beside its link. */
   actions?: ReactNode;
+  /**
+   * The card can be picked for a bulk action: whether the gallery is
+   * choosing, whether this card is picked, and what a press of its box does.
+   * A gallery's card only.
+   */
+  selection?:
+    | {
+        selecting: boolean;
+        selected: boolean;
+        onSelectedChange: NonNullable<ArtifactCardProps["onSelectedChange"]>;
+      }
+    | undefined;
 }) {
   const reader = useViewer().owner;
   const mine = reader !== "" && item.owner === reader;
@@ -89,10 +103,23 @@ export function ListedArtifactCard({
             trashed,
             preview: <GalleryPreview item={item} people={people} />,
             actions,
+            ...(selection
+              ? {
+                  selectable: true,
+                  selecting: selection.selecting,
+                  selected: selection.selected,
+                  onSelectedChange: selection.onSelectedChange,
+                }
+              : {}),
           }
         : {})}
     />
   );
+}
+
+/** A dashboard address, absolute, as a person pastes it into chat. */
+function pageAddress(path: string[], query?: Record<string, string>): string {
+  return `${location.origin}${location.pathname}${href(path, query)}`;
 }
 
 /**
@@ -100,15 +127,19 @@ export function ListedArtifactCard({
  * at one of its older versions where `version` names one.
  */
 export function artifactAddress(id: string, version?: number): string {
-  const query = version ? { version: String(version) } : undefined;
-  return `${location.origin}${location.pathname}${href(artifactPath(id), query)}`;
+  return pageAddress(artifactPath(id), version ? { version: String(version) } : undefined);
 }
 
 /** Copies an artifact's address, and says whether the browser let it. */
 export async function copyAddress(id: string, toast: ToastApi): Promise<void> {
+  return copyPageAddress(artifactPath(id), toast);
+}
+
+/** Copies a page's address (an artifact's, a folder's), and says whether the browser let it. */
+export async function copyPageAddress(path: string[], toast: ToastApi): Promise<void> {
   try {
     if (!navigator.clipboard) throw new Error("no clipboard");
-    await navigator.clipboard.writeText(artifactAddress(id));
+    await navigator.clipboard.writeText(pageAddress(path));
     toast.ok("Link copied");
   } catch {
     toast.show({

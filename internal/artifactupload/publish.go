@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -40,12 +41,19 @@ type FileSpec struct {
 	// call, at most [artifacts.MaxInlineBytes] across the call. Never
 	// decoded from a request body.
 	Inline []byte `json:"-"`
+
+	// Brand copies the adopted brand's file in this slot (a logo, or one
+	// file of a face under [brandformat.FontFileSlot]) as a new object of
+	// the version: an agent's `from_brand`, and a deck begun in the brand.
+	// Never decoded from a request body.
+	Brand brandformat.Slot `json:"-"`
 }
 
 // sources counts how many sources a spec names.
 func (f FileSpec) sources() int {
 	n := 0
-	for _, set := range []bool{f.Upload, f.Carry != "", f.From != 0, f.Remove, f.Inline != nil} {
+	for _, set := range []bool{f.Upload, f.Carry != "", f.From != 0, f.Remove, f.Inline != nil,
+		f.Brand != ""} {
 		if set {
 			n++
 		}
@@ -110,6 +118,11 @@ type CreateRequest struct {
 	SourceKey string            `json:"source_key,omitempty"`
 	Shares    []artifacts.Share `json:"shares,omitempty"`
 
+	// Folder is the folder the artifact is created in, by id, empty for the
+	// top level: one the caller's surface already admitted filing into
+	// (contributor on it, through the requester ceiling for a tool).
+	Folder string `json:"folder,omitempty"`
+
 	Upload       string                 `json:"upload,omitempty"`
 	Files        []FileSpec             `json:"files,omitempty"`
 	Entry        string                 `json:"entry,omitempty"`
@@ -156,6 +169,9 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %v",
 			ErrInvalid, req.Kind, artifacts.Kinds)
 	}
+	// adopted is the brand a deck begun in it was composed from, which its
+	// copies are then made from too: one adoption for the whole version.
+	var adopted *artifactsdomain.Adoption
 	if (req.Doc != nil || req.Deck != nil || req.Layout != nil) && !req.Starter {
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a doc's written text, a "+
 			"deck plan or a design's layout begins the artifact from its kind's starter: "+
@@ -166,11 +182,11 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 			return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a create from the "+
 				"kind's starter names no upload, files or entry: the starter is all of them", ErrInvalid)
 		}
-		files, entry, err := starter(req)
+		files, entry, brand, err := s.starter(ctx, req)
 		if err != nil {
 			return artifactsdomain.Published{}, Report{}, err
 		}
-		req.Files, req.Entry = files, entry
+		req.Files, req.Entry, adopted = files, entry, brand
 	}
 	for _, f := range req.Files {
 		if f.Carry != "" || f.From != 0 || f.Remove {
@@ -194,6 +210,7 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 	if done, ok := r.answered(); ok {
 		return done.Published, done.Report, nil
 	}
+	r.brand = adopted
 	in, err := r.compose(ctx, manifest.ModeWhole, req.Files, nil, req.Entry, req.Contract, req.Capabilities)
 	if err != nil {
 		return artifactsdomain.Published{}, Report{}, r.fail(ctx, err)
@@ -202,7 +219,7 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 	published, err := s.writes.Create(ctx, c, artifactsdomain.CreateInput{
 		Kind: req.Kind, Title: req.Title, Description: req.Description, Icon: req.Icon,
 		Owner: req.Owner, OwnerKind: req.OwnerKind, SourceKey: req.SourceKey,
-		First: in, Shares: req.Shares,
+		First: in, Shares: req.Shares, Folder: req.Folder,
 	})
 	if err != nil {
 		return published, Report{}, r.fail(ctx, err)

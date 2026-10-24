@@ -422,7 +422,11 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	if err != nil {
 		return 0, err
 	}
-	return rows + pruned, nil
+	folders, err := pruneFolderHistory(ctx, tx, c)
+	if err != nil {
+		return 0, err
+	}
+	return rows + pruned + folders, nil
 }
 
 // applyEviction records a node's removal from this log, or its readmission, as
