@@ -22,6 +22,7 @@ import {
   eventHistorySpan,
   nodeCountLabel,
   formatPhaseLLM,
+  fmtBytes,
   fmtCount,
   fmtDate,
   fmtDuration,
@@ -173,6 +174,17 @@ describe("relative time", () => {
 });
 
 describe("numbers", () => {
+  // POWERS OF 1024 ARE LABELLED AS SUCH, as the engine labels them: the CLI
+  // and the node's own sentences say "8.0 GiB", and a banner that drew the same
+  // size as "8.0 GB" read as a different number beside it. Mutation: put the
+  // decimal labels back.
+  test("a size is labelled in binary units, as the engine labels it", () => {
+    expect(fmtBytes(512)).toBe("512 B");
+    expect(fmtBytes(3_789)).toBe("3.7 KiB");
+    expect(fmtBytes(8 * 1024 ** 3)).toBe("8.0 GiB");
+    expect(fmtBytes(2 * 1024 ** 4)).toBe("2.0 TiB");
+  });
+
   test("a four-digit count stays exact", () => {
     // A token count in the thousands is something an operator reads exactly;
     // rounding it to "1.2k" throws away the digit they were looking at.

@@ -4489,7 +4489,7 @@ session. An image (an SVG included) is previewed through an object URL in an
 a file carries reaches the page as markup; any other file shows no preview.
 
 **A question can carry images.** The person attaches up to four PNG, JPEG,
-WebP or GIF images of at most 5 MB each by Attach image, by dropping them on
+WebP or GIF images of at most 5 MiB each by Attach image, by dropping them on
 the composer, or by pasting (a screenshot). Each uploads at once
 (`POST /assistant/conversations/{id}/files`, under its own operation key and
 through the same request path as every other assistant write), stands in the
