@@ -5,7 +5,7 @@
  * directory.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -19,6 +19,7 @@ import {
 import { ProductMark, VendorMark } from "@crewlethq/icons";
 import { CheckGlyph, RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { relTime } from "~/lib/format.ts";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
 import { FindingSubjects, SeatStep, docHref } from "./catalogue.tsx";
 import {
@@ -52,8 +53,9 @@ export function BucketTag({ tool }: { tool: Tool }) {
 
 /** The state pill a built-in service carries everywhere it is named. */
 export function ServiceState({ service }: { service: BuiltInService }) {
-  // NOTHING UNTIL THE ENGINE HAS SAID: Off on a node running no company would
-  // be a guess.
+  // NOTHING UNTIL THE ENGINE HAS SAID: "Not in use" on a node running no
+  // company would be a guess. A SERVICE IS IN USE, never connected: it is
+  // Crewlet's own, so there is nothing to connect.
   if (!service.known) return null;
   // SOON IS A FACT, CARRIED BY ITS WORD: the accent means where the reader
   // is, so it is not spent on a service that has not shipped.
@@ -66,11 +68,11 @@ export function ServiceState({ service }: { service: BuiltInService }) {
   }
   return service.on ? (
     <Tag size="sm" variant="success">
-      On
+      In use
     </Tag>
   ) : (
     <Tag size="sm" variant="neutral" appearance="outline">
-      Off
+      Not in use
     </Tag>
   );
 }
@@ -361,4 +363,48 @@ export function useDisconnect(model: Model | null) {
     />
   );
   return { disconnect, node };
+}
+
+/**
+ * One line of an activity feed: who, what, and when, newest first. With a
+ * `mark` it leads with the app's or service's own mark, and with an `href` the
+ * line is a link to where the activity belongs.
+ */
+export function FeedRow({
+  who,
+  what,
+  at,
+  now,
+  mark,
+  href,
+}: {
+  who: string;
+  what: ReactNode;
+  at: string;
+  now: number;
+  mark?: ReactNode;
+  href?: string;
+}) {
+  const body = (
+    <>
+      <strong>{who}</strong> {what}
+    </>
+  );
+  return (
+    <li className={mark === undefined ? "int-feed-row" : "int-feed-row int-feed-row--marked"}>
+      {mark !== undefined && (
+        <span className="int-feed-mark" aria-hidden>
+          {mark}
+        </span>
+      )}
+      {href ? (
+        <a className="int-feed-what" href={href}>
+          {body}
+        </a>
+      ) : (
+        <span className="int-feed-what">{body}</span>
+      )}
+      <span className="t-caption int-feed-at">{relTime(at, now)}</span>
+    </li>
+  );
 }

@@ -1163,7 +1163,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the charter and the standing policies are written too *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `edit=charter\|mission\|vision\|policies` (opens the company's charter once, at its top or at that field, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
-| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory grouped by need (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence, and the address apps deliver to at its foot; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what needs a look. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
+| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
@@ -7591,11 +7591,11 @@ asks the frame for the window's height, as the Inbox does), and on a phone the
 two are one column, the list until something is chosen, then the detail with a
 way back.
 
-The directory is **grouped by need**, and each of Crewlet's own services opens
-its group, so the built-in answer sits beside the apps that answer the same
-need:
+The directory is **every integration by category**, each of Crewlet's own
+services first in its category, so the built-in answer sits beside the apps
+that answer the same need:
 
-| Group | Lines |
+| Category | Lines |
 |---|---|
 | Chat | Crewlet Chat (coming soon), Slack, Mattermost |
 | Work tracking | Crewlet Works, Jira |
@@ -7606,20 +7606,45 @@ need:
 **Atlassian is listed by product**: it is one connection that serves two needs,
 so Jira sits under work tracking and Confluence under docs, each with its own
 product's state, and both open the one Atlassian page, since it is one key and
-one account per agent. A line carries its mark, its name (a product's app as a
-hint under it) and its state only where it carries one: **On**, **Off** or
-**Soon** for a service (none on a node running no company, which is "not known
-yet", never Off), and for an app the engine's bucket (*Connected*, *Needs
-attention*, *Setting up*), never *Not connected* repeated down the list. The
-**address apps deliver to** is the list's foot, said once, cut to fit with the
-whole of it in its title and copied with a press.
+one account per agent. A line stands at the rail's row step (30px) and carries
+its mark, its name (a product's app inline after it, in the quiet ink) and its
+state only where it carries one: **In use**, **Not in use** or **Soon** for a
+service, which is Crewlet's own and so never *connected* (none on a node
+running no company, which is "not known yet", never Not in use), and
+for an app the engine's bucket (*Connected*, *Needs attention*, *Setting up*),
+never *Not connected* repeated down the list.
+
+**The home** (the bare address, nothing chosen) is **what the company has in
+use**, under one fixed description of what the page is for (*The tools your
+agents work with: Crewlet's own services and the apps your company connects
+for them.*), the same for every reader and never a count. Then what needs a
+look (each issue under its app's name, linking to the app's page with the form
+its fix needs already open), or one line saying all is well. Then, under **In
+use** with a quiet count of every card beneath it (`home.ts`, one function and
+one table test), the connected apps (Jira and Confluence as their own
+products) and the Crewlet services in use, each a **compact card** (the kit's
+`CatalogTile` at `density` `compact`: one header line with the mark, the name,
+the state and a figure, the one action at its end, and one line of what it
+gives), two to a row, and, for an Admin while only Crewlet's services are in
+use, one line saying apps connected from the list show there too. Then the
+recent activity (the latest deliveries and each app's last check), and the
+**address apps deliver to**, said once at the foot, cut to fit with the whole
+of it in its title and copied with a press. Services not in use and apps nobody
+connected are the list's alone, and a home with nothing in use says so and
+points at the list. A connected app's figure is its agents (*x of y agents
+ready*) where it gives each agent an account, and otherwise its newest
+delivery. Sections stand one small step apart (the kit's `Section` at
+`spacing` `tight`).
 
 **The address is the selection**: `#/company/integrations/{kind}` selects an
 app's key, a surface (`jira`, `confluence`, and the `forge` relay and
 `atlassian` select Jira's line) or a service (`works`, `knowledge`, `chat`), so
-every address the earlier tile page printed still lands on its tool. The bare
-address shows, beside the list, **what needs a look**: each issue under its
-app's name, linking to the app's page rather than fixing it out of context.
+every address an earlier version printed still lands on its tool. An arrival's
+`open=` names the form to open (`connect`, `continue`, `rotate`, `settings`,
+`agents`), taken out of the address once read and held for the selection it
+arrived with: a fix followed from the home opens its form on a page that is
+already mounted, and leaving for another selection drops it, so coming back
+through the list opens none.
 
 **An app's page** is its header (the kit's `ObjectHeader` carrying the vendor's
 own mark, the engine's word for its state, its one-line description, and the
@@ -9096,11 +9121,12 @@ to.
    never read back — no route returns either again, and the screen says so. A
    token the reader types on the sign-in screen is the other direction: it is
    sent once and kept nowhere.
-9. **A directory line carries no control.** Company › Integrations lists
-   every tool and service as one link with its mark, its name and its state
-   where it has one, because a list is read in one glance; what a tool offers
-   (its one action, Settings, Disconnect, an agent's own step) is on its page
-   beside the list, where the reason for each sits next to it.
+9. **A directory line carries no control, and a card one.** Company ›
+   Integrations lists every tool and service as one link with its mark, its
+   name and its state, because a list is read in one glance; a card on its
+   home carries exactly one action (the one fix it owes, or Open), and
+   everything else a tool offers is on its page, where the reason for each
+   sits next to it.
 10. **Every screen, section and filter is in the URL**, and obeys the
     push/replace table above.
 11. **A screen subscribes to the slices it reads and no others.**

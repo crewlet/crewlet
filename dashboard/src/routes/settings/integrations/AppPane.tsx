@@ -64,13 +64,18 @@ export function AppPane({
   tool,
   model,
   onDisconnect,
+  arrive,
 }: {
   tool: Tool;
   model: Model;
   onDisconnect: () => void;
+  /** Open the settings form on arrival: the landing's Connect sends a reader here to connect. */
+  arrive?: Intent | undefined;
 }) {
   const now = useNow();
-  const [open, setOpen] = useState<Intent | null>(null);
+  // ONLY WHERE THE INTENT CAN BE TAKEN: an arrival asking to connect a tool
+  // whose form cannot open lands on the page, which says why.
+  const [open, setOpen] = useState<Intent | null>(arrive && !tool.blocked ? arrive : null);
   const [tab, setTab] = useState("overview");
   const facts = useMemo<Fact[] | undefined>(() => {
     if (!tool.configured) return undefined;

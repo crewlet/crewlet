@@ -7,7 +7,7 @@
  * Chat, Work tracking, Docs and knowledge, Code and Observability. Each of
  * Crewlet's own services opens its group (Crewlet Chat, Works, Knowledge),
  * so the built-in answer to a need sits beside the apps that answer it in its
- * place, with its On, Off or Soon on its line. ATLASSIAN IS LISTED BY
+ * place, with In use, Not in use or Soon on its line. ATLASSIAN IS LISTED BY
  * PRODUCT: it is one connection that serves two needs, so Jira sits under work
  * tracking and Confluence under docs, each with its own product's state, and
  * both open the one Atlassian page, since it is one key and one account per
@@ -18,7 +18,7 @@
  * `#/company/integrations/{kind}` selects a line: an app's key, a surface
  * (`jira`, `confluence`, the `forge` relay and `atlassian` select Jira's
  * line, on the Atlassian page), or a service (`works`, `knowledge`, `chat`).
- * The bare address shows what needs a look.
+ * The bare address shows what the company has active.
  *
  * # Who reads it
  *
@@ -31,19 +31,18 @@
  * # Two columns that scroll on their own
  *
  * Above a phone's width the screen asks the frame for the window's height
- * (`useFillScreen`), as the Inbox does, so the directory holds its place with
- * the engine's address at its foot while the detail scrolls beside it. On a
+ * (`useFillScreen`), as the Inbox does, so the directory holds its place
+ * while the detail scrolls beside it. On a
  * phone the two are one column and the page scrolls as any other.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
   Callout,
   DirectoryList,
   ListDetail,
-  Section,
   Skeleton,
   StatusDot,
   useMediaMatch,
@@ -52,7 +51,7 @@ import {
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { ChevronLeftGlyph, KeyGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
-import { href } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -66,56 +65,14 @@ import {
   useBuiltIns,
   useIntegrations,
   toolFor,
-  type BuiltInService,
+  type Intent,
   type Model,
 } from "./model.ts";
 import { AppPane } from "./AppPane.tsx";
+import { DIRECTORY, entryOf, type Line } from "./categories.ts";
+import { Landing } from "./Landing.tsx";
 import { ServicePane } from "./ServicePane.tsx";
-import { EngineAddress, IssueRow, ServiceMark, ServiceState, useDisconnect } from "./parts.tsx";
-
-/** One line of the directory: a built-in service, an app, or one product of an app. */
-type Line =
-  | { kind: "service"; key: BuiltInService["key"] }
-  | { kind: "app"; key: string }
-  | { kind: "product"; key: string; name: string; app: string };
-
-/** The directory's groups, in the order a company reaches for them. */
-const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
-  {
-    key: "chat",
-    label: "Chat",
-    lines: [
-      { kind: "service", key: "chat" },
-      { kind: "app", key: "slack" },
-      { kind: "app", key: "mattermost" },
-    ],
-  },
-  {
-    key: "work",
-    label: "Work tracking",
-    lines: [
-      { kind: "service", key: "works" },
-      { kind: "product", key: "jira", name: "Jira", app: "atlassian" },
-    ],
-  },
-  {
-    key: "docs",
-    label: "Docs and knowledge",
-    lines: [
-      { kind: "service", key: "knowledge" },
-      { kind: "product", key: "confluence", name: "Confluence", app: "atlassian" },
-    ],
-  },
-  {
-    key: "code",
-    label: "Code",
-    lines: [
-      { kind: "app", key: "github" },
-      { kind: "app", key: "gitlab" },
-    ],
-  },
-  { key: "alerts", label: "Observability", lines: [{ kind: "app", key: "datadog" }] },
-];
+import { ServiceMark, ServiceState, useDisconnect } from "./parts.tsx";
 
 /** Which line a route segment selects: Atlassian and its relay select Jira's. */
 function selects(line: Line, kind: string | undefined): boolean {
@@ -124,11 +81,8 @@ function selects(line: Line, kind: string | undefined): boolean {
   return line.key === "jira" && (kind === "atlassian" || kind === "forge");
 }
 
-/** The catalogue entry an app line or a product line stands for. */
-function entryOf(line: Line): Entry | undefined {
-  if (line.kind === "service") return undefined;
-  return CATALOG.find((e) => e.key === (line.kind === "product" ? line.app : line.key));
-}
+/** The intents an arrival may ask an app's page to open its form for: the home's fixes. */
+const ARRIVALS: readonly Intent[] = ["connect", "continue", "rotate", "settings", "agents"];
 
 export function Integrations({ kind }: { kind?: string }) {
   const viewer = useViewer();
@@ -178,6 +132,29 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
   const crumb = service?.name ?? product?.name ?? entry?.name;
   usePageLabels(useMemo(() => (kind && crumb ? { [kind]: crumb } : {}), [kind, crumb]));
   const { disconnect, node } = useDisconnect(model);
+  // AN ARRIVAL'S INTENT BELONGS TO THE SELECTION IT ARRIVED WITH, and is
+  // taken out of the address once read, so a reload or a step back does not
+  // open the form again. The page is never keyed on the selection (App.tsx),
+  // so a fix followed from the home is a change of address under a mounted
+  // page: the intent is held per selection rather than read once at mount,
+  // and survives the address being cleared, because an app's pane reads it
+  // when it mounts, which may be after the address was cleared.
+  // Leaving for another selection drops it, so coming back through the list
+  // opens no form.
+  const [arrive, setArrive] = useParam("open", "");
+  const asked = ARRIVALS.find((i) => i === arrive);
+  const [arrival, setArrival] = useState<{ kind: string | undefined; intent: Intent } | null>(() =>
+    asked ? { kind, intent: asked } : null,
+  );
+  if (asked && (!arrival || arrival.kind !== kind || arrival.intent !== asked)) {
+    setArrival({ kind, intent: asked });
+  } else if (!asked && arrival && arrival.kind !== kind) {
+    setArrival(null);
+  }
+  const arrived = asked ?? (arrival && arrival.kind === kind ? arrival.intent : undefined);
+  useEffect(() => {
+    if (arrive !== "") setArrive("");
+  }, [arrive, setArrive]);
 
   const groups = useMemo<DirectoryGroup[]>(
     () =>
@@ -232,6 +209,7 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
         tool={tool}
         model={model}
         onDisconnect={() => disconnect(tool)}
+        arrive={arrived}
       />
     );
   } else if (entry) {
@@ -239,20 +217,14 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
   } else if (kind) {
     pane = <p className="t-caption">This build serves no integration called “{kind}”.</p>;
   } else {
-    pane = <Summary model={model} services={services} />;
+    pane = <Landing model={model} services={services} note={<AdminNote />} />;
   }
 
   return (
     <>
       <ListDetail
         showing={kind ? "detail" : "list"}
-        list={
-          <DirectoryList
-            label="Integrations"
-            groups={groups}
-            foot={model?.base ? <EngineAddress value={model.base} /> : undefined}
-          />
-        }
+        list={<DirectoryList label="Integrations" groups={groups} />}
       >
         {/* ONE COLUMN THE PAGE'S PARTS ARE SPACED IN, where a lone control
             keeps its own width rather than the column's. */}
@@ -271,62 +243,6 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
         </div>
       </ListDetail>
       {node}
-    </>
-  );
-}
-
-/** With nothing chosen: what needs a look, or where to start. */
-function Summary({ model, services }: { model: Model | null; services: BuiltInService[] }) {
-  if (!model) {
-    const on = services.filter((s) => s.on).map((s) => s.name);
-    return (
-      <>
-        <ObjectHeader
-          kind="Company"
-          icon="plug"
-          title="Integrations"
-          description={
-            (on.length > 0
-              ? `${on.join(" and ")} ${on.length === 1 ? "is" : "are"} on for your company.`
-              : "Your company runs none of Crewlet's own services.") +
-            " Pick one to see what it holds."
-          }
-        />
-        <AdminNote />
-      </>
-    );
-  }
-  const attention = model.tools.filter((t) => t.bucket === "attention");
-  const connected = model.tools.filter((t) => t.configured).length;
-  return (
-    <>
-      <ObjectHeader
-        kind="Company"
-        icon="plug"
-        title="Integrations"
-        description={
-          connected === 0
-            ? "No app is connected yet. Pick one to see what it gives your agents."
-            : `${connected} of ${model.tools.length} apps connected. ${attention.length === 0 ? "Nothing needs you." : "Pick an item to manage it."}`
-        }
-      />
-      {attention.length > 0 && (
-        <Section title="Needs a look">
-          <div className="int-issues">
-            {attention.flatMap((t) =>
-              t.issues.map((issue) => (
-                <IssueRow
-                  key={issue.key}
-                  tool={t}
-                  issue={issue}
-                  go={href(["company", "integrations", t.entry.key])}
-                  showTool
-                />
-              )),
-            )}
-          </div>
-        </Section>
-      )}
     </>
   );
 }

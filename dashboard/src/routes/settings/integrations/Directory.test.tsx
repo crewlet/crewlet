@@ -13,7 +13,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { Router } from "~/app/router.tsx";
+import { Router, useRoute } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
@@ -22,6 +22,7 @@ import type { OrgServices } from "~/contract/services.ts";
 import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 import { withDerived } from "~/test/org.ts";
 import { Integrations } from "./Directory.tsx";
+import { CONNECT_HINT, DESCRIPTION } from "./home.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -139,10 +140,22 @@ interface Mounted {
   fetched: string[];
 }
 
+/**
+ * The selection taken from the address, as App.tsx renders the page: one
+ * page, never keyed on the selection, so a move between selections is a
+ * change of address under a mounted page rather than a fresh mount.
+ */
+const ROUTED = Symbol("routed");
+
+function RoutedIntegrations() {
+  const { path } = useRoute();
+  return <Integrations kind={path[2]} />;
+}
+
 /** The page as `viewer`, on a company running `services`, at `kind`. */
 function mount(
   viewer: unknown,
-  kind?: string,
+  kind?: string | typeof ROUTED,
   /** What the company runs, or null for a node running no company. */
   services: OrgServices | null = NATIVE,
   setup: { status: number; body: unknown } = { status: 200, body: listing },
@@ -176,9 +189,7 @@ function mount(
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
-        <Router>
-          <Integrations kind={kind} />
-        </Router>
+        <Router>{kind === ROUTED ? <RoutedIntegrations /> : <Integrations kind={kind} />}</Router>
       </ViewerProvider>
     </ClientContext.Provider>,
     { wrapper: LayerHost },
@@ -240,7 +251,7 @@ test("each line carries its own state, and a product only its own", async () => 
   expect((await line(/^Jira/)).textContent).not.toContain("Connected");
   expect((await line(/GitLab/)).textContent).toContain("Needs attention");
   expect((await line(/Slack/)).textContent).toBe("Slack");
-  expect((await line(/Crewlet Works/)).textContent).toContain("On");
+  expect((await line(/Crewlet Works/)).textContent).toContain("In use");
   expect((await line(/Crewlet Chat/)).textContent).toContain("Soon");
 });
 
@@ -266,7 +277,75 @@ test("the summary lists what needs a look and links to each app", async () => {
   mount(ADMIN);
   expect(await screen.findByText(expiring)).toBeTruthy();
   const open = screen.getByRole("link", { name: "Open GitLab" });
-  expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab");
+  expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab?open=rotate");
+});
+
+// THE HOME IS WHAT IS IN USE: the connected apps (Confluence as its own
+// product) and the services the company runs, each a compact card with its
+// state and one action; an app nobody connected is the list's alone.
+// Mutation: list every catalogue entry and Slack appears.
+test("the home shows only what is in use, each a compact card with one action", async () => {
+  mount(ADMIN);
+  const inUse = await screen.findByRole("region", { name: /^In use/ });
+  const names = [...inUse.querySelectorAll(".int-tile-link")].map((a) => a.textContent);
+  expect(names).toEqual(["Crewlet Works", "Crewlet Knowledge", "Confluence", "GitLab", "Datadog"]);
+  for (const card of inUse.querySelectorAll(".crewlet-catalog-tile")) {
+    expect(card.className).toContain("crewlet-catalog-tile--compact");
+  }
+  const gitlab = within(inUse).getByRole("link", { name: "GitLab" }).closest("li") as HTMLElement;
+  expect(within(gitlab).getByRole("link", { name: "Replace key" }).getAttribute("href")).toBe(
+    "#/company/integrations/gitlab?open=rotate",
+  );
+  // THE HEADING DESCRIBES THE PAGE, and the count beside In use is of every
+  // card under it, the services included.
+  expect(screen.getByText(DESCRIPTION)).toBeTruthy();
+  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 5");
+});
+
+// A FIX LANDS WITH ITS FORM OPEN, read once and taken out of the address.
+test("an arrival naming a form opens it, and leaves the address", async () => {
+  location.hash = "#/company/integrations/gitlab?open=rotate";
+  mount(ADMIN, "gitlab");
+  expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
+  await waitFor(() => expect(location.hash).not.toContain("open="));
+});
+
+// A FIX FOLLOWED FROM THE HOME OPENS ITS FORM: the page stays mounted while
+// the address moves, so the intent is read with the selection it arrived on
+// rather than once when the page first mounted. Mutation: read the intent
+// once at mount and the form never opens.
+test("a fix followed from the home opens its form on the app's page", async () => {
+  mount(ADMIN, ROUTED);
+  const inUse = await screen.findByRole("region", { name: /^In use/ });
+  const gitlab = within(inUse).getByRole("link", { name: "GitLab" }).closest("li") as HTMLElement;
+  location.hash = within(gitlab)
+    .getByRole("link", { name: /^Replace key/ })
+    .getAttribute("href")!;
+  expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
+  await waitFor(() => expect(location.hash).not.toContain("open="));
+});
+
+// AN ARRIVAL IS SPENT ON ITS OWN SELECTION: leaving for another app and
+// coming back through the list shows the app's page, not the form again.
+// Mutation: keep the intent across selections and the form reopens.
+test("coming back to an app through the list does not reopen the arrival's form", async () => {
+  location.hash = "#/company/integrations/gitlab?open=rotate";
+  mount(ADMIN, ROUTED);
+  expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
+  await waitFor(() => expect(location.hash).not.toContain("open="));
+  location.hash = (await line(/GitHub/)).getAttribute("href")!;
+  expect(await screen.findByRole("heading", { level: 2, name: "GitHub" })).toBeTruthy();
+  location.hash = (await line(/GitLab/)).getAttribute("href")!;
+  expect(await screen.findByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /Overview/ })).toBeTruthy();
+  expect(screen.queryByRole("form", { name: "Replace the GitLab key" })).toBeNull();
+});
+
+// A HOME WITH NOTHING IN USE says so and points at the list.
+test("a company with nothing in use is told to pick from the list", async () => {
+  mount(MEMBER, undefined, { tracker: "none", knowledge: "none" });
+  expect(await screen.findByText("Nothing is in use yet")).toBeTruthy();
+  expect(screen.queryByRole("region", { name: /^In use/ })).toBeNull();
 });
 
 // AN APP'S PAGE: its header, its tabs, and the one action the engine's state
@@ -299,14 +378,18 @@ test("Check now asks the loop to look where a pass runs, and only there", async 
   expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
 });
 
-// THE ADDRESS APPS DELIVER TO, said once at the foot of the directory, with a
-// copy control named for what it copies.
-test("the engine's address sits at the foot of the directory, copyable", async () => {
+// THE ADDRESS APPS DELIVER TO, said once at the foot of the home rather than
+// under the list, with a copy control named for what it copies.
+test("the engine's address sits once at the foot of the home, copyable", async () => {
   mount(ADMIN);
   const nav = await screen.findByRole("navigation", { name: "Integrations" });
+  await waitFor(() => expect(document.querySelector(".int-landing-foot")).not.toBeNull());
+  expect(within(nav).queryByText("Apps reach this engine at")).toBeNull();
+  expect(document.querySelectorAll(".int-engine-address")).toHaveLength(1);
+  const foot = document.querySelector(".int-landing-foot") as HTMLElement;
   await waitFor(() =>
     expect(
-      within(nav).getByRole("button", {
+      within(foot).getByRole("button", {
         name: "Copy the engine's address, https://engine.example.com",
       }),
     ).toBeTruthy(),
@@ -355,8 +438,11 @@ test("a refused setup listing names the access it takes and holds every form act
 // every reader and the first list names `integrations`.
 test("a reader without Admin is shown the services and asked nothing an Admin's", async () => {
   const { asked, fetched } = mount(MEMBER);
-  expect((await line(/Crewlet Works/)).textContent).toContain("On");
+  expect((await line(/Crewlet Works/)).textContent).toContain("In use");
   expect((await line(/GitLab/)).textContent).toBe("GitLab");
+  // THE SAME DESCRIPTION, and no hint to connect what an Admin connects.
+  expect(screen.getByText(DESCRIPTION)).toBeTruthy();
+  expect(screen.queryByText(CONNECT_HINT)).toBeNull();
   expect(screen.getByText("Admins connect and manage apps")).toBeTruthy();
   expect(asked).not.toContain("integrations");
   expect(fetched).not.toContain("/setup/integrations");
@@ -382,7 +468,7 @@ test("a reader nobody signed in is offered the sign-in", async () => {
 
 // --- Crewlet's own services -------------------------------------------------------- //
 
-test("a service the company runs is On, with its way in", async () => {
+test("a service the company runs is in use, with its way in", async () => {
   mount(MEMBER, "works");
   expect(await screen.findByRole("heading", { level: 2, name: "Crewlet Works" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open Work" }).getAttribute("href")).toBe("#/work");
@@ -397,7 +483,7 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
   expect(screen.getByRole("link", { name: "Open Jira" }).getAttribute("href")).toBe(
     "#/company/integrations/jira",
   );
-  expect((await line(/Crewlet Works/)).textContent).toContain("Off");
+  expect((await line(/Crewlet Works/)).textContent).toContain("Not in use");
   expect(asked).not.toContain("work_projects");
 });
 
