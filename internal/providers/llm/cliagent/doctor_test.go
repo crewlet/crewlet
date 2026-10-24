@@ -86,6 +86,98 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 	}
 }
 
+// THE DOCTOR'S ROUTES FOLLOW THE ENTRY'S AUTH MODE, not only its CLI. On a
+// machine with a personal Claude login, every entry with no sign-in was told to
+// adopt it with -from-host or — preferred — to mint a headless token with
+// -capture-token. An api-key entry never reads that token (the mode removes it
+// from the CLI's environment) and should not be handed a plan login either,
+// which the CLI would bill beside its key by the vendor's precedence; an
+// inherit-env entry never looks in the secret store the token is stored in.
+// Each is told what its mode reads, worded as the remote run's refusal and
+// `crewlet llm login` word it ([Provider.ModeSignIn]).
+//
+// The subscription case is the control: it proves the host login was found, so
+// the routes missing from the other two are missing by mode, not by accident.
+// Not parallel: HOME is the fake human's, and inherit-env reads the process
+// environment, emptied here of both variables it forwards.
+//
+// Mutation: offer the host-login routes whatever the mode, and the api-key and
+// inherit-env cases name -capture-token and go red.
+func TestTheDoctorsRoutesFollowTheEntrysAuthMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"token":"personal"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		mode    AuthMode
+		want    []string
+		notWant []string
+	}{
+		{
+			mode: AuthSubscription,
+			want: []string{"`crewlet llm login sub -from-host`", "CLAUDE_CODE_OAUTH_TOKEN with `-capture-token`"},
+		},
+		{
+			mode: AuthAPIKey,
+			want: []string{"auth.mode is api-key", "providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY",
+				"`crewlet secrets set`"},
+			notWant: []string{"capture-token", "-from-host", "crewlet llm login", "CLAUDE_CODE_OAUTH_TOKEN"},
+		},
+		{
+			mode: AuthInheritEnv,
+			want: []string{"auth.mode is inherit-env", "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY",
+				"engine's own process environment, never from the secret store",
+				"`crewlet llm login sub -from-host`"},
+			notWant: []string{"capture-token", "crewlet secrets set"},
+		},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			p, err := New(Config{
+				Key: "sub", Agent: "claude-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+				// No binary to run: the version probe is skipped and the
+				// report is judged on configuration, files and HOME.
+				Overrides: map[string]any{"binary": "crewlet-no-such-cli-binary"},
+				Auth:      Auth{Mode: tc.mode},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			d := p.Diagnose(t.Context(), DiagnoseOptions{})
+			if len(d.HostLogin) == 0 {
+				t.Fatal("the premise: the host login was not found")
+			}
+			var problem string
+			for _, line := range d.Problems {
+				if strings.HasPrefix(line, "no sign-in") {
+					problem = line
+				}
+			}
+			if problem == "" {
+				t.Fatalf("an entry nothing signs in raised no problem: %v", d.Problems)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(problem, want) {
+					t.Errorf("the problem does not name %q:\n%s", want, problem)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(problem, bad) {
+					t.Errorf("the problem names %q, which this mode does not sign in with:\n%s", bad, problem)
+				}
+			}
+		})
+	}
+}
+
 // A budget built on estimates is a different promise from one built on the
 // vendor's own counts, so the report must not let the difference pass
 // silently.

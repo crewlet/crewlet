@@ -250,10 +250,11 @@ func (p *Provider) Workspace() *Workspace { return p.ws }
 func (p *Provider) Agent() string { return p.agent }
 
 // AuthMode is how this entry signs its CLI in ([Auth.Mode]), for a caller that
-// has to tell an operator which credential to supply: under api-key only the
-// key is read, under inherit-env only the engine's own environment, so a
-// remedy written for a subscription — mint a token — is one the entry would
-// never read.
+// has to tell an operator which credential to supply: of the variables the
+// engine hands the CLI, api-key reads only the key and inherit-env only the
+// engine's own environment, so a remedy written for a subscription — mint a
+// token into the secret store — is one the entry would never read
+// ([Provider.ModeSignIn]). The credential files are seeded under every mode.
 func (p *Provider) AuthMode() AuthMode {
 	if p.auth.Mode == "" {
 		return AuthSubscription

@@ -2084,7 +2084,11 @@ variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
 [credential-named](../concepts/llm-backends.md#6-a-provider-key-in-env-opencode-hermes-pi)
 variable in the entry's `env`. `doctor`'s `sign-in` line names every one it found, and
-an entry with none is a `no sign-in` problem naming the route to take — unless
+an entry with none is a `no sign-in` problem naming the routes its `auth.mode`
+reads ([how `doctor` judges a
+sign-in](../concepts/llm-backends.md#how-doctor-judges-a-sign-in)): a login or a
+headless token under `subscription`, only the key under `api-key`, and the
+variables it forwards or a login under `inherit-env` — unless
 the smoke test was answered, which proves the CLI authenticates some way the
 engine does not hand it (an endpoint that takes no key, a credential in its
 own configuration). A token `auth.mode: api-key` removes from the child is not

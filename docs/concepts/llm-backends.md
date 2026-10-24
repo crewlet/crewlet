@@ -1745,7 +1745,9 @@ for a deployment where the engine runs as a different user than the one
 that logged the CLI in.
 
 `crewlet llm doctor` looks for a host login too, so "no sign-in" on a
-machine where the CLI plainly works explains itself:
+machine where the CLI plainly works explains itself — for a `subscription`
+entry, which is the one it offers a host login and a token to ([how `doctor`
+judges a sign-in](#how-doctor-judges-a-sign-in)):
 
 ```
 credentials   : none on disk
@@ -2505,8 +2507,16 @@ run it with the engine's environment to get the engine's answer.
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to
-nothing — an `api-key` entry whose key resolved to nothing names `auth.api_key`
-and the variable it fell back to. One case is not a fault: a CLI pointed at an
+nothing, and then the routes the entry's `auth.mode` reads — the remedy a
+[remote coding run's refusal](code-sandbox.md#failure-modes) gives too:
+
+| `auth.mode` | Routes `doctor` names |
+|---|---|
+| `subscription` | a login: adopt this machine's with `-from-host` where it has one — or, preferred where the CLI mints one, a headless token with `-capture-token` — else the CLI's own `crewlet llm login <key>`, or, for a CLI with no login command (`gemini-cli`, `qwen-code`, `grok`), a login made with the CLI by hand and adopted |
+| `api-key` | the key alone: `auth.api_key`, else the CLI's key variable, stored with `crewlet secrets set` or exported in the engine's environment. Never a login, which would sit in every seat's home beside the key and leave which of the two the CLI bills to the vendor's precedence, and never a token, which the mode removes |
+| `inherit-env` | the variables it forwards, exported in the engine's own environment — never the secret store, which it does not read — and a login, as under `subscription` but without `-capture-token`, whose token lands in the secret store |
+
+One case is not a fault: a CLI pointed at an
 endpoint that takes no key (an `opencode` entry declaring a local server, or a
 `hermes` or `pi` entry aimed at one through `env`), or one holding a key in a
 configuration file of its own. The configuration cannot tell that from a

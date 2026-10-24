@@ -268,8 +268,8 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 }
 
 // noSignIn is the problem for an entry nothing authenticates, naming every
-// route this CLI could take and, first, the one the operator already
-// configured and this process could not resolve.
+// route this CLI could take under the entry's auth mode and, first, the one the
+// operator already configured and this process could not resolve.
 func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 	problem := fmt.Sprintf("no sign-in for %q: no credential files in %s, and nothing "+
 		"in the environment the CLI is given authenticates it", p.key, p.ws.CredentialsDir())
@@ -282,19 +282,33 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 			"resolved to nothing: export it, or store it with `crewlet secrets set`",
 			strings.Join(unresolved, ", "))
 	}
-	if p.auth.Mode == AuthAPIKey && p.auth.APIKey == "" {
-		problem += fmt.Sprintf(" — auth.mode is api-key and its key (auth.api_key, else %s) "+
-			"resolved to nothing: export it, or store it with `crewlet secrets set`",
-			p.profile.APIKeyEnv)
-	}
-	if p.auth.Mode == AuthSubscription && p.auth.TokenConfigured && p.auth.Token == "" {
-		problem += " — auth.token is set, but the ${VAR} it references resolved " +
-			"to nothing: export it, or store it with `crewlet secrets set`"
-	}
-	problem += " — " + p.loginRemedy(hostLogin)
-	if len(hostLogin) > 0 && len(p.profile.CaptureTokenArgs) > 0 {
-		problem += fmt.Sprintf(", or mint a headless %s with `-capture-token` "+
-			"(preferred: no shared refresh token)", p.profile.TokenEnv)
+	// THE ROUTES FOLLOW THE AUTH MODE, since the mode decides what the entry
+	// reads at all ([Provider.ModeSignIn]). Chosen without it, an api-key or
+	// inherit-env entry on a machine with a personal login was told to mint
+	// a headless token with `-capture-token` — preferred, even — which
+	// api-key removes from the CLI's environment and inherit-env never looks
+	// for in the secret store the token lands in. An api-key entry is told
+	// its key and nothing else: a login adopted into its directory is seeded
+	// into every seat home beside the key, and which of the two the CLI then
+	// bills is the vendor's precedence rather than the entry's. An
+	// inherit-env entry is told the variables it forwards, and a login,
+	// which it seeds like every mode.
+	sign, fromEnv := p.ModeSignIn()
+	switch {
+	case !fromEnv:
+		if p.auth.TokenConfigured && p.auth.Token == "" {
+			problem += " — auth.token is set, but the ${VAR} it references resolved " +
+				"to nothing: export it, or store it with `crewlet secrets set`"
+		}
+		problem += " — " + p.loginRemedy(hostLogin)
+		if len(hostLogin) > 0 && p.MintsHeadlessToken() {
+			problem += fmt.Sprintf(", or mint a headless %s with `-capture-token` "+
+				"(preferred: no shared refresh token)", p.profile.TokenEnv)
+		}
+	case sign.Mode == AuthAPIKey:
+		problem += " — " + sign.Missing()
+	default:
+		problem += " — " + sign.Missing() + " — " + p.loginRemedy(hostLogin)
 	}
 	// Offered only when env does not already try it: an entry whose
 	// reference resolved to nothing was told so above, and being told to

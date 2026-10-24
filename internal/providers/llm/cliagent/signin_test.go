@@ -3,6 +3,7 @@ package cliagent
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -106,8 +107,9 @@ func signInCases() []signInCase {
 			// THE FALSE HEALTHY: api-key mode removes the token, so a
 			// resolved token is not a sign-in there.
 			name: "api-key mode with no key and a token it removes", agent: "claude-code",
-			auth:    Auth{Mode: AuthAPIKey, Token: "oauth-token"},
-			problem: "auth.mode is api-key and its key (auth.api_key, else ANTHROPIC_API_KEY) resolved to nothing",
+			auth: Auth{Mode: AuthAPIKey, Token: "oauth-token"},
+			problem: "its auth.mode is api-key, which hands the CLI only its key " +
+				"(providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY), and that key resolved to nothing",
 		},
 		{
 			name: "a keyed api-key entry", agent: "grok",
@@ -279,6 +281,78 @@ func TestAnAnsweredSmokeTestClearsANoSignInProblem(t *testing.T) {
 			}
 			if problem == "" {
 				t.Errorf("a CLI that failed with nothing to sign it in raised no problem (sign-in: %q)", d.SignIn)
+			}
+		})
+	}
+}
+
+// A MODE'S SIGN-IN NAMES ONLY THE VARIABLES ITS PROFILE HAS, since those are
+// the only ones [applyAuth] hands the CLI. Codex has a key variable and no
+// token one, so inherit-env forwards one name, and an entry whose profile has
+// none for its mode — which every write of the configuration refuses, and an
+// apply only warns about — is told that the mode itself is the remedy, never
+// to set a variable that would reach nothing. Subscription has none at all: its
+// credentials are a login and a stored token, which each message words for its
+// own setting.
+func TestEachModesSignInNamesOnlyTheVariablesItsProfileHas(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		agent     string
+		mode      AuthMode
+		variables []string
+		want      []string
+		notWant   []string
+	}{
+		{agent: "claude-code", mode: AuthSubscription},
+		{
+			agent: "claude-code", mode: AuthInheritEnv,
+			variables: []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"},
+			want:      []string{"CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "neither is set there", "export one"},
+		},
+		{
+			agent: "codex", mode: AuthAPIKey, variables: []string{"OPENAI_API_KEY"},
+			want: []string{"its auth.mode is api-key", "providers.llm.sub.auth.api_key, else OPENAI_API_KEY",
+				"`crewlet secrets set`"},
+		},
+		{
+			agent: "codex", mode: AuthInheritEnv, variables: []string{"OPENAI_API_KEY"},
+			want:    []string{"only OPENAI_API_KEY from the engine's own process environment", "it is not set there", "export it"},
+			notWant: []string{" or ", "neither"},
+		},
+		{
+			agent: "hermes", mode: AuthAPIKey,
+			want:    []string{"no api_key_env", "set auth.mode: subscription"},
+			notWant: []string{"else ", "crewlet secrets set"},
+		},
+		{
+			agent: "hermes", mode: AuthInheritEnv,
+			want:    []string{"neither a token_env nor an api_key_env", "set auth.mode: subscription"},
+			notWant: []string{"export"},
+		},
+	} {
+		t.Run(tc.agent+"/"+string(tc.mode), func(t *testing.T) {
+			t.Parallel()
+			p := newSignInProvider(t, signInCase{agent: tc.agent, auth: Auth{Mode: tc.mode}})
+			sign, fromEnv := p.ModeSignIn()
+			if fromEnv != (tc.mode != AuthSubscription) {
+				t.Fatalf("ModeSignIn reports %v for %s", fromEnv, tc.mode)
+			}
+			if !fromEnv {
+				return
+			}
+			if !slices.Equal(sign.Variables, tc.variables) {
+				t.Errorf("Variables = %v, want %v", sign.Variables, tc.variables)
+			}
+			missing := sign.Missing()
+			for _, want := range tc.want {
+				if !strings.Contains(missing, want) {
+					t.Errorf("%q does not say %q", missing, want)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(missing, bad) {
+					t.Errorf("%q says %q, which this profile does not have", missing, bad)
+				}
 			}
 		})
 	}
