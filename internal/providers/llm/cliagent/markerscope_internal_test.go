@@ -279,9 +279,10 @@ func TestTheEventsScopeDoesNotSearchStderr(t *testing.T) {
 // THE PRODUCTION CALL SITE CLASSIFIES A STREAM FAILURE, AND ONLY A STREAM
 // FAILURE. Every case above asks classifyMarkers directly; this asks the frame
 // that turns a finished OpenCode call into an answer or an error, so a call
-// site that handed the located answer over as stdout — which is the shape that
-// classified a spent OpenCode plan as fatal and never moved the chain — fails
-// here. Exit 0 throughout: a marker is checked before the exit code.
+// site that handed the located answer over as stdout — which is the shape
+// that once classified a spent OpenCode plan as fatal and never moved the
+// chain — fails here. Exit 0 throughout: a marker is checked before the exit
+// code.
 func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 	t.Parallel()
 	p, ok := cliprofile.Builtin("opencode")
