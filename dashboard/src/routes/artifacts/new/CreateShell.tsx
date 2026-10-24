@@ -160,7 +160,13 @@ export function CreateShell({
   const bar: ArtifactBarTool[] = [
     {
       key: "save-in",
-      label: saveIn.path ? `Save in ${saveIn.path}` : "Save in a folder",
+      // WHILE THE TREE IS READ the folder has no name yet, and "Save in a
+      // folder" would say the artifact is going nowhere.
+      label: saveIn.path
+        ? `Save in ${saveIn.path}`
+        : saveIn.reading
+          ? "Save in…"
+          : "Save in a folder",
       shortLabel: saveIn.name || "Folder",
       icon: <FolderGlyph size="sm" />,
       onSelect: () => setChoosing(true),

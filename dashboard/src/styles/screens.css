@@ -10456,10 +10456,13 @@ a.live-row:focus-visible {
   gap: var(--spacing-4);
 }
 /* MOVE TO…'S LIST OPENS UNDER ITS FIELD, over the dialog's body rather than
-   in its flow (the kit's `Combobox`), so the body keeps room for the list's
-   six rows: without it the open list ran under the dialog's foot. */
-.artifacts-move {
-  min-height: calc(var(--size-control-md) + 13rem);
+   in its flow (the kit's `Combobox`), so while it is open the body keeps room
+   for its six rows and sets its sentence at the foot of that room: without it
+   the open list ran under the dialog's foot and over the sentence. Closed, a
+   place chosen, the body is the field and the sentence. */
+.artifacts-move.is-listing {
+  justify-content: space-between;
+  min-height: calc(var(--size-control-md) + 14rem);
 }
 .artifacts-folder-note {
   margin: 0;

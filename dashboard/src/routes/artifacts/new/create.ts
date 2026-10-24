@@ -48,6 +48,8 @@ export interface SaveIn {
   name: string;
   /** Its path in words ("Marketing › Q4 review"), `""` at the top level. */
   path: string;
+  /** The address names a folder and the tree that names it is still being read. */
+  reading: boolean;
   /** File it elsewhere: a folder's id, or `""` for the top level. */
   set: (folder: string) => void;
 }
@@ -65,11 +67,13 @@ export function useSaveIn(): SaveIn {
   const tree = useFolderTree(asked !== "");
   const found = asked ? tree.index.get(asked) : undefined;
   const usable = found && found.role !== "viewer" ? found : undefined;
-  const folder = usable ? usable.id : tree.data === null ? asked : "";
+  const reading = asked !== "" && tree.data === null;
+  const folder = usable ? usable.id : reading ? asked : "";
   return {
     folder,
     name: usable?.name ?? "",
     path: usable ? tree.index.label(usable.id) : "",
+    reading,
     set: setRaw,
   };
 }

@@ -239,6 +239,12 @@ export function MoveDialog({
       : []),
   ];
 
+  // BACK TO THE LIST, open on the phrase the reader typed.
+  const back = () => {
+    setStep("choose");
+    setListOpen(true);
+  };
+
   const choose = (target: MoveTarget, path: string) => {
     setChosen(target);
     setPhrase(path);
@@ -341,11 +347,11 @@ export function MoveDialog({
         onClose={onClose}
         title="New folder"
         placement="top"
-        onBack={() => setStep("choose")}
+        onBack={back}
         backLabel="Back to Move to…"
         footer={
           <>
-            <Button size="small" variant="ghost" onClick={() => setStep("choose")}>
+            <Button size="small" variant="ghost" onClick={back}>
               Back
             </Button>
             <Button
@@ -426,7 +432,7 @@ export function MoveDialog({
       }
     >
       <form
-        className="artifacts-move"
+        className={listOpen ? "artifacts-move is-listing" : "artifacts-move"}
         onSubmit={(e) => {
           e.preventDefault();
           if (!hold) void move();

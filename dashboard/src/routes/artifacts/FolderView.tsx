@@ -398,6 +398,10 @@ export function FolderView({
         onMove={() => setMoving(true)}
         returnFocusRef={selectRef}
       />
+      {/* NO FOLDERS YET, BUT THINGS TO FILE: the top level says so above
+          what is in no folder, with the way to make the first one, rather
+          than opening on a list that reads as the whole gallery. */}
+      {folder === null && tiles.length === 0 && !filtered && listing.items.length > 0 && empty()}
       {tiles.length > 0 && (
         <Section title="Folders" className="artifacts-group">
           {/* THE READER'S SHAPE, for folders as for artifacts: tiles in the

@@ -215,6 +215,13 @@ describe("the Folders section", () => {
     expect(screen.getAllByRole("button", { name: "New folder" }).length).toBeGreaterThan(0);
   });
 
+  test("with no folders yet but things to file, it says so above what is in no folder", () => {
+    tree = [];
+    mount(<ArtifactFolders />, "#/artifacts/folders");
+    expect(screen.getByText("No folders yet")).toBeTruthy();
+    expect(screen.getByRole("region", { name: /Not in a folder/ })).toBeTruthy();
+  });
+
   test("New folder at the top level asks who sees it, and sends the preset with the name", async () => {
     answer = () => ({
       kind: "done",
