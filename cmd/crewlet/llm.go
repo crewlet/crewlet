@@ -588,14 +588,15 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, environ, req.bootstrapPath, tokenVar, token); err != nil {
+		where, err := storeLLMSecret(ctx, environ, req.bootstrapPath, tokenVar, token)
+		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
-			"Stored the headless token as %s in the encrypted secret store.\n"+
+			"Stored the headless token as %s in %s.\n"+
 				"Reference it from the company document as:\n\n"+
 				"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-				"            token: \"${%s}\"\n", tokenVar, key, tokenVar)
+				"            token: \"${%s}\"\n", tokenVar, where, key, tokenVar)
 		return nil
 
 	case req.username != "":
@@ -653,37 +654,41 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		return nil
 	}
 	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle); err != nil {
+	where, err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle)
+	if err != nil {
 		return err
 	}
-	// NOT "any engine sharing that database". The store is one file, one
-	// process — a second engine pointed at this path is corruption, not a
-	// warm standby — so what actually restores a bundle on another node is
-	// running this command there too.
+	// EVERY NODE, not this one. The store's rows are the company's, on the
+	// coordination KV every node reads: a write through the running node
+	// reaches them at once, and a stopped node's own rows are migrated
+	// there at its next start — which is what `where` says. Each node
+	// restores the bundle at boot into a credentials directory that is
+	// still empty, so one export signs the whole fleet in.
 	fmt.Fprintf(stdout,
-		"Stored the credential bundle as %s in THIS NODE's encrypted secret\n"+
-			"store. This engine restores it at boot when its own credentials\n"+
-			"directory is empty; on a fleet, run this once per node.\n"+
-			"Reference it as:\n\n"+
+		"Stored the credential bundle as %s in %s.\n"+
+			"Every node restores it at boot when its own credentials directory\n"+
+			"is empty. Reference it as:\n\n"+
 			"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-			"            credential_bundle: \"${%s}\"\n", name, key, name)
+			"            credential_bundle: \"${%s}\"\n", name, where, key, name)
 	return nil
 }
 
 // storeLLMSecret writes one value into the encrypted secret store, as
 // [secrets.SourceLLMLogin] where the store keeps the word — a stopped node's
-// own table — and as the running node's route records it otherwise.
-func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) error {
+// own table — and as the running node's route records it otherwise. It
+// returns which store took the write, said after every write for the reason
+// [secretTarget.where] gives.
+func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) (string, error) {
 	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, "")
 	if err != nil {
-		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
+		return "", fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
 	defer closeStore()
 	if _, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
 		time.Now().UTC()); err != nil {
-		return fmt.Errorf("writing %s: %w", name, err)
+		return "", fmt.Errorf("writing %s: %w", name, err)
 	}
-	return nil
+	return sv.where, nil
 }
 
 // importLLM restores an exported credential bundle onto this host.

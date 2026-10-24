@@ -1322,9 +1322,14 @@ list`, `status`, `export` and `doctor` restore it first too, so they answer
 about the login the engine would run with; `login`, `logout` and `import` do
 not, since each replaces or removes that login. `crewlet validate` never does:
 checking a document writes nothing onto the host.
-It is **that node's** store and nothing else's — the rows do not travel, and a
-second host needs its own `crewlet llm login`, or the same bundle handed to it
-through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
+The [secret store](secret-store.md) is the fleet's, so every node of the company
+reads the same bundle (one written while the engine is stopped lands in that
+node's own table and reaches the fleet at its next start), and each restores it
+into its own empty directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
+or whatever variable the entry's `auth.credential_bundle` names. Each node then
+holds its own copy of one refresh token, so where the vendor rotates refresh
+tokens two nodes fork it — a headless token is the better answer for a fleet.
+The blob is validated on the way back in — only the
 profile's own credential paths, files only, size-capped — because an
 archive is an execution surface if it is unpacked on trust.
 
