@@ -547,20 +547,26 @@ func (e *recordingEngine) Stop(context.Context)  { e.step("stop") }
 // public bind that failed tearing api.port down at once is exactly that stop —
 // returned with the goroutine still to run and the socket listening until it
 // did: the kernel completed connections a node that had reported its failed
-// start would never answer.
+// start would never answer. So [shutdownListener] closes the socket itself and
+// then waits for that goroutine.
 //
 // Each round is a fresh listener stopped at once and then checked three ways.
 // Its Serve has RETURNED, because the goroutine listenAPI starts belongs to
 // the stop: a stop that does not wait for it fails this in round 0 at any
 // GOMAXPROCS, Serve having yet to return in over 96% of such stops on 2 or 4
 // cores and in every one on 1 (Go 1.27.2, measured). A dial of its address is
-// REFUSED — the symptom a person meets — which such a stop fails in 20–61% of
-// rounds on 2 or more cores and in under 0.1% on 1, where the dialler seldom
-// runs before Serve has closed the socket; 500 rounds put a miss there below
-// one in 10^48. And nothing is logged at warn or above, read once every
-// round's Serve has returned, so no round's goroutine can log after the
-// check. A round is a bind, a stop and a refused dial, so the 500 take about a
-// tenth of a second under the race detector.
+// REFUSED — the symptom a person meets. The stop's own close of the socket is
+// not this case's to hold: it makes the dial refused in every round whether or
+// not the stop waits, and [TestAListenerStoppedBeforeItIsServedIsClosed] holds
+// it by keeping the window open rather than racing for it. What the dial
+// catches here is a stop that does neither, which leaves the socket to a Serve
+// still to run and fails in 20–61% of rounds on 2 or more cores and under
+// 0.1% on 1, where the dialler seldom runs before that Serve has closed it;
+// on 2 or more cores 500 rounds put a miss below one in 10^48. And nothing is
+// logged at warn or above, read once every round's Serve has returned, so no
+// round's goroutine can log after the check. A round is a bind, a stop and a
+// refused dial, so the 500 take about a tenth of a second under the race
+// detector.
 func TestAStoppedListenerAcceptsNothing(t *testing.T) {
 	t.Parallel()
 	var logged lockedBuffer

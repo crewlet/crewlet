@@ -2377,15 +2377,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// surface's routes, which read them through this node's
 			// object client.
 			Files: fileSource,
-			// WHO LINKS TO A PAGE, from this node's lexical index, which
-			// derives the links from the bodies it already reads —
-			// resolved per question for the same reason, since the
-			// index is the native half's.
+			// WHO LINKS TO A PAGE, from a data node's lexical index,
+			// which derives the links from the bodies it already reads
+			// — asked through the knowledge base's routed reader, so
+			// the node that answers is one whose copies the links are
+			// named from serve (ADR-0045), and resolved per question
+			// for the same reason, since the index is the native half's.
 			Backlinks: backlinkSource,
-			// RANKED SEARCH, gated on its own index rather than on
-			// the tracker: the rows are the fleet's and the lexical
-			// index is this node's own, so a node still building one
-			// answers every board question and cannot rank a word.
+			// RANKED SEARCH, present exactly where the company keeps its
+			// tracker here, and asked through the router like every
+			// other tool seam (engine.WorkSearcher): a data node's
+			// router answers from its own lexical index, and a node that
+			// holds no data asks one that does.
 			WorkSearch: searchSource,
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping

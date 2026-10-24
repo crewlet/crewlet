@@ -30,7 +30,8 @@ import (
 // lookup.
 //
 // A UNIT REFERENCE IS A DURABLE VALUE, resolved through the chart's own
-// durable lookup ([org.Index.UnitByRef]: folded, an id before a name) and
+// durable lookup ([org.Index.UnitByRef]: its key, exactly and then folded,
+// before any name, and a name only where one unit alone carries it) and
 // never compared with [org.Unit.Key]. A repository's owner is written when it
 // is created or declared and outlives the spelling of its unit: a unit that
 // gains an `id:` after a repository was made under its name keeps that

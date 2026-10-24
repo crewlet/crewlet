@@ -22,11 +22,14 @@ import (
 // can message, ran silent for as long as nobody ran `crewlet validate` on the
 // file.
 //
-// THE ADVISORIES ONLY. The dangling references and the admission rules a
-// revision breaks are the two other kinds of [config.Warning], and the apply
-// logs each already under its own name (org_dangling_reference,
-// org_admission_warning); repeating them here would warn twice about one
-// fact.
+// THE COMPANY'S OWN ADVISORIES ONLY ([config.Company.AdvisoryWarnings]). The
+// dangling references and the admission rules a revision breaks are the two
+// other kinds of [config.Warning], and what the company raises beside this
+// node's Tier A ([config.NodeTierWarnings]) is a third set of warnings, read
+// from both documents rather than from the company alone; the apply logs each
+// already under its own name (org_dangling_reference, org_admission_warning,
+// config_tier_warning — see [warnTiers]), and repeating them here would warn
+// twice about one fact.
 //
 // The same event and the same three fields as the advisories `crewlet run`
 // logs for its Tier A, with `config` naming the tier, so one query finds
