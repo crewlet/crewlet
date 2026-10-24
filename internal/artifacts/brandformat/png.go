@@ -25,7 +25,7 @@ import (
 // ancillary chunk, which is where text, EXIF, timestamps and editor state
 // live. Refused: an unknown critical chunk (no decoder would draw it), an
 // animated PNG (acTL, fcTL, fdAT: a logo is one frame), a bad CRC, anything
-// after IEND.
+// after IEND, and any byte after the image data's compressed stream.
 
 var pngSignature = []byte("\x89PNG\r\n\x1a\n")
 
@@ -174,7 +174,11 @@ func pngChunks(b []byte) ([]pngChunk, error) {
 // that does not hold exactly the rows the header promises, each with a filter
 // byte PNG defines.
 func inflatePNG(stream []byte, width, height, bits int, interlaced bool) error {
-	z, err := zlib.NewReader(bytes.NewReader(stream))
+	// THE READER UNDER ZLIB IS KEPT, so the bytes after the zlib stream's end
+	// can be counted: a bytes.Reader is a ByteReader, so inflate reads exactly
+	// the stream and nothing past it.
+	br := bytes.NewReader(stream)
+	z, err := zlib.NewReader(br)
 	if err != nil {
 		return fmt.Errorf("the PNG's image data cannot be inflated: %w", err)
 	}
@@ -212,6 +216,11 @@ func inflatePNG(stream []byte, width, height, bits int, interlaced bool) error {
 		return fmt.Errorf("the PNG's image data is damaged: %w", err)
 	case len(rest) > 0:
 		return errors.New("the PNG's image data holds more than its header promises")
+	case br.Len() > 0:
+		// AND NOTHING FOLLOWS IT: bytes after the zlib stream draw nothing,
+		// and would be stored and served at a public address for ever.
+		return fmt.Errorf("the PNG's image data holds %d bytes after its compressed stream ends: "+
+			"export it again", br.Len())
 	}
 	return nil
 }

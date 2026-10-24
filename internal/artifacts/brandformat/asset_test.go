@@ -68,6 +68,21 @@ func pngWith(width, height uint32, interlace byte, raw []byte) []byte {
 		chunk("IDAT", z.Bytes()), chunk("IEND", nil)}, nil)
 }
 
+// pngWithTail is [pngWith] with tail after the zlib stream, inside the IDAT.
+func pngWithTail(width, height uint32, raw, tail []byte) []byte {
+	var z bytes.Buffer
+	w := zlib.NewWriter(&z)
+	_, _ = w.Write(raw)
+	_ = w.Close()
+	z.Write(tail)
+	var ihdr bytes.Buffer
+	_ = binary.Write(&ihdr, binary.BigEndian, width)
+	_ = binary.Write(&ihdr, binary.BigEndian, height)
+	ihdr.Write([]byte{8, 0, 0, 0, 0})
+	return bytes.Join([][]byte{[]byte("\x89PNG\r\n\x1a\n"), chunk("IHDR", ihdr.Bytes()),
+		chunk("IDAT", z.Bytes()), chunk("IEND", nil)}, nil)
+}
+
 // A PNG OUTSIDE ITS RULES IS REFUSED, NEVER DRAWN: an animation, a damaged
 // chunk, a size past the bounds (refused from the header, before anything
 // inflates), a stream that does not hold the rows its header promises, a
@@ -95,6 +110,7 @@ func TestAPNGOutsideItsRulesIsRefused(t *testing.T) {
 		"interlaced":     {pngWith(4, 4, 1, bytes.Repeat(row, 4)), "fewer rows"},
 		"unknown chunk":  {pngOf(t, 8, 8, chunk("ZZZZ", []byte("x"))), "critical chunk"},
 		"after iend":     {append(bytes.Clone(honest), 0), "after its IEND"},
+		"after stream":   {pngWithTail(4, 4, bytes.Repeat(row, 4), []byte("hidden")), "after its compressed stream"},
 		"not png":        {[]byte("GIF89a"), "not a PNG"},
 		"too many bytes": {make([]byte, brandformat.MaxImageBytes+1), "at most"},
 	} {
@@ -147,7 +163,9 @@ func TestAWebPDropsItsMetadata(t *testing.T) {
 	if again, _ := sanitize(t, "mark.webp", "image/webp", out); !bytes.Equal(again, out) {
 		t.Error("the stored WebP is not a fixed point")
 	}
-	lossy := riff([2]string{"VP8 ", "\x10\x02\x00\x9d\x01\x2a\x50\x00\x28\x00"})
+	// A LOSSY KEYFRAME: its frame tag says a 16-byte first partition, which
+	// follows the 10-byte header.
+	lossy := riff([2]string{"VP8 ", "\x10\x02\x00\x9d\x01\x2a\x50\x00\x28\x00" + strings.Repeat("\x00", 16)})
 	if _, msg := sanitize(t, "mark.webp", "image/webp", lossy); msg != "" {
 		t.Errorf("an honest lossy WebP was refused: %s", msg)
 	}
@@ -176,6 +194,7 @@ func TestAWebPOutsideItsRulesIsRefused(t *testing.T) {
 		"no header":   {riff([2]string{"VP8L", "\x00\x00\x00\x00\x00"}), "VP8L header"},
 		"not riff":    {[]byte("RIFX....WEBP"), "not a WebP"},
 		"alpha alone": {riff([2]string{"ALPH", "x"}, [2]string{"VP8L", vp8l(8, 8)}), "extended header"},
+		"partition":   {riff([2]string{"VP8 ", "\x10\x02\x00\x9d\x01\x2a\x50\x00\x28\x00"}), "first partition"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -202,6 +221,12 @@ func TestAFaceIsHeldByItsHeader(t *testing.T) {
 	binary.BigEndian.PutUint32(lies[8:12], 4)
 	reserved := bytes.Clone(honest)
 	reserved[15] = 1
+	private := bytes.Clone(honest)
+	binary.BigEndian.PutUint32(private[40:44], 80)
+	binary.BigEndian.PutUint32(private[44:48], 8)
+	meta := bytes.Clone(honest)
+	binary.BigEndian.PutUint32(meta[28:32], 100)
+	binary.BigEndian.PutUint32(meta[32:36], 64)
 	for name, c := range map[string]struct {
 		data []byte
 		want string
@@ -212,6 +237,8 @@ func TestAFaceIsHeldByItsHeader(t *testing.T) {
 		"too many":   {woff2Of(65, 40000, 64), "1 to 64"},
 		"too large":  {woff2Of(12, brandformat.MaxFontSFNTBytes+1, 64), "subset it"},
 		"reserved":   {reserved, "reserved"},
+		"private":    {private, "private data block"},
+		"metadata":   {meta, "metadata block lies outside"},
 		"file bound": {make([]byte, brandformat.MaxFontFileBytes+1), "subset it"},
 	} {
 		t.Run(name, func(t *testing.T) {

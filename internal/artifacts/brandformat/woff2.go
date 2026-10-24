@@ -14,7 +14,9 @@ import (
 // and Firefox) checks again anyway; what the engine holds is what bounds the
 // work a page's reader is put to: the signature, a header length equal to the
 // file, a table count from 1 to [MaxFontTables], the size the font decodes to
-// at most [MaxFontSFNTBytes], and a compressed size inside the file. Who may
+// at most [MaxFontSFNTBytes], a compressed size inside the file, a metadata
+// block (if any) inside the file, and no private data block: a font's private
+// block draws nothing and would be served as uploaded, for ever. Who may
 // push a face into every reader's browser is bounded by the adoption, which
 // is an administrator's.
 
@@ -41,6 +43,8 @@ func checkWOFF2(data []byte) error {
 	reserved := binary.BigEndian.Uint16(data[14:16])
 	sfnt := binary.BigEndian.Uint32(data[16:20])
 	compressed := binary.BigEndian.Uint32(data[20:24])
+	metaOffset, metaLength := binary.BigEndian.Uint32(data[28:32]), binary.BigEndian.Uint32(data[32:36])
+	privOffset, privLength := binary.BigEndian.Uint32(data[40:44]), binary.BigEndian.Uint32(data[44:48])
 	switch {
 	case flavor != flavorTrueType && flavor != flavorCFF:
 		return fmt.Errorf("the font's flavour %#08x is neither TrueType nor CFF", flavor)
@@ -56,6 +60,13 @@ func checkWOFF2(data []byte) error {
 			sfnt, MaxFontSFNTBytes)
 	case uint64(compressed) > uint64(len(data)-woff2HeaderBytes):
 		return errors.New("the font's compressed tables are longer than the file: the file is damaged")
+	case metaLength == 0 && metaOffset != 0,
+		metaLength > 0 && (metaOffset < woff2HeaderBytes ||
+			uint64(metaOffset)+uint64(metaLength) > uint64(len(data))):
+		return errors.New("the font's metadata block lies outside the file: the file is damaged")
+	case privLength > 0 || privOffset != 0:
+		return errors.New("the font carries a private data block, which draws nothing and would " +
+			"be served as uploaded: export the face again without one")
 	}
 	return nil
 }

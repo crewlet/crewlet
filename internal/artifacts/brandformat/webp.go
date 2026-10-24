@@ -166,5 +166,14 @@ func webpSize(c webpChunk) (int, int, error) {
 	if w == 0 || h == 0 {
 		return 0, 0, errors.New("the WebP's image is zero pixels wide or tall")
 	}
+	// THE FIRST PARTITION LIES INSIDE THE CHUNK (RFC 6386 9.1, the frame
+	// tag's 19-bit size): the bound the frame header itself states. Bytes
+	// past a lossy or lossless bitstream's end cannot be found without
+	// decoding the image, which the engine does not do; they draw nothing and
+	// are served under nosniff, inert.
+	if part := int(uint32(d[0])|uint32(d[1])<<8|uint32(d[2])<<16) >> 5; part > len(d)-10 {
+		return 0, 0, fmt.Errorf("the WebP's lossy image says its first partition is %d bytes and the "+
+			"chunk holds %d after its header: the file is damaged", part, len(d)-10)
+	}
 	return w, h, nil
 }
