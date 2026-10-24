@@ -820,8 +820,9 @@ agent-mode entry can be reached without any seat naming it — but a
 **human seat** never resolves one at all: it is addressable and never
 spawned, so it runs no executor and reaches no entry.
 
-The credential guard that refuses a remote run whose login cannot follow
-it (see [Code Sandbox](code-sandbox.md#failure-modes)) reads **this**
+The credential guard that refuses a remote run nothing signs in, and names
+the remedy the entry's `auth.mode` reads (see
+[Code Sandbox](code-sandbox.md#failure-modes)), reads **this**
 entry for an agent-mode run — the run *is* the executor — and the seat's
 `llm_sandbox` only for `run_sandbox` work.
 

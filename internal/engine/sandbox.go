@@ -2782,9 +2782,10 @@ func (e *SandboxModelError) Error() string { return e.msg }
 // SandboxCredentialError reports a coding run whose box could never
 // authenticate, refused before the box is minted.
 //
-// A distinct type because the remedies (a token that travels, a provider key
-// that travels, a local cell) are different config edits and an operator has
-// to be told which one is theirs — and because this is the one launch failure
+// A distinct type because the remedies (a token that travels, an api-key
+// entry's key, a provider key that travels, a variable in the engine's own
+// environment, a local cell) are different config edits and an operator has
+// to be told which one is theirs ([credentialRefusal]) — and because this is the one launch failure
 // that is a CONFIGURATION mistake rather than a provider outage, so it must
 // not be retried as if the vendor were down.
 type SandboxCredentialError struct{ msg string }
@@ -2878,19 +2879,71 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 			}
 		}
 	}
-	remedy := fmt.Sprintf("Give this seat a local cell — role.sandbox.run_in: %q or %q",
-		sandbox.Direct, sandbox.Container)
+	return credentialRefusal(agent, member.Key, seat.Handle(), placement)
+}
+
+// credentialRefusal is the [SandboxCredentialError] for a remote run nothing
+// in whose environment signs its CLI in, carrying the remedy for THIS entry.
+//
+// THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE, because the mode decides
+// what the entry reads at all ([cliagent.Auth]). Chosen by the profile alone,
+// an api-key Claude Code entry whose key resolved to nothing was told to mint
+// a subscription token: `-capture-token` stored one the entry never reads
+// (api-key gives the token no fallback, and the child has the token variable
+// removed), and the next launch was refused with the same advice. An
+// inherit-env entry reads neither the secret store nor its own credentials,
+// only the engine's process environment. So:
+//
+//   - api-key: the key — auth.api_key, else the CLI's own key variable, which
+//     the entry reads through the secret store — or the seat's own;
+//   - inherit-env: one of the two variables it forwards, in the engine's
+//     environment, or the seat's own;
+//   - subscription: a token that travels where the CLI mints one, the
+//     provider's key where the CLI reads it from its environment, and
+//     otherwise a local cell, which is seeded with the login itself.
+//
+// Its own function rather than the tail of [sandboxCredentials] so that the
+// guard's VERDICT — which runs are refused — reads apart from its wording.
+func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) *SandboxCredentialError {
+	profile := agent.Profile()
+	localCell := fmt.Sprintf("role.sandbox.run_in: %q or %q", sandbox.Direct, sandbox.Container)
+	switch mode := agent.AuthMode(); {
+	case mode == cliagent.AuthAPIKey && profile.APIKeyEnv != "":
+		return &SandboxCredentialError{msg: fmt.Sprintf(
+			"seat %q runs code in %q, and nothing in this run's environment authenticates "+
+				"%q: its auth.mode is api-key, and its key — the variable "+
+				"providers.llm.%s.auth.api_key references, else %s — resolved to nothing. "+
+				"Set that key: export it in the engine's environment, or store it with "+
+				"`crewlet secrets set`; or give this seat its own %s in role.sandbox.env",
+			seat, placement, key, key, profile.APIKeyEnv, profile.APIKeyEnv)}
+	case mode == cliagent.AuthInheritEnv:
+		forwarded := make([]string, 0, 2)
+		for _, name := range []string{profile.TokenEnv, profile.APIKeyEnv} {
+			if name != "" {
+				forwarded = append(forwarded, name)
+			}
+		}
+		return &SandboxCredentialError{msg: fmt.Sprintf(
+			"seat %q runs code in %q, and nothing in this run's environment authenticates "+
+				"%q: its auth.mode is inherit-env, which forwards only %s from the engine's "+
+				"own process environment — never the secret store — and none of them is set "+
+				"there. Export one in the engine's environment, set one in this seat's "+
+				"role.sandbox.env, or give this seat a local cell (%s), which is seeded "+
+				"with the entry's login",
+			seat, placement, key, strings.Join(forwarded, " or "), localCell)}
+	}
+	remedy := "Give this seat a local cell — " + localCell
 	switch {
 	case agent.MintsHeadlessToken():
 		remedy = fmt.Sprintf("Mint a token that travels with `crewlet llm login %s "+
-			"-capture-token`, or give this seat a local cell (role.sandbox.run_in: %q or %q)",
-			member.Key, sandbox.Direct, sandbox.Container)
+			"-capture-token`, or give this seat a local cell (%s)", key, localCell)
 	case agent.SignsInThroughEnv():
 		// This CLI's key travels the way a token does, so the one-line
 		// fix is the key rather than a placement change — named by the
 		// provider segment of the very value the box is handed, the one
 		// fact here that says which provider it is. The VARIABLE stays
-		// the CLI's to name (see above), so it is not guessed at.
+		// the CLI's to name (see [sandboxCredentials]), so it is not
+		// guessed at.
 		provider := "the provider its model names"
 		if name, _, found := strings.Cut(agent.ModelArgument(), "/"); found && name != "" {
 			provider = fmt.Sprintf("%q, the provider its model names", name)
@@ -2898,15 +2951,15 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 		remedy = fmt.Sprintf("Set the key of %s, under the variable %s reads for "+
 			"that provider, in providers.llm.%s.env or in this seat's "+
 			"role.sandbox.env — both are exported into the box — or give this seat a "+
-			"local cell (role.sandbox.run_in: %q or %q)",
-			provider, agent.Agent(), member.Key, sandbox.Direct, sandbox.Container)
+			"local cell (%s)",
+			provider, agent.Agent(), key, localCell)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(
 		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
 			"the login stays on the engine host because it carries a refresh token whose "+
 			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
-		seat.Handle(), placement, member.Key, remedy)}
+		seat, placement, key, remedy)}
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

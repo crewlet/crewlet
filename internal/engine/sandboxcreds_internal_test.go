@@ -21,8 +21,14 @@ import (
 // a fake would answer whatever the test wanted and prove nothing about codex.
 func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 	t.Helper()
+	return creditedCompanyAuth(t, agent, cliagent.Auth{})
+}
+
+// creditedCompanyAuth is [creditedCompany] signed in under auth.
+func creditedCompanyAuth(t *testing.T, agent string, auth cliagent.Auth) (*Company, *org.Role) {
+	t.Helper()
 	provider, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: agent, StateDir: t.TempDir(), Timeout: time.Minute,
+		Key: "sub", Agent: agent, StateDir: t.TempDir(), Timeout: time.Minute, Auth: auth,
 	})
 	if err != nil {
 		t.Fatalf("cliagent.New(%s): %v", agent, err)
@@ -79,6 +85,106 @@ func TestTheRemedyNamesTheTokenWhereTheCLIMintsOne(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "-capture-token") {
 		t.Errorf("the error does not name the token claude-code can mint: %v", err)
+	}
+}
+
+// THE REMEDY FOLLOWS THE ENTRY'S AUTH MODE, not only its CLI. Claude Code
+// mints a headless token, but an api-key entry never reads one — the mode
+// gives the token no fallback and removes its variable from the child — and an
+// inherit-env entry reads only the engine's own environment, never the secret
+// store `-capture-token` writes into. Told to mint one, the operator of either
+// stored a token nothing reads, and the next launch was refused with the same
+// advice. Each mode's refusal has to name what that mode reads.
+//
+// Not parallel: inherit-env reads the engine's process environment, which the
+// test empties of both variables so that a key exported on the machine running
+// the suite cannot sign the entry in.
+//
+// Mutation: choose the remedy by the profile alone, and the api-key and
+// inherit-env cases offer -capture-token and go red.
+func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	for _, tc := range []struct {
+		mode    cliagent.AuthMode
+		want    []string
+		notWant []string
+	}{
+		{
+			mode:    cliagent.AuthAPIKey,
+			want:    []string{"api-key", "providers.llm.sub.auth.api_key", "ANTHROPIC_API_KEY", "crewlet secrets set", "role.sandbox.env"},
+			notWant: []string{"capture-token", "subscription login", "CLAUDE_CODE_OAUTH_TOKEN"},
+		},
+		{
+			mode:    cliagent.AuthInheritEnv,
+			want:    []string{"inherit-env", "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "engine's", "never the secret store", "role.sandbox.env", string(sandbox.Direct)},
+			notWant: []string{"capture-token", "subscription login", "crewlet secrets set"},
+		},
+		{
+			mode:    cliagent.AuthSubscription,
+			want:    []string{"subscription login", "crewlet llm login sub -capture-token", string(sandbox.Direct)},
+			notWant: []string{"auth.api_key", "inherit-env"},
+		},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			c, seat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: tc.mode})
+			err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+			var credErr *SandboxCredentialError
+			if !errors.As(err, &credErr) {
+				t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, which this mode never reads: %v", bad, err)
+				}
+			}
+		})
+	}
+}
+
+// AND WHAT EACH MODE'S REMEDY NAMES SIGNS THE RUN IN. An api-key entry whose
+// key the seat brings in role.sandbox.env passes, and so does an inherit-env
+// entry once the engine's environment holds a variable it forwards — the
+// refusal's advice has to be advice that works. Judged on the environment the
+// launch judges, the one [newCodingRun] lays: the seat's own, with the entry's
+// sign-in underneath.
+func TestEachModesRemedySignsTheRunIn(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	launch := func(c *Company, seat *org.Role, seatEnv map[string]string) error {
+		t.Helper()
+		run, err := newCodingRun(c, seat, phase.Sandbox, "claude-code", seatEnv)
+		if err != nil {
+			t.Fatalf("newCodingRun: %v", err)
+		}
+		return sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, run.env)
+	}
+
+	key, keySeat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: cliagent.AuthAPIKey})
+	if err := launch(key, keySeat, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-not-a-real-key"}); err != nil {
+		t.Errorf("an api-key entry whose seat brings the key was refused: %v", err)
+	}
+	if err := launch(key, keySeat, nil); err == nil {
+		t.Error("an api-key entry with no key anywhere was launched")
+	}
+	stored, storedSeat := creditedCompanyAuth(t, "claude-code",
+		cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-a-real-key"})
+	if err := launch(stored, storedSeat, nil); err != nil {
+		t.Errorf("an api-key entry whose key resolved was refused: %v", err)
+	}
+
+	inherit, inheritSeat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: cliagent.AuthInheritEnv})
+	if err := launch(inherit, inheritSeat, nil); err == nil {
+		t.Error("an inherit-env entry with nothing in the engine's environment was launched")
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+	if err := launch(inherit, inheritSeat, nil); err != nil {
+		t.Errorf("an inherit-env entry whose engine environment holds the key was refused: %v", err)
 	}
 }
 

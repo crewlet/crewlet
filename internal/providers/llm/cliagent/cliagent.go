@@ -246,6 +246,18 @@ func (p *Provider) Workspace() *Workspace { return p.ws }
 // Agent is which CLI this provider drives.
 func (p *Provider) Agent() string { return p.agent }
 
+// AuthMode is how this entry signs its CLI in ([Auth.Mode]), for a caller that
+// has to tell an operator which credential to supply: under api-key only the
+// key is read, under inherit-env only the engine's own environment, so a
+// remedy written for a subscription — mint a token — is one the entry would
+// never read.
+func (p *Provider) AuthMode() AuthMode {
+	if p.auth.Mode == "" {
+		return AuthSubscription
+	}
+	return p.auth.Mode
+}
+
 // String identifies the provider in a log line.
 func (p *Provider) String() string {
 	return fmt.Sprintf("%s/%s/%s", providerName, p.agent, p.model)
