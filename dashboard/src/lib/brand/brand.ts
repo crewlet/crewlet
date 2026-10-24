@@ -143,6 +143,11 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
   },
 ];
 
+/** The logo slot an adoption's file slot (`logo.on_dark`) serves, or undefined for any other file. */
+export function logoSlotOf(fileSlot: string): BrandLogoSlot | undefined {
+  return BRAND_LOGO_SLOTS.find((s) => s.fileSlot === fileSlot)?.slot;
+}
+
 /** What each face is for, in the order the Typography card shows them. */
 export const BRAND_FACE_ROLES: readonly { role: BrandFaceRole; label: string; fileSlot: string }[] =
   [

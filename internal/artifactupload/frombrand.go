@@ -200,10 +200,7 @@ func copyableSlots(a artifactsdomain.Adoption) []string {
 // from the brand adopted now, and the copies the version takes with it: the
 // logo the cover shows and one file of each uploaded typeface.
 //
-// THE COVER'S LOGO IS THE ONE MEANT FOR ITS GROUND: the logo for dark grounds
-// when the cover's feature ground is dark (white clears more on it than black,
-// the rule the kit's label on the accent follows), and the primary logo
-// otherwise or where the brand has no dark one.
+// THE COVER'S LOGO IS THE ONE MEANT FOR ITS GROUND ([CoverLogo]).
 //
 // ONE FILE PER FAMILY, because a deck declares a face as a family and one font
 // file, with no weight or style beside it: the regular file nearest the weight
@@ -241,21 +238,11 @@ func (s *Service) brandLook(ctx context.Context) (slideformat.Look, []FileSpec, 
 		return dest, nil
 	}
 
-	onWhite, err := brandformat.Ratio(theme.Feature, "#ffffff")
+	logo, err := CoverLogo(theme, a.Files)
 	if err != nil {
-		return slideformat.Look{}, nil, nil, fmt.Errorf("artifactupload: the brand's slide theme "+
-			"grounds its cover in %q: %w", theme.Feature, err)
+		return slideformat.Look{}, nil, nil, err
 	}
-	onBlack, err := brandformat.Ratio(theme.Feature, "#000000")
-	if err != nil {
-		return slideformat.Look{}, nil, nil, fmt.Errorf("artifactupload: the brand's slide theme "+
-			"grounds its cover in %q: %w", theme.Feature, err)
-	}
-	logo := brandformat.SlotLogoPrimary
-	if _, dark := held[string(brandformat.SlotLogoOnDark)]; dark && onWhite > onBlack {
-		logo = brandformat.SlotLogoOnDark
-	}
-	if look.Logo, err = copyTo(logo); err != nil {
+	if look.Logo, err = copyTo(brandformat.Slot(logo.Slot)); err != nil {
 		return slideformat.Look{}, nil, nil, err
 	}
 
@@ -278,6 +265,38 @@ func (s *Service) brandLook(ctx context.Context) (slideformat.Look, []FileSpec, 
 		look.Faces[face.key] = slideformat.IndexFace{Family: family, Src: src}
 	}
 	return look, specs, &a, nil
+}
+
+// CoverLogo is the logo a deck begun in the brand's slide theme shows on its
+// cover, of the adoption's files: THE ONE MEANT FOR ITS GROUND, the logo for
+// dark grounds when the cover's feature ground is dark (white clears more on
+// it than black, the rule the kit's label on the accent follows), and the
+// primary logo otherwise or where the brand has no dark one. One rule for the
+// deck a starter writes and the sample its theme is picked from.
+func CoverLogo(theme slideformat.Theme, files []artifactsdomain.BrandFile) (artifactsdomain.BrandFile, error) {
+	held := map[string]artifactsdomain.BrandFile{}
+	for _, f := range files {
+		held[f.Slot] = f
+	}
+	onWhite, err := brandformat.Ratio(theme.Feature, "#ffffff")
+	if err != nil {
+		return artifactsdomain.BrandFile{}, fmt.Errorf("artifactupload: the brand's slide theme "+
+			"grounds its cover in %q: %w", theme.Feature, err)
+	}
+	onBlack, err := brandformat.Ratio(theme.Feature, "#000000")
+	if err != nil {
+		return artifactsdomain.BrandFile{}, fmt.Errorf("artifactupload: the brand's slide theme "+
+			"grounds its cover in %q: %w", theme.Feature, err)
+	}
+	if dark, ok := held[string(brandformat.SlotLogoOnDark)]; ok && onWhite > onBlack {
+		return dark, nil
+	}
+	primary, ok := held[string(brandformat.SlotLogoPrimary)]
+	if !ok {
+		return artifactsdomain.BrandFile{}, fmt.Errorf("artifactupload: the adopted brand's "+
+			"snapshot holds no %s, which its brand.json names", brandformat.SlotLogoPrimary)
+	}
+	return primary, nil
 }
 
 // FaceFile is the slot of the file a version sets the brand's face in (the

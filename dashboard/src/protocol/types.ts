@@ -5777,6 +5777,12 @@ export interface DeckTheme {
   name: string;
   tag: string;
   sample: ArtifactDeck;
+  /**
+   * The brand theme's cover logo (`artifactsapi.SampleLogo`): the path its
+   * sample names and the adopted brand's file slot (`logo.primary`) it is
+   * drawn from, since a sample holds no bytes. Absent for every other theme.
+   */
+  logo?: { path: string; slot: string };
 }
 
 /** `GET /artifacts/starters/slides` (`artifactsapi.SlidesStartersAnswer`). */

@@ -261,7 +261,9 @@ func TestTheSlidesStartersGoldenIsTheRoutesAnswer(t *testing.T) {
 // THE COMPANY'S BRAND IS THE FIRST THEME A DECK CAN BEGIN IN, whenever one is
 // adopted: answered per request, so an adoption shows at once and a cleared
 // brand is gone at once, its sample drawn through the slide format like any
-// theme's, and the default plan untouched (a plan naming no theme is the
+// theme's, its cover drawing the logo a deck begun in it shows (at the path
+// the starter copies it to, named with the adopted brand's slot it is drawn
+// from), and the default plan untouched (a plan naming no theme is the
 // engine's own).
 func TestTheSlidesStartersOfferTheAdoptedBrandFirst(t *testing.T) {
 	t.Parallel()
@@ -294,7 +296,9 @@ func TestTheSlidesStartersOfferTheAdoptedBrandFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.estate.mu.Lock()
-	g.estate.adoption = &artifactsdomain.Adoption{BrandJSON: canonical}
+	g.estate.adoption = &artifactsdomain.Adoption{BrandJSON: canonical, Files: []artifactsdomain.BrandFile{
+		{Slot: string(brandformat.SlotLogoPrimary), ContentType: "image/svg+xml", Object: entryLogo.Object},
+	}}
 	g.estate.mu.Unlock()
 	after := starters()
 	if len(after.Themes) != len(before.Themes)+1 {
@@ -308,6 +312,18 @@ func TestTheSlidesStartersOfferTheAdoptedBrandFirst(t *testing.T) {
 	if after.Default.Theme != before.Default.Theme {
 		t.Errorf("the default plan moved to %q", after.Default.Theme)
 	}
+	const logo = "brand/logo-primary.svg"
+	if first.Logo == nil || *first.Logo != (artifactsapi.SampleLogo{Path: logo, Slot: "logo.primary"}) {
+		t.Errorf("the brand theme names its cover logo %+v", first.Logo)
+	}
+	if !holdsImage(first.Sample.Slides[0].Root, logo) {
+		t.Errorf("the brand sample's cover draws no logo at %s", logo)
+	}
+	for _, th := range after.Themes[1:] {
+		if th.Logo != nil {
+			t.Errorf("the engine's theme %q names a logo", th.ID)
+		}
+	}
 
 	g.estate.mu.Lock()
 	g.estate.adoption = nil
@@ -315,4 +331,17 @@ func TestTheSlidesStartersOfferTheAdoptedBrandFirst(t *testing.T) {
 	if cleared := starters(); len(cleared.Themes) != len(before.Themes) {
 		t.Errorf("a cleared brand still answers %d themes", len(cleared.Themes))
 	}
+}
+
+// holdsImage reports whether n or any node under it is an image of src.
+func holdsImage(n slideformat.Node, src string) bool {
+	if n.Tag == "img" && n.Attrs["src"] == src {
+		return true
+	}
+	for _, c := range n.Children {
+		if holdsImage(c, src) {
+			return true
+		}
+	}
+	return false
 }

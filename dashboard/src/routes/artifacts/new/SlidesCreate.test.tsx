@@ -17,7 +17,8 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { readSlidesStarters } from "~/lib/artifacts/api.ts";
 import type { SlidesStartersAnswer } from "~/protocol/index.ts";
-import { SlidesCreate } from "./SlidesCreate.tsx";
+import { previewImages, SlidesCreate } from "./SlidesCreate.tsx";
+import { NO_BRAND_ASSETS } from "~/lib/brand/useBrand.ts";
 
 const starters = JSON.parse(
   readFileSync(
@@ -282,4 +283,24 @@ test("asking an agent makes the deck shared with it, files its task linked to th
     work_item: "OPS-7",
     after: "CREWLET_TRACKER_LOG@1:9",
   });
+});
+
+// THE BRAND THEME'S PREVIEW DRAWS THE LOGO ITS DECK WILL: its sample names the
+// cover logo by the path the starter copies it to, holding no bytes, and the
+// preview draws it from the adopted brand's own file for that slot. Every
+// other image, and every other theme, draws nothing.
+test("the brand theme's preview draws its cover logo from the adopted brand", () => {
+  const brand = {
+    ...starters.themes[0]!,
+    id: "brand",
+    logo: { path: "brand/logo-on-dark.svg", slot: "logo.on_dark" },
+  };
+  const assets = {
+    ...NO_BRAND_ASSETS,
+    logo: (slot: string) => (slot === "on_dark" ? "blob:logo-on-dark" : null),
+  };
+  const image = previewImages(brand, assets);
+  expect(image("brand/logo-on-dark.svg")).toBe("blob:logo-on-dark");
+  expect(image("images/team.png")).toBeNull();
+  expect(previewImages(starters.themes[0]!, assets)("brand/logo-on-dark.svg")).toBeNull();
 });

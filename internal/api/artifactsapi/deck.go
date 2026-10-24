@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 )
 
@@ -184,6 +186,18 @@ type SlidesStartersAnswer struct {
 type SlidesStarterTheme struct {
 	slideformat.Theme
 	Sample slideformat.Deck `json:"sample"`
+
+	// Logo is the brand theme's cover logo: the path its sample names and the
+	// adopted brand's file slot it is drawn from (the sample holds no bytes,
+	// being no version's). Absent for every other theme.
+	Logo *SampleLogo `json:"logo,omitempty"`
+}
+
+// SampleLogo is the logo a sample's cover names, by its path and the adopted
+// brand's slot.
+type SampleLogo struct {
+	Path string `json:"path"`
+	Slot string `json:"slot"`
 }
 
 // slidesStarters answers what a deck can begin from, to anyone who may list
@@ -203,6 +217,7 @@ func (s *Service) slidesStarters(w http.ResponseWriter, r *http.Request) {
 		readFailed(w, r, err, "the adopted brand")
 		return
 	}
+	var branded *SlidesStarterTheme
 	if adopted {
 		b, err := brandformat.Decode(adoption.BrandJSON) //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err != nil {
@@ -213,11 +228,18 @@ func (s *Service) slidesStarters(w http.ResponseWriter, r *http.Request) {
 			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 			return
 		}
-		themes = append([]slideformat.Theme{brandformat.SlideTheme(b)}, themes...)
+		if branded, err = brandStarter(b, adoption); err != nil {
+			log.ErrorContext(r.Context(), "artifacts_brand_starter_unreadable", "error", err.Error())
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+			return
+		}
 	}
-	out := SlidesStartersAnswer{Themes: make([]SlidesStarterTheme, len(themes)),
+	out := SlidesStartersAnswer{Themes: make([]SlidesStarterTheme, 0, len(themes)+1),
 		Layouts: slideformat.Layouts(), Default: slideformat.DefaultPlan()}
-	for i, t := range themes {
+	if branded != nil {
+		out.Themes = append(out.Themes, *branded)
+	}
+	for _, t := range themes {
 		sample, err := slideformat.Sample(t)
 		if err != nil {
 			// THE TESTS HOLD EVERY THEME, THE BRAND'S INCLUDED, TO THE
@@ -228,7 +250,30 @@ func (s *Service) slidesStarters(w http.ResponseWriter, r *http.Request) {
 			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 			return
 		}
-		out.Themes[i] = SlidesStarterTheme{Theme: t, Sample: sample}
+		out.Themes = append(out.Themes, SlidesStarterTheme{Theme: t, Sample: sample})
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// brandStarter is the adopted brand's theme as the picker offers it, its
+// sample's cover drawing the logo a deck begun in it shows
+// ([artifactupload.CoverLogo], the starter's own rule), at the path the
+// starter copies it to.
+func brandStarter(b brandformat.Brand, adoption artifactsdomain.Adoption) (*SlidesStarterTheme, error) {
+	theme := brandformat.SlideTheme(b)
+	logo, err := artifactupload.CoverLogo(theme, adoption.Files)
+	if err != nil {
+		return nil, err
+	}
+	path, err := artifactupload.BrandPath(brandformat.Slot(logo.Slot), logo.ContentType)
+	if err != nil {
+		return nil, err
+	}
+	sample, err := slideformat.SampleBranded(slideformat.Look{Theme: theme, Logo: path, LogoAlt: b.Name},
+		logo.ContentType)
+	if err != nil {
+		return nil, err
+	}
+	return &SlidesStarterTheme{Theme: theme, Sample: sample,
+		Logo: &SampleLogo{Path: path, Slot: logo.Slot}}, nil
 }

@@ -408,14 +408,64 @@ func layoutIDs() []string {
 // Sample is a theme drawn as a deck of every layout once, read through this
 // format as any deck is: what a picker shows a theme as, and the slides the
 // deck editor adds a layout from. Any theme samples, a caller-resolved
-// [BrandTheme] included; a sample carries no logo and declares no face, since
-// it is no version's and holds no file but its slides.
+// [BrandTheme] included; a sample declares no face, since it is no version's
+// and holds no file but its slides. [SampleBranded] draws the brand's logo.
 func Sample(t Theme) (Deck, error) {
+	return Read(composed(compose(t.Name, t, sampleSlides(), Look{})))
+}
+
+// SampleBranded is [Sample] for the caller-resolved [BrandTheme], drawn with
+// the logo a deck begun in it shows on its cover (look.Logo, whose file is of
+// type logoType), so the picker promises what the deck delivers. The sample
+// holds the logo by its path and type alone, as no version's file; a caller
+// draws it from the adopted brand. Faces are not declared, as in any sample.
+func SampleBranded(look Look, logoType string) (Deck, error) {
+	if look.Theme.ID != BrandTheme {
+		return Deck{}, fmt.Errorf("%w: the look resolved for %q names the theme %q", ErrPlan,
+			BrandTheme, look.Theme.ID)
+	}
+	look.Faces = nil
+	files := composed(compose(look.Theme.Name, look.Theme, sampleSlides(), look))
+	if look.Logo == "" {
+		return Read(files)
+	}
+	return Read(sampleFiles{composed: files, image: look.Logo, essence: logoType})
+}
+
+// sampleSlides are every layout once, in a picker's order.
+func sampleSlides() []PlanSlide {
 	slides := make([]PlanSlide, len(layouts))
 	for i, l := range layouts {
 		slides[i] = PlanSlide{Layout: l.ID}
 	}
-	return Read(composed(compose(t.Name, t, slides, Look{})))
+	return slides
+}
+
+// sampleFiles are a sample's files and the one image its cover shows, held by
+// path and type only: a sample is no version's, so the image has no bytes.
+type sampleFiles struct {
+	composed
+	image, essence string
+}
+
+func (s sampleFiles) Paths() []string {
+	out := append(s.composed.Paths(), s.image)
+	slices.Sort(out)
+	return out
+}
+
+func (s sampleFiles) Essence(p string) (string, bool) {
+	if p == s.image {
+		return s.essence, true
+	}
+	return s.composed.Essence(p)
+}
+
+func (s sampleFiles) Read(p string) ([]byte, error) {
+	if p == s.image {
+		return nil, nil
+	}
+	return s.composed.Read(p)
 }
 
 // composed is a starter's files as a version to read.

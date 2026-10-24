@@ -6693,7 +6693,10 @@ The API origin **never renders an artifact**:
   `name`, `description` and `heading` (the title a slide of it opens with), and
   `default`, the plan a starter opens with when it names none. Whenever the
   company has adopted a brand, its theme (`brand`, named for the brand, its
-  colours and typefaces resolved from the adoption) comes first; the answer is
+  colours and typefaces resolved from the adoption) comes first, its sample's
+  cover drawing the logo a deck begun in it shows, at the path the starter
+  copies it to, with `logo` (`{path, slot}`) naming that path and the adopted
+  brand's file slot it is drawn from, since a sample holds no bytes; the answer is
   composed per request, so an adoption or a clear shows at once. The create page
   draws its theme picker and preview from it, and the deck editor adds a slide
   from the sample of the theme its deck's index names (see
