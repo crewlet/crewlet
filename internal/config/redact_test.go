@@ -530,22 +530,13 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	exempt := map[string]bool{
 		// Numeric caps that merely count tokens (a token budget is a
 		// mapping of them, one per calendar window).
-		"TokenBudget": true, "BudgetTokens": true, "SummarizeMaxTokens": true,
-		"CompactionBudgetTokens": true, "MaxTokens": true, "TokenExpiryDays": true,
-		"ReasoningBudgetTokens": true, "MinTokensPerTask": true,
-		"SandboxMinBudgetTokens": true,
+		"TokenBudget": true, "MinTokensPerTask": true, "SandboxMinBudgetTokens": true,
 		// An embedding model's limits, counted in tokens.
 		"MaxInputTokens": true, "MaxBatchTokens": true,
 		// Scope NAMES minted onto a token, not the token.
 		"TokenScopes": true,
-		// A path on disk, not the material at it.
-		"StateDir": true,
-		// Tuning for how a dead credential is retried.
-		"Cooldowns": true,
-		// The Forge app's public identifier: it is the JWT audience, and
-		// it is in every manifest the operator installs.
-		"ForgeAppID": true,
 	}
+	usedNames := map[string]bool{}
 
 	// The exemptions by Type.Field, for a name that is a credential's
 	// somewhere else: a BLOCK or a LIST whose credential is tagged on the
@@ -618,6 +609,9 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 				if exemptField && strings.Contains(name, needle) && !tagged {
 					usedFields[rt.Name()+"."+field.Name] = true
 				}
+				if exempt[field.Name] && strings.Contains(name, needle) && !tagged {
+					usedNames[field.Name] = true
+				}
 				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] && !exemptField {
 					t.Errorf("%s.%s looks like a credential and is not tagged "+
 						"secret:\"true\", so the config read surface publishes it "+
@@ -633,6 +627,12 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	walk(reflect.TypeOf(Bootstrap{}), "", map[reflect.Type]bool{})
 	// An exemption that excuses nothing is one that would silently excuse
 	// whatever field takes its name next.
+	for name := range exempt {
+		if !usedNames[name] {
+			t.Errorf("exemption %s names no untagged credential-looking field "+
+				"the walk reached: delete it", name)
+		}
+	}
 	for field, reason := range exemptFields {
 		if !usedFields[field] {
 			t.Errorf("exemption %s (%s) names no untagged credential-looking "+
