@@ -228,8 +228,9 @@ const (
 	// for the knowledge base: both logs hold a trailing window, so at the
 	// ratio of what each takes a day a blocked trim fills both in the same
 	// time. What each takes is its records and the barriers its
-	// linearizable reads append (136 bytes each, code.BarrierRecordBytes),
-	// at the reference company once its seats push:
+	// linearizable reads append (176 bytes each in their signed frames,
+	// code.BarrierRecordBytes), at the reference company once its seats
+	// push:
 	//
 	//   - the mutation log about 11.4 MB a day: 9.7 MB of records,
 	//     MEASURED for the reference company's tasks, comments, edits and

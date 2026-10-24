@@ -545,6 +545,12 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	// THE BARRIERS' YEAR to the nearest ten megabytes, as the guide rounds a
 	// figure it calls "about".
 	barrierYear := math.Round(seatBarriersAYear/1e7) * 10
+	// THE CODE LOG'S GIT CENSUS at its floor and the default min_age, to the
+	// nearest thousand, as the guide rounds it: the term it prices at
+	// code.BarrierRecordBytes, so a barrier restated moves the census the
+	// guide prints.
+	gitCensus := spaced(int64(math.Round(float64(code.GitReadsPerDay(config.CodeLogMaxBytesFloor,
+		config.DefaultMinAge))/1e3) * 1e3))
 
 	for file, wants := range map[string][]string{
 		"docs/guides/retention.md": {
@@ -580,6 +586,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("the log keeps the whole day, about %.1f GB a year, so a log created at 16 GiB "+
 				"fills in a little over four years — nearly five on its records alone — and one "+
 				"created at 4 GiB in about a year", day*365/1e9),
+			fmt.Sprintf("at %d bytes a barrier in its signed frame (about %s a day at the 1 GiB floor "+
+				"and the default seven days)", code.BarrierRecordBytes, gitCensus),
 		},
 		"internal/tracker/subject.go": {
 			fmt.Sprintf("a task filed: %s bytes, in two records", spaced(int64(whole.create))),

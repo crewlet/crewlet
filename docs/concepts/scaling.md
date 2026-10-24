@@ -279,7 +279,7 @@ counts them on a line of their own for a company that hosts code, and every
 data node's snapshot volume holds about 4.2 times them, as it does the rest of
 its estate. The code log's column is its push records alone; each linearizable
 read a git client makes — an advertisement, a push's sync, a fetch's ls-refs —
-appends a 136-byte barrier beside them, which is why the log's ceiling is
+appends a 176-byte barrier beside them, which is why the log's ceiling is
 derived at two thirds of the mutation log's rather than from its pushes alone
 ([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)).
 The push records fit the ceiling a first boot derives from 50 GiB free or more

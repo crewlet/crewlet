@@ -39,18 +39,29 @@ func LimitsOf(c config.Code) Limits {
 
 // BarrierRecordBytes is what one code-log barrier costs its stream, as the
 // broker counts it against the log's ceiling: the encoded record
-// ([EncodeBarrier]), its subject and the broker's per-message overhead.
+// ([EncodeBarrier]) in the signed frame every record is appended in
+// (ADR-0031), its subject and the broker's per-message overhead.
 //
-// 136 BYTES, MEASURED: a barrier at the first generation, whose envelope
-// carries no generation, costs 116; one at the last costs 133, since a
-// generation printed whole is up to ten digits and its key. So 136 bounds every
-// barrier the log can hold, and overstates the commonest by under a fifth —
-// noise beside census_drift's factor of two
+// 176 BYTES, MEASURED: a barrier at the first generation, whose envelope
+// carries no generation, costs 156; one at the last costs 173, since a
+// generation printed whole is up to ten digits and its key. So 176 bounds every
+// barrier the log can hold, overstates the commonest by an eighth — noise
+// beside census_drift's factor of two
 // (TestABarrierCostsTheCodeLogWhatTheCensusSays holds both arms between half
-// the figure and all of it). The 160 first proposed was an estimate from the
-// tracker's figure in docs/guides/retention.md and overstated a real barrier
-// by 38 %, which sized the git census that much smaller.
-const BarrierRecordBytes = 136
+// the figure and all of it) — and is exactly what a mutation-log barrier
+// costs from that log's second generation to its tenth, so the storage
+// forecast prices both logs' barriers at one figure.
+//
+// FORTY OF THOSE BYTES ARE THE FRAME: its magic, its version, the key id's
+// length, the key id and a 32-byte MAC. It was 136 before every record was
+// signed, which now understates a barrier by 15 to 27 %, and a census priced
+// at it would let the git clients' barriers past the tenth they are allowed
+// before census_drift said anything. The frame carries the SIGNING KEY'S ID,
+// measured here at the suites' two bytes, so a deployment whose active key has
+// a longer id pays a byte a character more on every record — three for
+// `crewlet secrets keygen`'s `key-1`, five for the examples' `2026-01`: under
+// 3 % of a barrier, which census_drift's factor of two does not notice.
+const BarrierRecordBytes = 176
 
 // GitReadsShare is how much of the code log's byte ceiling the census lets its
 // git clients' barriers hold over the trim's min_age: one part in TEN.
@@ -81,8 +92,8 @@ const GitReadsShare = 10
 // 125 a day per agent seat says nothing about them: a five-seat company's code
 // log alarmed past 1 300 git reads a day, which one CI polling ten repositories
 // a minute exceeds tenfold. At the 1 GiB floor and the default seven days this
-// is 112 788 a day — about 78 a minute fleet-wide: that CI, thirty developers
-// fetching every three minutes, and every clone and push, several times over.
+// is 87 154 a day — about 60 a minute fleet-wide: that CI, thirty developers
+// fetching every three minutes and 3 000 pushes a day, three times over.
 //
 // IT FOLLOWS THE CEILING THE STREAM HOLDS, which the caller reads off the
 // broker: the one every node reads alike, and the one a resize moves. Never

@@ -574,14 +574,14 @@ func TestGitReadsFollowTheCodeLogsCeiling(t *testing.T) {
 		minAge  time.Duration
 		want    int
 	}{
-		{1 << 30, week, 112_788},
-		{16 << 30, week, 1_804_608},
-		{1 << 30, time.Hour, 789_516},
-		{1 << 30, 24 * time.Hour, 789_516},
-		{1 << 30, 36 * time.Hour, 526_344},
-		{1 << 30, 47 * time.Hour, 403_157},
-		{math.MaxInt64, 24 * time.Hour, 6_781_891_203_569_688},
-		{math.MaxInt64, week, 968_841_600_509_955},
+		{1 << 30, week, 87_154},
+		{16 << 30, week, 1_394_469},
+		{1 << 30, time.Hour, 610_080},
+		{1 << 30, 24 * time.Hour, 610_080},
+		{1 << 30, 36 * time.Hour, 406_720},
+		{1 << 30, 47 * time.Hour, 311_530},
+		{math.MaxInt64, 24 * time.Hour, 5_240_552_293_667_486},
+		{math.MaxInt64, week, 748_650_327_666_783},
 		{0, week, 0},
 	} {
 		if got := code.GitReadsPerDay(tc.ceiling, tc.minAge); got != tc.want {
