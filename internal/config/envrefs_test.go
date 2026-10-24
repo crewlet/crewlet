@@ -22,9 +22,9 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-a-literal-key", "${ROTATED_KEY}"]
+      auth: {mode: api-key, api_key: sk-a-literal-key}
+      env: {ROTATED_KEY: "${ROTATED_KEY}"}
 integrations:
   gitlab:
     enabled: true
@@ -68,7 +68,7 @@ func TestEveryReferenceIsReportedAtItsOwnPath(t *testing.T) {
 		{Path: "integrations.gitlab.signing_secret", Name: "GITLAB_SIGNING"},
 		{Path: "integrations.gitlab.token", Name: "GITLAB_TOKEN"},
 		{Path: "mcp_servers[0].env.NOTION_TOKEN", Name: "NOTION_TOKEN"},
-		{Path: "providers.llm.zulu.api_keys[1]", Name: "ROTATED_KEY"},
+		{Path: "providers.llm.zulu.env.ROTATED_KEY", Name: "ROTATED_KEY"},
 		{Path: "roles[0].integrations.slack.bot_token", Name: "SLACK_BOT_TOKEN_CEO"},
 		{Path: "roles[0].integrations.slack.signing_secret", Name: "SLACK_SIGNING_CEO"},
 		{Path: "roles[0].mcp_env.notion.NOTION_TOKEN", Name: "NOTION_TOKEN"},
@@ -84,7 +84,7 @@ func TestEveryReferenceIsReportedAtItsOwnPath(t *testing.T) {
 func TestALiteralIsNotAReference(t *testing.T) {
 	t.Parallel()
 	for _, ref := range References(referenceCompany(t)) {
-		if strings.HasPrefix(ref.Path, "providers.llm.zulu.api_keys[0]") {
+		if strings.HasPrefix(ref.Path, "providers.llm.zulu.auth.api_key") {
 			t.Errorf("a literal api key was reported as a reference to %q", ref.Name)
 		}
 	}
@@ -100,5 +100,62 @@ func TestAnEmptyDocumentReferencesNothing(t *testing.T) {
 	}
 	if got := References(nil); len(got) != 0 {
 		t.Errorf("References(nil) = %v, want none", got)
+	}
+}
+
+// A VARIABLE THE COMPANY READS WITHOUT NAMING IT IS STILL READ. An entry that
+// writes no credential signs in from its CLI's own variable — the token
+// `crewlet llm login -capture-token` stored, the key already exported — and
+// from the bundle `crewlet llm export -secret-store` stored, and the Secrets
+// screen calls a row nothing reads safe to delete. So each is reported at the
+// field that falls back, by the mode that reads it, and a field the entry
+// writes is reported as written and never as its fallback too.
+//
+// Mutation: report References alone, and every implied row below is missing;
+// ignore the auth mode, and the plan entry gains the API key it never reads.
+func TestAnEntrysFallbackCredentialIsReportedAsRead(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    plan:
+      model: sonnet
+    metered:
+      model: haiku
+      auth: {mode: api-key}
+    named:
+      model: sonnet
+      auth: {token: "${MY_TOKEN}", credential_bundle: "${MY_BUNDLE}"}
+    host:
+      agent: codex
+      model: gpt-5
+      auth: {mode: inherit-env}
+  embeddings:
+    type: openai
+    model: text-embedding-3-small
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := cfg.VariablesRead()
+	want := []Reference{
+		{Path: "providers.embeddings.api_key", Name: EmbeddingKeyVar},
+		{Path: "providers.llm.host.auth.credential_bundle", Name: "CREWLET_LLM_CLI_HOST_CREDENTIALS"},
+		{Path: "providers.llm.metered.auth.api_key", Name: "ANTHROPIC_API_KEY"},
+		{Path: "providers.llm.metered.auth.credential_bundle", Name: "CREWLET_LLM_CLI_METERED_CREDENTIALS"},
+		{Path: "providers.llm.named.auth.credential_bundle", Name: "MY_BUNDLE"},
+		{Path: "providers.llm.named.auth.token", Name: "MY_TOKEN"},
+		{Path: "providers.llm.plan.auth.credential_bundle", Name: "CREWLET_LLM_CLI_PLAN_CREDENTIALS"},
+		{Path: "providers.llm.plan.auth.token", Name: "CLAUDE_CODE_OAUTH_TOKEN"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("VariablesRead mismatch\n got %v\nwant %v", got, want)
+	}
+	// The literal walk is unchanged: it answers what the document NAMES.
+	for _, ref := range References(cfg) {
+		if ref.Name == "CLAUDE_CODE_OAUTH_TOKEN" || ref.Name == EmbeddingKeyVar {
+			t.Errorf("References reported %v, which the document never names", ref)
+		}
 	}
 }

@@ -272,7 +272,7 @@ func TestProseWithoutATerminatorIsACleanFinish(t *testing.T) {
 func TestARoundThatSaidNothingAtAllIsCorrectedRatherThanAccepted(t *testing.T) {
 	t.Parallel()
 	p := &scriptedProvider{turns: []llm.Completion{
-		{Content: "", ReasoningContent: "thinking very hard", OutputTokens: 627},
+		{Content: "", OutputTokens: 627},
 		{Content: "the answer"},
 	}}
 	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
@@ -290,8 +290,8 @@ func TestARoundThatSaidNothingAtAllIsCorrectedRatherThanAccepted(t *testing.T) {
 	if !strings.Contains(res.Text, "the answer") {
 		t.Errorf("text = %q, want the answer the corrective produced", res.Text)
 	}
-	// Keyed on CONTENT, not on reasoning: reasoning is not an answer that
-	// reached anybody, so a thinking-only round is the same failure.
+	// Keyed on CONTENT, not on the output billed: the 627 tokens went
+	// somewhere nobody reads, so the round reached nobody.
 	var corrected bool
 	for _, m := range res.Messages {
 		if m.Role == llm.RoleUser && strings.Contains(m.Content, "empty") {
@@ -533,7 +533,7 @@ func TestTheFinishingAllowanceResetsAfterACall(t *testing.T) {
 func TestAnEmptyRoundInASubmissionPhaseGetsTheFinishingCorrective(t *testing.T) {
 	t.Parallel()
 	p := &scriptedProvider{turns: []llm.Completion{
-		{ReasoningContent: "thinking very hard", OutputTokens: 627},
+		{OutputTokens: 627},
 		submitCall("1"),
 	}}
 	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
@@ -560,9 +560,9 @@ func TestAnEmptyRoundInASubmissionPhaseGetsTheFinishingCorrective(t *testing.T) 
 		}
 	}
 	// Declined is for a round that SAID something; this one said nothing,
-	// and the count above is its record.
-	if len(res.Narration) != 1 || res.Narration[0].Declined {
-		t.Errorf("narration = %+v, want the thinking-only round not marked declined",
+	// so it narrates nothing, and the count above is its record.
+	if len(res.Narration) != 0 {
+		t.Errorf("narration = %+v, want none: the empty round said nothing to decline with",
 			res.Narration)
 	}
 }
@@ -790,15 +790,15 @@ func TestATerminatorOnTheLastRoundIsNotExhaustion(t *testing.T) {
 // THE TEXT IS THE MODEL'S ANSWER TO ITS TASK, not to the correctives. A run of
 // rounds that called nothing keeps its first answer and drops the rest, which
 // re-wrote the same report for a corrective; a round that called a tool ends
-// the run, so a later answer is a new one; and a thinking-only round before
-// the answer is part of it.
+// the run, so a later answer is a new one; and a round that said nothing
+// before the answer does not stand in for it.
 func TestTheTextKeepsTheAnswerNotItsRepeats(t *testing.T) {
 	t.Parallel()
 	p := &scriptedProvider{turns: []llm.Completion{
 		{Content: "first report"},
 		{Content: "first report, again"},
 		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
-		{ReasoningContent: "thinking it over"},
+		{OutputTokens: 40},
 		{Content: "second report"},
 		{Content: "second report, again"},
 	}}
@@ -809,13 +809,14 @@ func TestTheTextKeepsTheAnswerNotItsRepeats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	want := "first report\n\nworking\n\n<think>thinking it over</think>\n\nsecond report"
+	want := "first report\n\nworking\n\nsecond report"
 	if res.Text != want {
 		t.Errorf("text = %q, want %q", res.Text, want)
 	}
-	// Every round is still on the record, the repeats included.
-	if res.RoundsUsed != 6 || len(res.Narration) != 6 {
-		t.Errorf("rounds = %d narrated = %d, want all 6 on the record",
+	// Every round that said something is still on the record, the repeats
+	// included; the one that said nothing has nothing to narrate.
+	if res.RoundsUsed != 6 || len(res.Narration) != 5 {
+		t.Errorf("rounds = %d narrated = %d, want 6 rounds and the 5 that spoke on the record",
 			res.RoundsUsed, len(res.Narration))
 	}
 }
@@ -1363,40 +1364,6 @@ func TestTheFailureViewCarriesWhatThePhaseManaged(t *testing.T) {
 	}
 }
 
-// --- the response grammar --------------------------------------------------
-
-func TestOneBuilderRendersReasoningAndContentTogether(t *testing.T) {
-	t.Parallel()
-	// The live row and the record you expand afterwards must be the same
-	// text. They were assembled separately once, so a reasoning model
-	// streamed its tool calls against an empty response.
-	cases := []struct{ reasoning, content, want string }{
-		{"", "answer", "answer"},
-		{"pondering", "", "<think>pondering</think>"},
-		{"pondering", "answer", "<think>pondering</think>\nanswer"},
-		{"  ", "  ", ""},
-	}
-	for _, c := range cases {
-		if got := toolloop.FormatReasoningAndContent(c.reasoning, c.content); got != c.want {
-			t.Errorf("FormatReasoningAndContent(%q,%q) = %q, want %q",
-				c.reasoning, c.content, got, c.want)
-		}
-	}
-
-	p := &scriptedProvider{turns: []llm.Completion{
-		{ReasoningContent: "let me think", Content: "hello"},
-	}}
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: &fakeSurface{}, MaxRounds: 2,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.Text != "<think>let me think</think>\nhello" {
-		t.Errorf("text = %q — the loop does not use the shared builder", res.Text)
-	}
-}
-
 // --- validation ------------------------------------------------------------
 
 func TestRunRefusesAConfigThatCannotWork(t *testing.T) {
@@ -1566,12 +1533,10 @@ func TestNarrationStaysAttachedToItsOwnRound(t *testing.T) {
 	// The whole point of recording it. Result.Text joins every round's turn
 	// into one string, and that join CANNOT be undone — the parts are
 	// separated by a blank line and prose contains blank lines — so a reader
-	// handed only the blob put the first round's thinking under "reasoning"
-	// and every later round's thinking under "the answer", tags and all.
+	// handed only the blob cannot say which round said what.
 	p := &scriptedProvider{turns: []llm.Completion{
-		{ReasoningContent: "which tool?", Content: "looking it up",
-			ToolCalls: []llm.ToolCall{toolCall("1", "search")}},
-		{ReasoningContent: "now I know", Content: "done"},
+		{Content: "looking it up", ToolCalls: []llm.ToolCall{toolCall("1", "search")}},
+		{Content: "done"},
 	}}
 	res, err := toolloop.Run(t.Context(), toolloop.Config{
 		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("search")}}, MaxRounds: 4,
@@ -1586,10 +1551,10 @@ func TestNarrationStaysAttachedToItsOwnRound(t *testing.T) {
 	if res.Narration[0].Round != 1 || res.Narration[1].Round != 2 {
 		t.Errorf("rounds = %d,%d — want 1,2", res.Narration[0].Round, res.Narration[1].Round)
 	}
-	if res.Narration[0].Reasoning != "which tool?" || res.Narration[0].Content != "looking it up" {
+	if res.Narration[0].Content != "looking it up" {
 		t.Errorf("round 0 = %#v", res.Narration[0])
 	}
-	if res.Narration[1].Reasoning != "now I know" || res.Narration[1].Content != "done" {
+	if res.Narration[1].Content != "done" {
 		t.Errorf("round 1 = %#v", res.Narration[1])
 	}
 	// A round's narration and the calls that round asked for MUST carry the

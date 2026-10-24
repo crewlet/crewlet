@@ -84,7 +84,7 @@ func (p *Provider) loginLeftNothing() error {
 		return fmt.Errorf("cliagent: the %q profile names no place a login is kept — no "+
 			"credential_paths and no credential_store — so nothing its login command stores "+
 			"can reach a seat; declare where it keeps one under "+
-			"providers.llm.%s.cli.overrides", p.agent, p.key)
+			"providers.llm.%s.overrides", p.agent, p.key)
 	}
 	return fmt.Errorf("cliagent: the %q CLI exited without leaving a login where this "+
 		"entry reads one (%s), so nothing was written to %s — if the sign-in did not "+
@@ -201,7 +201,7 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 			"`crewlet llm login` (which brokers that flow), or "+
 			"`crewlet llm login -capture-token` where the vendor mints a headless "+
 			"token. If your build of this CLI does accept a credential, declare it "+
-			"under providers.llm.%s.cli.overrides.stdin_login",
+			"under providers.llm.%s.overrides.stdin_login",
 			ErrNoLoginCommand, p.agent, p.key)
 	}
 	args := make([]string, 0, len(login.Args))
@@ -653,19 +653,19 @@ func (p *Provider) LogoutNotice() (string, error) {
 // bundleSource names where the entry's configured bundle came from.
 func (p *Provider) bundleSource() string {
 	if p.bundleConfigured {
-		return fmt.Sprintf("providers.llm.%s.cli.auth.credential_bundle", p.key)
+		return fmt.Sprintf("providers.llm.%s.auth.credential_bundle", p.key)
 	}
-	return BundleVarName(p.key)
+	return cliprofile.BundleVarName(p.key)
 }
 
 // retireBundle says what removes the entry's configured bundle, which is what
 // a fresh state volume restores.
 func (p *Provider) retireBundle() string {
 	if p.bundleConfigured {
-		return fmt.Sprintf("remove providers.llm.%s.cli.auth.credential_bundle from the company "+
+		return fmt.Sprintf("remove providers.llm.%s.auth.credential_bundle from the company "+
 			"document, or the secret it references", p.key)
 	}
-	name := BundleVarName(p.key)
+	name := cliprofile.BundleVarName(p.key)
 	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
 		"the engine's environment", name, name)
 }

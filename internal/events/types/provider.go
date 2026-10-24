@@ -9,8 +9,8 @@ import (
 // The LLM provider chain: falling through it, and running out of it.
 //
 // error_kind on these (and on the phase/turn events) is the classifier's output
-// — rate_limit, auth, server, timeout, pool_exhausted for an exhausted
-// credential pool — but it is deliberately an open string: an unclassified
+// — rate_limit, auth, server, timeout, fatal — but it is deliberately an open
+// string: an unclassified
 // failure reports the exception's own type name rather than being forced into a
 // bucket that would misdescribe it.
 

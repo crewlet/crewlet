@@ -6,9 +6,7 @@
 // NEXT model: [llm.ErrorKind.Retryable] says whether another member is worth
 // trying at all. A fatal is where the walk stops — a malformed request will be
 // refused identically by every member, so trying them is two more seconds and
-// another log line saying the same thing — and so is a model's REFUSAL, for a
-// different reason: the next member might well answer, and walking a refused
-// request round the models until one does is circumventing the decision.
+// another log line saying the same thing.
 //
 // Fallback is per CALL, not per round. A member that fails is dropped along
 // with whatever it produced, and the next one starts the call from scratch,
@@ -147,7 +145,7 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			// forwards a fragment carrying none — a keep-alive, a
 			// bookkeeping event — must not make the next member announce a
 			// restart of an answer nobody ever saw.
-			if d.Content != "" || d.Reasoning != "" {
+			if d.Content != "" {
 				streamed = true
 			}
 			// Through Send, not straight to the callback: the empty-fragment
@@ -187,24 +185,9 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 
 		kind := llm.KindOf(err)
 		if !kind.Retryable() {
-			// A REFUSAL'S COMPLETION IS BILLED like an answer's, so it
-			// is named like one: the frame that meters it reads which
-			// model and which entry served the call off it, and only
-			// this loop knows the entry.
-			var refusal *llm.Refusal
-			if errors.As(err, &refusal) && refusal.Completion != nil {
-				if refusal.Completion.Model == "" {
-					refusal.Completion.Model = m.Provider.Model()
-				}
-				if refusal.Completion.ProviderKey == "" {
-					refusal.Completion.ProviderKey = m.Key
-				}
-			}
 			// Returned as it came, so errors.As still reaches the
-			// backend's own *llm.Error with its provider, model and
-			// status intact. A refusal stops here too — see
-			// [llm.KindRefusal]: handing a refused request to the next
-			// model until one answers is circumventing the decision.
+			// backend's own *llm.Error with its provider and model
+			// intact.
 			return nil, err
 		}
 

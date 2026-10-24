@@ -123,14 +123,9 @@ func TestSummaries(t *testing.T) {
 		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseReview, Decision: "self_iterate", Model: "gpt-4o", TotalTokens: 12},
 		want:    "Dev review → self_iterate (gpt-4o, 12 tokens)",
 	}, {
-		name: "a refused phase says the model declined, not that it broke",
-		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Failed: true,
-			ErrorKind: "refusal", Refusal: &PhaseRefusal{Category: "cyber"}},
-		want: "Dev execute ✗ refused by the model (cyber)",
-	}, {
-		name:    "a phase a stop reason ended names it",
-		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Failed: true, ErrorKind: "max_tokens"},
-		want:    "Dev execute ✗ failed (max_tokens)",
+		name:    "a failed phase names its error kind",
+		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Failed: true, ErrorKind: "rate_limit"},
+		want:    "Dev execute ✗ failed (rate_limit)",
 	}, {
 		name:    "a guard breach names the invariant",
 		payload: TurnGuardBreach{RoleName: "Dev", Kind: GuardStall, Detail: "unchanged artifact"},
@@ -507,54 +502,6 @@ func TestSummaryLeadsWithTheResolvedActor(t *testing.T) {
 			t.Parallel()
 			if got := summaryOf(tc.payload, tc.source); got != tc.want {
 				t.Errorf("summary = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-// The <think> wire format between the engine and the dashboard's response
-// renderer. Both the live per-round event and the per-phase record build their
-// response through this one function: when they built it two ways, the live one
-// dropped reasoning entirely and a thinking model's thoughts did not exist on
-// the dashboard until its phase ended.
-func TestFormatReasoningAndContent(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name      string
-		reasoning string
-		content   string
-		want      string
-	}{{
-		name:      "reasoning precedes the visible content",
-		reasoning: "weighing it",
-		content:   "the answer",
-		want:      "<think>weighing it</think>\n\nthe answer",
-	}, {
-		name:    "a non-thinking model keeps its plain shape",
-		content: "the answer",
-		want:    "the answer",
-	}, {
-		name:      "whitespace-only reasoning is no reasoning",
-		reasoning: "  ",
-		content:   "the answer",
-		want:      "the answer",
-	}, {
-		// A thinking model that hit its output cap mid-thought still renders:
-		// the thinking is then the only signal there is.
-		name:      "reasoning alone still renders",
-		reasoning: "still deciding",
-		want:      "<think>still deciding</think>",
-	}, {
-		name: "nothing renders as nothing",
-		want: "",
-	}}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := FormatReasoningAndContent(tc.reasoning, tc.content); got != tc.want {
-				t.Errorf("FormatReasoningAndContent(%q, %q) = %q, want %q",
-					tc.reasoning, tc.content, got, tc.want)
 			}
 		})
 	}

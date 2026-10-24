@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -252,17 +251,18 @@ func TestTheCompletionNamesTheEntryThatServed(t *testing.T) {
 	}
 }
 
-// An exhausted credential pool is a retryable failure like any other. It needs
-// no dedicated error type and no dedicated catch: the classification carried on
+// A SPENT PLAN FALLS THROUGH LIKE ANY OTHER RETRYABLE FAILURE. A member
+// sitting out its window answers every call as a rate limit, and that needs no
+// dedicated error type and no dedicated catch: the classification carried on
 // the error is enough.
-func TestAnExhaustedPoolFallsThroughWithNoSpecialCase(t *testing.T) {
+func TestASpentPlanFallsThroughWithNoSpecialCase(t *testing.T) {
 	t.Parallel()
-	exhausted := &llm.Error{
-		Kind: llm.KindRateLimit, Provider: "anthropic", Model: "head-model",
-		Err: fmt.Errorf("all 2 credentials cooling: %w", credential.ErrExhausted),
+	spent := &llm.Error{
+		Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code", Model: "head-model",
+		Err: errors.New("Usage limit reached — sitting out until 2026-10-23T10:01:00Z"),
 	}
 	c := build(t, Options{},
-		member("primary", &fake{model: "head-model", err: exhausted}),
+		member("primary", &fake{model: "head-model", err: spent}),
 		member("backup", answering("backup-model", "ok")))
 
 	out, err := c.Complete(context.Background(), llm.Request{})
@@ -274,9 +274,8 @@ func TestAnExhaustedPoolFallsThroughWithNoSpecialCase(t *testing.T) {
 	}
 }
 
-// A malformed request or a content refusal will be refused identically by
-// every member, so trying them is two more seconds and another log line
-// saying the same thing.
+// A malformed request will be refused identically by every member, so trying
+// them is two more seconds and another log line saying the same thing.
 func TestAFatalFailureStopsTheWalk(t *testing.T) {
 	t.Parallel()
 	backup := answering("backup-model", "y")
@@ -297,41 +296,6 @@ func TestAFatalFailureStopsTheWalk(t *testing.T) {
 	var chainErr *Error
 	if errors.As(err, &chainErr) {
 		t.Fatal("a fatal failure was dressed up as an exhausted chain")
-	}
-}
-
-// A REFUSAL STOPS THE WALK, and fires no fallback. The next member might
-// answer — which is exactly why it is not asked: routing a refused request
-// round the models until one complies is circumventing the decision, not
-// recovering from a fault. The refused completion leaves the chain named with
-// the entry and model that served it, because it is billed like an answer.
-func TestARefusalIsNotHandedToTheNextMember(t *testing.T) {
-	t.Parallel()
-	refused := &llm.Completion{InputTokens: 9, StopReason: llm.StopRefusal}
-	head := &fake{model: "head-model", err: llm.Refused("p", "head-model",
-		&llm.Refusal{Category: "bio", Completion: refused})}
-	backup := answering("backup-model", "y")
-	fired := 0
-	c := build(t, Options{OnFallback: func(Fallback) { fired++ }},
-		member("primary", head), member("backup", backup))
-
-	_, err := c.Complete(context.Background(), llm.Request{})
-	if backup.calls.Load() != 0 {
-		t.Fatal("a refusal walked to the next member")
-	}
-	if fired != 0 {
-		t.Fatalf("%d fallbacks fired for a refusal", fired)
-	}
-	if llm.KindOf(err) != llm.KindRefusal {
-		t.Fatalf("kind = %s, want refusal", llm.KindOf(err))
-	}
-	var refusal *llm.Refusal
-	if !errors.As(err, &refusal) || refusal.Category != "bio" {
-		t.Fatalf("err = %v, want the member's refusal reachable", err)
-	}
-	if refused.Model != "head-model" || refused.ProviderKey != "primary" {
-		t.Fatalf("refused completion named %q/%q, want head-model/primary",
-			refused.Model, refused.ProviderKey)
 	}
 }
 
@@ -601,7 +565,7 @@ func TestAFailoverAfterNoVisibleTextAnnouncesNothing(t *testing.T) {
 		if d.Restart {
 			t.Errorf("a restart was announced for an answer nobody saw: %#v", got)
 		}
-		if !d.Restart && d.Content == "" && d.Reasoning == "" {
+		if !d.Restart && d.Content == "" {
 			t.Errorf("an empty fragment reached the consumer: %#v", got)
 		}
 	}

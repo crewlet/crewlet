@@ -101,14 +101,6 @@ var contract = []Entry{
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
 
-	// credentials.ts
-	{"CredentialPoolAnswer", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialPoolRow", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialKeyRow", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialKeyState", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialKeySource", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialPoolState", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-
 	// backups.ts
 	{"BackupsAnswer", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
 	{"BackupPointRow", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
@@ -138,6 +130,15 @@ var contract = []Entry{
 	// avatar.ts
 	{"AVATAR_CHARACTERS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
 	{"AVATAR_COLORS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
+
+	// models.ts
+	{"CLIAuthMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"CLIMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_AGENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_AUTH_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},

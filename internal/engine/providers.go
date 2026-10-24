@@ -26,12 +26,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/providers/credential"
-	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
-	"github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
 
 // buildProviders turns the company's providers.llm map into the ordered
@@ -50,22 +46,12 @@ import (
 // had just called valid. The epoch carries a nil registry instead, which is
 // what [Company.Models] documents and what the dispatcher reads to hold every
 // seat's work until a provider arrives.
-//
-// IT ALSO RETURNS EVERY API ENTRY'S RESOLVED ENDPOINT, keyed on the entry: the
-// model, base URL and keys its backend was built with, which is what a coding
-// box run on that entry is handed ([runLLM]). Kept from THIS resolution rather
-// than resolved again at launch, because a box must address the endpoint and
-// carry the key the seat's own calls use, and a second resolution through a
-// resolver whose store moved since would hand it ones no call of this epoch
-// ever made. A cli-agent entry is not in it: its provider holds its own
-// resolved model and sign-in.
-func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, map[string]endpoint, error) {
+func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	entries := make([]phase.Entry, 0, len(order))
-	endpoints := make(map[string]endpoint, len(order))
 	for _, key := range order {
 		spec, ok := c.Providers.LLM[key]
 		if !ok {
@@ -73,197 +59,15 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, map
 			// happen — but a silent skip here would produce a registry
 			// missing a provider the operator configured, and the seat
 			// using it would fall back to another model with nothing said.
-			return nil, nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
+			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
-		p, e, err := buildProvider(key, spec, r)
+		p, err := BuildCLIAgent(key, spec, r)
 		if err != nil {
-			return nil, nil, err
-		}
-		if spec.Type != config.LLMCLIAgent {
-			endpoints[key] = e
+			return nil, err
 		}
 		entries = append(entries, phase.Entry{Key: key, Provider: p})
 	}
-	registry, err := phase.NewRegistry(entries)
-	if err != nil {
-		return nil, nil, err
-	}
-	return registry, endpoints, nil
-}
-
-// buildProvider constructs one backend, and returns the endpoint it resolved
-// for it — the one resolution [buildProviders] keeps for the entry's coding
-// boxes, so a box and the backend can never be handed two.
-//
-// A provider whose credentials are missing still BUILDS. Every call then comes
-// back a clean 401, which names the provider and the vendor, far easier to
-// diagnose than a constructor that refused to exist and took the whole company
-// down at boot with a message about one key.
-func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, endpoint, error) {
-	e, err := resolveEndpoint(key, spec, r)
-	if err != nil {
-		return nil, endpoint{}, err
-	}
-	p, err := buildBackend(key, spec, r, e)
-	if err != nil {
-		return nil, endpoint{}, err
-	}
-	return p, e, nil
-}
-
-// buildBackend is the backend of spec's type over its resolved endpoint.
-func buildBackend(key string, spec config.LLMProvider, r *config.Resolver, e endpoint) (llm.Provider, error) {
-	switch spec.Type {
-	case config.LLMAnthropic:
-		return buildAnthropic(key, spec, e)
-	case config.LLMOpenAI, config.LLMOpenAICompatible:
-		// Name labels errors, logs and the chain's telemetry. An
-		// openai-compatible entry passes its CONFIG KEY so a failure names
-		// the endpoint that answered rather than claiming to be OpenAI;
-		// a plain openai entry leaves it empty and keeps the vendor's name.
-		name := ""
-		if spec.Type == config.LLMOpenAICompatible {
-			name = key
-		}
-		return openai.New(openai.Config{
-			Model: e.model, Name: name, APIKeys: e.keys, BaseURL: e.baseURL,
-			Timeout: e.timeout, Cooldowns: e.cooldowns,
-			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
-		})
-	case config.LLMCLIAgent:
-		return buildCLIAgent(key, spec, r, e.keys)
-	default:
-		return nil, fmt.Errorf("engine: provider %q: unknown type %q", key, spec.Type)
-	}
-}
-
-// BuildAnthropic constructs one anthropic provider from its config entry.
-//
-// Exported for `crewlet llm doctor`, for the reason [BuildCLIAgent] is: a
-// doctor that constructed its own provider would diagnose a request shape no
-// seat sends — a different model resolution, a different endpoint, a
-// different effort — and the two would drift the first time a default
-// changed. This is the same resolution and the same constructor a running
-// node uses, so what the doctor certifies is what a seat gets.
-func BuildAnthropic(key string, spec config.LLMProvider, r *config.Resolver) (*anthropic.Provider, error) {
-	if spec.Type != config.LLMAnthropic {
-		return nil, fmt.Errorf("engine: provider %q is type %q, not %q", key, spec.Type, config.LLMAnthropic)
-	}
-	e, err := resolveEndpoint(key, spec, r)
-	if err != nil {
-		return nil, err
-	}
-	return buildAnthropic(key, spec, e)
-}
-
-// endpoint is what every entry resolves before its backend is built: the
-// values a Tier B document may write as a `${VAR}`, resolved, and the
-// config's defaults applied.
-type endpoint struct {
-	model     string
-	baseURL   string
-	keys      []string
-	timeout   time.Duration
-	cooldowns credential.Policy
-}
-
-// resolveEndpoint resolves an entry's references and refuses the two that
-// cannot be sent anywhere.
-func resolveEndpoint(key string, spec config.LLMProvider, r *config.Resolver) (endpoint, error) {
-	// The CONFIG's default applies, through Timeout(): the backends keep a
-	// default of their own only for a Config built without one, and the
-	// value an operator reads in the docs must be the one that runs.
-	timeout := time.Duration(spec.Timeout() * float64(time.Second))
-	// RESOLVED HERE, at the moment the provider is built, which is the only
-	// place a key value ever exists in this process. Tier B stores its
-	// references verbatim — that is what keeps an exported revision free of
-	// resolved secrets — so a backend handed spec.APIKeys directly would
-	// send the literal "${ANTHROPIC_API_KEY}" as its credential and get a
-	// 401 that names the vendor rather than the misconfiguration.
-	//
-	// The conventional variable too — ANTHROPIC_API_KEY or OPENAI_API_KEY,
-	// read when the entry names no api_keys — through the same resolver, so
-	// a key `crewlet secrets set` put in the store is found where os.Getenv
-	// could not see it. config.LLMProvider.Keys is that rule, and the one
-	// place it is written: an entry whose references all resolve to nothing
-	// runs on no key rather than on the conventional one.
-	keys := spec.ResolvedKeys(r)
-	// The SAME resolution the keys get, for the other two scalars a Tier B
-	// document is allowed to write a reference into. Tier B stores "${VAR}"
-	// verbatim, so a backend handed the raw field receives the literal
-	// "${LLM_BASE_URL}" and sends every request to a URL that is not one —
-	// and examples/nimbus.company.yaml ships exactly that reference, against
-	// the variable docs/reference/environment-variables.md documents.
-	model, modelMissing := r.Expand(spec.Model)
-	baseURL, baseURLMissing := r.Expand(spec.BaseURL)
-	// A REFERENCE THAT RESOLVED TO NOTHING is not the same as a field
-	// somebody left out, and the two need different sentences. A provider
-	// entry that plainly reads `model: "${LLM_MODEL}"` and is refused with
-	// "Model is required" sends an operator to look at a field they can see
-	// is filled in; naming the variable sends them to the one thing they
-	// have to change.
-	//
-	// This is a REFUSAL where a missing api_key is not, and the asymmetry is
-	// deliberate: a missing credential still builds, because every call then
-	// comes back a clean 401 that names the provider — far easier to
-	// diagnose than a boot that died over one key. A missing MODEL has no
-	// such tell; the request is malformed rather than unauthorised.
-	if len(modelMissing) > 0 && strings.TrimSpace(model) == "" {
-		return endpoint{}, fmt.Errorf(
-			"engine: provider %q: model is %q and %s resolved to nothing. Set "+
-				"it in the environment, or with `crewlet secrets set`",
-			key, spec.Model, strings.Join(modelMissing, ", "))
-	}
-	// AN OPENAI-COMPATIBLE ENTRY WITH NO ENDPOINT IS REFUSED, and this one
-	// is not a message fix. `openai-compatible` means "not OpenAI" by
-	// definition — the type exists to point somewhere else — and an empty
-	// base URL takes the openai backend's own default, so a company whose
-	// ${LLM_BASE_URL} was unset sends every request, under a key that is not
-	// an OpenAI key, to api.openai.com. That is a silent misroute of the
-	// company's whole model traffic to a third party, and the only symptom
-	// is a 401 naming a vendor the operator never configured.
-	if spec.Type == config.LLMOpenAICompatible && strings.TrimSpace(baseURL) == "" {
-		where := "base_url is empty"
-		if len(baseURLMissing) > 0 {
-			where = fmt.Sprintf("base_url is %q and %s resolved to nothing",
-				spec.BaseURL, strings.Join(baseURLMissing, ", "))
-		}
-		return endpoint{}, fmt.Errorf(
-			"engine: provider %q: %s. An openai-compatible entry needs an endpoint "+
-				"— without one every request would go to api.openai.com under "+
-				"this entry's own key", key, where)
-	}
-	return endpoint{
-		model: model, baseURL: baseURL, keys: keys, timeout: timeout,
-		// Through the accessors, not the raw fields: those apply the bounds
-		// and the defaults, and reading the fields directly would send a
-		// zero cooldown for every provider that did not configure one.
-		cooldowns: credential.Policy{
-			RateLimit: time.Duration(spec.Cooldowns.RateLimit()) * time.Second,
-			Auth:      time.Duration(spec.Cooldowns.Auth()) * time.Second,
-		},
-	}, nil
-}
-
-// buildAnthropic constructs the Anthropic Messages backend.
-//
-// The request shape follows the MODEL (claudemodel), so the entry passes the
-// model's dials and nothing else — no temperature, no cap, no thinking switch.
-// New judges them against the resolved model, which is what catches a `${VAR}`
-// model validation could not see; its refusal names the backend field, so it
-// is said here in the operator's own field names too.
-func buildAnthropic(key string, spec config.LLMProvider, e endpoint) (*anthropic.Provider, error) {
-	p, err := anthropic.New(anthropic.Config{
-		Model: e.model, ClaudeModel: spec.ClaudeModel, APIKeys: e.keys, BaseURL: e.baseURL,
-		Timeout: e.timeout, Cooldowns: e.cooldowns,
-		Effort: llm.Effort(spec.ReasoningEffort), ThinkingBudget: spec.ReasoningBudgetTokens,
-	})
-	if err != nil {
-		return nil, fmt.Errorf(
-			"engine: provider %q (model %q; check claude_model, reasoning_effort and "+
-				"reasoning_budget_tokens against it): %w", key, e.model, err)
-	}
-	return p, nil
+	return phase.NewRegistry(entries)
 }
 
 // log is the package logger.
@@ -312,39 +116,50 @@ func (c *Company) restoreBundles(ctx context.Context) {
 	}
 }
 
-// BuildCLIAgent constructs one cli-agent provider from its config entry.
+// BuildCLIAgent constructs one providers.llm entry's provider.
 //
 // Exported for `crewlet llm`, which has to build the SAME provider the engine
 // would in order to report on it: a doctor that constructed its own would
 // diagnose a provider no seat is using, and the two would drift the first
 // time a default changed.
-func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cliagent.Provider, error) {
-	return buildCLIAgent(key, spec, r, spec.ResolvedKeys(r))
-}
-
-// buildCLIAgent constructs the subscription-CLI backend.
 //
-// Its credentials do not arrive the way an API entry's do. A metered entry
-// has a list of keys and a pool that rotates them; this one has ONE login,
-// held by the vendor's CLI in a directory on disk, and at most a single
-// long-lived token beside it. So there is no pool here and nothing to rotate
-// — the cooldowns an operator configured govern the chain's retry of this
-// provider, not a key inside it.
-func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiKeys []string) (*cliagent.Provider, error) {
-	cli := spec.CLI
-	if cli == nil {
-		// Validation refuses this combination, so reaching it means the
-		// provider was built from a document that never went through it.
-		return nil, fmt.Errorf("engine: provider %q: type %q with no cli block", key, spec.Type)
-	}
-	stateDir, err := cli.ResolvedStateDir(key)
+// A provider whose credentials are missing still BUILDS. Every call then fails
+// with the CLI's own "not authenticated", which names the CLI and is exactly
+// what `crewlet llm doctor` explains — far easier to diagnose than a
+// constructor that refused to exist and took the whole company down at boot
+// over one login.
+//
+// ITS CREDENTIALS DO NOT ARRIVE AS A BAG OF KEYS. The entry holds ONE login,
+// kept by the vendor's CLI in a directory on disk, and at most a single
+// long-lived token or API key beside it, so there is no pool here and nothing
+// to rotate: a second key is a second entry in the seat's fallback chain.
+func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cliagent.Provider, error) {
+	stateDir, err := spec.ResolvedStateDir(key)
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
-	// RESOLVED HERE for the same reason an API key is: Tier B stores
-	// "${VAR}" verbatim, so a child handed the raw map would receive the
-	// literal reference as its value.
-	env, missing := r.Map(fmt.Sprintf("providers.llm.%s.cli.env", key), cli.Env)
+	// The model, RESOLVED HERE: Tier B stores "${VAR}" verbatim, so a CLI
+	// handed the raw field would receive the literal reference on its
+	// --model flag and refuse a model by that name.
+	//
+	// A REFERENCE THAT RESOLVED TO NOTHING is refused, and that is not the
+	// same as a field somebody left out (which validation refuses). An entry
+	// that plainly reads `model: "${LLM_MODEL}"` and silently ran on the
+	// CLI's own default model when LLM_MODEL was unset would bill and answer
+	// as a model nobody chose; naming the variable sends the operator to the
+	// one thing they have to change. A missing CREDENTIAL still builds,
+	// because every call then fails with the CLI's own sign-in error that
+	// names it; a missing model has no such tell.
+	model, modelMissing := r.Expand(spec.Model)
+	if len(modelMissing) > 0 && strings.TrimSpace(model) == "" {
+		return nil, fmt.Errorf(
+			"engine: provider %q: model is %q and %s resolved to nothing. Set "+
+				"it in the environment, or with `crewlet secrets set`",
+			key, spec.Model, strings.Join(modelMissing, ", "))
+	}
+	// RESOLVED HERE for the same reason: a child handed the raw map would
+	// receive the literal reference as its value.
+	env, missing := r.Map(fmt.Sprintf("providers.llm.%s.env", key), spec.Env)
 	for _, ref := range missing {
 		// Warned rather than refused: a CLI whose optional tuning
 		// variable is unset still runs, and a provider that refused to
@@ -353,45 +168,48 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 			"path", ref.Path, "variables", strings.Join(ref.Names, ","))
 	}
 
-	auth := cliagent.Auth{Mode: cliagent.AuthMode(cli.Auth.Mode)}
-	if auth.Mode == "" {
-		auth.Mode = cliagent.AuthSubscription
-	}
-	if len(apiKeys) > 0 {
-		auth.APIKey = apiKeys[0]
-	}
-
 	// Config loads this same merged profile under its runnable rules
-	// (LLMProvider.validateCLIProfile), so a failure here is a document
-	// that never went through validation.
-	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
-	if err != nil {
+	// (LLMProvider.validateProfile), so a failure here is a document that
+	// never went through validation — refused here rather than built on
+	// whatever CredentialSources made of a profile it could not load.
+	if _, err := cliprofile.Load(spec.AgentName(), spec.Overrides); err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
 
-	// Both credentials fall back to a CONVENTIONAL name when the entry
-	// points at none, and both go through the resolver, which reads the
+	// Every credential falls back to a CONVENTIONAL name when the entry
+	// points at none, and each goes through the resolver, which reads the
 	// secret store BEFORE the environment. That order is the whole point:
 	// `crewlet llm login <key> -capture-token` writes the token into the
 	// store, and an entry that had to name it explicitly would leave every
-	// operator wiring up a ${VAR} for a value Crewlet itself just wrote.
-	auth.Token = resolveOrConvention(r, cli.Auth.Token, profile.TokenEnv)
-	auth.TokenConfigured = cli.Auth.Token != ""
-	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliagent.BundleVarName(key))
-	bundleConfigured := cli.Auth.CredentialBundle != ""
+	// operator wiring up a ${VAR} for a value Crewlet itself just wrote. The
+	// API key reads the CLI's own key variable — ANTHROPIC_API_KEY for
+	// Claude Code — so a key already exported, or set with `crewlet secrets
+	// set`, signs an api-key entry in with no YAML change; it reaches the
+	// child only under auth.mode api-key ([cliagent.Auth]).
+	//
+	// WHICH variable each falls back to is [config.LLMProvider.CredentialSources],
+	// the one rule the company's account of the variables it reads also
+	// follows, so a credential this resolves is never one the Secrets screen
+	// calls read by nothing.
+	sources := spec.CredentialSources(key)
+	auth := cliagent.Auth{
+		Mode:            cliagent.AuthMode(spec.ResolvedAuthMode()),
+		Token:           resolveOrConvention(r, sources.Token.Value, sources.Token.Fallback),
+		TokenConfigured: spec.Auth.Token != "",
+		APIKey:          strings.TrimSpace(resolveOrConvention(r, sources.APIKey.Value, sources.APIKey.Fallback)),
+	}
+	bundle := resolveOrConvention(r, sources.Bundle.Value, sources.Bundle.Fallback)
+	bundleConfigured := spec.Auth.CredentialBundle != ""
 
 	return cliagent.New(cliagent.Config{
-		Key: key,
-		// Resolved for the same reason cli.env is: a model written as a
-		// reference would reach the CLI's --model flag as the literal
-		// "${VAR}", and the CLI would reject a model by that name.
-		Model:                      r.Value(spec.Model),
-		Agent:                      cli.Name(),
-		AgentMode:                  cli.AgentMode(),
+		Key:                        key,
+		Model:                      model,
+		Agent:                      spec.AgentName(),
+		AgentMode:                  spec.AgentMode(),
 		StateDir:                   stateDir,
-		Overrides:                  cli.Overrides,
-		Timeout:                    time.Duration(cli.Timeout() * float64(time.Second)),
-		MaxConcurrent:              cli.Concurrency(),
+		Overrides:                  spec.Overrides,
+		Timeout:                    time.Duration(spec.Timeout() * float64(time.Second)),
+		MaxConcurrent:              spec.Concurrency(),
 		Env:                        env,
 		Auth:                       auth,
 		CredentialBundle:           bundle,

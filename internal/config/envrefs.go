@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
 )
@@ -54,6 +55,44 @@ func References(payload any) []Reference {
 			out = append(out, Reference{Path: path.String(), Name: name})
 		}
 	})
+	slices.SortFunc(out, func(a, b Reference) int {
+		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Name, b.Name))
+	})
+	return out
+}
+
+// VariablesRead is every variable the company reads, paired with the field
+// that reads it: every ${VAR} its document names ([References]), and every
+// variable it reads WITHOUT naming it — a credential field left empty, which
+// the engine fills from a conventional variable instead.
+//
+// The second half is what the Secrets screen's "what breaks if I remove this"
+// needs and a walk of the document cannot see. `crewlet llm login KEY
+// -capture-token` stores CLAUDE_CODE_OAUTH_TOKEN and the entry signs in with
+// it while naming nothing, so an index of the names written called it read by
+// nothing, and deleting it signed the entry out. Reported at the field that
+// falls back — `providers.llm.default.auth.token` — because that is where an
+// operator would write the reference instead.
+func (c *Company) VariablesRead() []Reference {
+	if c == nil {
+		return References(nil)
+	}
+	out := References(c)
+	for key, entry := range c.Providers.LLM {
+		sources := entry.CredentialSources(key)
+		for field, source := range map[string]CredentialSource{
+			"auth.token":             sources.Token,
+			"auth.api_key":           sources.APIKey,
+			"auth.credential_bundle": sources.Bundle,
+		} {
+			if source.Value == "" && source.Fallback != "" {
+				out = append(out, Reference{Path: at(entryPath(key), field).String(), Name: source.Fallback})
+			}
+		}
+	}
+	if e := c.Providers.Embeddings; e != nil && strings.TrimSpace(e.APIKey) == "" {
+		out = append(out, Reference{Path: "providers.embeddings.api_key", Name: EmbeddingKeyVar})
+	}
 	slices.SortFunc(out, func(a, b Reference) int {
 		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Name, b.Name))
 	})

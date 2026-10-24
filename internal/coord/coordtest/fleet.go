@@ -49,7 +49,6 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"valve", valveCases},
 		{"claims", claimCases},
 		{"ledger", ledgerCases},
-		{"cooldowns", cooldownCases},
 		{"budgets", budgetCases},
 		{"plane", planeCases},
 		{"payload", payloadCases},
@@ -463,72 +462,6 @@ var ledgerCases = []fleetCase{{
 		}
 		if !h.worked("ceo", "wk-race")["wk-race"] {
 			h.t.Fatal("the key is not worked after 16 concurrent records")
-		}
-	},
-}}
-
-// ---- the credential cooldowns ------------------------------------------- //
-
-var cooldownCases = []fleetCase{{
-	name: "a cooled credential is visible to every node",
-	fn: func(h *fleetHarness) {
-		until := h.now().Add(10 * time.Minute)
-		if err := h.f.Cool(h.ctx, "anthropic:sk-…abcd", until); err != nil {
-			h.t.Fatalf("Cool: %v", err)
-		}
-		got, err := h.f.Since(h.ctx, h.now())
-		if err != nil {
-			h.t.Fatalf("Since: %v", err)
-		}
-		if !got["anthropic:sk-…abcd"].Equal(until) {
-			h.t.Fatalf("cooldowns = %v, want the instant it was cooled until", got)
-		}
-	},
-}, {
-	name: "a lapsed cooldown is not reported",
-	fn: func(h *fleetHarness) {
-		if err := h.f.Cool(h.ctx, "openai:sk-…wxyz", h.now().Add(time.Minute)); err != nil {
-			h.t.Fatalf("Cool: %v", err)
-		}
-		got, err := h.f.Since(h.ctx, h.now().Add(2*time.Minute))
-		if err != nil {
-			h.t.Fatalf("Since: %v", err)
-		}
-		if _, still := got["openai:sk-…wxyz"]; still {
-			h.t.Fatal("a cooldown that had lapsed was still reported")
-		}
-	},
-}, {
-	// The LONGER cooldown survives. Both nodes saw a real refusal, and
-	// shortening a peer's would send this node straight back at a key the
-	// peer already knows is spent.
-	name: "the longer of two cooldowns wins",
-	fn: func(h *fleetHarness) {
-		short := h.now().Add(time.Minute)
-		long := h.now().Add(30 * time.Minute)
-		if err := h.f.Cool(h.ctx, "key", long); err != nil {
-			h.t.Fatalf("Cool: %v", err)
-		}
-		if err := h.f.Cool(h.ctx, "key", short); err != nil {
-			h.t.Fatalf("Cool: %v", err)
-		}
-		got, err := h.f.Since(h.ctx, h.now())
-		if err != nil {
-			h.t.Fatalf("Since: %v", err)
-		}
-		if !got["key"].Equal(long) {
-			h.t.Fatalf("cooldown = %v, want the longer %v", got["key"], long)
-		}
-	},
-}, {
-	name: "nothing cooled reports nothing",
-	fn: func(h *fleetHarness) {
-		got, err := h.f.Since(h.ctx, h.now())
-		if err != nil {
-			h.t.Fatalf("Since: %v", err)
-		}
-		if len(got) != 0 {
-			h.t.Fatalf("an empty ledger reported %v", got)
 		}
 	},
 }}

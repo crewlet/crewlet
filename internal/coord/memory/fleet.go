@@ -39,7 +39,6 @@ type Fleet struct {
 	windows      map[windowKey]int
 	claims       map[string]time.Time
 	worked       map[string]workedEntry
-	cooldowns    map[string]time.Time
 	applies      map[string]coord.NodeApply
 	budgets      map[string]coord.Tally
 	channels     map[string]coord.Channel
@@ -118,7 +117,6 @@ func NewFleet() *Fleet {
 		windows:      map[windowKey]int{},
 		claims:       map[string]time.Time{},
 		worked:       map[string]workedEntry{},
-		cooldowns:    map[string]time.Time{},
 		applies:      map[string]coord.NodeApply{},
 		budgets:      map[string]coord.Tally{},
 		channels:     map[string]coord.Channel{},
@@ -235,40 +233,6 @@ func (f *Fleet) Record(_ context.Context, scope, key, detail string, at time.Tim
 	}
 	f.worked[id] = workedEntry{at: at, detail: detail}
 	return nil
-}
-
-// Cool records a credential as unusable until an instant.
-func (f *Fleet) Cool(_ context.Context, key string, until time.Time) error {
-	if key == "" {
-		return errors.New("coord/memory: a cooldown needs a key")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// The LONGER of the two survives: two nodes cooling the same key have
-	// each seen a real refusal, and shortening a peer's cooldown would send
-	// this node back at a credential the peer already knows is spent.
-	if existing, ok := f.cooldowns[key]; ok && existing.After(until) {
-		return nil
-	}
-	f.cooldowns[key] = until
-	return nil
-}
-
-// Since returns every cooldown that has not yet lapsed.
-func (f *Fleet) Since(_ context.Context, now time.Time) (map[string]time.Time, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	out := map[string]time.Time{}
-	for key, until := range f.cooldowns {
-		if until.After(now) {
-			out[key] = until
-			continue
-		}
-		delete(f.cooldowns, key)
-	}
-	return out, nil
 }
 
 // Activate publishes a new target revision.

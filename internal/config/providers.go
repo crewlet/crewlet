@@ -12,7 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -24,12 +23,12 @@ import (
 // tiers in one block is how an operator comes to believe the broker's
 // address is live-editable.
 type Providers struct {
-	// LLM is the named provider chain seats select from by key. A seat
-	// naming a key that is not here falls back to `default`, else the first
-	// provider declared — a model nobody chose for it — so the keys are the
-	// company's model vocabulary, and a company naming one is refused at
-	// Validate.
-	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named LLM providers; seats select one by key."`
+	// LLM is the named models seats select from by key, each a coding CLI
+	// the engine drives ([LLMProvider]). A seat naming a key that is not
+	// here falls back to `default`, else the first provider declared — a
+	// model nobody chose for it — so the keys are the company's model
+	// vocabulary, and a company naming one is refused at Validate.
+	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named models, each a coding CLI the engine drives; seats select one by key."`
 
 	// LLMOrder is the order the providers were DECLARED in, preserved
 	// because per-phase resolution's last resort is "the first provider
@@ -220,7 +219,7 @@ func (p *Providers) validate(path Path) error {
 }
 
 // validateSharedStateDirs holds the rule that two entries sharing one
-// cli.state_dir must drive the SAME CLI.
+// state_dir must drive the SAME CLI.
 //
 // Sharing a directory is the supported way to run several models off a
 // single login — an "opus" entry for the executor and a "sonnet" entry for
@@ -231,12 +230,17 @@ func (p *Providers) validate(path Path) error {
 // one directory agree on neither, so each prunes the other's state and
 // seeds credentials the other cannot read.
 //
+// Compared on the CLI each entry DRIVES ([LLMProvider.AgentName]), not on the
+// field as written: an entry that leaves `agent` out drives Claude Code, so it
+// shares a directory with one that names `claude-code` as safely as two that
+// both name it. Comparing the raw field refused exactly that pair.
+//
 // Caught here so it fails `crewlet validate` rather than at the first turn
 // of whichever seat lost the race.
 func (p *Providers) validateSharedStateDirs(path Path) error {
 	type claim struct {
 		key   string
-		agent CLIAgentName
+		agent string
 	}
 	byDir := map[string]claim{}
 	var probs problems
@@ -245,25 +249,26 @@ func (p *Providers) validateSharedStateDirs(path Path) error {
 	// nobody can write a test against.
 	for _, key := range sortedKeys(p.LLM) {
 		cfg := p.LLM[key]
-		if cfg.Type != LLMCLIAgent || cfg.CLI == nil || cfg.CLI.StateDir == "" {
+		if cfg.StateDir == "" || (cfg.Agent != "" && !cfg.Agent.Valid()) {
 			continue
 		}
 		// Cleaned before comparison: "/var/lib/x" and "/var/lib/x/" are
 		// one directory, and comparing the raw strings let that pair
 		// through validation to fail at the first turn instead.
-		dir := filepath.Clean(cfg.CLI.StateDir)
+		dir := filepath.Clean(cfg.StateDir)
+		agent := cfg.AgentName()
 		prev, seen := byDir[dir]
-		if seen && prev.agent != cfg.CLI.Agent {
-			probs.add(at(entry(path, key), "cli.state_dir"), ErrConflict,
+		if seen && prev.agent != agent {
+			probs.add(at(entry(path, key), "state_dir"), ErrConflict,
 				"shares %q with providers.llm.%s but drives a different CLI "+
 					"(%q vs %q). One state directory is one login and one set "+
 					"of per-seat homes, which only works for the same CLI: "+
 					"give them separate state_dirs",
-				cfg.CLI.StateDir, prev.key, cfg.CLI.Agent, prev.agent)
+				cfg.StateDir, prev.key, agent, prev.agent)
 			continue
 		}
 		if !seen {
-			byDir[dir] = claim{key: key, agent: cfg.CLI.Agent}
+			byDir[dir] = claim{key: key, agent: agent}
 		}
 	}
 	return probs.err()
@@ -271,658 +276,35 @@ func (p *Providers) validateSharedStateDirs(path Path) error {
 
 // ---- LLM providers --------------------------------------------------- //
 
-// LLMProviderType is which built-in implementation to construct.
-type LLMProviderType string
-
-const (
-	// LLMOpenAI is the official OpenAI SDK.
-	LLMOpenAI LLMProviderType = "openai"
-	// LLMAnthropic is the official Anthropic SDK.
-	LLMAnthropic LLMProviderType = "anthropic"
-	// LLMOpenAICompatible is any endpoint speaking the OpenAI wire format
-	// — an aggregator, a gateway, a local vLLM.
-	LLMOpenAICompatible LLMProviderType = "openai-compatible"
-	// LLMCLIAgent drives a locally installed coding CLI on the operator's
-	// SUBSCRIPTION rather than a metered API key. No HTTP client is
-	// involved at all; see docs/concepts/subscription-llm-backends.md.
-	LLMCLIAgent LLMProviderType = "cli-agent"
-)
-
-// LLMProviderTypes is the closed set.
+// LLMProvider is one named entry under providers.llm: a coding CLI — Claude
+// Code, Codex, OpenCode and the rest of [CLIAgentNames] — that the engine
+// drives as its model.
 //
-// Closed rather than a free string because the engine DISPATCHES on it: an
-// unrecognised value fell through every branch and silently produced no
-// provider at all, leaving every seat that named the key without a model
-// and no error anywhere.
-var LLMProviderTypes = []LLMProviderType{
-	LLMOpenAI, LLMAnthropic, LLMOpenAICompatible, LLMCLIAgent,
-}
-
-// ReasoningEffort is how hard a model thinks: OpenAI's `reasoning_effort` and
-// Anthropic's `output_config.effort`, which share these spellings. Ordered,
-// lowest first, because a call may lower it (llm.Request.Effort) and lowering
-// needs an order.
-type ReasoningEffort string
-
-// The reasoning-effort levels. `xhigh` is accepted by Claude from Opus 4.7 on
-// and by OpenAI's reasoning models; an anthropic entry is held to what its own
-// model takes (see [LLMProvider.validate]).
-const (
-	EffortLow    ReasoningEffort = "low"
-	EffortMedium ReasoningEffort = "medium"
-	EffortHigh   ReasoningEffort = "high"
-	EffortXHigh  ReasoningEffort = "xhigh"
-	EffortMax    ReasoningEffort = "max"
-)
-
-// ReasoningEfforts is the closed set, lowest first.
-var ReasoningEfforts = []ReasoningEffort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
-
-// LLMProvider is one named entry under providers.llm.
+// # The CLI is the only backend
+//
+// There is no HTTP client to a model vendor in this engine, and that is the
+// decision rather than a gap. Each vendor ships its own harness — the request
+// shape each model accepts, how its thinking is replayed, what is cached and
+// where, how a stream ends, which sign-in bills which account — and moves it
+// with every model it releases. Re-implementing that per vendor and per model
+// was a second, permanently trailing copy of work the vendors already do in
+// the CLIs they maintain. So a model is reached THROUGH one: Claude Code for
+// Anthropic's models, on a subscription or an API key; Codex for OpenAI's;
+// OpenCode for open models on any provider it speaks to, a local server
+// included.
+//
+// The entry is therefore the CLI's own settings and nothing else: which CLI,
+// which model in that CLI's grammar, whether it runs as a text model behind
+// the engine's tool loop or as the executor itself, where its login and
+// per-seat homes live, and how it signs in.
 type LLMProvider struct {
-	Type  LLMProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|anthropic|openai-compatible|cli-agent" desc:"Which implementation to construct."`
-	Model string          `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id this provider serves."`
+	// Agent is which CLI to drive. Empty drives Claude Code.
+	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which coding CLI to drive (default claude-code)."`
 
-	// ClaudeModel names the Claude model whose request shape an anthropic
-	// entry uses, when `model` is a gateway alias the capability table
-	// cannot read. An anthropic request's shape — how it thinks, which
-	// effort levels it takes, whether it may carry a temperature, its
-	// output cap — is a function of the model, read from
-	// internal/providers/llm/anthropic/claudemodel; an id the table does
-	// not know is shaped as the current generation, which is right for a
-	// model newer than the table and wrong for an alias hiding an older
-	// one. That last case is what this names. An exact table id; refused
-	// on any other type and beside a model the table already reads.
-	ClaudeModel string `yaml:"claude_model,omitempty" json:"claude_model,omitempty" desc:"anthropic only: the Claude model id whose request shape this entry uses, when model is a gateway alias the table cannot read."`
-
-	// APIKeys is always a list: one entry for the ordinary case, several
-	// for rotation. With more than one the provider rotates on rate-limit
-	// and auth errors and only gives up when every key is cooling down —
-	// at which point the seat's own fallback chain tries the next
-	// provider.
-	//
-	// An empty list falls back to the provider's conventional variable
-	// (OPENAI_API_KEY, ANTHROPIC_API_KEY) at construction time, so a
-	// credential already exported in the shell works with no YAML change —
-	// on the vendor's own types only, and only when the list is EMPTY
-	// rather than unresolved. See [LLMProvider.Keys].
-	APIKeys []string `secret:"true" yaml:"api_keys,omitempty" json:"api_keys,omitempty" desc:"API keys, ${VAR} supported. Several rotate on rate-limit/auth errors."`
-
-	// Cooldowns is the TTL policy applied per error class when a key is
-	// marked cooled-down.
-	Cooldowns CredentialCooldowns `yaml:"cooldowns,omitempty" json:"cooldowns"`
-
-	// BaseURL redirects any HTTP backend, not just openai-compatible: an
-	// Anthropic-API gateway is an `anthropic` entry with one of these, and
-	// the code sandbox forwards it to Claude Code as ANTHROPIC_BASE_URL.
-	// It is only REQUIRED for openai-compatible, which has no vendor
-	// default to fall back to.
-	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy)."`
-
-	// Reasoning turns on an OpenAI reasoning model's effort. Refused on an
-	// anthropic entry, where thinking is not a switch: every current Claude
-	// model thinks on every call (several refuse to be told not to), and
-	// the depth is `reasoning_effort`.
-	Reasoning bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty" desc:"openai only: send reasoning_effort to a reasoning model."`
-	// ReasoningEffort is how hard the model thinks — OpenAI's
-	// reasoning_effort while `reasoning` is on, Anthropic's
-	// output_config.effort on every call (high when unset, on a model
-	// that takes effort). A call may lower it and never raise it.
-	ReasoningEffort ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty" js:"enum=low|medium|high|xhigh|max" desc:"How hard the model thinks. openai: sent while reasoning is on. anthropic: sent on every call, high when unset, refused at a level the model does not take."`
-	// ReasoningBudgetTokens is the thinking budget of a BUDGET-ERA Claude
-	// model (Haiku 4.5, Sonnet 4.5, Opus 4.5 and older): 0 means it does
-	// not think. Refused on every other model — the adaptive ones answer a
-	// budget with a 400 or have deprecated it — and on every other type.
-	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"anthropic, budget-era models only (claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5 and older): the thinking budget in tokens, 1024 or more and below the model's output cap. Unset means no thinking."`
-
-	// TimeoutSeconds bounds one HTTP attempt, and what it bounds depends on
-	// how the call is made: a unary call IN TOTAL, a streamed one by its
-	// SILENCE — the longest wait with nothing arriving, the first byte
-	// included — and never by its length, because a round that thinks at a
-	// high effort writes for many minutes and every one of them is the model
-	// working. The cli-agent backend drives a subprocess rather than an HTTP
-	// client and has its own timeout.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Seconds one HTTP attempt may take: the whole of a unary call, the longest silence in a streamed one (default 600)."`
-
-	// CLI is the cli-agent block: which coding CLI to drive, where its
-	// per-seat state lives, how it authenticates. Required when Type is
-	// cli-agent and refused otherwise.
-	CLI *CLIAgent `yaml:"cli,omitempty" json:"cli,omitempty" desc:"The cli-agent block. Required for type cli-agent, refused otherwise."`
-}
-
-// defaultLLMTimeoutSeconds is the bound an entry that names none gets: ten
-// minutes, the vendors' own SDK default and Anthropic's documented ceiling for
-// a non-streaming call. It is the TOTAL of a unary call, which now asks for the
-// model's whole output cap (128K tokens on the current Claude models) at a
-// thinking effort, so the two minutes it replaced cut off exactly the calls
-// that were doing the most; and it is the longest SILENCE a streamed call may
-// keep, where a live vendor stream sends a keep-alive long before ten minutes
-// pass, so the generous figure costs nothing on a healthy connection and only
-// bounds how long a dead one holds a seat.
-const defaultLLMTimeoutSeconds = 600.0
-
-// Timeout is the per-request timeout, applying the default.
-func (l *LLMProvider) Timeout() float64 {
-	if l.TimeoutSeconds <= 0 {
-		return defaultLLMTimeoutSeconds
-	}
-	return l.TimeoutSeconds
-}
-
-// The conventional variables an entry that names no api_keys reads its one key
-// from: the variable each vendor's own SDK documents, so a credential already
-// exported in the shell works with no YAML change.
-const (
-	AnthropicKeyVar = "ANTHROPIC_API_KEY"
-	OpenAIKeyVar    = "OPENAI_API_KEY"
-)
-
-// ConventionalKeyVar is the variable this entry reads its key from when it
-// names none, or "" for a type that has none: a `cli-agent` entry holds a
-// login rather than a key bag. An `openai-compatible` entry reads
-// OPENAI_API_KEY like an `openai` one, which is what lets an OpenAI-shaped
-// gateway run on the credential already exported; an entry pointing at a
-// third party that must not see that key names its own.
-func (l *LLMProvider) ConventionalKeyVar() string {
-	switch l.Type {
-	case LLMAnthropic:
-		return AnthropicKeyVar
-	case LLMOpenAI, LLMOpenAICompatible, "":
-		return OpenAIKeyVar
-	default:
-		return ""
-	}
-}
-
-// APIKey is one credential an entry declares, as this process resolved it.
-//
-// It is the ONE reading of `api_keys`, and it says where each key came from as
-// well as what it is, because the two have different readers: the provider
-// needs the value and nothing else, while an operator surface needs the
-// provenance and must never be handed the value. [LLMProvider.ResolvedKeys] is
-// the values; the provenance is what `credential_pool` reports.
-type APIKey struct {
-	// Ref is the variable a whole `${VAR}` names, or the conventional
-	// variable for a [APIKey.Default] key. Empty for an [APIKey.Inline] one.
-	Ref string
-	// Inline is a value written into the document rather than referenced:
-	// a literal, or a literal with a reference embedded in it. It has no
-	// name an operator surface could show, only a position.
-	Inline bool
-	// Default is the conventional variable, read because the entry names
-	// no api_keys at all.
-	Default bool
-	// Value is the credential, trimmed, "" when the reference resolved to
-	// nothing. It is a SECRET: never logged, never serialised.
-	Value string `json:"-" yaml:"-"`
-}
-
-// Keys is every credential the entry declares, in declaration order, resolved
-// through r — duplicates and unresolved ones included, because a surface that
-// reports on them has to be able to say "this one resolves to nothing" and
-// "this one is the same key as the first".
-//
-// An entry that names NO api_keys reads its type's conventional variable
-// ([LLMProvider.ConventionalKeyVar]). One that names some reads exactly those,
-// even when every one of them resolves to nothing: an entry that says "use
-// ACME_KEY" and silently ran on the company's ANTHROPIC_API_KEY when ACME_KEY
-// was unset would bill another account for its traffic with nothing on any
-// surface saying so. It builds with no key instead, and every call is a clean
-// 401 naming the provider.
-func (l *LLMProvider) Keys(r *Resolver) []APIKey {
-	if len(l.APIKeys) == 0 {
-		name := l.ConventionalKeyVar()
-		if name == "" {
-			return nil
-		}
-		return []APIKey{{Ref: name, Default: true, Value: strings.TrimSpace(r.Lookup(name))}}
-	}
-	out := make([]APIKey, 0, len(l.APIKeys))
-	for _, raw := range l.APIKeys {
-		key := APIKey{Value: strings.TrimSpace(r.Value(raw))}
-		if name, whole := envref.Whole(raw); whole {
-			key.Ref = name
-		} else {
-			key.Inline = true
-		}
-		out = append(out, key)
-	}
-	return out
-}
-
-// ResolvedKeys is the values of [LLMProvider.Keys], de-duplicated and with
-// empties dropped, in declaration order — the bag a provider's pool rotates
-// through. References are expanded through r, which is the only place a key
-// value ever exists in this process.
-func (l *LLMProvider) ResolvedKeys(r *Resolver) []string {
-	var out []string
-	seen := map[string]struct{}{}
-	for _, key := range l.Keys(r) {
-		if key.Value == "" {
-			continue
-		}
-		if _, dup := seen[key.Value]; dup {
-			continue
-		}
-		seen[key.Value] = struct{}{}
-		out = append(out, key.Value)
-	}
-	return out
-}
-
-func (l *LLMProvider) validate(path Path) error {
-	var p problems
-	if l.Type != "" && !slices.Contains(LLMProviderTypes, l.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", l.Type, names(LLMProviderTypes))
-		return p.err() // every rule below keys on the type
-	}
-	kind := l.Type
-	if kind == "" {
-		kind = LLMOpenAI
-	}
-
-	if strings.TrimSpace(l.Model) == "" {
-		p.add(at(path, "model"), ErrMissing,
-			"name the model this provider serves")
-	}
-
-	if l.Reasoning {
-		switch kind {
-		case LLMOpenAICompatible:
-			p.add(at(path, "reasoning"), ErrConflict,
-				"reasoning is not supported for openai-compatible providers; "+
-					"use type openai")
-		case LLMAnthropic:
-			// Not a switch on a Claude model: every current one thinks on
-			// every call — Opus 5.5, Fable and Mythos refuse to be told
-			// otherwise, and Opus 4.8 and 5 with thinking off write a tool
-			// call into their prose instead of making it. Accepting the
-			// field and ignoring it would be the "configured it and nothing
-			// happened" this file refuses everywhere else.
-			p.add(at(path, "reasoning"), ErrConflict,
-				"thinking always runs on an anthropic entry, so there is nothing to "+
-					"switch: drop reasoning, and tune how hard it thinks with "+
-					"reasoning_effort — or, on a budget-era model (claude-haiku-4-5, "+
-					"claude-sonnet-4-5, claude-opus-4-5 and older), turn thinking on with "+
-					"reasoning_budget_tokens")
-		case LLMCLIAgent:
-			p.add(at(path, "reasoning"), ErrConflict,
-				"reasoning is not a Crewlet setting for cli-agent providers: "+
-					"the CLI's plan carries its own reasoning configuration and "+
-					"exposes no per-call switch. Drop reasoning, or pick the "+
-					"CLI's reasoning model with `model`")
-		}
-	}
-	// The two DIALS beside that switch are refused on the same entry for the
-	// same reason, and refused rather than wired up: both are per-call API
-	// parameters (an effort level and an Anthropic thinking budget), and a
-	// coding CLI driven headlessly takes neither — it exposes no flag for
-	// either and reads its reasoning setup from its own plan. Accepted, they
-	// would validate clean and be read by nobody, which is the worst of the
-	// three possible behaviours: an operator sent here by an error message
-	// telling them to raise the model's effort would set one, see no change,
-	// and have nothing to look at. The honest fix for an under-reasoning CLI
-	// entry is its `model`.
-	//
-	// The same rule, applied to every type: a dial is refused wherever the
-	// backend it would reach does not send it.
-	switch kind {
-	case LLMCLIAgent:
-		if l.ReasoningEffort != "" {
-			p.add(at(path, "reasoning_effort"), ErrConflict,
-				"reasoning_effort is an API request field and does nothing on a "+
-					"cli-agent provider: the CLI takes no per-call effort flag. "+
-					"Drop it, and point `model` at a stronger model instead")
-		}
-		if l.ReasoningBudgetTokens != 0 {
-			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
-				"reasoning_budget_tokens is an Anthropic API thinking budget and does "+
-					"nothing on a cli-agent provider: the CLI carries its own. "+
-					"Drop it, and point `model` at a stronger model instead")
-		}
-	case LLMOpenAI, LLMOpenAICompatible:
-		// The OpenAI backend sends reasoning_effort only while reasoning
-		// is on, and an openai-compatible entry cannot turn it on.
-		if l.ReasoningEffort != "" && !l.Reasoning {
-			p.add(at(path, "reasoning_effort"), ErrConflict,
-				"reasoning_effort is sent only while reasoning is on, so here it does "+
-					"nothing: set `reasoning: true` (type openai only), or drop it")
-		}
-		if l.ReasoningBudgetTokens != 0 {
-			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
-				"reasoning_budget_tokens is an Anthropic thinking budget and does nothing "+
-					"on an %s provider: drop it, and set reasoning_effort for how hard "+
-					"a reasoning model thinks", kind)
-		}
-	}
-	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
-		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
-			l.ReasoningEffort, names(ReasoningEfforts))
-	}
-	if l.ReasoningBudgetTokens < 0 {
-		p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange,
-			"must not be negative, got %d", l.ReasoningBudgetTokens)
-	}
-	if kind == LLMAnthropic {
-		p.wrap(l.validateClaudeShape(path))
-	} else if l.ClaudeModel != "" {
-		p.add(at(path, "claude_model"), ErrConflict,
-			"claude_model names the request shape of an anthropic entry and does "+
-				"nothing on a %s provider: drop it", kind)
-	}
-
-	// Left unbounded, a timeout of 0 or a negative one passes validation
-	// and reaches an HTTP client that reads it as
-	// "expire immediately" — every call failing instantly, with nothing in
-	// the config looking wrong.
-	if l.TimeoutSeconds < 0 {
-		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
-			"must be 0 (the %v s default) or positive, got %v",
-			defaultLLMTimeoutSeconds, l.TimeoutSeconds)
-	}
-	p.wrap(l.Cooldowns.validate(at(path, "cooldowns")))
-
-	// Both directions matter. A cli-agent entry with no block would
-	// silently construct the default Claude Code profile, which may be the
-	// wrong CLI entirely; a cli block on an HTTP provider is read by
-	// nobody, which is the classic "I configured it and nothing happened".
-	switch {
-	case kind == LLMCLIAgent && l.CLI == nil:
-		p.add(at(path, "cli"), ErrMissing,
-			"type cli-agent needs a `cli:` block naming the CLI to drive, "+
-				"e.g. `cli: {agent: claude-code}`")
-	case kind != LLMCLIAgent && l.CLI != nil:
-		p.add(at(path, "cli"), ErrConflict,
-			"`cli:` only applies to type cli-agent (this entry is type %q). "+
-				"Remove the block, or change the type", kind)
-	case l.CLI != nil:
-		p.wrap(l.CLI.validate(at(path, "cli")))
-		p.wrap(l.validateCLIProfile(path))
-	}
-
-	if kind == LLMOpenAICompatible && strings.TrimSpace(l.BaseURL) == "" {
-		// An openai-compatible provider with no endpoint is an OpenAI
-		// provider wearing a different label: it silently talks to
-		// api.openai.com with whatever key it was given.
-		p.add(at(path, "base_url"), ErrMissing,
-			"an openai-compatible provider needs the endpoint to talk to")
-	}
-	return p.err()
-}
-
-// llmWarnings is every LLM entry that is valid and worth a second look, in
-// declaration order.
-//
-// One today: an anthropic model the capability table does not know, named
-// with no claude_model. That is VALID — most likely a model released after the
-// table, and the current-generation shape it gets is what those accept — and
-// it is wrong in exactly one case nothing can detect offline, an alias that
-// hides an OLDER model, whose every call would then be a 400. Located at the
-// field that settles it.
-func (p *Providers) llmWarnings() []Warning {
-	var out []Warning
-	for _, key := range p.ProviderOrder() {
-		entry := p.LLM[key]
-		model := strings.TrimSpace(entry.Model)
-		if entry.Type != LLMAnthropic || entry.ClaudeModel != "" || model == "" || envref.Has(model) {
-			continue
-		}
-		if _, known := claudemodel.Lookup(model); known {
-			continue
-		}
-		out = append(out, advisory(at(entryPath(key), "claude_model"), fmt.Sprintf(
-			"provider %q: model %q is not in the Claude capability table, so its "+
-				"requests use the current-generation shape (adaptive thinking, every "+
-				"effort level, no temperature, a %d-token output cap). That is right "+
-				"for a model newer than the table; if it is a gateway alias for an "+
-				"older Claude model, name that model with claude_model, or every call "+
-				"may be refused", key, model, claudemodel.Modern.MaxOutput)))
-	}
-	return out
-}
-
-// entryPath is where provider key sits in the document.
-func entryPath(key string) Path { return entry(field("providers.llm"), key) }
-
-// validateClaudeShape holds an anthropic entry's settings to what its model
-// accepts — the profile its requests are shaped from — by the SAME rules the
-// backend's constructor applies (claudemodel), so `crewlet validate` refuses
-// exactly what would otherwise be a 400 on every call.
-//
-// A model written as a `${VAR}` is judged only once it resolves, by the
-// backend at build, because before then there is no id to look up — unless
-// claude_model names the shape, which needs no model id at all.
-func (l *LLMProvider) validateClaudeShape(path Path) error {
-	var p problems
-	model := strings.TrimSpace(l.Model)
-	if model == "" || (envref.Has(model) && l.ClaudeModel == "") {
-		return nil
-	}
-	profile, err := claudemodel.Resolve(model, l.ClaudeModel)
-	switch {
-	case errors.Is(err, claudemodel.ErrNotInTable):
-		p.add(at(path, "claude_model"), ErrUnknownValue, "%v", err)
-		return p.err()
-	case err != nil:
-		p.add(at(path, "claude_model"), ErrConflict, "%v: drop claude_model", err)
-		return p.err()
-	}
-
-	effort := claudemodel.Effort(l.ReasoningEffort)
-	if effort.Valid() { // an unknown level is reported once, above
-		switch err := profile.CheckEffort(model, effort); {
-		case errors.Is(err, claudemodel.ErrTakesNoEffort):
-			p.add(at(path, "reasoning_effort"), ErrConflict,
-				"%v: drop reasoning_effort (this model's depth is reasoning_budget_tokens)", err)
-		case err != nil:
-			p.add(at(path, "reasoning_effort"), ErrOutOfRange, "%v", err)
-		}
-	}
-	if l.ReasoningBudgetTokens > 0 { // a negative one is reported once, above
-		switch err := profile.CheckBudget(model, l.ReasoningBudgetTokens); {
-		case errors.Is(err, claudemodel.ErrTakesNoBudget):
-			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
-				"%v: drop it, and tune how hard the model thinks with reasoning_effort — "+
-					"or, if model is a gateway alias for a budget-era model, name that "+
-					"model with claude_model", err)
-		case err != nil:
-			p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange, "%v", err)
-		}
-	}
-	return p.err()
-}
-
-// CredentialCooldowns is the TTL policy for an LLM provider's key pool.
-//
-// A key is marked cooled-down by ERROR CLASS, because the two classes clear
-// on different clocks: a 429 typically clears in an hour, while a 401 or
-// 403 often clears in minutes once a token refreshes.
-type CredentialCooldowns struct {
-	RateLimitSeconds int `yaml:"rate_limit_seconds,omitempty" json:"rate_limit_seconds,omitempty" js:"min=0;max=86400" desc:"Cooldown after a rate-limit error (60..86400s)."`
-	AuthSeconds      int `yaml:"auth_seconds,omitempty" json:"auth_seconds,omitempty" js:"min=0;max=86400" desc:"Cooldown after an auth error (60..86400s)."`
-}
-
-// The cooldown bounds and defaults.
-const (
-	defaultRateLimitCooldown = 3600
-	defaultAuthCooldown      = 300
-	minCooldownSeconds       = 60
-	maxCooldownSeconds       = 86400
-)
-
-// RateLimit is the rate-limit cooldown, applying the default.
-func (c CredentialCooldowns) RateLimit() int {
-	if c.RateLimitSeconds == 0 {
-		return defaultRateLimitCooldown
-	}
-	return c.RateLimitSeconds
-}
-
-// Auth is the auth-error cooldown, applying the default.
-func (c CredentialCooldowns) Auth() int {
-	if c.AuthSeconds == 0 {
-		return defaultAuthCooldown
-	}
-	return c.AuthSeconds
-}
-
-func (c CredentialCooldowns) validate(path Path) error {
-	var p problems
-	for _, f := range []struct {
-		name  string
-		value int
-	}{{"rate_limit_seconds", c.RateLimitSeconds}, {"auth_seconds", c.AuthSeconds}} {
-		if f.value == 0 {
-			continue // the default
-		}
-		if f.value < minCooldownSeconds || f.value > maxCooldownSeconds {
-			p.add(at(path, f.name), ErrOutOfRange,
-				"must be %d..%d seconds, got %d: below a minute a cooling key "+
-					"is retried before the limit clears, and above a day it is "+
-					"effectively retired",
-				minCooldownSeconds, maxCooldownSeconds, f.value)
-		}
-	}
-	return p.err()
-}
-
-// ---- the cli-agent backend ------------------------------------------- //
-
-// CLIAgentName is which coding CLI a cli-agent provider drives.
-//
-// A NAMED TYPE over a closed set, like every other closed set in this package
-// and unlike the []string this replaces. Two things followed from the bare
-// string. The generated schema emitted `"type":"string"` while its sibling
-// RoleSandbox.CodingAgent emitted an enum, so an editor blessed
-// `agent: claud-code` — which [names]'s own doc calls worse than no schema —
-// and with no `js:` tag the field could not join schema_test.go's enum table,
-// so nothing noticed.
-type CLIAgentName string
-
-// The coding CLIs the engine knows how to drive. `custom` ships no defaults
-// at all — supply everything under Overrides.
-const (
-	CLIClaudeCode  CLIAgentName = "claude-code"
-	CLICodex       CLIAgentName = "codex"
-	CLIGeminiCLI   CLIAgentName = "gemini-cli"
-	CLIQwenCode    CLIAgentName = "qwen-code"
-	CLIOpenCode    CLIAgentName = "opencode"
-	CLICursorAgent CLIAgentName = "cursor-agent"
-	CLICopilot     CLIAgentName = "copilot"
-	CLIGrok        CLIAgentName = "grok"
-	CLIMuseCode    CLIAgentName = "muse-code"
-	CLIKimiCode    CLIAgentName = "kimi-code"
-	CLIHermes      CLIAgentName = "hermes"
-	CLIPi          CLIAgentName = "pi"
-	CLICustom      CLIAgentName = "custom"
-)
-
-// CLIAgentNames is the closed set.
-var CLIAgentNames = []CLIAgentName{
-	CLIClaudeCode, CLICodex, CLIGeminiCLI, CLIQwenCode,
-	CLIOpenCode, CLICursorAgent, CLICopilot, CLIGrok, CLIMuseCode,
-	CLIKimiCode, CLIHermes, CLIPi, CLICustom,
-}
-
-// CLIAgentMode is HOW the engine uses a coding CLI.
-//
-// # Two genuinely different things wearing one config block
-//
-// A coding CLI is an agent. Driving it as a text model — one prompt in, one
-// answer out, its own tools denied — spends a whole agentic runtime to get a
-// completion, and it is the right trade only because Crewlet's own tool loop
-// is doing the agency: the tools ride the prompt envelope, the engine executes
-// them, and everything an operator reads about a turn comes from that loop.
-//
-// AGENT MODE gives the agency back. The CLI runs the executor itself: its loop
-// drives the model, its own shell and editor are enabled, and the seat's tools
-// reach it over the MCP bridge (internal/api/mcpbridge) so a bridged call is
-// the same frame a native loop would call. The engine's job becomes handing
-// that loop a brief and collecting what it did.
-//
-// The mode is NOT inferred, and the reason is that both are defensible for the
-// same CLI on the same seat. Text mode is predictable, its tool log is the
-// engine's own, and it works with no reachable API. Agent mode is faster on
-// real code work and gets the vendor's own harness, at the cost of a run that
-// outlives its turn and a tool surface reached over the network.
-type CLIAgentMode string
-
-const (
-	// CLIModeText drives the CLI as a text model behind the engine's own
-	// tool loop. The default, and what every cli-agent entry meant before
-	// agent mode existed.
-	CLIModeText CLIAgentMode = "text"
-
-	// CLIModeAgent runs the seat's executor AS the CLI's own agentic run,
-	// detached, with the seat's tools bridged in over MCP.
-	CLIModeAgent CLIAgentMode = "agent"
-)
-
-// CLIAgentModes is the closed set.
-var CLIAgentModes = []CLIAgentMode{CLIModeText, CLIModeAgent}
-
-// Valid reports whether n is one the engine knows.
-//
-// Empty is NOT valid here — unlike an optional enum elsewhere — because the
-// caller checks emptiness first: an absent agent takes the provider's own
-// default rather than meaning "any".
-func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
-
-// CLIAgentAuthMode is how a cli-agent provider authenticates.
-type CLIAgentAuthMode string
-
-const (
-	// AuthSubscription uses the operator's own CLI login — a token in the
-	// secret store, or the credential files `crewlet llm login` wrote.
-	// The default, and the point of this backend.
-	AuthSubscription CLIAgentAuthMode = "subscription"
-	// AuthAPIKey puts the entry's one api_keys value into the CLI's key
-	// variable (its profile's api_key_env), billing the metered account.
-	// Refused on a CLI whose profile names no such variable, where the key
-	// would reach nothing.
-	AuthAPIKey CLIAgentAuthMode = "api-key"
-	// AuthInheritEnv forwards whichever of the two variables the engine's
-	// own environment has — an escape hatch for an unusual CLI, and the
-	// only mode that lets a host credential reach the child.
-	AuthInheritEnv CLIAgentAuthMode = "inherit-env"
-)
-
-// CLIAgentAuthModes is the closed set.
-//
-// The default is deliberately NOT inherit-env: a subscription backend that
-// silently picked up a stray ANTHROPIC_API_KEY would bill the metered
-// account while the operator believed they were on a flat-rate plan.
-var CLIAgentAuthModes = []CLIAgentAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv}
-
-// CLIAgentAuth is how a cli-agent provider authenticates. The login itself
-// is performed by `crewlet llm login`, never by the engine.
-type CLIAgentAuth struct {
-	Mode CLIAgentAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env" desc:"subscription (default), api-key, or inherit-env."`
-
-	// Token is a ${VAR} reference to a long-lived subscription token.
-	// Empty falls back to the profile's own token variable. This is the
-	// best headless path where a CLI offers one: no credential files to
-	// sync, no refresh rotation, and it survives an ephemeral container.
-	// Read only under auth.mode subscription and only by a CLI whose
-	// profile names a token_env; set anywhere else it is refused, because
-	// it would reach nothing.
-	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
-
-	// CredentialBundle is a ${VAR} reference to a bundle exported by
-	// `crewlet llm export` — the CLI's login (its credential files, or the
-	// document its export printed) as one blob, restored into an empty
-	// credential directory whenever the engine builds a company to run (boot
-	// and every apply it publishes), so a fresh container comes up already
-	// logged in — and withheld after `crewlet llm logout` until a login is
-	// written into the credential directory again (`crewlet llm login`,
-	// `-from-host` or `crewlet llm import`; a headless token does not end it).
-	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
-}
-
-// CLIAgent is the cli-agent block of a providers.llm entry.
-type CLIAgent struct {
-	// Agent is which CLI to drive.
-	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which coding CLI to drive."`
+	// Model is handed to the CLI's model flag, in that CLI's own grammar:
+	// an alias or id for Claude Code (`sonnet`, `claude-opus-5-5`), an
+	// OpenAI id for Codex, `<provider>/<model>` for OpenCode.
+	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id, in the CLI's own grammar (OpenCode: <provider>/<model>)."`
 
 	// Mode is text (the default) or agent. See [CLIAgentMode].
 	Mode CLIAgentMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=text|agent" desc:"text (a model behind the engine's tool loop) or agent (the CLI runs the executor)."`
@@ -952,14 +334,11 @@ type CLIAgent struct {
 	// [Providers.validateSharedStateDirs].
 	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory. Entries sharing one share a login."`
 
-	// TimeoutSeconds caps one CLI invocation.
-	//
-	// Separate from the HTTP timeout because the transports are not
-	// comparable: this covers a process launch (a Node runtime costs
-	// seconds before the first byte), the model call, and the CLI's own
-	// internal retry and backoff. 120 s — right for HTTP — cuts off
-	// legitimate long reasoning turns here, so the default is 2.5x that.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one CLI invocation."`
+	// TimeoutSeconds caps one CLI invocation, wall clock: a process launch
+	// (a Node runtime costs seconds before its first byte), the model's
+	// answer, and the CLI's own internal retry and backoff. See
+	// [defaultCLITimeoutSeconds] for where the default comes from.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one CLI invocation (default 600)."`
 
 	// MaxConcurrent is how many CLI processes this provider runs at once.
 	//
@@ -973,7 +352,8 @@ type CLIAgent struct {
 
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
-	// the CLI needs beyond PATH, locale, TLS and proxy is declared here.
+	// the CLI needs beyond PATH, locale, TLS and proxy is declared here —
+	// for OpenCode, the key of the provider its model names.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI child process."`
 
 	Auth CLIAgentAuth `yaml:"auth,omitempty" json:"auth"`
@@ -987,37 +367,200 @@ type CLIAgent struct {
 	Overrides map[string]any `yaml:"overrides,omitempty" json:"overrides,omitempty" desc:"Field-wise overrides of the built-in CLI profile."`
 }
 
-// Default cli-agent knobs. See the field comments for where the numbers
-// come from.
+// CLIAgentName is which coding CLI a providers.llm entry drives.
+//
+// A NAMED TYPE over a closed set, like every other closed set in this
+// package. Two things followed from a bare string. The generated schema
+// emitted `"type":"string"` while its sibling RoleSandbox.CodingAgent emitted
+// an enum, so an editor blessed `agent: claud-code` — which [names]'s own doc
+// calls worse than no schema — and with no `js:` tag the field could not join
+// schema_test.go's enum table, so nothing noticed.
+type CLIAgentName string
+
+// The coding CLIs the engine knows how to drive. `custom` ships no defaults
+// at all — supply everything under Overrides.
 const (
-	defaultCLITimeoutSeconds = 300.0
-	defaultCLIMaxConcurrent  = 4
-	defaultCLIAgentName      = "claude-code"
+	CLIClaudeCode  CLIAgentName = "claude-code"
+	CLICodex       CLIAgentName = "codex"
+	CLIGeminiCLI   CLIAgentName = "gemini-cli"
+	CLIQwenCode    CLIAgentName = "qwen-code"
+	CLIOpenCode    CLIAgentName = "opencode"
+	CLICursorAgent CLIAgentName = "cursor-agent"
+	CLICopilot     CLIAgentName = "copilot"
+	CLIGrok        CLIAgentName = "grok"
+	CLIMuseCode    CLIAgentName = "muse-code"
+	CLIKimiCode    CLIAgentName = "kimi-code"
+	CLIHermes      CLIAgentName = "hermes"
+	CLIPi          CLIAgentName = "pi"
+	CLICustom      CLIAgentName = "custom"
 )
 
-// Name is the CLI to drive, applying the default.
+// CLIAgentNames is the closed set.
+var CLIAgentNames = []CLIAgentName{
+	CLIClaudeCode, CLICodex, CLIGeminiCLI, CLIQwenCode,
+	CLIOpenCode, CLICursorAgent, CLICopilot, CLIGrok, CLIMuseCode,
+	CLIKimiCode, CLIHermes, CLIPi, CLICustom,
+}
+
+// Valid reports whether n is one the engine knows.
+//
+// Empty is NOT valid here — unlike an optional enum elsewhere — because the
+// caller checks emptiness first: an absent agent takes the default rather
+// than meaning "any".
+func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
+
+// CLIAgentMode is HOW the engine uses a coding CLI.
+//
+// # Two genuinely different things wearing one entry
+//
+// A coding CLI is an agent. Driving it as a text model — one prompt in, one
+// answer out, its own tools denied — spends a whole agentic runtime to get a
+// completion, and it is the right trade only because Crewlet's own tool loop
+// is doing the agency: the tools ride the prompt envelope, the engine executes
+// them, and everything an operator reads about a turn comes from that loop.
+//
+// AGENT MODE gives the agency back. The CLI runs the executor itself: its loop
+// drives the model, its own shell and editor are enabled, and the seat's tools
+// reach it over the MCP bridge (internal/api/mcpbridge) so a bridged call is
+// the same frame a native loop would call. The engine's job becomes handing
+// that loop a brief and collecting what it did.
+//
+// The mode is NOT inferred, and the reason is that both are defensible for the
+// same CLI on the same seat. Text mode is predictable, its tool log is the
+// engine's own, and it needs no sandbox. Agent mode is faster on real code
+// work and gets the vendor's own harness, at the cost of a run that outlives
+// its turn and a tool surface reached over the network.
+type CLIAgentMode string
+
+const (
+	// CLIModeText drives the CLI as a text model behind the engine's own
+	// tool loop. The default.
+	CLIModeText CLIAgentMode = "text"
+
+	// CLIModeAgent runs the seat's executor AS the CLI's own agentic run,
+	// detached, with the seat's tools bridged in over MCP.
+	CLIModeAgent CLIAgentMode = "agent"
+)
+
+// CLIAgentModes is the closed set.
+var CLIAgentModes = []CLIAgentMode{CLIModeText, CLIModeAgent}
+
+// CLIAgentAuthMode is how a providers.llm entry's CLI authenticates.
+type CLIAgentAuthMode string
+
+const (
+	// AuthSubscription uses the operator's own CLI login — a token in the
+	// secret store, or the credential files `crewlet llm login` wrote.
+	// The default.
+	AuthSubscription CLIAgentAuthMode = "subscription"
+	// AuthAPIKey puts the entry's API key into the CLI's key variable (its
+	// profile's api_key_env), billing the metered account: auth.api_key,
+	// or that variable itself looked up through the secret store and then
+	// the environment when the entry names none. Refused on a CLI whose
+	// profile names no such variable, where the key would reach nothing.
+	AuthAPIKey CLIAgentAuthMode = "api-key"
+	// AuthInheritEnv forwards whichever of the two variables the engine's
+	// own environment has — an escape hatch for an unusual CLI, and the
+	// only mode that lets a host credential reach the child.
+	AuthInheritEnv CLIAgentAuthMode = "inherit-env"
+)
+
+// CLIAgentAuthModes is the closed set.
+//
+// The default is deliberately NOT inherit-env: a subscription entry that
+// silently picked up a stray ANTHROPIC_API_KEY would bill the metered
+// account while the operator believed they were on a flat-rate plan.
+var CLIAgentAuthModes = []CLIAgentAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv}
+
+// CLIAgentAuth is how a providers.llm entry's CLI authenticates. The login
+// itself is performed by `crewlet llm login`, never by the engine.
+type CLIAgentAuth struct {
+	Mode CLIAgentAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env" desc:"subscription (default), api-key, or inherit-env."`
+
+	// Token is a ${VAR} reference to a long-lived subscription token.
+	// Empty falls back to the profile's own token variable. This is the
+	// best headless path where a CLI offers one: no credential files to
+	// sync, no refresh rotation, and it survives an ephemeral container.
+	// Read only under auth.mode subscription and only by a CLI whose
+	// profile names a token_env; set anywhere else it is refused, because
+	// it would reach nothing.
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
+
+	// APIKey is a ${VAR} reference to a metered API key, put into the
+	// CLI's key variable (its profile's api_key_env) under auth.mode
+	// api-key. Empty reads that variable itself through the secret store
+	// and then the environment — ANTHROPIC_API_KEY for Claude Code,
+	// OPENAI_API_KEY for Codex — so a key already exported, or set with
+	// `crewlet secrets set`, works with no YAML change.
+	//
+	// ONE key, never a list: a CLI holds one sign-in and rotates nothing,
+	// so a second key belongs on an entry of its own in the seat's
+	// fallback chain. Set under any other mode it is refused, because it
+	// would reach nothing.
+	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"${VAR} holding an API key, read under auth.mode api-key. Empty reads the CLI's own key variable."`
+
+	// CredentialBundle is a ${VAR} reference to a bundle exported by
+	// `crewlet llm export` — the CLI's login (its credential files, or the
+	// document its export printed) as one blob, restored into an empty
+	// credential directory whenever the engine builds a company to run (boot
+	// and every apply it publishes), so a fresh container comes up already
+	// logged in — and withheld after `crewlet llm logout` until a login is
+	// written into the credential directory again (`crewlet llm login`,
+	// `-from-host` or `crewlet llm import`; a headless token does not end it).
+	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
+}
+
+// Default entry knobs. See the field comments for where the numbers come
+// from.
+const (
+	// defaultCLITimeoutSeconds is ten minutes. A text call is one model
+	// answer at the CLI's own effort, and on the current Claude models that
+	// is adaptive thinking against a 128K-token output cap: ten minutes is
+	// Anthropic's documented ceiling for such an answer in one call, and
+	// two minutes was measured cutting off exactly the calls doing the most
+	// work when the engine still made them itself. A CLI adds its process
+	// launch on top. A hung child holds its seat for no longer than this,
+	// and a timeout is retryable, so the seat's fallback chain moves on.
+	defaultCLITimeoutSeconds = 600.0
+	defaultCLIMaxConcurrent  = 4
+	defaultCLIAgentName      = CLIClaudeCode
+)
+
+// AgentName is the CLI to drive, applying the default.
 //
 // A STRING, not a CLIAgentName: the value crosses into internal/providers,
 // which does not import config, and the profile registry it keys is that
 // package's own. The type exists to bound what config ACCEPTS, which is a
 // question answered before this is called.
-func (c *CLIAgent) Name() string {
-	if c.Agent == "" {
-		return defaultCLIAgentName
+func (l *LLMProvider) AgentName() string {
+	if l.Agent == "" {
+		return string(defaultCLIAgentName)
 	}
-	return string(c.Agent)
+	return string(l.Agent)
 }
 
+// AgentMode reports whether this entry runs the executor as the CLI's own
+// agentic run.
+func (l *LLMProvider) AgentMode() bool { return l.Mode == CLIModeAgent }
+
 // Timeout is the invocation cap, applying the default.
-func (c *CLIAgent) Timeout() float64 {
-	if c.TimeoutSeconds <= 0 {
+func (l *LLMProvider) Timeout() float64 {
+	if l.TimeoutSeconds <= 0 {
 		return defaultCLITimeoutSeconds
 	}
-	return c.TimeoutSeconds
+	return l.TimeoutSeconds
+}
+
+// Concurrency is the process cap, applying the default.
+func (l *LLMProvider) Concurrency() int {
+	if l.MaxConcurrent <= 0 {
+		return defaultCLIMaxConcurrent
+	}
+	return l.MaxConcurrent
 }
 
 // CLIHomeEnv is the environment variable naming the root under which every
-// cli-agent provider keeps its credential directory and per-seat homes.
+// providers.llm entry keeps its credential directory and per-seat homes.
 const CLIHomeEnv = "CREWLET_LLM_CLI_HOME"
 
 // defaultCLIHome is the per-user fallback root, under the operator's home.
@@ -1029,14 +572,14 @@ const defaultCLIHome = ".crewlet/llm-cli"
 // Derived PER PROVIDER KEY, which is what makes sharing a login an explicit
 // act: two unrelated entries must not silently land on one directory and
 // prune each other's state, so entries that should share have to say so with
-// a matching cli.state_dir. See docs/concepts/subscription-llm-backends.md.
+// a matching state_dir. See docs/concepts/llm-backends.md.
 //
 // Read from the process environment rather than the resolver because this is
 // where the engine keeps FILES, not a secret — the same reason the store path
 // is a Tier A field and not a ${VAR}.
-func (c *CLIAgent) ResolvedStateDir(key string) (string, error) {
-	if c != nil && c.StateDir != "" {
-		return filepath.Clean(c.StateDir), nil
+func (l *LLMProvider) ResolvedStateDir(key string) (string, error) {
+	if l.StateDir != "" {
+		return filepath.Clean(l.StateDir), nil
 	}
 	if root := os.Getenv(CLIHomeEnv); root != "" {
 		return filepath.Join(filepath.Clean(root), key), nil
@@ -1044,52 +587,116 @@ func (c *CLIAgent) ResolvedStateDir(key string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf(
-			"providers.llm.%s.cli.state_dir: no directory given and no home directory to "+
-				"derive one under (%w): set cli.state_dir, or %s", key, err, CLIHomeEnv)
+			"providers.llm.%s.state_dir: no directory given and no home directory to "+
+				"derive one under (%w): set state_dir, or %s", key, err, CLIHomeEnv)
 	}
 	return filepath.Join(home, defaultCLIHome, key), nil
 }
 
-// Concurrency is the process cap, applying the default.
-func (c *CLIAgent) Concurrency() int {
-	if c.MaxConcurrent <= 0 {
-		return defaultCLIMaxConcurrent
+// ResolvedAuthMode is the entry's auth.mode, applying the default.
+func (l *LLMProvider) ResolvedAuthMode() CLIAgentAuthMode {
+	if l.Auth.Mode == "" {
+		return AuthSubscription
 	}
-	return c.MaxConcurrent
+	return l.Auth.Mode
 }
 
-func (c *CLIAgent) validate(path Path) error {
-	var p problems
-	if c.Agent != "" && !c.Agent.Valid() {
-		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
-			c.Agent, names(CLIAgentNames))
+// CredentialSource is one credential a providers.llm entry signs its CLI in
+// with: what the entry's own field holds, and the variable read in its place
+// when the field holds nothing.
+type CredentialSource struct {
+	// Value is the field as written: a ${VAR}, a literal, or empty.
+	Value string
+	// Fallback is the variable read when Value is empty, through the secret
+	// store and then the environment. Empty where the entry's auth mode does
+	// not read this credential, or its CLI names no such variable.
+	Fallback string
+}
+
+// CredentialSources are the three credentials an entry can sign in with.
+type CredentialSources struct {
+	Token, APIKey, Bundle CredentialSource
+}
+
+// CredentialSources says where each of this entry's credentials is read from:
+// the field the entry writes or, where it writes none, a conventional variable
+// — the CLI's own token or key variable, and the bundle's
+// [cliprofile.BundleVarName].
+//
+// A CONVENTION, so `crewlet llm login -capture-token`, `crewlet llm export
+// -secret-store` and a key already exported as ANTHROPIC_API_KEY sign an entry
+// in with no YAML change. And ONE RULE with two readers: the engine resolves
+// the entry's sign-in through it, and [Company.VariablesRead] reports it, so
+// the Secrets screen never calls a variable "read by nothing" while an entry
+// signs in with it — which is what invited deleting a live credential.
+//
+// PER AUTH MODE, as the CLI is handed them: a token only under subscription,
+// an API key only under api-key, and the bundle under every mode, since it is
+// restored into an empty credential directory whatever signs the calls in.
+// inherit-env reads nothing through here: it forwards the engine's own
+// environment, which the secret store is not part of.
+func (l *LLMProvider) CredentialSources(key string) CredentialSources {
+	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
+	if err != nil {
+		// A profile that does not load is refused at overrides by
+		// validation, and names no variable to fall back to.
+		profile = cliprofile.Profile{}
 	}
-	if c.TimeoutSeconds < 0 {
+	sources := CredentialSources{
+		Token:  CredentialSource{Value: l.Auth.Token},
+		APIKey: CredentialSource{Value: l.Auth.APIKey},
+		Bundle: CredentialSource{Value: l.Auth.CredentialBundle, Fallback: cliprofile.BundleVarName(key)},
+	}
+	switch l.ResolvedAuthMode() {
+	case AuthSubscription:
+		sources.Token.Fallback = profile.TokenEnv
+	case AuthAPIKey:
+		sources.APIKey.Fallback = profile.APIKeyEnv
+	}
+	return sources
+}
+
+func (l *LLMProvider) validate(path Path) error {
+	var p problems
+	if strings.TrimSpace(l.Model) == "" {
+		p.add(at(path, "model"), ErrMissing,
+			"name the model this entry's CLI runs, in that CLI's own grammar "+
+				"(e.g. sonnet for claude-code, anthropic/claude-sonnet-5 for opencode)")
+	}
+	if l.Agent != "" && !l.Agent.Valid() {
+		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
+			l.Agent, names(CLIAgentNames))
+	}
+	// Left unbounded, a timeout of 0 or a negative one passes validation
+	// and reaches a process supervisor that reads it as "expire
+	// immediately" — every call failing instantly, with nothing in the
+	// config looking wrong.
+	if l.TimeoutSeconds < 0 {
 		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the %v s default) or positive, got %v",
-			defaultCLITimeoutSeconds, c.TimeoutSeconds)
+			defaultCLITimeoutSeconds, l.TimeoutSeconds)
 	}
-	if c.MaxConcurrent < 0 {
+	if l.MaxConcurrent < 0 {
 		p.add(at(path, "max_concurrent"), ErrOutOfRange,
 			"must be 0 (the default of %d) or positive, got %d",
-			defaultCLIMaxConcurrent, c.MaxConcurrent)
+			defaultCLIMaxConcurrent, l.MaxConcurrent)
 	}
-	if c.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, c.Auth.Mode) {
+	if l.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, l.Auth.Mode) {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
-			c.Auth.Mode, names(CLIAgentAuthModes))
+			l.Auth.Mode, names(CLIAgentAuthModes))
 	}
 	switch {
-	case c.Mode != "" && !slices.Contains(CLIAgentModes, c.Mode):
+	case l.Mode != "" && !slices.Contains(CLIAgentModes, l.Mode):
 		p.add(at(path, "mode"), ErrUnknownValue, "%q (want %s)",
-			c.Mode, names(CLIAgentModes))
-	case c.RunIn != "" && !c.AgentMode():
+			l.Mode, names(CLIAgentModes))
+	case l.RunIn != "" && !l.AgentMode():
 		// A value that means nothing where it is written. In text mode
 		// the CLI is a subprocess of this engine and there is no cell to
 		// choose — an operator who wrote one meant to switch modes.
 		p.add(at(path, "run_in"), ErrConflict,
 			"only agent mode runs somewhere: a text-mode CLI is a subprocess of "+
 				"this engine. Set `mode: agent`, or remove the field")
-	case c.RunIn != "" && !slices.Contains(BackendPlacements(), c.RunIn):
+	case l.RunIn != "" && !slices.Contains(BackendPlacements(), l.RunIn):
 		// BACKEND CELLS ONLY. `self` is a seat's answer — "my code work
 		// rides my executor's run" — and an agent-mode entry IS that
 		// run, so it has no executor of its own to ride and no backend
@@ -1097,15 +704,15 @@ func (c *CLIAgent) validate(path Path) error {
 		// the seat's first turn, every turn, with the manager's "no
 		// backend for self".
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			c.RunIn, names(BackendPlacements()))
+			l.RunIn, names(BackendPlacements()))
 	}
+	p.wrap(l.validateProfile(path))
 	return p.err()
 }
 
-// validateCLIProfile holds a cli-agent entry to the profile it drives — the
-// built-in profile with cli.overrides merged in, loaded by the same
-// [cliprofile.Load] the backend is built from — and its model to that
-// profile's model flag.
+// validateProfile holds an entry to the profile it drives — the built-in
+// profile with overrides merged in, loaded by the same [cliprofile.Load] the
+// backend is built from — and its model to that profile's model flag.
 //
 // HERE, AND NOT ONLY WHERE THE BACKEND IS BUILT, because building it is what
 // `crewlet validate` and every node's apply do and what no API write does: a
@@ -1116,62 +723,58 @@ func (c *CLIAgent) validate(path Path) error {
 // RUNNABLE, because each says the backend cannot be built: the profile does
 // not load, or no model_args element carries {model}, and every entry names a
 // model (the backend refuses to drop one silently). Where the entry's
-// CREDENTIALS go is the admission half, [LLMProvider.validateCLICredentials].
-func (l *LLMProvider) validateCLIProfile(path Path) error {
-	cli := l.CLI
-	if cli.Agent != "" && !cli.Agent.Valid() {
-		return nil // reported at cli.agent; there is no profile to judge
+// CREDENTIALS go is the admission half, [LLMProvider.validateCredentials].
+func (l *LLMProvider) validateProfile(path Path) error {
+	if l.Agent != "" && !l.Agent.Valid() {
+		return nil // reported at agent; there is no profile to judge
 	}
 	var p problems
-	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
 	switch {
 	case errors.Is(err, cliprofile.ErrOverrides):
-		p.add(at(path, "cli.overrides"), ErrShape, "%v", err)
+		p.add(at(path, "overrides"), ErrShape, "%v", err)
 		return p.err()
 	case err != nil:
-		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+		p.add(at(path, "overrides"), ErrConflict, "%v", err)
 		return p.err()
 	}
 	if strings.TrimSpace(l.Model) != "" && !profile.TakesModel() {
-		p.add(at(path, "cli.overrides.model_args"), ErrMissing,
+		p.add(at(path, "overrides.model_args"), ErrMissing,
 			"the %q profile's model_args carry no {model}, so the model %q this entry "+
 				"names would never reach the CLI, and every entry names one: declare "+
-				`the flag with the placeholder, e.g. cli.overrides.model_args: ["--model", "{model}"]`,
-			cli.Name(), l.Model)
+				`the flag with the placeholder, e.g. overrides.model_args: ["--model", "{model}"]`,
+			l.AgentName(), l.Model)
 	}
 	return p.err()
 }
 
-// validateCLIAgentCredentials is [LLMProvider.validateCLICredentials] over
-// every cli-agent entry of the company, in key order.
-func (c *Company) validateCLIAgentCredentials() error {
+// entryPath is where provider key sits in the document.
+func entryPath(key string) Path { return entry(field("providers.llm"), key) }
+
+// validateLLMCredentials is [LLMProvider.validateCredentials] over every
+// entry of the company, in key order.
+func (c *Company) validateLLMCredentials() error {
 	var p problems
 	for _, key := range sortedKeys(c.Providers.LLM) {
 		spec := c.Providers.LLM[key]
-		if spec.Type != LLMCLIAgent || spec.CLI == nil {
-			continue
-		}
-		p.wrap(spec.validateCLICredentials(entryPath(key)))
+		p.wrap(spec.validateCredentials(entryPath(key)))
 	}
 	return p.err()
 }
 
-// validateCLIAgentModels is [LLMProvider.validateCLIModel] over every
-// cli-agent entry of the company, in key order.
-func (c *Company) validateCLIAgentModels() error {
+// validateLLMModels is [LLMProvider.validateModel] over every entry of the
+// company, in key order.
+func (c *Company) validateLLMModels() error {
 	var p problems
 	for _, key := range sortedKeys(c.Providers.LLM) {
 		spec := c.Providers.LLM[key]
-		if spec.Type != LLMCLIAgent || spec.CLI == nil {
-			continue
-		}
-		p.wrap(spec.validateCLIModel(entryPath(key)))
+		p.wrap(spec.validateModel(entryPath(key)))
 	}
 	return p.err()
 }
 
-// validateCLIModel holds a cli-agent entry's model to the grammar its CLI
-// reads it in, where the merged profile declares one
+// validateModel holds an entry's model to the grammar its CLI reads it in,
+// where the merged profile declares one
 // ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
@@ -1189,16 +792,15 @@ func (c *Company) validateCLIAgentModels() error {
 // refusal is the CLI's grammar — a vendor fact that moves between releases,
 // which is why it is a profile declaration — and a newer peer may admit what
 // this build would not. So a write is refused and an apply only warns.
-func (l *LLMProvider) validateCLIModel(path Path) error {
-	cli := l.CLI
-	if (cli.Agent != "" && !cli.Agent.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
+func (l *LLMProvider) validateModel(path Path) error {
+	if (l.Agent != "" && !l.Agent.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
 		return nil
 	}
-	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
 	if err != nil || !profile.ModelNamesProvider {
 		//nolint:nilerr // Deliberate: a profile that does not load is a
-		// runnable fault validateCLIProfile already reports at
-		// cli.overrides, and there is no grammar to judge the model by.
+		// runnable fault validateProfile already reports at overrides,
+		// and there is no grammar to judge the model by.
 		return nil
 	}
 	value := profile.ModelArgument(l.Model)
@@ -1212,11 +814,11 @@ func (l *LLMProvider) validateCLIModel(path Path) error {
 		what = "names no provider"
 	}
 	// THE VENDOR'S OWN WORDS ONLY FOR THE CLI THEY ARE MEASURED ON. Any
-	// profile can declare the grammar through cli.overrides, and an
-	// operator pointed at `opencode models` for a hermes entry is sent to
-	// a tool that entry does not run.
+	// profile can declare the grammar through overrides, and an operator
+	// pointed at `opencode models` for a hermes entry is sent to a tool
+	// that entry does not run.
 	failure, listing := "with the CLI's own model-not-found error", ""
-	if cli.Name() == string(CLIOpenCode) {
+	if l.AgentName() == string(CLIOpenCode) {
 		failure = `with OpenCode's "Invalid model reference"`
 		listing = " (`opencode models --standalone` lists them)"
 	}
@@ -1225,15 +827,15 @@ func (l *LLMProvider) validateCLIModel(path Path) error {
 			"slash, so %q %s: every call this entry makes, an agent-mode run included, "+
 			"would fail inside the CLI %s. Name the provider as the CLI spells it%s, e.g. "+
 			"anthropic/claude-sonnet-5 or openrouter/anthropic/claude-sonnet-5, with that "+
-			"provider's key in cli.env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+
+			"provider's key in env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+
 			"login of the CLI's own",
-		cli.Name(), value, what, failure, listing)
+		l.AgentName(), value, what, failure, listing)
 	return p.err()
 }
 
-// validateCLICredentials holds a cli-agent entry's credentials to the
-// variables its merged profile names, and the profile itself to keeping every
-// credential behind cli.auth ([cliprofile.Profile.ValidateCredentials]).
+// validateCredentials holds an entry's credentials to the variables its
+// merged profile names, and the profile itself to keeping every credential
+// behind auth ([cliprofile.Profile.ValidateCredentials]).
 //
 // The rules exist because the backend's applyAuth (in
 // internal/providers/llm/cliagent) places a credential only where the profile
@@ -1255,84 +857,70 @@ func (l *LLMProvider) validateCLIModel(path Path) error {
 // Skipped where the runnable half already refused the entry (an unknown agent,
 // a profile that does not load): there is no profile to judge credentials
 // against, and the refusal that matters is already reported.
-func (l *LLMProvider) validateCLICredentials(path Path) error {
-	cli := l.CLI
-	if cli.Agent != "" && !cli.Agent.Valid() {
+func (l *LLMProvider) validateCredentials(path Path) error {
+	if l.Agent != "" && !l.Agent.Valid() {
 		return nil
 	}
-	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
 	if err != nil {
 		//nolint:nilerr // Deliberate: a profile that does not load is a
-		// runnable fault validateCLIProfile already reports at
-		// cli.overrides, and there is no profile to judge credentials by.
+		// runnable fault validateProfile already reports at overrides,
+		// and there is no profile to judge credentials by.
 		return nil
 	}
 	var p problems
-	agent := cli.Name()
+	agent := l.AgentName()
 	if err := profile.ValidateCredentials(agent); err != nil {
-		p.add(at(path, "cli.overrides"), ErrConflict, "%v", err)
+		p.add(at(path, "overrides"), ErrConflict, "%v", err)
 	}
 
 	// The mode-dependent rules each state what a mode does with a
 	// credential, and an unknown mode does nothing this file can describe:
 	// judged as one, a typo drew refusals naming a mode that does not exist.
-	// The fault is reported once, at cli.auth.mode.
-	mode := cli.Auth.Mode
-	if mode == "" {
-		mode = AuthSubscription
-	}
+	// The fault is reported once, at auth.mode.
+	mode := l.ResolvedAuthMode()
 	if !slices.Contains(CLIAgentAuthModes, mode) {
 		return p.err()
 	}
 
-	switch {
-	case len(l.APIKeys) > 0 && mode != AuthAPIKey:
-		p.add(at(path, "api_keys"), ErrConflict,
-			"a cli-agent entry reads api_keys only under cli.auth.mode api-key, which "+
-				"puts the key in the CLI's key variable; under %s it reaches nothing. "+
-				"Set auth.mode: api-key, or drop api_keys", mode)
-	case len(l.APIKeys) > 1:
-		p.add(at(path, "api_keys"), ErrConflict,
-			"a cli-agent entry holds one login and rotates nothing, so only the "+
-				"first key would ever reach the CLI: keep one, and put another key "+
-				"on an entry of its own in the seat's fallback chain")
+	if l.Auth.APIKey != "" && mode != AuthAPIKey {
+		p.add(at(path, "auth.api_key"), ErrConflict,
+			"an API key is read only under auth.mode api-key, which puts it in the "+
+				"CLI's key variable; under %s it reaches nothing. Set auth.mode: "+
+				"api-key, or drop auth.api_key", mode)
 	}
 
 	if mode == AuthAPIKey {
 		switch {
 		case profile.APIKeyEnv == "" && profile.EnvSignIn:
-			p.add(at(path, "cli.auth.mode"), ErrConflict,
-				"api-key puts the api_keys value in the CLI's key variable, and the "+
+			p.add(at(path, "auth.mode"), ErrConflict,
+				"api-key puts the entry's key in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env): this CLI reads each model "+
 					"provider's key from that provider's own variable. Leave auth.mode "+
-					"at subscription, drop api_keys, and set the key in cli.env under "+
+					"at subscription, drop auth.api_key, and set the key in env under "+
 					"the variable of the provider its model names, as a ${VAR} — e.g. "+
 					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
 		case profile.APIKeyEnv == "":
-			p.add(at(path, "cli.auth.mode"), ErrConflict,
-				"api-key puts the api_keys value in the CLI's key variable, and the "+
+			p.add(at(path, "auth.mode"), ErrConflict,
+				"api-key puts the entry's key in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
 					"nothing: this CLI reads a key only from %s, so put it there — "+
 					"`crewlet llm login`, or a credential bundle — or, if your build of "+
 					"the CLI does read a key variable, name it with "+
-					"cli.overrides.api_key_env",
+					"overrides.api_key_env",
 				agent, profile.LoginLocation())
-		case len(l.APIKeys) == 0:
-			p.add(at(path, "api_keys"), ErrMissing,
-				"auth.mode api-key puts the api_keys value in %s, and this entry "+
-					`names none: add one, e.g. ["${%s}"]`, profile.APIKeyEnv, profile.APIKeyEnv)
 		}
 	}
 
-	if cli.Auth.Token != "" {
+	if l.Auth.Token != "" {
 		switch {
 		case profile.TokenEnv == "":
-			p.add(at(path, "cli.auth.token"), ErrConflict,
+			p.add(at(path, "auth.token"), ErrConflict,
 				"the %q profile names no token_env — this CLI mints no headless "+
 					"token — so the token would reach nothing: remove it, or name the "+
-					"variable your build of the CLI reads with cli.overrides.token_env", agent)
+					"variable your build of the CLI reads with overrides.token_env", agent)
 		case mode != AuthSubscription:
-			p.add(at(path, "cli.auth.token"), ErrConflict,
+			p.add(at(path, "auth.token"), ErrConflict,
 				"a token is read only under auth.mode subscription: %s removes %s "+
 					"from the CLI's environment or forwards the engine's own. Remove "+
 					"it, or set auth.mode: subscription", mode, profile.TokenEnv)
@@ -1342,41 +930,41 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
 		remedy := "sign the CLI in with `crewlet llm login`"
 		if profile.EnvSignIn {
-			remedy = "set the key in cli.env under the variable of the provider " +
+			remedy = "set the key in env under the variable of the provider " +
 				"its model names, as a ${VAR}"
 		}
-		p.add(at(path, "cli.auth.mode"), ErrConflict,
+		p.add(at(path, "auth.mode"), ErrConflict,
 			"inherit-env forwards the profile's token_env and api_key_env from the "+
 				"engine's own environment, and the %q profile names neither, so "+
 				"nothing would be forwarded: leave auth.mode at subscription and %s",
 			agent, remedy)
 	}
 
-	// The two variables cli.auth owns. It is layered over cli.env, and
-	// whether it then replaces, removes or leaves a value written here turns
-	// on the mode and on whether the secret store or the engine's own
-	// environment holds a credential — which the document cannot see, so an
-	// entry relying on cli.env for one is configured to work only sometimes.
+	// The two variables auth owns. It is layered over env, and whether it
+	// then replaces, removes or leaves a value written here turns on the
+	// mode and on whether the secret store or the engine's own environment
+	// holds a credential — which the document cannot see, so an entry
+	// relying on env for one is configured to work only sometimes.
 	isolation := profile.IsolationVariables()
-	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
+	for _, name := range slices.Sorted(maps.Keys(l.Env)) {
 		switch name {
 		case "":
 			continue
 		case profile.TokenEnv:
-			p.add(entry(at(path, "cli.env"), name), ErrConflict,
-				"%s is this CLI's token variable, which cli.auth owns: whether a value "+
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s is this CLI's token variable, which auth owns: whether a value "+
 					"here reaches the CLI depends on auth.mode and on whether the secret "+
 					"store or the engine's environment holds a token of its own. Give "+
-					"the token as cli.auth.token", name)
+					"the token as auth.token", name)
 		case profile.APIKeyEnv:
-			p.add(entry(at(path, "cli.env"), name), ErrConflict,
-				"%s is this CLI's key variable, which cli.auth owns: whether a value "+
-					"here reaches the CLI depends on auth.mode, and on whether api_keys "+
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s is this CLI's key variable, which auth owns: whether a value "+
+					"here reaches the CLI depends on auth.mode, and on whether auth.api_key "+
 					"resolves or the engine's environment holds a key of its own. Give "+
-					"the key as api_keys with cli.auth.mode api-key", name)
+					"the key as auth.api_key with auth.mode api-key", name)
 		default:
-			// cli.env is layered OVER the variables that keep each seat's
-			// CLI inside its own home and its call's working directory, so a
+			// env is layered OVER the variables that keep each seat's CLI
+			// inside its own home and its call's working directory, so a
 			// value here would replace them for every seat on the entry —
 			// the engine user's real dotfiles, a configuration directory the
 			// seat's system prompt is never written to, or a vendor switch
@@ -1384,7 +972,7 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 			// seat whatever configuration sits above the state directory) —
 			// and nothing would say so.
 			if layer, ok := profile.IsolationLayerOf(name); ok {
-				p.add(entry(at(path, "cli.env"), name), ErrConflict,
+				p.add(entry(at(path, "env"), name), ErrConflict,
 					"%s is a variable the engine sets for every call of this CLI to keep "+
 						"it inside its seat's own home and its call's working directory "+
 						"(%s); a value here would replace that isolation for every seat, so "+
@@ -1397,12 +985,12 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 }
 
 // isolationRemedy is where an isolation variable's value IS changed, for the
-// refusal of an entry's cli.env that names one: the field of the layer that
-// sets it ([cliprofile.Profile.IsolationLayerOf]), or none.
+// refusal of an entry's env that names one: the field of the layer that sets
+// it ([cliprofile.Profile.IsolationLayerOf]), or none.
 //
 // PER LAYER, because the three fields refuse each other's variables: one
-// remedy naming cli.overrides.config_env for every variable sent an operator
-// who followed it to a second refusal for both of OpenCode's —
+// remedy naming overrides.config_env for every variable sent an operator who
+// followed it to a second refusal for both of OpenCode's —
 // OPENCODE_CONFIG_DIR is work_config_env's, so config_env naming it too is
 // "one variable, two directories", and OPENCODE_CONFIG_PROJECT_DISABLE is an
 // isolation_env switch, which may not also be a relocated variable.
@@ -1420,7 +1008,7 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 		// isolation, and the remedy says so rather than hand it out as a
 		// setting.
 		return fmt.Sprintf("it is the profile's isolation switch, which the profile sets to "+
-			"%q, changed only deliberately, with cli.overrides.isolation_env, since a value "+
+			"%q, changed only deliberately, with overrides.isolation_env, since a value "+
 			"that turns it off undoes the isolation it is there for", profile.IsolationEnv[name])
 	default: // cliprofile.IsolationHome, which every profile field refuses
 		return "the engine points it at or inside the seat's own home for every CLI, " +
@@ -1434,27 +1022,23 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 // WITH THE PATHS KEPT UNDER IT, because the directory alone is not a remedy
 // that works: the CLI finds the profile's login, sessions, tool policy or
 // agent file through the variable ([cliprofile.Profile.KeptUnder]), so "a
-// different directory is set with cli.overrides.work_config_env", followed as
+// different directory is set with overrides.work_config_env", followed as
 // written, was an entry every write path accepted whose OpenCode found no
 // agent and no policy. The profile refuses such a move now; the remedy says
 // what makes one load.
 func relocationRemedy(field, root, dir string, kept []string) string {
 	remedy := fmt.Sprintf("the profile points it at %s under %s with %s", dir, root, field)
 	if len(kept) == 0 {
-		return remedy + "; a different directory is set with cli.overrides." + field
+		return remedy + "; a different directory is set with overrides." + field
 	}
 	fields := strings.Join(kept, ", ")
 	if n := len(kept); n > 1 {
 		fields = strings.Join(kept[:n-1], ", ") + " and " + kept[n-1]
 	}
-	return fmt.Sprintf("%s; a different directory is set with cli.overrides.%s, moving the "+
+	return fmt.Sprintf("%s; a different directory is set with overrides.%s, moving the "+
 		"%s kept under %s beneath it in the same override, since the CLI finds them "+
 		"through this variable", remedy, field, fields, dir)
 }
-
-// AgentMode reports whether this entry runs the executor as the CLI's own
-// agentic run.
-func (c *CLIAgent) AgentMode() bool { return c != nil && c.Mode == CLIModeAgent }
 
 // ---- embeddings ------------------------------------------------------ //
 
@@ -1942,16 +1526,20 @@ func limitOf(stated, documented int) int {
 	}
 }
 
+// EmbeddingKeyVar is the variable an embedding provider that names no
+// api_key reads its key from: the one OpenAI's own SDK documents, so a key
+// already exported in the shell works with no YAML change.
+const EmbeddingKeyVar = "OPENAI_API_KEY"
+
 // ResolvedKey is the embedder's credential, resolved through r and trimmed.
 //
-// The rule [LLMProvider.Keys] states for a chat entry: a field left EMPTY
-// reads OPENAI_API_KEY, the key the chat backend shares, and a reference that
-// resolves to nothing stays nothing. An embedder told to use EMBED_KEY that
-// quietly ran on the chat account's key when EMBED_KEY was unset would bill
-// the wrong account with nothing on any surface to say so.
+// A field left EMPTY reads [EmbeddingKeyVar], and a reference that resolves to
+// nothing stays nothing. An embedder told to use EMBED_KEY that quietly ran on
+// the account behind OPENAI_API_KEY when EMBED_KEY was unset would bill the
+// wrong account with nothing on any surface to say so.
 func (e *EmbeddingProvider) ResolvedKey(r *Resolver) string {
 	if strings.TrimSpace(e.APIKey) == "" {
-		return strings.TrimSpace(r.Lookup(OpenAIKeyVar))
+		return strings.TrimSpace(r.Lookup(EmbeddingKeyVar))
 	}
 	return strings.TrimSpace(r.Value(e.APIKey))
 }

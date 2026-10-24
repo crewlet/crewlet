@@ -147,20 +147,6 @@ const (
 	// keeps answering longer than it was asked to, and that is
 	// [ErrOverBudget], not a reason to keep spending.
 	maxDepth = 3
-
-	// temperature is zero because the same input must produce the same
-	// rewrite: the cache keys on the input, and a block whose compacted
-	// form moved between two renders of one turn would invalidate a
-	// provider's prompt cache on every round.
-	temperature = 0.0
-
-	// thinkingHeadroom is added to every completion's token cap.
-	//
-	// A thinking model spends its cap reasoning before it writes anything,
-	// and an answer cut off there comes back EMPTY — which reads as a model
-	// that refused rather than one that ran out of room. The visible answer
-	// is at most the budget; this is the room to get there.
-	thinkingHeadroom = 2048
 )
 
 var (
@@ -507,12 +493,10 @@ func (p *pass) complete(ctx context.Context, text string, budget int, retry stri
 			{Role: llm.RoleUser, Content: userPrompt(text, retry)},
 		},
 		// NO TOOLS: a rewrite is text back, and a tool on the surface
-		// invites a model to call it and answer nothing.
-		Temperature: llm.Temp(temperature),
-		// Tokens run at about four bytes each in prose; a third of the
-		// budget in tokens is room for the answer, and the headroom is
-		// room for a thinking model to get there.
-		MaxTokens: budget/3 + thinkingHeadroom,
+		// invites a model to call it and answer nothing. NO CAP either:
+		// the budget is the prompt's to state (systemPrompt), which is
+		// the one channel the model reads, and [ErrOverBudget] is what
+		// holds a model that answers longer to it.
 	})
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %w", ErrUnavailable, p.member.Key, err)
@@ -522,9 +506,9 @@ func (p *pass) complete(ctx context.Context, text string, budget int, retry stri
 	}
 	answer := strings.TrimSpace(completion.Content)
 	if answer == "" {
-		return "", fmt.Errorf("%w: %s answered nothing visible (%d output tokens "+
-			"against a cap of %d — a thinking model that spent the cap reasoning)",
-			ErrUnavailable, p.member.Key, completion.OutputTokens, budget/3+thinkingHeadroom)
+		return "", fmt.Errorf("%w: %s answered nothing visible (%d output tokens — "+
+			"a model that spent its output reasoning)",
+			ErrUnavailable, p.member.Key, completion.OutputTokens)
 	}
 	if !utf8.ValidString(answer) {
 		// A backend that decoded its own stream badly. Refused rather

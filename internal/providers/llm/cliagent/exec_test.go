@@ -353,10 +353,6 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 	if comp.StopReason != llm.StopToolUse {
 		t.Errorf("StopReason = %q, want tool_use", comp.StopReason)
 	}
-	// Recorded so no other backend mistakes this turn for one of its own.
-	if comp.Provider != "cli-agent" {
-		t.Errorf("Provider = %q, want cli-agent", comp.Provider)
-	}
 	if comp.Content != "reading" {
 		t.Errorf("Content = %q", comp.Content)
 	}
@@ -387,8 +383,10 @@ func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
 }
 
 // A spent subscription arrives as prose on a SUCCESSFUL exit. Classifying it
-// RATE_LIMIT is what carries the role onto its metered fallback for the rest
-// of the window and back again afterwards, with no operator intervention.
+// RATE_LIMIT is what carries the role onto its fallback for the rest of the
+// window and back again afterwards, with no operator intervention — and the
+// window it sits out is the vendor's own reset instant ([Provider.bench]),
+// where the profile reads one.
 func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 	t.Parallel()
 	reset := time.Now().Add(37 * time.Minute).Unix()
@@ -410,8 +408,8 @@ func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 	if !errors.As(err, &classified) {
 		t.Fatalf("error is not classified: %v", err)
 	}
-	if classified.RetryAfter < 30*time.Minute || classified.RetryAfter > 40*time.Minute {
-		t.Errorf("RetryAfter = %v, want the vendor's own reset instant", classified.RetryAfter)
+	if left := time.Until(p.sitOut.until); left < 30*time.Minute || left > 40*time.Minute {
+		t.Errorf("the entry sits out %v, want the vendor's own reset instant", left)
 	}
 }
 
@@ -479,7 +477,7 @@ func TestTheWallClockCapEndsACall(t *testing.T) {
 
 // Exit zero with nothing on stdout is a failed call, but not a FATAL one:
 // nothing about the request was refused, so the chain must be free to try
-// another member and the credential must not be cooled.
+// another member and the entry must not sit out.
 func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ""}, nil)
@@ -487,8 +485,8 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 	if got := llm.KindOf(err); got != llm.KindServer {
 		t.Fatalf("kind = %v, want server", got)
 	}
-	if llm.KindOf(err).ExhaustsCredential() {
-		t.Error("an empty answer must not cool the credential")
+	if err := p.benched(); err != nil {
+		t.Errorf("an empty answer sat the entry out: %v", err)
 	}
 }
 
@@ -526,7 +524,7 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 }
 
 // The default mode must never let a metered key through, even one an operator
-// put in cli.env — that is the flat-rate-plan-billed-anyway failure the mode
+// put in env — that is the flat-rate-plan-billed-anyway failure the mode
 // exists to prevent.
 func TestSubscriptionModeStripsAMeteredKey(t *testing.T) {
 	t.Parallel()

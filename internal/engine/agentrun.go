@@ -134,7 +134,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		e.bridge.Close(l.turn.RunID)
 		return refused
 	}
-	agentLLM, env := run.llm, run.env
+	model, env := run.model, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       l.placement,
 		CodingAgent:     l.codingAgent,
@@ -157,7 +157,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Spec:       spec,
 		Setup:      setup,
 		MCPServers: servers,
-		LLM:        agentLLM,
+		Model:      model,
 		Brief:      req.Brief,
 		Task:       l.turn.Task,
 		Opened:     ledger.bind,
@@ -232,8 +232,8 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn) r
 // an apply landed in between — and a turn whose executor changes runtime
 // halfway is one whose prompt was built for a loop that is not running.
 //
-// A nil launcher is the native tool loop, which is what every API entry and
-// every text-mode CLI entry has.
+// A nil launcher is the native tool loop, which is what every text-mode entry
+// has.
 func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *agentLauncher {
 	if c.Models == nil {
 		return nil
@@ -263,10 +263,10 @@ func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *a
 // once. See [sandbox.Manager.BuildSpec].
 func agentPlacement(c *Company, key string) config.Placement {
 	entry, ok := c.Config.Providers.LLM[key]
-	if !ok || entry.CLI == nil {
+	if !ok {
 		return ""
 	}
-	return entry.CLI.RunIn
+	return entry.RunIn
 }
 
 // maxTurnsFor is a seat's coding-round cap, nil-safe on a seat with no

@@ -14,17 +14,11 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
     alpha:
-      type: anthropic
       model: claude-haiku-4-5
-      api_keys: ["${K}"]
     mike:
-      type: openai
       model: gpt-5
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo
@@ -87,9 +81,9 @@ func TestADocumentWithNoRecordedOrderIsStillDeterministic(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{
 		"name": "Acme",
 		"providers": {"llm": {
-			"zulu":  {"type":"anthropic","model":"m","api_keys":["k"]},
-			"alpha": {"type":"anthropic","model":"m","api_keys":["k"]},
-			"mike":  {"type":"anthropic","model":"m","api_keys":["k"]}
+			"zulu":  {"model":"m"},
+			"alpha": {"model":"m"},
+			"mike":  {"model":"m"}
 		}}}`), &c); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -112,8 +106,8 @@ func TestTheOrderIsReconciledAgainstTheMap(t *testing.T) {
 		"providers": {
 			"llm_order": ["ghost", "zulu", "zulu"],
 			"llm": {
-				"zulu":  {"type":"anthropic","model":"m","api_keys":["k"]},
-				"alpha": {"type":"anthropic","model":"m","api_keys":["k"]}
+				"zulu":  {"model":"m"},
+				"alpha": {"model":"m"}
 			}}}`), &c); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -188,13 +182,9 @@ providers:
   llm:
     <<: &base
       zulu:
-        type: anthropic
         model: m
-        api_keys: ["${K}"]
     alpha:
-      type: anthropic
       model: m
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo
@@ -233,17 +223,11 @@ roles:
 providers:
   llm:
     zulu:
-      type: anthropic
       model: m
-      api_keys: ["${K}"]
     mike:
-      type: anthropic
       model: m
-      api_keys: ["${K}"]
     alpha:
-      type: anthropic
       model: m
-      api_keys: ["${K}"]
 `))
 	if err != nil {
 		t.Fatalf("an alias to an anchor outside the providers block broke the parse: %v", err)
@@ -263,13 +247,9 @@ providers:
   llm:
     <<: &first
       zulu:
-        type: anthropic
         model: m
-        api_keys: ["${K}"]
     alpha:
-      type: anthropic
       model: m
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo
@@ -304,18 +284,12 @@ providers:
     <<:
       - &a
         zulu:
-          type: anthropic
           model: m
-          api_keys: ["${K}"]
       - &b
         mike:
-          type: anthropic
           model: m
-          api_keys: ["${K}"]
     alpha:
-      type: anthropic
       model: m
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo
@@ -348,14 +322,10 @@ providers:
     <<:
       - &shared
         zulu:
-          type: anthropic
           model: m
-          api_keys: ["${K}"]
       - *shared
     alpha:
-      type: anthropic
       model: m
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo

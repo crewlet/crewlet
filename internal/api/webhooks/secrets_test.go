@@ -37,9 +37,7 @@ name: Acme
 providers:
   llm:
     primary:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["key"]
 integrations:
   mattermost:
     enabled: true
@@ -83,9 +81,7 @@ name: Acme
 providers:
   llm:
     primary:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["key"]
 integrations:
   gitlab:
     enabled: true
@@ -104,9 +100,7 @@ name: Acme
 providers:
   llm:
     primary:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["key"]
 integrations:
   gitlab:
     enabled: true
@@ -434,9 +428,7 @@ name: Acme
 providers:
   llm:
     primary:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["key"]
 roles:
   - name: SRE Lead
     handle: sre-lead

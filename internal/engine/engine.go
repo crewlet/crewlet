@@ -47,24 +47,6 @@ type Company struct {
 	// is refused rather than crashed.
 	Models *phase.Registry
 
-	// endpoints is every API entry's model, base URL and keys as this
-	// epoch's providers were built with them, keyed on the entry — what a
-	// coding box run on that entry addresses and signs in with ([runLLM]).
-	// From the build's own resolution, for the reason credentials below
-	// is: the resolver exists only while the epoch is being built, and a
-	// value resolved through any other would describe an endpoint no call
-	// of this epoch uses.
-	endpoints map[string]endpoint
-
-	// credentials is where each pooled provider's keys came from, as this
-	// epoch resolved them — the variable each names and a hint of what it
-	// resolved to, never a value — for [Engine.CredentialPools]. Keyed on
-	// the provider's config key. Computed HERE because the resolver the
-	// providers were built through exists only while the epoch is being
-	// built, and a key's provenance read through any other resolver would
-	// describe credentials no pool holds.
-	credentials map[string][]credentialSource
-
 	// contacts resolves the `${VAR}` contact ids a teammate in the prompts'
 	// roster may carry: the resolver this epoch was built through, which on
 	// a running node is its own chain — the secret store, then the
@@ -159,18 +141,16 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: organization: %w", err)
 	}
-	models, endpoints, err := buildProviders(c, env)
+	models, err := buildProviders(c, env)
 	if err != nil {
 		return nil, err
 	}
 	return &Company{
-		Config:      c,
-		Org:         organization,
-		Models:      models,
-		Tools:       tools.NewRegistry(),
-		endpoints:   endpoints,
-		credentials: credentialSources(c, env),
-		contacts:    env.LookupOK,
+		Config:   c,
+		Org:      organization,
+		Models:   models,
+		Tools:    tools.NewRegistry(),
+		contacts: env.LookupOK,
 	}, nil
 }
 

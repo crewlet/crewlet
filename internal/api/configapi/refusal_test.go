@@ -68,10 +68,11 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 		s := newSurface(t)
 		s.seed(t, companyDoc)
 		res := s.do(t, http.MethodPut, "/config",
-			strings.Replace(companyDoc, "      type: anthropic", "      type: nowhere", 1), summaryHeader)
+			strings.Replace(companyDoc, "      model: claude-sonnet-5\n",
+				"      agent: nowhere\n      model: claude-sonnet-5\n", 1), summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "validation_error")
-		p := problemAt(t, body, "providers.llm.zulu.type")
-		if !reflect.DeepEqual(p.Segments, config.Path{"providers", "llm", "zulu", "type"}) {
+		p := problemAt(t, body, "providers.llm.zulu.agent")
+		if !reflect.DeepEqual(p.Segments, config.Path{"providers", "llm", "zulu", "agent"}) {
 			t.Errorf("problem = %+v, want it located with its segments", p)
 		}
 		if !strings.Contains(body.Detail, p.Message) {
@@ -139,10 +140,10 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 		s := newSurface(t)
 		s.seed(t, companyDoc)
 		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
-			`{"type": "nowhere", "model": "claude-sonnet-5"}`, summaryHeader)
+			`{"agent": "nowhere", "model": "claude-sonnet-5"}`, summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "validation_error")
-		if p := problemAt(t, body, "providers.llm.zulu.type"); p.Kind != "unknown_value" {
-			t.Errorf("problem = %+v, want it about the provider's type", p)
+		if p := problemAt(t, body, "providers.llm.zulu.agent"); p.Kind != "unknown_value" {
+			t.Errorf("problem = %+v, want it about the provider's agent", p)
 		}
 	})
 
@@ -151,7 +152,7 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 		s := newSurface(t)
 		s.seed(t, companyDoc)
 		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
-			`{"type": "anthropic", "modell": "x"}`, summaryHeader)
+			`{"agent": "claude-code", "modell": "x"}`, summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "invalid_body")
 		// Placed where the provider sits in the document, as a whole
 		// document's typo is, with the line in the body that was sent.
@@ -279,26 +280,26 @@ func TestRefusalFieldsIsAlwaysWritable(t *testing.T) {
 	}
 }
 
-// A CLI-AGENT ENTRY IS JUDGED AGAINST ITS PROFILE AT ADMISSION.
+// AN ENTRY IS JUDGED AGAINST ITS CLI'S PROFILE AT ADMISSION.
 //
 // No API write builds a provider, so a rule that lived only in the epoch build
 // — an unloadable profile, a key the CLI has no variable for — was admitted
 // here, activated, and then refused by every node's apply. The validator the
 // API runs now holds the entry to its profile, so the write is refused where
 // the person making it can see why.
-func TestAPutIsRefusedForACLIAgentEntryItsProfileCannotRun(t *testing.T) {
+func TestAPutIsRefusedForAnEntryItsProfileCannotRun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, entry, path string }{
 		{"a profile that cannot load",
-			"      type: cli-agent\n      model: m\n      cli: {agent: custom}\n",
-			"providers.llm.sub.cli.overrides"},
+			"      model: m\n      agent: custom\n",
+			"providers.llm.sub.overrides"},
 		{"an api key the CLI has no variable for",
-			"      type: cli-agent\n      model: m\n      api_keys: [\"${OPENROUTER_API_KEY}\"]\n" +
-				"      cli: {agent: hermes, auth: {mode: api-key}}\n",
-			"providers.llm.sub.cli.auth.mode"},
+			"      model: m\n      agent: hermes\n" +
+				"      auth: {mode: api-key, api_key: \"${OPENROUTER_API_KEY}\"}\n",
+			"providers.llm.sub.auth.mode"},
 		{"a profile with no model flag for the model every entry names",
-			"      type: cli-agent\n      model: m\n      cli: {agent: codex, overrides: {model_args: []}}\n",
-			"providers.llm.sub.cli.overrides.model_args"},
+			"      model: m\n      agent: codex\n      overrides: {model_args: []}\n",
+			"providers.llm.sub.overrides.model_args"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -6,19 +6,19 @@ import (
 	"testing"
 )
 
-// cliEntry is a company with one cli-agent entry, "sub", whose body is the
+// cliEntry is a company with one providers.llm entry, "sub", whose body is the
 // YAML lines given (indented under the entry).
 func cliEntry(lines ...string) string {
 	var b strings.Builder
-	b.WriteString("name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: m\n")
+	b.WriteString("name: Acme\nproviders:\n  llm:\n    sub:\n      model: m\n")
 	for _, line := range lines {
 		b.WriteString("      " + line + "\n")
 	}
 	return b.String()
 }
 
-// EVERY CREDENTIAL A CLI-AGENT ENTRY CONFIGURES REACHES THE CLI, OR THE ENTRY
-// IS REFUSED. The backend places a credential only in a variable its profile
+// EVERY CREDENTIAL A PROVIDERS.LLM ENTRY CONFIGURES REACHES THE CLI, OR THE
+// ENTRY IS REFUSED. The backend places a credential only in a variable its profile
 // names and drops it silently otherwise, so each of these validated clean and
 // ran signed in to nothing — and only `crewlet validate` could ever have said
 // so, since no API write builds a provider. Judged against the MERGED profile,
@@ -33,86 +33,75 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 		says  string
 	}{
 		{
-			name:  "api-key on a CLI that reads its provider's key from its environment",
-			lines: []string{`api_keys: ["${OPENROUTER_API_KEY}"]`, "cli: {agent: hermes, auth: {mode: api-key}}"},
-			path:  "providers.llm.sub.cli.auth.mode", kind: ErrConflict,
-			says: `set the key in cli.env under the variable of the provider its model names`,
+			name: "api-key on a CLI that reads its provider's key from its environment",
+			lines: []string{"agent: hermes",
+				`auth: {mode: api-key, api_key: "${OPENROUTER_API_KEY}"}`},
+			path: "providers.llm.sub.auth.mode", kind: ErrConflict,
+			says: `set the key in env under the variable of the provider its model names`,
 		},
 		{
-			name:  "api-key on a CLI that reads no key from its environment",
-			lines: []string{`api_keys: ["${KIMI_API_KEY}"]`, "cli: {agent: kimi-code, auth: {mode: api-key}}"},
-			path:  "providers.llm.sub.cli.auth.mode", kind: ErrConflict,
+			name: "api-key on a CLI that reads no key from its environment",
+			lines: []string{"agent: kimi-code",
+				`auth: {mode: api-key, api_key: "${KIMI_API_KEY}"}`},
+			path: "providers.llm.sub.auth.mode", kind: ErrConflict,
 			says: "config.toml), so put it there",
 		},
 		{
-			name:  "api-key with no key",
-			lines: []string{"cli: {agent: claude-code, auth: {mode: api-key}}"},
-			path:  "providers.llm.sub.api_keys", kind: ErrMissing,
-			says: `add one, e.g. ["${ANTHROPIC_API_KEY}"]`,
-		},
-		{
-			name:  "api_keys under subscription",
-			lines: []string{`api_keys: ["${ANTHROPIC_API_KEY}"]`, "cli: {agent: claude-code}"},
-			path:  "providers.llm.sub.api_keys", kind: ErrConflict,
-			says: "reads api_keys only under cli.auth.mode api-key",
-		},
-		{
-			name:  "two keys on an entry that rotates nothing",
-			lines: []string{`api_keys: ["${A_KEY}", "${B_KEY}"]`, "cli: {agent: grok, auth: {mode: api-key}}"},
-			path:  "providers.llm.sub.api_keys", kind: ErrConflict,
-			says: "only the first key would ever reach the CLI",
+			name:  "an API key under subscription",
+			lines: []string{"agent: claude-code", `auth: {api_key: "${ANTHROPIC_API_KEY}"}`},
+			path:  "providers.llm.sub.auth.api_key", kind: ErrConflict,
+			says: "an API key is read only under auth.mode api-key",
 		},
 		{
 			name:  "a token on a CLI that mints none",
-			lines: []string{`cli: {agent: codex, auth: {token: "${CODEX_TOKEN}"}}`},
-			path:  "providers.llm.sub.cli.auth.token", kind: ErrConflict,
+			lines: []string{"agent: codex", `auth: {token: "${CODEX_TOKEN}"}`},
+			path:  "providers.llm.sub.auth.token", kind: ErrConflict,
 			says: `the "codex" profile names no token_env`,
 		},
 		{
-			name: "a token under api-key, which removes it",
-			lines: []string{`api_keys: ["${ANTHROPIC_API_KEY}"]`,
-				`cli: {agent: claude-code, auth: {mode: api-key, token: "${TOK}"}}`},
-			path: "providers.llm.sub.cli.auth.token", kind: ErrConflict,
+			name:  "a token under api-key, which removes it",
+			lines: []string{"agent: claude-code", `auth: {mode: api-key, token: "${TOK}"}`},
+			path:  "providers.llm.sub.auth.token", kind: ErrConflict,
 			says: "a token is read only under auth.mode subscription",
 		},
 		{
 			name:  "inherit-env on a CLI that names neither variable",
-			lines: []string{"cli: {agent: pi, auth: {mode: inherit-env}}"},
-			path:  "providers.llm.sub.cli.auth.mode", kind: ErrConflict,
+			lines: []string{"agent: pi", "auth: {mode: inherit-env}"},
+			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
 			says: `the "pi" profile names neither`,
 		},
 		{
-			name:  "the key variable written into cli.env",
-			lines: []string{`cli: {agent: grok, env: {XAI_API_KEY: "${XAI_API_KEY}"}}`},
-			path:  "providers.llm.sub.cli.env.XAI_API_KEY", kind: ErrConflict,
-			says: "the key as api_keys with cli.auth.mode api-key",
+			name:  "the key variable written into env",
+			lines: []string{"agent: grok", `env: {XAI_API_KEY: "${XAI_API_KEY}"}`},
+			path:  "providers.llm.sub.env.XAI_API_KEY", kind: ErrConflict,
+			says: "the key as auth.api_key with auth.mode api-key",
 		},
 		{
-			name:  "the token variable written into cli.env",
-			lines: []string{`cli: {agent: claude-code, env: {CLAUDE_CODE_OAUTH_TOKEN: "${TOK}"}}`},
-			path:  "providers.llm.sub.cli.env.CLAUDE_CODE_OAUTH_TOKEN", kind: ErrConflict,
-			says: "the token as cli.auth.token",
+			name:  "the token variable written into env",
+			lines: []string{"agent: claude-code", `env: {CLAUDE_CODE_OAUTH_TOKEN: "${TOK}"}`},
+			path:  "providers.llm.sub.env.CLAUDE_CODE_OAUTH_TOKEN", kind: ErrConflict,
+			says: "the token as auth.token",
 		},
 		{
-			// cli.env is layered over the variables that keep every seat's
+			// env is layered over the variables that keep every seat's
 			// CLI in its own home, so this would hand every seat the
 			// engine user's dotfiles and nothing would say so.
-			name:  "a home isolation variable written into cli.env",
-			lines: []string{`cli: {agent: claude-code, env: {HOME: /home/engine}}`},
-			path:  "providers.llm.sub.cli.env.HOME", kind: ErrConflict,
+			name:  "a home isolation variable written into env",
+			lines: []string{"agent: claude-code", "env: {HOME: /home/engine}"},
+			path:  "providers.llm.sub.env.HOME", kind: ErrConflict,
 			says: "a value here would replace that isolation for every seat",
 		},
 		{
-			name:  "the profile's own relocation variable written into cli.env",
-			lines: []string{`cli: {agent: codex, env: {CODEX_HOME: /srv/codex}}`},
-			path:  "providers.llm.sub.cli.env.CODEX_HOME", kind: ErrConflict,
+			name:  "the profile's own relocation variable written into env",
+			lines: []string{"agent: codex", "env: {CODEX_HOME: /srv/codex}"},
+			path:  "providers.llm.sub.env.CODEX_HOME", kind: ErrConflict,
 			says: "CODEX_HOME is a variable the engine sets for every call",
 		},
 		{
 			name:  "a credential in the profile's own env",
-			lines: []string{`cli: {agent: hermes, overrides: {env: {OPENROUTER_API_KEY: sk-or-literal}}}`},
-			path:  "providers.llm.sub.cli.overrides", kind: ErrConflict,
-			says: "put it in cli.env, which is ${VAR}-resolved",
+			lines: []string{"agent: hermes", "overrides: {env: {OPENROUTER_API_KEY: sk-or-literal}}"},
+			path:  "providers.llm.sub.overrides", kind: ErrConflict,
+			says: "put it in the entry's own env, which is ${VAR}-resolved",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,14 +150,14 @@ func assertAdmissionOnly(t *testing.T, doc, path string) {
 // removed a token and ignored a key.
 func TestAnUnknownCLIAuthModeIsReportedOnce(t *testing.T) {
 	t.Parallel()
-	doc := cliEntry(`api_keys: ["${K}"]`, `cli: {agent: claude-code, auth: {mode: apikey, token: "${T}"}}`)
+	doc := cliEntry("agent: claude-code", `auth: {mode: apikey, api_key: "${K}", token: "${T}"}`)
 	cfg, err := ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	problems := Problems(cfg.Validate())
-	if len(problems) != 1 || problems[0].Path != "providers.llm.sub.cli.auth.mode" {
-		t.Errorf("want exactly one problem, at cli.auth.mode; got %+v", problems)
+	if len(problems) != 1 || problems[0].Path != "providers.llm.sub.auth.mode" {
+		t.Errorf("want exactly one problem, at auth.mode; got %+v", problems)
 	}
 }
 
@@ -179,8 +168,8 @@ func TestAnUnknownCLIAuthModeIsReportedOnce(t *testing.T) {
 // provider cannot be built.
 func TestAProfileWithNoModelFlagIsRefusedOnEveryPath(t *testing.T) {
 	t.Parallel()
-	doc := cliEntry("cli: {agent: codex, overrides: {model_args: []}}")
-	err := rejects(t, doc, "providers.llm.sub.cli.overrides.model_args")
+	doc := cliEntry("agent: codex", "overrides: {model_args: []}")
+	err := rejects(t, doc, "providers.llm.sub.overrides.model_args")
 	if !errors.Is(err, ErrMissing) || !strings.Contains(err.Error(), `"--model", "{model}"`) {
 		t.Errorf("want a missing-field refusal showing the flag to declare, got %v", err)
 	}
@@ -194,8 +183,8 @@ func TestAProfileWithNoModelFlagIsRefusedOnEveryPath(t *testing.T) {
 
 	// A flag WITHOUT the placeholder drops the model as silently: it
 	// passes the same fixed value on every call.
-	err = rejects(t, cliEntry(`cli: {agent: codex, overrides: {model_args: ["--model", "gpt-5"]}}`),
-		"providers.llm.sub.cli.overrides.model_args")
+	err = rejects(t, cliEntry("agent: codex", `overrides: {model_args: ["--model", "gpt-5"]}`),
+		"providers.llm.sub.overrides.model_args")
 	if !errors.Is(err, ErrMissing) || !strings.Contains(err.Error(), "{model}") {
 		t.Errorf("want a missing-placeholder refusal, got %v", err)
 	}
@@ -203,24 +192,30 @@ func TestAProfileWithNoModelFlagIsRefusedOnEveryPath(t *testing.T) {
 
 // The routes each CLI does read are accepted, or the rules above refuse what
 // they exist to steer people to — and the MERGED profile is what is judged,
-// so naming a variable with cli.overrides makes api-key valid on a CLI whose
+// so naming a variable with overrides makes api-key valid on a CLI whose
 // built-in profile has none.
 func TestEveryCredentialRouteACLIReadsIsAccepted(t *testing.T) {
 	t.Parallel()
 	for name, lines := range map[string][]string{
-		"a hermes key in cli.env": {
-			`cli: {agent: hermes, env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}}`},
+		"a hermes key in env": {
+			"agent: hermes", `env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}`},
 		"a metered key in api-key mode": {
-			`api_keys: ["${XAI_API_KEY}"]`, "cli: {agent: grok, auth: {mode: api-key}}"},
+			"agent: grok", `auth: {mode: api-key, api_key: "${XAI_API_KEY}"}`},
+		// The key named nowhere in the document: the CLI's own key
+		// variable, read through the resolver at build — which is what
+		// lets a metered entry run on the variable every operator of the
+		// vendor already exports.
+		"api-key on the CLI's own variable": {
+			"agent: claude-code", "auth: {mode: api-key}"},
 		"a headless token in subscription mode": {
-			`cli: {agent: claude-code, auth: {token: "${MY_OAUTH_TOKEN}"}}`},
+			"agent: claude-code", `auth: {token: "${MY_OAUTH_TOKEN}"}`},
 		"inherit-env on a CLI with a key variable": {
-			"cli: {agent: codex, auth: {mode: inherit-env}}"},
+			"agent: codex", "auth: {mode: inherit-env}"},
 		"api-key once an override names the variable": {
-			`api_keys: ["${OPENROUTER_API_KEY}"]`,
-			"cli: {agent: hermes, auth: {mode: api-key}, overrides: {api_key_env: OPENROUTER_API_KEY}}"},
+			"agent: hermes", `auth: {mode: api-key, api_key: "${OPENROUTER_API_KEY}"}`,
+			"overrides: {api_key_env: OPENROUTER_API_KEY}"},
 		"cursor-agent's own key variable": {
-			`api_keys: ["${CURSOR_API_KEY}"]`, "cli: {agent: cursor-agent, auth: {mode: api-key}}"},
+			"agent: cursor-agent", `auth: {mode: api-key, api_key: "${CURSOR_API_KEY}"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -234,13 +229,13 @@ func TestEveryCredentialRouteACLIReadsIsAccepted(t *testing.T) {
 // that holds the fault, rather than with an empty path from the epoch build.
 func TestACLIAgentProfileThatCannotLoadIsRefusedAtItsOverrides(t *testing.T) {
 	t.Parallel()
-	err := rejects(t, cliEntry("cli: {agent: custom}"), "providers.llm.sub.cli.overrides")
-	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "set cli.overrides.binary") {
-		t.Errorf("want a conflict naming cli.overrides.binary, got %v", err)
+	err := rejects(t, cliEntry("agent: custom"), "providers.llm.sub.overrides")
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "set overrides.binary") {
+		t.Errorf("want a conflict naming overrides.binary, got %v", err)
 	}
 
-	err = rejects(t, cliEntry("cli: {agent: codex, overrides: {complete_arg: [exec]}}"),
-		"providers.llm.sub.cli.overrides")
+	err = rejects(t, cliEntry("agent: codex", "overrides: {complete_arg: [exec]}"),
+		"providers.llm.sub.overrides")
 	if !errors.Is(err, ErrShape) || !strings.Contains(err.Error(), "complete_arg") {
 		t.Errorf("want a shape error naming the misspelled field, got %v", err)
 	}

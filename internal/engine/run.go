@@ -798,11 +798,6 @@ type Engine struct {
 	// one company's fires. reconcileScheduler arms and disarms it instead.
 	scheduler schedulerLoop
 
-	// cooldowns is the loop that pulls the fleet's credential bench into
-	// this node's pools. On the ENGINE rather than on an epoch because it
-	// is a loop this process runs — see cooldowns.go.
-	cooldowns *cooldowns
-
 	// onboarded remembers which seats this PROCESS has seen onboarded.
 	//
 	// On the engine rather than on an epoch, because it is a fact about
@@ -1776,10 +1771,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.startMemorySync(ctx)
 	e.startMemoryFill(ctx)
 	e.startScheduler(ctx)
-	// The credential pools were attached to the fleet's ledger by equip,
-	// above, so a bench already publishes. This arms the other half: the
-	// pull that tells this node what its peers have already benched.
-	e.startCooldownRefresh(ctx)
 	// AFTER the epoch is current, because the dispatcher resolves a turn's
 	// seat against it — and before notifications, so a turn woken by the
 	// first inbound message already has somewhere to write what it learns.
@@ -2415,7 +2406,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	// tick of this node runs once a peer can take the duty, and no turn of
 	// this node can claim one again once it is given back.
 	e.releaseDuties(ctx)
-	e.stopCooldownRefresh()
 	// BEFORE the native backends, whose pages its walk reads, and before
 	// backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)

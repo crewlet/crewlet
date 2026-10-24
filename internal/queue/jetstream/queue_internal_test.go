@@ -15,8 +15,8 @@ import (
 // A FAILING MESSAGE BACKS OFF, and the budget outlives the outage.
 //
 // A flat spacing spent every one of a message's 25 attempts inside half a
-// minute, so an LLM credential benched for its cooldown, a vendor's
-// rate-limit window or a database restarting all dead-lettered work that the
+// minute, so an LLM entry sitting out a spent plan, a vendor's rate-limit
+// window or a database restarting all dead-lettered work that the
 // next attempt would have handled, while sending the struggling dependency 25
 // requests a second apart on the way there.
 func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
@@ -57,16 +57,18 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 	}
 
 	// AND THE SHIPPED DEFAULTS SPAN THE OUTAGE THEY EXIST FOR: a message's
-	// whole budget must outlast a benched credential's auth cooldown, which
-	// is the failure that used to consume it in 25 seconds.
+	// whole budget must outlast the minute an LLM entry sits out after its
+	// CLI reports a spent plan with no reset instant
+	// (internal/providers/llm/cliagent, bench.go) several times over — the
+	// failure flat spacing consumed the budget on in 25 seconds.
 	var total time.Duration
 	shipped := &Queue{}
 	for n := uint64(1); n <= uint64(maxDeliver); n++ {
 		total += shipped.nakBackoff(n)
 	}
 	if total < 5*time.Minute {
-		t.Errorf("the default budget spans %v, which is shorter than the "+
-			"auth cooldown a benched provider credential serves", total)
+		t.Errorf("the default budget spans %v, which does not outlast an LLM "+
+			"entry's one-minute sit-out several times over", total)
 	}
 }
 

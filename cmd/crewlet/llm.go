@@ -15,20 +15,20 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// `crewlet llm` — the operator's window onto the subscription CLI backends.
+// `crewlet llm` — the operator's window onto the coding CLIs every model runs
+// through.
 //
 // # Why these commands exist at all
 //
-// Every other provider type is configured and done: an API key is a string in
-// the secret store. A `cli-agent` provider is a LOGIN — browser OAuth with
-// PKCE, often behind SSO and MFA — held by a vendor's own command-line tool
-// in a directory on disk. There is no password grant to script, and driving a
+// A providers.llm entry is a LOGIN — browser OAuth with PKCE, often behind
+// SSO and MFA — held by a vendor's own command-line tool in a directory on
+// disk, unless it runs on an API key. There is no password grant to script, and driving a
 // headless browser through a vendor's login page breaks on their next
 // redesign. So Crewlet does not re-implement any of it. What it controls is
 // WHERE the credential lands: inside the provider's own isolated directory,
@@ -36,7 +36,7 @@ import (
 //
 // # Why doctor is the command that matters
 //
-// A cli-agent provider can be configured perfectly and still not work: the
+// An entry can be configured perfectly and still not work: the
 // binary can be missing from the engine host, the profile's flags can have
 // drifted from the installed version, the login can be present but expired,
 // and — the one nothing else catches — the model can answer prose instead of
@@ -52,25 +52,12 @@ import (
 // was assumed. The web probe asks it to fetch a URL, because web is the one
 // local tool every profile keeps ON and a vendor's sandbox flag can cut it
 // without saying so.
-//
-// # Why doctor also reads anthropic entries
-//
-// An `anthropic` entry needs no login, but it can be configured perfectly and
-// still be refused on every call: its request is SHAPED from a capability
-// table compiled into this build (claudemodel), and a model the vendor has
-// since changed — or a gateway alias the table reads as the wrong generation —
-// answers that shape with a 400, which the fallback chain does not retry. So
-// doctor reads the model's record from the vendor's Models API and reports
-// where the table disagrees with it, and sends one round in the shape a phase
-// sends to certify a tool call comes back. The other subcommands stay
-// cli-agent only: there is no login to broker, list or export.
-
-const llmUsage = `crewlet llm — subscription CLI backends: logins, health and tokens;
-and the health of the anthropic entries beside them
+const llmUsage = `crewlet llm — the coding CLIs every model runs through: logins,
+health and tokens
 
 Usage:
   crewlet llm list                        Providers, agent, model and how each is signed in
-  crewlet llm doctor [KEY]                Verify cli-agent and anthropic entries end to end
+  crewlet llm doctor [KEY]                Verify providers.llm entries end to end
                                           (-no-smoke skips the real calls)
   crewlet llm login KEY                   Broker the vendor's own interactive login
   crewlet llm login KEY -from-host        Adopt a login already on this machine
@@ -89,8 +76,7 @@ Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
   -home PATH     Read a host login from somewhere other than this user's home
-  -no-smoke      Skip doctor's real completions (the tool call and both probes; an
-                 anthropic entry's Models API read still runs, it bills nothing)
+  -no-smoke      Skip doctor's real completions (the tool call and both probes)
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
@@ -231,16 +217,12 @@ func loadLLMConfig(ctx context.Context, companyPath, bootstrapPath string, notes
 	return company, resolver, closeResolver, nil
 }
 
-// cliAgents builds every cli-agent provider the company declares, in the
-// order the document wrote them.
+// cliAgents builds every provider the company declares, in the order the
+// document wrote them.
 func cliAgents(company *config.Company, resolver *config.Resolver, companyPath string) ([]cliAgentProvider, error) {
 	var out []cliAgentProvider
 	for _, key := range company.Providers.ProviderOrder() {
-		spec := company.Providers.LLM[key]
-		if spec.Type != config.LLMCLIAgent {
-			continue
-		}
-		built, err := engine.BuildCLIAgent(key, spec, resolver)
+		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver)
 		if err != nil {
 			return nil, err
 		}
@@ -248,8 +230,8 @@ func cliAgents(company *config.Company, resolver *config.Resolver, companyPath s
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf(
-			"%s declares no cli-agent providers — see "+
-				"docs/concepts/subscription-llm-backends.md for the config block",
+			"%s declares no providers.llm entries — see "+
+				"docs/concepts/llm-backends.md for the config block",
 			companyPath)
 	}
 	return out, nil
@@ -268,7 +250,7 @@ func oneProvider(providers []cliAgentProvider, key string) (*cliagent.Provider, 
 			return p.provider, nil
 		}
 	}
-	return nil, fmt.Errorf("no cli-agent provider %q (have %s)",
+	return nil, fmt.Errorf("no provider %q (have %s)",
 		key, strings.Join(providerKeys(providers), ", "))
 }
 
@@ -326,86 +308,65 @@ func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout,
 	return w.Flush()
 }
 
-// diagnosis is what doctor prints about one entry, whichever backend it is.
-// Declared here, by the one caller that needs both backends' reports to look
-// alike.
+// diagnosis is what doctor prints about one entry: the CLI's own report, or
+// why there is none. Declared here, by the one caller that needs those
+// reports to look alike.
 type diagnosis interface {
 	Render(w io.Writer)
 	Healthy() bool
 }
 
-// doctorEntry is one entry doctor can examine.
+// doctorEntry is one entry doctor examines.
 type doctorEntry struct {
-	key  string
-	kind config.LLMProviderType
+	key string
 	// diagnose measures the entry; smoke sends the billed calls.
 	diagnose func(ctx context.Context, smoke bool) diagnosis
 }
 
-// doctorEntries is every entry doctor examines, in the order the document
-// wrote them: the cli-agent entries and the anthropic ones.
+// doctorEntries is every entry, in the order the document wrote them.
 //
 // AN ENTRY THAT DOES NOT BUILD IS A REPORT, not an abort. The engine would
 // refuse to apply this document over it, which is precisely what an operator
 // running doctor needs to read — beside every other entry's report, rather
 // than instead of it.
-//
-// The openai entries are not examined (there is no capability table to drift
-// from and no login to check), and naming one is refused by name rather than
-// answered with a report of nothing.
 func doctorEntries(company *config.Company, resolver *config.Resolver, companyPath string) ([]doctorEntry, error) {
 	var out []doctorEntry
 	for _, key := range company.Providers.ProviderOrder() {
-		spec := company.Providers.LLM[key]
-		entry := doctorEntry{key: key, kind: spec.Type}
-		switch spec.Type {
-		case config.LLMCLIAgent:
-			built, err := engine.BuildCLIAgent(key, spec, resolver)
-			if err != nil {
-				entry.diagnose = unbuilt(key, err)
-				break
+		entry := doctorEntry{key: key}
+		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver)
+		if err != nil {
+			entry.diagnose = unbuilt(key, err)
+			out = append(out, entry)
+			continue
+		}
+		entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
+			// A logout that keeps the bundle out is no failure of the
+			// bundle: the diagnosis names it beside the missing sign-in,
+			// as it would for the entry the engine runs.
+			if err := built.RestoreConfiguredBundle(ctx); err != nil &&
+				!errors.Is(err, cliagent.ErrLoggedOut) {
+				return bundleFailure{key: key, err: err}
 			}
-			entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
-				// A logout that keeps the bundle out is no failure of the
-				// bundle: the diagnosis names it beside the missing sign-in,
-				// as it would for the entry the engine runs.
-				if err := built.RestoreConfiguredBundle(ctx); err != nil &&
-					!errors.Is(err, cliagent.ErrLoggedOut) {
-					return bundleFailure{key: key, err: err}
-				}
-				return built.Diagnose(ctx, cliagent.DiagnoseOptions{
-					Smoke: smoke,
-					// THE ENGINE'S OWN ANSWERS, not the provider's guess at
-					// them: which runners this build registers and what a
-					// sandbox can dial are facts about the process, and both
-					// decide whether an agent-mode entry works at all.
-					AgentRunners: codingagent.Names(),
-					BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
-				})
-			}
-		case config.LLMAnthropic:
-			built, err := engine.BuildAnthropic(key, spec, resolver)
-			if err != nil {
-				entry.diagnose = unbuilt(key, err)
-				break
-			}
-			entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
-				return built.Diagnose(ctx, anthropic.DiagnoseOptions{Key: key, Smoke: smoke})
-			}
+			return built.Diagnose(ctx, cliagent.DiagnoseOptions{
+				Smoke: smoke,
+				// THE ENGINE'S OWN ANSWERS, not the provider's guess at
+				// them: which runners this build registers and what a
+				// sandbox can dial are facts about the process, and both
+				// decide whether an agent-mode entry works at all.
+				AgentRunners: codingagent.Names(),
+				BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
+			})
 		}
 		out = append(out, entry)
 	}
-	if !slices.ContainsFunc(out, doctorEntry.examined) {
+	if len(out) == 0 {
 		return nil, fmt.Errorf(
-			"%s declares no cli-agent or anthropic providers, which are the entries "+
-				"doctor examines — see docs/concepts/subscription-llm-backends.md",
+			"%s declares no providers.llm entries, which are what doctor "+
+				"examines — see docs/concepts/llm-backends.md",
 			companyPath)
 	}
 	return out, nil
 }
-
-// examined reports whether doctor has a report for this entry's type.
-func (e doctorEntry) examined() bool { return e.diagnose != nil }
 
 // buildFailure is the report for an entry that did not build.
 type buildFailure struct {
@@ -413,7 +374,7 @@ type buildFailure struct {
 	err error
 }
 
-// bundleFailure is a cli-agent entry whose configured credential bundle did not
+// bundleFailure is an entry whose configured credential bundle did not
 // restore: the engine warns and runs it signed out, so there is no login to
 // diagnose, and the bundle is what to fix.
 type bundleFailure struct {
@@ -443,21 +404,16 @@ func (b buildFailure) Render(w io.Writer) {
 }
 
 func doctorLLM(ctx context.Context, entries []doctorEntry, key string, smoke bool, stdout io.Writer) error {
-	selected := slices.DeleteFunc(slices.Clone(entries), func(e doctorEntry) bool { return !e.examined() })
+	selected := entries
 	if key != "" {
 		i := slices.IndexFunc(entries, func(e doctorEntry) bool { return e.key == key })
-		switch {
-		case i < 0:
-			keys := make([]string, 0, len(selected))
-			for _, e := range selected {
+		if i < 0 {
+			keys := make([]string, 0, len(entries))
+			for _, e := range entries {
 				keys = append(keys, e.key)
 			}
 			slices.Sort(keys)
 			return fmt.Errorf("no provider %q (doctor examines %s)", key, strings.Join(keys, ", "))
-		case !entries[i].examined():
-			return fmt.Errorf(
-				"provider %q is type %q; doctor examines cli-agent and anthropic entries",
-				key, entries[i].kind)
 		}
 		selected = []doctorEntry{entries[i]}
 	}
@@ -594,9 +550,8 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 		}
 		fmt.Fprintf(stdout,
 			"Stored the headless token as %s in %s.\n"+
-				"Reference it from the company document as:\n\n"+
-				"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-				"            token: \"${%s}\"\n", tokenVar, where, key, tokenVar)
+				"Reference it from the company document as:\n\n%s",
+			tokenVar, where, authReference(key, "token", tokenVar))
 		return nil
 
 	case req.username != "":
@@ -653,7 +608,7 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		fmt.Fprintln(stdout, bundle)
 		return nil
 	}
-	name := cliagent.BundleVarName(key)
+	name := cliprofile.BundleVarName(key)
 	where, err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle)
 	if err != nil {
 		return err
@@ -667,10 +622,16 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 	fmt.Fprintf(stdout,
 		"Stored the credential bundle as %s in %s.\n"+
 			"Every node restores it at boot when its own credentials directory\n"+
-			"is empty. Reference it as:\n\n"+
-			"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-			"            credential_bundle: \"${%s}\"\n", name, where, key, name)
+			"is empty. Reference it as:\n\n%s",
+		name, where, authReference(key, "credential_bundle", name))
 	return nil
+}
+
+// authReference is the company-document snippet that points an entry's auth
+// field at a stored secret, for the line printed after one is written.
+func authReference(key, field, name string) string {
+	return fmt.Sprintf("  providers:\n    llm:\n      %s:\n        auth:\n"+
+		"          %s: \"${%s}\"\n", key, field, name)
 }
 
 // storeLLMSecret writes one value into the encrypted secret store, as

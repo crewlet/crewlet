@@ -101,7 +101,7 @@ What the engine relies on, and where each behaviour is enforced (`internal/queue
 **Three outcomes, not two.** A handler acks, naks, or **defers**:
 
 - **Ack** — done. It is the zero value, so the quiet path is the safe one.
-- **Nak** — the handler failed. Redelivered after a one-second spacing that doubles on each further failure, up to 30 seconds, because an immediately-redelivered failure spins the loop at full speed against whatever is broken while a flat spacing spends all 25 attempts inside half a minute. The doubling spreads the delivery budget over about ten minutes, so a benched provider credential, a vendor rate-limit window or a restarting database is outlasted rather than dead-lettered; a failure that outlives that window is not transient, and holding a seat's mailbox behind it is worse than the dead-letter copy. **A failure comes back behind the mail that was waiting when it failed**: the broker serves never-delivered messages while the backoff runs, so a newer message of the same conversation is handled first. That is the contract on both backends, and one conformance case holds both to it. The in-memory twin models the backoff virtually — the failure goes to the back of the mailbox, with no timer — so it keeps its inline, deterministic dispatch while certifying the order production gives; it used to replay a failure at the head, and every engine test run on it certified an order the shipped broker never produced.
+- **Nak** — the handler failed. Redelivered after a one-second spacing that doubles on each further failure, up to 30 seconds, because an immediately-redelivered failure spins the loop at full speed against whatever is broken while a flat spacing spends all 25 attempts inside half a minute. The doubling spreads the delivery budget over about ten minutes, so a provider sitting out a spent plan, a vendor rate-limit window or a restarting database is outlasted rather than dead-lettered; a failure that outlives that window is not transient, and holding a seat's mailbox behind it is worse than the dead-letter copy. **A failure comes back behind the mail that was waiting when it failed**: the broker serves never-delivered messages while the backoff runs, so a newer message of the same conversation is handled first. That is the contract on both backends, and one conformance case holds both to it. The in-memory twin models the backoff virtually — the failure goes to the back of the mailbox, with no timer — so it keeps its inline, deterministic dispatch while certifying the order production gives; it used to replay a failure at the head, and every engine test run on it certified an order the shipped broker never produced.
 - **Defer** — *this process has lost the right to do this work*. The message goes back with an immediate Nak — about a millisecond, where letting the ack timer expire would park a seat's mail for the whole ack window on every lease movement — **at the head**, because the broker serves a redelivery before new mail, and the consumer **quiesces itself**, since continuing to fetch would hand it more work it has equally lost the right to do. **It costs one delivery, exactly as a Nak does, on every backend**: no broker here has a "give this back without counting it", so what keeps a healthy event alive across handoffs is a budget sized for them (25 rather than the 10 a free-handoff broker would need), never a handoff that is free. The in-memory twin spends one too — it used to return a deferred batch untouched, which modelled a broker nobody runs and left the one conformance case about handoff cost running against the twin alone. Never a republish: a republished event is a new message at the stream's tail, and both the [completion ledger](seat-ownership.md#the-completion-ledger)'s idempotency and the batch layer's aging key on the identity a Nak preserves.
 
 **The ack clock is real.** A fetched-unacked message stays invisible to every other consumer of that subscription for `ackWait` — **30 minutes**, sized for a wait behind a running turn plus one worst-case turn. It is a backstop rather than the handoff path: a seat that loses its lease defers explicitly and its successor sees the message in about a millisecond, where waiting the clock out would cost half an hour.
@@ -369,14 +369,12 @@ agent_turn_steered         # what became of a person's note to this running
 agent_phase_started
 agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's
-                           # timing, tokens and `stop_reason` (end, tool_use,
-                           # max_tokens, refusal, context_exceeded, paused;
-                           # absent where the backend reported none). A
-                           # failed phase carries `error_kind` — a provider
-                           # kind, the stop reason that ended it, or
-                           # budget_exhausted — and a phase whose model
-                           # DECLINED carries `refusal` {category,
-                           # explanation} beside `error_kind: refusal`
+                           # timing, tokens and `stop_reason` (end or
+                           # tool_use; absent where the backend reported
+                           # none). A failed phase carries `error_kind` — a
+                           # provider kind (rate_limit, auth, timeout,
+                           # server, fatal), budget_exhausted, stopped for a
+                           # phase a person ended, canceled, or error
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider
@@ -407,11 +405,9 @@ subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # plus a token approximation: the system and user
                            # text, a resumed phase's seeded conversation — its
-                           # text, each parked round's reasoning (once: the
-                           # thinking blocks, or the prose rendering of them,
-                           # never both) and its tool-call arguments — and the
-                           # tool-definition array both providers bill as
-                           # input, under system_bytes / user_bytes /
+                           # text and its tool-call arguments — and the
+                           # tool-definition array the backend writes into
+                           # the prompt, under system_bytes / user_bytes /
                            # message_bytes / tool_bytes and tool_count. A
                            # separate row rather than a
                            # derivation: the prompts themselves are on

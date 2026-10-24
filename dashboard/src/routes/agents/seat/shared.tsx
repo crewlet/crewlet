@@ -143,8 +143,8 @@ export function ConfigValue({ value }: { value: string | undefined }) {
 
 /**
  * A provider chain, in the order the fallback walks it. Each key opens its
- * model under Settings › Models & keys, where its keys and their cooldowns
- * say whether the seat can reach it right now.
+ * model under Settings › Models & keys, which says the CLI it drives and how
+ * it signs in.
  */
 export function ModelChain({ keys }: { keys: readonly string[] }) {
   return (

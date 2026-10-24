@@ -24,6 +24,59 @@ Two things are worth having anyway, for what runs *around* it:
   Mattermost) and for the container mode of the
   [code sandbox](../concepts/code-sandbox.md).
 
+### A coding CLI
+
+**Every model a seat runs on is reached through a coding CLI** that the engine
+starts as a child process — it has no HTTP client to a model vendor of its own
+(see [LLM Backends](../concepts/llm-backends.md#why-the-cli-is-the-only-backend)
+for why). So the CLI each `providers.llm` entry names has to be installed on
+the engine host, executable by the engine's user and on its `PATH` (or named by
+path with `overrides.binary`):
+
+| Models | `agent` | Binary | Install |
+|---|---|---|---|
+| Anthropic's | `claude-code` (the default) | `claude` | Claude Code — `@anthropic-ai/claude-code` on npm, or the vendor's own installer |
+| OpenAI's | `codex` | `codex` | Codex — `@openai/codex` on npm, or the vendor's own installer |
+| Open models on any provider, a local server included | `opencode` | `opencode` | **OpenCode 2** — `@opencode/cli` on npm. Not 1.x's `opencode-ai`, which cannot run the engine's profile |
+
+[Supported CLIs](../concepts/llm-backends.md#supported-clis) lists the rest.
+In a fleet it is every node whose `node.roles` include `seats` (which run the
+turns) or `workers` (which run the learning passes on each seat's auxiliary
+model) — and the machine you run `crewlet llm login` and `crewlet llm doctor`
+on, which drive the same binary.
+
+Install the release line the engine's built-in profile was written for:
+`crewlet llm doctor` prints it as `written for` beside the version it found,
+and a profile that no longer matches its CLI fails there rather than at a
+seat's first turn. Each CLI keeps its login and its per-seat homes under the
+entry's `state_dir` — by default `~/.crewlet/llm-cli/<key>`, or under
+`CREWLET_LLM_CLI_HOME` — so that directory belongs on storage that outlives the
+process.
+
+**The container image ships no coding CLI.** It is the engine and the userland
+it needs (see below), and a CLI is a Node or Rust runtime of a few hundred
+megabytes that only the companies naming it want — the same reason it ships
+no `node` or `uv` for MCP servers. Build a derived image with the ones your
+company names:
+
+```dockerfile
+FROM ghcr.io/crewlet/crewlet:<tag>
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @anthropic-ai/claude-code@2.1.263
+USER crewlet
+```
+
+— `2.1.263` because it is the release the `claude-code` profile's flags, output
+paths and limit sentences were measured against; take a newer one when
+`crewlet llm doctor` passes against it. Give the container a volume for the state directory
+(`CREWLET_LLM_CLI_HOME=/var/lib/crewlet/llm-cli`, say), so a login survives a
+restart. A login made on another machine reaches the container as a
+credential bundle or a headless token in the secret store — see
+[Authentication](../concepts/llm-backends.md#authentication).
+
 ## Install
 
 ```bash
@@ -64,8 +117,10 @@ with Feather's MIT text for the glyphs derived from it). The container image car
 `/static/dashboard/THIRD_PARTY_NOTICES.txt`.
 
 Or run the container image, `ghcr.io/crewlet/crewlet` — a Debian userland
-rather than a distroless one, because the engine spawns process trees (stdio
-MCP servers, and the local sandbox's coding agent). Each release pushes it as
+rather than a distroless one, because the engine spawns process trees (the
+coding CLI every model runs through, stdio MCP servers, and the local sandbox's
+coding agent) — and one that ships no coding CLI, so a company runs it as the
+base of an image of its own ([above](#a-coding-cli)). Each release pushes it as
 `ghcr.io/crewlet/crewlet:<tag>` (`v0.2.0`, the tag itself) for linux/amd64 and
 linux/arm64, and a stable release also moves `latest`. The image is signed by
 digest with the same keyless identity as the checksums, which names the release
@@ -173,6 +228,10 @@ healthcheck.)
 ```bash
 crewlet --version
 ```
+
+and, for the coding CLI your company's entries name, its own version probe
+(`claude --version`, `codex --version`, `opencode --version`) — `crewlet llm
+doctor` runs the same probe against the configured entry once a company exists.
 
 Next: the [Quickstart](quickstart.md) brings up a four-agent company, and
 [Choosing your stack](choosing-your-stack.md) walks through the external

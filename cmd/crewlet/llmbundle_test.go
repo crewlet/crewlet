@@ -11,14 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // The cases here hold WHERE `crewlet llm` restores an entry's configured
 // credential bundle. Every one sets the conventional variable the engine reads
 // a bundle from, so none runs in parallel.
 
-// bundledEntry writes a company whose one cli-agent entry, "sub", keeps its
+// bundledEntry writes a company whose one entry, "sub", keeps its
 // login in a credential file and runs `true` for every command, configures
 // bundle through the conventional CREWLET_LLM_CLI_SUB_CREDENTIALS, and has an
 // empty state directory. It returns the flags pointing a command at it and the
@@ -36,29 +36,27 @@ func bundledEntryWithLogout(t *testing.T, bundle, logout string) (flags []string
 	t.Helper()
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state")
-	t.Setenv(cliagent.BundleVarName("sub"), bundle)
+	t.Setenv(cliprofile.BundleVarName("sub"), bundle)
 	binary, status, signIn, logoutArgs := "true", `["status"]`, `["login"]`, ""
 	if logout != "" {
 		binary, status, signIn = "sh", `["-c", "exit 0"]`, `["-c", "exit 0"]`
-		logoutArgs = fmt.Sprintf("\n          logout_args: [\"-c\", %q]", logout)
+		logoutArgs = fmt.Sprintf("\n        logout_args: [\"-c\", %q]", logout)
 	}
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
     sub:
-      type: cli-agent
+      agent: custom
       model: m
-      cli:
-        agent: custom
-        state_dir: %q
-        overrides:
-          binary: %q
-          complete_args: ["-p"]
-          model_args: ["--model", "{model}"]
-          output: text
-          credential_paths: [".fake/creds.json"]
-          status_args: %s
-          login_args: %s%s
+      state_dir: %q
+      overrides:
+        binary: %q
+        complete_args: ["-p"]
+        model_args: ["--model", "{model}"]
+        output: text
+        credential_paths: [".fake/creds.json"]
+        status_args: %s
+        login_args: %s%s
 roles:
   - name: CEO
     handle: ceo
@@ -135,7 +133,7 @@ func TestALogoutOutlastsTheCommandsThatRestoreTheBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("logout: %v (%s)", err, stderr)
 	}
-	for _, want := range []string{"Logged sub out", cliagent.BundleVarName("sub"), "fresh volume",
+	for _, want := range []string{"Logged sub out", cliprofile.BundleVarName("sub"), "fresh volume",
 		"`crewlet llm login sub`"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the logout does not say %q about the configured bundle:\n%s", want, stdout)
@@ -304,7 +302,7 @@ func TestALogoutWhoseVendorHalfFailedStillNamesTheBundle(t *testing.T) {
 	if strings.Contains(stdout, "Logged sub out") {
 		t.Errorf("a logout whose vendor half failed reported success:\n%s", stdout)
 	}
-	for _, want := range []string{cliagent.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
+	for _, want := range []string{cliprofile.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the failed logout does not say %q about the bundle it holds back:\n%s", want, stdout)
 		}

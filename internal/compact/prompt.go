@@ -46,8 +46,8 @@ var kindBriefs = map[Kind]string{
 	KindToolError: "The text is what a FAILED tool call returned. Keep the cause, the status " +
 		"code, and anything naming what to change — a missing scope, a field, a limit.",
 	KindProduced: "The text is everything an AI agent wrote during one earlier round of its " +
-		"work, thinking included, ENDING with what it produced. Keep the produced content " +
-		"itself in full detail; compress the reasoning before it hardest.",
+		"work, ENDING with what it produced. Keep the produced content itself in full " +
+		"detail; compress what it said on the way there hardest.",
 	KindSource: "The text is a document being read to answer a question. Keep everything " +
 		"that bears on the question, verbatim where you can — steps, values, conditions, " +
 		"names — and drop what does not bear on it.",

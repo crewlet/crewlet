@@ -22,9 +22,7 @@ import {
   phaseDuration,
   phaseStart,
   rounds,
-  stopNote,
   streamedPhases,
-  timedRounds,
   toolCalls,
   transcriptLength,
   type PhaseRecord,
@@ -463,26 +461,26 @@ describe("presentation rules", () => {
 });
 
 describe("narration is kept beside the round that produced it", () => {
-  test("a round's thinking, speech and calls land in one block", () => {
+  test("a round's speech and calls land in one block", () => {
     // The bug this replaces: `response` is the JOIN of every round's turn,
     // and a join cannot be undone — the parts are separated by a blank line
-    // and prose contains blank lines. Splitting it on the leading <think>
-    // tag showed round 1's thinking as "the reasoning" and every later
-    // round's thinking as "the model output", tags and all.
+    // and prose contains blank lines, so nothing could say which round said
+    // what, or which words asked for which call.
     const ledger = rounds(
       toolCalls([
         { name: "search", round: 1 },
         { name: "read", round: 2 },
       ]),
       narrations([
-        { round: 1, reasoning: "which tool?", content: "looking it up" },
-        { round: 2, reasoning: "now I know", content: "done" },
+        { round: 1, content: "looking it up" },
+        { round: 2, content: "done" },
       ]),
     );
     expect(ledger.map((r) => r.round)).toEqual([1, 2]);
-    expect(ledger[0]).toMatchObject({ reasoning: "which tool?", content: "looking it up" });
+    expect(ledger[0]!.content).toBe("looking it up");
     expect(ledger[0]!.tools.map((t) => t.name)).toEqual(["search"]);
-    expect(ledger[1]).toMatchObject({ reasoning: "now I know", content: "done" });
+    expect(ledger[1]!.content).toBe("done");
+    expect(ledger[1]!.tools.map((t) => t.name)).toEqual(["read"]);
   });
 
   test("the final round has no tools and still gets a block", () => {
@@ -500,9 +498,8 @@ describe("narration is kept beside the round that produced it", () => {
   test("a round that only called tools narrates nothing", () => {
     const ledger = rounds(
       toolCalls([{ name: "search", round: 1 }]),
-      narrations([{ round: 1, reasoning: "   ", content: "" }]),
+      narrations([{ round: 1, content: "   " }]),
     );
-    expect(ledger[0]!.reasoning).toBe("");
     expect(ledger[0]!.content).toBe("");
   });
 
@@ -581,7 +578,7 @@ describe("a round being written is not a round that is finished", () => {
     const ledger = rounds(
       toolCalls([{ name: "search", round: 1 }]),
       narrations([{ round: 1, content: "looked it up" }]),
-      { round: 2, reasoning: "still think", content: "half a sen" },
+      { round: 2, content: "half a sen" },
     );
     expect(ledger.map((r) => r.round)).toEqual([1, 2]);
     expect(ledger[0]!.streaming).toBe(false);
@@ -994,52 +991,5 @@ describe("the row's column is the authority for a stored record, the payload for
   test("falls back to the payload for a frame nothing has stored", () => {
     const done = fromPhaseEvent(phaseEvent({ work_key: "wk-live" }))!;
     expect(done.workKey).toBe("wk-live");
-  });
-});
-
-describe("stop reasons and refusals", () => {
-  test("a round's stop reason is read off the record, and absent is unreported", () => {
-    const [a, b] = timedRounds([{ round: 1, stop_reason: "max_tokens" }, { round: 2 }]);
-    expect(a!.stopReason).toBe("max_tokens");
-    expect(b!.stopReason).toBe("");
-  });
-
-  test("only a round that did not finish has a note", () => {
-    for (const reason of ["max_tokens", "refusal", "context_exceeded", "paused"]) {
-      expect(stopNote(reason)).not.toBeNull();
-    }
-    for (const reason of ["end", "tool_use", "", "from_the_future", "toString"]) {
-      expect(stopNote(reason)).toBeNull();
-    }
-  });
-
-  test("a round that did not finish keeps its slot with nothing in it; one that finished does not", () => {
-    const ledger = rounds(
-      [],
-      [],
-      null,
-      timedRounds([
-        { round: 1, stop_reason: "tool_use" },
-        { round: 2, stop_reason: "refusal" },
-      ]),
-    );
-    expect(ledger.map((r) => [r.round, r.stopReason])).toEqual([[2, "refusal"]]);
-  });
-
-  test("the record's refusal is read, and its absence is null", () => {
-    const refused = fromPhaseEvent({
-      id: "e",
-      type: "agent_phase_completed",
-      timestamp: "2026-10-05T00:00:00Z",
-      payload: { phase: "execute", failed: true, refusal: { category: "bio" } },
-    } as unknown as EventRecord);
-    expect(refused!.refusal).toEqual({ category: "bio", explanation: "" });
-    const plain = fromPhaseEvent({
-      id: "e",
-      type: "agent_phase_completed",
-      timestamp: "2026-10-05T00:00:00Z",
-      payload: { phase: "execute", failed: true },
-    } as unknown as EventRecord);
-    expect(plain!.refusal).toBeNull();
   });
 });

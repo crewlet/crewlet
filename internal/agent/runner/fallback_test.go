@@ -220,8 +220,8 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Errorf("message_bytes = %d on a phase that opened its own conversation, want 0",
 			m.MessageBytes)
 	}
-	// AND THE TOOL ARRAY, which both HTTP vendors bill as input and the
-	// cli-agent text backend renders into the prompt literally. The meter
+	// AND THE TOOL ARRAY, which the cli-agent text backend renders into the
+	// prompt literally and its model is billed for as input. The meter
 	// was blind to it: a measured turn reported ~6,900 tokens against the
 	// provider's 205,000, and this row is what "is the prompt getting
 	// smaller" is answered from.
@@ -278,29 +278,19 @@ func toolArrayBytes(t *testing.T, defs []llm.ToolDef) int {
 }
 
 // seedChars is what the engine measures a parked conversation as, rebuilt from
-// what the provider was handed: every message's text, each assistant round's
-// reasoning ONCE — the structured blocks where a round has them, the prose
-// where it does not — and the compact JSON of its tool calls' arguments.
+// what the provider was handed: every message's text and the compact JSON of
+// its tool calls' arguments.
 //
 // Restated here rather than reaching for the engine's own unexported helper,
 // for the reason toolArrayBytes gives: this suite is the one thing holding that
 // helper's answer against what a provider actually received, and a test that
 // calls the function it is checking agrees with itself whatever either of them
-// does. Restating it is also what makes the double-count visible from here — a
-// helper that summed both reasoning fields would have to be written down as
-// summing both.
+// does.
 func seedChars(t *testing.T, msgs []llm.Message) int {
 	t.Helper()
 	total := 0
 	for _, msg := range msgs {
 		total += len(msg.Content)
-		if len(msg.ThinkingBlocks) > 0 {
-			for _, tb := range msg.ThinkingBlocks {
-				total += len(tb.Thinking) + len(tb.Data)
-			}
-		} else {
-			total += len(msg.ReasoningContent)
-		}
 		for _, tc := range msg.ToolCalls {
 			if len(tc.Arguments) == 0 {
 				total += len(`{}`)
@@ -326,12 +316,11 @@ func seedChars(t *testing.T, msgs []llm.Message) int {
 // only the tool term would have made it worse, reading as a phase offered
 // every tool and asked nothing.
 //
-// The parked rounds here carry REASONING AND TOOL-CALL ARGUMENTS, which is what
-// a real one carries — every current Claude model thinks on every round and
-// returns its summarized thinking, the tool loop stores the blocks on each
-// assistant message and execstate serialises them into the row — and they were
-// the next term to go missing after the two above: text alone under-reported a
-// resumed executor by the largest thing in its prompt.
+// The parked rounds here carry TOOL-CALL ARGUMENTS, which is what a real one
+// carries — the tool loop stores each round's calls on its assistant message
+// and execstate serialises them into the row — and they were the next term to
+// go missing after the two above: text alone under-reported a resumed executor
+// by the largest thing in its prompt.
 func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -341,20 +330,6 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 				`"evidence":"the box could not compile it"}`),
 	}}
 	state := suspendedAfterTwoRounds()
-	// The shape the Anthropic backend hands back: the blocks verbatim, and
-	// the same thinking text rendered beside them as prose. Added here
-	// rather than to the shared fixture, which the round and duration cases
-	// read for their own reasons.
-	const thought = "the module is untidy, so the box has to run go mod tidy"
-	for i, msg := range state.Messages {
-		if msg.Role != llm.RoleAssistant {
-			continue
-		}
-		state.Messages[i].ReasoningContent = thought
-		state.Messages[i].ThinkingBlocks = []llm.ThinkingBlock{
-			{Type: "thinking", Thinking: thought},
-		}
-	}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		pub: pub,
 		resume: &runner.Resume{
@@ -373,30 +348,22 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 	m := got[0]
 	sent := prov.requestsFor("execute")[0]
 	messages := seedChars(t, sent.Messages)
-	var text, reasoned, args int
+	var text, args int
 	for _, msg := range sent.Messages {
 		text += len(msg.Content)
-		reasoned += len(msg.ReasoningContent)
 		for _, tc := range msg.ToolCalls {
 			args += len(tc.Arguments)
 		}
 	}
 	// Each term has to be present in the fixture, or the case cannot tell a
 	// fix from a bug: the meter would report the same figure either way.
-	if text == 0 || reasoned == 0 || args == 0 {
-		t.Fatalf("the fixture sent text=%d reasoning=%d tool-call arguments=%d; a term at "+
-			"zero is a term this case is not holding", text, reasoned, args)
+	if text == 0 || args == 0 {
+		t.Fatalf("the fixture sent text=%d tool-call arguments=%d; a term at "+
+			"zero is a term this case is not holding", text, args)
 	}
 	if m.MessageBytes != messages {
 		t.Errorf("message_bytes = %d, the provider received %d bytes of conversation",
 			m.MessageBytes, messages)
-	}
-	// The double count, named: on this backend's shape ReasoningContent is a
-	// rendering of the blocks beside it, so summing both would report the
-	// prompt's largest term twice.
-	if m.MessageBytes == messages+reasoned {
-		t.Error("message_bytes counted the reasoning twice — the blocks and the prose " +
-			"rendering of the same thinking are one term")
 	}
 	// The two a resume does NOT prepend. Reporting them would report bytes
 	// nothing sent, which is the mirror of the bug above.
@@ -405,7 +372,7 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 			m.SystemBytes, m.UserBytes)
 	}
 	tools := toolArrayBytes(t, sent.Tools)
-	// The tool array is a term of this case exactly as the three above are,
+	// The tool array is a term of this case exactly as the two above are,
 	// and it is held to the same bar: at zero the comparison below is 0 == 0
 	// and says nothing about what a resumed phase re-offers.
 	if len(sent.Tools) == 0 || tools == 0 {

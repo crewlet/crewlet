@@ -22,10 +22,10 @@ import (
 // second — most of it the CLI starting the private server `--standalone`
 // gives it. Thirty seconds is sixty times that, so a host already running
 // max_concurrent coding CLIs does not fail a seat's generation or lose a
-// call's real counts over a slow start, and a tenth of the default per-call
-// cap (cli.timeout_seconds, 300), so a wedged command cannot quietly spend
-// most of the call it brackets: every one of them runs inside the call's
-// concurrency slot.
+// call's real counts over a slow start, and a twentieth of the default
+// per-call cap (timeout_seconds, 600), so a wedged command cannot quietly
+// spend much of the call it brackets: every one of them runs inside the
+// call's concurrency slot.
 //
 // A constant rather than a setting because nothing about a deployment moves
 // it: the work is a fixed-size local round trip, and the per-call cap is the

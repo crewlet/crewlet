@@ -330,7 +330,6 @@ node means nothing was done.
 | `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Takes `admin`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are) |
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Takes `admin`** and a recent proof, as the removal by name does |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
-| `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Takes `admin`** (see [below](#get-credential-pool)) |
 | `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
@@ -666,7 +665,7 @@ told they lead nobody goes looking for an authority they already hold.
 | **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions — an agent's **status**, with its **body** to an administrator and to whoever leads the seat ([below](#a-status-reader-never-receives-a-transcript)) — `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row — `/feed`, `decisions` and the `knowledge` question |
 | `tracker` | The reads under `/work/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /work/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s tracker half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `knowledge` | The reads under `/pages/*` and `/containers`, the page questions, and writing the company's own pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/credential-pool`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/work/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model — a coding CLI the host runs — a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/work/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and a coding run's tail (`/sandbox-runs/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -1599,7 +1598,7 @@ one is the managing system's to hold, not the caller's to retry with. See
 | `GET` | `/config/revisions` | Paginated history (newest first), metadata only |
 | `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
-| `GET` | `/config/references` | Every `${VAR}` the active document names, each with the config path of the field that names it, plus the `revision` they were read from |
+| `GET` | `/config/references` | Every `${VAR}` the active document names, and every variable it reads without naming it, each with the config path of the field that reads it, plus the `revision` they were read from |
 | `GET` | `/config/charter` | The company's mission, vision and policies, with an `ETag` of their content. See [The charter](#the-charter-mission-vision-and-policies) |
 
 The dashboard reads four of those facts over the query channel rather than
@@ -1621,9 +1620,19 @@ credential only when it is one whole `${VAR}`, so `"Bearer ${TOKEN}"` arrives
 as `"__redacted__"`. The index is built from the unredacted document and
 answers names and paths only, never a value. The path is the operator's own spelling
 (`integrations.github.webhook_secret`), the same one a validation failure
-reports, and a name with several readers appears once per reader. It carries
-the document's own `ETag`, because the index changes exactly when the revision
-does.
+reports, and a name with several readers appears once per reader. It also
+lists every variable the document reads **without naming it**: a
+`providers.llm` entry whose credential field is empty signs in from a
+conventional variable instead — its CLI's token variable under
+`subscription` (`CLAUDE_CODE_OAUTH_TOKEN`, which `crewlet llm login
+-capture-token` stores), its key variable under `api-key`
+(`ANTHROPIC_API_KEY`), and `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` for the bundle
+`crewlet llm export -secret-store` stores — and `providers.embeddings` with no
+`api_key` reads `OPENAI_API_KEY`. Each is reported at the empty field
+(`providers.llm.default.auth.token`), which is where a reference would be
+written instead; removing that row signs the entry out as surely as removing
+one it names. It carries the document's own `ETag`, because the index changes
+exactly when the revision does.
 
 **Full-document write:**
 
@@ -3260,7 +3269,7 @@ own envelopes.
 
 Crucially, the projection holds each agent's **in-flight LLM call** —
 the latest `agent_turn_progress` (phase, round, model, accumulated
-response *including the model's reasoning*, tool calls so far) — and
+response, tool calls so far) — and
 surfaces it as a `live_call` field on the agent in every snapshot.  Its
 `response` is built by the same function that builds the finished
 phase record's, so the live row and the turn you expand afterwards are
@@ -4025,7 +4034,7 @@ while an LLM call is under
 way. The fields are these:
 
 - `prompt_messages` is `[{role, content, sections}]`, the conversation the phase opened with. `sections` is that message's outline as the prompt's builder recorded it — `[{key, title, bytes, headed?}]`, tiling `content` exactly, with `headed: true` on a part that opens on its own heading line whose text is `title` (absent on a part the builder named, which may still open on a heading of its content's) — and is absent on a message no builder outlined or whose text is not valid UTF-8; a finished phase record carries the same maps as `system_sections` and `user_sections`. See [a prompt carries its outline](../concepts/turn-engine.md#what-streams-during-a-turn) for the keys and the rules a reader checks before slicing by one.
-- `round_narration` is `[{round, reasoning, content, declined}]`, what the model said in each round so far; `declined: true` marks a round that answered in prose where the phase had to end in a call, and is absent otherwise.
+- `round_narration` is `[{round, content, declined}]`, what the model said in each round so far; `declined: true` marks a round that answered in prose where the phase had to end in a call, and is absent otherwise.
 - `rounds_used` is the round the phase is on, counted from one: the rounds that have come back, and the one in flight from the frame the engine publishes as that round's provider call is made. A finished phase record carries the same count under the same name.
 - `rounds` is each round's own timing and tokens, `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. This used to be the count, under the name the phase record uses for the list.
 - `max_rounds` is the round cap currently granted, which an extension can raise mid-phase.
@@ -4219,7 +4228,6 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's key), which is what a `schedules` row carries and what the ledger keys on — hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
-| `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Takes `admin`**. See [below](#get-credential-pool) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.max_tool_rounds`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
@@ -6956,67 +6964,6 @@ shared knowledge backend, reachable by all members via query-time search.
 
 ## Fleet, Sandbox Runs & Schedules
 
-### `GET /credential-pool`
-
-Backs **Settings › Models & keys**: every model the company configures, in
-config order (the order a seat that names no model falls back through), the
-keys each rotates through and which of them is benched. **It takes
-`admin`, reads included** — which variable holds each model's key and
-when each is refused is a map of which credential to take.
-
-**Names, never values.** A key is `ref`, the variable a whole `${VAR}` names
-(or the vendor's conventional variable, `source: "default"`, for a model that
-names no `api_keys`), or its position alone for a value written into the
-document (`source: "inline"`, `ref: ""`). `hint` is the 12-character,
-non-reversible identifier the engine's `credential_cooled` log lines carry.
-
-**The pool and the fleet's ledger, the later deadline winning.** A bench is
-published to the fleet when a node takes it and pulled by every other node
-every 15 s; this answer reads the ledger directly, so a key a peer benched a
-second ago is `cooling` here before the answering node has pulled it, and a
-bench whose publish failed still reads `cooling` on the node that took it. A
-ledger that cannot be read does not fail the answer: `fleet` is `false`,
-`fleet_error` says why, and every deadline is the answering node's own.
-`uses` and `in_flight` are the answering node's leases of the key since it
-applied its configuration, and `unresolved` is what ITS environment and the
-company's secrets resolve.
-
-| key `state` | Means |
-|---|---|
-| `ready` | A call can lease it now |
-| `cooling` | Benched after a rate-limit or auth refusal until `cooling_until` |
-| `unresolved` | It resolved to nothing on the answering node and is not in the pool |
-| `duplicate` | The same value as the key at `same_as` (1-based), held once |
-
-| model `state` | Means |
-|---|---|
-| `ready` | Every key resolves and none is cooling |
-| `degraded` | Some keys can be leased and some cannot |
-| `exhausted` | Every key that resolves is cooling: each call falls through to the seat's next model |
-| `no_key` | No key resolves: every call is refused as unauthorised |
-| `login` | A `cli-agent` entry — one login held by the CLI, no key bag |
-
-```json
-{
-  "node": "node-1",
-  "fleet": true,
-  "fleet_error": "",
-  "providers": [
-    {"key": "smart", "type": "anthropic", "model": "claude-sonnet-5", "state": "degraded",
-     "ready": 1, "rate_limit_seconds": 3600, "auth_seconds": 300,
-     "keys": [
-       {"ref": "ANTHROPIC_KEY_A", "source": "reference", "hint": "3f9a1c0b7e2d", "state": "ready",
-        "cooling_until": null, "same_as": 0, "uses": 12, "in_flight": 1},
-       {"ref": "ANTHROPIC_KEY_B", "source": "reference", "hint": "8c41d2e9a0f7", "state": "cooling",
-        "cooling_until": "2026-09-29T12:40:00Z", "same_as": 0, "uses": 4, "in_flight": 0}
-     ]}
-  ]
-}
-```
-
-To change a model's keys, `PUT /config/llm-providers/{id}` — see
-[Per-entity read and write](#per-entity-read-and-write).
-
 ### `GET /mcp-servers`
 
 Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
@@ -8094,7 +8041,7 @@ The rollup: the window's spend by phase, model, provider entry, worker and seat.
     ...
   ],
   "by_provider": [
-    { "provider_key": "anthropic", "models": ["claude-sonnet-5", "claude-haiku-4-5"],
+    { "provider_key": "claude", "models": ["claude-sonnet-5"],
       "seats": ["pm", "coder", "reviewer"], "seats_total": 5,
       "total_tokens": 20100, "calls": 5, ... }
   ],

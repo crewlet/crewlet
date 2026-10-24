@@ -157,8 +157,9 @@ each call was for. That is part of the Auxiliary band rather than the whole of
 it: the band also holds the round-cap judge and the first-turn onboarding (and
 any phase a newer peer records), which are no purpose, so the Worker split sums
 to the band less those. **Provider** answers "which of
-our configured entries are we paying for", which **model** cannot: a fallback
-chain serves several models under one entry.
+our configured entries are we paying for", which **model** cannot: two entries
+can run one model — a subscription entry and an `auth.mode: api-key` entry for
+the same Claude model, say — and only the entry says which account paid.
 
 ## Auxiliary spend
 
@@ -254,12 +255,17 @@ known size:
 
 Every figure carries the prompt cache's share of its input: `cache_read_tokens`
 (served from the cache) and `cache_write_tokens` (stored into it). They are a
-**breakdown** of `input_tokens`, never an addition to it — every provider counts
-the cached prefix in the input already — so the share of input a cache served is
-`cache_read_tokens / input_tokens`, and `total_tokens` is input plus output.
+**breakdown** of `input_tokens`, never an addition to it — the cache is the
+coding CLI's own, and the backend adds the cache counts the CLI reports back
+into its input total — so the share of input a cache served is
+`cache_read_tokens / input_tokens`, and `total_tokens` is input plus output. A
+CLI that reports no cache counts carries zero for both, and one that reports no
+usage at all is charged an estimate, four characters a token, which
+`crewlet llm doctor` names on its `token usage` line.
 
 ## Tokens, never money
 
-The dashboard measures spend in tokens only. A price is reported by one kind of
-backend — a subscription coding CLI — and nothing else, so a currency figure
-would cover a small minority of calls while reading as the company's spend.
+The dashboard measures spend in tokens only. A price is reported only by a
+coding run — a `run_sandbox` job or an agent-mode executor, in its CLI's own
+figure — and by no text call, so a currency figure would cover a small minority
+of calls while reading as the company's spend.

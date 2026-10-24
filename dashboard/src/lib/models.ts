@@ -1,205 +1,288 @@
 /**
- * Settings › Models & keys, in words and in values: what each state the engine
- * sends means, which seats run on a model, and the edit form's rules.
+ * Settings › Models & keys, in words and in values: every `providers.llm`
+ * entry the company document holds, the CLI it drives and how it signs in,
+ * which seats run on it, and the edit form's rules.
  *
- * NOTHING HERE DECIDES A STATE. Whether a key is cooling and whether a model can
- * still answer are the engine's (`credential_pool`), read off its pools and the
- * fleet's cooldown ledger; which seats run on a model is the engine's too — the
- * org projection carries each seat's resolved chain per phase. This file names
- * them and builds the one write the screen makes.
+ * THE DOCUMENT IS WHAT AN OPERATOR WROTE; WHAT AN UNSET FIELD MEANS IS THE
+ * ENGINE'S. An entry that names no `agent`, `mode` or `auth.mode` still runs as
+ * something, and what it runs as is read from `contract/models.ts`, which a Go
+ * gate holds to the defaults the engine applies. Which seats run on a model is
+ * the engine's too — the org projection carries each seat's resolved chain per
+ * phase. Nothing here decides either: it names them and builds the one write
+ * the screen makes.
+ *
+ * NAMES, NEVER VALUES. The document is served redacted: a credential written
+ * as one whole `${NAME}` arrives as that reference, and anything else as the
+ * mask. So a credential is drawn by the variable it names, or as written
+ * inline, and there is no member a value could travel in.
  */
 
-import type {
-  CredentialKeyRow,
-  CredentialKeySource,
-  CredentialKeyState,
-  CredentialPoolRow,
-  CredentialPoolState,
-} from "~/contract/credentials.ts";
+import {
+  DEFAULT_CLI_AGENT,
+  DEFAULT_CLI_AUTH_MODE,
+  DEFAULT_CLI_MAX_CONCURRENT,
+  DEFAULT_CLI_MODE,
+  DEFAULT_CLI_TIMEOUT_SECONDS,
+  type CLIAuthMode,
+  type CLIMode,
+} from "~/contract/models.ts";
 import type { Seat } from "~/lib/seats.ts";
-import { REDACTED } from "~/lib/format.ts";
-import type { ConfigProblem } from "~/protocol/types.ts";
+import { configValueKind, fmtSetting, REDACTED } from "~/lib/format.ts";
+import { wholeReferenceName } from "~/lib/references.ts";
+import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 
-type Tone = "success" | "neutral" | "warning" | "danger";
+// ---------------------------------------------------------------------------
+// Reading the document
+// ---------------------------------------------------------------------------
 
 /**
- * A model's condition, in words, with what to do about it.
+ * A credential field as the redacted document holds it: the variable a whole
+ * `${NAME}` names, or a value written into the document, which reaches this
+ * page as the mask and so has no name to show.
+ */
+export type Credential = { kind: "reference"; name: string } | { kind: "inline" };
+
+/** A credential field's value as a [Credential], or null where it is unset. */
+export function credentialOf(value: unknown): Credential | null {
+  if (typeof value !== "string") return null;
+  // A CREDENTIAL FIELD SHOWS A WHOLE REFERENCE OR NOTHING: a literal is
+  // `hidden` there even where an engine sent it unmasked.
+  switch (configValueKind(value, { secret: true })) {
+    case "empty":
+      return null;
+    case "reference":
+      return { kind: "reference", name: wholeReferenceName(value) ?? "" };
+    default:
+      return { kind: "inline" };
+  }
+}
+
+/** One `providers.llm` entry, as written and as the engine will run it. */
+export interface ModelEntry {
+  /** The entry's config key — what a seat's `llm:` names. */
+  key: string;
+  /** The CLI it drives, the engine's default applied. */
+  agent: string;
+  /** Whether the entry leaves `agent` out and so drives the default CLI. */
+  agentDefault: boolean;
+  /** The model, as written, in the CLI's own grammar; a `${VAR}` stays its reference. */
+  model: string;
+  /** `text` or `agent`, the default applied; a value this build does not know, as written. */
+  mode: string;
+  /** The sandbox cell an agent-mode run happens in; "" takes `providers.sandbox`'s default. */
+  runIn: string;
+  /** The wall-clock cap on one CLI invocation, in seconds, the default applied. */
+  timeoutSeconds: number;
+  /** Whether the entry names its own `timeout_seconds`. */
+  timeoutSet: boolean;
+  /** How many CLI processes run at once, the default applied. */
+  maxConcurrent: number;
+  /** Whether the entry names its own `max_concurrent`. */
+  concurrencySet: boolean;
+  /** Where its login and per-seat homes live, as written; "" is derived per key on each node. */
+  stateDir: string;
+  /** `auth.mode`, the default applied. */
+  authMode: string;
+  /** Whether the entry leaves `auth.mode` out. */
+  authDefault: boolean;
+  token: Credential | null;
+  apiKey: Credential | null;
+  bundle: Credential | null;
+  /** The extra variables the CLI is handed, by name, sorted; each value is a credential. */
+  env: { name: string; value: Credential | null }[];
+}
+
+/**
+ * The order the company's models are declared in — the order a seat that names
+ * none falls back through — as the engine's `Providers.ProviderOrder` reads it.
  *
- * EXHAUSTIVE OVER THE CONTRACT'S UNION, so a state the engine adds fails the
- * typecheck here rather than drawing as nothing.
+ * `llm_order` is how the document carries it, because a JSON object's keys
+ * are sorted on the way out; it is reconciled against the map rather than
+ * trusted, since the two travel separately: a key it names that the map lacks
+ * is dropped, and a key the map has that it omits comes after, sorted.
  */
-export const POOL_STATE_WORDS: Record<
-  CredentialPoolState,
-  { label: string; tone: Tone; hint: string }
-> = {
-  ready: {
-    label: "Ready",
-    tone: "success",
-    hint: "Every key resolves and none is cooling.",
-  },
-  degraded: {
-    label: "Fewer keys",
-    tone: "warning",
-    hint: "Some keys are cooling down or missing.",
-  },
-  exhausted: {
-    label: "All keys cooling",
-    tone: "danger",
-    hint: "Calls use the next model until a key recovers.",
-  },
-  no_key: {
-    label: "No key",
-    tone: "danger",
-    hint: "Calls are refused. Store the secret its key names.",
-  },
-  login: {
-    label: "CLI login",
-    tone: "neutral",
-    hint: "Uses the CLI’s own login.",
-  },
-};
-
-/** One key's condition, in words. Exhaustive for the reason above. */
-export const KEY_STATE_WORDS: Record<CredentialKeyState, { label: string; tone: Tone }> = {
-  ready: { label: "Ready", tone: "success" },
-  cooling: { label: "Cooling", tone: "warning" },
-  unresolved: { label: "Not set", tone: "danger" },
-  duplicate: { label: "Duplicate", tone: "neutral" },
-};
-
-/** Whether a model needs somebody: every state that is not one to leave alone. */
-export function needsAttention(row: CredentialPoolRow): boolean {
-  return row.state === "degraded" || row.state === "exhausted" || row.state === "no_key";
-}
-
-/**
- * Where a key's value comes from, in words, for its title. Exhaustive over the
- * contract's union for the reason above.
- */
-export const KEY_SOURCE_WORDS: Record<CredentialKeySource, string> = {
-  reference: "a secret or environment variable this model names",
-  default: "the vendor’s default variable",
-  inline: "written into the configuration",
-};
-
-/**
- * What a key is called on screen: its variable, the conventional variable it
- * defaults to, or its position when it is written into the document and has
- * no name. Never a value — there is none in the answer to show.
- */
-export function keyName(key: CredentialKeyRow, position: number): string {
-  if (key.source === "inline") return `Key ${position} (written inline)`;
-  return key.ref;
-}
-
-/**
- * What a key's MARK prints on the models list: its variable, or — for a key
- * written into the document, which has no name — its place and where it
- * lives. The bare "#1" this replaced read as a cipher beside the named marks,
- * while the model's own page called the same key "Key 1 (written inline)".
- */
-export function keyMark(key: CredentialKeyRow, position: number): string {
-  return key.source === "inline" ? `key ${position} · inline` : key.ref;
-}
-
-/**
- * What a key's "Back" cell says when it carries no deadline: a ready key is in
- * the pool now, a duplicate is in it ONCE — as the key it repeats — and only an
- * unresolved key is not in the pool at all.
- */
-export function keyBackWords(key: CredentialKeyRow): string {
-  switch (key.state) {
-    case "ready":
-      return "Now";
-    case "duplicate":
-      return `As key ${key.same_as}`;
-    case "cooling":
-    case "unresolved":
-      return "Not in the pool";
+export function providerOrder(llm: Record<string, unknown>, order: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const key of Array.isArray(order) ? order : []) {
+    if (typeof key !== "string" || !Object.hasOwn(llm, key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
   }
-}
-
-/** Why a key is in the state it is, in one sentence for its row. */
-export function keyWhy(key: CredentialKeyRow): string {
-  switch (key.state) {
-    case "ready":
-      return key.source === "default" ? "From the vendor’s default variable." : "In the pool.";
-    case "cooling":
-      return "Cooling down after the vendor refused it.";
-    case "unresolved":
-      return key.source === "inline" ? "Written empty." : `${key.ref} isn’t set on this node.`;
-    case "duplicate":
-      return `Same as key ${key.same_as}.`;
-  }
-}
-
-/** The earliest instant any key in these models lifts, or null. */
-export function nextLift(rows: readonly CredentialPoolRow[]): string | null {
-  let best: string | null = null;
-  let bestAt = Infinity;
-  for (const row of rows) {
-    for (const key of row.keys) {
-      if (key.state !== "cooling" || !key.cooling_until) continue;
-      const at = Date.parse(key.cooling_until);
-      if (at < bestAt) {
-        bestAt = at;
-        best = key.cooling_until;
-      }
-    }
-  }
-  return best;
-}
-
-/**
- * A bench time as the dashboard writes every span: unit letters, no space —
- * "1h", "5m", "1h 30m", "90s" — the convention `fmtDuration` and a cooling
- * key's "41m" already keep, so the bench, the chips and the tile beside them
- * read as one clock rather than three.
- */
-export function benchWords(seconds: number): string {
-  if (!(seconds > 0)) return "0s";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  const parts: string[] = [];
-  if (h) parts.push(`${h}h`);
-  if (m) parts.push(`${m}m`);
-  if (s) parts.push(`${s}s`);
-  return parts.join(" ");
-}
-
-/**
- * A model's two bench times, NAMED FOR WHAT BENCHES A KEY rather than by the
- * status code: "429" and "401" are what a reader has to already know. One
- * list for every place the bench is drawn (the list's column, the model's
- * header), so it is written one way.
- */
-export function benchParts(row: {
-  rate_limit_seconds: number;
-  auth_seconds: number;
-}): { key: string; words: string; title: string }[] {
   return [
-    {
-      key: "rate",
-      words: `rate limit ${benchWords(row.rate_limit_seconds)}`,
-      title: `Rate-limited keys rest ${benchWords(row.rate_limit_seconds)}, or as long as the vendor asks`,
-    },
-    {
-      key: "auth",
-      words: `auth ${benchWords(row.auth_seconds)}`,
-      title: `Refused keys rest ${benchWords(row.auth_seconds)}, doubling each time`,
-    },
+    ...out,
+    ...Object.keys(llm)
+      .filter((key) => !seen.has(key))
+      .sort(),
   ];
 }
 
-/**
- * The line under a model's key: its type, and the vendor's model id when it
- * names one. A cli-agent entry names none, and "cli-agent ·" was a separator
- * with nothing after it.
- */
-export function modelLine(row: { type: string; model: string }): string {
-  return row.model.trim() ? `${row.type} · ${row.model}` : row.type;
+/** Every model the document configures, in declaration order ([providerOrder]). */
+export function modelEntries(doc: CompanyDocument | null | undefined): ModelEntry[] {
+  const providers = isRecord(doc?.providers) ? doc.providers : {};
+  const llm = isRecord(providers.llm) ? providers.llm : {};
+  return providerOrder(llm, providers.llm_order).map((key) =>
+    modelEntry(key, isRecord(llm[key]) ? llm[key] : {}),
+  );
 }
+
+/** One entry, read off the document. */
+export function modelEntry(key: string, raw: Record<string, unknown>): ModelEntry {
+  const auth = isRecord(raw.auth) ? raw.auth : {};
+  const env = isRecord(raw.env) ? raw.env : {};
+  const agent = nonEmpty(raw.agent);
+  const mode = nonEmpty(raw.mode);
+  const authMode = nonEmpty(auth.mode);
+  const timeout = positive(raw.timeout_seconds);
+  const concurrency = positive(raw.max_concurrent);
+  return {
+    key,
+    agent: agent ?? DEFAULT_CLI_AGENT,
+    agentDefault: agent === undefined,
+    model: typeof raw.model === "string" ? raw.model : "",
+    mode: mode ?? DEFAULT_CLI_MODE,
+    runIn: nonEmpty(raw.run_in) ?? "",
+    timeoutSeconds: timeout ?? DEFAULT_CLI_TIMEOUT_SECONDS,
+    timeoutSet: timeout !== undefined,
+    maxConcurrent: concurrency ?? DEFAULT_CLI_MAX_CONCURRENT,
+    concurrencySet: concurrency !== undefined,
+    stateDir: nonEmpty(raw.state_dir) ?? "",
+    authMode: authMode ?? DEFAULT_CLI_AUTH_MODE,
+    authDefault: authMode === undefined,
+    token: credentialOf(auth.token),
+    apiKey: credentialOf(auth.api_key),
+    bundle: credentialOf(auth.credential_bundle),
+    env: Object.keys(env)
+      .sort()
+      .map((name) => ({ name, value: credentialOf(env[name]) })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Words
+// ---------------------------------------------------------------------------
+
+/**
+ * How the engine uses an entry's CLI, in words. EXHAUSTIVE OVER THE CONTRACT'S
+ * UNION, so a mode the engine adds fails the typecheck here rather than
+ * drawing as nothing.
+ */
+export const MODE_WORDS: Record<CLIMode, { label: string; hint: string }> = {
+  text: {
+    label: "Text",
+    hint: "A model behind the engine’s own tool loop.",
+  },
+  agent: {
+    label: "Agent",
+    hint: "Runs the seat’s executor as the CLI’s own agentic run, with the seat’s tools over MCP.",
+  },
+};
+
+/** A mode's words, or the value itself for a mode this build does not know. */
+export function modeWords(mode: string): { label: string; hint: string } {
+  return Object.hasOwn(MODE_WORDS, mode)
+    ? MODE_WORDS[mode as CLIMode]
+    : { label: mode, hint: `“${mode}” is a mode this dashboard does not know.` };
+}
+
+/** How an entry's CLI signs in, in words. Exhaustive for the reason above. */
+export const AUTH_WORDS: Record<CLIAuthMode, { label: string; hint: string }> = {
+  subscription: {
+    label: "Subscription",
+    hint: "Signs in with the CLI’s own login: a headless token, or what crewlet llm login wrote.",
+  },
+  "api-key": {
+    label: "API key",
+    hint: "Signs in with one API key in the CLI’s key variable, billed to the metered account.",
+  },
+  "inherit-env": {
+    label: "Engine environment",
+    hint: "Forwards the CLI’s token or key variable from the engine’s own environment.",
+  },
+};
+
+/** An auth mode's words, or the value itself for one this build does not know. */
+export function authWords(mode: string): { label: string; hint: string } {
+  return Object.hasOwn(AUTH_WORDS, mode)
+    ? AUTH_WORDS[mode as CLIAuthMode]
+    : { label: mode, hint: `“${mode}” is a sign-in this dashboard does not know.` };
+}
+
+/**
+ * The credential an entry's sign-in reads, and what it is called: the token
+ * under `subscription`, the API key under `api-key`. `inherit-env` reads
+ * neither from the document, and so has none.
+ */
+export function signInCredential(
+  entry: ModelEntry,
+): { label: "Token" | "API key"; value: Credential | null } | null {
+  switch (entry.authMode) {
+    case "subscription":
+      return { label: "Token", value: entry.token };
+    case "api-key":
+      return { label: "API key", value: entry.apiKey };
+    default:
+      return null;
+  }
+}
+
+/** A credential in a few words: the variable it names, or that it is inline. */
+export function credentialWords(value: Credential): string {
+  return value.kind === "reference" ? value.name : "written inline";
+}
+
+/**
+ * Where an entry's sign-in comes from, in a few words for its row: the
+ * variable its credential names, or what the CLI reads when the entry names
+ * none. NEVER A VALUE — a credential written inline is said to be inline.
+ */
+export function signInSource(entry: ModelEntry): string {
+  const read = signInCredential(entry);
+  if (read?.value) {
+    return read.value.kind === "reference"
+      ? read.value.name
+      : `${read.label === "Token" ? "token" : "key"} written inline`;
+  }
+  switch (entry.authMode) {
+    case "subscription":
+      return entry.bundle ? "CLI login, from a bundle" : "CLI login";
+    case "api-key":
+      return "the CLI’s own key variable";
+    case "inherit-env":
+      return "the engine’s own variables";
+    default:
+      return "";
+  }
+}
+
+/**
+ * What a credential the entry does not name is read from, as a sentence for
+ * the model's page — the engine's own fallback for each mode.
+ */
+export function signInFallback(entry: ModelEntry): string {
+  switch (entry.authMode) {
+    case "subscription":
+      return "None named. The CLI reads its own token variable, or the login crewlet llm login wrote.";
+    case "api-key":
+      return "None named. The CLI’s own key variable is read from the secret store, then the engine’s environment.";
+    default:
+      return "";
+  }
+}
+
+/** "claude-code · sonnet": the CLI and the model it runs, for a row's second line. */
+export function modelLine(entry: { agent: string; model: string }): string {
+  return entry.model.trim() ? `${entry.agent} · ${entry.model}` : entry.agent;
+}
+
+/** A cap as a setting: "10 minutes", "4 at once". */
+export function timeoutWords(seconds: number): string {
+  return fmtSetting(seconds);
+}
+
+// ---------------------------------------------------------------------------
+// Who runs on it
+// ---------------------------------------------------------------------------
 
 /**
  * The phases a seat's chain names, in the engine's own order (the executor
@@ -264,162 +347,81 @@ export function usesOf(seats: readonly Seat[], key: string): ModelUse[] {
 // The edit form
 // ---------------------------------------------------------------------------
 
-/** One key row of the form, with a client id so a removal keeps its neighbours' state. */
-export interface KeyField {
-  id: string;
-  /** A `${NAME}`, or [REDACTED] for a value written into the document. */
-  value: string;
-}
-
-let nextKeyId = 0;
-
-/** A fresh key row. */
-export function newKeyField(value = ""): KeyField {
-  nextKeyId += 1;
-  return { id: `key-${nextKeyId}`, value };
-}
-
-/** What the form edits: the parts of an entry a person changes by hand. */
+/**
+ * What the form edits: the parts of an entry a person changes by hand. The
+ * CLI, the mode and how it signs in are the entry's identity rather than its
+ * tuning — changing one changes what the model id means or which account is
+ * billed — and are changed in Configuration, where the whole entry is in view.
+ */
 export interface ModelForm {
   model: string;
-  keys: KeyField[];
-  baseUrl: string;
-  /** Seconds, as typed; empty is the default. */
-  rateLimit: string;
-  auth: string;
+  /**
+   * The credential the entry's `auth.mode` reads ([credentialField]): a
+   * `${NAME}`, [REDACTED] for one written into the document, or "" for none.
+   * Unused where the mode reads none.
+   */
+  credential: string;
+  /** Seconds, as typed; empty is the engine's default. */
+  timeout: string;
+  /** Processes, as typed; empty is the engine's default. */
+  concurrency: string;
 }
 
-export type ModelField = "model" | "keys" | "baseUrl" | "rateLimit" | "auth";
+export type ModelField = "model" | "credential" | "timeout" | "concurrency";
+
+/**
+ * Which `auth` field the entity's sign-in reads — `token` under subscription,
+ * `api_key` under api-key — or null for a mode that reads neither from the
+ * document. The engine refuses a credential written under a mode that does
+ * not read it, so the form offers only this one.
+ */
+export function credentialField(entity: Record<string, unknown>): "token" | "api_key" | null {
+  const auth = isRecord(entity.auth) ? entity.auth : {};
+  const mode = nonEmpty(auth.mode) ?? DEFAULT_CLI_AUTH_MODE;
+  if (mode === "subscription") return "token";
+  if (mode === "api-key") return "api_key";
+  return null;
+}
+
+/** The entity's resolved auth mode. */
+export function authModeOf(entity: Record<string, unknown>): string {
+  const auth = isRecord(entity.auth) ? entity.auth : {};
+  return nonEmpty(auth.mode) ?? DEFAULT_CLI_AUTH_MODE;
+}
 
 /** The form over an entity as the engine served it (redacted). */
 export function formOf(entity: Record<string, unknown>): ModelForm {
-  const cooldowns = isRecord(entity.cooldowns) ? entity.cooldowns : {};
-  const keys = Array.isArray(entity.api_keys) ? entity.api_keys : [];
+  const auth = isRecord(entity.auth) ? entity.auth : {};
+  const field = credentialField(entity);
+  const credential = field ? auth[field] : undefined;
   return {
     model: typeof entity.model === "string" ? entity.model : "",
-    keys: keys.filter((k): k is string => typeof k === "string").map((k) => newKeyField(k)),
-    baseUrl: typeof entity.base_url === "string" ? entity.base_url : "",
-    rateLimit: secondsText(cooldowns.rate_limit_seconds),
-    auth: secondsText(cooldowns.auth_seconds),
-  };
-}
-
-/** The bounds the engine holds a bench time to (`internal/config`'s). */
-export const MIN_BENCH_SECONDS = 60;
-export const MAX_BENCH_SECONDS = 86_400;
-
-/**
- * Whether a key list still says, BY POSITION, which value each inline key
- * hid.
- *
- * A key written into the document reaches this page as the mask, and the
- * engine puts its value back by its PLACE in the list (`api_keys` is a list
- * of anonymous values, so position is the only correspondence it has —
- * `config.Company.RestoreRedacted`). So while any mask is in the list the
- * list keeps the length it was read at and every mask stays where it was
- * read. The engine refuses a list that changed length; one that kept its
- * length with a mask moved is WORSE — the mask is restored from whatever
- * value used to stand at its new place, and a key is silently swapped for
- * another with nothing refused (`[${A}, <inline>]`, remove key 1, add
- * `${C}`: the inline key becomes `${A}`).
- */
-export function keysKeepInlinePlaces(
-  read: readonly KeyField[],
-  keys: readonly KeyField[],
-): boolean {
-  if (!keys.some((k) => k.value === REDACTED)) return true;
-  if (keys.length !== read.length) return false;
-  return keys.every((k, i) => k.value !== REDACTED || read[i]?.value === REDACTED);
-}
-
-/** The first inline key's number (1-based) in a list, or 0 for none. */
-export function firstInlineKey(keys: readonly KeyField[]): number {
-  return keys.findIndex((k) => k.value === REDACTED) + 1;
-}
-
-/** Why a key list cannot grow or shrink while it holds an inline key. */
-export function inlinePlaceWords(keys: readonly KeyField[]): string {
-  return `Key ${firstInlineKey(keys)} is inline. Replace it with a secret before adding or removing keys.`;
-}
-
-/**
- * How many keys an entry's form may hold, and the words around the list.
- *
- * A `cli-agent` entry is not a key pool. It holds ONE login and rotates
- * nothing, and the engine reads its `api_keys` only under
- * `cli.auth.mode: api-key`, where the one value goes in the CLI's own key
- * variable; in any other mode, or past one value, a write keeping them is
- * refused, because nothing would read them. So under api-key the form offers
- * one key, and in any other mode none — a key it already holds is drawn so it
- * can be removed, with the reason. Every other entry rotates through as many
- * keys as it is given.
- */
-export interface KeySlots {
-  /** How many keys the entry may hold. */
-  max: number;
-  legend: string;
-  /** Said when the list is empty. */
-  empty: string;
-  /** Why no key can be added once the list is at `max`, or why it is over it. */
-  full: string;
-}
-
-const KEY_POOL: KeySlots = {
-  max: Number.POSITIVE_INFINITY,
-  legend: "Keys",
-  empty: "None. Uses ANTHROPIC_API_KEY or OPENAI_API_KEY. Type $ to add a secret.",
-  full: "",
-};
-
-/** The key slots of the entity as the engine served it. */
-export function keySlots(entity: Record<string, unknown>): KeySlots {
-  if (entity.type !== "cli-agent") return KEY_POOL;
-  const cli = isRecord(entity.cli) ? entity.cli : {};
-  const auth = isRecord(cli.auth) ? cli.auth : {};
-  const mode = typeof auth.mode === "string" && auth.mode ? auth.mode : "subscription";
-  if (mode === "api-key") {
-    return {
-      max: 1,
-      legend: "API key",
-      empty: "None yet. This entry needs an API key. Type $ to add a secret.",
-      full: "Holds one key. Add more as separate entries.",
-    };
-  }
-  return {
-    max: 0,
-    legend: "API key",
-    empty: "None. Signs in through its CLI.",
-    full: "Keys only work in api-key mode. Remove it.",
+    credential: typeof credential === "string" ? credential : "",
+    timeout: numberText(entity.timeout_seconds),
+    concurrency: numberText(entity.max_concurrent),
   };
 }
 
 /**
  * What stops a save before the engine is asked. The engine validates the
  * whole company again; this is only what a person can see is wrong while
- * typing — and the one thing the engine cannot see at all, an inline key
- * moved to another key's place (see [keysKeepInlinePlaces]).
+ * typing.
  */
-export function formErrors(
-  form: ModelForm,
-  read: ModelForm,
-  slots: KeySlots = KEY_POOL,
-): Partial<Record<ModelField, string>> {
+export function formErrors(form: ModelForm): Partial<Record<ModelField, string>> {
   const out: Partial<Record<ModelField, string>> = {};
-  if (!form.model.trim()) out.model = "Name the model this entry serves.";
-  if (form.keys.length > slots.max) {
-    out.keys = slots.full;
-  } else if (form.keys.some((k) => !k.value.trim())) {
-    out.keys = "A key row is empty. Fill it in or remove it.";
-  } else if (!keysKeepInlinePlaces(read.keys, form.keys)) {
-    out.keys = inlinePlaceWords(form.keys);
+  if (!form.model.trim()) out.model = "Name the model this entry runs.";
+  const timeout = form.timeout.trim();
+  if (timeout) {
+    const n = Number(timeout);
+    if (!Number.isFinite(n) || n <= 0) {
+      out.timeout = "A number of seconds above 0, or empty for the default.";
+    }
   }
-  for (const field of ["rateLimit", "auth"] as const) {
-    const text = form[field].trim();
-    if (!text) continue;
-    const n = Number(text);
-    if (!Number.isInteger(n) || n < MIN_BENCH_SECONDS || n > MAX_BENCH_SECONDS) {
-      out[field] =
-        `A whole number of seconds from ${MIN_BENCH_SECONDS} to ${MAX_BENCH_SECONDS}, or empty for the default.`;
+  const concurrency = form.concurrency.trim();
+  if (concurrency) {
+    const n = Number(concurrency);
+    if (!Number.isInteger(n) || n < 1) {
+      out.concurrency = "A whole number from 1, or empty for the default.";
     }
   }
   return out;
@@ -427,58 +429,66 @@ export function formErrors(
 
 /**
  * The entity to send: the one the engine served, with only the edited fields
- * replaced. Everything the form does not show — the type, reasoning, the
- * timeout, a cli-agent's block — goes back exactly as it came, and a key the
- * document holds inline goes back as the mask, which the engine restores from
- * the revision this was read from.
+ * replaced. Everything the form does not show — the CLI, the mode, where it
+ * runs, its state directory, its environment, its overrides, the credential
+ * bundle — goes back exactly as it came, and a credential the document holds
+ * inline goes back as the mask, which the engine restores from the revision
+ * this was read from.
  */
 export function modelEntity(
   entity: Record<string, unknown>,
   form: ModelForm,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...entity, model: form.model.trim() };
-  const keys = form.keys.map((k) => k.value.trim()).filter(Boolean);
-  if (keys.length) out.api_keys = keys;
-  else delete out.api_keys;
-  if (form.baseUrl.trim()) out.base_url = form.baseUrl.trim();
-  else delete out.base_url;
-  const cooldowns: Record<string, number> = {};
-  if (form.rateLimit.trim()) cooldowns.rate_limit_seconds = Number(form.rateLimit.trim());
-  if (form.auth.trim()) cooldowns.auth_seconds = Number(form.auth.trim());
-  if (Object.keys(cooldowns).length) out.cooldowns = cooldowns;
-  else delete out.cooldowns;
+  const field = credentialField(entity);
+  if (field) {
+    const auth: Record<string, unknown> = isRecord(entity.auth) ? { ...entity.auth } : {};
+    const credential = form.credential.trim();
+    if (credential) auth[field] = credential;
+    else delete auth[field];
+    out.auth = auth;
+  }
+  const timeout = form.timeout.trim();
+  if (timeout) out.timeout_seconds = Number(timeout);
+  else delete out.timeout_seconds;
+  const concurrency = form.concurrency.trim();
+  if (concurrency) out.max_concurrent = Number(concurrency);
+  else delete out.max_concurrent;
   return out;
 }
 
 /**
- * The revision's audit summary: which model, and what moved. Key VALUES are
- * never in it — a count and the variable names that came and went.
+ * The revision's audit summary: which model, and what moved. A credential is
+ * named by the variable it reads, never by a value — one written inline is
+ * "inline", and a literal typed into the field is "a value".
  */
-export function editSummary(key: string, before: ModelForm, after: ModelForm): string {
+export function editSummary(
+  key: string,
+  entity: Record<string, unknown>,
+  before: ModelForm,
+  after: ModelForm,
+): string {
   const changes: string[] = [];
   if (before.model.trim() !== after.model.trim()) {
     changes.push(`model ${before.model.trim() || "unset"} → ${after.model.trim()}`);
   }
-  const was = before.keys.map((k) => k.value.trim()).filter(Boolean);
-  const now = after.keys.map((k) => k.value.trim()).filter(Boolean);
-  const added = now.filter((k) => !was.includes(k) && k !== REDACTED);
-  const removed = was.filter((k) => !now.includes(k) && k !== REDACTED);
-  if (added.length) changes.push(`keys added: ${added.join(", ")}`);
-  if (removed.length) changes.push(`keys removed: ${removed.join(", ")}`);
-  if (!added.length && !removed.length && was.join("\n") !== now.join("\n")) {
+  const field = credentialField(entity);
+  if (field && before.credential.trim() !== after.credential.trim()) {
+    const word = field === "token" ? "token" : "API key";
     changes.push(
-      now.length === was.length ? "keys reordered" : `keys ${was.length} → ${now.length}`,
+      `${word} ${credentialSummary(before.credential)} → ${credentialSummary(after.credential)}`,
     );
   }
-  if (before.baseUrl.trim() !== after.baseUrl.trim()) {
-    changes.push(after.baseUrl.trim() ? `endpoint ${after.baseUrl.trim()}` : "endpoint cleared");
-  }
-  for (const [field, word] of [
-    ["rateLimit", "rate-limit bench"],
-    ["auth", "auth bench"],
+  for (const [name, word, unit] of [
+    ["timeout", "timeout", " s"],
+    ["concurrency", "max concurrent", ""],
   ] as const) {
-    if (before[field].trim() !== after[field].trim()) {
-      changes.push(`${word} ${benchOrDefault(before[field])} → ${benchOrDefault(after[field])}`);
+    const was = before[name].trim();
+    const now = after[name].trim();
+    if (was !== now) {
+      changes.push(
+        `${word} ${was ? `${was}${unit}` : "default"} → ${now ? `${now}${unit}` : "default"}`,
+      );
     }
   }
   return changes.length ? `Edit the model ${key}: ${changes.join("; ")}` : `Edit the model ${key}`;
@@ -487,26 +497,15 @@ export function editSummary(key: string, before: ModelForm, after: ModelForm): s
 /** Whether the form differs from what was read. */
 export function formChanged(before: ModelForm, after: ModelForm): boolean {
   const flat = (f: ModelForm) =>
-    JSON.stringify([
-      f.model.trim(),
-      f.keys.map((k) => k.value.trim()),
-      f.baseUrl.trim(),
-      f.rateLimit.trim(),
-      f.auth.trim(),
-    ]);
+    JSON.stringify([f.model.trim(), f.credential.trim(), f.timeout.trim(), f.concurrency.trim()]);
   return flat(before) !== flat(after);
 }
 
 /**
  * The engine's problems placed beside the field each is about, by the
- * problem's own segments — `["providers", "llm", "smart", "api_keys", 1]` is
- * the keys — never its message. The rest is said above the form.
- *
- * A problem on a key this page SENT AS THE MASK is said in this screen's own
- * words: the engine could not put an inline key's value back, and its line
- * for that is written for the whole document (seats, units, MCP servers),
- * which means nothing beside a model's keys. Recognised by what was sent at
- * that place, never by the message.
+ * problem's own segments — `["providers", "llm", "smart", "auth", "api_key"]`
+ * is the credential on an api-key entry — never its message. The rest is said
+ * above the form.
  */
 export function problemsByField(
   problems: readonly ConfigProblem[],
@@ -515,44 +514,56 @@ export function problemsByField(
 ): { fields: Partial<Record<ModelField, string>>; rest: string[] } {
   const fields: Partial<Record<ModelField, string>> = {};
   const rest: string[] = [];
-  const keys = Array.isArray(sent.api_keys) ? sent.api_keys : [];
+  const credential = credentialField(sent);
   for (const p of problems) {
     const seg = p.segments ?? [];
     const field =
-      seg[0] === "providers" && seg[1] === "llm" && seg[2] === key && typeof seg[3] === "string"
-        ? fieldOf(seg[3], seg[4])
+      seg[0] === "providers" && seg[1] === "llm" && seg[2] === key
+        ? fieldOf(seg.slice(3), credential)
         : null;
-    const masked = field === "keys" && typeof seg[4] === "number" && keys[seg[4]] === REDACTED;
-    const message = masked
-      ? `Key ${Number(seg[4]) + 1} is written inline and its value could not be put back, because the list no longer says by its place which key it is. Put the keys back as they were, or replace key ${Number(seg[4]) + 1} with a \${NAME} from Secrets.`
-      : p.message;
-    if (field && !fields[field]) fields[field] = message;
-    else rest.push(message);
+    if (field && !fields[field]) fields[field] = p.message;
+    else rest.push(p.message);
   }
   return { fields, rest };
 }
 
-function fieldOf(segment: string, next: string | number | undefined): ModelField | null {
-  switch (segment) {
+function fieldOf(
+  seg: readonly (string | number)[],
+  credential: "token" | "api_key" | null,
+): ModelField | null {
+  switch (seg[0]) {
     case "model":
       return "model";
-    case "api_keys":
-      return "keys";
-    case "base_url":
-      return "baseUrl";
-    case "cooldowns":
-      return next === "auth_seconds" ? "auth" : next === "rate_limit_seconds" ? "rateLimit" : null;
+    case "timeout_seconds":
+      return "timeout";
+    case "max_concurrent":
+      return "concurrency";
+    case "auth":
+      // ONLY THE FIELD THE FORM SHOWS: a fault in another auth field is
+      // about something this form cannot change, and is said above it.
+      return credential !== null && seg[1] === credential ? "credential" : null;
     default:
       return null;
   }
 }
 
-function benchOrDefault(text: string): string {
-  return text.trim() ? `${text.trim()} s` : "default";
+function credentialSummary(value: string): string {
+  const text = value.trim();
+  if (!text) return "none";
+  if (text === REDACTED) return "inline";
+  return wholeReferenceName(text) ?? "a value";
 }
 
-function secondsText(value: unknown): string {
+function numberText(value: unknown): string {
   return typeof value === "number" && value > 0 ? String(value) : "";
+}
+
+function positive(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

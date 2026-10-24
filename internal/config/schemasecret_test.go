@@ -35,7 +35,8 @@ func TestSchemaMarksExactlyWhatRedactionMasks(t *testing.T) {
 		want []string
 	}{
 		{TierCompany, reflect.TypeFor[Company](), []string{
-			"providers.llm{}.api_keys[]",
+			"providers.llm{}.auth.api_key",
+			"providers.llm{}.env{}",
 			"providers.embeddings.api_key",
 			"mcp_servers[].env{}",
 			"mcp_servers[].headers{}",

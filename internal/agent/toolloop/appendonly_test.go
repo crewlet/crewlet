@@ -1,7 +1,6 @@
 package toolloop_test
 
 import (
-	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -9,48 +8,28 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// THE CONVERSATION ONLY GROWS. Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 bind
-// every thinking block to the conversation before it, so a request that sent
-// any earlier message differently — a corrective spliced in, a note rewritten,
-// a turn rebuilt — invalidates every block after the change, which on an
-// account the vendor enforces is a 400 no fallback retries. So every request a
-// phase makes must be the previous one with messages ADDED at the end, and the
-// conversation a phase hands back — which an extension, a withheld corrective
-// and a suspension all continue from — must extend the last request too.
+// THE CONVERSATION ONLY GROWS. A model answers the conversation it was sent,
+// so a request that sent any earlier message differently — a corrective
+// spliced in, a note rewritten, a turn rebuilt — shows it a history in which
+// its own earlier answers replied to something they never saw. So every
+// request a phase makes must be the previous one with messages ADDED at the
+// end, and the conversation a phase hands back — which an extension, a
+// withheld corrective and a suspension all continue from — must extend the
+// last request too.
 //
 // One run exercises every way the loop adds a message: a tool round, a note a
 // person sent while it ran, the empty-answer corrective and the finishing one.
-// Each assistant turn carries the vendor's own blocks, and those must reach
-// every later request unchanged as well, since they are what is replayed.
 func TestTheConversationOnlyGrows(t *testing.T) {
 	t.Parallel()
-	blocks := func(b ...string) []json.RawMessage {
-		out := make([]json.RawMessage, len(b))
-		for i := range b {
-			out[i] = json.RawMessage(b[i])
-		}
-		return out
-	}
 	var log []string
 	box := &noteBox{log: &log}
 	p := &scriptedProvider{turns: []llm.Completion{
-		{
-			Provider: "anthropic", Model: "claude-test",
-			ToolCalls: []llm.ToolCall{toolCall("1", "search")},
-			Raw: blocks(`{"type":"thinking","thinking":"a","signature":"s1"}`,
-				`{"type":"tool_use","id":"1","name":"search","input":{}}`),
-		},
-		// Thought and said nothing: the empty-answer corrective.
-		{Provider: "anthropic", Model: "claude-test",
-			Raw: blocks(`{"type":"thinking","thinking":"b","signature":"s2"}`)},
+		{Model: "claude-test", ToolCalls: []llm.ToolCall{toolCall("1", "search")}},
+		// Said nothing and called nothing: the empty-answer corrective.
+		{Model: "claude-test"},
 		// Answered in prose where a submission was owed: the finishing one.
-		{Provider: "anthropic", Model: "claude-test", Content: "All done.",
-			Raw: blocks(`{"type":"text","text":"All done."}`)},
-		{
-			Provider: "anthropic", Model: "claude-test",
-			ToolCalls: []llm.ToolCall{toolCall("2", "submit")},
-			Raw:       blocks(`{"type":"tool_use","id":"2","name":"submit","input":{}}`),
-		},
+		{Model: "claude-test", Content: "All done."},
+		{Model: "claude-test", ToolCalls: []llm.ToolCall{toolCall("2", "submit")}},
 	}}
 	s := &offeringSurface{
 		fakeSurface: fakeSurface{tools: []llm.ToolDef{def("search"), def("submit")}},
@@ -91,8 +70,7 @@ func TestTheConversationOnlyGrows(t *testing.T) {
 	}
 	grows("the conversation handed back", p.seen[len(p.seen)-1].Messages, res.Messages)
 
-	// Every assistant turn is its completion's, untouched — the vendor's
-	// blocks and the origin they are replayed by included. An edit to the
+	// Every assistant turn is its completion's, untouched. An edit to the
 	// newest turn before the next request sends it passes the check above,
 	// and is still a turn that is not what the model wrote.
 	var turns int

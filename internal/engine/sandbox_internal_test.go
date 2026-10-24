@@ -102,136 +102,60 @@ func runOn(t *testing.T, c *Company, seat *org.Role, runner string, seatEnv map[
 	return run
 }
 
-// A coding run needs the model its seat was pointed at. Nothing filled this
-// before, so OpenCode — which must declare its own provider rather than read
-// a credential from the environment — resolved a bare model against its own
-// catalogue and the vendor's default endpoint.
-func TestTheSandboxGetsTheSeatsResolvedModel(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "sk-test")
-	c := companyFor(t, `
-name: Acme
-providers:
-  llm:
-    gateway:
-      type: openai-compatible
-      model: gpt-4o
-      base_url: https://llm.example.com/v1
-      api_keys: ["${OPENAI_API_KEY}"]
-roles:
-  - name: Engineer
-    handle: eng
-    llm: gateway
-`)
-	run := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil)
-	got, credentials, env := run.llm, run.files, run.env
-	if got == nil {
-		t.Fatal("the sandbox got no model at all")
-	}
-	if got.Model != "gpt-4o" {
-		t.Errorf("Model = %q", got.Model)
-	}
-	if got.BaseURL != "https://llm.example.com/v1" {
-		t.Errorf("BaseURL = %q — a custom gateway must not be resolved away", got.BaseURL)
-	}
-	if credentials != nil {
-		t.Errorf("an API entry contributed credential files: %v", credentials)
-	}
-	// AND ITS KEY IN THE RUN ENVIRONMENT, which is the only place a coding
-	// agent reads it: OpenCode's declared provider names OPENAI_API_KEY in
-	// its `env` list, and nothing set it. Not the endpoint, which OpenCode is
-	// handed in opencode.json and reads nowhere else.
-	if env["OPENAI_API_KEY"] != "sk-test" {
-		t.Errorf("the run environment = %v, want the entry's key", env)
-	}
-	if _, exported := env["OPENAI_BASE_URL"]; exported {
-		t.Errorf("an endpoint OpenCode is declared in opencode.json was exported too: %v", env)
-	}
-}
-
-// AN API ENTRY'S BOX IS HANDED WHAT THE ENTRY'S OWN CALLS USE, RESOLVED.
+// AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
 //
-// The docs promised a coding run the role's `anthropic` key as
-// ANTHROPIC_API_KEY and its base_url as ANTHROPIC_BASE_URL, and no code ever
-// exported either: Claude Code started in the box with no credential at all,
-// and OpenCode's declared provider read a variable nothing set. The model and
-// endpoint were passed as the document stores them, so a `${LLM_MODEL}`
-// reached the box as that literal.
-func TestAnAPIEntrysBoxCarriesItsResolvedKeyAndEndpoint(t *testing.T) {
+// Under auth.mode api-key an entry signs its CLI in with one metered key, and
+// a coding run on that entry has to carry it: Claude Code in a box reads only
+// its environment, so a run that left the key behind started signed in to
+// nothing. Model and key are the epoch's resolution, the one its seats' own
+// calls are made with, so a `${LLM_MODEL}` reaches the box as its value rather
+// than that literal. And the mode decides which credential travels: a plan
+// token the engine's own environment happens to hold stays out of an api-key
+// entry's box, or the run would be signed in two ways at once.
+func TestAnAPIKeyEntrysBoxCarriesItsResolvedKey(t *testing.T) {
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	t.Setenv("LLM_MODEL", "claude-sonnet-5")
-	t.Setenv("LLM_BASE_URL", "https://gateway.example.com")
-	t.Setenv("FIRST_KEY", "sk-ant-first")
-	t.Setenv("SECOND_KEY", "sk-ant-second")
+	t.Setenv("ENTRY_KEY", "sk-ant-entry")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-not-this-entrys")
 	c := companyFor(t, `
 name: Acme
 providers:
   llm:
     claude:
-      type: anthropic
       model: ${LLM_MODEL}
-      base_url: ${LLM_BASE_URL}
-      api_keys: ["${FIRST_KEY}", "${SECOND_KEY}"]
-    direct:
-      type: anthropic
-      model: claude-sonnet-5
-      api_keys: ["${FIRST_KEY}"]
+      auth: {mode: api-key, api_key: "${ENTRY_KEY}"}
 roles:
   - name: Engineer
     handle: eng
     llm: claude
-  - name: Reviewer
-    handle: rev
-    llm: direct
 `)
-	seat := seatNamed(t, c, "Engineer")
-	run := runOn(t, c, seat, codingagent.ClaudeCodeName, nil)
-	if run.llm == nil || run.llm.Model != "claude-sonnet-5" || run.llm.BaseURL != "https://gateway.example.com" {
-		t.Fatalf("the box's model = %+v, want the resolved model and endpoint", run.llm)
+	run := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil)
+	if run.model != "claude-sonnet-5" {
+		t.Errorf("the box's model = %q, want the resolved model", run.model)
 	}
-	want := map[string]string{
-		// The FIRST key: a box cannot rotate through the pool.
-		"ANTHROPIC_API_KEY":  "sk-ant-first",
-		"ANTHROPIC_BASE_URL": "https://gateway.example.com",
-	}
-	if !maps.Equal(run.env, want) {
-		t.Errorf("Claude Code's run environment = %v, want exactly %v", run.env, want)
-	}
-
-	// OPENCODE IS HANDED ITS ENDPOINT IN opencode.json, so only the key
-	// travels, under the variable its declared provider names in its `env`
-	// list.
-	run = runOn(t, c, seat, codingagent.OpenCodeName, nil)
-	if !maps.Equal(run.env, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-first"}) {
-		t.Errorf("OpenCode's run environment = %v, want the key alone", run.env)
-	}
-
-	// An entry with NO base_url exports no endpoint variable at all: an
-	// empty ANTHROPIC_BASE_URL is not "the default", it is a URL that is
-	// not one.
-	run = runOn(t, c, seatNamed(t, c, "Reviewer"), codingagent.ClaudeCodeName, nil)
-	if !maps.Equal(run.env, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-first"}) {
-		t.Errorf("an entry with no base_url gave the run environment %v, want the key alone", run.env)
+	if want := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-entry"}; !maps.Equal(run.env, want) {
+		t.Errorf("the run environment = %v, want exactly %v", run.env, want)
 	}
 }
 
 // THE ENTRY'S SIGN-IN IS ONE UNIT WHERE THE SEAT BROUGHT ITS OWN.
 //
-// Underlaid by name, the company's key and endpoint were added beside
-// whatever the seat named in role.sandbox.env: Claude Code ranks
-// ANTHROPIC_API_KEY above a plan's CLAUDE_CODE_OAUTH_TOKEN, so a seat billing
-// its own Pro/Max plan was moved onto the company's metered key, and a seat
-// naming its own key had it sent to the company's gateway. When the seat's
-// environment signs Claude Code in, the entry adds neither.
+// Underlaid by name, an api-key entry's key is added beside whatever the seat
+// named in role.sandbox.env: Claude Code ranks ANTHROPIC_API_KEY above a
+// plan's CLAUDE_CODE_OAUTH_TOKEN, so a seat billing its own Pro/Max plan is
+// moved onto the company's metered key, and a seat on a cloud provider's own
+// credentials carries a company key into a box that never reads it. When the
+// seat's environment signs Claude Code in, the entry adds nothing.
 func TestASeatsOwnClaudeCodeSignInKeepsTheEntrysOut(t *testing.T) {
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	t.Setenv("ENTRY_KEY", "sk-ant-company")
 	c := companyFor(t, `
 name: Acme
 providers:
   llm:
     claude:
-      type: anthropic
       model: claude-sonnet-5
-      base_url: https://gateway.example.com
-      api_keys: ["${ENTRY_KEY}"]
+      auth: {mode: api-key, api_key: "${ENTRY_KEY}"}
 roles:
   - name: Engineer
     handle: eng
@@ -254,9 +178,6 @@ roles:
 		if run.env["ANTHROPIC_API_KEY"] == "sk-ant-company" {
 			t.Errorf("%v: the company key was added beside the seat's own sign-in", own)
 		}
-		if _, added := run.env["ANTHROPIC_BASE_URL"]; added {
-			t.Errorf("%v: the company endpoint was added beside the seat's own sign-in", own)
-		}
 	}
 
 	// A seat that brings no sign-in still gets the entry's, or this would
@@ -272,62 +193,37 @@ roles:
 // work happens in one conversation, so there is no separate executor key to
 // inherit — sandboxed work is that same work, done somewhere else.
 func TestTheSandboxModelFallsBackToTheSeatsOwn(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "sk-test")
-	c := companyFor(t, `
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	const doc = `
 name: Acme
 providers:
   llm:
-    big:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
-    coder:
-      type: openai
-      model: gpt-4o-coder
-      api_keys: ["${OPENAI_API_KEY}"]
+    big: {model: opus}
+    coder: {model: sonnet}
 roles:
   - name: Engineer
     handle: eng
     llm: big
-`)
-	got := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil).llm
-	if got == nil || got.Model != "gpt-4o" {
-		t.Fatalf("the sandbox model = %+v, want the seat's own model", got)
+`
+	c := companyFor(t, doc)
+	if got := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).model; got != "opus" {
+		t.Fatalf("the sandbox model = %q, want the seat's own model", got)
 	}
 	// And its own key still wins, or the fallback would be the only path.
-	c = companyFor(t, `
-name: Acme
-providers:
-  llm:
-    big:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
-    coder:
-      type: openai
-      model: gpt-4o-coder
-      api_keys: ["${OPENAI_API_KEY}"]
-roles:
-  - name: Engineer
-    handle: eng
-    llm: big
-    llm_sandbox: coder
-`)
-	got = runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.OpenCodeName, nil).llm
-	if got == nil || got.Model != "gpt-4o-coder" {
-		t.Fatalf("the sandbox model = %+v, want llm_sandbox's own", got)
+	c = companyFor(t, doc+"    llm_sandbox: coder\n")
+	if got := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).model; got != "sonnet" {
+		t.Fatalf("the sandbox model = %q, want llm_sandbox's own", got)
 	}
 }
 
-// A CLI-AGENT ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
+// AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
 //
-// Every subscription entry shares one providers.llm type, and the run used to
-// be handed a FAMILY instead — the profile's vendor — from which OpenCode
-// rebuilt `anthropic/<model>`. So an agent-mode OpenCode entry ran its box on
-// a model its text calls never named, and no value of `model` worked for both.
-// The model is resolved (a `${VAR}` reaches the CLI as its value) and passed
-// as written, beside the CLI it is written for.
-func TestACLIAgentRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
+// The run used to be handed a FAMILY instead — the profile's vendor — from
+// which OpenCode rebuilt `anthropic/<model>`. So an agent-mode OpenCode entry
+// ran its box on a model its text calls never named, and no value of `model`
+// worked for both. The model is resolved (a `${VAR}` reaches the CLI as its
+// value) and passed as written.
+func TestAnEntrysRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
 	state := t.TempDir()
 	t.Setenv(config.CLIHomeEnv, state)
 	t.Setenv("OC_MODEL", "openrouter/anthropic/claude-sonnet-5")
@@ -337,11 +233,9 @@ providers:
   sandbox: {fake: true}
   llm:
     oc:
-      type: cli-agent
+      agent: opencode
       model: ${OC_MODEL}
-      cli:
-        agent: opencode
-        mode: agent
+      mode: agent
 roles:
   - name: Engineer
     handle: eng
@@ -352,13 +246,6 @@ roles:
 	if err != nil {
 		t.Fatalf("an opencode entry under its own runner was refused: %v", err)
 	}
-	got := run.llm
-	if got == nil {
-		t.Fatal("the run got no model at all")
-	}
-	if got.CLI != "opencode" || got.ProviderType != "" || got.BaseURL != "" {
-		t.Errorf("AgentLLM = %+v, want the CLI named and no family or endpoint", got)
-	}
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatal(err)
@@ -367,9 +254,12 @@ roles:
 	if text != "openrouter/anthropic/claude-sonnet-5" {
 		t.Fatalf("the text calls' model = %q, want the resolved model as written", text)
 	}
+	if run.model != text {
+		t.Errorf("the run's model = %q, want %q, the value every text call passes", run.model, text)
+	}
 	// The run is a script quoted for `sh -c`; its quoting undone, the model
 	// is an argument of its own.
-	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", LLM: got}, codingagent.Paths{}, "")
+	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, codingagent.Paths{}, "")
 	if script := strings.ReplaceAll(cmd, `'\''`, "'"); !strings.Contains(script, "--model '"+text+"'") {
 		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
 	}
@@ -386,11 +276,9 @@ providers:
   sandbox: {fake: true}
   llm:
     oc:
-      type: cli-agent
+      agent: opencode
       model: anthropic/claude-sonnet-5
-      cli:
-        agent: opencode
-        mode: agent
+      mode: agent
 roles:
   - name: Engineer
     handle: eng
@@ -441,14 +329,8 @@ func TestACodingRunOnAnotherCLIsEntryIsRefused(t *testing.T) {
 name: Acme
 providers:
   llm:
-    oc:
-      type: cli-agent
-      model: anthropic/claude-sonnet-5
-      cli: {agent: opencode}
-    cc:
-      type: cli-agent
-      model: sonnet
-      cli: {agent: claude-code}
+    oc: {agent: opencode, model: anthropic/claude-sonnet-5}
+    cc: {agent: claude-code, model: sonnet}
 roles:
   - name: Writer
     handle: writer
@@ -473,71 +355,10 @@ roles:
 			t.Errorf("%s: the refusal does not offer the entry's own runner:\n%v", tc.seat, err)
 		}
 		// And the entry's own runner is let through, or this would just
-		// refuse every cli-agent entry.
+		// refuse every entry.
 		if _, err := newCodingRun(c, seat, phase.Sandbox, tc.cli, nil); err != nil {
 			t.Errorf("%s under its own CLI's runner was refused: %v", tc.seat, err)
 		}
-	}
-}
-
-// CLAUDE CODE SPEAKS ONLY ANTHROPIC'S API, so an `openai` entry gives it
-// nothing it can read: refused, unless the seat brought a Claude Code sign-in
-// of its own — and then the run carries NONE of the entry, not its model,
-// which `claude --model` refuses whatever signs the run in, and not its key,
-// which would only ride into a box that cannot use it.
-func TestClaudeCodeOnAnOpenAIEntryRunsOnlyOnTheSeatsOwnSignIn(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "sk-test")
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-	c := companyFor(t, `
-name: Acme
-providers:
-  llm:
-    gpt:
-      type: openai
-      model: gpt-5
-    claude:
-      type: anthropic
-      model: claude-sonnet-5
-roles:
-  - name: Engineer
-    handle: eng
-    llm: gpt
-  - name: Reviewer
-    handle: rev
-    llm: claude
-`)
-	eng := seatNamed(t, c, "Engineer")
-	_, err := newCodingRun(c, eng, phase.Sandbox, codingagent.ClaudeCodeName, nil)
-	var modelErr *SandboxModelError
-	if !errors.As(err, &modelErr) {
-		t.Fatalf("Claude Code on an openai entry: err = %v, want *SandboxModelError", err)
-	}
-	if !strings.Contains(err.Error(), "role.sandbox.coding_agent: opencode") {
-		t.Errorf("the refusal does not offer the runner that reads the entry:\n%v", err)
-	}
-	if run := runOn(t, c, eng, codingagent.OpenCodeName, nil); run.env["OPENAI_API_KEY"] != "sk-test" {
-		t.Errorf("OpenCode on an openai entry was not handed its key: %v", run.env)
-	}
-	for _, own := range []map[string]string{
-		{"CLAUDE_CODE_USE_BEDROCK": "1"},
-		// The plan token signs Claude Code in as surely as a key does.
-		{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-plan"},
-	} {
-		run := runOn(t, c, eng, codingagent.ClaudeCodeName, own)
-		if run.llm != nil {
-			t.Errorf("%v: the run was handed %+v, a model Claude Code cannot name", own, run.llm)
-		}
-		if _, leaked := run.env["OPENAI_API_KEY"]; leaked {
-			t.Errorf("%v: an OpenAI key rode into a Claude Code box: %v", own, run.env)
-		}
-	}
-	// A blank value signs nothing in: an unresolved ${VAR} lands as one.
-	if _, err := newCodingRun(c, eng, phase.Sandbox, codingagent.ClaudeCodeName,
-		map[string]string{"ANTHROPIC_API_KEY": " "}); !errors.As(err, &modelErr) {
-		t.Errorf("a blank Anthropic key let Claude Code onto an openai entry: %v", err)
-	}
-	if run := runOn(t, c, seatNamed(t, c, "Reviewer"), codingagent.ClaudeCodeName, nil); run.llm == nil {
-		t.Error("Claude Code on an anthropic entry was handed no model")
 	}
 }
 
@@ -563,10 +384,8 @@ name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
+      agent: claude-code
       model: sonnet
-      cli:
-        agent: claude-code
 roles:
   - name: Engineer
     handle: eng
@@ -595,10 +414,8 @@ name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
+      agent: claude-code
       model: sonnet
-      cli:
-        agent: claude-code
 roles:
   - name: Engineer
     handle: eng

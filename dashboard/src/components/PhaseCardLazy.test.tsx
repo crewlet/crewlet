@@ -62,7 +62,7 @@ function record() {
         startedAt: "",
       },
     ],
-    narration: [{ round: 1, reasoning: "", content: "Working.", declined: false }],
+    narration: [{ round: 1, content: "Working.", declined: false }],
     partial: null,
     inputTokens: 0,
     outputTokens: 0,

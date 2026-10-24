@@ -300,7 +300,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 }
 
 // WHAT MOVES WITH A DIRECTORY IS WHAT THE PROFILE KEEPS UNDER IT. The refusal
-// of an entry's cli.env naming a relocation variable says which fields have to
+// of an entry's env naming a relocation variable says which fields have to
 // move with a different directory, read from here.
 func TestKeptUnderNamesTheFieldsThatMoveWithADirectory(t *testing.T) {
 	t.Parallel()
@@ -597,10 +597,10 @@ func TestTheOpenCodeProfileWritesWhatItReadsIntoTheCallsOwnConfigDir(t *testing.
 // AN ISOLATION SWITCH IS A VENDOR VARIABLE OF ITS OWN, WITH A VALUE, AND
 // NOTHING LAYERED OVER IT MAY SET IT. isolation_env exists because OpenCode's
 // project switch, written in env, was turned back off by
-// `cli.env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an empty value,
+// `env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an empty value,
 // which OpenCode reads as off — and every ancestor's configuration reached
 // every seat again (measured on 2.0.32). So the switch is an isolation
-// variable: refused in env and passthrough_env here, and in cli.env by config
+// variable: refused in env and passthrough_env here, and in an entry's env by config
 // through the same list. An empty value is refused because a vendor that reads
 // `1` as on reads it as off; a name the engine already points at a directory
 // would give the child two values; and a credential has no place in a value
@@ -648,7 +648,7 @@ func TestAnIsolationSwitchIsAVendorVariableWithAValue(t *testing.T) {
 		t.Fatalf("a switch beside an ordinary env was refused: %v", err)
 	}
 	if got := p.IsolationVariables(); !slices.Equal(got, append(slices.Clone(HomeIsolation), "VENDOR_HOME", "VENDOR_NO_PROJECT")) {
-		t.Errorf("IsolationVariables = %v, want the switch listed, so cli.env is refused it", got)
+		t.Errorf("IsolationVariables = %v, want the switch listed, so an entry's env is refused it", got)
 	}
 	if clone := p.Clone(); clone.IsolationEnv["VENDOR_NO_PROJECT"] != "1" {
 		t.Errorf("Clone dropped isolation_env: %v", clone.IsolationEnv)
@@ -686,12 +686,12 @@ func TestTheOpenCodeSwitchesAreTheNamesItReadsFirst(t *testing.T) {
 		}
 	}
 	if _, inEnv := p.Env["OPENCODE_CONFIG_PROJECT_DISABLE"]; inEnv {
-		t.Error("the project switch is in env, where cli.env may replace it")
+		t.Error("the project switch is in env, where an entry's env may replace it")
 	}
 	if p.Env["OPENCODE_FILEWATCHER_DISABLE"] != "1" {
 		t.Errorf("env OPENCODE_FILEWATCHER_DISABLE = %q, want 1", p.Env["OPENCODE_FILEWATCHER_DISABLE"])
 	}
 	if !slices.Contains(p.IsolationVariables(), "OPENCODE_CONFIG_PROJECT_DISABLE") {
-		t.Error("the project switch is not an isolation variable, so cli.env is not refused it")
+		t.Error("the project switch is not an isolation variable, so an entry's env is not refused it")
 	}
 }

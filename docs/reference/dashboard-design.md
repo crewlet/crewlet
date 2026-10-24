@@ -1188,7 +1188,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (a board's name, frame preset or size, order and brief) and the hand-off panel beside it (the design's name, brief and references and who builds it); Create and ask publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. Every page offers **Ask an agent** in its bar, which opens the hand-off panel beside the page rather than replacing it ([Asking an agent from a create page is a panel, not a mode](#asking-an-agent-from-a-create-page-is-a-panel-not-a-mode)); a design and an HTML page arrive with it open where it fits beside the page. The gallery's Make row and its New menu open them | `item=` (the task it is made for, which lists it on that task's Artifacts card) · `panel=ask\|closed` (the hand-off panel; `closed` on a design or an HTML page, which open with it) |
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
-| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address for a reader who may open it (one who may not is taken to the first section they can, Token spend for a reader holding Tracker), every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
+| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address for a reader who may open it (one who may not is taken to the first section they can, Token spend for a reader holding Tracker), every `providers.llm` entry — the coding CLI it drives, its model, its mode and how it signs in, by the variable each credential names — read off the company document (`config`), and the seats whose chain names it; one model's facts, its sign-in and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP Tools**, the engine's runtime beside the models, every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
 | `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
@@ -3680,7 +3680,7 @@ list's checkboxes are disabled — this surface performs no writes, and a box a
 reader could tick would report a change that never reached the page.
 
 **A model's words are markdown too**, and this page used to say they were
-not. A round's speech and thinking and a coding run's report were a `pre-wrap`
+not. A round's speech and a coding run's report were a `pre-wrap`
 block on the rule that a model's line breaks are load-bearing and it does not
 write markdown — and a round that wrote a fenced JSON block printed three
 backticks, a language tag and a wall of braces. The line breaks *are*
@@ -4439,10 +4439,10 @@ rules fix it, and each one names a specific mechanism:
 
    The model's *words* had the same problem one level up. `response` is the
    JOIN of every round's turn, and a join cannot be undone — its parts are
-   separated by a blank line and prose contains blank lines — so splitting
-   it on the leading `<think>` tag showed round 1's thinking as "the
-   reasoning" and every later round's thinking as "the model output", tags
-   and all. So the engine sends the split it already knows, at the point
+   separated by a blank line and prose contains blank lines — so a card
+   that read only the string could not say which round said what, and put
+   the model's words in a block detached from the calls they were about. So
+   the engine sends the split it already knows, at the point
    the round's assistant message is appended, and the card reads the rounds
    from that alone — the joined string is rendered only as a coding run's
    report, whose rounds happened in its box.
@@ -4471,25 +4471,16 @@ rules fix it, and each one names a specific mechanism:
    word a reviewer chooses on purpose, and "sent the turn back" claimed a
    judgement nobody made.
 
-   **A round that did not finish says why, and a refusal is named as one.**
-   The engine ends a phase on a round its output cap cut off, one that filled
-   the context window, one the provider paused, and one whose model declined
-   the request — and none of them looks different on the round itself: the
-   words read like any round's, and a call the cap cut off was never run, so
-   there is no failed row to catch the eye. Each round's `rounds[].stop_reason`
-   is what says which, and a round whose reason ended the phase carries a
-   sentence under its words in the danger tone, with its glyph, and a danger
-   node (rule 4) — keyed on `contract/stops.ts`, the engine's own set, so a
-   reason the engine starts recording is a type error until it has its
-   sentence. Such a round keeps its place on the rail even when it said
-   nothing and ran nothing: a refusal with no text is exactly that round, and
-   it is the one that explains why the phase ended. The header names a refused
-   phase **"declined by model"** rather than its `error_kind` (`refusal` reads
-   as the engine refusing), and the error banner says what the vendor said
-   (`refusal.category`, `refusal.explanation`) and that the phase ended there.
-   Still danger, because the phase and its turn ended there.
+   **A round needs no sentence about how it ended.** Each round's
+   `rounds[].stop_reason` is `end` or `tool_use` — an answer, or calls to run
+   — which its words and its calls already show, so the card draws nothing
+   from it. There is no reason for a round cut short: a CLI whose model hit
+   its ceiling or declined says so in its own words, which the round shows as
+   it shows any words, or fails, and a failed phase carries its `error_kind`
+   on the header in the danger tone, and its error text in a danger callout in
+   the body.
 3. **The model's words are prose; JSON is monospace, and INDENTED.**
-   Reasoning and speech get a proportional face, real leading and a bounded
+   Speech gets a proportional face, real leading and a bounded
    measure, and are rendered as the markdown they are, read by a model's
    habits — every newline a break, every heading a styled line rather than a
    heading of the page (see
@@ -4577,8 +4568,8 @@ rules fix it, and each one names a specific mechanism:
    only the second was being done. The rail was drawn strictly *between*
    rounds and the tint only on even ones, so a phase with a single round —
    the common case — got neither, and rendered as a bare numeral in the
-   gutter beside a flat stack of look-alike disclosure rows: the thinking
-   and the call it asked for read as siblings. The round's content also sat
+   gutter beside a flat stack of look-alike rows: the words and the call
+   they asked for read as siblings. The round's content also sat
    on three different left edges, because a disclosure head carries its own
    inset and the model's speech carried none. One bracket per round, one
    left edge, and 24px between rounds against 8px inside one.
@@ -5283,7 +5274,7 @@ not, which is the class of defect that never shows up in a screenshot:
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
 change shape when it completes. `decision`, `exhausted_rounds`,
-`empty_answer_rounds`, `rescue_fired`, `refusal`, `notes`, `tools_available` and
+`empty_answer_rounds`, `rescue_fired`, `notes`, `tools_available` and
 `conversation_key` are all rendered; every one of them was on the wire and shown
 nowhere. `empty_answer_rounds` is the newest and the one with the least warning
 attached elsewhere: a model that answers with nothing used to fail its provider
@@ -5452,8 +5443,8 @@ Four rules replace it, and each one names what it fixes.
    turn reported ~6,900 tokens on a prompt the provider billed 205,000 input
    tokens for. *Messages* is what a **resumed** phase sends in place of a
    system and user pair — a detached coding run re-enters its saved
-   conversation, counted with the reasoning each parked round carries and the
-   arguments of its tool calls — and reads 0 on every phase that opens one of
+   conversation, counted as its messages' text and the arguments of its tool
+   calls — and reads 0 on every phase that opens one of
    its own. Five fixed columns overflow a phone, which is what the sideways
    scroll on `.num-block` is for.
 
@@ -7879,52 +7870,64 @@ asks the engine nothing. That list is derived from each seat's configuration
 an admin; an absent list on this admin's screen means a node older than the
 field, and the panel says so.
 
-**Models & keys** draws the engine's `credential_pool`: every model the
-company configures in config order (the order a seat that names no model falls
-back through), its **state** as the engine judged it (*Ready*, *Fewer keys*,
-*All keys cooling*, *No key*, *CLI login*) and **one mark per key** in
-declaration order — the variable it names (`ANTHROPIC_KEY_A`), the vendor's
-own variable marked *default* when the model names none, or *key n · inline*
-for a key written into the configuration itself — in its state's tone, a
-cooling key carrying how long it has left; several marks wrap two to a line
-where the column allows. The bench times sit one cause per line (*rate limit
-1h* over *auth 5m*), so neither is ever clipped to a different value, and a
-model no seat names reads *–* on its row and on its page alike. A key is **never a value**: the answer has no
-member one could travel in, and a key the document holds inline is drawn by its
-position. The deadline is the later of the answering node's own bench and the
-**fleet's cooldown ledger**, so a key a peer benched a second ago reads
-*Cooling* here before this node's refresher has pulled it; a node that could
-not read the ledger says its cooldowns are its own and why. Three tiles count
-the models (and how many need attention), the keys ready now, and when the next
-cooling key comes back. **Runs** is the seats whose resolved chain (the org
-projection's `llm`, the engine's own resolution) starts with the model, and
-how many fall back to it. A row opens the **model's page** (`models/{id}`):
-its facts, the state's sentence when it is not ready, every key with its
-state, when it comes back, why (*ACME_KEY isn’t set on this node*, *Same as
-key 1*, and its Back cell says *As key 1*, since the pool holds it once),
-this node's leases of it and the non-reversible **hint**
-the engine's `credential_cooled` log lines carry, then **Seats on it** — each
-seat and which phases run on it or fall back to it. A seat's model chain on
-its Settings tab links here. **Edit** (the page's action, and a row's pencil)
-is drawn for every reader and disabled with the reason for one who cannot
-change the configuration: it reads the entry (`GET
-/config/llm-providers/{id}`), edits its model id, its keys (secret fields —
-`$` offers the sealed entries; a key written inline is a locked row that can
-be kept, removed or replaced in its place, never shown — and while one is in
-the list the list neither grows nor shrinks and no removal moves it, because
-the engine puts an inline value back **by its position** and a moved mask
-would come back as its neighbour's key; a `cli-agent` entry is no key pool, so
-its list is one **API key**, offered only under `cli.auth.mode: api-key`, and
-in any other mode it offers none and says how the entry signs in — a key it
-already holds is drawn to be removed, with the reason, since the engine
-refuses one there), its endpoint and its two bench times
-(named for what benches a key — *rate limit 1h · auth 5m* — rather than by
-status code), checks
-the whole company with the change in it and says only a warning the edit
-introduces, then stores it with `PUT /config/llm-providers/{id}` and
-`If-Match`, sending back every field it did not show exactly as read. The
-answer is polled every 15 s while the screen is open — the node's own
-cooldown refresher's cadence.
+**Models & keys** draws the company document's `providers.llm` entries, read
+through the same Admin-only `config` question the Configuration screen asks,
+in config order (the order a seat that names no model falls back through), each
+**as the engine will run it**: a field the entry leaves out is said as the
+default the engine applies — the CLI (`claude-code`), the mode (`text`), the
+sign-in (`subscription`), the 600-second timeout and four processes at once —
+from `contract/models.ts`, which
+`internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes` holds to the
+engine's own defaults, so a default that drifted cannot name a CLI or a
+sign-in the engine does not apply. There is **no per-key state** to draw and
+nothing is asked of a node: a model is one CLI, which holds one sign-in and
+rotates nothing, so what an operator needs is how it signs in and whether
+anything still runs on it. Three tiles count the models (and how many no seat
+names), the models in **agent mode**, which run the executor in their CLI, and
+the models **on an API key**, the ones billed to a metered account. Each row is the entry's key over its CLI and model
+(`claude-code · sonnet`), its mode (*Text*, or *Agent* with the cell its
+`run_in` names), how it **signs in** — *Subscription*, *API key* or *Engine
+environment* — over where that credential comes from: the variable the entry's
+`auth.token` or `auth.api_key` names, or, where it names none, what the CLI
+reads instead (*CLI login*, *from a bundle*; *the CLI's own key variable*; *the
+engine's own variables*) — and **Runs**, the seats whose resolved chain (the
+org projection's `llm`, the engine's own resolution) starts with the model and
+how many fall back to it. A credential is **never a value**: one written as a
+whole `${NAME}` is that name, and anything else is the document's mask, said to
+be *written inline* and never drawn. The list is read again on every company the
+engine publishes — the org projection the seats ride on moves with it — and
+never on a clock, since the document changes only with a revision.
+
+A row opens the **model's page** (`models/{id}`): its facts (model, CLI, mode,
+timeout, processes at once, seats — each default said as one), a **Signing
+in** card naming the mode, the credential that mode reads (the token under
+`subscription`, the API key under `api-key`, none under `inherit-env`) or, where
+the entry names none, the sentence saying what the engine reads instead (the
+CLI's own token variable or the login `crewlet llm login` wrote; the CLI's own
+key variable, from the secret store and then the environment), the login
+bundle's variable, where the login is kept (`state_dir`, or a directory derived
+from the key on each node) and each `env` variable with the name its value
+comes from; then **Seats on it** — each seat and which phases run on it or fall
+back to it. A seat's model chain on its Settings tab links here. Changing the
+CLI, the mode or the sign-in is Configuration's, where the whole entry is in
+view, and the card links to that entry there. **Edit** (the page's action, and
+a row's pencil) is drawn for every reader and disabled with the reason for one
+who cannot change the configuration: it reads the entry (`GET
+/config/llm-providers/{id}`) and edits its model, the ONE credential its
+sign-in reads (a secret field — `$` offers the sealed entries, and one the
+document holds inline is a locked row that can be kept or replaced, never shown
+— and none at all under `inherit-env`, since the engine refuses a credential
+under a mode that does not read it) and, under a **Limits** fold, its two caps,
+the wall clock on one CLI invocation and how many run at once, empty meaning
+the default. It checks the whole company twice with `dry_run` — as stored and
+with the edit — so only a warning the edit introduces is said, places a problem
+the engine names at one of those fields beside it and any other above the form,
+then stores it with `PUT /config/llm-providers/{id}` and `If-Match`, sending
+back every field it did not show — the CLI, the mode, `run_in`, `state_dir`,
+`env`, `overrides` and the bundle — exactly as read. With no entry, or no
+company configured, the tiles read 0 and the card says to add one under
+`providers.llm`; an address naming no entry says so and links back to every
+model.
 
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.

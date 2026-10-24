@@ -163,7 +163,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.BinaryPath = "not on PATH"
 		d.Problems = append(d.Problems, fmt.Sprintf(
 			"%q is not on this host's PATH — the CLI runs on the ENGINE host, so it "+
-				"must be installed here; set cli.overrides.binary to an absolute path "+
+				"must be installed here; set overrides.binary to an absolute path "+
 				"if it lives somewhere unusual", p.profile.Binary))
 	default:
 		d.BinaryPath = path
@@ -250,7 +250,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	// NOTHING THE ENGINE HANDS THE CLI SIGNS IT IN — which is a problem
 	// unless the CLI answered anyway. A model served by an endpoint that
 	// takes no key (a hermes or pi entry pointed at a local server through
-	// cli.env) is signed in to nothing and works, and so is a CLI holding a
+	// env) is signed in to nothing and works, and so is a CLI holding a
 	// key in a configuration file of its own that no profile names. The
 	// configuration cannot tell those from a missing key; the smoke test's
 	// answer can, so it decides, and without it the report says what it
@@ -278,16 +278,17 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 			"bundle stays out until a login is written again"
 	}
 	if len(unresolved) > 0 {
-		problem += fmt.Sprintf(" — cli.env sets %s, but the ${VAR} it references "+
+		problem += fmt.Sprintf(" — env sets %s, but the ${VAR} it references "+
 			"resolved to nothing: export it, or store it with `crewlet secrets set`",
 			strings.Join(unresolved, ", "))
 	}
 	if p.auth.Mode == AuthAPIKey && p.auth.APIKey == "" {
-		problem += " — auth.mode is api-key and its api_keys value resolved to " +
-			"nothing: export it, or store it with `crewlet secrets set`"
+		problem += fmt.Sprintf(" — auth.mode is api-key and its key (auth.api_key, else %s) "+
+			"resolved to nothing: export it, or store it with `crewlet secrets set`",
+			p.profile.APIKeyEnv)
 	}
 	if p.auth.Mode == AuthSubscription && p.auth.TokenConfigured && p.auth.Token == "" {
-		problem += " — cli.auth.token is set, but the ${VAR} it references resolved " +
+		problem += " — auth.token is set, but the ${VAR} it references resolved " +
 			"to nothing: export it, or store it with `crewlet secrets set`"
 	}
 	if len(hostLogin) > 0 {
@@ -301,12 +302,12 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 	} else {
 		problem += fmt.Sprintf(" — run `crewlet llm login %s`", p.key)
 	}
-	// Offered only when cli.env does not already try it: an entry whose
+	// Offered only when env does not already try it: an entry whose
 	// reference resolved to nothing was told so above, and being told to
 	// do what it did would read as a second, different fault.
 	if p.profile.EnvSignIn && len(unresolved) == 0 {
 		problem += fmt.Sprintf(", or set the key of the provider its model names in "+
-			"cli.env, under that provider's own variable (the %q CLI reads it from "+
+			"env, under that provider's own variable (the %q CLI reads it from "+
 			"its environment)", p.agent)
 	}
 	// Said last because it is the one case where nothing needs doing — a
@@ -413,7 +414,7 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 		return "probe: SHELL RAN", fmt.Sprintf(
 			"the %q profile says local tools are denied, but the CLI ran a shell "+
 				"command on the engine host — the vendor's denial flag is not taking "+
-				"effect on this build (%s); check cli.overrides against the installed "+
+				"effect on this build (%s); check overrides against the installed "+
 				"version before running seats on it", p.agent, orNone(p.profile.WrittenFor))
 	case ran:
 		return "probe: SHELL RAN", fmt.Sprintf(
@@ -460,7 +461,7 @@ func (p *Provider) webProbe(ctx context.Context) string {
 		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
-			"environment (cli.env / passthrough_env)",
+			"environment (env / passthrough_env)",
 		p.agent, webProbeURL, strings.TrimSpace(comp.Content))
 }
 
@@ -708,7 +709,7 @@ func (p *Provider) SandboxCredentialDocument() string {
 // files, which is why a CLI that mints no token needs a local box.
 //
 // A CLI that reads its model provider's key from its own environment
-// ([cliprofile.Profile.EnvSignIn]) signs in through cli.env, and that key
+// ([cliprofile.Profile.EnvSignIn]) signs in through env, and that key
 // travels for the same reason a token does — it is the whole sign-in, and a
 // run that dropped it would start the CLI signed in to nothing while the
 // doctor reported the entry healthy.
@@ -740,7 +741,7 @@ func (p *Provider) MintsHeadlessToken() bool {
 // CredentialEnvNames are the variables that authenticate this CLI inside a
 // box: the headless token's and the API key's, and — for a CLI that reads its
 // model provider's key from its own environment — the credential-named
-// variables the entry's cli.env sets.
+// variables the entry's env sets.
 //
 // Exported because the launch has to answer a question only it can — whether
 // ANYTHING in the run environment authenticates, including a value the
@@ -765,6 +766,6 @@ func (p *Provider) CredentialEnvNames() []string {
 }
 
 // SignsInThroughEnv reports whether this CLI reads its model provider's key
-// from its own environment, so the launch's refusal can name cli.env as the
+// from its own environment, so the launch's refusal can name env as the
 // route that travels to a remote box.
 func (p *Provider) SignsInThroughEnv() bool { return p.profile.EnvSignIn }

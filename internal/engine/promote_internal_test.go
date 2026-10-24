@@ -11,9 +11,9 @@ import (
 
 // THE PROMOTION WIRING.
 //
-// `skill_promotion.enabled`, `min_sibling_count`, `jaccard_threshold` and
-// `budget_tokens` validated, shipped in the example company, and had no
-// reader outside internal/config — the pass they configure did not exist.
+// `skill_promotion.enabled`, `min_sibling_count` and `jaccard_threshold`
+// validated, shipped in the example company, and had no reader outside
+// internal/config — the pass they configure did not exist.
 // These cases are the seam between the pass and the company.
 
 // promotionCompany builds an epoch with units and a knowledge container.
@@ -24,9 +24,7 @@ name: Acme
 providers:
   llm:
     gateway:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
+      model: sonnet
 `+units+`
 `)
 }
@@ -285,9 +283,7 @@ name: Acme
 providers:
   llm:
     gateway:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
+      model: sonnet
 learning:
   skill_promotion:
     enabled: false

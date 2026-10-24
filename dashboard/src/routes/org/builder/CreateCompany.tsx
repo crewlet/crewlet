@@ -253,8 +253,8 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         <div className="col gap-1">
           <strong>Add a model provider</strong>
           <span className="t-caption">
-            Agents can’t work until one is added. Seal the key with{" "}
-            <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>, then add the provider:
+            Agents can’t work until one is added. Every model runs through a coding CLI. This adds
+            Claude Code and signs it in with <InlineCode>crewlet llm login</InlineCode>:
           </span>
           <CodeBlock plain wrap code={PROVIDER_SNIPPET} />
         </div>
@@ -263,14 +263,22 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-/** The exact commands the step above names. */
-const PROVIDER_SNIPPET = `# Either: edit the company file and import it
-crewlet config import company.yaml
+/**
+ * The exact steps the card above names, in the order they work in. The entry
+ * goes in the company FILE first, because `crewlet llm` reads the entry it
+ * signs in from that file. `-capture-token` stores a headless token in the
+ * secret store under the CLI's own token variable, which an entry naming no
+ * `auth.token` reads — so the entry needs nothing more than its model.
+ */
+const PROVIDER_SNIPPET = `# 1. Add the model to company.yaml
+providers:
+  llm:
+    default:
+      model: sonnet
 
-# Or: patch the running configuration
-curl -X PATCH "$CREWLET_URL/config" \\
-  -H "Authorization: Bearer $CREWLET_API_TOKEN" \\
-  -H "Content-Type: application/merge-patch+json" \\
-  -H "X-Summary: add a model provider" \\
-  -d '{"providers":{"llm":{"default":{"type":"anthropic",
-       "model":"claude-sonnet-5-5","api_keys":["\${ANTHROPIC_API_KEY}"]}}}}'`;
+# 2. Sign its CLI in to your subscription, and check it end to end
+crewlet llm login default -capture-token
+crewlet llm doctor default
+
+# 3. Import the file
+crewlet config import company.yaml`;

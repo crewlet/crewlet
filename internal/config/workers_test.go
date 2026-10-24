@@ -18,13 +18,9 @@ name: Acme
 providers:
   llm:
     default:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
     fast:
-      type: anthropic
       model: claude-haiku-4-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
 %s
 roles:
   - name: CEO

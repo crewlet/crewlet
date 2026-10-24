@@ -66,7 +66,7 @@ var testAuthor = secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}
 // Connect for the first time is in.
 const companyDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "CTO", "handle": "cto", "llm": "zulu"}
@@ -1938,7 +1938,7 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {"gitlab": {"enabled": true, "url": "https://gitlab.com",
 	    "signing_secret": "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=",
 	    "provisioning": {"group": "acme", "admin_token": "glpat-x"}}},

@@ -58,7 +58,6 @@ type Synthesizer struct {
 	maxPerAgent  int
 	duplicateAt  float64
 	timeout      time.Duration
-	maxTokens    int
 	now          func() time.Time
 
 	// The clustered path's own inputs. episodes is nil for a synthesizer
@@ -87,9 +86,6 @@ type SynthesizerOptions struct {
 
 	// CallTimeout bounds one auxiliary call; zero takes DefaultAuxTimeout.
 	CallTimeout time.Duration
-
-	// MaxTokens caps one draft; zero takes DefaultSynthesisTokens.
-	MaxTokens int
 
 	// Episodes backs the clustered pass. Nil leaves [Synthesizer.ClusterPass]
 	// answering empty — the inline path needs no episode store, because a
@@ -129,9 +125,6 @@ const (
 	// DefaultDuplicateJaccard is how similar two tool sequences may be
 	// before the second is the first again.
 	DefaultDuplicateJaccard = 0.7
-
-	// DefaultSynthesisTokens caps one draft.
-	DefaultSynthesisTokens = 4000
 
 	// DefaultClusterMinSize is three: two turns that ran the same tools is
 	// a coincidence, and drafting from it teaches a seat a procedure it
@@ -173,7 +166,6 @@ func NewSynthesizer(models Models, s *Skills, opts SynthesizerOptions) (*Synthes
 		maxPerAgent:   opts.MaxSkillsPerAgent,
 		duplicateAt:   opts.DuplicateJaccardThreshold,
 		timeout:       opts.CallTimeout,
-		maxTokens:     opts.MaxTokens,
 		now:           opts.Now,
 		episodes:      opts.Episodes,
 		clusterMin:    opts.ClusterMinSize,
@@ -192,9 +184,6 @@ func NewSynthesizer(models Models, s *Skills, opts SynthesizerOptions) (*Synthes
 	}
 	if syn.timeout <= 0 {
 		syn.timeout = DefaultAuxTimeout
-	}
-	if syn.maxTokens <= 0 {
-		syn.maxTokens = DefaultSynthesisTokens
 	}
 	if syn.clusterMin <= 0 {
 		syn.clusterMin = DefaultClusterMinSize
@@ -279,9 +268,6 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 			{Role: llm.RoleSystem, Content: SynthesisSystemPrompt},
 			{Role: llm.RoleUser, Content: buildSynthesisPrompt(t)},
 		},
-		Temperature: llm.Temp(auxTemperature),
-		Effort:      auxEffort,
-		MaxTokens:   s.maxTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("learning: drafting a skill for %s: %w", handle, err)

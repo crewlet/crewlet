@@ -44,8 +44,8 @@ import (
 // The turn is held in flight by the model it is waiting on, which answers
 // only when the parent says so. That is what makes the drain last long enough
 // to observe, and it is a real turn on the real path: a signed GitLab delivery
-// on the webhook edge, the notification service, the seat's mailbox, and an
-// Anthropic backend pointed at the parent.
+// on the webhook edge, the notification service, the seat's mailbox, and the
+// CLI backend running the model's CLI ([heldCLI]) as a child of the node.
 const (
 	drainProbeEnv     = "CREWLET_RUN_DRAIN_PROBE"
 	drainProbeArgsEnv = "CREWLET_RUN_DRAIN_PROBE_ARGS"
@@ -54,10 +54,6 @@ const (
 	// its tests exits 0 or 1 and a panic exits 2, so an exit code that
 	// could be any of those would not say that run() itself returned.
 	drainProbeExit = 7
-
-	// drainProbeKey is the model credential the child's company names. A
-	// placeholder: the model is the parent's own endpoint.
-	drainProbeKey = "sk-ant-drain-probe"
 
 	// drainProbeToken is the operator credential the child's Tier A
 	// accepts, so a write is refused for draining rather than for having
@@ -169,7 +165,7 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	// package's parallel cases waiting on the same cores is time taken from
 	// the one budget here that matters.
 	client := drainProbeClient(t)
-	model := newHeldModel(t)
+	model := newHeldCLI(t)
 	forge := newAccountForge(t)
 	// THE NODE'S PORT, HELD: see [drainProbeSocketFD].
 	port, socket := reserveNodeSocket(t)
@@ -207,11 +203,7 @@ api:
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
-    held:
-      type: anthropic
-      model: claude-drain-probe
-      base_url: %s
-      api_keys: ["${CREWLET_DRAIN_PROBE_KEY}"]
+%s
 integrations:
   gitlab:
     enabled: true
@@ -227,14 +219,13 @@ roles:
 turn_engine:
   max_iterations: 1
   max_tool_rounds: 3
-`, model.url, forge.URL, drainProbeSecret))
+`, model.entry("held", filepath.Join(dir, "llm")), forge.URL, drainProbeSecret))
 
 	node := startNodeChild(t, "TestASignalledNodeDrainsWithItsProbesUp", socket,
-		[]string{"-config", boot, "-company", company, "-log-format", "json"},
-		"CREWLET_DRAIN_PROBE_KEY="+drainProbeKey)
-	// The model lets go of its held request BEFORE the child is killed —
+		[]string{"-config", boot, "-company", company, "-log-format", "json"})
+	// The model lets go of its held call BEFORE the child is killed —
 	// registered after the child's own cleanup, so LIFO runs it first — or
-	// the node's teardown waits on a request the model is still holding.
+	// the node's teardown waits on a call the model is still holding.
 	t.Cleanup(model.letGo)
 	alive := node.alive
 	output := node.output
@@ -456,48 +447,97 @@ func (n *nodeChild) exitedWith(t *testing.T, code int) {
 	}
 }
 
-// heldModel is an Anthropic Messages endpoint that answers nothing until the
-// test lets it go, and then refuses everything at once.
+// heldCLI is the seat's model: a CLI that marks every call it is handed and
+// answers none until the test lets it go, and then fails them all at once.
 //
-// A REFUSAL rather than an answer, because the case is about the node that
-// waits for the turn and not about the turn: a request the model rejects ends
-// it on the spot, with no retry (the provider makes none) and no second model
-// to fall back to.
-type heldModel struct {
-	url      string
+// A FAILURE rather than an answer, because the case is about the node that
+// waits for the turn and not about the turn: a CLI that exits non-zero ends
+// the call as a fatal one, with no retry (the backend makes none) and no
+// second model to fall back to.
+//
+// /bin/sh UNDER THE `custom` PROFILE rather than this binary re-executed: a
+// held call computes nothing, and both of its halves — the mark that a call
+// arrived and the file it waits for — are things the parent sees from
+// outside, as it sees the node's probes. `custom` because it ships nothing, so
+// no vendor's sign-in, sentinels or configuration stands between the engine
+// and a CLI that has none of them.
+type heldCLI struct {
+	t *testing.T
+	// marker is the file a call creates on arrival; release is the one the
+	// call waits for.
+	marker, release string
+	// entered closes once a call has arrived.
 	entered  chan struct{}
-	release  chan struct{}
-	enter    sync.Once
 	released sync.Once
 }
 
-func newHeldModel(t *testing.T) *heldModel {
+// heldCLIPoll is how often the parent looks for the marker and a held call for
+// the release: fast enough that neither wait is what a case spends its budget
+// on, slow enough to cost nothing beside a booting node.
+const heldCLIPoll = 50 * time.Millisecond
+
+// newHeldCLI makes the files, and watches for the first call until the case
+// ends. The let-go is registered here as well, so a case that fails before it
+// lets go itself never leaves a call held through the node's teardown.
+func newHeldCLI(t *testing.T) *heldCLI {
 	t.Helper()
-	m := &heldModel{entered: make(chan struct{}), release: make(chan struct{})}
-	server := httptest.NewServer(http.HandlerFunc(m.serve))
-	// The let-go is registered AFTER the close, so LIFO runs it first: a
-	// server closing while a request is still held waits for that request
-	// for ever.
-	t.Cleanup(server.Close)
+	dir := t.TempDir()
+	m := &heldCLI{
+		t:       t,
+		marker:  filepath.Join(dir, "entered"),
+		release: filepath.Join(dir, "release"),
+		entered: make(chan struct{}),
+	}
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		tick := time.NewTicker(heldCLIPoll)
+		defer tick.Stop()
+		for {
+			if _, err := os.Stat(m.marker); err == nil {
+				close(m.entered)
+				return
+			}
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop); <-stopped })
 	t.Cleanup(m.letGo)
-	m.url = server.URL
 	return m
 }
 
-func (m *heldModel) letGo() { m.released.Do(func() { close(m.release) }) }
+// letGo releases every call held now and every one made after.
+func (m *heldCLI) letGo() {
+	m.released.Do(func() {
+		if err := os.WriteFile(m.release, nil, 0o600); err != nil {
+			m.t.Errorf("releasing the held CLI: %v", err)
+		}
+	})
+}
 
-func (m *heldModel) serve(w http.ResponseWriter, r *http.Request) {
-	_, _ = io.Copy(io.Discard, r.Body)
-	m.enter.Do(func() { close(m.entered) })
-	select {
-	case <-m.release:
-	case <-r.Context().Done():
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
-	_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error",`+
-		`"message":"the drain probe has no model"}}`)
+// entry is the providers.llm entry, under key, whose CLI this is, keeping its
+// homes under stateDir — indented to sit under `providers: llm:`.
+//
+// The paths are quoted twice over: single quotes inside the script, so the
+// shell reads each as one word, and the whole script with %q, a Go-quoted
+// string being a YAML double-quoted scalar.
+func (m *heldCLI) entry(key, stateDir string) string {
+	script := fmt.Sprintf("touch '%s'; while [ ! -e '%s' ]; do sleep %g; done; "+
+		"echo 'the drain probe has no model' >&2; exit 1",
+		m.marker, m.release, heldCLIPoll.Seconds())
+	return fmt.Sprintf(`    %s:
+      agent: custom
+      model: claude-drain-probe
+      state_dir: %q
+      overrides:
+        binary: /bin/sh
+        complete_args: ["-c", %q]
+        model_args: ["--model", "{model}"]
+        output: text`, key, stateDir, script)
 }
 
 // newAccountForge is a GitLab that answers the one thing the engine reads a

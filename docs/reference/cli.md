@@ -49,8 +49,8 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin`, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
-| `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and how it is signed in |
-| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
+| `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
+| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real completion returns with a tool call, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
@@ -1884,10 +1884,11 @@ hold the two to the same verdict:
 
 Every position that holds a credential carries the annotation
 `"x-crewlet-secret": true` — on the field itself for a single value
-(`integrations.github.webhook_secret`), on `items` for each member of a
-list (`providers.llm.*.api_keys`), and on `additionalProperties` for each
-value of a map (`mcp_servers[].headers`, a seat's `sandbox.env`, and both
-levels down in `mcp_env`, whose values are per-server maps of variables).
+(`integrations.github.webhook_secret`, a `providers.llm` entry's
+`auth.api_key`), and on `additionalProperties` for each value of a map
+(`mcp_servers[].headers`, a `providers.llm` entry's `env`, a seat's
+`sandbox.env`, and both levels down in `mcp_env`, whose values are per-server
+maps of variables).
 A map's **keys** are never marked: they are names (`GITHUB_TOKEN`,
 `Authorization`), and only what they map to is a credential. A position
 without the keyword holds none, and the keyword's only value is `true`.
@@ -2052,14 +2053,13 @@ crewlet llm export <KEY> [-secret-store]
 crewlet llm import <KEY>          # bundle on stdin
 ```
 
-The operator side of a [subscription LLM backend](../concepts/subscription-llm-backends.md):
-a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
-the operator's Pro/Max plan instead of an API key, and the login that makes
-that work is established here rather than in the config document. `KEY` is the
-`providers.llm` key; commands that take one and are given none act on the only
-`cli-agent` provider when there is exactly one. `doctor` also examines every
-`type: anthropic` entry; the other subcommands are `cli-agent` only, since an
-API entry has no login to broker, list or export.
+The operator side of the [LLM backends](../concepts/llm-backends.md): every
+`providers.llm` entry drives a vendor's own coding CLI — on the operator's
+subscription plan, or on an API key under `auth.mode: api-key` — and the login
+that makes a subscription work is established here rather than in the config
+document. `KEY` is the `providers.llm` key; commands that take one and are
+given none act on the only entry when there is exactly one, and `doctor` given
+none examines every entry, in the order the document declares them.
 
 **`list`** is the inventory — provider key, CLI, model and how it is signed
 in. **`doctor`** is the one to run before a company's first turn: it
@@ -2077,11 +2077,13 @@ clock, read by the tool.
 Both commands answer "signed in" the same way, from the environment the CLI is
 actually given rather than from the configuration: credential files a login
 wrote (or, for OpenCode 2, which keeps its login in its own database, the
-document its export printed), a headless token, an `api_keys` value under `auth.mode: api-key`, a
+document its export printed), a headless token, the key `auth.mode: api-key`
+puts in the CLI's key variable (`auth.api_key`, or that variable itself —
+`ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex), a
 variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
-[credential-named](../concepts/subscription-llm-backends.md#5-a-provider-key-in-clienv-hermes-pi-opencode)
-variable in `cli.env`. `doctor`'s `sign-in` line names every one it found, and
+[credential-named](../concepts/llm-backends.md#6-a-provider-key-in-env-opencode-hermes-pi)
+variable in the entry's `env`. `doctor`'s `sign-in` line names every one it found, and
 an entry with none is a `no sign-in` problem naming the route to take — unless
 the smoke test was answered, which proves the CLI authenticates some way the
 engine does not hand it (an endpoint that takes no key, a credential in its
@@ -2095,34 +2097,13 @@ engine's answer.
 restore the entry's configured bundle first, as the engine does:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
-by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
+by `auth.mode: inherit-env`), `environment` (a key in the entry's `env`), or `none`.
 
-On an **`anthropic` entry** `doctor` checks the two things that make every
-call on it a 400 while the config validates clean. The request is
-[shaped from the model](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
-by a capability table compiled into this build, so `doctor` reads the model's
-record from the vendor's Models API (`GET /v1/models/{id}`, under the id the
-table reads — a Bedrock or dated spelling is the model it spells) and compares
-the thinking types, the effort levels and the output ceiling with what the
-entry sends. A disagreement that puts a field the model refuses on the wire is
-a **problem**, naming what to change: a `claude_model` for an alias the table
-does not know, the row a `claude_model` names, or — for a model the table reads
-itself — a Crewlet whose table matches the API. One where the table is merely
-more cautious than the model is a note. A gateway that does not serve
-`/v1/models` (a 404, 405 or 501, or a 200 that is not a model record) is
-reported as *not served* and is not a problem; any other failure of that read
-is. That read is made on one key and benches nothing, whatever it is answered:
-`/v1/models` is not the route a phase calls, and a gateway that refuses a key
-there (or rate-limits that route alone) while its messages route takes it
-would otherwise leave the round below with every key cooling. Then, unless you
-pass `-no-smoke`, it sends **one real round** in the shape
-a phase sends — a tool offered, no tool choice forced, the instruction naming
-it, the entry's own thinking, streamed, at effort `low` — and certifies that a
-call to that tool came back. The Models API read bills nothing, so it runs
-under `-no-smoke` too. `doctor` exits non-zero when any entry has a problem,
-and an entry that does not build at all (a `${VAR}` model that resolved to
-nothing, a dial its resolved model refuses) is reported as one beside the
-others. `openai` entries are not examined.
+`doctor` exits non-zero when any entry has a problem, and an entry that does
+not build at all (a `${VAR}` model that resolved to nothing, say) is reported
+as one beside the others rather than ending the run. A configured credential
+bundle that does not restore is a problem of its own, naming `crewlet llm
+export` as the fix, since the engine would run that entry signed out.
 
 **`login`** has four shapes because the vendors do:
 
@@ -2138,7 +2119,7 @@ The brokered and `-username` shapes **fail when the CLI left no login** where
 the entry reads one — exiting 0 having stored nothing, as backing out of the
 vendor's sign-in does — rather than printing that a login was written. `login`,
 `status` and a vendor's own `logout` run the CLI one at a time per state
-directory (entries sharing a `cli.state_dir` share one login home): a second
+directory (entries sharing a `state_dir` share one login home): a second
 started while the first is running is refused, saying so. Only the commands
 that make a login create the shared one; `status` and a seat's call write back
 only a refresh of the very login they started from, so neither reverts a newer
@@ -2147,7 +2128,7 @@ makes first declines after a `logout` (below). A login whose export failed
 after you signed in is kept and written by the next command — unless you replaced
 the login since with `-from-host`, `import` or `logout`; a `login` that cannot
 carry such a kept login out replaces it, saying so — see [token refresh across
-seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats). A
+seats](../concepts/llm-backends.md#token-refresh-across-seats). A
 `login` likewise replaces a shared login the CLI refuses to import (OpenCode's
 document from another build, say), saying so, where `status` keeps refusing it.
 
@@ -2185,7 +2166,7 @@ recorded either way.
 
 The engine also restores a bundle **itself**, at boot and at every apply it
 publishes (never for a revision it refuses), from
-`cli.auth.credential_bundle` or the conventional
+`auth.credential_bundle` or the conventional
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
 credential directory, by the same rule, and never after a `logout` until a
 login is written again. `list`, `status`, `export` and `doctor` make

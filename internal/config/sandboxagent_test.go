@@ -12,17 +12,16 @@ import (
 // providers and seat lines.
 func sandboxAgentCompany(sandbox, seat string) string {
 	return "name: Acme\nproviders:\n  sandbox: {fake: true" + sandbox + "}\n  llm:\n" +
-		"    oc:\n      type: cli-agent\n      model: anthropic/claude-sonnet-5\n      cli: {agent: opencode}\n" +
-		"    cc:\n      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code}\n" +
-		"    agent:\n      type: cli-agent\n      model: anthropic/claude-sonnet-5\n" +
-		"      cli: {agent: opencode, mode: agent}\n" +
-		"    api:\n      type: anthropic\n      model: claude-sonnet-5\n" +
+		"    oc:\n      model: anthropic/claude-sonnet-5\n      agent: opencode\n" +
+		"    cc:\n      model: sonnet\n      agent: claude-code\n" +
+		"    agent:\n      model: anthropic/claude-sonnet-5\n" +
+		"      agent: opencode\n      mode: agent\n" +
 		"roles:\n  - name: SWE\n" + seat
 }
 
-// A SEAT'S CODE WORK NEVER HANDS A CLI-AGENT ENTRY TO ANOTHER CLI.
+// A SEAT'S CODE WORK NEVER HANDS AN ENTRY TO ANOTHER CLI.
 //
-// A cli-agent entry's model is written in its own CLI's grammar and its
+// An entry's model is written in its own CLI's grammar and its
 // sign-in is that CLI's, so a runner of another CLI can read neither: an
 // OpenCode text seat that enabled a sandbox ran Claude Code on
 // `--model anthropic/claude-sonnet-5`, which it does not resolve, with an
@@ -42,9 +41,9 @@ func TestASeatsCodeWorkMustRunOnItsEntrysOwnCLI(t *testing.T) {
 		{"a claude-code entry under the catalogue's opencode default", ", default_coding_agent: opencode",
 			"    llm: cc\n    sandbox: {enabled: true}\n", true},
 		{"llm_sandbox wins over llm", "",
-			"    llm: api\n    llm_sandbox: oc\n    sandbox: {enabled: true}\n", true},
+			"    llm: cc\n    llm_sandbox: oc\n    sandbox: {enabled: true}\n", true},
 		{"the mapping form's sandbox key too", "",
-			"    llm: {default: api, sandbox: oc}\n    sandbox: {enabled: true}\n", true},
+			"    llm: {default: cc, sandbox: oc}\n    sandbox: {enabled: true}\n", true},
 		{"the company's fallback, the first declared entry", "",
 			"    sandbox: {enabled: true}\n", true},
 		{"an opencode entry under its own runner", "",
@@ -53,8 +52,8 @@ func TestASeatsCodeWorkMustRunOnItsEntrysOwnCLI(t *testing.T) {
 			"    llm: oc\n    sandbox: {enabled: true}\n", false},
 		{"a claude-code entry under the default", "",
 			"    llm: cc\n    sandbox: {enabled: true}\n", false},
-		{"an API entry", "",
-			"    llm: oc\n    llm_sandbox: api\n    sandbox: {enabled: true}\n", false},
+		{"llm_sandbox naming an entry of the default's own CLI", "",
+			"    llm: oc\n    llm_sandbox: cc\n    sandbox: {enabled: true}\n", false},
 		{"a seat that runs no code", "",
 			"    llm: oc\n", false},
 		// `self` rides the executor's own agent-mode run, whose runner is
@@ -110,9 +109,9 @@ func TestTheCodingAgentRemedyNamesOnlyARunnerThatExists(t *testing.T) {
 func TestBothPathsToTheSandboxEntryAgree(t *testing.T) {
 	t.Parallel()
 	providers := "name: Acme\nproviders:\n  llm:\n" +
-		"    first:\n      type: anthropic\n      model: a\n" +
-		"    default:\n      type: anthropic\n      model: b\n" +
-		"    coder:\n      type: anthropic\n      model: c\n"
+		"    first:\n      model: a\n" +
+		"    default:\n      model: b\n" +
+		"    coder:\n      model: c\n"
 	// PARSED, NOT VALIDATED: a key that misses is refused on a write, and
 	// still reaches a node in a revision a newer peer admitted — the registry
 	// falls back for it, and so must this.

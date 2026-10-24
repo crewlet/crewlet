@@ -5,9 +5,8 @@
 # end-to-end with:
 #
 #     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-#     export LLM_BASE_URL="https://api.your-llm-provider.example/v1/"  # any OpenAI-compatible endpoint
-#     export LLM_MODEL="your-provider/model-id"
-#     export LLM_API_KEY="<your-llm-provider-key>"
+#     export LLM_MODEL="openrouter/<model-id>"     # <provider>/<model>, as OpenCode spells it
+#     export OPENROUTER_API_KEY="<your-openrouter-key>"
 #     export OPENAI_API_KEY="<for-embeddings>"
 #     # The keyring every node needs — see `secrets:` below.
 #     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
@@ -145,9 +144,9 @@ node:
                                        #   N x this.  Omit for the default (32),
                                        #   which is above the seat count of a
                                        #   single-node company.  Not the same
-                                       #   knob as a cli-agent provider's own
+                                       #   knob as a providers.llm entry's own
                                        #   max_concurrent, which caps that
-                                       #   provider's subprocesses.
+                                       #   entry's CLI processes.
 
 api:
   host: "0.0.0.0"

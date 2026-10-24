@@ -139,8 +139,8 @@ type PromptSection struct {
 // need every reader recompiled before that thing can be seen.
 type ToolExecution = map[string]any
 
-// RoundNarration records one round's model turn: `round`, `reasoning` and
-// `content` — and `declined: true` on a round that answered with prose and NO
+// RoundNarration records one round's model turn: `round` and `content` —
+// and `declined: true` on a round that answered with prose and NO
 // tool call in a phase that had to end in one (its loop declares a submission
 // tool that finishes it — `submit_work`, `submit_review`, `mark_onboarded`, a
 // worker's `submit_result`). Absent otherwise, never `false`. Whether the
@@ -155,9 +155,7 @@ type ToolExecution = map[string]any
 // but a corrective's repeats, which this list keeps and `response` leaves out
 // (see toolloop's assistantText) — and a join cannot be undone: the parts are
 // separated by a blank line and prose contains blank lines, so a consumer
-// handed only the blob cannot say which round said what. A dashboard splitting it on the leading `<think>` tag showed the first
-// round's thinking as "the reasoning" and every later round's thinking as
-// "the answer", tags and all.
+// handed only the blob cannot say which round said what.
 //
 // Both are published rather than one replacing the other: `response` is what
 // every existing consumer and every already-stored event reads, and this
@@ -200,23 +198,9 @@ type PhaseRound struct {
 	// ToolCalls is how many calls the model asked for this round.
 	ToolCalls int `json:"tool_calls"`
 	// StopReason is why the model stopped writing this round's response:
-	// `end`, `tool_use`, `max_tokens` (cut off at the output cap),
-	// `refusal`, `context_exceeded` (the context window filled) or
-	// `paused`. The last four end the phase. Absent where the backend
-	// reported none — absent is "not reported", never "ended normally" as a
-	// fact.
+	// `end` or `tool_use`. Absent where the backend reported none — absent
+	// is "not reported", never "ended normally" as a fact.
 	StopReason string `json:"stop_reason,omitempty"`
-}
-
-// PhaseRefusal is a model declining the phase's request on policy grounds —
-// see [AgentPhaseCompleted.Refusal].
-type PhaseRefusal struct {
-	// Category is the vendor's policy category (`cyber`, `bio`, …), absent
-	// where it named none.
-	Category string `json:"category,omitempty"`
-	// Explanation is the vendor's own account, absent where it gave none.
-	// Not stable wording, so a reader shows it and never matches on it.
-	Explanation string `json:"explanation,omitempty"`
 }
 
 // RunningCall is the tool call a phase is running RIGHT NOW, on the live
@@ -387,8 +371,8 @@ type AgentTurnCompleted struct {
 	Error string `json:"error"`
 	// ErrorKind is the machine-readable failure class: the guard-breach kind
 	// where a guard ended the turn, otherwise the same class the failed
-	// phase's [AgentPhaseCompleted.ErrorKind] carries (`refusal`,
-	// `max_tokens`, `rate_limit`, …) — or `stopped` for a turn a person
+	// phase's [AgentPhaseCompleted.ErrorKind] carries (`rate_limit`,
+	// `auth`, `timeout`, …) — or `stopped` for a turn a person
 	// ended, which is the one kind that is not a failure.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation the turn served, "{source}:{local}".
@@ -695,7 +679,7 @@ type AgentPhaseCompleted struct {
 	Response       string          `json:"response"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
 	// RoundNarration is Response split back into the rounds that produced
-	// it, so a reader can put a round's thinking beside the calls it asked
+	// it, so a reader can put a round's prose beside the calls it asked
 	// for. See [RoundNarration].
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
 	// Rounds is one entry per provider call the phase made, keyed on the
@@ -848,26 +832,16 @@ type AgentPhaseCompleted struct {
 	// Error is the failure's message, truncated. Empty unless Failed.
 	Error string `json:"error"`
 	// ErrorKind is the failure's class: a classified provider error
-	// (`rate_limit`, `auth`, `timeout`, `server`, `fatal`, `refusal`), a
-	// round whose stop reason ended the phase (`max_tokens`,
-	// `context_exceeded`, `paused`), `budget_exhausted`, `stopped` for a
-	// phase a person ended, and `error` for anything unclassified.
+	// (`rate_limit`, `auth`, `timeout`, `server`, `fatal`),
+	// `budget_exhausted`, `stopped` for a phase a person ended, and `error`
+	// for anything unclassified.
 	ErrorKind string `json:"error_kind"`
-	// Refusal is set when the phase ended because its model DECLINED the
-	// request on policy grounds — a failed phase whose ErrorKind is
-	// `refusal` — with what the vendor said about why. A named outcome
-	// rather than a rescue: the executor is not marked `incomplete` and the
-	// reviewer does not send the turn round again, because re-running a
-	// refused request is asking the model to reconsider a decision, and the
-	// turn's trigger is recorded rather than redelivered. Absent on every
-	// other phase.
-	Refusal *PhaseRefusal `json:"refusal,omitempty"`
 	// ConversationKey is which conversation this phase's turn served.
 	//
-	// This event is where the model's reasoning is durably kept, as the <think>
-	// prefix of Response, and until this field existed it was addressable only
-	// by agent id and time: the store tags a channel id for A2A events alone,
-	// so no query could ask for one thread's phases.
+	// This event is where what the model said is durably kept, and until
+	// this field existed it was addressable only by agent id and time: the
+	// store tags a channel id for A2A events alone, so no query could ask
+	// for one thread's phases.
 	ConversationKey string `json:"conversation_key"`
 }
 
@@ -897,13 +871,6 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 		parts = append(parts, "[sandbox:"+agent+"]")
 	}
 	switch {
-	case e.Failed && e.Refusal != nil:
-		// Said as what it is: a model's decision, not a breakage.
-		what := "✗ refused by the model"
-		if e.Refusal.Category != "" {
-			what += " (" + e.Refusal.Category + ")"
-		}
-		parts = append(parts, what)
 	case e.Failed:
 		kind := e.ErrorKind
 		if kind == "" {
@@ -985,8 +952,8 @@ type AgentTurnProgress struct {
 	// lets the live view append a round rather than redraw one blob.
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
 	// PartialRound is the round being written RIGHT NOW: `round`,
-	// `reasoning`, `content`, and `abandoned` for attempts a provider gave
-	// up on partway through.
+	// `content`, and `abandoned` for attempts a provider gave up on partway
+	// through.
 	//
 	// SEPARATE from RoundNarration on purpose — a reader must be able to
 	// tell text that is still arriving from text the model has committed
@@ -1105,31 +1072,4 @@ func (e SubagentBatched) SummaryFor(actor string) string {
 	}
 	return lead(actor, fmt.Sprintf("delegated %d tasks (%d ok, %d failed, %d tokens%s)",
 		e.TaskCount, e.Successes, e.Failures, e.TotalTokens, shape))
-}
-
-// FormatReasoningAndContent renders one assistant turn's reasoning and visible
-// content as ONE string: the model's extended thinking wrapped in <think> tags,
-// immediately before the content it produced.
-//
-// This is the wire format of the response field on AgentPhaseCompleted and
-// AgentTurnProgress, and it lives beside the events whose field it defines
-// because several call sites build that field and they must not drift. When the
-// live event omitted reasoning and the completed one included it, a thinking
-// model's thoughts simply did not exist on the dashboard until its phase ended
-// — the live view streamed tool calls against an empty response.
-//
-// Empty reasoning yields the content unchanged, so a non-thinking model's
-// response keeps its plain shape. Reasoning with no content — a thinking model
-// that hit its output cap — still renders, because the thinking is then the
-// only signal there is.
-func FormatReasoningAndContent(reasoning, content string) string {
-	reasoning = strings.TrimSpace(reasoning)
-	content = strings.TrimSpace(content)
-	if reasoning == "" {
-		return content
-	}
-	if content == "" {
-		return "<think>" + reasoning + "</think>"
-	}
-	return "<think>" + reasoning + "</think>\n\n" + content
 }

@@ -255,8 +255,8 @@ Usage:
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,
                               sessions and tokens
-  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends;
-                              doctor also checks anthropic entries against their model
+  crewlet llm <cmd>           Log in, verify and export the coding CLIs every model
+                              runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
@@ -2279,13 +2279,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: retentionSource(ctx, e),
-			// EVERY MODEL'S KEY BAG: the provenance this node's epoch
-			// resolved and its pools' state, read per call because an
-			// apply replaces every pool — beside the fleet's cooldown
-			// ledger, so a key a peer benched reads cooling here before
-			// this node's refresher has pulled it.
-			CredentialPools: e.CredentialPools,
-			Cooldowns:       e.Backends().Fleet,
 			// WHAT THE FLEET HAS BACKED UP: each owner's newest
 			// announced point, marked by the policy the trim takes —
 			// Tier A, fixed for the life of this process.

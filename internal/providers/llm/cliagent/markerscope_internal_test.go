@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -266,7 +267,7 @@ func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 	if !ok {
 		t.Fatal("no built-in opencode profile")
 	}
-	prov := &Provider{profile: p, model: "anthropic/claude-sonnet-5", agent: "opencode", key: "sub"}
+	prov := &Provider{profile: p, model: "anthropic/claude-sonnet-5", agent: "opencode", key: "sub", now: time.Now}
 	answer := openCodeText("I fetched the page; the summary follows.")
 	for name, tc := range map[string]struct {
 		event string

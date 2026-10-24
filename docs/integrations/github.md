@@ -866,7 +866,7 @@ one.
 
 A seat the founder has gated with `role.sandbox.enabled` authors code through
 the [code sandbox](../concepts/code-sandbox.md). Where its executor is not in
-[agent mode](../concepts/subscription-llm-backends.md#agent-mode),
+[agent mode](../concepts/llm-backends.md#agent-mode),
 `run_sandbox` is on the executor's surface; it calls it, and a coding agent
 runs in an isolated box and opens a pull request **as the agent's own GitHub
 identity** — the token the role declares in `role.sandbox.env`, by convention

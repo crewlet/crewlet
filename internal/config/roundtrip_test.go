@@ -18,25 +18,20 @@ mission: ship
 providers:
   llm:
     default:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys:
-        - "${ANTHROPIC_API_KEY}"
+      auth:
+        mode: api-key
+        api_key: "${ANTHROPIC_API_KEY}"
     fast:
-      type: anthropic
       model: claude-haiku-4-5
-      api_keys:
-        - "${ANTHROPIC_API_KEY}"
     big:
-      type: anthropic
       model: claude-opus-5
-      api_keys:
-        - "${ANTHROPIC_API_KEY}"
     bigger:
-      type: openai
+      agent: codex
       model: gpt-5
-      api_keys:
-        - "${OPENAI_API_KEY}"
+      auth:
+        mode: api-key
+        api_key: "${OPENAI_API_KEY}"
 integrations:
   confluence:
     url: "${CONFLUENCE_URL}"
@@ -96,7 +91,7 @@ func TestCompanyRoundTripsThroughYAML(t *testing.T) {
 	if reloaded.Name != original.Name || reloaded.Mission != original.Mission {
 		t.Fatalf("identity changed: %+v", reloaded)
 	}
-	if got := reloaded.Providers.LLM["default"].APIKeys[0]; got != "${ANTHROPIC_API_KEY}" {
+	if got := reloaded.Providers.LLM["default"].Auth.APIKey; got != "${ANTHROPIC_API_KEY}" {
 		t.Fatalf("the key was rewritten as %q", got)
 	}
 	if reloaded.Integrations.Mattermost == nil || reloaded.Integrations.Mattermost.TypingStatus != StatusAlways {

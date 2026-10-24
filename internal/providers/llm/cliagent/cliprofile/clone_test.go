@@ -7,7 +7,7 @@ import (
 
 // A CLONE SHARES NOTHING A CALLER CAN WRITE THROUGH. Builtin hands out a clone
 // because callers merge overrides into it, and a slice, map or pointer the
-// clone still shares with the table lets one provider's cli.overrides rewrite
+// clone still shares with the table lets one provider's overrides rewrite
 // what every later provider reads. Clone lists its fields by hand, so a field
 // added without a line there is shared silently — asked of every field by
 // reflection here, so the next one cannot be missed.

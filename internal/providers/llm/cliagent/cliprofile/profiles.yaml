@@ -1,7 +1,7 @@
 # Built-in cli-agent profiles.
 #
 # DATA, not code: every field here is replaceable from
-# providers.llm.<key>.cli.overrides, because these flags and JSON shapes
+# providers.llm.<key>.overrides, because these flags and JSON shapes
 # belong to vendors who rename them between releases. `written_for` is the
 # version each profile was authored against, and `crewlet llm doctor` prints
 # it beside the version actually installed — a profile that quietly stopped
@@ -143,9 +143,9 @@ claude-code:
   # the CLI's own line (every live variant begins with this exact prefix —
   # "… · continuing automatically", "… · finishing up", "… · resets") and the
   # API error it relays. Neither carries a reset instant any more, so there is
-  # no reset_separator: resetAfter then returns 0 and the credential pool uses
-  # its configured cooldown, which is the honest answer rather than an
-  # invented window.
+  # no reset_separator: resetAfter then returns 0 and the entry sits out the
+  # backend's one minute, which is the honest answer rather than an invented
+  # window.
   limit_markers:
     - sentinel: "Usage limit reached"
     - sentinel: '"type":"rate_limit_error"'
@@ -326,7 +326,7 @@ opencode:
   # HOME on the machine. Measured on 2.0.32: the second seat's call failed
   # after ~20s on the occupied port, a call reusing a running service sent
   # the key that service was started with rather than the one the call was
-  # given (which defeats auth.mode and every rotation through cli.env), and
+  # given (which defeats auth.mode and every rotation through the entry's env), and
   # the service outlived the call's timeout and process-group kill for as
   # long as it was watched (29 minutes). With it, each call runs a private
   # server inside its own process tree, and nothing survives the call.
@@ -435,8 +435,8 @@ opencode:
   text_events: ["text"]
   text_paths: [["part", "text"]]
   # USAGE FROM THE SESSION, NOT THE STREAM: `run --format json` drops the
-  # final step's counts (see usage_args in docs/concepts/
-  # subscription-llm-backends.md), and the session the call ran in holds the
+  # final step's counts (see usage_args in docs/concepts/llm-backends.md),
+  # and the session the call ran in holds the
   # whole total. `output` is the visible text alone, beside `reasoning` —
   # 2.0 subtracts the one from the other — so reasoning is declared and
   # added back, as every provider bills it.
@@ -468,15 +468,15 @@ opencode:
   # providers) documents NVIDIA_API_KEY, AWS_BEARER_TOKEN_BEDROCK,
   # DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as read from the environment
   # in place of a stored login — so there is no one variable to name, exactly
-  # as for hermes and pi. A key goes through `cli.env`; `crewlet llm login`
+  # as for hermes and pi. A key goes through the entry's `env`; `crewlet llm login`
   # (`opencode auth login`) is the other route.
   env_sign_in: true
   # No project configuration from the working directory or any ancestor of
   # it — see work_config_env above — on every command this profile runs, the
   # credential store's and the login's included: an ancestor plugin is code.
   # In isolation_env rather than env because a switch there is refused in
-  # env, passthrough_env and cli.env, each of which is layered over it: in
-  # env, `cli.env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or "" — turned
+  # env, passthrough_env and the entry's env, each of which is layered over it: in
+  # env, `env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or "" — turned
   # the walk back on with nothing to say so (measured: shell, write and
   # execute offered, an ancestor agent named crewlet-seat replacing the
   # seat's prompt, the ancestor's plugins loaded). The name is the one 2.0
@@ -521,7 +521,7 @@ opencode:
   # "no credentials") were never printed by either major, so a spent plan or
   # a dead key was classified fatal and the fallback chain never moved. 2.0
   # retries a rate limit itself, with no setting to bound it — ~86s,
-  # measured — so a transient one holds the seat up to cli.timeout_seconds
+  # measured — so a transient one holds the seat up to timeout_seconds
   # before this sentinel can hand it on.
   marker_scope: events
   marker_events: ["error"]
@@ -563,9 +563,9 @@ cursor-agent:
   # authentication) gives CURSOR_API_KEY as the recommended headless sign-in,
   # "for automation, scripts, or CI environments", beside `--api-key`. It was
   # missing here, so `auth.mode: api-key` had nowhere to put the key and a
-  # subscription run did not remove one an operator left in cli.env. The key
+  # subscription run did not remove one an operator left in the entry's env. The key
   # is a Cursor account key rather than a vendor's metered model key, but the
-  # route is the same: api_keys under auth.mode api-key, never forwarded
+  # route is the same: auth.api_key under auth.mode api-key, never forwarded
   # otherwise.
   api_key_env: "CURSOR_API_KEY"
   login_args: ["login"]
@@ -600,7 +600,7 @@ copilot:
   model_args: ["--model", "{model}"]
   # The prompt goes on argv, so a long transcript is bounded by ARG_MAX
   # (~2 MB on Linux, 256 KB on macOS) and fails at exec rather than at the
-  # model. Documented in subscription-llm-backends.md.
+  # model. Documented in llm-backends.md.
   prompt_mode: argv
   output: text
   credential_paths: [".copilot/hosts.json"]
@@ -743,7 +743,7 @@ muse-code:
   # either — the per-call working directory is created empty, and trusting it
   # is what would admit an AGENTS.md, a rule or a skill from a checkout the
   # engine does not control. Not --max-model-steps: breaching it exits 1, so
-  # a cap would DISCARD a finished answer, and cli.timeout_seconds already
+  # a cap would DISCARD a finished answer, and timeout_seconds already
   # bounds the call from the outside without throwing the work away.
   complete_args:
     - "exec"
@@ -886,7 +886,7 @@ muse-code:
   # captured case — an account that can no longer pay, which is a spent
   # credential and belongs on the fallback chain. `rate_limit_error` is the
   # published type for 429; no 429 from this CLI has been captured, so if your
-  # plan's wording differs, put it in cli.overrides.limit_markers rather than
+  # plan's wording differs, put it in overrides.limit_markers rather than
   # letting a spent plan classify FATAL and strand the chain. The error CODES
   # (`rate_limit_exceeded`, `invalid_api_key`) are deliberately not used: the
   # observed template carries the type, not the code.
@@ -1057,7 +1057,7 @@ kimi-code:
     # What `kimi -p` does when background tasks are still pending after the
     # main turn. The default is `steer`, whose own wait ceiling defaults to
     # 2147483 seconds — twenty-four days — and a headless run that reaches it
-    # holds the seat's concurrency slot until cli.timeout_seconds fires.
+    # holds the seat's concurrency slot until timeout_seconds fires.
     # `exit` is the only posture that cannot wait. Nothing should ever create
     # a background task here (they come from `Bash`, which the agent file
     # denies), which is exactly why this costs nothing and covers the case
@@ -1075,9 +1075,9 @@ kimi-code:
     # concurrency slot for two and a half minutes first — on every call, until
     # the plan resets — doing nothing but sleeping. Three keeps one real retry
     # for a transient 500 or an overloaded engine (~1.8 s of backoff) and
-    # hands everything past that to the chain and the credential pool, which
-    # move to another model or another key rather than hammering a dependency
-    # that is already refusing. An auth failure is not retried at all, which
+    # hands everything past that to the entry's sit-out and the chain, which
+    # move to another model rather than hammering a dependency that is
+    # already refusing. An auth failure is not retried at all, which
     # this measured at 3.1 s either way.
     KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
   config_env:
@@ -1201,7 +1201,7 @@ hermes:
   #
   # NOT --ignore-user-config and NOT --safe-mode. Neither is needed now that
   # the tools are on argv, and each would discard an operator's own
-  # cli.overrides.seed_files if they ever add one.
+  # overrides.seed_files if they ever add one.
   #
   # AND NOT --yolo, which the vendor's own flag help makes unnecessary rather
   # than merely unwise: `-z` already says "approvals are auto-bypassed". There
@@ -1293,7 +1293,7 @@ hermes:
   # NOUS_API_KEY — so there is no one key variable a profile could name, and
   # naming one would silently be wrong for every other entry. A metered key
   # goes in the credential home's .env (which travels to every seat) or
-  # through `cli.env`, where it is ${VAR}-resolved like any other secret —
+  # through the entry's `env`, where it is ${VAR}-resolved like any other secret —
   # which is what env_sign_in declares, so `crewlet llm doctor` counts it.
   env_sign_in: true
   #
@@ -1308,8 +1308,8 @@ hermes:
   # WHAT MAKES THEM SAFE IS THE SCOPE, not the wording. `-z` writes the final
   # response text to stdout and nothing else BY CONTRACT, and every failure
   # goes to stderr — so these are matched against stderr alone and a seat that
-  # was ASKED about rate limits cannot answer its way into a credential
-  # cooldown. See [MarkerScope]. Without that, "quota" in a model's prose
+  # was ASKED about rate limits cannot answer its way into sitting its entry
+  # out. See [MarkerScope]. Without that, "quota" in a model's prose
   # would bench this seat's login, which is the bug this file already fixed
   # once by dropping a bare "429".
   #
@@ -1390,7 +1390,7 @@ pi:
   # home and cannot carry a prompt that differs per phase. So the seat's
   # identity is on argv here, as it is for grok — and the prompt already is
   # too, so on a shared host both are readable through /proc/<pid>/cmdline and
-  # both count against ARG_MAX. `cli.overrides.system_prompt_args: []` puts
+  # both count against ARG_MAX. `overrides.system_prompt_args: []` puts
   # the identity back in the transcript for an operator who would rather.
   system_prompt_args: ["--system-prompt", "{system}"]
   prompt_mode: argv
@@ -1467,7 +1467,7 @@ pi:
   # `--api-key` exists as a flag but the environment variable is per provider
   # — ANTHROPIC_API_KEY, OPENAI_API_KEY, one for each of the twenty-odd — so
   # there is no single key variable to name, exactly as for hermes. A metered
-  # key goes in auth.json (which travels to every seat) or through `cli.env`,
+  # key goes in auth.json (which travels to every seat) or through the entry's `env`,
   # which is what env_sign_in declares.
   env_sign_in: true
   #
@@ -1482,7 +1482,7 @@ pi:
   # dropped a bare "429" sentinel once already, because three digits match
   # ordinary prose. Pi's subscription providers are Claude Pro/Max, ChatGPT
   # and GitHub Copilot, so both vendors' vocabularies are listed; if yours
-  # differs, override cli.overrides.limit_markers.
+  # differs, override overrides.limit_markers.
   #
   # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: a failed
   # call left stdout EMPTY and wrote `<status>: <the provider's error JSON>`
@@ -1509,7 +1509,7 @@ pi:
     - sentinel: "invalid_api_key"
 
 # `custom` ships NOTHING on purpose. An operator pointing at their own wrapper
-# or a self-hosted gateway declares every field under cli.overrides, and the
+# or a self-hosted gateway declares every field under overrides, and the
 # profile validation then names whichever one they left out — which is a far
 # better first run than defaults borrowed from an unrelated vendor's CLI.
 custom: {}

@@ -20,9 +20,7 @@ name: Acme
 providers:
   llm:
     gateway:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
+      model: sonnet
 integrations:
   mattermost:
     enabled: false

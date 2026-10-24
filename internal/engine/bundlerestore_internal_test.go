@@ -37,17 +37,15 @@ func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
 
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
 roles:
   - name: CEO
     handle: ceo
@@ -60,7 +58,8 @@ roles:
 	if err != nil {
 		t.Fatalf("NewCompany: %v", err)
 	}
-	stateDir, err := c.Providers.LLM["subscription"].CLI.ResolvedStateDir("subscription")
+	entry := c.Providers.LLM["subscription"]
+	stateDir, err := entry.ResolvedStateDir("subscription")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,9 +243,10 @@ func bundledLogin(t *testing.T) string {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
 	c := parseBundled(t, bundledCompanyDoc)
-	stateDir, err := c.Providers.LLM["subscription"].CLI.ResolvedStateDir("subscription")
+	entry := c.Providers.LLM["subscription"]
+	stateDir, err := entry.ResolvedStateDir("subscription")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,10 +286,8 @@ name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
   sandbox:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
@@ -332,7 +330,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliagent.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
+	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, name, `{"token":"configured"}`))
 	c, err := config.ParseCompany([]byte(bundledCompanyDoc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -349,7 +347,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		}
 	}
 	if provider == nil {
-		t.Fatal("the premise: the epoch holds no cli-agent provider for the entry")
+		t.Fatal("the premise: the epoch holds no CLI provider for the entry")
 	}
 	if !provider.Workspace().HasLogin() {
 		t.Fatal("the premise: the epoch restored no login")
@@ -413,10 +411,8 @@ name: Acme
 providers:
   llm:
     subscription:
-      type: cli-agent
       model: sonnet
-      cli:
-        agent: claude-code
+      agent: claude-code
 roles:
   - name: CEO
     handle: ceo

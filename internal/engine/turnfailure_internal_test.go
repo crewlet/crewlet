@@ -308,9 +308,9 @@ func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 
 // A FAILED TURN NAMES ITS CLASS, the one its failed phase names. The field's
 // doc always promised the classified provider error and the code wrote
-// `error` for every failure, so a turn whose model refused and one whose key
+// `error` for every failure, so a turn whose plan was spent and one whose key
 // was revoked read the same on the Turn screen while their phase records said
-// `refusal` and `auth`.
+// `rate_limit` and `auth`.
 func TestAFailedTurnNamesTheClassItsPhaseNamed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -318,8 +318,8 @@ func TestAFailedTurnNamesTheClassItsPhaseNamed(t *testing.T) {
 		cause error
 		want  string
 	}{
-		{"a refusal", fmt.Errorf("turn: execute round 1: %w",
-			llm.Refused("anthropic", "m", &llm.Refusal{Category: "cyber"})), "refusal"},
+		{"a spent plan", fmt.Errorf("turn: execute round 1: %w",
+			&llm.Error{Kind: llm.KindRateLimit, Err: errors.New("usage limit reached")}), "rate_limit"},
 		{"a revoked key", fmt.Errorf("turn: review round 1: %w",
 			&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), "auth"},
 		{"an unclassified failure", errors.New("runner could not be built"), "error"},

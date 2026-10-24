@@ -59,9 +59,7 @@ name: Nimbus
 providers:
   llm:
     main:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
 integrations:
   confluence:
     url: ` + url + `

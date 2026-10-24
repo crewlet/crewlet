@@ -281,7 +281,7 @@ const trailCompany = `
 name: Acme
 providers:
   llm:
-    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+    p: {model: m}
 roles:
   - name: Ana Diaz
     handle: ana

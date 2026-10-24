@@ -16,7 +16,7 @@ import (
 // decide "logged in" for itself from the configuration — the doctor from the
 // files and a resolved token, the list from those plus the auth mode — and
 // neither from what the child is actually given, so both drifted, in both
-// directions: a hermes key in cli.env and a keyed api-key entry were reported
+// directions: a hermes key in env and a keyed api-key entry were reported
 // as having no login, and a claude-code entry in api-key mode with no key was
 // reported healthy on a token that [applyAuth] removes from the child.
 type signIn struct {
@@ -24,7 +24,7 @@ type signIn struct {
 	// the report names them; empty means nothing does.
 	sources []signInSource
 
-	// unresolved names the credential-shaped cli.env entries, on a profile
+	// unresolved names the credential-shaped env entries, on a profile
 	// that reads one ([cliprofile.Profile.EnvSignIn]), whose ${VAR}
 	// resolved to nothing — the case where the operator did configure a
 	// sign-in and this process cannot see it.
@@ -75,11 +75,11 @@ func (p *Provider) signIn() signIn {
 	if !p.profile.EnvSignIn {
 		return s
 	}
-	// Only the operator's cli.env, and only a name shaped like a
+	// Only the operator's env, and only a name shaped like a
 	// credential: HTTPS_PROXY or a tuning variable there is configuration,
 	// not a sign-in. The same predicate passthrough_env and a profile's env
 	// are refused by, so this package has one notion of "this name carries
-	// a secret". Checked on the child's map rather than on cli.env itself,
+	// a secret". Checked on the child's map rather than on env itself,
 	// so a value [applyAuth] removed is never counted.
 	for _, name := range slices.Sorted(maps.Keys(p.env)) {
 		if name == p.profile.TokenEnv || name == p.profile.APIKeyEnv || !cliprofile.IsCredentialName(name) {
@@ -89,7 +89,7 @@ func (p *Provider) signIn() signIn {
 			s.unresolved = append(s.unresolved, name)
 			continue
 		}
-		s.sources = append(s.sources, signInSource{state: "environment", line: "cli.env sets " + name})
+		s.sources = append(s.sources, signInSource{state: "environment", line: "env sets " + name})
 	}
 	return s
 }

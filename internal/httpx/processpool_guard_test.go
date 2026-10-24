@@ -20,9 +20,9 @@ import (
 // built here, and a round tripper that wraps another takes [Transport] as its
 // base — and [httpxtest] says the third half of it, that a test double
 // wrapping an httptest.Server takes THAT SERVER'S transport. All three were
-// prose, and prose is what the tree already had: gitlab, mattermost, datadog's
-// conformance helper and anthropic's own test each carried a paragraph about
-// it, and seven packages sat on the shared pool anyway. internal/sandbox lost
+// prose, and prose is what the tree already had: gitlab, mattermost and
+// datadog's conformance helper each carried a paragraph about it, and seven
+// packages sat on the shared pool anyway. internal/sandbox lost
 // a CI run to it.
 //
 // # Why this fails the build rather than reporting

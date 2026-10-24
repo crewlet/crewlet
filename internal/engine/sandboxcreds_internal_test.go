@@ -103,6 +103,36 @@ func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 	}
 }
 
+// A SEAT SIGNED IN TO CLAUDE CODE BY ITS OWN CLOUD OR BEARER TOKEN IS SIGNED
+// IN. Such a seat is handed none of the entry's sign-in — Claude Code ranks a
+// cloud toggle and a bearer token above the entry's token, so the entry's
+// would only ride along unread — and a guard that knew only the profile's own
+// two variables then refused its remote run as signed in to nothing.
+//
+// Mutation: drop Claude Code's own list from the guard, and every case here
+// is refused.
+func TestASeatsOwnClaudeCodeSignInPassesTheRemoteGuard(t *testing.T) {
+	t.Parallel()
+	c, seat := creditedCompany(t, "claude-code")
+	for _, own := range []map[string]string{
+		{"CLAUDE_CODE_USE_BEDROCK": "1"},
+		{"CLAUDE_CODE_USE_VERTEX": "1"},
+		{"CLAUDE_CODE_USE_FOUNDRY": "1"},
+		{"ANTHROPIC_AUTH_TOKEN": "bearer-from-the-seat"},
+	} {
+		if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, own); err != nil {
+			t.Errorf("%v: a seat signed in by its own environment was refused: %v", own, err)
+		}
+	}
+	// And only Claude Code's: a codex run is not signed in by a Bedrock
+	// toggle it never reads.
+	codex, codexSeat := creditedCompany(t, "codex")
+	if err := sandboxCredentials(codex, codexSeat, phase.Sandbox, sandbox.E2B,
+		map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}); err == nil {
+		t.Error("a codex run was let through on Claude Code's cloud toggle")
+	}
+}
+
 // A LOCAL CELL SEEDS THE FILES AND WRITES A REFRESHED ONE BACK, so files alone
 // are a complete answer there — which is the entire reason the check turns on
 // the placement rather than on the provider.
@@ -161,10 +191,10 @@ func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
 	}
 }
 
-// A CLI THAT SIGNS IN THROUGH cli.env TAKES THAT SIGN-IN INTO ITS BOX.
+// A CLI THAT SIGNS IN THROUGH env TAKES THAT SIGN-IN INTO ITS BOX.
 //
 // OpenCode reads its provider's key from its own environment, so an entry's
-// whole sign-in can be one variable in cli.env — which the doctor counts. The
+// whole sign-in can be one variable in env — which the doctor counts. The
 // run environment carried only the token and the api-key variable, so an
 // agent-mode or sandbox run on such an entry started its CLI signed in to
 // nothing, and a remote one was refused as having no credential at all.
@@ -183,7 +213,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 			t.Fatalf("NewRegistry: %v", err)
 		}
 		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
-			"sub": {Type: config.LLMCLIAgent, Model: "anthropic/claude-sonnet-4"},
+			"sub": {Agent: config.CLIOpenCode, Model: "anthropic/claude-sonnet-4", Env: env},
 		}}}
 		return &Company{Models: models, Config: cfg},
 			&org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}}
@@ -198,13 +228,13 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	}
 	env := run.env
 	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
-		t.Fatalf("the run environment does not carry the cli.env sign-in: %v", env)
+		t.Fatalf("the run environment does not carry the env sign-in: %v", env)
 	}
 	if _, leaked := env["HTTPS_PROXY"]; leaked {
-		t.Errorf("a cli.env variable that is no credential was offered as one: %v", env)
+		t.Errorf("an env variable that is no credential was offered as one: %v", env)
 	}
 	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, env); err != nil {
-		t.Errorf("a remote run carrying its cli.env key was refused: %v", err)
+		t.Errorf("a remote run carrying its env key was refused: %v", err)
 	}
 
 	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this
@@ -226,7 +256,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("a remote run with no sign-in was launched")
 	}
-	for _, route := range []string{"providers.llm.sub.cli.env", "role.sandbox.env"} {
+	for _, route := range []string{"providers.llm.sub.env", "role.sandbox.env"} {
 		if !strings.Contains(err.Error(), route) {
 			t.Errorf("the refusal does not name the %s route this CLI takes: %v", route, err)
 		}

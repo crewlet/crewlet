@@ -93,7 +93,7 @@ func Shared(stateDir, agent string, profile cliprofile.Profile) (*Workspace, err
 			return nil, fmt.Errorf(
 				"cli-agent: state_dir %q is already driving %q — two CLIs cannot share "+
 					"one directory, because each would prune the other's login; give this "+
-					"entry its own cli.state_dir", resolved, existing.agent)
+					"entry its own state_dir", resolved, existing.agent)
 		}
 		return existing, nil
 	}
@@ -673,8 +673,8 @@ func (e *loginRefusedError) Unwrap() error { return e.err }
 //     another member and the credential is not benched.
 //   - A shared login the CLI refused to import is AUTH: this entry's login is
 //     unusable until somebody signs in again, which is what an auth failure
-//     says, so the chain moves on and the credential's cooldown applies
-//     rather than every call retrying a document that cannot be read.
+//     says, so the chain moves on — and the next call tries the login again,
+//     since `crewlet llm login` mends it and that call must find it.
 //   - Any other command that exited non-zero — the export a previous
 //     generation's login is carried out through — is a SERVER failure: the
 //     local CLI failed to answer, as a 5xx is a vendor failing to, and the
@@ -959,7 +959,7 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 // seat's broken export into every seat's outage.
 //
 // THE SEATS ARE LISTED, NEVER GLOBBED: the state directory is the operator's
-// path (cli.state_dir, CREWLET_CLI_HOME or HOME), and a pattern built from it
+// path (state_dir, CREWLET_CLI_HOME or HOME), and a pattern built from it
 // reads a `[`, `*` or `?` in it as syntax — `crewlet[prod]` matched nothing,
 // and an unclosed `[` was a malformed pattern whose error was dropped — so
 // every seat was seeded with the token a kept refresh had rotated away. A
@@ -1271,7 +1271,7 @@ const seatHolder = "another process running a call in this seat's home — an en
 // login still waiting on its browser flow, which then stored its credential in
 // a database nothing could find again and was told it had written a login.
 //
-// ONE PER STATE DIRECTORY, not per entry: entries that share a cli.state_dir
+// ONE PER STATE DIRECTORY, not per entry: entries that share a state_dir
 // share one login home, so a command for one refuses a command for the other.
 //
 // NOT WAITED ON. The holder may be a person part way through a sign-in, for

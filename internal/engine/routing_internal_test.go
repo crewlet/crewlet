@@ -171,9 +171,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-zulu-key"]
 integrations:
   jira:
     url: ` + instance + `
@@ -276,9 +274,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-zulu-key"]
 integrations:
   gitlab:
     enabled: true

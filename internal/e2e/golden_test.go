@@ -38,10 +38,10 @@ import (
 //
 // Every other test in this tree stops at a seam. This one starts a real engine
 // on a real broker, wakes a real seat with a real trigger, drives a real
-// executor and reviewer loop against a scripted vendor endpoint, and reads the
-// result off a WebSocket dialled the way the dashboard dials it, then feeds
-// those exact frames through the dashboard's OWN protocol module (the store
-// and the socket, built as static/dashboard/protocol.js).
+// executor and reviewer loop against a scripted model behind the real CLI
+// backend, and reads the result off a WebSocket dialled the way the dashboard
+// dials it, then feeds those exact frames through the dashboard's OWN protocol
+// module (the store and the socket, built as static/dashboard/protocol.js).
 //
 // It is the only test that can catch the class of bug it was written for. The
 // turn engine emitted NO events at all when this was written: every payload
@@ -521,7 +521,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// and starve submit_work.
 	//
 	// THE FIRST PHASE, not the first model call. The turn-start prefetch
-	// reaches the same endpoint for its own auxiliary passes — the memory
+	// reaches the same model for its own auxiliary passes — the memory
 	// filter, the knowledge query, the episode summary — and it runs
 	// before any phase by design: the context a turn reasons over is
 	// FROZEN before the runner exists, so a self_iterate loop cannot move
@@ -1372,11 +1372,10 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	// agree is a snapshot in which every refused round so far is counted.
 	// Every round of the loop here is a tool-use reply, and every auxiliary
 	// pass a text reply, so each call's cost is known from its kind. EVERY
-	// call the model answered is summed, the first streamed request
-	// included: the fixture answers it unary, and the adapter keeps that
-	// answer rather than dropping it and asking again
-	// (httpapi.UnaryAnswer), so there is no call the engine was billed for
-	// and never handed.
+	// call the model answered is summed: each is one run of the scripted CLI,
+	// whose answer and usage the backend reads off the one document it prints
+	// ([scriptedEntry]), so there is no call the engine was billed for and
+	// never handed.
 	var used, want int
 	var calls []string
 	waitFor(t, "the counter to hold every completion the model answered", func() bool {

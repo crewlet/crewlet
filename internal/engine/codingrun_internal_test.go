@@ -86,7 +86,7 @@ func runnableCompany(t *testing.T, doc string) *Company {
 // call. Asserted through the launcher rather than the resolver, so a launch
 // that stopped asking, or asked after the box was minted, fails here; and the
 // same seat naming its own CLI's runner launches, or a launcher refusing every
-// cli-agent entry would pass.
+// entry would pass.
 func TestARunSandboxLaunchRefusesARunnerThatCannotReadItsEntry(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	for _, tc := range []struct {
@@ -102,9 +102,9 @@ providers:
   sandbox: {fake: true}
   llm:
     oc:
-      type: cli-agent
+      agent: opencode
       model: anthropic/claude-sonnet-5
-      cli: {agent: opencode, env: {ANTHROPIC_API_KEY: sk-ant-not-real}}
+      env: {ANTHROPIC_API_KEY: sk-ant-not-real}
 roles:
   - name: Writer
     handle: writer
@@ -122,7 +122,7 @@ roles:
 				t.Fatalf("%s: the launch was refused: %v", tc.name, err)
 			}
 			if got := jobs[codingagent.OpenCodeName].Started(); len(got) != 1 ||
-				got[0].LLM == nil || got[0].LLM.Model != "anthropic/claude-sonnet-5" {
+				got[0].Model != "anthropic/claude-sonnet-5" {
 				t.Errorf("%s: OpenCode started %+v, want one run on the entry's model as written", tc.name, got)
 			}
 			continue

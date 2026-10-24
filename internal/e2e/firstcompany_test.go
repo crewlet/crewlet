@@ -111,7 +111,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 
 	// THE FIRST COMPANY, by apply — what the reconcile loop does with the
 	// revision a `crewlet config import` activates.
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	cfg, err := config.ParseCompany([]byte(goldenCompany(model)))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
