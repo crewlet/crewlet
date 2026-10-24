@@ -47,6 +47,15 @@ it reads in its scope; a create or a move into a folder removed since it was
 decided is refused where it applies. **Removing a folder moves everything in
 it up one level**, child folders and artifacts, live and trashed, in one
 record: never refused for what it holds, never a cascade into the trash.
+**A folder promoted to the top level** (a top-level folder's child, when the
+folder is removed or moved to the top level) keeps its tree's shares and takes
+its own owner as the new tree's owner. Where that owner is not the old
+top-level folder's owner and the tree had no company share, the old owner
+stops seeing it. Only an administrator's elevated move can place somebody
+else's folder in a private tree, so this is the one way the promotion narrows
+a tree's audience, and it is accepted rather than answered with a share
+nobody asked for: the remover or the mover is the folder's manager, and a
+share granted on their behalf would widen access as a side effect.
 
 Every count the estate answers beside a page (a listing's total, a folder's
 artifacts, the artifacts in no folder) comes from the listing's own visibility

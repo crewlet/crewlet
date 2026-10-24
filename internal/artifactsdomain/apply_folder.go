@@ -401,8 +401,11 @@ func reroot(ctx context.Context, tx *sql.Tx, c applyContext, ids []string, root 
 // applyFolderRemove removes one folder: its child folders (tombstones
 // included) and every artifact filed in it, live and trashed, move up to its
 // parent, and its row becomes a tombstone. A child moved up to the top level
-// becomes a top-level folder holding the removed folder's shares, so nobody
-// who saw it stops seeing it.
+// becomes a top-level folder holding the removed folder's shares, owned by
+// its own owner: everybody the shares reached keeps seeing it, and the old
+// top-level folder's owner does too unless the child is somebody else's in a
+// tree with no company share, which only an administrator's elevated move
+// produces (ADR-0047 says why no share is granted on their behalf).
 //
 // ONE HISTORY ROW, WITH THE COUNTS, and no row per artifact: an unbounded
 // folder would turn one person's gesture into as many history writes inside

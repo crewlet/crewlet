@@ -551,9 +551,11 @@ func (w *Writer) RenameFolder(ctx context.Context, c Call, id, name string) (Wri
 //
 // WHO SEES THE TREE IS ITS TOP-LEVEL FOLDER'S, so a move under another
 // top-level folder changes who sees the folder and everything beneath it to
-// that tree's audience, and a move to the top level keeps the audience it had
-// (the record carries its old top-level folder's shares). Whether a move
-// widens is the surface's question to put to the person before it calls this.
+// that tree's audience, and a move to the top level keeps the shares it had
+// (the record carries its old top-level folder's shares) under its own owner,
+// who becomes the new tree's (ADR-0047 names the one case that narrows). Whether
+// a move widens is the surface's question to put to the person before it calls
+// this.
 func (w *Writer) MoveFolder(ctx context.Context, c Call, id, parent string) (Written, error) {
 	if err := validCall(c); err != nil {
 		return Written{}, err
