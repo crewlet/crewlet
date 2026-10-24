@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/foldername"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -189,20 +190,31 @@ func (d ArtifactDeps) resolveFolder(ctx context.Context, c artifactCaller, tool,
 }
 
 // chainExists reports whether every folder of names beneath the folder at
-// parentPath is one the call can already see, compared as the domain compares
-// sibling names (case-insensitively): a create the writer would answer with
-// nothing written.
+// parentPath is one the call can already see, compared by the key the domain
+// decides sibling names on ([foldername.Key]): a create the writer would answer
+// with nothing written.
 func chainExists(visible []visibleFolder, parentPath string, names []string) bool {
+	held := make(map[string]bool, len(visible))
+	for _, v := range visible {
+		held[pathKey(v.path)] = true
+	}
 	path := parentPath
 	for _, name := range names {
 		path += artifactsdomain.ListDelimiter + name
-		if !slices.ContainsFunc(visible, func(v visibleFolder) bool {
-			return strings.EqualFold(v.path, path)
-		}) {
+		if !held[pathKey(path)] {
 			return false
 		}
 	}
 	return true
+}
+
+// pathKey is a folder path as the domain compares it, name by name.
+func pathKey(path string) string {
+	names := strings.Split(path, artifactsdomain.ListDelimiter)
+	for i, n := range names {
+		names[i] = foldername.Key(n)
+	}
+	return strings.Join(names, artifactsdomain.ListDelimiter)
 }
 
 // audienceOf is a folder's preset as a refusal names it.
