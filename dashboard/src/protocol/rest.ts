@@ -737,6 +737,116 @@ async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
   }
 }
 
+/** A text stream being read: the next chunk, or null once the engine ended it. */
+export interface TextStream {
+  next: () => Promise<string | null>;
+}
+
+/**
+ * A long-lived text answer, read as it arrives: the Dashboard Assistant's
+ * turn stream (`assistant.ts`), whose bytes are server-sent events.
+ *
+ * THE SAME CREDENTIAL AND THE SAME REFUSALS as every request here: the
+ * session cookie and nothing else, no browser cache in front of it, and a
+ * refusal read as the engine's JSON ([RestError]), a `401` reaching
+ * [noteSession] exactly as a request's does. Only the STATUS LINE has a
+ * deadline ([REQUEST_TIMEOUT_MS]); the body runs for as long as the engine
+ * keeps it open, and the caller decides when a quiet stream has stalled,
+ * since only the caller knows how often the engine promised to speak.
+ *
+ * NOT COUNTED IN FLIGHT ([whenRequestsSettle]), for a download's reason: a
+ * stream may run for minutes, and it sets no cookie.
+ */
+async function stream(
+  path: string,
+  options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
+): Promise<TextStream> {
+  const { headers = {}, signal } = options;
+  if (signal?.aborted) throw signal.reason;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+  const forward = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forward, { once: true });
+  const unanswered = (err: unknown): unknown => {
+    if (signal?.aborted) return signal.reason;
+    return timedOut
+      ? new RestError(0, {
+          error: "unreachable",
+          detail: `the engine did not answer within ${waitWords(REQUEST_TIMEOUT_MS)}`,
+        })
+      : offline(err);
+  };
+  const release = () => signal?.removeEventListener("abort", forward);
+  let response: Response;
+  try {
+    response = await fetch(location.origin + path, {
+      method: "GET",
+      cache: "no-store",
+      // The whole of how this stream is authenticated, as for [request].
+      credentials: "same-origin",
+      headers: { Accept: "text/event-stream", ...headers },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    release();
+    throw unanswered(err);
+  } finally {
+    clearTimeout(timer);
+  }
+  answeredAt = Date.now();
+  if (!response.ok || response.body === null) {
+    let body: Record<string, unknown>;
+    try {
+      body = (await response.json()) as Record<string, unknown>;
+    } catch {
+      body = { error: "unreadable_body" };
+    } finally {
+      release();
+    }
+    const refusal = new RestError(
+      response.ok ? 502 : response.status,
+      body,
+      retryAfterOf(response),
+    );
+    noteSession(refusal);
+    throw refusal;
+  }
+  const reader = response.body.getReader();
+  // AN ABORT ENDS A READ IN FLIGHT: a body whose connection a proxy dropped
+  // without a word never errors, so a caller that judged the stream stalled
+  // must be able to end the read it is waiting on.
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      reader.cancel(controller.signal.reason).catch(() => {});
+    },
+    { once: true },
+  );
+  const decoder = new TextDecoder();
+  return {
+    async next() {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        release();
+        throw unanswered(err);
+      }
+      if (chunk.done) {
+        release();
+        const tail = decoder.decode();
+        return tail === "" ? null : tail;
+      }
+      answeredAt = Date.now();
+      return decoder.decode(chunk.value, { stream: true });
+    },
+  };
+}
+
 export const rest = {
   /**
    * The whole answer: status, entity-tag and body. For a caller that sends a
@@ -780,4 +890,6 @@ export const rest = {
     bodyOf("DELETE", path, { body, headers }),
   /** A file's bytes — see [blob]. */
   blob,
+  /** A long-lived text answer, read as it arrives — see [stream]. */
+  stream,
 };
