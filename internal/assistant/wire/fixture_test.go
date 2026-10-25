@@ -114,7 +114,11 @@ func vocabularyFrames() []wire.Frame {
 		resumed.Frame(wire.Frame{Kind: wire.EventSnapshot, Snapshot: &wire.SnapshotEvent{
 			Messages: []wire.Message{{ID: id("message:question"), TurnID: resumed.ID,
 				Role: wire.RoleUser, Text: "What is running right now?", CreatedAt: at, Page: page}},
-			Steps: []wire.StepEvent{}, Cards: []wire.CardEvent{}}}),
+			Steps: []wire.StepEvent{{StepID: id("step:running"), TurnID: resumed.ID, Index: 1,
+				Tool: "list_agents", Label: "Read what the agents are doing",
+				Request: &wire.StepRequest{Method: "GET", Route: "/agents"},
+				State:   wire.StepDone, StartedAt: at, DurationMS: 240, Summary: "6 agents"}},
+			Cards: []wire.CardEvent{}}}),
 		resumed.Frame(wire.Frame{Kind: wire.EventError, Error: &wire.ErrorEvent{
 			Code: wire.ErrorTurnInterrupted, Message: "The node running this answer stopped.",
 			Hint: "Ask again.", Retryable: true}}),
