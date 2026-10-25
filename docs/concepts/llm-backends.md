@@ -1962,9 +1962,11 @@ cost reporting only. Vendors report it two ways, and the profile says which:
 - **With the cache inside it** — OpenAI's: `input_tokens` already holds the
   cached tokens. `usage.input_includes_cache: true` declares it, and the cache
   figures are then not added again; `codex`, whose `turn.completed` passes
-  OpenAI's usage through, declares it. Read the other way, every cached token
-  was charged twice. Qwen Code and Copilot report an input count that holds the
-  cached part too, and their profiles read no cache figure at all.
+  OpenAI's usage through, declares it, and so does `copilot`, whose usage
+  report counts the cached reads inside its input (measured: 1,000 input
+  tokens, 600 of them cached). Read the other way, every cached token was
+  charged twice. Qwen Code reports an input count that holds the cached part
+  too, and its profile reads no cache figure at all.
 
 Two figures are **added** rather than reported as themselves, each because a
 vendor reports it apart from the count it belongs to and bills it with that

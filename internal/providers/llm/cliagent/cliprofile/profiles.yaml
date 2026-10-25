@@ -1400,13 +1400,16 @@ copilot:
   # of the model that served the call. Its input count already holds the
   # cached tokens (measured: a reply reporting 1,000 prompt tokens, 600 of
   # them cached, was recorded as inputTokens 1000 and cacheReadTokens 600),
-  # so the cache figures are not read here — this backend adds them to the
-  # input count, and they would be charged twice. One entry per model the
-  # call used; every measured call used one.
+  # so the cached reads are reported and not added again
+  # (input_includes_cache). cacheWriteTokens is not read: every measured call
+  # wrote 0, so whether the input count holds a write too is unmeasured. One
+  # entry per model the call used; every measured call used one.
   usage_file_args: ["--usage-output-file", "{usage_file}"]
   usage:
     input: [["providerModelMetrics", "0", "metrics", "usage", "inputTokens"]]
     output: [["providerModelMetrics", "0", "metrics", "usage", "outputTokens"]]
+    cache_read: [["providerModelMetrics", "0", "metrics", "usage", "cacheReadTokens"]]
+    input_includes_cache: true
   env:
     # Auto-update is on by default for a standalone install, and it would
     # download a newer CLI into each seat's own cache and run that instead

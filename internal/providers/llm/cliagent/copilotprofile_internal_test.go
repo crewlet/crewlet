@@ -180,12 +180,12 @@ func TestCopilotTakesTheTranscriptOnStdin(t *testing.T) {
 	}
 }
 
-// THE USAGE REPORT IS CHARGED ONCE. The CLI's input count already holds the
-// cached tokens (measured: 1,000 prompt tokens of which 600 cached were
-// recorded as inputTokens 1000 and cacheReadTokens 600), and this backend adds
-// the cache figures it reads to the input count — so reading them here would
-// charge the 600 twice. The report is the CLI's own --usage-output-file,
-// verbatim in the shape 1.0.103 wrote it.
+// THE USAGE REPORT IS CHARGED ONCE, ITS CACHED READS REPORTED. The CLI's input
+// count already holds the cached tokens (measured: 1,000 prompt tokens of which
+// 600 cached were recorded as inputTokens 1000 and cacheReadTokens 600), so the
+// 600 are reported as cache reads and not added to the input a second time.
+// The report is the CLI's own --usage-output-file, verbatim in the shape
+// 1.0.103 wrote it.
 func TestCopilotChargesItsUsageReportOnce(t *testing.T) {
 	t.Parallel()
 	const report = `{"totalPremiumRequestCost":0,"totalUserRequests":1,` +
@@ -204,9 +204,9 @@ func TestCopilotChargesItsUsageReportOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
-	if comp.InputTokens != 1000 || comp.OutputTokens != 10 {
-		t.Errorf("charged in %d out %d, want in 1000 out 10 — the cached 600 are inside the 1000",
-			comp.InputTokens, comp.OutputTokens)
+	if comp.InputTokens != 1000 || comp.OutputTokens != 10 || comp.CacheRead != 600 {
+		t.Errorf("charged in %d out %d cache read %d, want in 1000 out 10 cache read 600 — the "+
+			"cached 600 are inside the 1000", comp.InputTokens, comp.OutputTokens, comp.CacheRead)
 	}
 	if comp.Content != "ok" {
 		t.Errorf("content = %q, want the answer stdout carried", comp.Content)
