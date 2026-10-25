@@ -2943,7 +2943,7 @@ var SESSION_QUERIES = {
 /**
 * A position off the wire, or null for one this client cannot read.
 *
-* THE ENGINE'S OWN GRAMMAR (`tracker.ParseLogPosition`), so the value handed
+* THE ENGINE'S OWN GRAMMAR (`worklet.ParseLogPosition`), so the value handed
 * back as `min_position` is one the engine will accept: a stream name, then a
 * generation and a sequence that are both non-negative integers.
 */
