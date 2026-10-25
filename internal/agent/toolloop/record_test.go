@@ -48,6 +48,107 @@ func (f *frames) list() []toolloop.Result {
 // pause is a response's Writing that takes d: the model's half of a round.
 func pause(d time.Duration) func() { return func() { time.Sleep(d) } }
 
+// EVERY ROUND RECORDS ITS OWN SPAN AND TOKENS: one round per model request,
+// numbered one-based, started in UTC within the run, timed for the MODEL's half
+// only — at least the model's own time and never its calls on top — and costed
+// as its own request, cache included as a breakdown of input and never on top
+// of it. A chain can move a phase between models, so each round names the one
+// that served IT.
+func TestEveryRoundRecordsItsOwnSpanAndTokens(t *testing.T) {
+	t.Parallel()
+	const delay = 15 * time.Millisecond
+	surf := newSurface("read")
+	surf.delay = 30 * time.Millisecond
+	prov := script(runOf(
+		llmtest.Response{Text: "reading", Model: "first-member", Writing: pause(delay),
+			Calls: []llmtest.Call{{Name: "read"}, {Name: "read", Args: `{"n":2}`}},
+			Usage: llm.Usage{Input: 1000, Output: 40, CacheRead: 800, CacheWrite: 150}},
+		llmtest.Response{Text: "done", Model: "second-member", Writing: pause(delay),
+			Usage: llm.Usage{Input: 1300, Output: 20, CacheRead: 1100}},
+	))
+	before := time.Now().UTC()
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 6})
+	after := time.Now().UTC()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Rounds) != 2 {
+		t.Fatalf("recorded %d rounds, want one per model request (2): %+v", len(res.Rounds), res.Rounds)
+	}
+	first, second := res.Rounds[0], res.Rounds[1]
+	for i, r := range res.Rounds {
+		if r.Round != i+1 {
+			t.Errorf("round %d is numbered %d — the lists join on a one-based round", i, r.Round)
+		}
+		if r.StartedAt.Location() != time.UTC {
+			t.Errorf("round %d started at %v, want UTC", r.Round, r.StartedAt)
+		}
+		if r.StartedAt.Before(before) || r.StartedAt.After(after) {
+			t.Errorf("round %d started at %v, outside the run [%v, %v]", r.Round, r.StartedAt, before, after)
+		}
+		if r.Duration < delay {
+			t.Errorf("round %d took %v, want at least the model's %v", r.Round, r.Duration, delay)
+		}
+	}
+	// THE MODEL'S HALF ONLY: round 2's model began once round 1's calls had
+	// returned, so its start is after them and its duration excludes them.
+	lastCall := res.Executions[len(res.Executions)-1]
+	if callsEnded := lastCall.StartedAt.Add(lastCall.Duration); second.StartedAt.Before(callsEnded) {
+		t.Errorf("round 2 began at %v, before round 1's calls ended at %v", second.StartedAt, callsEnded)
+	}
+	if second.Duration >= delay+surf.delay {
+		t.Errorf("round 2 took %v — its duration carries the calls' time", second.Duration)
+	}
+	if first.Model != "first-member" || second.Model != "second-member" {
+		t.Errorf("rounds served by %q, %q — want the model each response named", first.Model, second.Model)
+	}
+	if first.InputTokens != 1000 || first.OutputTokens != 40 || first.CacheRead != 800 || first.CacheWrite != 150 {
+		t.Errorf("round 1 cost %+v, want its own request's counts", first)
+	}
+	if first.ToolCalls != 2 || second.ToolCalls != 0 {
+		t.Errorf("tool calls per round = %d, %d, want 2, 0", first.ToolCalls, second.ToolCalls)
+	}
+	if res.CacheRead != 1900 || res.CacheWrite != 150 {
+		t.Errorf("cache = %d read / %d write, want 1900 / 150", res.CacheRead, res.CacheWrite)
+	}
+	if res.InputTokens != 2300 {
+		t.Errorf("input = %d, want 2300 — the cache must not be added to it", res.InputTokens)
+	}
+	if res.MaxRounds != 6 {
+		t.Errorf("MaxRounds = %d, want the cap the loop ran under echoed (6)", res.MaxRounds)
+	}
+}
+
+// A RUN'S FIRST ROUND STARTS WHEN THE RUN DID. A phase of several runs — a
+// corrective, a note, a long call — has a gap between them, the engine's own,
+// and a round timed from the previous run's last response would carry that gap
+// as the model's time.
+func TestARunsFirstRoundStartsWithTheRun(t *testing.T) {
+	t.Parallel()
+	const gap = 60 * time.Millisecond
+	surf := newSurface("delegate", "submit_work")
+	surf.delay = gap
+	prov := script(
+		runOf(calling("", "delegate")),
+		runOf(llmtest.Response{Writing: pause(10 * time.Millisecond), Calls: []llmtest.Call{{Name: "submit_work"}}}),
+	)
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"},
+		TerminateAfter: []string{"submit_work"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Rounds) != 2 || len(res.Invocations) != 2 {
+		t.Fatalf("rounds %+v over runs %+v, want one round in each of two runs", res.Rounds, res.Invocations)
+	}
+	second, run2 := res.Rounds[1], res.Invocations[1]
+	if second.StartedAt.Before(run2.StartedAt) {
+		t.Errorf("run 2's first round started at %v, before run 2 itself at %v", second.StartedAt, run2.StartedAt)
+	}
+	if second.Duration > run2.Duration {
+		t.Errorf("run 2's first round took %v, longer than the whole run's %v", second.Duration, run2.Duration)
+	}
+}
+
 // A TOOL CALL IS TIMED AND NAMES ITS ORIGIN: started in UTC after its round's
 // model half ended, at least the tool's own time, and who answered it — the
 // surface's own report — carried onto its record.

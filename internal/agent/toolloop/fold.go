@@ -269,6 +269,7 @@ func (d *dispatcher) roundsUsed() int {
 func (d *dispatcher) reopen() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.began = time.Now()
 	if d.state.ended() || d.state == stateExhausted {
 		return
 	}

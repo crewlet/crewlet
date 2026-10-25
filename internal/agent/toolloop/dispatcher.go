@@ -159,6 +159,7 @@ type observedTurn struct {
 type run struct {
 	opts     llm.ServeOptions
 	session  *toolsession.Session
+	start    time.Time
 	released chan struct{}
 	// synthetic is the round an unobserved run's calls are placed on.
 	synthetic int
@@ -195,6 +196,8 @@ type dispatcher struct {
 	lastBusy  bool
 	// invCalls is where the current CLI run's calls start in calls.
 	invCalls int
+	// began is when the loop's current run was started.
+	began time.Time
 
 	// folded is how much of turns and calls the loop has already turned
 	// into conversation, so [dispatcher.Pending] and the next fold start
@@ -245,7 +248,7 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 	if err != nil {
 		return llm.Served{}, err
 	}
-	r := &run{opts: opts, session: session, released: make(chan struct{})}
+	r := &run{opts: opts, session: session, start: time.Now(), released: make(chan struct{})}
 	d.mu.Lock()
 	d.runs = append(d.runs, r)
 	d.mu.Unlock()
@@ -300,7 +303,7 @@ func (d *dispatcher) Observe(t llm.Turn) {
 		d.turns = append(d.turns, &observedTurn{
 			id: t.ID, round: d.rounds, text: t.Text, calls: t.Calls,
 			joined: nativeJoined(t.Calls), model: t.Model, stop: t.Stop,
-			usage: t.Usage, at: now, start: d.modelStart(now),
+			usage: t.Usage, at: now, start: d.modelStartLocked(now),
 		})
 		// THE LAST ROUND THE BUDGET ALLOWS asked for tools: once they have
 		// all run, the run ends before the CLI can make another request.
@@ -312,15 +315,21 @@ func (d *dispatcher) Observe(t llm.Turn) {
 	d.frame()
 }
 
-// modelStart is when the model began the response observed at now: the later
-// of the run's start, the last call's end and the previous response.
-func (d *dispatcher) modelStart(now time.Time) time.Time {
-	var start time.Time
-	if n := len(d.turns); n > 0 {
+// modelStartLocked is when the model began the response observed at now: the
+// latest of the current run's start, the previous response and the last call
+// that returned — the moment the CLI had everything it needed to ask. Never
+// before the run's own start: a run's first request is not dated from the
+// last thing the run before it did.
+func (d *dispatcher) modelStartLocked(now time.Time) time.Time {
+	start := d.began
+	if r := d.lastRunLocked(); r != nil && r.start.After(start) {
+		start = r.start
+	}
+	if n := len(d.turns); n > 0 && d.turns[n-1].at.After(start) {
 		start = d.turns[n-1].at
 	}
-	for _, c := range d.calls {
-		if c.settled && c.started.Add(c.took).After(start) {
+	for _, c := range d.calls[d.invCalls:] {
+		if c.settled && !c.refused && c.started.Add(c.took).After(start) {
 			start = c.started.Add(c.took)
 		}
 	}
