@@ -59,6 +59,17 @@ func newAssistApp(t *testing.T, grants []iam.Grant, probe interface {
 	Routes(authz.Mux) error
 }) *assistApp {
 	t.Helper()
+	return newAssistAppWith(t, grants, func(opts *api.Options) {
+		if probe != nil {
+			opts.Config = probe
+		}
+	})
+}
+
+// newAssistAppWith is [newAssistApp] with the App's options finished by more,
+// for a case that mounts a surface of its own (the act route, an audit sink).
+func newAssistAppWith(t *testing.T, grants []iam.Grant, more func(*api.Options)) *assistApp {
+	t.Helper()
 	out := &assistApp{b: config.DefaultBootstrap(), keys: runtoken.Material{ActiveID: "k1",
 		Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-assistant-test-key"}}}}
 	authorize(&out.b, config.APIToken{ID: "fixture", Token: fixtureToken})
@@ -99,9 +110,7 @@ func newAssistApp(t *testing.T, grants []iam.Grant, probe interface {
 	out.disp = auth.NewDispatcher(out.d)
 	opts := api.Options{Bootstrap: &out.b, Sessions: out.arm, Delegations: out.d,
 		Dispatcher: out.disp}
-	if probe != nil {
-		opts.Config = probe
-	}
+	more(&opts)
 	out.app = newApp(t, opts)
 	return out
 }
