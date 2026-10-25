@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A BUNDLE LAID OUT AND STORED: the files a git wrote for one pack — the
@@ -25,7 +27,9 @@ import (
 // installing cache holds a bundle to, so a second writer that laid a bundle
 // out or sealed it by its own reading would be judged by a rule it did not
 // write against — and the first difference would be a row no git node can
-// install, fleet-wide.
+// install, fleet-wide. The id a compaction's output is laid out under is one
+// derivation for the same reason ([DeriveCompactionPackID]): the build that
+// names the output and the check of the proposal that carries it must agree.
 //
 // Unlike bundle.go, this half does I/O: it reads the three files and streams
 // them to the store it is handed. It still runs no git — the files are a
@@ -100,6 +104,38 @@ func LayBundle(packID, packPath, checksum string) (*PackRef, error) {
 	_ = idx.Close()
 	return &PackRef{PackID: packID, Size: sizes[0] + sizes[1] + sizes[2], IndexBytes: sizes[1],
 		ReverseBytes: sizes[2], GitChecksum: checksum, Objects: count}, nil
+}
+
+// DeriveCompactionPackID is the pack id of output n of the compaction
+// compactionID — the id [LayBundle] lays that output out under, and its
+// row's — n counting the outputs from 0 in the order the build wrote them:
+// an UNNAMED derivation ([statelog.DeriveOpID]) over the compaction's id and
+// n, at the instant that id was minted ([statelog.OpMintedAt]).
+//
+// ONE FUNCTION, because two packages must agree on every byte of it without
+// asking each other (ADR-0008): the git node that builds a compaction names
+// each output by it before the output is stored, and a proposal of the
+// compaction is held to it output by output before any committer decides it.
+// A copy that disagreed in one byte would have every compaction's outputs
+// refused, and a repository nothing compacts keeps every pack each push
+// stored.
+//
+// DERIVED rather than minted, as a push's pack carries the push's own id: an
+// output's id is its compaction's, so a proposal's outputs are held to the
+// compaction that wrote them — none can take another pack's id — with nothing
+// to look up, and the same compaction proposed again names the same outputs.
+// UNNAMED, because a stored pack's id is a bare UUIDv7 in its canonical
+// spelling, as a push's is: a name would follow it after a dot. AT THE
+// COMPACTION'S INSTANT, the one its id carries, never the clock of the call,
+// so whoever derives it, wherever and whenever, derives the same id.
+//
+// An id that carries no instant derives at the zero instant — statelog's
+// reading of such an id, which the layout writes as the Unix epoch — and is
+// still the same id on every node, which is all the two sides need of it. A
+// compaction's own id always carries one: it is a bare UUIDv7.
+func DeriveCompactionPackID(compactionID string, n int) string {
+	at, _ := statelog.OpMintedAt(compactionID)
+	return statelog.DeriveOpID(at, "", compactionID, strconv.Itoa(n))
 }
 
 // UploadDeadline is a bundle put's own bound: objstore.ReadBase — the store's

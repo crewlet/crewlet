@@ -14,9 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A BUNDLE IS LAID OUT FROM THE FILES A GIT WROTE: each section's size from
@@ -110,6 +113,63 @@ func TestOpenIdxReadsTheCountAndRefusesWhatItCannotRead(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), tc.says) || f != nil {
 			t.Errorf("%s: OpenIdx = %d, %v, %v; want a refusal naming %s and saying %q, with no file",
 				tc.name, count, f, err, path, tc.says)
+		}
+	}
+}
+
+// EVERY NODE NAMES A COMPACTION'S OUTPUTS ALIKE, IN EVERY BUILD: an output's
+// id is a pure function of the compaction's id and the output's place — no
+// clock, no randomness, nothing of the node — so the build that names the
+// outputs and the committer that checks them agree without asking each other.
+// The literals were computed apart from this package (SHA-256 over an empty
+// name, the compaction's id and the place, each closed by a zero byte, laid
+// out as a UUIDv7 at the compaction id's millisecond), so a change to what
+// the digest takes, in what order, or at which instant fails here rather than
+// as two builds of one rolling upgrade refusing each other's outputs. An id
+// that carries no instant names its outputs at the Unix epoch, and as alike.
+func TestEveryNodeNamesACompactionsOutputsAlike(t *testing.T) {
+	t.Parallel()
+	const compaction = "01a1753a-6eab-7a1b-8c3d-4e5f60718293" // minted 2026-10-25T22:42:06.123Z
+	for _, tc := range []struct {
+		compaction string
+		n          int
+		want       string
+	}{
+		{compaction, 0, "01a1753a-6eab-701b-adcd-1ecc70e47bd6"},
+		{compaction, 1, "01a1753a-6eab-762c-ba84-773ed87f5671"},
+		{compaction, 15, "01a1753a-6eab-747b-84a4-9e5810e6756b"},
+		{"", 0, "00000000-0000-73d0-89f6-dc618e4cfdbb"},
+		{"not-an-operation-id", 0, "00000000-0000-790a-939f-64b799c4a4ee"},
+	} {
+		if got := code.DeriveCompactionPackID(tc.compaction, tc.n); got != tc.want {
+			t.Errorf("output %d of compaction %q is named %s, want %s", tc.n, tc.compaction, got, tc.want)
+		}
+	}
+}
+
+// A COMPACTION'S OUTPUTS TAKE IDS OF THEIR OWN, AT ITS INSTANT: one id a
+// place, and none another compaction's, each in the shape every stored pack's
+// id has — a bare UUIDv7 in its canonical spelling, as a push's — and
+// carrying the instant the compaction's id carries, never the clock of the
+// call that derives it.
+func TestACompactionsOutputsTakeIDsOfTheirOwnAtItsInstant(t *testing.T) {
+	t.Parallel()
+	minted := time.Date(2026, 10, 25, 22, 42, 6, 123_000_000, time.UTC)
+	named := map[string]string{}
+	for _, compaction := range []string{statelog.NewOpID(minted, ""), statelog.NewOpID(minted, "")} {
+		for n := range 3 {
+			id := code.DeriveCompactionPackID(compaction, n)
+			what := fmt.Sprintf("output %d of compaction %s", n, compaction)
+			if other, taken := named[id]; taken {
+				t.Errorf("%s is named %s, as %s is", what, id, other)
+			}
+			named[id] = what
+			u, err := uuid.Parse(id)
+			at, carries := statelog.OpMintedAt(id)
+			if err != nil || u.Version() != 7 || u.String() != id || !carries || !at.Equal(minted) {
+				t.Errorf("%s is named %q (minted %v, %t), want a UUIDv7 in its canonical spelling "+
+					"minted at the compaction's %v", what, id, at, carries, minted)
+			}
 		}
 	}
 }
