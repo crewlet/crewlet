@@ -278,6 +278,7 @@ func (r *writeRig) takeMoved() iamdomain.Moved {
 		out.People = append(out.People, m.People...)
 		out.Logins = append(out.Logins, m.Logins...)
 		out.Sessions = append(out.Sessions, m.Sessions...)
+		out.Removed = append(out.Removed, m.Removed...)
 	}
 	r.moved = nil
 	return out
