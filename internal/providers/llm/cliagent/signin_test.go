@@ -310,13 +310,13 @@ func TestEachModesSignInNamesOnlyTheVariablesItsProfileHas(t *testing.T) {
 			want:      []string{"CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "neither is set there", "export one"},
 		},
 		{
-			agent: "codex", mode: AuthAPIKey, variables: []string{"OPENAI_API_KEY"},
-			want: []string{"its auth.mode is api-key", "providers.llm.sub.auth.api_key, else OPENAI_API_KEY",
+			agent: "codex", mode: AuthAPIKey, variables: []string{"CODEX_API_KEY"},
+			want: []string{"its auth.mode is api-key", "providers.llm.sub.auth.api_key, else CODEX_API_KEY",
 				"`crewlet secrets set`"},
 		},
 		{
-			agent: "codex", mode: AuthInheritEnv, variables: []string{"OPENAI_API_KEY"},
-			want:    []string{"only OPENAI_API_KEY from the engine's own process environment", "it is not set there", "export it"},
+			agent: "codex", mode: AuthInheritEnv, variables: []string{"CODEX_API_KEY"},
+			want:    []string{"only CODEX_API_KEY from the engine's own process environment", "it is not set there", "export it"},
 			notWant: []string{" or ", "neither"},
 		},
 		{

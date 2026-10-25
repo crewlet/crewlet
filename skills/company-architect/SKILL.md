@@ -183,8 +183,9 @@ live-editable, so the first version does not need to be the last.
      `auth: {mode: api-key}`, which reads `ANTHROPIC_API_KEY` from the secret
      store or the environment. Name another variable with
      `auth.api_key: "${VAR}"` only if theirs is called something else.
-   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth` for an
-     `OPENAI_API_KEY`; leave `auth` out for a ChatGPT login.
+   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth`, which
+     reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
+     with; leave `auth` out for a ChatGPT login.
    - **Open models** (OpenRouter, a hosted provider, a local server) —
      `agent: opencode`, `model: <provider>/<model>` (a bare id is refused), and
      the provider's key in `env` under that provider's own variable, e.g.

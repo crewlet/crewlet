@@ -386,7 +386,7 @@ func TestEachProfileNamesTheVariablesItsCLIReads(t *testing.T) {
 	t.Parallel()
 	want := map[string][2]string{ // agent: {api_key_env, token_env}
 		"claude-code":  {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
-		"codex":        {"OPENAI_API_KEY", ""},
+		"codex":        {"CODEX_API_KEY", ""},
 		"gemini-cli":   {"GEMINI_API_KEY", ""},
 		"qwen-code":    {"DASHSCOPE_API_KEY", ""},
 		"opencode":     {"", ""},

@@ -197,7 +197,6 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 				`config_env moves CODEX_HOME from .codex to .codex-elsewhere`,
 				`credential_paths[0] ".codex/auth.json"`,
 				`volatile_paths[0] ".codex/sessions"`,
-				`volatile_paths[2] ".codex/log"`,
 			},
 		},
 		"codex's home moved with its login but not its sessions": {
@@ -206,7 +205,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 				"config_env":       map[string]any{"CODEX_HOME": ".codex-elsewhere"},
 				"credential_paths": []any{".codex-elsewhere/auth.json"},
 			},
-			left: []string{`volatile_paths[1] ".codex/history.jsonl"`},
+			left: []string{`volatile_paths[0] ".codex/sessions"`},
 		},
 		"codex's home moved with everything under it": {
 			agent: "codex",
@@ -241,7 +240,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 			overrides: map[string]any{
 				"config_env":       map[string]any{"CODEX_HOME": "."},
 				"credential_paths": []any{"auth.json"},
-				"volatile_paths":   []any{"sessions", "history.jsonl", "log"},
+				"volatile_paths":   []any{"sessions"},
 			},
 		},
 		"codex's home moved inside its old directory, with its paths": {
@@ -249,7 +248,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 			overrides: map[string]any{
 				"config_env":       map[string]any{"CODEX_HOME": ".codex/inner"},
 				"credential_paths": []any{".codex/inner/auth.json"},
-				"volatile_paths":   []any{".codex/inner/sessions", ".codex/inner/history.jsonl", ".codex/inner/log"},
+				"volatile_paths":   []any{".codex/inner/sessions"},
 			},
 		},
 		// The parent of pi's .pi/agent holds every path pi kept there, and pi

@@ -275,54 +275,207 @@ claude-code:
 
 codex:
   binary: codex
-  written_for: "Codex CLI 0.153.x (`codex --version`)"
+  written_for: "Codex CLI 0.164.x (`codex --version`)"
   version_args: ["--version"]
-  # read-only sandbox for the same reason as Claude's tool denials, and
-  # --skip-git-repo-check because the per-call scratch directory is
-  # deliberately not a repository. The sandbox also cuts the shell's network,
-  # which is fine — the shell is denied — but the model's OWN web search is a
-  # separate tool that the config defaults to an offline index; `live` is the
-  # setting that reaches the web, passed as a config override so no file has
-  # to be seeded.
+  # MEASURED on 0.153.4 and 0.164.0 through this backend's own code path — the
+  # built-in profile, cliagent.New and Complete — with the CLI pointed at a
+  # local stand-in for the Responses API, and the state directory inside a
+  # repository with an AGENTS.md, an AGENTS.override.md, a CLAUDE.md, a .env,
+  # skills, rules and a project config.toml above it.
+  #
+  # NOTHING FROM OUTSIDE THE CALL, AND NOTHING CARRIED BETWEEN CALLS:
+  #
+  #   - project_root_markers=[] makes the call's directory the project root,
+  #     beside the engine's `.git` file there, which ends the walk on its own:
+  #     no request carried anything from above it — no AGENTS.md or
+  #     AGENTS.override.md, no skill from an ancestor's .agents/skills or
+  #     .codex/skills. --skip-git-repo-check, because that `.git` names no
+  #     repository.
+  #   - skills.include_instructions=false and skills.bundled.enabled=false
+  #     drop the skills block (5 KB naming the seat's home) and keep the
+  #     bundled skills out of the home; --ignore-rules loads no `.rules` file;
+  #     features.hooks, features.apps and features.plugins switch off hooks, a
+  #     ChatGPT login's connectors and the plugin marketplace.
+  #   - --ephemeral writes no session; features.memories=false keeps memories
+  #     off (the default, stated so that a release flipping it changes
+  #     nothing); features.shell_snapshot=false writes no snapshot of the
+  #     shell into the home; and CODEX_SQLITE_HOME (work_config_env) puts the
+  #     databases codex opens on every run, thread state and history among
+  #     them, in the call's own directory, removed with it. After every probe
+  #     the seat's home held codex's installation id and its scratch
+  #     directories, and nothing a call had said.
+  #
+  # THE TOOLS ARE WEB SEARCH AND APPLY_PATCH. Everything else is switched off:
+  # the shell (features.shell_tool and features.unified_exec), view_image, the
+  # goal tools, request_user_input, the multi-agent tools and tool_search with
+  # them, and image generation. A shell call the model makes is answered
+  # "unsupported call: exec_command" (or `shell`) and runs nothing. apply_patch
+  # has no switch on either release: codex offers it whenever the model's own
+  # catalogue entry names a patch format (read from 0.164.0's source).
+  #
+  # --sandbox read-only makes apply_patch write nothing: every patch, inside the
+  # call's directory or out of it, is "rejected: writing is blocked by read-only
+  # sandbox". It still reads a file to check a patch against it, so a patch
+  # naming a file outside the call is answered with whether that file exists
+  # and holds the patch's lines, never with its content. A filesystem
+  # permission profile reading only the call's directory (default_permissions)
+  # would close that too, but codex then reads even the call's AGENTS.md
+  # through its bubblewrap helper, which needs user namespaces: measured, on a
+  # host where none can be created every call failed ("bwrap: Creating new
+  # namespace failed"), where under --sandbox read-only every call answered.
+  #
+  # web_search="live" because the default answers from an offline index.
+  #
+  # project_doc_max_bytes is the largest value the setting takes, because
+  # AGENTS.md is the append channel (below) and codex cuts the file at this many
+  # bytes without a word, 32 KiB by default: measured, a 240 KB seat prompt
+  # reached the model whole with it and was cut at 32 KiB without it. A prompt
+  # too long for the model is then refused by the model, by name, rather than
+  # shortened.
+  #
+  # Each -c value is TOML, and taken as a literal string where it does not
+  # parse (`codex exec --help`).
   complete_args:
     - "exec"
     - "--json"
+    - "--skip-git-repo-check"
+    - "--ephemeral"
+    - "--ignore-rules"
     - "--sandbox"
     - "read-only"
-    - "--skip-git-repo-check"
     - "-c"
     - 'web_search="live"'
+    - "-c"
+    - "project_root_markers=[]"
+    - "-c"
+    - "project_doc_max_bytes=9223372036854775807"
+    - "-c"
+    - "skills.include_instructions=false"
+    - "-c"
+    - "skills.bundled.enabled=false"
+    - "-c"
+    - "features.shell_tool=false"
+    - "-c"
+    - "features.unified_exec=false"
+    - "-c"
+    - "features.shell_snapshot=false"
+    - "-c"
+    - "features.view_image=false"
+    - "-c"
+    - "features.goals=false"
+    - "-c"
+    - "features.multi_agent=false"
+    - "-c"
+    - "features.image_generation=false"
+    - "-c"
+    - "features.apps=false"
+    - "-c"
+    - "features.plugins=false"
+    - "-c"
+    - "features.hooks=false"
+    - "-c"
+    - "features.memories=false"
+    - "-c"
+    - "tools.experimental_request_user_input.enabled=false"
     - "-"
+  # Denied: no shell, and apply_patch writes nothing (above).
   local_tools: denied
   model_args: ["--model", "{model}"]
+  # A SIDE PASS REPLACES CODEX'S PROMPT: model_instructions_file takes the
+  # place of the base instructions outright — the Responses `instructions`
+  # field on 0.153.4, the first developer message on 0.164.0 — and the two
+  # include_* switches drop the permissions and environment blocks, so the
+  # request carries the engine's text, the transcript and codex's two tools,
+  # and nothing else. The engine's text is the first prompt byte.
+  #
+  # The path is UNQUOTED on purpose: an absolute path never parses as TOML, so
+  # codex takes it verbatim whatever the state directory's name holds, where a
+  # quoted one would read a backslash in it as an escape. Measured with a state
+  # directory named with a space, both quotes, a hash and a backslash. Appended
+  # after `-` and the model, where codex still reads it.
+  system_prompt:
+    args:
+      - "-c"
+      - "model_instructions_file={file}"
+      - "-c"
+      - "include_permissions_instructions=false"
+      - "-c"
+      - "include_environment_context=false"
+  # A SEAT KEEPS CODEX'S PROMPT: the AGENTS.md in the call's directory, which
+  # codex reads on every run. It arrives after codex's own prompt (21,175
+  # characters for gpt-5.5 on 0.153.4, 21,299 on 0.164.0, opening "You are
+  # Codex, a coding agent based on GPT-5") and its permissions block, as the
+  # first part of the context user message, wrapped as "# AGENTS.md
+  # instructions for <the call's directory>" around <INSTRUCTIONS>. That
+  # heading is codex's and names the per-call directory, so it is per-call text
+  # ahead of the engine's; everything before it is the same on every call.
+  # codex keys its prompt cache by thread (prompt_cache_key is a new id on every
+  # call), so one call's prefix is not cached for the next whichever channel
+  # carries the text.
+  #
+  # Not developer_instructions, the developer-role setting, although it would
+  # sit higher: it is a string, so it reaches codex on argv, which every account
+  # on the machine can read, or in a `--profile` file under CODEX_HOME, which a
+  # seat's concurrent calls share.
+  append_system_prompt:
+    file:
+      name: "AGENTS.md"
+      discovered: always
   prompt_mode: stdin
   output: jsonl
-  # Two shapes, newest first: 0.5x emits item.completed envelopes, 0.4x
-  # emitted msg envelopes. Both are listed rather than one being chosen so an
-  # operator on either release needs no override.
-  text_paths: [["item", "text"], ["msg", "message"]]
+  # The answer is the agent_message item. `item.text` alone reads every item
+  # that has one, and a reasoning item does: `{"type":"reasoning","text":…}`
+  # precedes the answer on a model that summarises its reasoning, and was
+  # spliced into it.
+  text_paths: [["item", "text"]]
+  event_type_path: ["item", "type"]
+  text_events: ["agent_message"]
+  # turn.completed's usage, the turn's total across every request it made, in
+  # OpenAI's arithmetic: input_tokens is the whole prompt with the cached tokens
+  # inside it (codex's own non_cached_input is the difference), and
+  # output_tokens holds the reasoning tokens. Measured: a turn reporting 1,000
+  # input, 600 cached and 50 output, 20 of them reasoning, is charged 1,000 and
+  # 50.
   usage:
-    input:
-      - ["msg", "info", "total_token_usage", "input_tokens"]
-      - ["usage", "input_tokens"]
-    output:
-      - ["msg", "info", "total_token_usage", "output_tokens"]
-      - ["usage", "output_tokens"]
-    cache_read:
-      - ["msg", "info", "total_token_usage", "cached_input_tokens"]
+    input: [["usage", "input_tokens"]]
+    output: [["usage", "output_tokens"]]
+    cache_read: [["usage", "cached_input_tokens"]]
+    cache_write: [["usage", "cache_write_input_tokens"]]
+    input_includes_cache: true
   config_env:
     CODEX_HOME: ".codex"
+  # CODEX_SQLITE_HOME moves every database codex opens per run (state, thread
+  # history, logs, memories, goals, queue) out of the seat's home, on both
+  # releases, and creates the directory: inside the call's directory, so each
+  # call has its own and none outlives it.
+  work_config_env:
+    CODEX_SQLITE_HOME: ".crewlet-sqlite"
   credential_paths: [".codex/auth.json"]
-  volatile_paths: [".codex/sessions", ".codex/history.jsonl", ".codex/log"]
+  # The session store a run without --ephemeral writes. history.jsonl and log/
+  # are written by neither release.
+  volatile_paths: [".codex/sessions"]
   host_credential_paths: [".codex/auth.json"]
-  api_key_env: "OPENAI_API_KEY"
+  # CODEX_API_KEY, not OPENAI_API_KEY: `codex exec` signs its requests with the
+  # first, and sends no Authorization header at all with only the second set
+  # (measured on both releases).
+  api_key_env: "CODEX_API_KEY"
   login_args: ["login"]
   status_args: ["login", "status"]
   logout_args: ["logout"]
+  # A spent plan or a rate limit exits 1, its report in the error events on
+  # stdout. 0.153.4 writes the plan's sentence with an ASCII apostrophe and
+  # 0.164.0 with a typographic one, so both are listed. An API rate limit is
+  # retried by codex itself and reported as "exceeded retry limit, last
+  # status: 429 Too Many Requests", without the API's own message.
   limit_markers:
     - sentinel: "You've hit your usage limit"
-    - sentinel: "rate limit reached"
+    - sentinel: "You’ve hit your usage limit"
+    - sentinel: "429 Too Many Requests"
+  # A refused key reports "unexpected status 401 Unauthorized"; a ChatGPT
+  # login that cannot be refreshed asks to "log out and sign in again".
   auth_markers:
+    - sentinel: "401 Unauthorized"
+    - sentinel: "Please log out and sign in again"
     - sentinel: "Not logged in"
     - sentinel: "run `codex login`"
 

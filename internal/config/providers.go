@@ -438,7 +438,7 @@ type CLIAgentAuth struct {
 	// CLI's key variable (its profile's api_key_env) under auth.mode
 	// api-key. Empty reads that variable itself through the secret store
 	// and then the environment — ANTHROPIC_API_KEY for Claude Code,
-	// OPENAI_API_KEY for Codex — so a key already exported, or set with
+	// CODEX_API_KEY for Codex — so a key already exported, or set with
 	// `crewlet secrets set`, works with no YAML change.
 	//
 	// ONE key, never a list: a CLI holds one sign-in and rotates nothing,
