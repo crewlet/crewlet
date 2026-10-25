@@ -1964,9 +1964,9 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder --------------------------------------------------------
-   Agents › Edit org (`routes/org/builder/`, at `#/agents/edit`), the one
-   screen that WRITES the org. Its recipes live here beside the chart's
-   because it draws the same chart, and the two must read as one.
+   Org chart › Edit org (`routes/org/builder/`, at `#/company/org/edit`),
+   the one screen that WRITES the org. Its recipes live here beside the
+   chart's because it draws the same chart, and the two must read as one.
 
    Read `routes/org/builder/builderStyles.test.ts` before changing anything
    below — it reads these rules as text and states what each one buys. */
