@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -124,4 +126,108 @@ func notFound(err error, turnID uuid.UUID) error {
 		return fmt.Errorf("%w: turn %s", ErrNotFound, turnID)
 	}
 	return err
+}
+
+// LastHere is the newest seq this node numbered for owner's turn
+// (live.Server), for a peer opening the turn's next segment.
+func (s *Service) LastHere(_ context.Context, owner, turnID uuid.UUID) (uint64, error) {
+	who, last, ok := s.hub.Known(turnID)
+	switch {
+	case !ok:
+		return 0, live.ErrNotRunning
+	case who != owner:
+		return 0, live.ErrNotYours
+	}
+	return last, nil
+}
+
+// continuing is the seq a segment of owner's turn opened on this node numbers
+// after: the highest any node of the fleet numbered for it, and never below
+// parked, the last seq the turn's parked record says its parking segment told.
+// A NUMBER THAT ONLY GROWS across nodes, because a client resuming on any of
+// them draws a frame only above the last it saw; a jump is harmless (a gap is
+// answered with a snapshot) where a repeat is a frame the client drops.
+//
+// A fleet that cannot be asked leaves the parked record's floor and this
+// node's own memory ([live.Hub.Open]), which a segment told on a node the
+// probe could not reach can only be below if that node is gone with it.
+func (s *Service) continuing(ctx context.Context, owner, turnID uuid.UUID, parked uint64) uint64 {
+	if s.remote == nil {
+		return parked
+	}
+	_, last, err := s.remote.LastSeq(ctx, owner, turnID)
+	if err != nil {
+		s.log.WarnContext(ctx, "assistant_numbering_unprobed", "turn", turnID,
+			"error", redact.Secrets(err.Error()),
+			"detail", "the segment is numbered after the parked record and this node's memory")
+		return parked
+	}
+	return max(parked, last)
+}
+
+// parkedLoop is owner's turn's parked loop, decoded.
+func (s *Service) parkedLoop(ctx context.Context, owner, turnID uuid.UUID) (parked, error) {
+	raw, err := s.transcripts.Parked(ctx, owner, turnID)
+	if err != nil {
+		return parked{}, s.readFailure(err)
+	}
+	var keep parked
+	if err = json.Unmarshal(raw, &keep); err != nil {
+		return parked{}, fmt.Errorf("assistant: turn %s parked a loop this build "+
+			"cannot decode: %w", turnID, err)
+	}
+	if keep.V != parkedVersion {
+		return parked{}, fmt.Errorf("assistant: turn %s parked a loop at version %d, "+
+			"and this build reads version %d", turnID, keep.V, parkedVersion)
+	}
+	return keep, nil
+}
+
+func (r fleetRemote) LastSeq(ctx context.Context, owner, turnID uuid.UUID) (string, uint64, error) {
+	holder, last, err := r.f.LastSeq(ctx, owner, turnID)
+	return holder, last, notFound(err, turnID)
+}
+
+// streamSource is where a stream of owner's turn is answered from, after seq
+// after: this node's log, the node holding the frames the client has not
+// drawn, or neither (the transcript answers).
+//
+// A RUNNING TURN is answered where its record says it runs. A turn whose
+// segment here has ended, or that is not running, may since have been told
+// on a node the record does not name (an approval resumed it, or emitted a
+// page action, elsewhere), so the fleet is asked which node holds its newest
+// frames, and a stream behind them is answered there.
+func (s *Service) streamSource(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
+	after uint64) (*live.Log, string) {
+
+	l, held := s.hub.Get(row.ID)
+	switch {
+	case held && (!l.Ended() || s.remote == nil):
+		return l, ""
+	case s.remote == nil:
+		return nil, ""
+	case !held && !row.State.Ended():
+		if row.Node == s.node {
+			return nil, ""
+		}
+		return nil, row.Node
+	}
+	holder, last, err := s.remote.LastSeq(ctx, owner, row.ID)
+	switch {
+	case err != nil:
+		s.log.WarnContext(ctx, "assistant_numbering_unprobed", "turn", row.ID,
+			"error", redact.Secrets(err.Error()),
+			"detail", "the stream is answered from what this node holds")
+	case held && l.Last() >= last:
+		return l, ""
+	case holder != "" && holder != s.node && last > after:
+		return nil, holder
+	}
+	switch {
+	case held:
+		return l, ""
+	case !row.State.Ended() && row.Node != s.node:
+		return nil, row.Node
+	}
+	return nil, ""
 }

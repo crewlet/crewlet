@@ -399,10 +399,9 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 			end.State, end.ErrorCode = state, string(failure.Code)
 		}
 	}
+	settled := true
 	if state != wire.TurnWaitingForApproval {
-		t.record(ctx, "close", func(ctx context.Context, w Write) error {
-			return t.svc.records.CloseTurn(ctx, w.Step("close"), t.id, end)
-		})
+		settled = t.closeOnce(ctx, end)
 	} else {
 		t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
 			State: wire.StatusWaitingForApproval, StepsDone: end.Steps}})
@@ -418,6 +417,11 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 		DurationMS: duration.Milliseconds(), Steps: end.Steps, MessageID: answer,
 		TraceID: tracing.TraceOf(ctx).TraceID}})
 	t.log.End()
+	if !settled {
+		// AFTER THE STREAM HAS ITS END: the person is told at once, and
+		// the record is retried behind it ([turn.settle]).
+		t.settle(ctx, end)
+	}
 
 	attrs := metrics.Attrs{"outcome": string(state)}
 	t.svc.metrics.Add(metrics.AssistantTurns, 1, attrs)
@@ -515,7 +519,15 @@ type parked struct {
 	Cards    int    `json:"cards"`
 	Count    int    `json:"message_count"`
 	Boundary string `json:"boundary"`
+	// Seq is the newest seq the parking segment told, its closing frames
+	// counted ([parkedTail]): what the segment an approval opens continues
+	// after where no node of the fleet remembers more.
+	Seq uint64 `json:"seq"`
 }
+
+// parkedTail is how many frames a segment tells after its park record has
+// landed: the waiting status and the done frame ([turn.conclude]).
+const parkedTail = 2
 
 // parkedVersion is the parked loop's format. A reshape takes a new number.
 const parkedVersion = 1
@@ -525,7 +537,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	t.mu.Lock()
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
-		Boundary: string(t.boundary)}
+		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail}
 	t.mu.Unlock()
 	raw, err := json.Marshal(keep)
 	if err != nil {

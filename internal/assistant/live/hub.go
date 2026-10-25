@@ -32,10 +32,12 @@ type Hub struct {
 	last map[uuid.UUID]lastSeq
 }
 
-// lastSeq is the newest seq a dropped log wrote, and when it was dropped.
+// lastSeq is the newest seq a dropped log wrote, whose turn it numbered, and
+// when it was dropped.
 type lastSeq struct {
-	seq uint64
-	at  time.Time
+	owner uuid.UUID
+	seq   uint64
+	at    time.Time
 }
 
 // Tap is told every frame a log appends, once it is numbered and retained:
@@ -55,10 +57,13 @@ func NewHub(now func() time.Time, remember time.Duration, tap Tap) *Hub {
 		last: map[uuid.UUID]lastSeq{}}
 }
 
-// Open starts the log of one of owner's turn segments: a new turn's from seq
-// 1, and a resumed turn's after the last seq this node numbered for it. A log
-// still open for the turn is returned as it is.
-func (h *Hub) Open(owner, conversation, turn uuid.UUID) *Log {
+// Open starts the log of one of owner's turn segments, numbered after floor
+// and after the last seq this node numbered for the turn, whichever is
+// higher: a new turn's from seq 1 (floor 0), and a resumed one's after
+// everything the fleet told of it, which the caller learns as floor (a
+// segment that ran on another node is numbered there). A log still open for
+// the turn is returned as it is.
+func (h *Hub) Open(owner, conversation, turn uuid.UUID, floor uint64) *Log {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.sweepLocked()
@@ -66,12 +71,12 @@ func (h *Hub) Open(owner, conversation, turn uuid.UUID) *Log {
 		if !l.Ended() {
 			return l
 		}
-		h.last[turn] = lastSeq{seq: l.Last(), at: h.now()}
+		h.last[turn] = lastSeq{owner: l.Owner(), seq: l.Last(), at: h.now()}
 		delete(h.logs, turn)
 	}
-	first := uint64(1)
+	first := floor + 1
 	if prior, ok := h.last[turn]; ok {
-		first = prior.seq + 1
+		first = max(first, prior.seq+1)
 	}
 	l := newLog(owner, conversation, turn, first, h.now, h.tap)
 	h.logs[turn] = l
@@ -85,6 +90,23 @@ func (h *Hub) Get(turn uuid.UUID) (*Log, bool) {
 	h.sweepLocked()
 	l, ok := h.logs[turn]
 	return l, ok
+}
+
+// Known is the newest seq this node numbered for a turn and whose turn it
+// is, from its log or, once the log is dropped, from what the hub remembers:
+// what a peer opening the turn's next segment is told, so the numbering only
+// grows across nodes.
+func (h *Hub) Known(turn uuid.UUID) (owner uuid.UUID, last uint64, ok bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sweepLocked()
+	if l, found := h.logs[turn]; found {
+		return l.Owner(), l.Last(), true
+	}
+	if prior, found := h.last[turn]; found {
+		return prior.owner, prior.seq, true
+	}
+	return uuid.Nil, 0, false
 }
 
 // Forget drops everything the hub holds for a turn: a conversation purged.
@@ -104,7 +126,7 @@ func (h *Hub) sweepLocked() {
 	now := h.now()
 	for turn, l := range h.logs {
 		if l.expired(now) {
-			h.last[turn] = lastSeq{seq: l.Last(), at: now}
+			h.last[turn] = lastSeq{owner: l.Owner(), seq: l.Last(), at: now}
 			delete(h.logs, turn)
 		}
 	}

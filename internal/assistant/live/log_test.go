@@ -81,7 +81,7 @@ func TestAResumedSegmentContinuesTheNumbering(t *testing.T) {
 	t.Parallel()
 	now := epoch
 	h := NewHub(func() time.Time { return now }, time.Hour, nil)
-	l := h.Open(uuid.Nil, conversation, turn)
+	l := h.Open(uuid.Nil, conversation, turn, 0)
 	for range 3 {
 		if _, err := l.Append(status()); err != nil {
 			t.Fatal(err)
@@ -99,7 +99,7 @@ func TestAResumedSegmentContinuesTheNumbering(t *testing.T) {
 	if _, ok := h.Get(turn); ok {
 		t.Fatal("an ended log outlived its retention")
 	}
-	next := h.Open(uuid.Nil, conversation, turn)
+	next := h.Open(uuid.Nil, conversation, turn, 0)
 	f, err := next.Append(status())
 	if err != nil || f.Seq != 4 {
 		t.Errorf("the resumed segment's first frame is seq %d (%v), want 4", f.Seq, err)

@@ -3,6 +3,7 @@ package evals
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -33,6 +34,9 @@ type Store struct {
 	// closes counts the closes that ended each turn: one, or the store let
 	// a turn end twice.
 	closes map[uuid.UUID]int
+	// failCloses and failConversations are how many of the next closes and
+	// conversation reads fail as a store that could not confirm them.
+	failCloses, failConversations int
 }
 
 type storedConversation struct {
@@ -125,6 +129,10 @@ func (s *Store) Conversations(_ context.Context, owner uuid.UUID, _ string, _ in
 func (s *Store) Conversation(_ context.Context, owner, id uuid.UUID) (assistantdomain.Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failConversations > 0 {
+		s.failConversations--
+		return assistantdomain.Conversation{}, errors.New("assistanttest: the store is away")
+	}
 	c, err := s.owned(owner, id)
 	if err != nil {
 		return assistantdomain.Conversation{}, err
@@ -384,6 +392,10 @@ func (s *Store) ResumeTurn(_ context.Context, w assistant.Write, turn uuid.UUID,
 func (s *Store) CloseTurn(_ context.Context, w assistant.Write, turn uuid.UUID, end assistantdomain.TurnEnd) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failCloses > 0 {
+		s.failCloses--
+		return fmt.Errorf("%w: the close of turn %s", assistant.ErrOutcomeUnknown, turn)
+	}
 	if err := s.keep(w, "turn_closed", end); err != nil {
 		return err
 	}
@@ -396,6 +408,21 @@ func (s *Store) CloseTurn(_ context.Context, w assistant.Write, turn uuid.UUID, 
 	delete(s.parked, turn)
 	s.closes[turn]++
 	return nil
+}
+
+// FailCloses makes the next n closes fail with an outcome nobody can confirm.
+func (s *Store) FailCloses(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failCloses = n
+}
+
+// FailConversations makes the next n conversation reads fail as an
+// unreachable store would.
+func (s *Store) FailConversations(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failConversations = n
 }
 
 // Closes is how many closes ended turn: the arbitrated end lets exactly one.
