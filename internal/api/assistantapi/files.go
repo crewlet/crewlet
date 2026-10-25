@@ -55,7 +55,8 @@ const (
 )
 
 // fileNamespace is the namespace an uploaded file's id is derived in from the
-// upload's operation, so a retried upload is one file. FIXED for the life of
+// upload's operation and its conversation, so a retried upload is one file and
+// a key sent again to another conversation is another. FIXED for the life of
 // the format.
 var fileNamespace = uuid.MustParse("6f1c2b9e-3a7d-5e40-b8f1-0d4c6a2e9b57")
 
@@ -111,8 +112,9 @@ func (s *Surface) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	ref, err := s.files.Store(r.Context(), assistant.Write{Owner: p.ID, By: iam.ActorFor(p),
 		Key: key, Steps: []string{"file"}}, assistant.NewFile{
-		ID: uuid.NewSHA1(fileNamespace, []byte(key)), Conversation: conversation,
-		Origin: wire.FileAttached, Name: kept, MediaType: mediaType, Content: raw,
+		ID:           uuid.NewSHA1(fileNamespace, []byte(conversation.String()+"/"+key)),
+		Conversation: conversation,
+		Origin:       wire.FileAttached, Name: kept, MediaType: mediaType, Content: raw,
 	})
 	switch {
 	case errors.Is(err, assistantdomain.ErrTooManyFiles):
