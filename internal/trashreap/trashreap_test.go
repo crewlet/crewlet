@@ -613,3 +613,70 @@ func TestAnUnreadableReportRunsThePass(t *testing.T) {
 		t.Error("an unreadable report decoded")
 	}
 }
+
+// termed is a source that keeps a term of its own.
+type termed struct {
+	*trash
+	term time.Duration
+}
+
+func (t termed) Term() time.Duration { return t.term }
+
+// A SOURCE THAT KEEPS ITS OWN TERM IS REAPED AT IT, beside a source that keeps
+// the reaper's: each is listed against its own cutoff, and the report names the
+// cutoff the source was reaped at. Mutation: reap every source at the
+// reaper's cutoff and the conversation a week past its term survives.
+func TestASourceWithATermOfItsOwnIsReapedAtIt(t *testing.T) {
+	t.Parallel()
+	pages := newTrash("pages")
+	week := 7 * 24 * time.Hour
+	assistant := termed{trash: newTrash("assistant"), term: week}
+	own := slotOf(noon).Add(-week)
+	assistant.put("past-its-week", own.Add(-time.Hour))
+	assistant.put("inside-its-week", own.Add(time.Hour))
+	pages.put("inside-the-month", own.Add(-time.Hour))
+	r := newRig(t, "node-a", memory.NewFleet(), &clock{at: noon}, pages, assistant)
+
+	report, err := r.reaper.Pass(t.Context())
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if got := assistant.purgedIDs(); !slices.Equal(got, []string{"past-its-week"}) {
+		t.Errorf("the source with its own term purged %v, want the one past its week", got)
+	}
+	if got := pages.purgedIDs(); len(got) != 0 {
+		t.Errorf("the source on the reaper's term purged %v inside its month", got)
+	}
+	if s := report.Sources[1]; !s.Cutoff.Equal(own) {
+		t.Errorf("the report names the source's cutoff as %s, want %s", s.Cutoff, own)
+	}
+	if s := report.Sources[0]; !s.Cutoff.IsZero() {
+		t.Errorf("the report names a cutoff of its own for a source on the reaper's term: %s", s.Cutoff)
+	}
+}
+
+// A TERM UNDER THE FLOOR PURGES NOTHING, and says so: the floor guards against
+// a mistake destroying what people expected to keep, whichever source states
+// the term. The other sources are reaped as ever.
+func TestATermUnderTheFloorPurgesNothing(t *testing.T) {
+	t.Parallel()
+	pages := newTrash("pages")
+	assistant := termed{trash: newTrash("assistant"), term: time.Hour}
+	assistant.put("an-hour-old", noon.Add(-2*time.Hour))
+	pages.put("old", slotOf(noon).Add(-term-time.Hour))
+	r := newRig(t, "node-a", memory.NewFleet(), &clock{at: noon}, assistant, pages)
+
+	report, err := r.reaper.Pass(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "minimum") {
+		t.Errorf("a term under the floor answers %v", err)
+	}
+	if assistant.remaining() != 1 || assistant.listed != 0 {
+		t.Errorf("a source under the floor was listed %d times and lost items", assistant.listed)
+	}
+	if report.Sources[0].Error == "" {
+		t.Error("the report says nothing about the source it would not reap")
+	}
+	if got := pages.purgedIDs(); !slices.Equal(got, []string{"old"}) {
+		t.Errorf("the other source purged %v", got)
+	}
+}
