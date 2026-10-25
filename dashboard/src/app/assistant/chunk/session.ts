@@ -136,8 +136,14 @@ function pageAction(frame: AssistantNarrowFrame): void {
   const mine =
     asked.has(frame.turn_id) ||
     (action.proposal_id !== undefined && approvals.has(action.proposal_id));
+  const at = generation;
   void takeAction(action, mine, {
     settle: (local) => dispatch({ type: "action_local", actionId: action.action_id, local }),
+  }).then(() => {
+    // THE TURN RESUMES ONLY ONCE THE PAGE HAS REPORTED, and the stream that
+    // carried the action may already have closed on the parked turn, so this
+    // tab reads the turn again from where it was, to hear the rest of it.
+    if (mine && at === generation) rejoin(frame.turn_id);
   });
 }
 
@@ -288,8 +294,14 @@ export async function clearConversation(): Promise<void> {
 
 /** Dial the running turn's stream again, after the drawer's Try again. */
 export function reconnect(): void {
+  rejoin();
+}
+
+/** Read the open turn again from its last frame; only `turnId`'s, where one is named. */
+function rejoin(turnId?: string): void {
   const turn = openTurn(view);
   if (!turn || turn.id === "" || view.id === null) return;
+  if (turnId !== undefined && turn.id !== turnId) return;
   follow(
     `/assistant/conversations/${encodeURIComponent(view.id)}/stream?turn=${encodeURIComponent(turn.id)}`,
     turn.seq > 0 ? assistantEventId(turn.id, turn.seq) : undefined,
