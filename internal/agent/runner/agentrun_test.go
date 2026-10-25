@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -111,7 +112,7 @@ func TestAnAgentModeExecutorsPromptTravelsInTheHalvesANativePassSends(t *testing
 		t.Fatalf("Execute (agent mode): %v", err)
 	}
 
-	prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+	prov := &scriptedProvider{execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool,
 		`{"outcome":"delivered","summary":"done","deliveries":["slack_post"]}`)}}
 	native, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{})
 	if _, _, err := native.Execute(context.Background(), 1, "", nil); err != nil {
@@ -175,7 +176,7 @@ func TestAnAgentModeExecutorIsNotTaughtRunSandbox(t *testing.T) {
 		}
 	}
 
-	prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+	prov := &scriptedProvider{execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool,
 		`{"outcome":"delivered","summary":"done","deliveries":["slack_post"]}`)}}
 	native, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
 		buildOpts{sandbox: gate, register: withTool})
@@ -231,7 +232,7 @@ func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
 					Bridged: []ledger.Call{{Name: "slack_post", Result: "posted"}},
 				}
 			} else {
-				prov.execute = []llm.Completion{
+				prov.execute = []llmtest.Response{
 					activate(runner.MarkOnboardedTool),
 					activate(runner.RunSandboxTool),
 					submitWork(t),
@@ -249,18 +250,18 @@ func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
 			if got := slices.Contains(surface.Catalogue, runner.RunSandboxTool); got != tc.runSandbox {
 				t.Errorf("the resumed executor reaches run_sandbox = %v, want %v", got, tc.runSandbox)
 			}
-			for i, req := range prov.seen {
-				offered := toolNames(req.Tools)
-				if slices.Contains(offered, runner.MarkOnboardedTool) {
+			offered := prov.offeredFor("execute")
+			for i, names := range offered {
+				if slices.Contains(names, runner.MarkOnboardedTool) {
 					t.Errorf("resumed request %d was offered mark_onboarded, which activate_tool reached", i+1)
 				}
-				if !tc.runSandbox && slices.Contains(offered, runner.RunSandboxTool) {
+				if !tc.runSandbox && slices.Contains(names, runner.RunSandboxTool) {
 					t.Errorf("resumed request %d was offered run_sandbox, which activate_tool reached", i+1)
 				}
 			}
-			if !tc.agentRun && len(prov.seen) < 3 {
+			if !tc.agentRun && len(offered) < 3 {
 				t.Fatalf("the resumed executor made %d requests; its activations never got a round after them",
-					len(prov.seen))
+					len(offered))
 			}
 		})
 	}
@@ -536,7 +537,7 @@ func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 // config would rebuild whichever one the company happens to say today.
 func TestANativeSuspensionResumesNativelyEvenInAgentMode(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, runner.SubmitWorkTool, `{
 			"outcome":"delivered","summary":"posted it","deliveries":["slack_post"]}`),
 	}}
@@ -739,7 +740,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"nothing to do"}`),
 		text("done"),
 	}}

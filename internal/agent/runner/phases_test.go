@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -21,85 +22,223 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// scriptedProvider replays completions PER PHASE, choosing the script from the
-// tools the request offers.
+// scriptedProvider is the model behind every phase's CLI runs, scripted PER
+// PHASE: each phase reads its own stream of responses, one per model request,
+// and a run is told which phase it is by the tools its CLI was offered.
 //
 // Not a flat sequence: each phase runs its own loop and a phase that calls a
 // tool takes another round, so a shared index drifts as soon as any phase
 // makes one more call than the fixture author counted. Dispatching on the
 // surface is both robust and closer to the truth — the offered tools ARE what
 // distinguishes the phases.
+//
+// A STREAM OF RESPONSES, NOT A LIST OF RUNS, because the runs are not the
+// model's to choose: its CLI asks it again after every call it makes, and the
+// engine ends a run when the phase finishes, parks or is corrected. So a run
+// plays the phase's next responses until one calls nothing — the model's
+// answer — or the engine ends it, and the next run of the phase picks the
+// stream up where that one left it. Past the end, the last response repeats: a
+// model that keeps answering the same way.
+//
+// THROUGH THE REAL SESSION: every response reaches the phase's dispatcher as a
+// CLI's record does, and every call reaches the phase's tools over MCP
+// (llmtest.Conn).
 type scriptedProvider struct {
-	execute, review, onboarding []llm.Completion
-	seen                        []llm.Request
-	n                           map[string]int
+	execute, review, onboarding []llmtest.Response
+
+	mu   sync.Mutex
+	runs []*scriptedRun
+	n    map[string]int
+}
+
+// scriptedRun is one CLI run the provider played.
+type scriptedRun struct {
+	which string
+	req   llm.Request
+	conn  *llmtest.Conn
+
+	// offered is the tool list the CLI read before each response it played
+	// — one per model request, an activation's effect included.
+	offered [][]llm.ToolDef
 }
 
 func (p *scriptedProvider) Model() string { return "scripted" }
 
-func (p *scriptedProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
-	p.seen = append(p.seen, req)
-	which, script := p.scriptFor(req)
-	if p.n == nil {
-		p.n = map[string]int{}
-	}
-	if len(script) == 0 {
+func (p *scriptedProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if req.Tools == nil {
 		return &llm.Completion{Content: "(no script)"}, nil
 	}
-	i := min(p.n[which], len(script)-1)
-	p.n[which]++
-	c := script[i]
-	return &c, nil
+	var run *scriptedRun
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(c *llmtest.Conn) (llmtest.Response, error) {
+		offered, err := c.Relist(ctx)
+		if err != nil {
+			return llmtest.Response{}, err
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if run == nil {
+			run = &scriptedRun{which: phaseOffering(toolNames(offered)), req: req, conn: c}
+			p.runs = append(p.runs, run)
+		}
+		run.offered = append(run.offered, offered)
+		script := p.scriptOf(run.which)
+		if len(script) == 0 {
+			return llmtest.Response{Text: "(no script)"}, nil
+		}
+		if p.n == nil {
+			p.n = map[string]int{}
+		}
+		i := min(p.n[run.which], len(script)-1)
+		p.n[run.which]++
+		return script[i], nil
+	})
 }
 
-func (p *scriptedProvider) scriptFor(req llm.Request) (string, []llm.Completion) {
-	offered := toolNames(req.Tools)
+// phaseOffering names the phase a run is from the tools its CLI was offered.
+func phaseOffering(offered []string) string {
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
-		return "review", p.review
+		return "review"
 	case slices.Contains(offered, runner.MarkOnboardedTool):
 		// Checked BEFORE the executor, because onboarding is the pass that
 		// offers mark_onboarded and the executor is deliberately denied it:
 		// a seat that could mark itself from inside the executor would
 		// permanently skip orientation. See runner.phaseScoped.
-		return "onboarding", p.onboarding
+		return "onboarding"
 	default:
-		return "execute", p.execute
+		return "execute"
 	}
 }
 
-// requestsFor returns the requests one phase received, in order.
-func (p *scriptedProvider) requestsFor(which string) []llm.Request {
-	var out []llm.Request
-	for _, req := range p.seen {
-		if got, _ := p.scriptFor(req); got == which {
-			out = append(out, req)
+func (p *scriptedProvider) scriptOf(which string) []llmtest.Response {
+	switch which {
+	case "review":
+		return p.review
+	case "onboarding":
+		return p.onboarding
+	default:
+		return p.execute
+	}
+}
+
+// runsFor is every CLI run one phase made, in order.
+func (p *scriptedProvider) runsFor(which string) []*scriptedRun {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []*scriptedRun
+	for _, run := range p.runs {
+		if run.which == which {
+			out = append(out, run)
 		}
 	}
 	return out
 }
 
-// submitCall builds a completion whose only content is a call to a submission
-// tool with the given JSON arguments.
-func submitCall(t *testing.T, name, argsJSON string) llm.Completion {
+// allRuns is every CLI run, of every phase, in order.
+func (p *scriptedProvider) allRuns() []*scriptedRun {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.runs)
+}
+
+// requestsFor returns the request each of one phase's CLI runs was handed, in
+// order: the conversation a run opens on.
+func (p *scriptedProvider) requestsFor(which string) []llm.Request {
+	var out []llm.Request
+	for _, run := range p.runsFor(which) {
+		out = append(out, run.req)
+	}
+	return out
+}
+
+// roundsOf is how many model requests — responses — one phase was asked for.
+func (p *scriptedProvider) roundsOf(which string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.n[which]
+}
+
+// offeredFor is what the model was offered at each of one phase's requests,
+// across its runs, by name.
+func (p *scriptedProvider) offeredFor(which string) [][]string {
+	var out [][]string
+	for _, run := range p.runsFor(which) {
+		p.mu.Lock()
+		lists := slices.Clone(run.offered)
+		p.mu.Unlock()
+		for _, defs := range lists {
+			out = append(out, toolNames(defs))
+		}
+	}
+	return out
+}
+
+// answered is what every call one phase's CLI made was answered, in order:
+// what the model read back from its tools.
+func (p *scriptedProvider) answered(which string) []llmtest.Result {
+	var out []llmtest.Result
+	for _, run := range p.runsFor(which) {
+		out = append(out, run.conn.Results()...)
+	}
+	return out
+}
+
+// answerTo is what the model read back from its first call of name, or "".
+func (p *scriptedProvider) answerTo(which, name string) string {
+	for _, r := range p.answered(which) {
+		if r.Name == name {
+			return r.Output
+		}
+	}
+	return ""
+}
+
+// wasAnswered reports whether any call one phase made was answered with text
+// containing part.
+func (p *scriptedProvider) wasAnswered(which, part string) bool {
+	return slices.ContainsFunc(p.answered(which), func(r llmtest.Result) bool {
+		return strings.Contains(r.Output, part)
+	})
+}
+
+// callOf is one call a response makes, its arguments encoded as the model
+// writes them.
+func callOf(t *testing.T, name string, args map[string]any) llmtest.Call {
 	t.Helper()
-	var args map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		t.Fatalf("fixture is not JSON: %v", err)
+	if args == nil {
+		return llmtest.Call{Name: name}
 	}
-	return llm.Completion{
-		ToolCalls: []llm.ToolCall{{ID: "c1", Name: name, Arguments: args}},
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("fixture arguments are not JSON: %v", err)
 	}
+	return llmtest.Call{Name: name, Args: string(raw)}
+}
+
+// calling is a response whose only content is calls.
+func calling(calls ...llmtest.Call) llmtest.Response {
+	return llmtest.Response{Calls: calls}
+}
+
+// submitCall builds a response whose only content is a call to a tool with the
+// given JSON arguments.
+func submitCall(t *testing.T, name, argsJSON string) llmtest.Response {
+	t.Helper()
+	if !json.Valid([]byte(argsJSON)) {
+		t.Fatalf("fixture is not JSON: %s", argsJSON)
+	}
+	return calling(llmtest.Call{Name: name, Args: argsJSON})
 }
 
 // submitWork is the ordinary ending for a round that delivered nothing: the
 // executor's starting surface carries no MCP tool, so a fixture that has not
 // discovered one cannot honestly cite a delivery.
-func submitWork(t *testing.T) llm.Completion {
+func submitWork(t *testing.T) llmtest.Response {
 	t.Helper()
 	return submitCall(t, runner.SubmitWorkTool,
 		`{"outcome":"blocked","summary":"nothing to do here","evidence":"no write tool yet"}`)
@@ -108,24 +247,22 @@ func submitWork(t *testing.T) llm.Completion {
 // activate is the discovery half of a delivery. MCP TOOLS ARE NOT ON THE
 // STARTING SURFACE — that is the whole point of discovery — so a fixture that
 // posts has to promote the tool first, exactly as a real turn does.
-func activate(name string) llm.Completion {
-	return llm.Completion{ToolCalls: []llm.ToolCall{
-		{ID: "act", Name: "activate_tool", Arguments: map[string]any{"name": name}},
-	}}
+func activate(name string) llmtest.Response {
+	return calling(llmtest.Call{Name: runner.ActivateTool, Args: `{"name":"` + name + `"}`})
 }
 
 // deliver is the ordinary three-round delivery: discover, call, report.
-func deliver(t *testing.T, summary string) []llm.Completion {
+func deliver(t *testing.T, summary string) []llmtest.Response {
 	t.Helper()
-	return []llm.Completion{
+	return []llmtest.Response{
 		activate("slack_post"),
-		{ToolCalls: []llm.ToolCall{{ID: "post", Name: "slack_post"}}},
+		calling(llmtest.Call{Name: "slack_post"}),
 		submitCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"`+summary+`","deliveries":["slack_post"]}`),
 	}
 }
 
-func text(s string) llm.Completion { return llm.Completion{Content: s} }
+func text(s string) llmtest.Response { return llmtest.Response{Text: s} }
 
 // workFor is a plain delivered submission, for tests that drive Review
 // directly and do not care what the executor did.
@@ -307,6 +444,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Turn:      runTurn,
 		Budget:    opts.budget,
 		Compact:   opts.compact,
+		Sessions:  sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -316,9 +454,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 
 func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{
+	r, _, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{
 		activate("slack_post"),
-		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post", Arguments: map[string]any{"channel": "C1"}}}},
+		calling(callOf(t, "slack_post", map[string]any{"channel": "C1"})),
 		submitCall(t, runner.SubmitWorkTool, `{
 			"outcome":"delivered","summary":"posted the weekly summary",
 			"deliveries":["slack_post"],"open_questions":"which channel next week?"}`),
@@ -362,11 +500,11 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 // turned out to need it.
 func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	offered := toolNames(prov.requestsFor("execute")[0].Tools)
+	offered := slices.Clone(prov.offeredFor("execute")[0])
 	slices.Sort(offered)
 	want := []string{
 		"activate_tool", "list_mcp_server_tools", "lookup_colleague", "reflect",
@@ -407,7 +545,7 @@ func isFinishingCorrective(m llm.Message, tool string) bool {
 func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{text("I posted something.")}}
+	prov := &scriptedProvider{execute: []llmtest.Response{text("I posted something.")}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
@@ -462,7 +600,7 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 // writtenSubmission is the measured failure: an executor on a cli-agent text
 // backend ended its turn with submit_work's ARGUMENTS typed out as a fenced
 // JSON block — the report, as prose — instead of the call.
-func writtenSubmission() llm.Completion {
+func writtenSubmission() llmtest.Response {
 	return text("Commented on the work item.\n\n```json\n" +
 		`{"summary":"Commented on the work item","outcome":"blocked",` +
 		`"evidence":"no write tool yet"}` + "\n```")
@@ -477,7 +615,7 @@ func writtenSubmission() llm.Completion {
 func TestAnExecutorThatWroteItsSubmissionAsTextIsReAskedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{writtenSubmission(), submitWork(t)}}
+	prov := &scriptedProvider{execute: []llmtest.Response{writtenSubmission(), submitWork(t)}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
@@ -510,7 +648,7 @@ func TestAnExecutorThatWroteItsSubmissionAsTextIsReAskedRatherThanRescued(t *tes
 func TestAResumedExecutorThatWroteItsSubmissionAsTextIsReAsked(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{writtenSubmission(), submitWork(t)}}
+	prov := &scriptedProvider{execute: []llmtest.Response{writtenSubmission(), submitWork(t)}}
 	// A round the pre-suspend half was corrected on stays marked across the
 	// suspend: the parked row carries the mark and the resumed record keeps
 	// it, or round 1 would read as a finish nothing finished.
@@ -567,7 +705,7 @@ func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
 		Calls: []ledger.Call{{Name: "comment_on_work_item", Result: "commented"}}}}
 
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{cite},
+		execute: []llmtest.Response{cite},
 	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
 	w, _, err := r.Execute(context.Background(), 2, "read the item first", earlier)
 	if err != nil {
@@ -581,7 +719,7 @@ func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
 	// The counterfactual: with no such round behind it, the same citation
 	// is refused every time it is made, and the phase ends in the rescue.
 	r, _ = buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{cite},
+		execute: []llmtest.Response{cite},
 	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
 	w, _, err = r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
@@ -598,7 +736,7 @@ func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *test
 	// episode record, all of which want the requester's actual ask and not
 	// the engine's running commentary on it. So the correction is prefixed
 	// to the user MESSAGE, not merged into the task.
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
 	if _, _, err := r.Execute(context.Background(), 2, "the link was wrong", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -611,7 +749,7 @@ func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *test
 	}
 	// And with no correction the message is byte-identical to its
 	// pre-correction form, which is what keeps the prompt prefix cacheable.
-	r2, prov2, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	r2, prov2, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
 	if _, _, err := r2.Execute(context.Background(), 1, "   ", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -622,12 +760,10 @@ func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *test
 
 func TestTheExecutorReportsWhatItCalledAndWhatWasMissing(t *testing.T) {
 	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{
+	r, _, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{
 		activate("slack_post"),
-		{ToolCalls: []llm.ToolCall{
-			{ID: "a", Name: "slack_post", Arguments: map[string]any{"channel": "C1"}},
-			{ID: "b", Name: "ghost_tool"},
-		}},
+		calling(callOf(t, "slack_post", map[string]any{"channel": "C1"}),
+			llmtest.Call{Name: "ghost_tool"}),
 		submitWork(t),
 	}})
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
@@ -653,11 +789,11 @@ func TestTheExecutorReportsWhatItCalledAndWhatWasMissing(t *testing.T) {
 // the executor would permanently skip orientation.
 func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if slices.Contains(toolNames(prov.requestsFor("execute")[0].Tools), runner.MarkOnboardedTool) {
+	if slices.Contains(prov.offeredFor("execute")[0], runner.MarkOnboardedTool) {
 		t.Error("the executor was offered mark_onboarded")
 	}
 }
@@ -669,7 +805,7 @@ func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
 	// the budgets belong to the cross-round ledger, not here.
 	body := strings.Repeat("x", 3000)
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	w := turn.Work{
 		Outcome: turn.OutcomeDelivered, Summary: "post it", Text: "posted",
@@ -692,7 +828,7 @@ func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
 func TestAnEmptyToolLogStillLeavesATrace(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
 		t.Fatalf("Review: %v", err)
@@ -707,7 +843,7 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	// Defaulting to done here is the difference between "the work was
 	// judged good" and "nothing judged it", and those look identical
 	// downstream.
-	r, _, _ := fixture(t, &scriptedProvider{review: []llm.Completion{text("looks fine to me")}})
+	r, _, _ := fixture(t, &scriptedProvider{review: []llmtest.Response{text("looks fine to me")}})
 	got, err := r.Review(context.Background(), 1, turn.Work{}, nil)
 	if err != nil {
 		t.Fatalf("Review: %v", err)
@@ -729,7 +865,7 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 // in prose.
 func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{review: []llm.Completion{
+	r, prov, _ := fixture(t, &scriptedProvider{review: []llmtest.Response{
 		text("Looks done to me."),
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
 	}})
@@ -755,8 +891,8 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 	// shared registry would leave one phase's answer visible to the next —
 	// or to the next turn, still holding the last one's decision.
 	r, prov, reg := fixture(t, &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-		review:  []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		execute: []llmtest.Response{submitWork(t)},
+		review:  []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
@@ -774,7 +910,7 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 		}
 	}
 	// The executor is offered its own and not the reviewer's.
-	execOffered := toolNames(prov.requestsFor("execute")[0].Tools)
+	execOffered := prov.offeredFor("execute")[0]
 	if !slices.Contains(execOffered, runner.SubmitWorkTool) {
 		t.Errorf("the executor was not offered its submission tool: %v", execOffered)
 	}
@@ -782,7 +918,7 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 		t.Errorf("the executor was offered the reviewer's tool: %v", execOffered)
 	}
 	// And the reviewer is offered its own, not the executor's.
-	reviewOffered := toolNames(prov.requestsFor("review")[0].Tools)
+	reviewOffered := prov.offeredFor("review")[0]
 	if !slices.Contains(reviewOffered, runner.SubmitReviewTool) {
 		t.Errorf("the reviewer was not offered its submission tool: %v", reviewOffered)
 	}
@@ -798,19 +934,26 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
 	t.Parallel()
 	// A reviewer that never submits burns its whole budget and then
-	// rescues, so the round count is observable.
+	// rescues, so the round count is observable. Its submission is the one
+	// tool it holds, so it keeps CALLING it — a self_iterate with no
+	// correction, which the decoder refuses — and every refused call is a
+	// round the budget counts.
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "x", Name: "lookup_colleague"}}},
+		review: []llmtest.Response{
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate"}`),
 		},
 	})
-	if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
+	got, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil)
+	if err != nil {
 		t.Fatalf("Review: %v", err)
+	}
+	if got.Decision != phase.SelfIterate || !strings.Contains(got.Notes, "produced no decision") {
+		t.Fatalf("review = %+v, want the rescue a reviewer that never decided gets", got)
 	}
 	// The executor's cap in this fixture is 6; the reviewer's is its own
 	// unexported constant, and must be neither that nor unbounded.
-	if got := len(prov.requestsFor("review")); got == 0 || got > 5 {
-		t.Errorf("the reviewer ran %d rounds, want its own small budget", got)
+	if rounds := prov.roundsOf("review"); rounds == 0 || rounds > 5 {
+		t.Errorf("the reviewer ran %d rounds, want its own small budget", rounds)
 	}
 }
 
@@ -822,6 +965,13 @@ func TestARunnerNeedsItsRegistries(t *testing.T) {
 	if _, err := runner.New(runner.Config{Registry: tools.NewRegistry()}); err == nil {
 		t.Error("a runner built with no provider registry")
 	}
+	// AND ITS SESSION HOST, which every phase's CLI reaches its tools
+	// through: without one the first phase fails, after the turn's prompts
+	// were built and its prefetch spent.
+	_, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Models: &phase.Registry{}})
+	if err == nil || !strings.Contains(err.Error(), "Config.Sessions") {
+		t.Errorf("a runner built with no session host answered %v, want a refusal naming the field", err)
+	}
 }
 
 func toolNames(defs []llm.ToolDef) []string {
@@ -832,25 +982,31 @@ func toolNames(defs []llm.ToolDef) []string {
 	return out
 }
 
-// breakingProvider answers a fixed script and then fails, so a phase can be
-// stopped at a chosen point WITH tool calls already behind it. The scripted
-// provider above cannot fail at all, and "the phase broke after it had already
-// written" is not reachable any other way.
+// breakingProvider plays a fixed script and then fails its CLI run, so a phase
+// can be stopped at a chosen point WITH tool calls already behind it. The
+// scripted provider above cannot fail at all, and "the phase broke after it had
+// already written" is not reachable any other way.
 type breakingProvider struct {
-	script []llm.Completion
-	n      int
+	script []llmtest.Response
 	err    error
+
+	mu sync.Mutex
+	n  int
 }
 
 func (p *breakingProvider) Model() string { return "breaking" }
 
-func (p *breakingProvider) Complete(_ context.Context, _ llm.Request) (*llm.Completion, error) {
-	if p.n >= len(p.script) {
-		return nil, p.err
-	}
-	c := p.script[p.n]
-	p.n++
-	return &c, nil
+func (p *breakingProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(*llmtest.Conn) (llmtest.Response, error) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.n >= len(p.script) {
+			return llmtest.Response{}, p.err
+		}
+		r := p.script[p.n]
+		p.n++
+		return r, nil
+	})
 }
 
 // A BROKEN PHASE HANDS BACK WHAT IT ALREADY DID.
@@ -865,9 +1021,9 @@ func (p *breakingProvider) Complete(_ context.Context, _ llm.Request) (*llm.Comp
 func TestABrokenExecutorReturnsTheCallsItAlreadyMade(t *testing.T) {
 	t.Parallel()
 	prov := &breakingProvider{
-		script: []llm.Completion{
+		script: []llmtest.Response{
 			activate("jira_create"),
-			{ToolCalls: []llm.ToolCall{{ID: "c", Name: "jira_create"}}},
+			calling(llmtest.Call{Name: "jira_create"}),
 		},
 		err: errors.New("the provider went away mid-loop"),
 	}

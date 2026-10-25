@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // THE PHASE SEAM AND THE PHASE EVENT ARE ONE ANNOUNCEMENT.
@@ -25,8 +25,8 @@ func TestThePhaseSeamNamesThePhaseTheEventNames(t *testing.T) {
 	pub := newCapture()
 	var seen []phase.Phase
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-		review:  []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		execute: []llmtest.Response{submitWork(t)},
+		review:  []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}}}, buildOpts{
 		pub:     pub,
 		onPhase: func(ph phase.Phase) { seen = append(seen, ph) },
@@ -68,7 +68,7 @@ func TestThePhaseSeamFiresWithNothingListening(t *testing.T) {
 	t.Parallel()
 	var seen []phase.Phase
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
+		execute: []llmtest.Response{submitWork(t)},
 	}}}, buildOpts{onPhase: func(ph phase.Phase) { seen = append(seen, ph) }})
 
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
@@ -84,7 +84,7 @@ func TestThePhaseSeamFiresWithNothingListening(t *testing.T) {
 func TestAPhaseRunsWithNoSeamWired(t *testing.T) {
 	t.Parallel()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
+		execute: []llmtest.Response{submitWork(t)},
 	}}}, buildOpts{})
 
 	w, _, err := r.Execute(context.Background(), 1, "", nil)

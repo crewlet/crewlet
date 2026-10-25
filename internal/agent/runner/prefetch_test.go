@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -35,6 +36,7 @@ func withContext(t *testing.T, prov *scriptedProvider, blocks prefetch.Blocks) *
 		Caps:     runner.Caps{ExecutorRounds: 4},
 		Task:     "post the weekly summary",
 		Context:  blocks,
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -63,7 +65,7 @@ func systemOf(t *testing.T, prov *scriptedProvider, phaseName string) string {
 // is the frame that acts, so nothing has to be forwarded from one to another.
 func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{text("working")}}
+	prov := &scriptedProvider{execute: []llmtest.Response{text("working")}}
 	r := withContext(t, prov, prefetch.Blocks{
 		ThreadContext:       "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:      "- always use semantic commits",
@@ -98,7 +100,7 @@ func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 func TestTheReviewerIsNotHandedThePrefetch(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}
 	r := withContext(t, prov, prefetch.Blocks{
 		PersonalMemory:      "- always use semantic commits",
@@ -122,7 +124,7 @@ func TestTheReviewerIsNotHandedThePrefetch(t *testing.T) {
 // agent it has a memory, or a knowledge base, that it cannot read.
 func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{text("working")}}
+	prov := &scriptedProvider{execute: []llmtest.Response{text("working")}}
 	r := withContext(t, prov, prefetch.Blocks{})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)

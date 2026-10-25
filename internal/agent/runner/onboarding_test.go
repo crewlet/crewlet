@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -79,6 +79,7 @@ func onboardingRunner(t *testing.T, store runner.Markers, latch *runner.Latch, p
 		Onboarding: runner.Onboarding{
 			Markers: store, Latch: latch, Rounds: 3, Ceiling: 0,
 		},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -86,11 +87,15 @@ func onboardingRunner(t *testing.T, store runner.Markers, latch *runner.Latch, p
 	return r
 }
 
+// markOnboarded is the response that marks the seat.
+func markOnboarded() llmtest.Response {
+	return calling(llmtest.Call{Name: runner.MarkOnboardedTool, Args: `{"notes":"read the pages"}`})
+}
+
 // marking is a provider that calls mark_onboarded on its first round.
 func marking() *scriptedProvider {
-	return &scriptedProvider{onboarding: []llm.Completion{
-		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "mark_onboarded",
-			Arguments: map[string]any{"notes": "read the pages"}}}},
+	return &scriptedProvider{onboarding: []llmtest.Response{
+		markOnboarded(),
 	}}
 }
 
@@ -123,10 +128,9 @@ func TestAnUnmarkedSeatRunsThePassAndMarks(t *testing.T) {
 // here, and is never offered it on a later round.
 func TestTheOnboardingPassIsNotShownRunSandbox(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		activate(runner.RunSandboxTool),
-		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "mark_onboarded",
-			Arguments: map[string]any{"notes": "read the pages"}}}},
+		markOnboarded(),
 	}}
 	r := onboardingRunner(t, &markers{claimHeld: true}, runner.NewLatch(), prov, runner.RunSandboxTool)
 	if _, err := r.Onboard(context.Background()); err != nil {
@@ -139,12 +143,12 @@ func TestTheOnboardingPassIsNotShownRunSandbox(t *testing.T) {
 	if !strings.Contains(system, "reflect_and_persist") {
 		t.Error("the onboarding pass's catalogue lost the tools it can call")
 	}
-	requests := prov.requestsFor("onboarding")
-	if len(requests) < 2 {
-		t.Fatalf("the pass made %d requests; the activation never got a round after it", len(requests))
+	offered := prov.offeredFor("onboarding")
+	if len(offered) < 2 {
+		t.Fatalf("the pass made %d requests; the activation never got a round after it", len(offered))
 	}
-	for i, req := range requests {
-		if slices.Contains(toolNames(req.Tools), runner.RunSandboxTool) {
+	for i, names := range offered {
+		if slices.Contains(names, runner.RunSandboxTool) {
 			t.Errorf("onboarding round %d was offered run_sandbox, which activate_tool reached", i+1)
 		}
 	}
@@ -264,7 +268,7 @@ func TestAPassThatDoesNotMarkRetriesNextTurn(t *testing.T) {
 	// just ends, and the next turn tries again.
 	store := &markers{claimHeld: true}
 	latch := runner.NewLatch()
-	silent := &scriptedProvider{onboarding: []llm.Completion{text("I had a look around.")}}
+	silent := &scriptedProvider{onboarding: []llmtest.Response{text("I had a look around.")}}
 	r := onboardingRunner(t, store, latch, silent)
 
 	if ran, err := r.Onboard(context.Background()); !ran || err != nil {
@@ -287,10 +291,9 @@ func TestAPassThatDoesNotMarkRetriesNextTurn(t *testing.T) {
 func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
 	t.Parallel()
 	store := &markers{claimHeld: true}
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		text("I have read everything I need."),
-		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "mark_onboarded",
-			Arguments: map[string]any{"notes": "read the pages"}}}},
+		markOnboarded(),
 	}}
 	latch := runner.NewLatch()
 	r := onboardingRunner(t, store, latch, prov)
@@ -343,6 +346,7 @@ func TestAZeroBudgetDisablesThePass(t *testing.T) {
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,
 		Onboarding: runner.Onboarding{Markers: store, Latch: runner.NewLatch(), Rounds: 0},
+		Sessions:   sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -366,13 +370,13 @@ func TestTheOnboardingSurfaceCannotSubmitWork(t *testing.T) {
 	if _, err := r.Onboard(context.Background()); err != nil {
 		t.Fatalf("Onboard: %v", err)
 	}
-	reqs := prov.requestsFor("onboarding")
-	if len(reqs) == 0 {
+	offered := prov.offeredFor("onboarding")
+	if len(offered) == 0 {
 		t.Fatal("the pass never called the model")
 	}
-	for _, def := range reqs[0].Tools {
-		if def.Name == runner.SubmitWorkTool || def.Name == runner.SubmitReviewTool {
-			t.Errorf("the onboarding surface offers %s", def.Name)
+	for _, name := range offered[0] {
+		if name == runner.SubmitWorkTool || name == runner.SubmitReviewTool {
+			t.Errorf("the onboarding surface offers %s", name)
 		}
 	}
 }
@@ -397,7 +401,7 @@ func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 	if len(reqs) == 0 {
 		t.Fatal("the pass never called the model")
 	}
-	offered := toolNames(reqs[0].Tools)
+	offered := prov.offeredFor("onboarding")[0]
 	for _, want := range []string{runner.ListMCPToolsTool, runner.ActivateTool} {
 		if !slices.Contains(offered, want) {
 			t.Errorf("the onboarding surface offers %v, without %s: the pass "+

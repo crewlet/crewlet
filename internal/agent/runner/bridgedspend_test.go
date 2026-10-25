@@ -69,6 +69,7 @@ func TestAnAgentRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
 		Subagent: &runner.SubagentConfig{Limits: shipped()},
 		Turn: runner.Turn{RunID: "t-bridge", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-bridge", WorkKey: "wk-bridge", AuxSpend: segment}},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
