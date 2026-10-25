@@ -198,12 +198,11 @@ live-editable, so the first version does not need to be the last.
    engine runs it reads the company's values through it, so it is run beside
    it with `CREWLET_API_TOKEN` set to one of the node's Tier A tokens (or with
    `-api URL` naming a running node). A member of a cluster whose engine is
-   stopped cannot reach the store alone, and refuses it, naming `-api`. If
-   they want a plan with
-   a key behind it, that is two entries on the same CLI and a list:
-   `llm: [plan, key]`. A cheap, fast entry for `llm_auxiliary` is worth
-   suggesting once the company grows: every auxiliary call pays a CLI launch
-   under a fixed deadline. See
+   stopped cannot reach the store alone, so the doctor is refused there,
+   naming `-api`. If they want a plan with a key behind it, that is two
+   entries on the same CLI and a list: `llm: [plan, key]`. A cheap, fast entry
+   for `llm_auxiliary` is worth suggesting once the company grows: every
+   auxiliary call pays a CLI launch under a fixed deadline. See
    [LLM Backends](https://docs.crewlet.ai/engine/latest/concepts/llm-backends/).
 
    Ask whether they want a cost ceiling, and on which window:
