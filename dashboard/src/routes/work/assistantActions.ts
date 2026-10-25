@@ -1,6 +1,8 @@
 /**
- * What the work list takes from the assistant: its filters and its
- * arrangement, written to the address exactly as its own controls write them.
+ * What the work list takes from the assistant: its filters
+ * (`work.filter.apply`), their Clear (`work.filters.clear`) and its
+ * arrangement (`work.arrange.set`), written to the address exactly as its own
+ * controls write them.
  *
  * THE KEYS ARE `URL_HOMES`', never a second list: every key the grammar
  * calls a chip (a narrowing) or an arrangement (how the same answer is
@@ -27,9 +29,6 @@ import {
   type LabelContext,
   type TrackerFilters,
 } from "~/lib/work.ts";
-
-/** The work list's one page action. */
-export const WORK_FILTER_ACTION = "work.filter.apply";
 
 /** A narrowing's value, as its chip words it: the chips' own words, never new copy. */
 function chipWords(name: string, value: string, labels: LabelContext): string {
@@ -67,13 +66,17 @@ function axisCheck(value: string): string | null {
 }
 
 /**
- * The keys the work list's page action may write, each with the label and
- * the words its own control uses.
+ * The keys a page action over the work list may write, by `URL_HOMES`' home:
+ * the chips (`work.filter.apply`) or the arrangement (`work.arrange.set`),
+ * each with the label and the words its own control uses.
  */
-export function workFilterKeys(labels: LabelContext): Record<string, UrlActionKey> {
+export function workKeys(
+  home: "chip" | "arrangement",
+  labels: LabelContext,
+): Record<string, UrlActionKey> {
   const keys: Record<string, UrlActionKey> = {};
-  for (const [name, home] of Object.entries(URL_HOMES)) {
-    if (home !== "chip" && home !== "arrangement") continue;
+  for (const [name, at] of Object.entries(URL_HOMES)) {
+    if (at !== home) continue;
     if (home === "chip") {
       keys[name] = {
         label: name === "f." ? "Field" : chipLabel(name, labels),
@@ -117,6 +120,31 @@ export function workFilterKeys(labels: LabelContext): Record<string, UrlActionKe
     }
   }
   return keys;
+}
+
+/**
+ * The keys Clear writes (`clearFiltersPatch`): every chip and the segment,
+ * which is the one key it touches that is not a chip.
+ */
+export function workClearKeys(labels: LabelContext): Record<string, UrlActionKey> {
+  return {
+    ...workKeys("chip", labels),
+    scope: {
+      label: "Segment",
+      history: "filter",
+      words: (v) => v.charAt(0).toUpperCase() + v.slice(1),
+    },
+  };
+}
+
+/** A patch without the keys a host locks, which are what the page is and never the assistant's to clear. */
+export function withoutLocked(
+  patch: Readonly<Record<string, string | null>>,
+  lock: Readonly<Record<string, string>> | undefined,
+): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const [k, v] of Object.entries(patch)) if (!lock || !Object.hasOwn(lock, k)) out[k] = v;
+  return out;
 }
 
 /**

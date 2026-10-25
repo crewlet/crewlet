@@ -1653,6 +1653,33 @@ export const URL_HOMES: Record<string, ControlHome> = {
 };
 
 /**
+ * What Clear writes: every narrowing off the address, as one patch.
+ *
+ * EVERY KEY THE GRAMMAR CALLS A CHIP, from [URL_HOMES] rather than from a
+ * list written out by hand. Written out, the screen's own copy was missing
+ * `unit` (a key no control on the list writes, which is exactly why nobody
+ * noticed), so a list reached from an item's own "Filed into" line could not
+ * be widened again by the control that offers to do it. One function, so the
+ * Clear button and the assistant's `work.filters.clear` clear the same set.
+ *
+ * A FAMILY IS NOT A KEY: the company's own fields are one key per declared
+ * field, so what is cleared is whichever of them the address holds
+ * (`fieldKeys`). AND THE SEGMENT, the one key Clear touches that is not a
+ * chip: it decides which half of the company is on screen, so a "nothing
+ * matched" that could not widen it would undo less than it says. It returns
+ * to the VIEW's segment, since dropping the key lets the view supply it.
+ */
+export function clearFiltersPatch(fieldKeys: Iterable<string>): Record<string, null> {
+  const patch: Record<string, null> = {};
+  for (const [key, home] of Object.entries(URL_HOMES)) {
+    if (home === "chip" && !key.endsWith(".")) patch[key] = null;
+  }
+  for (const key of fieldKeys) patch[key] = null;
+  patch.scope = null;
+  return patch;
+}
+
+/**
  * The `work_items` parameters one screen state asks for.
  *
  * # A view is a set of DEFAULTS and every explicit key overrides it

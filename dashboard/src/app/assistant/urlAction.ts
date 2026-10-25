@@ -68,6 +68,12 @@ export interface UrlActionOptions {
   blocked?: (patch: UrlPatch) => string | null;
   /** Whether the person approves it first; only a pure view change may say `none` (D11). */
   confirm?: "approve" | "none";
+  /**
+   * For an action that takes NO arguments (Clear): the patch the screen
+   * writes, computed from the address at the moment it is asked. Only the
+   * keys the address holds are written, so the card lists what goes.
+   */
+  preset?: () => UrlPatch;
 }
 
 /** The most keys one patch writes; a list has fewer controls than this. */
@@ -150,6 +156,22 @@ export function parseUrlPatch(
   return { ok: true, value: out };
 }
 
+/** An action that takes no arguments: nothing, or an empty object, and the screen's own patch. */
+function parsePreset(raw: unknown, preset: () => UrlPatch): PageActionParse<UrlPatch> {
+  const empty =
+    raw === null ||
+    raw === undefined ||
+    (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
+  if (!empty) return { ok: false, reason: "That change takes no settings." };
+  const { query } = liveQuery();
+  const patch: Record<string, string | null> = {};
+  for (const [name, value] of Object.entries(preset())) {
+    if (held(query, name) !== (value === "" ? null : value)) patch[name] = value;
+  }
+  if (Object.keys(patch).length === 0) return { ok: false, reason: "There is nothing to clear." };
+  return { ok: true, value: patch };
+}
+
 /**
  * A page action that writes address keys, by `id`, ready to spread into a
  * screen's `useAssistantContext` actions.
@@ -167,12 +189,12 @@ export function urlAction(
   };
   const spec: PageActionSpec<UrlPatch> = {
     scope: options.scope,
-    parse: (raw) => parseUrlPatch(raw, keys),
+    parse: (raw) => (options.preset ? parsePreset(raw, options.preset) : parseUrlPatch(raw, keys)),
     preview: (patch) => {
       const { query } = liveQuery();
       return Object.entries(patch).map(([name, value]) => ({
         field: keyOf(keys, name)?.label ?? name,
-        next: words(name, value) ?? "Not set",
+        next: words(name, value) ?? "Cleared",
         current: words(name, held(query, name)),
       }));
     },
