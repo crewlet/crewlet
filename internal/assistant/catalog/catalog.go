@@ -65,6 +65,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -321,6 +322,20 @@ func (t Tool) RouteOf(req exec.Request) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// StepRequest is how a step shows the request req makes: its method, and the
+// path pattern of the tool's route it matches, without the method the route
+// pattern starts with, since the step carries the method apart. THE ONE RULE
+// for a step's request, so a step never reads "GET GET /work/{id}". False
+// where req matches none of the tool's routes.
+func (t Tool) StepRequest(req exec.Request) (*wire.StepRequest, bool) {
+	route, ok := t.RouteOf(req)
+	if !ok {
+		return nil, false
+	}
+	_, path, _ := strings.Cut(route, " ")
+	return &wire.StepRequest{Method: req.Method, Route: path}, true
 }
 
 // CardFor is the spec a call's answer is carded by.

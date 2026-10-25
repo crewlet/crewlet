@@ -309,3 +309,32 @@ func TestEveryStepIsASentence(t *testing.T) {
 		t.Errorf("a page change reads %q", got)
 	}
 }
+
+// A STEP SHOWS ITS METHOD ONCE: every read's step carries the method apart and
+// the route as a path pattern, so the drawer's "get_task · GET /work/{id}"
+// never doubles the method. Mutation: show the whole route pattern and every
+// read fails.
+func TestAStepShowsItsRouteWithoutTheMethod(t *testing.T) {
+	t.Parallel()
+	for _, tool := range catalog.Tools() {
+		if tool.Kind != catalog.KindRead {
+			continue
+		}
+		req, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
+		if err != nil {
+			t.Errorf("%s: %v", tool.Name, err)
+			continue
+		}
+		shown, ok := tool.StepRequest(req)
+		if !ok || shown.Method != req.Method || !strings.HasPrefix(shown.Route, "/") {
+			t.Errorf("%s's step shows %+v for %s %s", tool.Name, shown, req.Method, req.Path)
+		}
+	}
+	req, err := mustTool(t, "get_task").Request(map[string]any{"item": "ENG-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown, _ := mustTool(t, "get_task").StepRequest(req); shown.Route != "/work/{id}" {
+		t.Errorf("get_task's step shows the route %q, want /work/{id}", shown.Route)
+	}
+}

@@ -118,7 +118,8 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
 	}
 	route, _ := tool.RouteOf(req)
-	step := s.t.stepStart(tool, args, &wire.StepRequest{Method: req.Method, Route: route})
+	shown, _ := tool.StepRequest(req)
+	step := s.t.stepStart(tool, args, shown)
 	resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, req)
 	if err != nil {
 		return s.unsent(ctx, step, tool, route, err)
@@ -255,8 +256,8 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 	var request *wire.StepRequest
 	if probe != nil {
 		request = &wire.StepRequest{Method: probe.Method, Route: link.Screen}
-		if route, ok := tool.RouteOf(*probe); ok {
-			request.Route = route
+		if shown, ok := tool.StepRequest(*probe); ok {
+			request = shown
 		}
 	}
 	step := s.t.stepStart(tool, args, request)
