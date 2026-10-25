@@ -296,6 +296,16 @@ func runFakeCLI() {
 		default:
 			fmt.Print(os.Getenv("FAKE_STDOUT"))
 		}
+	case os.Getenv("FAKE_STREAM_ARG") != "":
+		// A streamed variant is chosen per call, so the fake answers with
+		// the stream only when the call's argv carries the variant's
+		// argument: a test then knows which argv the call ran from what
+		// came back.
+		if slices.Contains(os.Args, os.Getenv("FAKE_STREAM_ARG")) {
+			fmt.Print(os.Getenv("FAKE_STREAM_STDOUT"))
+		} else {
+			fmt.Print(os.Getenv("FAKE_STDOUT"))
+		}
 	default:
 		fmt.Print(os.Getenv("FAKE_STDOUT"))
 	}

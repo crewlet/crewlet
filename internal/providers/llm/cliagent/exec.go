@@ -607,7 +607,7 @@ func extractStream(p cliprofile.Profile, stdout string) extracted {
 				continue
 			}
 			if text.Len() > 0 {
-				text.WriteString("\n")
+				text.WriteString(eventSeparator)
 			}
 			text.WriteString(chunk)
 		}
@@ -735,18 +735,32 @@ func usageSource(p cliprofile.Profile) string {
 // and then repeated the reply would look, to every frame downstream, exactly
 // like a model that had said all of it.
 func textOf(p cliprofile.Profile, doc map[string]any) (string, bool) {
-	if len(p.EventTypePath) == 0 {
-		return firstString(doc, p.TextPaths)
+	return eventString(p, doc, p.TextEvents, p.TextPaths)
+}
+
+// deltaOf reads a fragment of the answer out of ONE line of a jsonl stream,
+// through the profile's delta paths and their own event filter
+// ([cliprofile.Profile.DeltaPaths]).
+func deltaOf(p cliprofile.Profile, doc map[string]any) (string, bool) {
+	return eventString(p, doc, p.DeltaEvents, p.DeltaPaths)
+}
+
+// eventString reads the first string at paths in one stream line whose
+// discriminator is one of events, or in any line when the profile names no
+// discriminator or events names none.
+func eventString(p cliprofile.Profile, doc map[string]any, events []string, paths []cliprofile.Path) (string, bool) {
+	if len(p.EventTypePath) == 0 || len(events) == 0 {
+		return firstString(doc, paths)
 	}
 	kind, ok := lookup(doc, p.EventTypePath)
 	if !ok {
 		return "", false
 	}
 	name, isString := kind.(string)
-	if !isString || !slices.Contains(p.TextEvents, name) {
+	if !isString || !slices.Contains(events, name) {
 		return "", false
 	}
-	return firstString(doc, p.TextPaths)
+	return firstString(doc, paths)
 }
 
 // classifyFailureEvents is the [cliprofile.MarkerScopeEvents] scope: every

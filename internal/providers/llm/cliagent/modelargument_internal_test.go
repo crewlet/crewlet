@@ -49,7 +49,7 @@ func TestTheRunsModelIsTheValueEveryTextCallPasses(t *testing.T) {
 		}
 		// The text call's own argv carries the same value, in the
 		// element the profile spells it in.
-		if argv := p.argv(); !slices.Contains(argv, tc.textArg) {
+		if argv := p.argv(&p.profile); !slices.Contains(argv, tc.textArg) {
 			t.Errorf("%s: a text call passes %v, the run %q", tc.name, argv, p.ModelArgument())
 		}
 	}

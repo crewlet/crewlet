@@ -464,7 +464,7 @@ func (p *Provider) localToolsStance() string {
 // refused is good news worth printing. The second return is the problem line,
 // empty when there is none.
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
-	comp, err := p.Complete(ctx, probeRequest(shellProbePrompt))
+	comp, err := p.Complete(ctx, watched(probeRequest(shellProbePrompt)))
 	if err != nil {
 		return "probe failed — " + err.Error(), ""
 	}
@@ -511,7 +511,7 @@ func (p *Provider) webStance() string {
 // says it cannot.
 func (p *Provider) webProbe(ctx context.Context) (verdict, problem string) {
 	denied := p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied
-	comp, err := p.Complete(ctx, probeRequest(webProbePrompt))
+	comp, err := p.Complete(ctx, watched(probeRequest(webProbePrompt)))
 	if err != nil {
 		return "probe failed: " + err.Error(), "the web probe failed: " + err.Error()
 	}
@@ -711,6 +711,19 @@ func smokeRequest() llm.Request {
 			"required":   []any{"ok"},
 		},
 	}}
+	return watched(req)
+}
+
+// watched is a probe's request as every production call that matters sends
+// it: STREAMED, as a seat's round on the live view and a Dashboard Assistant
+// answer are. A streamed call runs the profile's streamed variant where it has
+// one ([Provider.profileFor]), so a probe that asked for none would prove the
+// web denied, the shell refused and the envelope readable on an argv and a
+// stream reading no such call uses. Nothing watches the fragments; the probe
+// reads the completion, which a streamed call returns exactly as an unwatched
+// one does.
+func watched(req llm.Request) llm.Request {
+	req.OnDelta = func(llm.Delta) {}
 	return req
 }
 
