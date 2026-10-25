@@ -32,7 +32,7 @@ export const WHEN_YOU_ADOPT: readonly { key: string; icon: ReactNode; text: stri
 
 export function WhenYouAdopt() {
   return (
-    <Section title="When you adopt" spacing="tight">
+    <Section title="When you adopt" spacing="tight" className="brand-when-you-adopt">
       <List variant="plain" density="compact">
         {WHEN_YOU_ADOPT.map((item) => (
           <ListItem key={item.key} leading={item.icon}>

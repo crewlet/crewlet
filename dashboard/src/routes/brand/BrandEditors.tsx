@@ -262,7 +262,10 @@ export function ColourFields({ edit, onEdit }: Omit<BrandEditorProps, "assets">)
             optional={!spec.required}
             helper={empty && fallback ? `${spec.description}. ${fallback.note}` : spec.description}
             onChange={(value) => set(spec.role, value)}
-            {...(fallback?.placeholder ? { labels: { placeholder: fallback.placeholder } } : {})}
+            // THE FIELD DRAWS ITS OWN #, so the default is shown as its six digits.
+            {...(fallback?.placeholder
+              ? { labels: { placeholder: fallback.placeholder.replace(/^#/, "") } }
+              : {})}
           />
         );
       })}

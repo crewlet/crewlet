@@ -258,10 +258,13 @@
 .brand-review-line {
   margin: var(--spacing-1) 0 0;
 }
+/* Three a row where they fit, two and one on a phone, so a slot is never so
+   narrow that its name wraps over a logo drawn too small to read. */
 .brand-review-logos {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-2);
+  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
+  gap: var(--spacing-3);
+  align-items: start;
 }
 .brand-review-swatches,
 .brand-review-faces,
@@ -272,6 +275,12 @@
 }
 .brand-review-before-body {
   gap: var(--spacing-4);
+}
+/* "When you adopt" heads its three items at the small step: it sits under a
+   dialog's title or a card's, which it must never outrank (the register is
+   the container's to set, `Section`). */
+.brand-when-you-adopt {
+  --crewlet-section-title-size: var(--font-size-sm);
 }
 /* A brand kit's gallery cover: the sample doc on its own ground, filling the card. */
 .artifacts-preview-brand {
