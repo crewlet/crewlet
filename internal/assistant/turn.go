@@ -152,7 +152,7 @@ func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepR
 // stepEnd closes a step in its final state: shown, recorded in the
 // transcript, counted and kept for the turn's audit record. status and bytes
 // are the route's answer, zero for a step that sent nothing.
-func (t *turn) stepEnd(step stepClock, state wire.StepState, summary string,
+func (t *turn) stepEnd(ctx context.Context, step stepClock, state wire.StepState, summary string,
 	refusal *wire.Refusal, status, bytes int) {
 
 	ev := step.StepEvent
@@ -161,7 +161,7 @@ func (t *turn) stepEnd(step stepClock, state wire.StepState, summary string,
 	t.emit(wire.Frame{Kind: wire.EventStep, Step: &ev})
 	t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
 		State: wire.StatusThinking, StepsDone: ev.Index}})
-	t.record("step", func(ctx context.Context, w Write) error {
+	t.record(ctx, "step", func(ctx context.Context, w Write) error {
 		return t.svc.records.RecordStep(ctx, w.Step("step", strconv.Itoa(ev.Index)), t.id, ev)
 	})
 	t.svc.metrics.Add(metrics.AssistantSteps, 1, metrics.Attrs{"state": string(state)})
@@ -193,7 +193,7 @@ func (t *turn) emitCard(ctx context.Context, card wire.Card, apps []string) {
 	t.mu.Unlock()
 	ev := wire.CardEvent{CardID: assistantdomain.CardID(t.id, n), MessageID: message, Card: card}
 	t.emit(wire.Frame{Kind: wire.EventCard, Card: &ev})
-	t.record("card", func(ctx context.Context, w Write) error {
+	t.record(ctx, "card", func(ctx context.Context, w Write) error {
 		return t.svc.records.RecordCard(ctx, w.Step("card", strconv.Itoa(n)), t.id, ev, apps)
 	})
 }
@@ -202,8 +202,8 @@ func (t *turn) emitCard(ctx context.Context, card wire.Card, apps []string) {
 // own, since what it records already happened. A record that fails is logged
 // and never fails the turn: the person saw it live, and only a reload will
 // miss it.
-func (t *turn) record(what string, write func(context.Context, Write) error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.ctx), recordTimeout)
+func (t *turn) record(ctx context.Context, what string, write func(context.Context, Write) error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 	if err := write(ctx, t.write()); err != nil {
 		t.svc.log.WarnContext(ctx, "assistant_record_failed", "turn", t.id, "record", what,
@@ -323,7 +323,7 @@ func (t *turn) run(r loopRun) {
 		tracing.Fail(span, err)
 	}
 	if r.fresh && end.State == wire.TurnCompleted {
-		t.svc.title(t, r.question, t.answerText(), r.meter)
+		t.svc.title(ctx, t, r.question, t.answerText(), r.meter)
 	}
 }
 
@@ -348,14 +348,14 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 		id := t.answer
 		t.mu.Unlock()
 		answer = &id
-		t.record("answer", func(ctx context.Context, w Write) error {
+		t.record(ctx, "answer", func(ctx context.Context, w Write) error {
 			return t.svc.records.RecordMessage(ctx, w.Step("message", "answer"), t.id,
 				assistantdomain.NewMessage{ID: id, Role: wire.RoleAssistant, Text: text})
 		})
 	}
 
 	if state == wire.TurnWaitingForApproval {
-		if parkErr := t.park(res); parkErr != nil {
+		if parkErr := t.park(ctx, res); parkErr != nil {
 			t.svc.log.ErrorContext(ctx, "assistant_park_failed", "turn", t.id,
 				"error", redact.Secrets(parkErr.Error()))
 			state, failure = wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorInternal,
@@ -364,7 +364,7 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 		}
 	}
 	if state != wire.TurnWaitingForApproval {
-		t.record("close", func(ctx context.Context, w Write) error {
+		t.record(ctx, "close", func(ctx context.Context, w Write) error {
 			return t.svc.records.CloseTurn(ctx, w.Step("close"), t.id, end)
 		})
 	} else {
@@ -480,7 +480,7 @@ type parked struct {
 const parkedVersion = 1
 
 // park records the suspended loop beside the turn.
-func (t *turn) park(res *toolloop.Result) error {
+func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	t.mu.Lock()
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
@@ -494,7 +494,7 @@ func (t *turn) park(res *toolloop.Result) error {
 		return fmt.Errorf("the parked loop is %d bytes, over the %d a turn may park",
 			len(raw), ParkedMaxBytes)
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.ctx), recordTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 	return t.svc.records.ParkTurn(ctx, t.write().Step("park"), t.id, raw)
 }

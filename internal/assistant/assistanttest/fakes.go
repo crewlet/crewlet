@@ -33,7 +33,10 @@ type Grant struct {
 
 var _ exec.Grant = Grant{}
 
-func (g Grant) ID() uuid.UUID      { return g.GrantID }
+// ID implements [exec.Grant].
+func (g Grant) ID() uuid.UUID { return g.GrantID }
+
+// Expires implements [exec.Grant].
 func (g Grant) Expires() time.Time { return g.ExpiresAt }
 
 // Dispatcher answers each request with what its handler says and records
@@ -54,6 +57,7 @@ type Sent struct {
 
 var _ exec.Dispatcher = (*Dispatcher)(nil)
 
+// Do implements [exec.Dispatcher].
 func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return exec.Response{}, err
@@ -90,12 +94,14 @@ type Revoker struct {
 
 var _ assistant.Revoker = (*Revoker)(nil)
 
+// Revoke implements [assistant.Revoker].
 func (r *Revoker) Revoke(id uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.grants = append(r.grants, id)
 }
 
+// RevokeTurn implements [assistant.Revoker].
 func (r *Revoker) RevokeTurn(turn uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -112,6 +118,7 @@ func (r *Revoker) Revoked(id uuid.UUID) bool {
 // Catalogue offers a fixed list of tools to everybody.
 type Catalogue []catalog.Tool
 
+// Offered implements [assistant.Catalogue].
 func (c Catalogue) Offered(iam.Principal, []string) []catalog.Tool { return slices.Clone(c) }
 
 // Tool is the catalogue's own tool of that name, the one a suite drives a
@@ -133,6 +140,7 @@ type Models struct {
 	Err   error
 }
 
+// Chain implements [assistant.Models].
 func (m Models) Chain(context.Context, iam.Principal, auxspend.Use) (llm.Provider, string, error) {
 	if m.Err != nil {
 		return nil, "", m.Err
@@ -143,6 +151,7 @@ func (m Models) Chain(context.Context, iam.Principal, auxspend.Use) (llm.Provide
 // Budget hands every turn one meter, or none.
 type Budget struct{ M toolloop.BudgetMeter }
 
+// Meter implements [assistant.Budget].
 func (b Budget) Meter(context.Context, iam.Principal) (toolloop.BudgetMeter, error) {
 	return b.M, nil
 }
@@ -151,10 +160,12 @@ func (b Budget) Meter(context.Context, iam.Principal) (toolloop.BudgetMeter, err
 // refused before it is made.
 type FullMeter struct{ ResetsAt time.Time }
 
+// Spend implements [toolloop.BudgetMeter].
 func (m FullMeter) Spend(context.Context, int) (toolloop.SpendOutcome, error) {
 	return m.outcome(), nil
 }
 
+// Refused implements [toolloop.BudgetMeter].
 func (m FullMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	return m.outcome(), true
 }
@@ -170,6 +181,7 @@ type Audit struct {
 	events []*events.Event
 }
 
+// Publish implements [assistant.AuditPublisher].
 func (a *Audit) Publish(_ context.Context, _ string, ev *events.Event) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -187,9 +199,14 @@ func (a *Audit) Events() []*events.Event {
 // Metrics records nothing a suite asserts on.
 type Metrics struct{}
 
-func (Metrics) Add(string, uint64, metrics.Attrs)            {}
+// Add implements [assistant.Metrics].
+func (Metrics) Add(string, uint64, metrics.Attrs) {}
+
+// Observe implements [assistant.Metrics].
 func (Metrics) Observe(string, time.Duration, metrics.Attrs) {}
-func (Metrics) Set(string, float64, metrics.Attrs)           {}
+
+// Set implements [assistant.Metrics].
+func (Metrics) Set(string, float64, metrics.Attrs) {}
 
 // Task is GET /work/{id}'s answer for one task, as the route writes it.
 func Task(key, title, body string) exec.Response {
