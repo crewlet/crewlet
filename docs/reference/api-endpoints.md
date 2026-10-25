@@ -1011,7 +1011,7 @@ bytes (it is rendered into the authentication trail beside the op, so it
 names which cause fired rather than narrating), and a permission this build
 does not know, **added** — by a create, an invitation, `add_grants` or a
 whole-set `grants` naming one the row does not already carry — which is
-refused naming the three; one already on the row is kept, and
+refused naming the four; one already on the row is kept, and
 `remove_grants` may name it. An enrolment is one record, so a
 refused create leaves nothing behind and the corrected retry lands.
 
@@ -1036,7 +1036,7 @@ refused create leaves nothing behind and the corrected retry lands.
 The body is `{kind, email, seat, login, name, grants, reason}`, and `kind`
 defaults to `person`. `email`, `seat` and `login` are trimmed before anything
 judges them. **`grants` is required**, for a person and a service account
-alike (any of `admin`, `worklet` and `doclet`, and `[]` for the
+alike (any of `admin`, `worklet`, `doclet` and `artifacts`, and `[]` for the
 [overview](../concepts/identity-and-access.md#everybodys-overview) alone), and
 an omitted field is `400 invalid_body` naming `grants`, decided before any key
 is read or link minted: a person enrolled with every app and one enrolled with
@@ -1131,7 +1131,7 @@ a permission it cannot carry. The answer is `201` with
 |---|---|
 | `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
 | `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, an owner already holding 64 live credentials — a revoked or expired one gives up its place to the new token, the earliest to lapse first, so revoking a token nothing uses makes room at once |
-| `400 invalid_body` (`field: grants`) | A permission this build does not know, named beside the three |
+| `400 invalid_body` (`field: grants`) | A permission this build does not know, named beside the four |
 | `403` | The request presented a machine token (`token_refused`); a **person's** token asked for by anybody but that person; a service account's asked for without `admin`; a permission the owner does not hold; a permission the caller does not hold; an owner who may not act |
 | `404` | Nobody by that id |
 
@@ -1173,7 +1173,7 @@ remove them. A **service account** is unbound with `seat: ""`.
 
 **Grants are the whole set or a change to it, never both.** `grants` replaces
 what the person holds — what `crewlet iam grant` sends, stating it outright —
-among `admin`, `worklet` and `doclet`; `admin` includes every app, and the
+among `admin`, `worklet`, `doclet` and `artifacts`; `admin` includes every app, and the
 dashboard and the CLI store every app beside it, so taking admin away later
 leaves the apps.
 `add_grants` and `remove_grants` are applied to what they hold **when the
@@ -1189,7 +1189,7 @@ a `login` of `""` (a login is never cleared, only changed), a `stage` this
 build cannot name, a `reason` past 256 bytes, `grants` beside `add_grants` or
 `remove_grants`, a name in both, a name this build does not know **added** —
 in `add_grants`, or in a whole `grants` naming one the row does not already
-carry (`400`, naming the three); `remove_grants` may name one, and one already
+carry (`400`, naming the four); `remove_grants` may name one, and one already
 on the row is kept and ignored — and permissions the caller may not confer
 (`403`). What only a later record can decide — a grant the caller's own
 row stopped letting them confer a moment ago — is refused by that record, and
@@ -1234,7 +1234,7 @@ document with no form.
 `POST /iam/invitations` takes `{email, seat, grants, reason}` and answers
 `201` with `{id, url, expires_at, seat, detail}` beside the `outcome`, `op_id`
 and `position`. **`grants` is required**, as on `POST /iam/people`: what the
-link confers (any of `admin`, `worklet` and `doclet`, `[]` for the
+link confers (any of `admin`, `worklet`, `doclet` and `artifacts`, `[]` for the
 overview alone), and an omitted field or a name this build does not know is
 `400 invalid_body` naming `grants`, decided before any key is read or link
 minted. **`seat` is required**: every invitation names the human seat

@@ -465,8 +465,8 @@ from the keyboard, and on the seat's page). Press **Invite** — the dialog is
 for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
-- **your access**: tick **Admin**, which ticks and locks both apps (Worklet
-  and Doclet) beside it. The founder token holds `admin`, and nobody can
+- **your access**: tick **Admin**, which ticks and locks every app (Worklet,
+  Doclet and Artifacts) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
