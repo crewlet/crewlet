@@ -109,6 +109,50 @@ func TestAnAbandonedAttemptIsKeptAndTheRetryStartsClean(t *testing.T) {
 	}
 }
 
+// A RETRACTION ERASES, IT DOES NOT ABANDON. The backend streamed a view it
+// could not stand behind once the call ended; no model gave up, so nothing is
+// kept as an abandoned attempt, and the text after the retraction is the
+// answer from its start rather than a continuation of the retracted view.
+func TestARetractedViewIsErasedRatherThanKeptAsAnAbandonedAttempt(t *testing.T) {
+	t.Parallel()
+	p := &streamingProvider{
+		fragments: []llm.Delta{
+			{Content: "The sea st"},
+			{Retract: true},
+			{Content: "The tide turns"},
+		},
+		final: llm.Completion{Content: "The tide turns"},
+	}
+	var views []toolloop.Partial
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{}, MaxRounds: 2,
+		StreamPartials: true, PartialInterval: time.Nanosecond,
+		OnProgress: func(live toolloop.Result) {
+			if live.Partial != nil {
+				views = append(views, *live.Partial)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	erased := false
+	for i, v := range views {
+		if len(v.Abandoned) != 0 {
+			t.Errorf("view %d keeps %#v as abandoned; a retraction is not a failed attempt", i, v.Abandoned)
+		}
+		if v.Content == "" && i > 0 && views[i-1].Content != "" {
+			erased = true
+		}
+	}
+	if !erased {
+		t.Errorf("views %#v: the retraction was never published as an erased view", views)
+	}
+	if last := views[len(views)-1].Content; last != "The tide turns" {
+		t.Errorf("last view = %q, want the answer from its start", last)
+	}
+}
+
 // Streaming is opt-in per call. Twelve of the thirteen call sites in this
 // engine want an answer, not a running commentary, and must keep taking the
 // unary path untouched.

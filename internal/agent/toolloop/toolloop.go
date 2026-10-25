@@ -1198,6 +1198,18 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 					last = time.Now()
 					return
 				}
+				if d.Retract {
+					// The text shown so far was a view the backend could
+					// not stand behind (see [llm.Delta.Retract]). ERASED,
+					// not kept as abandoned: no attempt failed, and what
+					// follows is this same answer from its start. Published
+					// at once, so no reader goes on drawing the retracted
+					// text for a whole interval.
+					partial.Content = ""
+					publish(roundsUsed, nil)
+					last = time.Now()
+					return
+				}
 				partial.Content += d.Content
 				// COALESCED on the clock, not on every fragment. The
 				// socket hub broadcasts one frame per progress event with
