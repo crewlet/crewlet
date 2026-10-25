@@ -339,9 +339,10 @@ func (t *turn) run(r loopRun) {
 		MaxRounds: r.steps + 1, AllowSuspend: true, Budget: r.meter,
 		Fence: t.fence, OnProgress: t.onProgress, Progress: progress,
 		// STREAMED, so a round's prose reaches the drawer while it is
-		// written. A CLI that cannot stream never sends a fragment, and its
-		// round arrives whole when it commits, as before.
-		StreamPartials: true,
+		// written, through the CLI's token stream where it has one. A CLI
+		// that cannot stream never sends a fragment, and its round arrives
+		// whole when it commits, as before.
+		StreamPartials: true, StreamTokens: true,
 	})
 	if res == nil {
 		snap := progress.Snapshot()
