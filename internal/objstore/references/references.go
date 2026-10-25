@@ -43,7 +43,8 @@
 // shorter than the longest read of what it names deletes the object under
 // that read. So a retired declaration never lands alone: the gate refuses one
 // without a reviewed entry naming its domain's grace, the largest object its
-// rows name and the job that sweeps them, and holds that grace above the
+// rows name and what sweeps them — a job of the engine's maintenance worker,
+// or a duty whose records delete them — and holds that grace above the
 // longest read of that object ([objstore.ReadBudget]) by more than the clocks
 // stamping and sweeping a row can disagree.
 //

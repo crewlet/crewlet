@@ -407,9 +407,12 @@ type retirement struct {
 	// bounds the longest read the grace has to outlast.
 	largest int64
 
-	// sweep is the job that deletes a retired row once its grace has
-	// passed, as the engine's sweep list
-	// (internal/engine.TestTheEngineSweepsEveryShortHorizonTable) names it.
+	// sweep is what deletes a retired row once its grace has passed: a job
+	// of the engine's maintenance worker, as its sweep list
+	// (internal/engine.TestTheEngineSweepsEveryShortHorizonTable) names it,
+	// or a duty whose records delete the rows, as the duty's own engine test
+	// holds it — a record-driven sweep is no job of that worker, and that
+	// list asserts the worker's jobs exactly.
 	sweep string
 }
 
@@ -442,8 +445,10 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 				"retirements (internal/objstore/references/references_test.go) — ADR-0051 holds "+
 				"a retired table to a sweep that deletes its rows and a grace that outlasts the "+
 				"longest read of what they name: add its domain's grace, the largest object a "+
-				"row names and the job that sweeps the rows, and list that job in "+
-				"internal/engine.TestTheEngineSweepsEveryShortHorizonTable", ref.Table))
+				"row names and what sweeps the rows — a maintenance job, listed in "+
+				"internal/engine.TestTheEngineSweepsEveryShortHorizonTable, or the duty whose "+
+				"records delete them, held by an engine test of its own that the duty the "+
+				"engine runs publishes them", ref.Table))
 			continue
 		}
 		if strings.TrimSpace(r.sweep) == "" {
