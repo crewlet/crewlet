@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -64,6 +65,152 @@ const (
 	EnvHookSocket = "CREWLET_HOOK_SOCKET"
 	EnvHookToken  = "CREWLET_HOOK_TOKEN"
 )
+
+// commitTree is the one subcommand a run may give an [Identity] to, and the
+// one that must have one.
+const commitTree = "commit-tree"
+
+// identityVars is every variable git reads a commit's identity from, in the
+// order the pool writes them from a [Cmd.Identity]: no call site spells one
+// (checkEnv), and the built environment holds none of them otherwise.
+var identityVars = []string{
+	"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE",
+	"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE",
+}
+
+// Identity is a commit's author and committer and their dates, for
+// `commit-tree` and nothing else ([Cmd.Identity]): the pool builds every other
+// process's environment with no identity at all, so a commit's names and
+// dates are exactly what its call states — never the HOME's, never the
+// host's, never the clock's. A git left to find an identity takes one from
+// the node it runs on — its account's name, its mail name or host name, its
+// clock — or refuses when it finds none, so the same commit-tree run on two
+// nodes, or twice on one, would be two commits naming a machine.
+//
+// EVERY PART IS ONE GIT WRITES AS IT IS GIVEN, or the run is refused before
+// any process starts ([ErrInvalid], naming the field). git builds an identity
+// line by cutting every line feed, `<` and `>` out of a name or an address and
+// trimming from either end of it every control byte but DEL, the space and
+// every `,` `:` `;` `"` `\` `'` (ident.c's crud), and it rewrites a commit
+// whose bytes are not UTF-8 as though they were Latin-1 (commit.c's
+// verify_utf8): a part git changes is a name the call never stated, in
+// history for good, and a part made of nothing else git refuses itself, late,
+// after the work that asked for the commit. A NUL is refused, since no
+// environment variable can carry one, and so is an empty part — an empty name
+// git refuses too, but an empty address it writes as `<>`, a commit that
+// names no address. Those two are the pool's own rules; every other is git's,
+// and TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven holds them
+// both ways against git.
+//
+// THE DATES are written in the one form git reads as seconds whatever their
+// digits, `@<unix seconds> +0000` — without the `@`, git reads a number of
+// eight digits or fewer as a calendar date, as it reads 20070606, and refuses
+// the epoch's 0 as one it cannot read — so each is held to WHOLE seconds at or
+// after the epoch: a fraction of a second is refused rather than dropped, so
+// the call states the second it means. CommitterWhen is never before
+// AuthorWhen and may be after it: an engine-built commit's committer date is
+// held to its parent's, so no child is dated before its parent, while its
+// author date stays the instant its principal acted.
+type Identity struct {
+	AuthorName, AuthorEmail       string
+	CommitterName, CommitterEmail string
+	AuthorWhen                    time.Time // GIT_AUTHOR_DATE, written "@<unix seconds> +0000"
+	CommitterWhen                 time.Time // GIT_COMMITTER_DATE, the same form; never before AuthorWhen
+}
+
+// env is id as the six variables git reads it from, in identityVars' order.
+func (id *Identity) env() []string {
+	values := []string{
+		id.AuthorName, id.AuthorEmail, gitDate(id.AuthorWhen),
+		id.CommitterName, id.CommitterEmail, gitDate(id.CommitterWhen),
+	}
+	out := make([]string, len(identityVars))
+	for i, name := range identityVars {
+		out[i] = name + "=" + values[i]
+	}
+	return out
+}
+
+// gitDate is t as the timestamp git writes into a commit, seconds since the
+// epoch at +0000, behind the `@` that makes git read it as one.
+func gitDate(t time.Time) string {
+	return "@" + strconv.FormatInt(t.Unix(), 10) + " +0000"
+}
+
+// checkIdentity holds a run's identity to its subcommand — commit-tree's
+// alone, and required there — and every part of it to what git writes as it
+// is given ([Identity]).
+func checkIdentity(sub string, id *Identity) error {
+	switch {
+	case sub != commitTree && id != nil:
+		return fmt.Errorf("%w: git %s carries a Cmd.Identity: an identity is given to commit-tree alone, and "+
+			"every other process runs with none", ErrInvalid, sub)
+	case sub == commitTree && id == nil:
+		return fmt.Errorf("%w: git commit-tree carries no Cmd.Identity: commit-tree takes the identity its call "+
+			"names, because a git left to find one takes a name and an address from the node it runs on, and the "+
+			"time from its clock, or refuses when it finds none", ErrInvalid)
+	case id == nil:
+		return nil
+	}
+	for _, part := range []struct{ field, value string }{
+		{"AuthorName", id.AuthorName}, {"AuthorEmail", id.AuthorEmail},
+		{"CommitterName", id.CommitterName}, {"CommitterEmail", id.CommitterEmail},
+	} {
+		if why := identityPart(part.value); why != "" {
+			return fmt.Errorf("%w: Cmd.Identity.%s %q %s", ErrInvalid, part.field, textcut.Ellipsis(part.value, 64), why)
+		}
+	}
+	for _, date := range []struct {
+		field string
+		when  time.Time
+	}{{"AuthorWhen", id.AuthorWhen}, {"CommitterWhen", id.CommitterWhen}} {
+		switch {
+		case date.when.IsZero():
+			return fmt.Errorf("%w: Cmd.Identity.%s is unset: a commit carries the second its call states", ErrInvalid, date.field)
+		case date.when.Unix() < 0:
+			return fmt.Errorf("%w: Cmd.Identity.%s %s is before the epoch: git writes a commit's dates as the seconds since it",
+				ErrInvalid, date.field, date.when.UTC().Format(time.RFC3339))
+		case date.when.Nanosecond() != 0:
+			return fmt.Errorf("%w: Cmd.Identity.%s %s holds a fraction of a second, which git cannot write: "+
+				"truncate it to the second it means (time.Truncate(time.Second))",
+				ErrInvalid, date.field, date.when.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	if id.CommitterWhen.Before(id.AuthorWhen) {
+		return fmt.Errorf("%w: Cmd.Identity.CommitterWhen %s is before its AuthorWhen %s: a commit is committed at "+
+			"or after it is authored", ErrInvalid, id.CommitterWhen.UTC().Format(time.RFC3339),
+			id.AuthorWhen.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
+// identityPart is why git would not write s into a commit as it is given — or
+// why the pool refuses it of its own (an empty part, a NUL) — and "" when it
+// would. Its rules are [Identity]'s.
+func identityPart(s string) string {
+	switch {
+	case s == "":
+		return "is empty: a commit names its author and its committer, each by a name and an address"
+	case strings.IndexByte(s, 0) >= 0:
+		return "holds a NUL byte, which no process's environment can carry"
+	case !utf8.ValidString(s):
+		return "is not UTF-8: git would rewrite the commit's bytes as though they were Latin-1"
+	case strings.ContainsAny(s, "\n<>"):
+		return "holds a line feed, a < or a >: git cuts each out of an identity line"
+	case identityCrud(s[0]) || identityCrud(s[len(s)-1]):
+		return "begins or ends with a space, a control byte or one of , : ; \" \\ ': git trims each from " +
+			"either end of an identity"
+	}
+	return ""
+}
+
+// identityCrud reports whether git trims b from either end of a name or an
+// address it writes into an identity line: ident.c's crud(), every byte at or
+// below the space — each control byte but DEL, and the space itself — and the
+// eight marks , : ; < > " \ '. No byte of a multi-byte UTF-8 sequence is one.
+func identityCrud(b byte) bool {
+	return b <= ' ' || strings.IndexByte(`,:;<>"\'`, b) >= 0
+}
 
 // Cmd is one git process, described entirely by the call site: nothing about
 // it comes from the environment, the HOME, or a configuration file.
@@ -125,6 +272,14 @@ type Cmd struct {
 
 	// Env adds EnvHookSocket and/or EnvHookToken; any other name is ErrEnv.
 	Env []KV
+
+	// Identity is the author, committer and dates of the commit a
+	// commit-tree writes — REQUIRED on a commit-tree and ErrInvalid on every
+	// other subcommand — written into the process's environment as the six
+	// variables git reads them from (GIT_AUTHOR_NAME, _EMAIL and _DATE, and
+	// GIT_COMMITTER_NAME, _EMAIL and _DATE), which Env never names. See
+	// [Identity] for why the identity is the call's and what a part may hold.
+	Identity *Identity
 
 	// Protocol is GIT_PROTOCOL as the client sent it. One not matching
 	// ^version=[0-9]+(:[a-z0-9=.-]+)*$ is DROPPED, and the run is then v0,
@@ -325,13 +480,16 @@ var allowedConfig = map[string]string{
 	"receive.advertisepushoptions": "the receive configuration",
 	"receive.autogc":               "the receive configuration",
 	"receive.updateserverinfo":     "the receive configuration",
-	// The .rev a stored bundle carries is written by receive-pack's own
-	// index-pack, never by a second process; pinned rather than left to
-	// git's default, which changed in 2.41.
-	"pack.writereverseindex": "the receive configuration",
+	// The .rev a stored bundle carries is written by the index-pack that
+	// checked its pack as it indexed it — receive-pack's own for a push, and
+	// for an engine write the `index-pack --strict` of its scratch, the
+	// relay's own fsck — never by pack-objects or a second process after it;
+	// pinned rather than left to git's default, which changed in 2.41.
+	"pack.writereverseindex": "the receive configuration, and an engine write's index-pack in its scratch",
 	// The index a stored bundle carries is version 2, which the bundle check
 	// requires; pinned so a future default cannot store one no cache accepts.
-	"pack.indexversion": "the receive configuration",
+	// Written by the same index-pack as the .rev, never by pack-objects.
+	"pack.indexversion": "the receive configuration, and an engine write's index-pack in its scratch",
 }
 
 // subcommand is what Args[0] must be.
@@ -488,8 +646,11 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 	if err := checkEnv(c.Env); err != nil {
 		return prepared{}, err
 	}
+	if err := checkIdentity(c.Args[0], c.Identity); err != nil {
+		return prepared{}, err
+	}
 
-	env := make([]string, 0, len(p.baseEnv)+3+2*(len(baseKeys)+len(c.Config))+len(c.Env))
+	env := make([]string, 0, len(p.baseEnv)+3+2*(len(baseKeys)+len(c.Config))+len(c.Env)+len(identityVars))
 	env = append(env, p.baseEnv...)
 	wd := c.Dir
 	if c.Dir != "" {
@@ -522,6 +683,9 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 	}
 	for _, kv := range c.Env {
 		env = append(env, kv.Key+"="+kv.Value)
+	}
+	if c.Identity != nil {
+		env = append(env, c.Identity.env()...)
 	}
 	return prepared{env: env, wd: wd, threads: threads}, nil
 }
@@ -561,10 +725,17 @@ func checkConfig(config []KV) error {
 	return nil
 }
 
-// checkEnv holds a call site's variables to the two the pool admits.
+// checkEnv holds a call site's variables to the two the pool admits. A
+// commit's identity is not among them: the pool writes its variables from
+// [Cmd.Identity], for commit-tree alone, and a call site naming one is told
+// to name it there.
 func checkEnv(env []KV) error {
 	seen := map[string]bool{}
 	for _, kv := range env {
+		if slices.Contains(identityVars, kv.Key) {
+			return fmt.Errorf("%w: %s is a commit's identity, which the pool writes from Cmd.Identity for commit-tree alone: name it there",
+				ErrEnv, kv.Key)
+		}
 		if kv.Key != EnvHookSocket && kv.Key != EnvHookToken {
 			return fmt.Errorf("%w: %s: a call site may add only %s and %s, because every other variable a git process sees is the pool's",
 				ErrEnv, textcut.Ellipsis(kv.Key, 120), EnvHookSocket, EnvHookToken)

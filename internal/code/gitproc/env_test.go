@@ -19,12 +19,20 @@ import (
 // THE ENVIRONMENT IS BUILT, NOT INHERITED: every variable git reads that the
 // engine's own environment could carry — its secrets, a trace, an exec path,
 // an alternate object directory, a config of its own, a tree to read
-// attributes from — is absent, and what is present is exactly the pool's
-// table, its base configuration first. The trace2 event stream is the pool's
-// own (fd 3, brief, nesting 1), whatever the engine's environment names.
+// attributes from, a commit's identity — is absent, and what is present is
+// exactly the pool's table, its base configuration first. The trace2 event
+// stream is the pool's own (fd 3, brief, nesting 1), whatever the engine's
+// environment names.
 func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 	for name, value := range map[string]string{
 		"CREWLET_SECRET_X":                 "leaked",
+		"GIT_AUTHOR_NAME":                  "Planted Author",
+		"GIT_AUTHOR_EMAIL":                 "planted@example.com",
+		"GIT_AUTHOR_DATE":                  "@1234567890 +0500",
+		"GIT_COMMITTER_NAME":               "Planted Committer",
+		"GIT_COMMITTER_EMAIL":              "planted@example.com",
+		"GIT_COMMITTER_DATE":               "@1234567890 +0500",
+		"EMAIL":                            "planted@example.com",
 		"GIT_CONFIG_PARAMETERS":            "'core.hooksPath'='/tmp'",
 		"GIT_EXEC_PATH":                    "/nonexistent",
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES": "/tmp",
@@ -735,7 +743,8 @@ func TestAConfigKeyOutsideTheAllowlistIsRefused(t *testing.T) {
 	}
 }
 
-// AN ENVIRONMENT NAME OUTSIDE THE TWO IS REFUSED.
+// AN ENVIRONMENT NAME OUTSIDE THE TWO IS REFUSED — a commit's identity among
+// them, whatever subcommand spells it, with the field that carries one named.
 func TestAnEnvironmentNameOutsideTheTwoIsRefused(t *testing.T) {
 	t.Parallel()
 	p := fakePool(t, "exit 0", gitproc.Options{})
@@ -748,6 +757,19 @@ func TestAnEnvironmentNameOutsideTheTwoIsRefused(t *testing.T) {
 		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Env: env, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 		if !errors.Is(err, gitproc.ErrEnv) {
 			t.Errorf("%s: %v, want ErrEnv", name, err)
+		}
+	}
+	id := suiteIdentity()
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE",
+		"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE"} {
+		for _, c := range []gitproc.Cmd{
+			{Args: []string{"commit-tree", emptyTree}, Identity: &id},
+			{Args: []string{"hash-object", "--stdin"}},
+		} {
+			c.Env, c.Class, c.Deadline = []gitproc.KV{{Key: name, Value: "x"}}, gitproc.ClassRead, gitproc.ReadDeadline
+			if _, err := p.Run(t.Context(), c); !errors.Is(err, gitproc.ErrEnv) || !strings.Contains(err.Error(), "Cmd.Identity") {
+				t.Errorf("git %s naming %s in Env: %v, want ErrEnv pointing at Cmd.Identity", c.Args[0], name, err)
+			}
 		}
 	}
 	_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Env: []gitproc.KV{

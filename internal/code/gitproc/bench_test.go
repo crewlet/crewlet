@@ -350,16 +350,16 @@ func benchRevParse(b *testing.B, p *gitproc.Pool, dir, alternate, id string) {
 }
 
 // scratchOver is an empty repository whose one alternate is repo's objects:
-// a push's scratch, as the guard sees one.
-func scratchOver(b *testing.B, repo string) string {
-	b.Helper()
-	scratch := gittest.Empty(b)
+// a push's scratch, or an engine write's, as the guard sees one.
+func scratchOver(tb testing.TB, repo string) string {
+	tb.Helper()
+	scratch := gittest.Empty(tb)
 	info := filepath.Join(scratch, "objects", "info")
 	if err := os.MkdirAll(info, hostbox.DirMode); err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(info, "alternates"), []byte(filepath.Join(repo, "objects")+"\n"), hostbox.FileMode); err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	return scratch
 }

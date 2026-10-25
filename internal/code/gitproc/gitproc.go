@@ -54,6 +54,18 @@
 // anyone (uploadpack.allowAnySHA1InWant, which the code host never sets) — a
 // denylist leaks whichever nobody named.
 //
+// A COMMIT IS ITS CALL'S. git writes a commit's author, committer and dates
+// from its environment, and where it is given none it finds them on the node
+// — its account's name, its mail name or host name, its clock — or refuses,
+// so the same commit-tree run on two nodes, or twice on one, would be two
+// commits naming a machine. The built environment carries no identity, and
+// the one a process is given is its call's: [Cmd.Identity], required of a
+// commit-tree and refused on every other subcommand, written as the six
+// GIT_AUTHOR_* and GIT_COMMITTER_* variables, which Cmd.Env never names. Each
+// part is held to what git writes as it is given, and each date to whole
+// seconds at or after the epoch ([Identity]), so the commit a call builds is
+// the same bytes on every node.
+//
 // A REPOSITORY CANNOT CONFIGURE ITS OWN PROCESS, and the obvious mechanism
 // does not achieve it: command-line configuration outranks a repository's
 // config file only for the keys it sets, and every other key is read from the
@@ -622,7 +634,11 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		ceiling: filepath.Dir(home),
 		// The table every process starts from, in this order; Run adds
 		// GIT_DIR or GIT_CEILING_DIRECTORIES, GIT_PROTOCOL, the
-		// configuration and the call site's two variables.
+		// configuration, the call site's two variables and — for a
+		// commit-tree alone — the identity its call names (Cmd.Identity).
+		// It holds no identity of its own: no GIT_AUTHOR_* or
+		// GIT_COMMITTER_* variable and no EMAIL, so a commit's names and
+		// dates are never the node's.
 		baseEnv: []string{
 			// git runs its own subcommands from its exec-path; PATH is
 			// what a hook's interpreter resolves by.
