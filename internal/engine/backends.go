@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat"
-	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -924,13 +923,14 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 	return configured
 }
 
-// clusteredStream is whether this node's broker has PEERS.
+// clusteredStream is whether this node's broker has PEERS: whether it is
+// anything but the fleet's sole member, which [config.Bootstrap.SoleMember]
+// decides from the stream block.
 //
-// The one place the engine decides it, so the queue, the lease store and the
+// The one place the engine asks it, so the queue, the lease store and the
 // fleet store cannot disagree about which budget they are on — and it is the
 // same rule [Queue.Clustered] applies, which is the rule the embedded server
 // itself is built by: the cluster block takes effect only when it is NAMED.
-// Tier A refuses a port or a peer list without one, so the name is sufficient.
 //
 // A topology question rather than a replica count: an external NATS is
 // somebody else's cluster, and an embedded member that names one is clustered
@@ -940,7 +940,7 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 // provisions is a replicated create on the members it reaches, and the solo
 // budget would fail it against peers that are themselves still forming.
 func clusteredStream(b *config.Bootstrap) bool {
-	return b.BrokerKind() != placement.BrokerMember || b.Stream.Cluster.Name != ""
+	return !b.SoleMember()
 }
 
 // HoldsEstate reports whether a node configured as b holds the company's
