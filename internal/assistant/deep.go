@@ -165,7 +165,7 @@ func (s *surface) deep(ctx context.Context, tool catalog.Tool, args map[string]a
 		return s.refuseBefore(ctx, tool, args, "Not available", err), nil
 	}
 	step := s.t.stepStart(tool, args, nil, "")
-	return s.t.runDeep(ctx, deepCall{step: step, goal: goal, brief: deepBrief(goal, plan, s.t.deep.attachments),
+	return s.t.runDeep(ctx, deepCall{step: step, goal: goal, brief: deepBrief(goal, plan, s.t.deep.attachments, s.t.page, s.t.boundary),
 		prior: parkedDeep{Step: step.Index, Label: step.Label, Goal: goal, StartedAt: step.started.UTC()}})
 }
 
@@ -219,7 +219,9 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 			"start deep work; ask again to give it a fresh start")), nil
 	}
 	t.deep.clock.extend(now, deadline.Add(DeepWrapUp))
-	runCtx, cancel := context.WithDeadlineCause(ctx, deadline, errDeepTimeout)
+	// A DURATION, measured on the service's clock: the deadline is the
+	// grant's, and the grant's instant is on that clock.
+	runCtx, cancel := context.WithTimeoutCause(ctx, deadline.Sub(now), errDeepTimeout)
 	defer cancel()
 
 	run := &deepRun{t: t, step: dc.step, max: cfg.Steps(), budget: cfg.Tokens(),
@@ -238,8 +240,9 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 		return t.deepRefused(ctx, dc, err), nil
 	}
 	c, _ := t.svc.company()
+	runID := deepRunID(t.id, dc.prior.Step, dc.prior.Runs)
 	outcome, err := t.svc.deep.Run(runCtx, DeepRun{
-		ID:    deepRunID(t.id, dc.prior.Step, dc.prior.Runs),
+		ID:    runID,
 		Owner: t.person.ID, Turn: t.id,
 		System: deepSystem(c, t.person), Brief: dc.brief, Continue: dc.cont,
 		Inputs: inputs, Surface: bridge, Timeout: deadline.Sub(now),
@@ -271,7 +274,7 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 		return failed(mcp.Classify(mcp.RefusalUnavailable, err), "Deep work could not start: "+
 			redact.Secrets(err.Error())+". Tell the person, and answer what you can without it."), nil
 	}
-	files, notes := t.deliver(ctx, outcome.Files)
+	files, notes := t.deliver(ctx, runID, outcome.Files)
 	prior := dc.prior
 	prior.Box, prior.Calls, prior.Spent, prior.Runs = outcome.Box, bridge.used(), run.spentNow(), prior.Runs+1
 	if pending := bridge.waiting(); pending != "" {
@@ -374,7 +377,7 @@ func deepAnswer(b provenance.Boundary, o DeepOutcome, files []wire.FileRef, note
 // deliver keeps the files a run left in its outbox and shows them on one card.
 // A file of a type no download may carry, or past the size cap, is not kept,
 // and a note says so.
-func (t *turn) deliver(ctx context.Context, delivered []DeepFile) ([]wire.FileRef, []string) {
+func (t *turn) deliver(ctx context.Context, runID string, delivered []DeepFile) ([]wire.FileRef, []string) {
 	var refs []wire.FileRef
 	var notes []string
 	for i, f := range delivered {
@@ -389,7 +392,7 @@ func (t *turn) deliver(ctx context.Context, delivered []DeepFile) ([]wire.FileRe
 			continue
 		}
 		ref, err := t.svc.files.Store(ctx, t.write().Step("file", strconv.Itoa(i)), NewFile{
-			ID:           uuid.NewSHA1(t.id, []byte("deep-file:"+strconv.Itoa(t.stepCount())+":"+name)),
+			ID:           DeliveredFileID(t.id, runID, name),
 			Conversation: t.conversation, Turn: t.id, Origin: wire.FileDelivered,
 			Name: name, MediaType: mediaType, Content: f.Content})
 		if err != nil {
@@ -421,6 +424,13 @@ func (t *turn) deepInputs(ctx context.Context, fresh bool) ([]DeepFile, error) {
 		out = append(out, DeepFile{Name: a.Name, Content: content})
 	}
 	return out, nil
+}
+
+// DeliveredFileID is the id a file a run delivered is kept under: derived from
+// the run and the file's name, so a retried record of one delivery is one file,
+// and the id a later proposal names is the one the card showed.
+func DeliveredFileID(turn uuid.UUID, runID, name string) uuid.UUID {
+	return uuid.NewSHA1(turn, []byte("delivered:"+runID+":"+name))
 }
 
 // deepRunID names one run: its turn, its step and its number within the task.
@@ -492,9 +502,12 @@ type deepRun struct {
 	progress wire.DeepProgress
 	// spent is the task's tokens before this run, plus what this run has
 	// reported so far once it reports.
-	spent, base int
-	shown       time.Time
-	stopped     bool
+	spent int
+	// shown and shownState are when the step was last re-sent and in which
+	// state: a change of state is always shown.
+	shown      time.Time
+	shownState wire.DeepState
+	stopped    bool
 }
 
 // observe takes one live reading of the run.
@@ -570,11 +583,11 @@ func (r *deepRun) stop() {
 func (r *deepRun) show(now bool) {
 	r.mu.Lock()
 	at := r.t.svc.now()
-	if !now && at.Sub(r.shown) < deepShowEvery {
+	if !now && r.progress.State == r.shownState && at.Sub(r.shown) < deepShowEvery {
 		r.mu.Unlock()
 		return
 	}
-	r.shown = at
+	r.shown, r.shownState = at, r.progress.State
 	ev := r.step.StepEvent
 	progress := r.progress
 	progress.Activity = slices.Clone(progress.Activity)

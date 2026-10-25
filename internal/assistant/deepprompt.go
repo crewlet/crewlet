@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -65,11 +66,20 @@ func deepSystem(c *config.Company, person iam.Principal) string {
 	return out.String()
 }
 
-// deepBrief is a new run's ask: its goal, the plan the assistant expects, and
-// the attachments in its inputs.
-func deepBrief(goal, plan string, attachments []StoredFile) string {
+// deepBrief is a new run's ask: its goal, the plan the assistant expects, the
+// screen the person asked from (fenced as the page's own words, the open draft
+// on it included), and the attachments in its inputs.
+func deepBrief(goal, plan string, attachments []StoredFile, page *wire.PageContext,
+	b provenance.Boundary) string {
 	var out strings.Builder
 	out.WriteString("Goal: " + goal)
+	if page != nil {
+		if raw, err := json.Marshal(page); err == nil {
+			out.WriteString("\n\nThe person asked from this screen of the dashboard, " +
+				"described by the screen itself:\n" + provenance.Fence(b,
+				provenance.SourcePageContext, provenance.TrustColleague, nil, string(raw)))
+		}
+	}
 	if plan != "" {
 		out.WriteString("\n\nPlan (change it where the work shows a better one):\n" + plan)
 	}

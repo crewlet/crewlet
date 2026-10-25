@@ -60,14 +60,47 @@ assistant:
 roles:
 %s`
 
+// deepDoc is [companyDoc] with deep work on, on an agent-mode Claude Code
+// entry.
+const deepDoc = `name: Nimbus
+providers:
+  llm:
+    assistant:
+      agent: claude-code
+      model: sonnet
+      overrides: {web_tools: denied}
+    deep:
+      agent: claude-code
+      model: sonnet
+      mode: agent
+assistant:
+  enabled: %t
+  llm: [assistant]
+  deep_work:
+    llm: deep
+    max_steps: 20
+    max_tokens: 100000
+roles:
+%s`
+
 // Company is the company a case's people work for: the assistant on when on
 // is set, and each of seats a human seat of that handle.
 func Company(on bool, seats ...string) (assistant.Company, error) {
+	return company(companyDoc, on, seats)
+}
+
+// DeepCompany is [Company] with deep work configured: twenty Crewlet calls and
+// a hundred thousand tokens a task.
+func DeepCompany(seats ...string) (assistant.Company, error) {
+	return company(deepDoc, true, seats)
+}
+
+func company(doc string, on bool, seats []string) (assistant.Company, error) {
 	var roles string
 	for _, seat := range seats {
 		roles += fmt.Sprintf("  - name: %s\n    handle: %s\n    kind: human\n", seat, seat)
 	}
-	c, err := config.ParseCompany(fmt.Appendf(nil, companyDoc, on, roles))
+	c, err := config.ParseCompany(fmt.Appendf(nil, doc, on, roles))
 	if err != nil {
 		return nil, fmt.Errorf("evals: the company does not parse: %w", err)
 	}

@@ -30,6 +30,8 @@ type Rig struct {
 	Audit        *Audit
 	Person       iam.Principal
 	Conversation uuid.UUID
+	// Files is the store the rig's service keeps files in, nil for none.
+	Files assistant.Files
 }
 
 // RigOptions vary one rig.
@@ -66,9 +68,12 @@ type RigOptions struct {
 	// counter; nil serves this node's own turns and counts them here.
 	Remote assistant.Remote
 	Rate   assistant.TurnRate
-	// Files is the assistant's file store a draft change's file is checked
-	// against; nil keeps none.
+	// Files is the assistant's file store: attachments, delivered files and
+	// the files a draft change names; nil keeps none.
 	Files assistant.Files
+	// Deep runs deep work; nil offers none. A rig given one and no Files
+	// keeps its files in a [Files] of its own.
+	Deep assistant.DeepWork
 }
 
 // Assemble builds a rig over o. Its person is grace, holding Worklet, on
@@ -109,12 +114,17 @@ func Assemble(o RigOptions) (*Rig, error) {
 	if o.Models != nil {
 		models = *o.Models
 	}
+	files := o.Files
+	if files == nil && o.Deep != nil {
+		files = NewFiles(clock.Now)
+	}
+	r.Files = files
 	var offered assistant.Catalogue = Catalogue(o.Tools)
 	if o.Catalogue != nil {
 		offered = o.Catalogue
 	}
 	svc, err := assistant.New(assistant.Deps{
-		Node: node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: o.Files,
+		Node: node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: files, Deep: o.Deep,
 		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
 		Models: models, Budget: o.Budget, Catalogue: offered,
 		Transcripts: r.Store, Records: r.Store, Dispatcher: dispatcher, Revoker: revoker,
