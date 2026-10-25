@@ -34,7 +34,7 @@ A decision has two halves, and they live in different places.
 6. **Driver is woken with the choice** — by the option's label, and continues from it
 7. **Informed parties see the outcome** — when the ask named an `inform` channel, the driver posts it there, and its turn is not finished until it has
 
-The rules for each part of a decision, the caps, and the tools' arguments are in [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision).
+The rules for each part of a decision, the caps, and the tools' arguments are in [Asking for a decision](../guides/worklet.md#asking-for-a-decision).
 
 The team channel is configured on the unit (`channel`), and it is integration-neutral: the same field serves whichever chat backend the company runs. A seat's transport identity is its own bot: a [Mattermost](../integrations/mattermost.md) bot token, or a [Slack](../integrations/slack.md) app:
 
@@ -70,7 +70,7 @@ Each agent's system prompt includes their team channel, with guidance to use it 
 
 ## When the outcome is promised to a channel
 
-A structured ask on a work item (see [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision))
+A structured ask on a work item (see [Asking for a decision](../guides/worklet.md#asking-for-a-decision))
 can name the channel the asker will report the outcome in — `inform:
 {surface, channel}`. That is the **Informed** role made concrete, and it is one
 of the two things the engine enforces about a decision (the other is that a

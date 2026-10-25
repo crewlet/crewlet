@@ -32,7 +32,7 @@ flowchart LR
     R -->|the object| S
 ```
 
-Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files)
+Today the store holds [a project's files](../guides/worklet.md#a-projects-files)
 and every file of every [artifact](artifacts.md) version and asset. It is built
 for more than that (chat attachments and anything else a row can name by key)
 and every consumer follows the same rule: the estate names the object, and the

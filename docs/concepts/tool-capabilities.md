@@ -127,7 +127,7 @@ membership test against the map `tools.Registry.Deliveries` computes, and
 two kinds of tool are in it: an MCP-served tool whose own annotations do
 **not positively** call it a read, and a first-party tool the engine
 registered as one that reaches somebody. So an unannotated server tool
-counts, and so does commenting on a native work item, while a diary write
+counts, and so does commenting on a Worklet item, while a diary write
 does not. The read side of that test is `mcp.ReadOnlyProven`, which exists
 beside `mcp.WritesToSharedSurface` precisely because the two questions fail
 in opposite directions: reusing the worker guard's answer here would read

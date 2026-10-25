@@ -115,7 +115,7 @@ When in doubt, ask: "If I stopped right now, would a reader of this diff conside
 
 ```
 cmd/crewlet/          # The one binary: run / validate / schema / migrate / budgets /
-                      #   backup / retention / work / objects / fleet / seats /
+                      #   backup / retention / worklet / objects / fleet / seats /
                       #   artifacts / secrets / config / iam / llm / search, and the
                       #   six vendor CLIs (gitlab, github, jira, slack, confluence,
                       #   mattermost). Every command the switch dispatches must
@@ -242,9 +242,9 @@ The implementation follows `docs/concepts/`. Its subsystems:
 1. **Event Queue** — durable pub/sub behind one contract: an embedded NATS JetStream by default, clustered members or an external cluster for a fleet, an in-memory twin for tests
 2. **Organization Model** — the hierarchy is the execution graph: `roles:` and `units:` in the company document, applied with every revision; a seat's handle and a unit's key are its identity, minted on every write and never changed in place
 3. **Agent Runtime** — queue-driven seats, a two-stage turn, an LLM tool loop that can suspend
-4. **Work Tracker** — the engine's own, `statelog`'s first domain; a company on an external PM tool sets `tracker.backend` to it and the engine mirrors nothing. Hand-offs are bounded on the item (`reassignments`), not by the delegation depth cap
+4. **Worklet**: the engine's own work tracker, `statelog`'s first domain; a company on an external PM tool sets `tracker.backend` to it and the engine mirrors nothing. Hand-offs are bounded on the item (`reassignments`), not by the delegation depth cap
 5. **Decision Framework** — DACI stays behavioural guidance; what the engine records is a structured ask on a work item (`adr/0023`), enforcing only its shape, that a choice names one of its options, and a promised `inform`
-6. **Knowledge System** — the company's pages (`statelog`'s third domain), searched by keyword (BM25 over the engine's own index; Turso has no fts5), semantically (two-stage 1-bit retrieval: a replicated inverted file over sign codes, then an exact rerank) or `hybrid` by default (the two fused by reciprocal rank fusion at k = 60). Embeddings are a domain computed once by a fleet duty. Confluence is the other backend, one per company. Plus each agent's diary
+6. **Knowledge System**: Doclet, the company's pages (`statelog`'s third domain), searched by keyword (BM25 over the engine's own index; Turso has no fts5), semantically (two-stage 1-bit retrieval: a replicated inverted file over sign codes, then an exact rerank) or `hybrid` by default (the two fused by reciprocal rank fusion at k = 60). Embeddings are a domain computed once by a fleet duty. Confluence is the other backend, one per company. Plus each agent's diary
 7. **Communication** — external chat (Mattermost, Slack) and ephemeral A2A channels; the eight surfaces are `integration.Kinds`
 8. **Notification Service** — a queue-based spine, the vendors on top
 9. **Provider Layer** — every model a coding CLI (one login or key per entry, a spent plan sitting its entry out), behind a fallback chain; embeddings on the OpenAI SDK

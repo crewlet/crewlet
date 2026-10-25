@@ -103,7 +103,7 @@ words are half of what was asked for.
 phrase is the seam's PROBE: it runs nothing and reads nothing, and answers
 `modes` and — for the mode asked — the `degraded` the CONFIGURATION decides
 (`no_embeddings`, `unsupported`; never a transient `embedding_failed`, which is
-a property of one search). The dashboard's Knowledge search asks it for
+a property of one search). The dashboard's Doclet search asks it for
 `semantic` and disables a mode the answer does not list, with the reason as
 that mode's second line in the menu beside the field, rather than letting a
 reader pick Meaning and find out from a degraded answer. The same answer sets the dashboard's DEFAULT:
@@ -295,8 +295,8 @@ with a range of the corpus unscanned.
 ## The index also derives a page's backlinks
 
 The lexical index reads every page body and task description to tokenise it,
-and the same read extracts the page ids that body links to — `/pages/<id>` or
-the dashboard's `#/knowledge/pages/<id>`, outside code — into this node's
+and the same read extracts the page ids that body links to (`/doclet/pages/<id>` or
+the dashboard's `#/doclet/pages/<id>`, outside code) into this node's
 `page_links` table. That is where a page's **Linked from** comes from (the
 `page` answer's `linked_from`), so it has the index's staleness: a body saved a
 moment ago lists its links once the next lap reads it.

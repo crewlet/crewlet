@@ -1,8 +1,8 @@
-# The Work Tracker
+# Worklet
 
-Crewlet ships its own tracker, and it is the default. This page is the product
-guide: what a company can record, what a seat can do with it, what a person
-can do with it, and what each screen answers.
+Worklet is Crewlet's own work tracker, and it is the default. This page is the
+product guide: what a company can record, what a seat can do with it, what a
+person can do with it, and what each screen answers.
 
 The architecture — one ordered log, N identical copies — is in
 [The Tracker](../concepts/task-engine.md) and
@@ -170,7 +170,7 @@ task in the trash under it that holds the walk is named as `move_waits_for`
 and has to be restored or purged first; and where the node cannot vouch for
 the task the walk stopped at (`move_unvouched`), the same call there stops at
 the same place, so it is left to the `tracker` duty or made on another node.
-Over HTTP the move is `POST /work/items/{key}/move` with `{"project": "OPS"}`,
+Over HTTP the move is `POST /worklet/items/{key}/move` with `{"project": "OPS"}`,
 and the same call is the same `Idempotency-Key` — the `op_id` every answer
 carries, sent back as that header, which is the request's key whether it sent
 one or the node minted it.
@@ -225,7 +225,7 @@ Every item carries two units, and they answer different questions.
 **Re-routing is the project lead's.** Pointing somebody else's work at
 another team is a decision about who owns it, so it takes the authority that
 declares a project's fields: whoever leads the project the item is filed in,
-or an administrator (`admin`), each with the `tracker` app. Every other caller
+or an administrator (`admin`), each with the `worklet` app. Every other caller
 is refused, and the refusal names the rule and the permission that would have
 admitted them. A person
 is asked about as the seat the [identity
@@ -254,7 +254,7 @@ name, where exactly one unit carries it; see
 **Both spellings work everywhere a unit is named**, in any case: the `unit`
 argument on `create_work_item`, `routing_unit` on `update_work_item`, the
 `unit=` and `routing_unit=` filters, the `unit` a project listing is narrowed
-by, and `GET /work/workload?unit=`. `unit: engineering` reaches the team
+by, and `GET /worklet/workload?unit=`. `unit: engineering` reaches the team
 called `Engineering`. A name two units share names neither, and where a
 spelling is one unit's key and another unit's name the key wins.
 
@@ -555,7 +555,7 @@ them against a definition nobody has seen for a year. Bringing one back means
 declaring a **new** field — a new id, and the same slug, because the slug is
 the word the company uses.
 
-Read it at `GET /work/catalogue`, or with `get_work_catalogue`, which every
+Read it at `GET /worklet/catalogue`, or with `get_work_catalogue`, which every
 seat holds: a model that cannot read the catalogue can only guess at a type.
 Writing it — `write_work_catalogue`, on the operator's assistant — takes
 **`admin`**, the permission that edits the company's own document. The
@@ -635,7 +635,7 @@ at random.
 the tag, and an archive takes a filter off everybody's board — both are
 decisions about how the company groups its work rather than about one task.
 Adding a tag stays open to every colleague: it needs nothing beyond the
-ordinary `tracker` app that `write_project` itself takes. An archive is
+ordinary `worklet` app that `write_project` itself takes. An archive is
 **one-way**, like a field's: the tasks keep the tag and every filter on it
 still answers, and what the archive buys is a tag that takes no *new* work.
 Bringing one back means declaring it again under its own name.
@@ -948,7 +948,7 @@ rather than about the rows.
 view's own, so a seat can open somebody's board and narrow it without editing
 it.
 
-Views are read at `GET /work/views?container=project:ENG`, and written through
+Views are read at `GET /worklet/views?container=project:ENG`, and written through
 the operator MCP surface with `save_work_view` — **not** by a seat. A view is
 furniture, and a seat's job is the work rather than the furniture around it.
 
@@ -1260,7 +1260,7 @@ An operator holds the same fourteen and more that no seat does, including
 `remove_work_item` puts an item in the **trash** and `restore_work_item` takes
 it out again, at any age. Both are decided by the item's **own** project and
 its **reporter**: whoever filed the item, the lead of the project it is filed
-under, or an administrator — each with the `tracker` app. A reporter tidies
+under, or an administrator, each with the `worklet` app. A reporter tidies
 their own item and never `subtree: true`, which takes the items under it too
 and stays the lead's or an administrator's. The tool names an
 item rather than a project, so it reads which project that is off the item and
@@ -1293,7 +1293,7 @@ is already back. A restore of an item that is not in the trash and has nothing
 in the trash with it says there is nothing to restore.
 
 Neither is `purge`, which destroys every row on every node and has no inverse.
-That one is `crewlet work purge`, with a typed confirmation and a required
+That one is `crewlet worklet purge`, with a typed confirmation and a required
 reason, and it is deliberately not a tool at all.
 
 Five of those count as a **delivery**: create, update, comment, merge and move. A turn
@@ -1365,12 +1365,12 @@ progress — **blocked**, **overdue** and **unscheduled** — because a person
 whose whole queue is blocked has a different problem from one who is simply
 busy, and a total alone cannot tell them apart.
 
-`GET /work/workload`, optionally narrowed to one `unit` — the people whose open
+`GET /worklet/workload`, optionally narrowed to one `unit`: the people whose open
 work sits in projects that unit owns.
 
 ## How the work has moved
 
-**The flow** (`GET /work/flow`, `work_flow`) is the company's work as a series:
+**The flow** (`GET /worklet/flow`, `work_flow`) is the company's work as a series:
 for each of the last N days or weeks on the company's clock, how many tasks sat
 in each status group at the window's end, and how many were **completed** in it
 — a change that took a task from not delivered to delivered, so a cancellation
@@ -1407,7 +1407,7 @@ ten minutes is a line rather than every line of the page.
 ## What a person can do
 
 **The dashboard** renders the same queries a seat's tools use, against this
-node's own copy, and every answer says how far behind that copy is. Work's trail
+node's own copy, and every answer says how far behind that copy is. Worklet's trail
 names its **scope**, All projects or one project, and that crumb is a button:
 press it, or **G** then **P** from any screen, to switch to another project, with
 the keys first and the start of a word in a name matching what you type.
@@ -1421,7 +1421,7 @@ A project is a key the company document declares on a unit or a seat, so
 setting one takes `admin`, a unit's lead included, and New project is
 drawn for everybody and held with that reason for anybody without it.
 
-- **Tasks** (`#/work/tasks`) is the list, and it opens as one: a container nobody
+- **Tasks** (`#/worklet/tasks`) is the list, and it opens as one: a container nobody
   has saved a default view for lands on the list shape, because a board's
   information is the comparison across its lanes — the best shape once work is
   moving and the worst on a company with three items in one status. The board
@@ -1464,7 +1464,7 @@ drawn for everybody and held with that reason for anybody without it.
   where it sits — "3 of 18", with the tasks above and below it a press (or
   `k` and `j`) away — in the whole list rather than in the page that was
   loaded, whether you opened it from its row or through the peek's **Open**.
-- **A task** (`#/work/{KEY}`) is one page: the task in the order a person
+- **A task** (`#/worklet/{KEY}`) is one page: the task in the order a person
   reads one — its title and description, its checklists, its sub-tasks — then
   its **activity**, and a rail of its fields beside it. The activity is **All**,
   **Comments**, **Agent turns** or **Changes**: who filed it and who handed it
@@ -1521,7 +1521,7 @@ drawn for everybody and held with that reason for anybody without it.
   and the sizes (`` `title` is 600 bytes and a task's title holds at most 256
   ``) — for a model and for a person alike, and without quoting the id minted
   for a task that was never filed.
-- **Projects** (`#/work`, where Work opens) is the directory: every project with its
+- **Projects** (`#/worklet`, where Worklet opens) is the directory: every project with its
   lead, the unit that owns it, its maintained counts, how far along its work is
   — one bar split into done, active and still to do, over exactly those counts
   — its lead's **target date**, and when that work last changed. A row opens the project
@@ -1530,7 +1530,7 @@ drawn for everybody and held with that reason for anybody without it.
   The sentence over the grid is the company's own total, and when the engine
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
-- **History** (`#/work/history`) is the change log over a window you choose,
+- **History** (`#/worklet/history`) is the change log over a window you choose,
   narrowed from one bar: the window, then **Kind** and **By** pickers whose
   options are what the pages loaded hold, with how many of each
   (said once: the counts are over the changes loaded) — and it says "Showing
@@ -1544,7 +1544,7 @@ drawn for everybody and held with that reason for anybody without it.
   have loaded are held still while you page through them — change the window or
   a facet to pick up what has landed since. One project's changes are that
   project's own History lens, a switch away in the trail.
-- **A project** (`#/work/{KEY}`) opens on its work (the **Tasks** lens, which
+- **A project** (`#/worklet/{KEY}`) opens on its work (the **Tasks** lens, which
   says how many are open, is the page's first content, with the lenses on the
   page bar beside the project's name), with an
   **About** lens for the container itself (who leads it, the unit that owns it,
@@ -1557,20 +1557,20 @@ drawn for everybody and held with that reason for anybody without it.
   empty list. **Edit project** sets or clears the target date
   (`write_project{target_date}`) — the project's lead may, and so may a person
   acting as themselves; a seat that does not lead the project is refused.
-- **Search** (`#/work/search`) ranks the company's work against a phrase —
+- **Search** (`#/worklet/search`) ranks the company's work against a phrase:
   **Hybrid** (the default: words and meaning, each ranked and then fused),
   **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is
   about); each mode's tooltip says what it matches. A company with no
   embeddings provider asking Hybrid is served Keyword, and the screen — and the
   command palette's mode pill — says so in the same words ("Asked for Hybrid,
   served Keyword — …").
-- **Saved views** (`#/work/views`) is the inventory of what somebody saved,
+- **Saved views** (`#/worklet/views`) is the inventory of what somebody saved,
   in every project and team as well as company-wide — each row says where the
   view lives, and each has a **Pin**. A view you **pinned** is in your
   sidebar, and that row **runs** it; the view running on a board can be pinned
   or unpinned from its own strip too.
 
-**Your own AI assistant** can reach the same tracker over MCP, at
+**Your own AI assistant** can reach Worklet over MCP too, at
 `/operator/mcp`. It serves the same work tools above, eleven more no seat is
 given — `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
@@ -1628,10 +1628,10 @@ either way, so a change you make on screen and one your assistant makes read
 alike in every history. See the
 [API reference](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface).
 
-**The REST API** serves the read side at `/work`, `/work/{id}` and
-`/work/views`. Writes go through a seat's tools, the operator MCP or [the human
+**The REST API** serves the read side at `/worklet`, `/worklet/{id}` and
+`/worklet/views`. Writes go through a seat's tools, the operator MCP or [the human
 write surface](../reference/api-endpoints.md#the-human-write-surface), every
-one of which is attributed to somebody. `/work` and `/work/views` answer their
+one of which is attributed to somebody. `/worklet` and `/worklet/views` answer their
 personal parts — `preset=my_queue`, `preset=priorities`, the pins and personal
 views that order a strip — for the **caller's own record**, and take no
 parameter naming anybody else's: the engine already knows who is asking. A
@@ -1651,46 +1651,46 @@ is never mistaken for the seat it resembles. The tools that take a handle
 ## Who may do what
 
 One table decides every gesture above, for a seat's own tools and for the
-operator's assistant alike. The tracker is one **app**, and the permission
-that uses it is `tracker`: every agent seat holds it, and a person holds it when
+operator's assistant alike. Worklet is one **app**, and the permission
+that uses it is `worklet`: every agent seat holds it, and a person holds it when
 an administrator ticks it ([Access](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)).
 `admin` below includes it and overrides every relation; no seat carries
 `admin`. A **lead** is whoever the org chart says leads the thing: a unit's
 effective lead (inherited from above when the unit names nobody), the seat
 whose own project it is, or — for a person — anybody above them in the
 management chain. **Every relation here is asked beside the app**: a lead, a
-reporter or a record's owner who does not use the tracker is refused `[tracker]`.
+reporter or a record's owner who does not use Worklet is refused `[worklet]`.
 
 | Gesture | Who may |
 |---|---|
-| Read the board, a project, the catalogue, the views | `tracker` — every seat holds it |
-| Read one task | `tracker`, **or** the person an open ask on the task names — see below |
-| File, update, merge and relate tasks | `tracker` — every seat holds it |
-| Comment on a task | `tracker`, **or**, for the answer to an open ask that names you and nothing else, the person asked |
-| Declare a tag on a project | `tracker` — any colleague |
+| Read the board, a project, the catalogue, the views | `worklet`, which every seat holds |
+| Read one task | `worklet`, **or** the person an open ask on the task names (see below) |
+| File, update, merge and relate tasks | `worklet`, which every seat holds |
+| Comment on a task | `worklet`, **or**, for the answer to an open ask that names you and nothing else, the person asked |
+| Declare a tag on a project | `worklet` (any colleague) |
 | Point a task at another team (`routing_unit`) | the lead of the project the task is filed in, or `admin` |
 | Move a task, with its subtree, to another project (`move_work_item`) | the lead of the project the task is in now, or `admin` — the same decision as a re-route, which is this without the re-key |
 | Declare a project's fields, set its default assignee, rename or archive a tag | the project's lead, or `admin` |
 | Archive the project | the project's lead or `admin` — **and never an agent**, whatever it leads or holds |
 | Declare task types and workspace fields (`write_work_catalogue`) | `admin` |
 | Save a view | see [Views](#views): a personal view is its owner's, a shared one its container's |
-| Read somebody's day — their inbox, queue and record (`work_inbox`, `my_work`, `get_person`) | that person, whoever leads them, or `admin` — with `tracker`, your own included, since it lists the company's tasks |
+| Read somebody's day: their inbox, queue and record (`work_inbox`, `my_work`, `get_person`) | that person, whoever leads them, or `admin`, with `worklet`, your own included, since it lists the company's tasks |
 | Set somebody's priorities | that person, whoever leads them, or `admin` — and a **seat** never sets anybody's but its own |
 | Mark an inbox, set pins | the person whose record it is, or `admin`; never a lead. The two tools take no handle at all, so a caller only ever writes their own |
-| Place a task in the manual order (`place_work_item`, the board drag) | `tracker`, and **never an agent** — a seat files work and moves its status, and the order a board is read in is a person's |
+| Place a task in the manual order (`place_work_item`, the board drag) | `worklet`, and **never an agent**: a seat files work and moves its status, and the order a board is read in is a person's |
 | Remove and restore a task | the task's **reporter** — whoever filed it — the lead of its project, or `admin`. A reporter tidies their own task and never a subtree beneath it; no seat is given the tools — see [What a seat can do](#what-a-seat-can-do) |
 | Purge a task | `admin`, with a recent proof, and **never an agent** — see [below](#removing-deleting-and-purging) |
 | Ask a colleague (`a2a_ask`) | an agent seat whose role offers it, with no permission, and **never a person or a token** — it spends that colleague's turn |
 
-**You may answer what you were asked without Tracker.** A colleague's
+**You may answer what you were asked without Worklet.** A colleague's
 [structured ask](#asking-for-a-decision) on a task names the
 person it is put to, and that person may read the task and post their answer to
 it — the comment, or the choice that answers that ask — whether or not they hold
-`tracker`. Nothing wider: the tool reads the task, finds the open ask naming
-the caller, and admits only that answer, which the tracker's writer checks
+`worklet`. Nothing wider: the tool reads the task, finds the open ask naming
+the caller, and admits only that answer, which Worklet's writer checks
 again is theirs; a plain comment, a new ask and a decision of their own stay
-the tracker's, and a task that does not exist is refused exactly as one they
-were not asked on is. Once they have answered, the task is the tracker's
+Worklet's, and a task that does not exist is refused exactly as one they
+were not asked on is. Once they have answered, the task is Worklet's
 again. Your own asks are always listed among your decisions, with or without
 the app.
 
@@ -1826,7 +1826,7 @@ may say why in its body.
 | `options` | 2 to 6, each `{id, label, detail?}`. An `id` is 1–32 of `a-z 0-9 _ -` because it is typed back in `choice`; a `label` is at most 80 bytes and a `detail` 500. One option is an approval — ask *yes* or *no* |
 | `recommended` | optional; one of the option ids |
 | `rationale` | optional, at most 1,500 bytes |
-| `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title — a company with no native knowledge base cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
+| `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title; a company not on Doclet cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
 | `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
 | `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost` or `slack`, and must be one the company runs **and** the asking seat holds a bot on; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
 
@@ -1887,15 +1887,15 @@ nobody, still wakes the assignee — unaddressed, which a turn may absorb withou
 replying. The result says so in a `warnings` line, because a commenter
 expecting an answer otherwise gets silence with nothing to explain it.
 
-**What waits on a person** is one question (`GET /work/decisions`,
+**What waits on a person** is one question (`GET /worklet/decisions`,
 `decisions`): the open asks put to them — under the one name their record is
 kept under, the seat they hold (every person holds one), or a token's own
 login where the identity directory binds it to none — beside the coding runs parked on a question to
 them, with how many there are in all and when the longest one began. With no
-`handle` it is the caller's own — your own asks are listed whether or not you
-hold `tracker`, since [you may answer what you were asked](#who-may-do-what) —
+`handle` it is the caller's own (your own asks are listed whether or not you
+hold `worklet`, since [you may answer what you were asked](#who-may-do-what)),
 and naming somebody else's is a lead's or an administrator's to ask, with
-`tracker`. The dashboard's Home
+`worklet`. The dashboard's Home
 answers them in place: each option of a structured ask is a button that sends
 the choice as the answer, and a parked run is answered by its turn.
 
@@ -2026,7 +2026,7 @@ A human has a record of their own beside the work: an **inbox**, a **queue**
 and their **pins**. Three parts of one document, with three different
 authorities over them — which is why they are three separate writes. Writing
 your own takes no permission beyond the app; READING or writing any of it,
-yours included, takes `tracker`, because a notice and a queue name the
+yours included, takes `worklet`, because a notice and a queue name the
 company's tasks.
 
 | Part | Who may write it |
@@ -2234,12 +2234,12 @@ whoever leads them, or an administrator — can open it with the
 whose-day picker, and there every change on the page is held,
 disabled with a sentence saying whose day it is: the questions put to them are
 theirs to answer — the engine refuses anybody else — and their work is changed
-from the work screens. The one exception is the authority the tracker grants
+from the work screens. The one exception is the authority Worklet grants
 across people: somebody **above them in the chart** may reorder their queue,
 and the page says before the press that they are told when you reorder.
 
 **The Queue is the work list, narrowed to one person.** It is the same
-screen `#/work/tasks` is (the five shapes, the Filter and Display menus, the
+screen `#/worklet/tasks` is (the five shapes, the Filter and Display menus, the
 scope switch, Group by and Sort, the columns, the count line), with the assignee fixed
 and every other choice yours and in the address. What is fixed is not a filter:
 there is no chip to take off and no `assignee=` on the URL, because that is
@@ -2307,7 +2307,7 @@ assistant's would be: under the seat you hold, which every person does
 ([ADR-0024](https://github.com/crewlet/crewlet/blob/main/adr/0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md)).
 The list is re-read at the position the write answered with, so a row moves
 only once the engine says it has. Your assistant makes the same call over
-`/operator/mcp`, and a script makes it as `PUT /work/people/{handle}/inbox` —
+`/operator/mcp`, and a script makes it as `PUT /worklet/people/{handle}/inbox`,
 the same verb over [the human write surface](../reference/api-endpoints.md#the-human-write-surface),
 attributed to whoever the request resolves to.
 
@@ -2318,7 +2318,7 @@ person I meant", and it has never been answerable anywhere else. The table's
 primary key is `(record_id, recipient)`, so both directions are index reads and
 neither costs the other anything.
 
-Read it at `GET /work/routing/{record_id}`, or open an item's **Woke** tab in
+Read it at `GET /worklet/routing/{record_id}`, or open an item's **Woke** tab in
 the dashboard. Every recipient names the one reason of eighteen that found them,
 whether the notice *asks* something of them, and whether they were reached only
 because nobody better was found — a lead who hears about a report's task
@@ -2336,7 +2336,7 @@ tell these apart: it says the commit *carried* a notification, never that
 anybody was woken — the applier deliberately holds no roster, because two nodes
 briefly on different epochs would then write different rows for one record.
 
-**Inbox rows age out; the history does not.** `tracker.native.inbox_retention_days`
+**Inbox rows age out; the history does not.** `tracker.worklet.inbox_retention_days`
 (default 365, 30..3650) is how long an entry lives. A sweep on every node
 deletes what is past the horizon — per data node rather than once across the fleet,
 because each data node applies the log into its own copy. It is **live**: a
@@ -2347,7 +2347,7 @@ deletes exactly the rows a replay would not write. A notice is a *pointer* at
 a history row, and the history answers for ever: "what was I told about in
 2024" is a `work_activity` question, not an inbox one.
 
-Read at `GET /work/people/{handle}`, and through the operator MCP with
+Read at `GET /worklet/people/{handle}`, and through the operator MCP with
 `work_inbox`, `get_person`, `mark_inbox`, `set_pins` and `set_priorities` —
 never by a seat. A seat is not a human: it has a **mailbox**, which is the
 durable subscription the engine attaches when it acquires the seat, and nothing
@@ -2370,7 +2370,7 @@ at all — any field — returns the whole budget. The ninth agent hand-off is
 refused `reassignment_budget`, and the refusal says to explain on the item what
 is blocking it instead.
 
-The limit is **served**, not copied: the item answer (`GET /work/{id}`,
+The limit is **served**, not copied: the item answer (`GET /worklet/{id}`,
 `get_work_item`) carries `reassignment_budget` beside the task's own
 `reassignments`, so a screen saying "hand-off 7 of 8" reads the figure from the
 engine that enforces it. And every task history row carries **`reassignments`
@@ -2426,7 +2426,7 @@ writers putting the same path contend, and exactly one wins.
 Seats reach them with the four tools in [What a seat can do](#what-a-seat-can-do);
 a person reaches them on the dashboard's project page, through their own
 assistant (the same four tools), or over REST —
-[`/work/files`](../reference/api-endpoints.md#project-files) takes an upload and
+[`/worklet/files`](../reference/api-endpoints.md#project-files) takes an upload and
 streams a download without either passing through a model.
 
 **The bytes are not in the tracker.** A file is a row saying where it lives,
@@ -2495,7 +2495,7 @@ is the one operation with no inverse and nothing else can be asked to confirm
 it:
 
 ```
-crewlet work purge <item> -reason "why" -confirm <item-key> [-op-id ID]
+crewlet worklet purge <item> -reason "why" -confirm <item-key> [-op-id ID]
 ```
 
 `<item>` is the task's key or its id, and `-confirm` repeats its **key**, which
@@ -2503,7 +2503,7 @@ the node checks against the task `<item>` resolves to — a mismatch destroys
 nothing. There is no project to name: the task's own row says which project the
 record is filed under. On `unknown` the command prints an operation id, and that
 id goes back in `-op-id` so the retry is the same operation rather than a second
-purge. See [the CLI reference](../reference/cli.md#crewlet-work-purge).
+purge. See [the CLI reference](../reference/cli.md#crewlet-worklet-purge).
 
 Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged

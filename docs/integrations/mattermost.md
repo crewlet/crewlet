@@ -1108,8 +1108,8 @@ extra to set up either, beyond one environment variable in step 5.
 Add a code host afterwards, once you have seen the loop work; it has its own
 page, `examples/nimbus.company.yaml` shows it already wired, and nothing here
 has to be undone first. Moving the tracker or the wiki to Atlassian is the
-one change that is not purely additive — [Jira](jira.md) and
-[Confluence](confluence.md) REPLACE the native halves rather than joining
+one change that is not purely additive: [Jira](jira.md) and
+[Confluence](confluence.md) REPLACE Worklet and Doclet rather than joining
 them, so each means changing the matching `backend` in the same edit.
 
 Two things the config expects of you, both once:

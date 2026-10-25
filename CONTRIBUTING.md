@@ -1123,8 +1123,8 @@ Links are checked, not trusted. `internal/docsgate` fails the suite on a
 relative link to a file that does not exist, on an `#anchor` that names no
 heading of its target (by GitHub's slug: rename a heading and every anchor to
 it goes red), and on a page under `docs/` that `docs/index.md` does not list.
-The dashboard's own addresses — `#/work/ENG-42` in a guide, a tool skill or a
-string the engine composes — are held by `dashboard/src/app/links.test.ts`
+The dashboard's own addresses (`#/worklet/ENG-42` in a guide, a tool skill or a
+string the engine composes) are held by `dashboard/src/app/links.test.ts`
 against the dashboard's route resolver, along with every pointer at a
 `dashboard-design.md` heading. And `internal/docslinks` reads every text file
 in the tree for an absolute `https://docs.crewlet.ai` link, failing on one the

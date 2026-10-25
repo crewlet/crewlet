@@ -204,7 +204,7 @@ advertising a kind this build does not know — a newer build's — shows as
 
 **The broker is a fixed few members.** Three survive one member lost; five
 survive two, and five is the recommendation for a fleet whose company runs
-the engine's own tracker at scale. No stream keeps more than five copies
+Worklet at scale. No stream keeps more than five copies
 (`stream.replicas` stops at five, JetStream's own ceiling), so a sixth member
 holds no copy anybody asked for and only adds a voter every election and
 every create waits on — `crewlet validate` warns about a peer list naming more
@@ -724,7 +724,7 @@ posture change.
 
 ## How a node that fell behind catches up
 
-The work tracker, the knowledge base's pages and embeddings, the identity
+Worklet, Doclet's pages and embeddings, the identity
 directory and the usage history are each derived on every data node from an
 ordered log the fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those

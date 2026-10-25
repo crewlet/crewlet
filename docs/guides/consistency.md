@@ -236,8 +236,8 @@ forever.
 
 A **write** refused by the log names a reason from the same vocabulary, and a
 reason spelled like one of the codes above agrees with it about waiting — the
-two describe one state of one node. Every surface that writes to a state log —
-`/work`, `/pages`, `/iam` and `/auth` — answers every one of them
+two describe one state of one node. Every surface that writes to a state log
+(`/worklet`, `/doclet/pages`, `/iam` and `/auth`) answers every one of them
 `503`, with a `Retry-After` only for the four that clear on their own; the
 other thirteen carry none, because the same write is refused the same however
 often it is sent here.
@@ -336,7 +336,7 @@ level does not touch them:
 
 ## Read-your-trigger is a floor, not the mechanism
 
-An agent woken by a change to the engine's own tracker or knowledge base sees
+An agent woken by a change to Worklet or Doclet sees
 that change. That is guaranteed by the *wake* carrying the record's own
 position — `trigger_position`, where on its log the change was committed (see
 [the event system](../concepts/event-system.md)) — and not by the level the
