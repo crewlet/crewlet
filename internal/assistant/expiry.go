@@ -35,18 +35,27 @@ const expiryReapBatch = 100
 // an expired one.
 var engineActor = iam.Actor{Name: "engine", Kind: iam.ActorSystem}
 
-// closeDerived closes row in end, under the operation every node derives
-// alike from the turn and name ([Derivation]), and answers the state the turn
-// is in now: end where this close or an earlier one of the same operation
-// landed, or the state another end left it in ([assistantdomain.TurnMoved]).
-// EXACTLY ONCE across the fleet: the state log arbitrates the turn's end, so
-// of two nodes noticing at once one records it.
-func (s *Service) closeDerived(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
-	name string, end assistantdomain.TurnEnd) (wire.TurnState, error) {
+// derivedWrite is the caller of an end nobody asked for, under the operation
+// every node derives alike from the turn and name ([Derivation]).
+func derivedWrite(owner uuid.UUID, row assistantdomain.Turn, name string) Write {
+	return Write{Owner: owner, By: engineActor, Derived: &Derivation{At: row.StartedAt,
+		Name: name, Identity: []string{row.ID.String()}}}
+}
 
-	err := s.records.CloseTurn(ctx, Write{Owner: owner, By: engineActor,
-		Derived: &Derivation{At: row.StartedAt, Name: name,
-			Identity: []string{row.ID.String()}}}, row.ID, end)
+// expiryWrite is the caller of a parked turn's expiry and what it settles.
+func expiryWrite(owner uuid.UUID, row assistantdomain.Turn) Write {
+	return derivedWrite(owner, row, "assistant_expire")
+}
+
+// closeDerived closes turn in end under w (a [derivedWrite]), and answers the
+// state the turn is in now: end where this close or an earlier one of the
+// same operation landed, or the state another end left it in
+// ([assistantdomain.TurnMoved]). EXACTLY ONCE across the fleet: the state log
+// arbitrates the turn's end, so of two nodes noticing at once one records it.
+func (s *Service) closeDerived(ctx context.Context, w Write, turn uuid.UUID,
+	end assistantdomain.TurnEnd) (wire.TurnState, error) {
+
+	err := s.records.CloseTurn(ctx, w, turn, end)
 	var moved *assistantdomain.TurnMoved
 	switch {
 	case errors.As(err, &moved):
@@ -58,17 +67,16 @@ func (s *Service) closeDerived(ctx context.Context, owner uuid.UUID, row assista
 }
 
 // lapse closes row expired when it is parked and none of the proposals it
-// waits on can still move it (proposals may be the conversation's: only the
-// turn's own are read). It answers whether the turn is over now, by this
-// close or any earlier end.
+// waits on can still move it (t is its conversation's transcript). It
+// answers whether the turn is over now, by this close or any earlier end.
 func (s *Service) lapse(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
-	proposals []assistantdomain.Proposal) (bool, error) {
+	t assistantdomain.Transcript) (bool, error) {
 
 	if row.State != wire.TurnWaitingForApproval {
 		return row.State.Final(), nil
 	}
 	var own []assistantdomain.Proposal
-	for _, p := range proposals {
+	for _, p := range t.Proposals {
 		if p.Turn == row.ID {
 			own = append(own, p)
 		}
@@ -76,12 +84,14 @@ func (s *Service) lapse(ctx context.Context, owner uuid.UUID, row assistantdomai
 	if !proposal.Lapsed(own, s.now()) {
 		return false, nil
 	}
-	state, err := s.closeDerived(ctx, owner, row, "assistant_expire", assistantdomain.TurnEnd{
+	w := expiryWrite(owner, row)
+	state, err := s.closeDerived(ctx, w, row.ID, assistantdomain.TurnEnd{
 		State: wire.TurnExpired, Steps: row.Steps})
 	if err != nil {
 		return false, err
 	}
 	if state == wire.TurnExpired {
+		s.settleWaiting(ctx, w, waitingSteps(t, row.ID), wire.ProposalExpired, nil, nil)
 		// The frame log this node may hold ends waiting for approval; a
 		// stream of the turn now is answered from the transcript, which
 		// says it expired.
@@ -103,7 +113,7 @@ func (s *Service) lapseOpen(ctx context.Context, owner uuid.UUID,
 	}
 	for _, row := range t.Turns {
 		if row.ID == open && row.State == wire.TurnWaitingForApproval {
-			closed, err := s.lapse(ctx, owner, row, t.Proposals)
+			closed, err := s.lapse(ctx, owner, row, t)
 			return !closed, err
 		}
 	}
@@ -120,7 +130,7 @@ func (s *Service) Lapse(ctx context.Context, owner, conversation, turn uuid.UUID
 	}
 	for _, row := range t.Turns {
 		if row.ID == turn {
-			_, err := s.lapse(ctx, owner, row, t.Proposals)
+			_, err := s.lapse(ctx, owner, row, t)
 			return err
 		}
 	}
@@ -145,7 +155,7 @@ func (s *Service) ReapLapsed(ctx context.Context) (int, error) {
 					continue
 				}
 				var over bool
-				if over, err = s.lapse(ctx, ref.Owner, row, t.Proposals); over {
+				if over, err = s.lapse(ctx, ref.Owner, row, t); over {
 					closed++
 				}
 			}
