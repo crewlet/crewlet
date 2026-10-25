@@ -294,6 +294,27 @@ func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) 
 // the retention gate exists to produce, and a caller distinguishing "gone" from
 // "the broker is unreachable" is the whole reason it is not one error value.
 // Asked as a read, for [DomainLog.LastSeq]'s reason.
+//
+// # The read term, and no term for the record's crossing
+//
+// A record may be as large as its log's MaxRecordBytes — the code log's is
+// the transport's whole [statelog.MaxTransportRecordBytes] — and the reply is
+// heard only once its last byte is in, so a reply still crossing at the read
+// term is asked again, and none is asked past the lookup ceiling. Neither
+// meets a domain log's reply. It is read only on a data node, whose JetStream
+// is a member in its own process, the leader's reply crossing the fleet's
+// cluster routes, or an external cluster it dials directly: never a leaf link,
+// and never a client's link at the object store's floor (internal/objstore's
+// MiBPace), which is what a piece's term is sized for (internal/jsapi's
+// Leader.Carrying). Read back on a member, the largest record took 46
+// ms (BenchmarkADomainLogReadOfItsLargestRecord, 20 reads on four cores):
+// inside the read term twentyfold, and a gigabit route adds 67 ms. A link
+// slow enough to cross the read term with it — under 70 Mbit/s — costs a
+// second reply, never the read; and the ceiling's thirty seconds would take a
+// route under 2.2 Mbit/s, across which the record's own append, which crossed
+// a route to reach a quorum, could not have been acknowledged inside even a
+// committer's thirty-second budget — so no log on such a fleet holds one to
+// read.
 func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 	payload []byte, storedAt time.Time, ok bool, err error) {
 

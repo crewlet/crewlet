@@ -151,7 +151,9 @@ func SequenceBudget(clustered bool) time.Duration {
 
 // LookupBudget is the CEILING over one existence probe — the "does this object
 // already exist" read that decides create-versus-observe, including however
-// many times [Read] has to re-issue it.
+// many times [Read] has to re-issue it — and over every other read [ReadWith]
+// asks, for the reason below: it is the longest silence the server keeps,
+// whoever is asking.
 //
 // # Why a read is not sized like a create
 //
@@ -226,8 +228,8 @@ type Timing struct {
 	// Sequence bounds a whole bring-up of many creates — see
 	// [SequenceBudget].
 	Sequence time.Duration
-	// Lookup is the ceiling over one existence probe, re-asks included —
-	// see [LookupBudget].
+	// Lookup is the ceiling over one read, re-asks included, whatever its
+	// caller set — see [LookupBudget] and [ReadWith].
 	Lookup time.Duration
 	// AskTerm is how long one metadata WRITE waits before it is presumed
 	// destroyed and re-issued — see [AskTerm].

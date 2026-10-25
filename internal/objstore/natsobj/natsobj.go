@@ -486,12 +486,10 @@ func checkCeiling(ctx context.Context, held int64, cfg Config) error {
 	return nil
 }
 
-// lookupBucket asks whether the bucket exists, under the lookup ceiling and at
-// the read term.
+// lookupBucket asks whether the bucket exists, as a read: at the read term, and
+// under the lookup ceiling every read is held to ([jsprovision.ReadWith]).
 func lookupBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing) (jetstream.ObjectStore, error) {
-	lookupCtx, cancel := context.WithTimeout(ctx, timing.Lookup)
-	defer cancel()
-	return jsprovision.ReadWith(lookupCtx, timing,
+	return jsprovision.ReadWith(ctx, timing,
 		func(ctx context.Context) (jetstream.ObjectStore, error) { return js.ObjectStore(ctx, Bucket) }, nil)
 }
 

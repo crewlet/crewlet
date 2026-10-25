@@ -25,6 +25,21 @@ import (
 // A WRITE IS NEVER ASKED THIS WAY: its reply is HELD until the object it made
 // has a leader ([AskTerm]), and a second create sent while the first is held
 // is a second write, so it asks through [Timing.Ask].
+//
+// # And never past t.Lookup, whatever its caller set
+//
+// The ceiling is the longest silence the server keeps ([LookupBudget]): past
+// it a group in any state answers a read — its leader, or a member of a group
+// with no leader with JSClusterNotAvailError — so a read still told nothing is
+// asking a broker it cannot reach, and asking on finds nothing out. A read for
+// a caller with no deadline of its own was asked for ever: the trim tick reads
+// every log's state on its node's lifetime, and its loop is the one that
+// evaluates the node's alarms, so a read nobody would ever answer held both. A
+// caller whose own deadline is longer gains nothing past the ceiling, for the
+// same reason; one whose deadline is shorter keeps it.
+//
+// The ceiling ending is SILENCE, never the caller's ending: [Unanswered] on
+// the caller's own context reads it as a read nobody answered.
 func ReadWith[T any](ctx context.Context, t Timing, one func(context.Context) (T, error),
 	again func(asks int)) (T, error) {
 
@@ -32,6 +47,8 @@ func ReadWith[T any](ctx context.Context, t Timing, one func(context.Context) (T
 		var zero T
 		return zero, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, t.Lookup)
+	defer cancel()
 	return hedge(ctx, t, one, again)
 }
 

@@ -1033,6 +1033,64 @@ func TestADroppedReadIsAskedAgainAtTheReadTerm(t *testing.T) {
 	}
 }
 
+// A READ NOBODY EVER ANSWERS ENDS AT THE LOOKUP CEILING, whatever its caller
+// set: none at all, or a deadline longer than the ceiling.
+//
+// Past the ceiling the server answers a read in any state its group is in, so
+// silence there is a broker this side cannot reach, and asking on finds out
+// nothing. With no ceiling of its own a read for a caller with no deadline —
+// the trim tick, on its node's lifetime, whose loop also evaluates the node's
+// alarms — was asked for ever. The ceiling's ending is silence: the caller's
+// own context is alive, so [Unanswered] reads it as a read nobody answered.
+func TestAReadNobodyAnswersEndsAtTheLookupCeiling(t *testing.T) {
+	t.Parallel()
+	for name, caller := range map[string]func(context.Context) (context.Context, context.CancelFunc){
+		"with no deadline": func(ctx context.Context) (context.Context, context.CancelFunc) {
+			return context.WithCancel(ctx)
+		},
+		"with a deadline past the ceiling": func(ctx context.Context) (context.Context, context.CancelFunc) {
+			return context.WithTimeout(ctx, time.Hour)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := caller(t.Context())
+			defer cancel()
+			var asks atomic.Int64
+			done := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				done <- read(ctx, fast, func(ctx context.Context) error {
+					asks.Add(1)
+					<-ctx.Done() // nobody answers, ever
+					return ctx.Err()
+				})
+			}()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(10 * fast.Lookup):
+				cancel()
+				<-done
+				t.Fatalf("a read nobody answers was still being asked %v later, "+
+					"ten times its %v ceiling (%d requests)", 10*fast.Lookup,
+					fast.Lookup, asks.Load())
+			}
+			if took := time.Since(start); took < fast.Lookup {
+				t.Errorf("the read gave up after %v, before its %v ceiling", took, fast.Lookup)
+			}
+			if !Unanswered(ctx, err) {
+				t.Errorf("the ceiling ended the read with %v, which the caller "+
+					"whose context is still alive cannot read as silence", err)
+			}
+			if n := asks.Load(); n < 2 {
+				t.Errorf("the read was asked %d time(s) before its ceiling, want it "+
+					"asked again while nobody answered", n)
+			}
+		})
+	}
+}
+
 // AND A WRITE IS NOT CUT AT IT, because a write's reply is HELD: the server
 // answers a create once the object it made has a leader, an election after the
 // request arrived. Cut at the read term, every accepted create would be

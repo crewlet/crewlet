@@ -1153,6 +1153,40 @@ func TestADomainLogReadItsLeaderNeverAnsweredIsAskedAgain(t *testing.T) {
 	}
 }
 
+// AND ONE NOBODY EVER ANSWERS ENDS AT THE LOOKUP CEILING, for a caller with no
+// deadline of its own: the trim tick reads every log's state on its node's
+// lifetime, in the loop that also evaluates the node's alarms, and asked until
+// somebody answered, a read of a broker the node could not reach held both for
+// good.
+func TestADomainLogReadNobodyAnswersEndsAtTheLookupCeiling(t *testing.T) {
+	t.Parallel()
+	s := &silentLeaderStream{}
+	s.lost.Store(1 << 30)
+	l := logOver(s)
+	// A CEILING OF TWENTY REQUESTS rather than production's thirty seconds,
+	// so the case waits it out in about a second.
+	ceiling := 20 * (l.q.timing.ReadTerm + l.q.timing.ReAsk)
+	l.q.timing.Lookup = ceiling
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		_, err := l.Stats(ctx)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !jsprovision.Unanswered(ctx, err) {
+			t.Errorf("a read nobody answered ended with %v, not as silence", err)
+		}
+	case <-time.After(10 * ceiling):
+		cancel()
+		<-done
+		t.Fatalf("a read nobody answers was still being asked %v later, ten times "+
+			"its %v ceiling (%d requests)", 10*ceiling, ceiling, s.calls.Load())
+	}
+}
+
 // logOver is a domain log over s, read at [shortReads].
 func logOver(s jetstream.Stream) *DomainLog {
 	return &DomainLog{stream: s, name: "CREWLET_CODE_LOG", q: &Queue{timing: shortReads()},

@@ -935,8 +935,9 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 
 // askRead runs one metadata READ on a state log's bring-up — its stream's
 // ceiling when the logs are sized, and everything a domain consumer's open
-// reads: under the lookup ceiling of [Queue.provisioning], re-issued by
-// [jsprovision.ReadWith] while nobody answers, every request kept outstanding.
+// reads: at [Queue.provisioning]'s cadences, re-issued by
+// [jsprovision.ReadWith] while nobody answers, every request kept outstanding,
+// and never past the lookup ceiling that every such read is held to.
 //
 // # Why a read on this path is not sized like the writes beside it
 //
@@ -957,9 +958,7 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 // parameter, and the read hands back what it read rather than writing it
 // anywhere: [jsprovision.ReadWith] may have more than one request out at once.
 func askRead[T any](ctx context.Context, q *Queue, read func(context.Context) (T, error)) (T, error) {
-	readCtx, cancel := context.WithTimeout(ctx, q.provisioning().Lookup)
-	defer cancel()
-	return jsprovision.ReadWith(readCtx, q.provisioning(), read, nil)
+	return jsprovision.ReadWith(ctx, q.provisioning(), read, nil)
 }
 
 // domainConsumerName is what this node's reader is called on the broker.
