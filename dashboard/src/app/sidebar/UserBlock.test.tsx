@@ -92,6 +92,7 @@ const nobody: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
 };
 const ada: ViewerState = {
   ...nobody,

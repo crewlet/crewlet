@@ -45,6 +45,8 @@ import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
 import { ADMIN, KNOWLEDGE, TRACKER, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
+import type { AssistantViewerReason } from "~/contract/assistant.ts";
+import { assistantUnavailable } from "~/protocol/assistantWire.ts";
 
 export interface ViewerState {
   /** The login the engine resolved this browser to, or "". */
@@ -128,6 +130,12 @@ export interface ViewerState {
   configWriter: boolean;
   /** Who manages the company document, or empty when nothing does. */
   configManagedBy: readonly string[];
+  /**
+   * Why this caller may not ask the Dashboard Assistant, or null when they
+   * may: the engine's own first failing condition, and `disabled` for an
+   * engine whose answer carries no `assistant` member at all.
+   */
+  assistant: AssistantViewerReason | null;
 }
 
 /**
@@ -169,6 +177,7 @@ function useViewerRead(): ViewerState {
     asking: loading && data === null && error === null,
     configWriter: data?.config_writer ?? false,
     configManagedBy: data?.config_managed_by ?? [],
+    assistant: assistantUnavailable(data?.assistant),
   };
 }
 

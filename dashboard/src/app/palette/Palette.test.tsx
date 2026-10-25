@@ -61,6 +61,7 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
 };
 
 const ANONYMOUS: ViewerState = {
