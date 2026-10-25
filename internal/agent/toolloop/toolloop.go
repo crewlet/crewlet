@@ -908,6 +908,17 @@ type Config struct {
 	// ([llm.Request.StreamTokens]). Read only with StreamPartials.
 	StreamTokens bool
 
+	// OwnPrompt says the loop's system prompt is its whole instruction, so
+	// its rounds are sent as calls that replace a vendor harness's own
+	// prompt rather than keep it ([llm.Request.Agent] false). The zero value
+	// is a seat at work, whose rounds keep the harness's prompt and add the
+	// seat's after it: every phase of a turn and every worker.
+	//
+	// The Dashboard Assistant sets it. It is not a seat: it acts as a person,
+	// its CLI is run with no tool of its own, and the harness's prompt is
+	// written for a coding agent at a terminal whose tools it would describe.
+	OwnPrompt bool
+
 	// OnProgress receives the live view twice per round and once per call:
 	// once the model has spoken, immediately before each tool call with
 	// that call as [Result.Running], and again once its tools have
@@ -1252,9 +1263,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages: msgs,
 			Tools:    tools,
-			// Every caller of this loop is a seat at work — a phase of
-			// its turn or a worker it delegated to — and nothing else is.
-			Agent:   true,
+			// A seat at work (a phase of its turn or a worker it
+			// delegated to) unless the loop's prompt is its own.
+			Agent:   !cfg.OwnPrompt,
 			OnDelta: onDelta,
 			// Only where something is watching: a token stream nobody
 			// reads is a larger output for nothing.
