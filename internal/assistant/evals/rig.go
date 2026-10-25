@@ -92,12 +92,12 @@ func Assemble(o RigOptions) (*Rig, error) {
 	if o.Person != nil {
 		r.Person = *o.Person
 	}
-	var dispatcher exec.Dispatcher = o.Dispatcher
+	dispatcher := o.Dispatcher
 	if dispatcher == nil {
 		r.Dispatcher = &Dispatcher{Handler: o.Handler}
 		dispatcher = r.Dispatcher
 	}
-	var revoker assistant.Revoker = o.Revoker
+	revoker := o.Revoker
 	if revoker == nil {
 		r.Revoker = &Revoker{}
 		revoker = r.Revoker
