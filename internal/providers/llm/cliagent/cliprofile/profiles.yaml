@@ -1517,6 +1517,108 @@ opencode:
     cache_read: [["data", "tokens", "cache", "read"]]
     cache_write: [["data", "tokens", "cache", "write"]]
     reasoning: [["data", "tokens", "reasoning"]]
+  # THE SEAT'S TOOLS RUN IN A SERVER OF OPENCODE'S OWN. Its one-shot run does
+  # not wait for a configured MCP server to start before it asks its model,
+  # so the model was offered none of the seat's tools (measured on 2.1.4). So
+  # a run with tools starts `opencode serve` in the call's directory, waits
+  # for it to print its address and its password, asks it (`api mcp.list`)
+  # until it lists the crewlet server as connected, and only then runs
+  # `run --server` against it, the password in OPENCODE_PASSWORD; the usage
+  # is asked of the same server; and the server is stopped with the run.
+  #
+  # The server is declared in a second file of the call's own configuration
+  # directory, `opencode.jsonc`, which OpenCode reads beside `opencode.json`
+  # (the profile's own seed, which a text function takes alone): the crewlet
+  # server (`codemode: false`, so its tools are the model's tools rather than
+  # functions inside Code Mode's runtime) and the permissions again, the
+  # seat's tools allowed (`crewlet_*`) beside the web tools, above the
+  # deny-all. Measured on 2.1.4 through the engine's own code path against a
+  # local stand-in, the state directory inside a checkout holding an
+  # opencode.json and .opencode/opencode.json with servers of their own, an
+  # .mcp.json and every other CLI's MCP configuration at each level above the
+  # call, and an opencode.json and opencode.jsonc in the home's global
+  # configuration directory: the model was offered the seat's tools, webfetch
+  # and websearch, and no other server started. With the project walk switched
+  # back on (isolation_env), the ancestor's server started.
+  #
+  # The server's timeout.execution is OpenCode's per-call timeout, in
+  # milliseconds (4,000 gave a slow call up at 4.1s). The server re-reads the
+  # crewlet server's list when told it changed — a tool activated mid-run was
+  # offered a few hundred milliseconds later, from a later request than the
+  # one the activation's result went back in — and makes one response's calls
+  # at once.
+  #
+  # A failed run prints an `error` event, which says why by field: its class,
+  # its status and its message.
+  mcp:
+    lifecycle: serve
+    serve:
+      args: ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs=false"]
+      ready:
+        - {prefix: "server listening on ", as: "url"}
+        - {prefix: "server password ", as: "password"}
+      poll:
+        args: ["api", "--server", "{url}", "mcp.list"]
+        items: ["data"]
+        match: [{path: ["name"], equals: "crewlet"}]
+        starting: [{path: ["status", "status"], equals: "pending"}]
+    seed:
+      - path: .crewlet-config/opencode.jsonc
+        in: work
+        content: '{"mcp":{"servers":{"crewlet":{"type":"local","command":{relay_argv_json},"codemode":false,"timeout":{"execution":{tool_timeout_ms}}}}},"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"},{"action":"crewlet_*","resource":"*","effect":"allow"}]}'
+    complete_args: ["run", "--server", "{url}", "--print-logs=false", "--format", "json", "--title", "crewlet"]
+    usage_args: ["api", "--server", "{url}", "session.get", "--param", "sessionID=ses_{session}"]
+    env:
+      OPENCODE_PASSWORD: "{password}"
+    tool_timeout_seconds: 600
+    relists: true
+    concurrency: at_once
+    failure_events:
+      - match: [{path: ["type"], equals: "error"}]
+        fields: [["error", "type"], ["error", "status"], ["error", "message"]]
+  # EACH REQUEST, FROM THE RUN'S STREAM: a step is a request, its events
+  # keyed by the step's message id — step_start, its prose, its calls, and
+  # step_finish with its stop reason and counts, which closes it. A call is
+  # printed only once it has COMPLETED, so the record shows a step's calls
+  # only after they ran (late_calls): a step is told once it closes or the
+  # next begins. The final step prints neither step_start nor step_finish,
+  # so its counts are the remainder of the session's total, asked of the
+  # server (mcp.usage_args). The CLI sends no id of its own with a call; a
+  # call is joined to its request by name and arguments.
+  #
+  # NO CAP: OpenCode's own step limit (an agent's `steps`) ends a run that
+  # reaches it like any other — exit 0, the session "succeeded" — and says so
+  # only in the error of a tool call it refuses ("Tools are disabled after the
+  # maximum agent steps"), a string a tool's own failure could carry as well.
+  # A run it ends is read as an answer.
+  #
+  # Measured on 2.1.4: each step's counts but the last as it closed, the
+  # session's total settling the rest, and each call in the record once it
+  # had run.
+  requests:
+    source: stdout
+    host_prefix: "crewlet_"
+    late_calls: true
+    stops: {"tool-calls": tool_use, stop: end}
+    events:
+      - match: [{path: ["type"], equals: "step_start"}]
+        id: ["part", "messageID"]
+      - match: [{path: ["type"], equals: "text"}]
+        id: ["part", "messageID"]
+        text: ["part", "text"]
+      - match: [{path: ["type"], equals: "tool_use"}]
+        id: ["part", "messageID"]
+        call: {id: ["part", "id"], name: ["part", "tool"], args: ["part", "state", "input"]}
+      - match: [{path: ["type"], equals: "step_finish"}]
+        id: ["part", "messageID"]
+        closes: true
+        stop: ["part", "reason"]
+        usage:
+          input: [["part", "tokens", "input"]]
+          output: [["part", "tokens", "output"]]
+          cache_read: [["part", "tokens", "cache", "read"]]
+          cache_write: [["part", "tokens", "cache", "write"]]
+          reasoning: [["part", "tokens", "reasoning"]]
   # 2.0 keeps sessions, logs and its LOGINS in one directory: `opencode.db`
   # holds every transcript beside the `credential` table, and a project row
   # for every call, whose own directory is its project root. The whole of it
