@@ -30,10 +30,10 @@ var log = logging.Get("agent.toolloop")
 //
 //   - THE RUN IS ENDED, NOT ASKED TO END. A state the phase reaches mid-run —
 //     finished, parked, out of rounds, a note waiting, a stop — closes
-//     [dispatcher.Done], and the backend stops its CLI. The calls that put
-//     the phase there have their answers WITHHELD from the CLI (held until
-//     it is stopped), so it makes no further request it would be billed for;
-//     the loop folds their real results into the conversation itself.
+//     [dispatcher.Done], and the backend stops its CLI. Every answer the CLI
+//     would act on from then is WITHHELD (held until it is stopped), so it
+//     makes no further request it would be billed for; the loop folds the
+//     real results into the conversation itself.
 //   - CALLS ARRIVE TOGETHER. A CLI may issue a response's calls at once, in
 //     any order. Ordinary calls run side by side; a call that ENDS the phase
 //     or PARKS it — a terminator, a detached run — runs alone, after every
@@ -105,21 +105,16 @@ func parkMargin(timeout time.Duration) time.Duration {
 const stillRunning = "This call is still running. End your turn now: you will be " +
 	"resumed with its result."
 
-// pausingNote is what every call is answered once a run is ending for a reason
-// the model needs no words for — a person's note waiting, an activation, the
-// round budget. It names no note: a note is read as a USER message, never
-// inside a tool's result, where any tool's output could imitate one.
+// pausingNote is what a CLI is handed for an answer withheld from a run that
+// has been stopped — which it never reads. It names no note: a note is read as
+// a USER message, never inside a tool's result, where any tool's output could
+// imitate one.
 const pausingNote = "Stop here and end your turn: you will be resumed."
 
-// endedNote is what a call is answered once the phase has ended.
-const endedNote = "This phase has ended; this call was not run."
-
-// refusalLocked is what a call is answered once the run is no longer open.
-func (d *dispatcher) refusalLocked() string {
-	if d.state.ended() {
-		return endedNote
-	}
-	return pausingNote
+// notRun is the record of a call the model asked for that never ran because
+// its run was ending: what the next run, or a resumed one, reads as its answer.
+func notRun(name string) string {
+	return name + " was NOT run: the run ended before it could run. Call it again if it is still needed."
 }
 
 // callRec is one call that reached the dispatcher.
@@ -450,7 +445,7 @@ func (d *dispatcher) Revision() uint64 { return d.cfg.Surface.Revision() }
 func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Result {
 	c, refusal := d.admit(in)
 	if refusal != "" {
-		return toolsession.Result{Output: refusal, Failed: true}
+		return d.withheld(c.run, toolsession.Result{Output: refusal, Failed: true})
 	}
 	if c.exclusive {
 		d.awaitSiblings(c)
@@ -462,7 +457,7 @@ func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Re
 	// call waited for an exclusive one to run.
 	if why := d.recheck(c); why != "" {
 		d.unlockGate(c.exclusive)
-		return toolsession.Result{Output: why, Failed: true}
+		return d.withheld(c.run, toolsession.Result{Output: why, Failed: true})
 	}
 
 	// The revision BEFORE the call, so an activation it made is told from a
@@ -500,7 +495,7 @@ func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Re
 		return d.withheld(c.run, toolsession.Result{Output: res.Output, Failed: res.Failed})
 	case <-timeout:
 		d.parkLocally(c)
-		return toolsession.Result{Output: stillRunning}
+		return d.withheld(c.run, toolsession.Result{Output: stillRunning})
 	}
 }
 
@@ -535,7 +530,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 		return c, why
 	}
 	if d.state != stateOpen {
-		return refuse(d.refusalLocked())
+		return refuse(notRun(c.name))
 	}
 	// THE FENCE, BEFORE ANY CALL, and the budget's standing refusal:
 	// a node whose lease moved stops at the next call, not the next
@@ -543,19 +538,19 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if d.cfg.Fence != nil {
 		if err := d.cfg.Fence(); err != nil {
 			d.cutLocked(err)
-			return refuse(endedNote)
+			return refuse(notRun(c.name))
 		}
 	}
 	if err := Refusal(d.ctx, d.cfg.Budget); err != nil {
 		d.cutLocked(err)
-		return refuse(endedNote)
+		return refuse(notRun(c.name))
 	}
 	// PAST THE ROUND BUDGET: the CLI made a request the budget did not
 	// allow — its record reached the engine after the request's calls did,
 	// or it records none. Nothing of it runs.
 	if c.round > d.cfg.MaxRounds {
 		d.exhaustLocked()
-		return refuse(pausingNote)
+		return refuse(notRun(c.name))
 	}
 	if c.argsErr != "" {
 		// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN: running the
@@ -578,7 +573,7 @@ func (d *dispatcher) recheck(c *callRec) string {
 	if d.state == stateOpen {
 		return ""
 	}
-	why := d.refusalLocked()
+	why := notRun(c.name)
 	d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
 	return why
 }
@@ -767,7 +762,8 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 			log.ErrorContext(d.ctx, "tool_panicked", "tool", c.name, "panic", perr.Value,
 				"stack", perr.Stack)
 			d.cut(perr)
-			res = ToolResult{Output: endedNote, Failed: true}
+			res = ToolResult{Output: c.name + " failed: the tool stopped with an internal error, " +
+				"and the phase was stopped.", Failed: true}
 		}
 		d.mu.Lock()
 		c.took = time.Since(c.started)
@@ -779,9 +775,10 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	})
 	if err != nil {
 		// THE SURFACE ITSELF FAILED — a torn-down turn. The phase cannot
-		// go on, and the call did not happen as far as its record says.
+		// go on.
 		d.cut(fmt.Errorf("toolloop: surface failed on %q: %w", c.name, err))
-		return ToolResult{Output: endedNote, Failed: true}
+		return ToolResult{Output: c.name + " failed: the phase was stopped before it could answer.",
+			Failed: true}
 	}
 	return out
 }

@@ -279,6 +279,41 @@ func TestTheLastRoundsParallelCallsAllRunAndTheRunEnds(t *testing.T) {
 	}
 }
 
+// A CALL STILL RUNNING NEAR THE CLI'S OWN TOOL TIMEOUT ENDS THE RUN, and the
+// next run is handed its real result: a CLI that gave up on a call the engine is
+// still running would send its model to do it again.
+func TestACallNearTheCLIsToolTimeoutEndsTheRun(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("slow", "submit_work")
+	surf.results["slow"] = toolloop.ToolResult{Output: "the real result"}
+	surf.hook = func(_ context.Context, call llm.ToolCall) {
+		if call.Name == "slow" {
+			time.Sleep(600 * time.Millisecond)
+		}
+	}
+	prov := script(
+		runOf(calling("", "slow"), says("never")),
+		runOf(calling("", "submit_work")),
+	)
+	// A margin of five seconds — the floor — under a timeout of 5.3: the
+	// call is answered at 300ms, while it still runs.
+	prov.ToolTimeout = 5300 * time.Millisecond
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, TerminateAfter: []string{"submit_work"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := surf.calls(); !slices.Equal(got, []string{"slow", "submit_work"}) {
+		t.Errorf("the surface ran %v", got)
+	}
+	if late := prov.Late(); late != 0 {
+		t.Errorf("the CLI asked its model %d time(s) after its run was ended", late)
+	}
+	withheldAndHanded(t, prov, "the real result")
+	if res.Executions[0].Output != "the real result" {
+		t.Errorf("executions %+v, want the call's real result recorded", res.Executions)
+	}
+}
+
 // lagging reports the run's records in order, but only once a lag has passed
 // from the first — a backend reading a session file the CLI flushes late — and
 // every one of them before the run is over.

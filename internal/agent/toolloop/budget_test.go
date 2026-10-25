@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -69,6 +70,48 @@ func (m *weekMeter) total() (int, []int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.spent, slices.Clone(m.charges)
+}
+
+// A REFUSED SPEND NAMES ITS SCOPE AND ITS WINDOW AND STOPS THE LOOP — and the
+// refused request's tools never run, since tools are where the irreversible
+// things happen and charging after them makes the cap advisory. The refused
+// request was handed to the meter WHOLE, input and output, both billed before
+// anything judged them.
+func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("send_email")
+	m := &weekMeter{refuseAt: 100}
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{{Name: "send_email"}}, Usage: llm.Usage{Input: 60, Output: 60}},
+		says("a request made after the refusal"),
+	))
+	_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 5, Budget: m})
+	var be *toolloop.BudgetError
+	if !errors.As(err, &be) || !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("err = %v, want a *BudgetError carrying the refusing scope", err)
+	}
+	if be.Scope != "role" {
+		t.Errorf("scope = %q, want role — the refusal did not name itself", be.Scope)
+	}
+	if spent, _ := m.total(); spent != 120 || be.Used != 120 || be.Limit != 100 {
+		t.Errorf("meter holds %d and the refusal says %d/%d, want the whole 120-token request "+
+			"counted against the ceiling of 100", spent, be.Used, be.Limit)
+	}
+	if be.Period != period.Week || be.Window != "2026-W39" || !be.ResetsAt.Equal(weekTurnsOver) {
+		t.Errorf("window = %s %q resets %v, want the week 2026-W39 resetting %v",
+			be.Period, be.Window, be.ResetsAt, weekTurnsOver)
+	}
+	if !strings.Contains(err.Error(), "2026-W39") || !strings.Contains(err.Error(), "2026-09-28T00:00:00Z") {
+		t.Errorf("error %q does not name the window and when it resets", err)
+	}
+	if got := surf.calls(); len(got) != 0 {
+		t.Errorf("a refused request ran its tools: %v", got)
+	}
+	// The call the refused request made is answered only once the CLI is
+	// stopped: answered at once, it is the CLI's cue to ask its model again.
+	if late := prov.Late(); late != 0 {
+		t.Errorf("the CLI asked its model %d time(s) after the refusal", late)
+	}
 }
 
 // A REFUSAL THE METER ALREADY HOLDS MAKES NO RUN — the first included. Started,

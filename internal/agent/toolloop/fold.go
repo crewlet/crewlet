@@ -193,7 +193,7 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 			// the run ended before the CLI made it.
 			answers = append(answers, llm.Message{
 				Role: llm.RoleTool, ToolCallID: e.call.ID, Name: e.call.Name, Failed: true,
-				Content: e.call.Name + " was NOT run: the run ended before the call was made.",
+				Content: notRun(e.call.Name),
 			})
 		case rec == d.suspended:
 			// THE PARKED CALL STAYS UNANSWERED — exactly one dangling
