@@ -50,7 +50,7 @@ subcommand below is served by it.
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` through a node |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
-| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real completion returns with a tool call, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
+| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
@@ -2093,9 +2093,16 @@ none examines every entry, in the order the document declares them.
 **`list`** is the inventory — provider key, CLI, model and how it is signed
 in. **`doctor`** is the one to run before a company's first turn: it
 checks the CLI is installed, that something signs it in, and — unless you pass
-`-no-smoke` — that a real completion comes back, which is the only check that
-catches a plan whose quota is exhausted, or a profile whose `text_paths` no
-longer find the answer in what the CLI prints. The same run measures two claims the
+`-no-smoke` — that a real run reaches the seat's tools: one tool,
+`crewlet_smoke`, served on a real tool session as a phase's are, which the CLI
+is told of by its profile's `mcp` block, starts this binary as
+[`mcp-relay`](#crewlet-mcp-relay) to reach, and is asked to call the way a phase
+asks, nothing forcing the call. It passes when the session recorded the call
+and the CLI's record showed the request that made it, and says how the call was
+joined to that record and which tools the CLI
+offered its model — where a confinement that stopped holding shows first. It is
+the only check that catches a plan whose quota is exhausted, or a profile whose
+tool route, record or `text_paths` no longer match what the CLI does. The same run measures two claims the
 profile makes rather than trusting them: that the CLI's own **shell is
 refused** (it runs on the engine host, so a denial that stopped working is a
 seat reading whatever the engine user can read) and that its **web tool
