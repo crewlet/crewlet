@@ -272,6 +272,44 @@ func TestAProposalsStateNowIsDecidedOnRead(t *testing.T) {
 	}
 }
 
+// A PARKED TURN LAPSES ONLY WHEN NOTHING CAN MOVE IT: every proposal settled
+// at now, or a page action the page never reported past its expiry. A write in
+// doubt keeps the turn for the person's Retry.
+func TestAParkedTurnLapsesWhenNoneOfItsProposalsCanMove(t *testing.T) {
+	t.Parallel()
+	waiting := assistantdomain.Proposal{Scope: wire.ScopeServer, State: wire.ProposalProposed,
+		ExpiresAt: noon}
+	cases := []struct {
+		name string
+		ps   []assistantdomain.Proposal
+		at   time.Time
+		want bool
+	}{
+		{"a proposal still inside its lifetime", []assistantdomain.Proposal{waiting},
+			noon.Add(-time.Second), false},
+		{"a proposal past its expiry", []assistantdomain.Proposal{waiting}, noon, true},
+		{"one expired and one still waiting", []assistantdomain.Proposal{waiting,
+			{Scope: wire.ScopeServer, State: wire.ProposalProposed, ExpiresAt: noon.Add(time.Hour)}},
+			noon, false},
+		{"a write in doubt", []assistantdomain.Proposal{{Scope: wire.ScopeServer,
+			State: wire.ProposalApproved, DecidedAt: noon.Add(-time.Hour), ExpiresAt: noon}},
+			noon, false},
+		{"a page action approved and never reported past its expiry",
+			[]assistantdomain.Proposal{{Scope: wire.ScopePage, State: wire.ProposalApplying,
+				ExpiresAt: noon}}, noon, true},
+		{"a page action approved inside its lifetime",
+			[]assistantdomain.Proposal{{Scope: wire.ScopePage, State: wire.ProposalApproved,
+				ExpiresAt: noon}}, noon.Add(-time.Second), false},
+		{"settled proposals", []assistantdomain.Proposal{
+			{State: wire.ProposalApplied}, {State: wire.ProposalDeclined}}, noon, true},
+	}
+	for _, c := range cases {
+		if got := proposal.Lapsed(c.ps, c.at); got != c.want {
+			t.Errorf("%s: Lapsed = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // A WORD DIFF IS EXACTLY THE CHANGE: what it keeps and removes is the old
 // text, what it keeps and adds is the new one, whatever the texts are.
 func TestAWordDiffJoinsToBothTexts(t *testing.T) {

@@ -78,6 +78,17 @@ func (s *Service) Transcript(ctx context.Context, p iam.Principal, id uuid.UUID)
 	if err != nil {
 		return wire.Transcript{}, s.readFailure(err)
 	}
+	// A TURN PARKED ON PROPOSALS THAT ALL EXPIRED reads as expired, never
+	// as still waiting: it is closed here and the transcript read again.
+	current, err := s.lapseOpen(ctx, p.ID, t)
+	if err != nil {
+		return wire.Transcript{}, err
+	}
+	if !current {
+		if t, err = s.transcripts.Transcript(ctx, p.ID, id); err != nil {
+			return wire.Transcript{}, s.readFailure(err)
+		}
+	}
 	return s.render(t, p), nil
 }
 
@@ -276,6 +287,7 @@ func (s *Service) Close(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 	s.cancel(errDraining)
+	s.reaperWG.Wait()
 	for _, t := range running {
 		select {
 		case <-t.done:

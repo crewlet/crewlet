@@ -111,6 +111,9 @@ type Turns interface {
 	// Emit appends frames to a turn that stays parked, and answers where
 	// the client reads them.
 	Emit(ctx context.Context, owner, conversation, turn uuid.UUID, e Emission) (wire.TurnAccepted, error)
+	// Lapse ends the parked turn as expired where none of its proposals
+	// can still move it, now that one of them expired.
+	Lapse(ctx context.Context, owner, conversation, turn uuid.UUID) error
 }
 
 // Deps is what an [Approver] is built from.

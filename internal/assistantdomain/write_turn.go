@@ -347,6 +347,10 @@ func (w *Writer) ResumeTurn(ctx context.Context, c Call, turn uuid.UUID, node st
 // CloseTurn ends a running or parked turn in a final state, drops what it
 // parked and frees its conversation for the next turn. ONCE: a second close is
 // refused [TurnMoved] naming the state the first left it in.
+//
+// An end only a parked turn can come to ([ClosableFrom]) is refused
+// [TurnMoved] for a turn that is running: one an approval resumed a moment
+// before is the runner's to end, never expired under it.
 func (w *Writer) CloseTurn(ctx context.Context, c Call, turn uuid.UUID, end TurnEnd) (statelog.Result, error) {
 	if !end.State.Final() {
 		return statelog.Result{}, invalid("a turn closes in a final state, and %q is not one",
@@ -356,10 +360,20 @@ func (w *Writer) CloseTurn(ctx context.Context, c Call, turn uuid.UUID, end Turn
 		return statelog.Result{}, err
 	}
 	return w.onTurn(ctx, c, turn, OpTurnClosed, statelog.PatternArbitrated,
-		[]wire.TurnState{wire.TurnRunning, wire.TurnWaitingForApproval},
+		ClosableFrom(end.State),
 		func(uuid.UUID) (any, error) {
 			return TurnClosed{V: baseRecordVersion, State: end.State, Steps: end.Steps,
 				InputTokens: end.InputTokens, OutputTokens: end.OutputTokens,
 				CacheRead: end.CacheRead, ErrorCode: end.ErrorCode}, nil
 		})
+}
+
+// ClosableFrom is the states a turn may close into end from: expired (a
+// parked turn whose proposals nobody decided in time) from waiting for
+// approval alone, every other end from running or waiting.
+func ClosableFrom(end wire.TurnState) []wire.TurnState {
+	if end == wire.TurnExpired {
+		return []wire.TurnState{wire.TurnWaitingForApproval}
+	}
+	return []wire.TurnState{wire.TurnRunning, wire.TurnWaitingForApproval}
 }

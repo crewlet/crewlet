@@ -399,7 +399,7 @@ func (s *Store) CloseTurn(_ context.Context, w assistant.Write, turn uuid.UUID, 
 	if err := s.keep(w, "turn_closed", end); err != nil {
 		return err
 	}
-	c, t, err := s.move(w.Owner, turn, end.State, wire.TurnRunning, wire.TurnWaitingForApproval)
+	c, t, err := s.move(w.Owner, turn, end.State, assistantdomain.ClosableFrom(end.State)...)
 	if err != nil {
 		return err
 	}
@@ -408,6 +408,34 @@ func (s *Store) CloseTurn(_ context.Context, w assistant.Write, turn uuid.UUID, 
 	delete(s.parked, turn)
 	s.closes[turn]++
 	return nil
+}
+
+// ParkedPast implements [assistant.Transcripts]: the parked turns none of
+// whose proposals expires after now, oldest first.
+func (s *Store) ParkedPast(_ context.Context, now time.Time, limit int) ([]assistantdomain.TurnRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var due []*storedTurn
+	for id := range s.parked {
+		t := s.turns[id]
+		if t == nil || t.State != wire.TurnWaitingForApproval {
+			continue
+		}
+		live := false
+		for _, p := range s.proposals {
+			live = live || (p.Turn == id && p.ExpiresAt.After(now))
+		}
+		if !live {
+			due = append(due, t)
+		}
+	}
+	slices.SortFunc(due, func(a, b *storedTurn) int { return a.StartedAt.Compare(b.StartedAt) })
+	out := []assistantdomain.TurnRef{}
+	for _, t := range due[:min(limit, len(due))] {
+		out = append(out, assistantdomain.TurnRef{Owner: t.Owner, Conversation: t.Conversation,
+			Turn: t.ID})
+	}
+	return out, nil
 }
 
 // FailCloses makes the next n closes fail with an outcome nobody can confirm.
