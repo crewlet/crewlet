@@ -583,27 +583,70 @@ func (b *noteBox) Waiting() bool {
 	return len(b.pending) > 0
 }
 
-// A SUBMISSION ISSUED BESIDE A DELIVERY RUNS AFTER IT: a CLI may issue a
-// response's calls at once and in any order, and the submission is judged
-// against what the phase delivered.
+// A SUBMISSION IS JUDGED AFTER THE DELIVERY BESIDE IT, AND THE DELIVERY RUNS IN
+// EITHER ORDER — on a CLI that issues a response's calls at once and on one
+// that waits on each answer before its next call. Issued together, the
+// submission waits for the delivery, whatever order the model wrote them in, so
+// it is judged against what the phase delivered. Issued in turn, the
+// submission's answer goes back so the delivery is made — the model asked for
+// it in the same breath — and the run ends after it. Either way both are run
+// and recorded, the phase is finished, and the CLI asks its model nothing more.
+//
+// The cases issued at once race, so each is tried repeatedly.
 //
 // Mutation: run a terminator as an ordinary call and, issued at once, it can
-// run first — the delivery is then refused as after the phase ended.
+// run first; end the run at the submission and, issued in turn, the delivery
+// after it is never made.
 func TestASubmissionBesideADeliveryRunsAfterIt(t *testing.T) {
 	t.Parallel()
-	for i := range 20 {
-		surf := newSurface("post", "submit_work")
-		prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{{
-			Parallel: true,
-			Calls:    []llmtest.Call{{Name: "submit_work"}, {Name: "post"}},
-		}}}}}
-		_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, TerminateAfter: []string{"submit_work"}})
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-		if got := surf.calls(); !slices.Equal(got, []string{"post", "submit_work"}) {
-			t.Fatalf("attempt %d: the surface ran %v, want the delivery before the submission", i, got)
-		}
+	for _, tc := range []struct {
+		name     string
+		parallel bool
+		order    []string
+		ran      []string
+	}{
+		{"at once, submission first", true, []string{"submit_work", "post"}, []string{"post", "submit_work"}},
+		{"at once, delivery first", true, []string{"post", "submit_work"}, []string{"post", "submit_work"}},
+		{"in turn, delivery first", false, []string{"post", "submit_work"}, []string{"post", "submit_work"}},
+		{"in turn, submission first", false, []string{"submit_work", "post"}, []string{"submit_work", "post"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			attempts := 1
+			if tc.parallel {
+				attempts = 20
+			}
+			for i := range attempts {
+				surf := newSurface("post", "submit_work")
+				r := llmtest.Response{Parallel: tc.parallel}
+				for _, n := range tc.order {
+					r.Calls = append(r.Calls, llmtest.Call{Name: n})
+				}
+				prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
+					r, {Text: "a request made after the phase was decided"},
+				}}}}
+				res, err := run(t, toolloop.Config{Provider: prov, Surface: surf,
+					TerminateAfter: []string{"submit_work"}})
+				if err != nil {
+					t.Fatalf("attempt %d: Run: %v", i, err)
+				}
+				if got := surf.calls(); !slices.Equal(got, tc.ran) {
+					t.Fatalf("attempt %d: the surface ran %v, want %v", i, got, tc.ran)
+				}
+				if res.ExhaustedRounds || res.RoundsUsed != 1 || len(prov.Seen()) != 1 {
+					t.Errorf("attempt %d: rounds %d over %d runs (exhausted %v), want the one round, finished",
+						i, res.RoundsUsed, len(prov.Seen()), res.ExhaustedRounds)
+				}
+				if late := prov.Late(); late != 0 {
+					t.Errorf("attempt %d: the CLI asked its model %d time(s) after the phase was decided", i, late)
+				}
+				for id, m := range toolResults(res.Messages) {
+					if m.Failed {
+						t.Errorf("attempt %d: call %s (%s) is recorded as not run: %q", i, id, m.Name, m.Content)
+					}
+				}
+			}
+		})
 	}
 }
 

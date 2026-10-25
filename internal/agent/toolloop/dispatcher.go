@@ -34,6 +34,15 @@ var log = logging.Get("agent.toolloop")
 //     would act on from then is WITHHELD (held until it is stopped), so it
 //     makes no further request it would be billed for; the loop folds the
 //     real results into the conversation itself.
+//   - A RESPONSE'S CALLS ARE RUN AS ONE, AS A ROUND'S WERE. A run that must
+//     end over one of a response's calls ends once the response's other calls
+//     have reached the engine, not at the first: a CLI that waits on each
+//     answer before its next call would otherwise never make the rest, and
+//     the model asked for them in the same breath — a delivery written beside
+//     its submission, a call made while a note arrived. Until then the
+//     deciding answer goes back, so the next call comes; the last answer is
+//     the one withheld, since a CLI asks its model again only once every call
+//     of the response is answered.
 //   - CALLS ARRIVE TOGETHER. A CLI may issue a response's calls at once, in
 //     any order. Ordinary calls run side by side; a call that ENDS the phase
 //     or PARKS it — a terminator, a detached run — runs alone, after every
@@ -210,6 +219,12 @@ type dispatcher struct {
 	cutErr error
 	done   chan struct{}
 
+	// pend is an end the run has reached and not yet taken — waiting for the
+	// rest of the response that decided it, pendRound — and stateOpen when
+	// there is none. See the file's doc.
+	pend      dstate
+	pendRound int
+
 	turns     []*observedTurn
 	calls     []*callRec
 	runs      []*run
@@ -337,7 +352,13 @@ func (d *dispatcher) Observe(t llm.Turn) {
 		}
 		d.expectLocked(turn)
 		d.turns = append(d.turns, turn)
+		if d.pend != stateOpen && turn.round > d.pendRound {
+			// THE CLI ASKED ITS MODEL AGAIN: the response that decided the
+			// run's end is over, whatever of it never came.
+			d.endLocked()
+		}
 	}
+	d.endIfCompleteLocked()
 	d.cond.Broadcast()
 	d.mu.Unlock()
 	d.frame()
@@ -407,11 +428,12 @@ func (d *dispatcher) Done() <-chan struct{} {
 
 // Halted reports a run no other member of a chain may continue: any end the
 // run has reached is one the loop answers itself — the phase ended, or the run
-// was ended for a reason the next run of the loop answers.
+// was ended for a reason the next run of the loop answers — including one
+// still waiting for the rest of the response that decided it.
 func (d *dispatcher) Halted() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.state != stateOpen
+	return d.state != stateOpen || d.pend != stateOpen
 }
 
 // Pending is what the phase did since the loop last folded it.
@@ -527,6 +549,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 
 	refuse := func(why string) (*callRec, string) {
 		d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
+		d.endIfCompleteLocked()
 		return c, why
 	}
 	if d.state != stateOpen {
@@ -552,6 +575,19 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 		d.exhaustLocked()
 		return refuse(notRun(c.name))
 	}
+	if d.pend != stateOpen {
+		if c.round != d.pendRound {
+			// A call of a later request than the one that decided the
+			// run's end: the CLI moved on.
+			d.endLocked()
+			return refuse(notRun(c.name))
+		}
+		if d.pend == stateFinished && c.exclusive {
+			// A second submission, or a park, beside a submission that
+			// already finished the phase.
+			return refuse(notRun(c.name))
+		}
+	}
 	if c.argsErr != "" {
 		// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN: running the
 		// call on an empty object is a write the model never asked for.
@@ -566,15 +602,16 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 }
 
 // recheck is admit's verdict again, for a call that waited for the gate: the
-// phase may have ended in the meantime.
+// phase may have ended, or finished, in the meantime.
 func (d *dispatcher) recheck(c *callRec) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.state == stateOpen {
+	if d.state == stateOpen && !(d.pend == stateFinished && c.exclusive) {
 		return ""
 	}
 	why := notRun(c.name)
 	d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
+	d.endIfCompleteLocked()
 	return why
 }
 
@@ -816,20 +853,21 @@ func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
 	case res.Suspend:
 		// THE PARK IS AT ONCE: its call stays unanswered, so nothing more
 		// of its response can come.
-		d.state, d.suspended, d.payload = stateParked, c, res.SuspendPayload
+		d.state, d.pend, d.suspended, d.payload = stateParked, stateOpen, c, res.SuspendPayload
 		d.closeDoneLocked()
 	case terminator && !res.Failed:
 		// A SUBMISSION THAT RAN FINISHED THE PHASE, whatever the run was
 		// ending for meanwhile — a call answered "still running" returns
 		// after its run ended, and a next run would submit again.
 		if d.state != stateOpen {
-			d.state = stateFinished
+			d.state, d.pend = stateFinished, stateOpen
 		} else {
 			d.decideLocked(stateFinished, c.round)
 		}
 	case d.state == stateOpen:
 		d.afterCallLocked(c, before)
 	}
+	d.endIfCompleteLocked()
 	d.mu.Unlock()
 }
 
@@ -855,8 +893,10 @@ func (d *dispatcher) withheld(r *run, answer toolsession.Result) toolsession.Res
 // run: the budget's last round, a note waiting, an activation the CLI will
 // not see.
 func (d *dispatcher) afterCallLocked(c *callRec, before uint64) {
-	if r := c.run; r != nil && r.opts.ObservesRequests {
-		d.settleRoundLocked(c.round)
+	if c.round == d.cfg.MaxRounds {
+		// THE LAST ROUND THE BUDGET ALLOWS: once its calls have all come,
+		// the run ends before the CLI can make another request.
+		d.decideLocked(stateExhausted, c.round)
 	}
 	if d.cfg.Steer != nil && d.cfg.Steer.Waiting() {
 		d.decideLocked(statePausing, c.round)
@@ -866,35 +906,49 @@ func (d *dispatcher) afterCallLocked(c *callRec, before uint64) {
 	}
 }
 
-// decideLocked ends the run in st, over the response of round.
-func (d *dispatcher) decideLocked(st dstate, _ int) {
+// decideLocked records that the run must end in st over the response of round:
+// the end is taken once the response's other calls have come
+// ([dispatcher.endIfCompleteLocked]). Of two ends one response reaches, the
+// one that settles more is kept — a submission over a note, the budget over an
+// activation.
+func (d *dispatcher) decideLocked(st dstate, round int) {
 	if d.state != stateOpen {
 		return
 	}
-	d.state = st
-	d.closeDoneLocked()
+	if st > d.pend {
+		d.pend, d.pendRound = st, round
+	}
 }
 
-// settleRoundLocked ends the run once the LAST round the budget allows has
-// had every call it asked for: the CLI must not make another request.
-func (d *dispatcher) settleRoundLocked(round int) {
-	if round != d.cfg.MaxRounds || d.state != stateOpen {
+// endIfCompleteLocked takes the decided end once nothing more of the response
+// that decided it is to come: every call the record shows the CLI making to the
+// host has reached it. A CLI asks its model again only once every call of the
+// response is answered, so the call that completes the response is the one
+// whose answer is withheld.
+func (d *dispatcher) endIfCompleteLocked() {
+	if d.pend == stateOpen || d.state != stateOpen {
 		return
 	}
-	for _, c := range d.calls {
-		if c.round == round && !c.settled {
+	if r := d.currentRunLocked(); r != nil && r.opts.ObservesRequests {
+		if t := d.turnOfRoundLocked(d.pendRound); t != nil && t.awaiting(-1, nil) {
 			return
 		}
 	}
-	if t := d.turnOfRoundLocked(round); t != nil && t.awaiting(-1, nil) {
+	d.endLocked()
+}
+
+// endLocked takes the decided end now.
+func (d *dispatcher) endLocked() {
+	if d.pend == stateOpen || d.state != stateOpen {
 		return
 	}
-	d.exhaustLocked()
+	d.state, d.pend = d.pend, stateOpen
+	d.closeDoneLocked()
 }
 
 func (d *dispatcher) exhaustLocked() {
-	if d.state == stateOpen {
-		d.state = stateExhausted
+	if d.state == stateOpen && d.pend != stateFinished {
+		d.state, d.pend = stateExhausted, stateOpen
 		d.closeDoneLocked()
 	}
 }
@@ -922,6 +976,7 @@ func (d *dispatcher) parkLocally(c *callRec) {
 	d.mu.Lock()
 	c.answered = true
 	d.decideLocked(stateLocalPark, c.round)
+	d.endIfCompleteLocked()
 	d.cond.Broadcast()
 	d.mu.Unlock()
 	d.frame()
@@ -950,7 +1005,7 @@ func (d *dispatcher) cutLocked(err error) {
 	if d.state.ended() {
 		return
 	}
-	d.state, d.cutErr = stateCut, err
+	d.state, d.cutErr, d.pend = stateCut, err, stateOpen
 	d.closeDoneLocked()
 }
 

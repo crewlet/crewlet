@@ -271,7 +271,7 @@ func (d *dispatcher) reopen() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.state.ended() && d.state != stateExhausted {
-		d.state = stateOpen
+		d.state, d.pend = stateOpen, stateOpen
 		select {
 		case <-d.done:
 			d.done = make(chan struct{})
@@ -282,11 +282,14 @@ func (d *dispatcher) reopen() {
 	d.invCalls, d.invRuns, d.invTurns = len(d.calls), len(d.runs), len(d.turns)
 }
 
-// finish closes the run: its CLI has exited.
+// finish closes the run: its CLI has exited, and an end it decided and was
+// still waiting to take — the rest of the deciding response never came — is
+// taken now.
 func (d *dispatcher) finish() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.active = false
+	d.endLocked()
 }
 
 // inFlight is the round a live frame names and when it started: while a run
@@ -324,7 +327,7 @@ func (d *dispatcher) inFlight(now time.Time) (int, time.Time) {
 	if n := len(d.turns); n > d.invTurns && d.turns[n-1].awaiting(-1, nil) {
 		return last()
 	}
-	if d.state != stateOpen {
+	if d.state != stateOpen || d.pend != stateOpen {
 		return last()
 	}
 	return d.rounds + 1, d.modelStartLocked(now)

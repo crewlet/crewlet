@@ -379,6 +379,55 @@ func TestASuspendIsRefusedWhereItCannotBeResumed(t *testing.T) {
 	}
 }
 
+// A LONG CALL BESIDE ANOTHER LETS THE OTHER RUN. A call that waits on other
+// model runs ends its run — but not before the rest of its response: a CLI that
+// waits on each answer is told "still running" so it makes the next call, and
+// the run ends after that one, whose answer is withheld. The next run is handed
+// both results.
+func TestALongCallBesideAnotherLetsTheOtherRun(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("delegate", "post", "submit_work")
+	surf.results["delegate"] = toolloop.ToolResult{Output: "the workers' answer"}
+	surf.hook = func(_ context.Context, call llm.ToolCall) {
+		if call.Name == "delegate" {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	prov := script(
+		runOf(calling("", "delegate", "post"), says("never reached in this run")),
+		runOf(calling("", "submit_work")),
+	)
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"},
+		TerminateAfter: []string{"submit_work"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ran := surf.calls()
+	slices.Sort(ran)
+	if !slices.Equal(ran, []string{"delegate", "post", "submit_work"}) {
+		t.Errorf("the surface ran %v, want the long call, the one beside it, and the submission", ran)
+	}
+	if late := prov.Late(); late != 0 {
+		t.Errorf("the CLI asked its model %d time(s) after its run was ended", late)
+	}
+	seen := prov.Seen()
+	if len(seen) != 2 {
+		t.Fatalf("%d runs, want two", len(seen))
+	}
+	results := map[string]string{}
+	for _, m := range seen[1].Messages {
+		if m.Role == llm.RoleTool {
+			results[m.Name] = m.Content
+		}
+	}
+	if results["delegate"] != "the workers' answer" || results["post"] != "post ok" {
+		t.Errorf("the next run was handed %v, want both calls' real results", results)
+	}
+	if strings.Contains(res.Text, "never reached in this run") {
+		t.Errorf("the first run went on past its response: %q", res.Text)
+	}
+}
+
 // halting is a backend that, as a fallback chain does, asks the host after its
 // run whether another member may continue it.
 type halting struct {

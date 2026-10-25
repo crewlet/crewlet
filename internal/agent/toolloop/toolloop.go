@@ -1226,10 +1226,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		runSpan.End()
 
-		// The run is over; then EVERY CALL OF THE RUN HAS SETTLED before
-		// anything is read: a call answered "still running" goes on after
-		// its CLI stopped, and its result is part of what the next run is
-		// handed.
+		// The run is over, and an end it reached is taken; then EVERY CALL
+		// OF THE RUN HAS SETTLED before anything is read: a call answered
+		// "still running" goes on after its CLI stopped, and its result is
+		// part of what the next run is handed.
 		d.finish()
 		d.awaitSettled()
 		if completion != nil {

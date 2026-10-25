@@ -192,6 +192,45 @@ func answered(t *testing.T, msgs []llm.Message, note string) {
 	}
 }
 
+// A NOTE NEVER SPLITS A RESPONSE FROM ITS CALLS. A response that asked for two
+// calls gets both run and both answered before anything else is said: a
+// provider rejects a user message between a call and its result, a model shown
+// one would read the note as the tool's output — and a note that arrived while
+// the first call ran is not a reason to drop the second, which the model asked
+// for in the same breath. Offered during the FIRST call, the moment a naive
+// delivery would end the run there, it lands after both.
+func TestASteerNeverSplitsAResponseFromItsCalls(t *testing.T) {
+	t.Parallel()
+	box := &stepBox{log: &stepLog{}}
+	surf := newSurface("first", "second")
+	surf.hook = offerDuring(box, "first", "the note")
+	prov := script(
+		runOf(calling("", "first", "second"), says("never reached in this run")),
+		runOf(says("done")),
+	)
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 4, Steer: box})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := surf.calls(); !slices.Equal(got, []string{"first", "second"}) {
+		t.Errorf("the surface ran %v, want both calls of the response", got)
+	}
+	if late := prov.Late(); late != 0 {
+		t.Errorf("the CLI asked its model %d time(s) after the note ended its run", late)
+	}
+	seen := prov.Seen()
+	if len(seen) != 2 {
+		t.Fatalf("%d runs, want the one the note ended and the one that read it", len(seen))
+	}
+	answered(t, seen[1].Messages, "the note")
+	for _, m := range seen[1].Messages {
+		if m.Role == llm.RoleTool && m.Failed {
+			t.Errorf("the next run reads %q as a failed call — both calls ran", m.Content)
+		}
+	}
+	answered(t, res.Messages, "the note")
+}
+
 // A NOTE WAITS FOR EVERY CALL IN FLIGHT. A CLI that runs a response's calls at
 // once has them all out when a note arrives during one: the run ends once the
 // last of them is answered — not at the first — and the next run reads every
