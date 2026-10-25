@@ -320,8 +320,10 @@ func (f *Fleet) Start(ctx context.Context, server Server) error {
 	} {
 		stop, err := f.broker.Serve(ctx, s.subject, s.answer)
 		if err != nil {
-			f.withdrawLocked(context.WithoutCancel(ctx))
-			return fmt.Errorf("live: serve %s: %w", s.subject, err)
+			// The answerers already serving are withdrawn, and a failure to
+			// withdraw one is reported beside the failure to serve.
+			return errors.Join(fmt.Errorf("live: serve %s: %w", s.subject, err),
+				f.withdrawLocked(context.WithoutCancel(ctx)))
 		}
 		f.stopped = append(f.stopped, stop)
 	}
