@@ -136,10 +136,15 @@ type LaunchRequest struct {
 	System string
 
 	// Brief is the task: an agent-mode executor's turn's ask, or the
-	// executor's own description of the code task. It is FRAMED, not passed
-	// through: the coding agent also gets the turn's wider task beside it
-	// ([buildBrief]).
+	// executor's own description of the code task.
 	Brief string
+
+	// Wider is the goal the Brief serves, framed after it ([buildBrief]): a
+	// run_sandbox job's turn task, of which its executor's brief is one
+	// step. Empty for an agent-mode executor, whose Brief IS the turn's ask
+	// — its task again under a second heading was paid for on every launch,
+	// and read as a goal beyond the one it was given.
+	Wider string
 
 	// Task is the ask the suspended turn was working on, carried onto the
 	// row so a resume has the brief when the trigger is long gone.
@@ -520,7 +525,8 @@ func summarise(brief string) string {
 // CLI runs.
 //
 // TWO PARTS, in the order an engineer reads them: the concrete task the
-// executor asked for, then the wider goal it serves. Nothing standing is here
+// executor asked for, then the wider goal it serves, where it has one
+// ([LaunchRequest.Wider]). Nothing standing is here
 // — what the box provides and how to ask a person are instructions for the
 // whole run rather than part of this request, and they ride the system
 // prompt's channel ([buildSystem]).
@@ -532,9 +538,9 @@ func summarise(brief string) string {
 func buildBrief(req LaunchRequest) string {
 	var b strings.Builder
 	b.WriteString(req.Brief)
-	if req.Task != "" && req.Task != req.Brief {
+	if req.Wider != "" && req.Wider != req.Brief {
 		b.WriteString("\n\n## The wider task\n")
-		b.WriteString(req.Task)
+		b.WriteString(req.Wider)
 	}
 	return b.String()
 }

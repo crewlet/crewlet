@@ -29,6 +29,7 @@ func launchReq(turnID string) LaunchRequest {
 			TraceID: "tr-1", SpanID: "sp-1",
 		},
 		Brief: "Clone example.com/acme/api and fix the failing test",
+		Wider: "get CI green",
 		Task:  "get CI green",
 		Spec:  Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
 	}
@@ -291,9 +292,14 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	t.Parallel()
 	const seat = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
 	const ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
-	for name, tc := range map[string]struct{ system, label, opens, named string }{
+	for name, tc := range map[string]struct {
+		system, label, opens, named string
+		// agent marks an agent-mode executor, whose brief is the turn's
+		// own ask and so carries no wider task.
+		agent bool
+	}{
 		"agent mode": {
-			system: seat, label: "Ship the login fix\nand tell Ana",
+			system: seat, label: "Ship the login fix\nand tell Ana", agent: true,
 			opens: agentRunNote + "\n\n" + seat + "\n\n## Your environment\n", named: "Ship the login fix",
 		},
 		"run_sandbox": {system: "", opens: "## Your environment\n"},
@@ -303,6 +309,9 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 			rig := newWaiterRig(t)
 			req := launchReq("t1")
 			req.System, req.Ask, req.Label = tc.system, ask, tc.label
+			if tc.agent {
+				req.Wider = ""
+			}
 			named := cmp.Or(tc.named, req.Brief)
 			if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 				t.Fatalf("Launch: %v", err)
@@ -318,8 +327,15 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 			if !strings.HasSuffix(got.System, "\n\n"+ask) {
 				t.Errorf("the ask is not the last standing instruction the launch adds:\n%s", got.System)
 			}
-			if !strings.HasPrefix(got.Brief, req.Brief+"\n\n## The wider task\n") {
-				t.Errorf("the brief does not open with the task:\n%s", got.Brief)
+			// THE TASK ONCE: an agent-mode executor's brief is the turn's
+			// ask already, and a run_sandbox job's is one step of a goal
+			// framed after it.
+			want := req.Brief
+			if !tc.agent {
+				want += "\n\n## The wider task\n" + req.Wider
+			}
+			if got.Brief != want {
+				t.Errorf("the brief is\n%q\nwant\n%q", got.Brief, want)
 			}
 			if strings.Contains(got.Brief, "SEAT-IDENTITY-MARKER") || strings.Contains(got.Brief, "crewlet-ask") {
 				t.Errorf("standing instructions reached the brief:\n%s", got.Brief)

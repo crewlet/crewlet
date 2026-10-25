@@ -629,7 +629,7 @@ func TestAnAgentModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) 
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Task: "fix the failing test"}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,
 	}
 	const system = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
@@ -651,8 +651,9 @@ func TestAnAgentModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) 
 		t.Errorf("the run's standing instructions do not lead with the seat's system prompt:\n%s",
 			started[0].System)
 	}
-	if !strings.HasPrefix(started[0].Brief, "## Task\nfix the failing test") ||
-		strings.Contains(started[0].Brief, "SEAT-IDENTITY-MARKER") {
+	// THE ASK ONCE: it already opens with the turn's task, so nothing frames
+	// that task after it a second time.
+	if started[0].Brief != "## Task\nfix the failing test" {
 		t.Errorf("the run's prompt is not the turn's ask alone:\n%s", started[0].Brief)
 	}
 }
