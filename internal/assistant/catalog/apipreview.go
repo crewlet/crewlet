@@ -364,7 +364,7 @@ func diff(c *changes, field string, before, after any) {
 		addedLeaves(c, field, after, false)
 		return
 	}
-	if row, ok := proposal.Value(field, labelOf(field), scalar(before), scalar(after)); ok {
+	if row, ok := proposal.Value(field, cards.FieldLabel(field), scalar(before), scalar(after)); ok {
 		*c = append(*c, row)
 	}
 }
@@ -378,7 +378,7 @@ func diffList(c *changes, field string, before, after []any) {
 	was, wasKeyed := keyed(before)
 	is, isKeyed := keyed(after)
 	if !wasKeyed || !isKeyed {
-		if row, ok := proposal.Value(field, labelOf(field), scalar(before),
+		if row, ok := proposal.Value(field, cards.FieldLabel(field), scalar(before),
 			scalar(after)); ok {
 			*c = append(*c, row)
 		}
@@ -479,7 +479,7 @@ func leaves(c *changes, field string, v any, row func(field, label, value string
 	if value == "" || field == "" {
 		return
 	}
-	*c = append(*c, row(field, labelOf(field), value))
+	*c = append(*c, row(field, cards.FieldLabel(field), value))
 }
 
 // bounded is c with at most [diffRows] field rows past the request's, the rest
@@ -501,19 +501,6 @@ func join(field, key string) string {
 		return key
 	}
 	return field + "." + key
-}
-
-// labelOf is a field path as a person reads it.
-func labelOf(field string) string {
-	parts := strings.Split(field, ".")
-	for i, p := range parts {
-		parts[i] = strings.ReplaceAll(p, "_", " ")
-	}
-	label := strings.Join(parts, " › ")
-	if label == "" {
-		return "Value"
-	}
-	return strings.ToUpper(label[:1]) + label[1:]
 }
 
 // scalar is a value as one line of a card: a string as it is, a number or a

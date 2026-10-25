@@ -165,14 +165,14 @@ func entityOf(record map[string]any, title string) (Spec, any, bool) {
 			if _, isNumber := f.value.(json.Number); isNumber {
 				typ = wire.ColumnNumber
 			}
-			e.Facts = append(e.Facts, Fact{Label: labelOf(f.path), Path: "facts." + key, Type: typ})
+			e.Facts = append(e.Facts, Fact{Label: FieldLabel(f.path), Path: "facts." + key, Type: typ})
 		}
 		doc["facts"] = facts
 	}
 	if items := in.items(); len(items) > 0 {
 		noun := entries
 		if len(in.lists) == 1 {
-			many := strings.ToLower(labelOf(lastKey(in.lists[0].path)))
+			many := strings.ToLower(FieldLabel(lastKey(in.lists[0].path)))
 			noun = wire.Noun{One: Singular(many), Many: many}
 		}
 		e.Items = &Items{Path: "items", ID: "id", Label: "label", Fact: "fact", Prose: true,
@@ -260,7 +260,7 @@ func (in *inferred) items() []any {
 			label, fact := knownFields(record)
 			id := recordID(record, at)
 			if several {
-				id, fact = l.path+"/"+id, labelOf(l.path)
+				id, fact = l.path+"/"+id, FieldLabel(l.path)
 			}
 			if label == "" {
 				label = "Entry " + strconv.Itoa(at+1)
@@ -350,7 +350,7 @@ func records(list []any, path, title string, doc any) (Spec, any, bool) {
 	keys = keys[:min(len(keys), inferColumns)]
 	t := &Table{Title: title, Rows: path}
 	for _, k := range keys {
-		c := Column{Key: k, Label: labelOf(k), Path: k, Type: wire.ColumnText, Prose: true}
+		c := Column{Key: k, Label: FieldLabel(k), Path: k, Type: wire.ColumnText, Prose: true}
 		if numeric[k] {
 			c.Type, c.Prose = wire.ColumnNumber, false
 		}
@@ -391,9 +391,15 @@ func joinPath(prefix, key string) string {
 	return prefix + "." + key
 }
 
-// labelOf is a field's path as a person reads it: each key in words, nested
-// keys beneath their parent's name ("Task counts › active").
-func labelOf(path string) string {
+// FieldLabel is a field's dotted path as a person reads it: each key in words,
+// nested keys beneath their parent's name ("Task counts › active"), and
+// "Value" for the answer itself. ONE RULE for every label drawn from an
+// answer's own keys: an inferred card's facts and columns, and a generic
+// change's preview rows (internal/assistant/catalog).
+func FieldLabel(path string) string {
+	if path == "" {
+		return "Value"
+	}
 	keys := strings.Split(path, ".")
 	for i, k := range keys {
 		keys[i] = words(k)
