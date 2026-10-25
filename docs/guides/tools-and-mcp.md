@@ -150,11 +150,13 @@ the request carrying it, never by the one that opened a session, so a grant
 withdrawn mid-conversation stops the next call and an `Mcp-Session-Id` is a
 handle rather than a proof.
 
-Over MCP, each tracker write's answer also carries the **`op_id`** of the
-operation the call was, and the write tools take it back as an argument: an
-assistant has no turn to repeat, so sending the same call with that `op_id` is
-how it finishes a write that came back `unknown` or stopped part of the way
-through, instead of filing it twice. An `op_id` is that one call and no other:
+Over MCP, each tracker write's answer — and each [artifact and
+datastore](#artifacts) write's, by the same rule — also carries the
+**`op_id`** of the operation the call was, and the write tools take it back as
+an argument: an assistant has no turn to repeat, so sending the same call with
+that `op_id` is how it finishes a write that came back `unknown` or stopped
+part of the way through, instead of filing it twice. An `op_id` is that one
+call and no other:
 it carries a digest of the call's arguments, and brought back with any other
 argument, or to another tool, it is refused before anything is written. A seat
 is never offered the argument — its turn is its identity — and a seat's call

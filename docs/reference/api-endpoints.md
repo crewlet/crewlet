@@ -4971,8 +4971,9 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `upload_artifact_asset`, `create_artifact_folder`, `move_artifact`,
 `read_artifact_data`, `query_artifact_data`,
 `write_artifact_data` and `set_artifact_schema` (see
-[Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact write answers
-its `op_id` here as the tracker's do. A schema, a default, a trimmed field and the wording of a
+[Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact and datastore
+write answers its `op_id` here, and takes it back, by the tracker's own rule
+(below). A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 
@@ -5001,11 +5002,16 @@ exactly the same arguments and that `op_id` — every write it makes is then the
 same operation again, a created item or a new comment or saved view included,
 answered from the ledger where it landed and finished where it did not. A call
 without one is a new operation: repeated, a create files a second item. The
-argument is offered by `create_work_item`, `update_work_item`,
-`comment_on_work_item`, `merge_work_item`, `move_work_item`, `place_work_item`,
-`remove_work_item`, `restore_work_item`, `set_priorities`, `set_pins`,
-`mark_inbox` and `save_work_view`, and held to the rule every route that takes
-an `Idempotency-Key` holds that key
+argument is offered by the tracker's writes — `create_work_item`,
+`update_work_item`, `comment_on_work_item`, `merge_work_item`,
+`move_work_item`, `place_work_item`, `remove_work_item`, `restore_work_item`,
+`set_priorities`, `set_pins`, `mark_inbox`, `save_work_view`,
+`write_project_file` and `remove_project_file` — and by the artifacts' and the
+datastore's — `create_artifact`, `publish_artifact`, `update_artifact`,
+`share_artifact`, `unshare_artifact`, `upload_artifact_asset`,
+`create_artifact_folder`, `move_artifact`, `write_artifact_data` and
+`set_artifact_schema` — under one rule and in one set of words, and held to the
+rule every route that takes an `Idempotency-Key` holds that key
 to: an id this engine minted, at most 128 bytes of visible ASCII — anything
 else is refused naming `op_id`. An `op_id` belongs to **the one call it was
 answered for**: the id names that call's tool and carries a digest of its
@@ -5325,7 +5331,8 @@ destructive, idempotent, open-world) are the catalogue's own, and a verb this
 company is not served is not listed at all.
 
 An MCP call names no request of its own, so each one is a new operation and a
-tracker write answers the `op_id` it was — sent back with exactly the same
+write (the tracker's, an artifact's or a datastore's alike) answers the `op_id`
+it was — sent back with exactly the same
 arguments, it finishes that write rather than making another (see
 [What it serves](#what-it-serves)). An assistant that files the same item twice
 without one gets two items, because that is what it asked for twice.
