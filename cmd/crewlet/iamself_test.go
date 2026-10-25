@@ -314,7 +314,7 @@ func TestAPipedPasswordOrCodeIsReadNoFurtherThanAnySignInCarries(t *testing.T) {
 			n.wantCode = tc.wantCode
 			endless := &endlessReader{}
 			args := []string{"token", "-login", "jane.doe", "-label", "laptop",
-				"-grants", "tracker", "-config", selfConfig(t), "-api", n.server.URL}
+				"-grants", "worklet", "-config", selfConfig(t), "-api", n.server.URL}
 			var out, errs bytes.Buffer
 			err := runIAM(noEnviron, args, io.MultiReader(strings.NewReader(tc.before), endless),
 				&out, &errs)
