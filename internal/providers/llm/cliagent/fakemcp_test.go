@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -70,7 +71,49 @@ type fakeScript struct {
 	// file in the working directory instead of stdout: a CLI that keeps its
 	// record in a file of its own.
 	RecordFile string `json:"record_file,omitempty"`
+
+	// Serve is the serve lifecycle's fake server: see [runFakeServer].
+	Serve fakeServe `json:"serve,omitzero"`
 }
+
+// fakeServe is how the fake plays a CLI whose loop runs in a server of its own,
+// as OpenCode 2.1's does: `serve` starts the server, which prints its address
+// and a password, connects to the crewlet server and plays the script once a
+// run hands it the prompt; `api … mcp.list` polls it; `run --server <url>` is
+// a run, its client, printing what the server's loop records; `report` asks it
+// for the run's usage. They meet in files in the call's working directory.
+type fakeServe struct {
+	// ConnectDelayMS holds the server's connection to the crewlet server
+	// that long after it is up, so a run started before the poll says so
+	// finds it unconnected — and refuses to go on, as the real one goes on
+	// with no tools.
+	ConnectDelayMS int `json:"connect_delay_ms,omitempty"`
+	// ExitBeforeUp exits 9 before printing anything.
+	ExitBeforeUp bool `json:"exit_before_up,omitempty"`
+	// NeverUp prints its address and never its password.
+	NeverUp bool `json:"never_up,omitempty"`
+	// ExitAfter exits 9 once that many responses have been played.
+	ExitAfter int `json:"exit_after,omitempty"`
+	// PidTo writes the server's pid here, outside the working directory the
+	// call's release removes.
+	PidTo string `json:"pid_to,omitempty"`
+	// ReportUsage is what `report` prints as the run's usage.
+	ReportUsage *fakeUsage `json:"report_usage,omitempty"`
+	// ReportTo writes the arguments and the password `report` was run with.
+	ReportTo string `json:"report_to,omitempty"`
+	// Say is written on the server's stderr once it is up.
+	Say string `json:"say,omitempty"`
+}
+
+// The files the serve lifecycle's fake roles meet in, in the working directory.
+const (
+	fakeServerFile    = ".fake-server"
+	fakeConnectedFile = ".fake-connected"
+	fakePolledFile    = ".fake-polled"
+	fakeGoFile        = ".fake-go"
+	fakeEventsFile    = ".fake-events.jsonl"
+	fakeDoneFile      = ".fake-done"
+)
 
 // fakeResponse is one model response.
 type fakeResponse struct {
@@ -111,11 +154,51 @@ func runFakeMCPCLI() {
 		fmt.Fprintln(os.Stderr, "fake: bad script:", err)
 		os.Exit(70)
 	}
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "serve":
+			runFakeServer(script)
+		case "api":
+			runFakePoll()
+		case "run":
+			runFakeClient()
+		case "report":
+			runFakeReport(script)
+		}
+	}
+	config := argAfter("--mcp-config")
+	if config == "" {
+		// A TEXT FUNCTION: no server, one answer.
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "result", "subtype": "success",
+			"is_error": false, "result": script.TextAnswer,
+			"usage": map[string]any{"input_tokens": 11, "output_tokens": 3}})
+		os.Exit(0)
+	}
 	prompt, _ := io.ReadAll(os.Stdin)
+	os.Exit(playFake(script, prompt, os.Stdout, connectOrExit(script, config)))
+}
+
+// connectOrExit connects to the server the configuration names, or nil for a
+// script that never does.
+func connectOrExit(script fakeScript, config string) *sdk.ClientSession {
+	if script.NoConnect {
+		return nil
+	}
+	cs, err := connectFake(config)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake: connect:", err)
+		os.Exit(71)
+	}
+	return cs
+}
+
+// playFake plays the script against the server cs connects to — none for nil —
+// printing the record on stdout, and returns the exit status.
+func playFake(script fakeScript, prompt []byte, stdout io.Writer, cs *sdk.ClientSession) int {
 	if script.PromptTo != "" {
 		_ = os.WriteFile(script.PromptTo, prompt, 0o600)
 	}
-	out := json.NewEncoder(os.Stdout)
+	out := json.NewEncoder(stdout)
 	record := out
 	if script.RecordFile != "" {
 		f, err := os.Create(script.RecordFile)
@@ -138,27 +221,13 @@ func runFakeMCPCLI() {
 		model = "claude-test-1"
 	}
 
-	config := argAfter("--mcp-config")
-	if config == "" {
-		// A TEXT FUNCTION: no server, one answer.
-		emit(map[string]any{"type": "result", "subtype": "success", "is_error": false,
-			"result": script.TextAnswer, "usage": map[string]any{"input_tokens": 11, "output_tokens": 3}})
-		os.Exit(0)
-	}
-	var cs *sdk.ClientSession
 	tools := []string{"WebFetch", "WebSearch"}
-	if !script.NoConnect {
-		var err error
-		cs, err = connectFake(config)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "fake: connect:", err)
-			os.Exit(71)
-		}
+	if cs != nil {
 		defer cs.Close()
 		listed, err := cs.ListTools(context.Background(), nil)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "fake: list:", err)
-			os.Exit(72)
+			return 72
 		}
 		for _, tool := range listed.Tools {
 			tools = append(tools, "mcp__crewlet__"+tool.Name)
@@ -169,6 +238,10 @@ func runFakeMCPCLI() {
 	var total fakeUsage
 	last := ""
 	for i, r := range script.Responses {
+		if script.Serve.ExitAfter > 0 && i == script.Serve.ExitAfter {
+			fmt.Fprintln(os.Stderr, "fake server: lost its footing")
+			os.Exit(9)
+		}
 		if r.SilentMS > 0 {
 			time.Sleep(time.Duration(r.SilentMS) * time.Millisecond)
 		}
@@ -259,7 +332,153 @@ func runFakeMCPCLI() {
 				"cache_read_input_tokens": usage.CacheRead, "cache_creation_input_tokens": usage.CacheWrite,
 			}})
 	}
-	os.Exit(script.Exit)
+	return script.Exit
+}
+
+// runFakeServer is the serve lifecycle's server: up, connected to the crewlet
+// server, then the script played once a run hands it the prompt, its record
+// written for the run to print. It lives until it is stopped.
+func runFakeServer(script fakeScript) {
+	srv := script.Serve
+	if srv.PidTo != "" {
+		_ = os.WriteFile(srv.PidTo, []byte(strconv.Itoa(os.Getpid())), 0o600)
+	}
+	fmt.Fprintln(os.Stderr, "fake server: starting")
+	if srv.ExitBeforeUp {
+		fmt.Fprintln(os.Stderr, "fake server: the port is taken")
+		os.Exit(9)
+	}
+	password := fmt.Sprintf("pw-%d", os.Getpid())
+	// A log line first, which is no ready value.
+	fmt.Println("INFO loading configuration")
+	fmt.Printf("server listening on http://fake-%d\n", os.Getpid())
+	if srv.NeverUp {
+		select {}
+	}
+	_ = os.WriteFile(fakeServerFile, []byte(fmt.Sprintf("http://fake-%d %s", os.Getpid(), password)), 0o600)
+	fmt.Printf("server password %s\n", password)
+	if srv.Say != "" {
+		fmt.Fprintln(os.Stderr, srv.Say)
+	}
+	time.Sleep(time.Duration(srv.ConnectDelayMS) * time.Millisecond)
+	cs := connectOrExit(script, argAfter("--mcp-config"))
+	_ = os.WriteFile(fakeConnectedFile, nil, 0o600)
+	var prompt []byte
+	for {
+		raw, err := os.ReadFile(fakeGoFile)
+		if err == nil {
+			prompt = raw
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	f, err := os.Create(fakeEventsFile)
+	if err != nil {
+		os.Exit(73)
+	}
+	code := playFake(script, prompt, f, cs)
+	_ = f.Close()
+	_ = os.WriteFile(fakeDoneFile, []byte(strconv.Itoa(code)), 0o600)
+	select {}
+}
+
+// fakeServerOrExit checks a client was handed the server's address and its
+// password, exiting 76 when it was not.
+func fakeServerOrExit() {
+	raw, err := os.ReadFile(fakeServerFile)
+	want := strings.Fields(string(raw))
+	if err != nil || len(want) != 2 || argAfter("--server") != want[0] ||
+		os.Getenv("FAKE_SERVER_PASSWORD") != want[1] {
+		fmt.Fprintf(os.Stderr, "fake: not this server's client: --server %q\n", argAfter("--server"))
+		os.Exit(76)
+	}
+}
+
+// runFakePoll lists the server's MCP servers: none at first, as OpenCode's
+// first answer does, then the crewlet server, pending until it connects.
+func runFakePoll() {
+	fakeServerOrExit()
+	if _, err := os.Stat(fakePolledFile); err != nil {
+		_ = os.WriteFile(fakePolledFile, nil, 0o600)
+		fmt.Println(`{"data":[]}`)
+		os.Exit(0)
+	}
+	status := "pending"
+	if _, err := os.Stat(fakeConnectedFile); err == nil {
+		status = "connected"
+	}
+	fmt.Printf(`{"data":[{"name":"other","status":{"status":"connected"}},`+
+		`{"name":"crewlet","status":{"status":%q}}]}`+"\n", status)
+	os.Exit(0)
+}
+
+// runFakeClient is a run against the server: it hands it the prompt and prints
+// the server's record as the server writes it, exiting as the server's loop
+// did. Started before the server connected to the crewlet server, it refuses —
+// where the real CLI goes on, with none of the seat's tools.
+func runFakeClient() {
+	fakeServerOrExit()
+	if _, err := os.Stat(fakeConnectedFile); err != nil {
+		fmt.Fprintln(os.Stderr, "fake: asked before the server connected to its tools")
+		os.Exit(75)
+	}
+	prompt, _ := io.ReadAll(os.Stdin)
+	_ = os.WriteFile(fakeGoFile+".tmp", prompt, 0o600)
+	_ = os.Rename(fakeGoFile+".tmp", fakeGoFile)
+	// Signalled, it prints what the server recorded so far and exits, as a
+	// client does: its record is what it relayed, and polling leaves it a
+	// beat behind the server's.
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
+	offset := 0
+	relay := func() {
+		data, _ := os.ReadFile(fakeEventsFile)
+		if len(data) > offset {
+			_, _ = os.Stdout.Write(data[offset:])
+			offset = len(data)
+		}
+	}
+	for {
+		done, doneErr := os.ReadFile(fakeDoneFile)
+		relay()
+		if doneErr == nil {
+			code, _ := strconv.Atoi(string(done))
+			os.Exit(code)
+		}
+		select {
+		case <-term:
+			relay()
+			os.Exit(143)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// runFakeReport asks the server for the run's usage, refusing when the server
+// is gone.
+func runFakeReport(script fakeScript) {
+	if argAfter("--server") == "" {
+		// A text function's report, which asks no server: its one answer.
+		fmt.Println(`{"usage":{"input_tokens":11,"output_tokens":3}}`)
+		os.Exit(0)
+	}
+	fakeServerOrExit()
+	if to := script.Serve.ReportTo; to != "" {
+		_ = os.WriteFile(to, []byte(strings.Join(os.Args[1:], " ")), 0o600)
+	}
+	pid, _ := strconv.Atoi(strings.TrimPrefix(argAfter("--server"), "http://fake-"))
+	if pid <= 0 || syscall.Kill(pid, 0) != nil {
+		fmt.Fprintln(os.Stderr, "fake: connection refused")
+		os.Exit(4)
+	}
+	u := script.Serve.ReportUsage
+	if u == nil {
+		os.Exit(3)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"usage": map[string]any{
+		"input_tokens": u.Input, "output_tokens": u.Output,
+	}})
+	os.Exit(0)
 }
 
 // connectFake starts the server its configuration names — the relay — and

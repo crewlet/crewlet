@@ -40,6 +40,28 @@ type toolRun struct {
 
 	releaseOnce sync.Once
 	connected   bool
+
+	// values are the run's substitutions into the profile's tool route; a
+	// serve lifecycle's ready values join them once its server is up.
+	values cliprofile.MCPValues
+	// readyArgs are the run's arguments, by position, that carry a ready
+	// value, as their templates; readyEnv the names of the route's variables
+	// that do. Rendered once the server is up ([toolRun.up]).
+	readyArgs map[int]string
+	readyEnv  []string
+	// routeEnv is the route's environment, rendered, for the usage command.
+	routeEnv []string
+
+	// server is a serve lifecycle's own server; nil on the run lifecycle.
+	// abort ends the context the run is made under — the server exiting
+	// under it, or failing closed — and the watcher that calls it is
+	// stopped by watchStop and closes watchDone. lost reports a server that
+	// exited on its own while the run went on.
+	server    *cliServer
+	abort     context.CancelCauseFunc
+	watchStop chan struct{}
+	watchDone chan struct{}
+	lost      bool
 }
 
 // serveTools opens the host to this run and hands the CLI its server: the
@@ -77,26 +99,48 @@ func (p *Provider) serveTools(
 		return nil, p.fail(llm.KindFatal, fmt.Errorf("serving the seat's tools to the CLI: %w", err))
 	}
 	t.served = served
-	values := cliprofile.MCPValues{
+	t.values = cliprofile.MCPValues{
 		RelayCommand: served.Command, RelayArgs: served.Args, Work: checkout.Work,
 	}
 	if n := len(served.Args); n > 0 {
 		// The relay's socket is its last argument (toolsession's Command).
-		values.Socket = served.Args[n-1]
+		t.values.Socket = served.Args[n-1]
 	}
 	for _, f := range m.Seed {
-		if err := writeSeed(checkout.Work, f.Path, m.Render(f.Content, values)); err != nil {
+		if err := writeSeed(checkout.Work, f.Path, m.Render(f.Content, t.values)); err != nil {
 			t.close()
 			return nil, p.fail(llm.KindFatal, err)
 		}
 	}
-	for _, arg := range append(append([]string(nil), m.Args...), m.AllowArgs...) {
-		in.args = append(in.args, m.Render(arg, values))
+	// AN ARGUMENT CARRYING A VALUE THE CLI'S SERVER PRINTS waits for it, as
+	// its template, and is rendered once the server is up — from the template,
+	// so nothing substituted into it is read for a placeholder twice.
+	t.readyArgs = map[int]string{}
+	place := func(i int, tmpl string) {
+		if m.ReadyPlaceholder(tmpl) {
+			t.readyArgs[i] = tmpl
+			return
+		}
+		in.args[i] = m.Render(tmpl, t.values)
+	}
+	// The route's complete_args lead the argv ([Provider.argv]).
+	for i, tmpl := range m.CompleteArgs {
+		place(i, tmpl)
+	}
+	for _, tmpl := range slices.Concat(m.Args, m.AllowArgs) {
+		in.args = append(in.args, tmpl)
+		place(len(in.args)-1, tmpl)
 	}
 	// APPENDED, so they win over every layer below: the tool timeout the host
 	// was told of must be the one the CLI applies.
 	for _, name := range slices.Sorted(maps.Keys(m.Env)) {
-		in.env = append(in.env, name+"="+m.Render(m.Env[name], values))
+		if m.ReadyPlaceholder(m.Env[name]) {
+			t.readyEnv = append(t.readyEnv, name)
+			continue
+		}
+		pair := name + "=" + m.Render(m.Env[name], t.values)
+		in.env = append(in.env, pair)
+		t.routeEnv = append(t.routeEnv, pair)
 	}
 	in.clock = t.clock
 	in.stop = req.Tools.Done()
@@ -149,14 +193,26 @@ func (t *toolRun) release() bool {
 	return t.connected
 }
 
-// close is the run's teardown on every way out: the tail stopped, the server
-// released, the carry stopped and waited for — before the checkout is
-// released, which the carry works in.
+// close is the run's teardown on every way out: the tail stopped, the host's
+// server released, a serve lifecycle's own server stopped, the carry stopped
+// and waited for — before the checkout is released, which the carry works in
+// and the CLI's server runs in.
 func (t *toolRun) close() {
 	if t.waitTail != nil {
 		close(t.stopTail)
 		t.waitTail()
 		t.waitTail = nil
+	}
+	if t.watchStop != nil {
+		close(t.watchStop)
+		<-t.watchDone
+		t.watchStop = nil
+	}
+	if t.server != nil {
+		t.server.stop()
+	}
+	if t.abort != nil {
+		t.abort(nil)
 	}
 	t.release()
 	t.clock.stop()

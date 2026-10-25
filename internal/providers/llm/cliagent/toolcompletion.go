@@ -74,12 +74,7 @@ func (p *Provider) toolCompletion(
 
 	switch {
 	case res.failureMarker != "":
-		// FAILED CLOSED: the CLI said its own confinement did not load, and
-		// it was stopped before it could act without it.
-		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI reported that its confinement "+
-			"failed to load (%q) and was stopped — the files or flags the profile gives it no "+
-			"longer match the installed CLI; run `crewlet llm doctor %s`%s",
-			p.agent, res.failureMarker, p.key, failureDetail(res.stderr, "")))
+		return nil, p.confinementFailed(res.failureMarker, res.stderr)
 	case res.timedOut:
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf("the model worked longer than %s without "+
 			"calling a tool or answering — raise timeout_seconds if this model legitimately "+
@@ -88,6 +83,11 @@ func (p *Provider) toolCompletion(
 		// The host ended the run: whatever the CLI's exit says is the
 		// signal's doing. No stop reason — the run ending was the host's.
 		return completion(""), nil
+	case t.lost:
+		// The run's loop was its CLI's server's, and the run was aborted
+		// when it went: whatever the run's own exit says is that.
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI's server exited %d during the run%s",
+			p.agent, t.server.exitCode, failureDetail(res.stderr, events)))
 	}
 	if res.droppedStdout > 0 && !read {
 		return nil, p.fail(llm.KindServer, fmt.Errorf(
@@ -149,6 +149,15 @@ func (p *Provider) toolCompletion(
 			"model", model, "requests", t.reader.observed(), "output_tokens", spent.Output)
 	}
 	return completion(llm.StopEnd), nil
+}
+
+// confinementFailed is the failure of a CLI that said its own confinement did
+// not load — FAILED CLOSED: it was stopped before it could act without it.
+func (p *Provider) confinementFailed(line, stderr string) error {
+	return p.fail(llm.KindServer, fmt.Errorf("the %s CLI reported that its confinement "+
+		"failed to load (%q) and was stopped — the files or flags the profile gives it no "+
+		"longer match the installed CLI; run `crewlet llm doctor %s`%s",
+		p.agent, line, p.key, failureDetail(stderr, "")))
 }
 
 // capped reports a run its CLI's own turn cap ended, by the profile's

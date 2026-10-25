@@ -29,8 +29,10 @@
 //     its prose and its cost, and handed to the host; a refreshed login is
 //     carried back at each call; and a model call made inside one of the
 //     run's calls runs on the run's slot — see toolrun.go, record.go and
-//     slots.go. A text function — no tools — is one prompt in and one answer
-//     out, as it always was.
+//     slots.go. A CLI whose loop runs in a server of its own (OpenCode 2.1)
+//     has that server started first and waited for until it has the tools,
+//     and the run is its client — see serve.go. A text function — no tools —
+//     is one prompt in and one answer out, as it always was.
 //
 //   - VENDOR DRIFT. These flags and JSON shapes change between releases, so
 //     every profile field is data an operator can replace from YAML rather
@@ -391,7 +393,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 
 	in := invocation{
 		binary:  p.profile.Binary,
-		args:    p.argv(),
+		args:    p.argv(req.Tools != nil),
 		dir:     checkout.Work,
 		env:     buildEnv(p.profile, checkout, p.env, p.auth),
 		timeout: p.timeout,
@@ -518,8 +520,24 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		in.stdin = prompt
 	}
 
+	// A SERVE LIFECYCLE'S SERVER, started now that everything the run writes
+	// into its working directory is there — see [toolRun.up]. Its end ends
+	// the run, through the context the run is made under.
+	runCtx := ctx
+	if tools != nil {
+		var up bool
+		runCtx, up, err = tools.up(ctx, p, &in)
+		if err != nil {
+			return nil, err
+		}
+		if !up {
+			// The host ended the run before the CLI's server was up:
+			// nothing ran, and nothing was spent.
+			return &llm.Completion{Model: p.model}, nil
+		}
+	}
 	started := time.Now()
-	res, err := run(ctx, in)
+	res, err := run(runCtx, in)
 	if err != nil {
 		// NO CLI RAN, which is all run's error ever says: the binary is
 		// missing or not executable here, or the host would not give it a
@@ -536,6 +554,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// THE RECORD WHOLE, THEN THE RUN RELEASED: every request the record
 		// showed is told before the host's server for the run is retired,
 		// which waits for every call still running on it.
+		tools.ran(ctx, res)
 		connected = tools.finish()
 		reportOffered(ctx, tools.reader.offeredTools())
 	}
@@ -579,30 +598,40 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// (bounded by the command's own timeout): such a run is a phase's whole
 	// loop, and its report is the one count of what the run spent before it
 	// was cut.
+	//
+	// A RUN WITH TOOLS MAY ASK THROUGH ITS CLI'S SERVER ([cliprofile.MCP.UsageArgs]),
+	// which is then asked while it is still up — and not at all once a run cut
+	// short took it down.
 	if len(p.profile.UsageArgs) > 0 && (!res.timedOut || tools != nil) {
 		args := make([]string, 0, len(p.profile.UsageArgs))
 		for _, arg := range p.profile.UsageArgs {
 			args = append(args, strings.ReplaceAll(arg, "{session}", session))
 		}
+		env := buildEnv(p.profile, checkout, p.env, p.auth)
+		ask := true
 		reportCtx := ctx
 		if tools != nil {
 			reportCtx = context.WithoutCancel(ctx)
+			if len(p.profile.MCP.UsageArgs) > 0 {
+				args, env, ask = tools.usageCommand(p, session, env)
+			}
 		}
-		report, reportErr := p.runAuxiliary(reportCtx, args, checkout.Work,
-			buildEnv(p.profile, checkout, p.env, p.auth), "")
-		switch {
-		case reportErr != nil:
-			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
-				"agent", p.agent, "error", reportErr)
-		case strings.TrimSpace(report) == "":
-			// A command that succeeded and printed nothing reported nothing,
-			// and the empty string handed on below reads as no report at all
-			// — so this is the one place that can say so.
-			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
-				"agent", p.agent, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
-					p.profile.Binary, strings.Join(args, " ")))
-		default:
-			usageDoc = report
+		if ask {
+			report, reportErr := p.runAuxiliary(reportCtx, args, checkout.Work, env, "")
+			switch {
+			case reportErr != nil:
+				log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+					"agent", p.agent, "error", reportErr)
+			case strings.TrimSpace(report) == "":
+				// A command that succeeded and printed nothing reported
+				// nothing, and the empty string handed on below reads as no
+				// report at all — so this is the one place that can say so.
+				log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+					"agent", p.agent, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
+						p.profile.Binary, strings.Join(args, " ")))
+			default:
+				usageDoc = report
+			}
 		}
 	}
 
@@ -629,10 +658,16 @@ func newSessionID() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// argv is the invocation's arguments: the profile's completion argv, then the
-// model, then (in argv mode) the prompt, which the caller appends.
-func (p *Provider) argv() []string {
-	args := append([]string(nil), p.profile.CompleteArgs...)
+// argv is the invocation's arguments: the profile's completion argv — its tool
+// route's in place of it for a run with tools, where the route declares one,
+// rendered by [Provider.serveTools] — then the model, then (in argv mode) the
+// prompt, which the caller appends.
+func (p *Provider) argv(tools bool) []string {
+	complete := p.profile.CompleteArgs
+	if m := p.profile.MCP; tools && m != nil && len(m.CompleteArgs) > 0 {
+		complete = m.CompleteArgs
+	}
+	args := append([]string(nil), complete...)
 	if p.model == "" {
 		return args
 	}
