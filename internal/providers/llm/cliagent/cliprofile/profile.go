@@ -1742,9 +1742,16 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 			if !ch.WritesFile() {
 				continue
 			}
+			// The shapes the channel's own rules admit: a file the CLI
+			// finds is a path inside the call's directory, one handed
+			// over by path a bare file name. A malformed one is that
+			// rule's to report, and claims nothing here.
 			name := ch.File.FileName()
-			found := ch.File.Found()
-			if !(found && staysInside(name) && namesAFile(name)) && !(!found && isBareFileName(name)) {
+			claimable := isBareFileName(name)
+			if ch.File.Found() {
+				claimable = staysInside(name) && namesAFile(name)
+			}
+			if !claimable {
 				continue
 			}
 			if clean := filepath.Clean(name); !claimed[clean] {
