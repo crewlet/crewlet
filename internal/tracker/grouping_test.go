@@ -754,7 +754,7 @@ func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 
 // berlinAt is a wall-clock instant in the COMPANY's own zone.
 //
-// SPELLED AS A CALENDAR rather than resolved through [tracker.ResolveDate]:
+// SPELLED AS A CALENDAR rather than resolved through [period.Resolve]:
 // these cases exist to pin where the bands cut, and a case that asked the
 // resolver for its own boundary would move with whatever it was asked to
 // hold. `wednesday` is 16:30 on Wednesday 2031-04-16 in Berlin, so the day is

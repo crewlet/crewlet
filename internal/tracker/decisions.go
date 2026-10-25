@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -87,7 +88,7 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		anchor, err := ResolveDate("today", now, loc)
+		anchor, err := period.Resolve("today", now, loc)
 		if err != nil {
 			return err
 		}

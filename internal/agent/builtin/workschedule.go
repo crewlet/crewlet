@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -33,7 +34,7 @@ import (
 // # One grammar for a date, shared with the filter that reads it
 //
 // A due date is set with the same tokens `due=` already filters on —
-// [tracker.ResolveDate]: an instant, a calendar date, `+7d`, `today`, `eow`.
+// [period.Resolve]: an instant, a calendar date, `+7d`, `today`, `eow`.
 // A second spelling here would be the copy that stops matching, and it would
 // make a model that can ask for "everything due this week" unable to say "due
 // this week" about one task.
@@ -135,7 +136,7 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 			out.Cleared[key] = true
 			continue
 		}
-		anchor, err := tracker.ResolveDate(token, now, loc)
+		anchor, err := period.Resolve(token, now, loc)
 		if err != nil {
 			return out, fmt.Sprintf("%s could not read `%s`: %v", tool, key, err)
 		}

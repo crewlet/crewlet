@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -424,7 +425,7 @@ type Query struct {
 	// tomorrow's midnight twice a year in the company's own zone — and a
 	// band cut there would disagree with the `due=range:today..tomorrow`
 	// filter that means the same thing, which is the whole defect this
-	// axis exists to remove. [ResolveDate] owns that calendar, and these
+	// axis exists to remove. [period.Resolve] owns that calendar, and these
 	// are its `tomorrow` and its `eow`.
 	DayEnd  time.Time
 	WeekEnd time.Time
@@ -572,17 +573,17 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	// time.Now() in the reader, the two disagreed by up to a day: a task
 	// due at 09:00 today was `overdue: true` on every row from 09:01 and
 	// absent from `?due=overdue` all day.
-	dayStart, err := ResolveDate("today", now, loc)
+	dayStart, err := period.Resolve("today", now, loc)
 	if err != nil {
 		return Query{}, err
 	}
 	// AND THE TWO BOUNDARIES THAT DAY AND ITS WEEK END ON, from the same
 	// calendar in the same call — see [Query.DayEnd].
-	dayEnd, err := ResolveDate("tomorrow", now, loc)
+	dayEnd, err := period.Resolve("tomorrow", now, loc)
 	if err != nil {
 		return Query{}, err
 	}
-	weekEnd, err := ResolveDate("eow", now, loc)
+	weekEnd, err := period.Resolve("eow", now, loc)
 	if err != nil {
 		return Query{}, err
 	}
@@ -1017,7 +1018,7 @@ func (q *Query) parseShowClosed(p Params, now time.Time, loc *time.Location) err
 		// A DATE TOKEN ON THE COMPANY'S CLOCK, through the same calendar
 		// every `due=` bound resolves on, so `closed_since=sow` begins
 		// the week the `due:bucket` bands and `due=range:sow..eow` mean.
-		at, err := ResolveDate(since, now, loc)
+		at, err := period.Resolve(since, now, loc)
 		if err != nil {
 			return fmt.Errorf("closed_since: %w", err)
 		}
