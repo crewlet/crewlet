@@ -1,11 +1,13 @@
 package runtoken_test
 
 import (
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -145,12 +147,15 @@ func TestAForgedMalformedOrExpiredTokenIsRefused(t *testing.T) {
 		t.Fatalf("a freshly minted token did not validate: %q", got)
 	}
 	for name, token := range map[string]string{
-		"empty":            "",
-		"one part":         "v2",
-		"too few parts":    "v2.tag.subject.9999999999",
-		"too many parts":   valid + ".extra",
-		"wrong version":    "v1" + strings.TrimPrefix(valid, "v2"),
-		"tampered subject": strings.Replace(valid, "subject", "subjecu", 1),
+		"empty":          "",
+		"one part":       "crewlet_rt1",
+		"too few parts":  "crewlet_rt1.tag.subject.9999999999",
+		"too many parts": valid + ".extra",
+		"wrong version":  "crewlet_rt2" + strings.TrimPrefix(valid, "crewlet_rt1"),
+		// The format before this one, which no tag shipped: refused, never
+		// read as this one.
+		"the bare v2 version": "v2" + strings.TrimPrefix(valid, "crewlet_rt1"),
+		"tampered subject":    strings.Replace(valid, "subject", "subjecu", 1),
 	} {
 		if got := s.Validate(token); got != "" {
 			t.Errorf("%s validated as %q", name, got)
@@ -235,6 +240,65 @@ func TestASubjectSurvivesTheRoundTrip(t *testing.T) {
 	} {
 		if got := s.Validate(s.Mint(subject, time.Hour)); got != subject {
 			t.Errorf("subject %q round-tripped as %q", subject, got)
+		}
+	}
+}
+
+// A MINTED TOKEN IS REDACTED, whoever minted it and wherever a box prints it.
+//
+// No node that collects a coding run holds the tokens its launch minted — the
+// run's row carries none — so what a box hands back cannot be redacted of them
+// by their values. internal/redact knows them by their SHAPE instead: the
+// version literal this package opens every token with, as it knows a GitHub
+// token by its ghp_, then a tag, a subject, an expiry and a signature. The two
+// packages spell that literal apart, since redact imports nothing of the
+// engine, and this is the test that holds them to one spelling — a token of
+// every domain the tree mints, each over a subject of its issuer's own shape,
+// printed every way a box prints one, comes out as the marker and nothing else.
+//
+// THE TICKET'S SUBJECT SPELLS A VENDOR'S KEY: an artifact view ticket's
+// subject is base64url of its claims, which spells `sk-` and twenty characters
+// more by chance — any three of its characters are `sk-` once in 262 144, and
+// a ticket's subject runs to thousands of them — and the token is still taken
+// whole, the vendor's piece with it, rather than cut where that piece was and
+// the rest of it, its signature among it, left in the text.
+//
+// Mutation: drop the run-token rule from redact's table, or open a token with
+// the bare `v2` this one replaced, and every row fails; take the run token
+// after the vendors' rules, and the ticket's rows do; require a subject of at
+// least one character, and the empty subject's do.
+func TestAMintedTokenIsRedacted(t *testing.T) {
+	t.Parallel()
+	marker := redact.Marker + "run-token]"
+	claims := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(
+		`{"artifact":"019948a2-7c1e-7000-8000-0123456789ab","purpose":"view",`+
+			`"capabilities":["read"],"lineage":"session:4f1c2a"}`, 20)))
+	for _, issuer := range []struct{ name, domain, subject string }{
+		// The OTLP receiver's (internal/sandbox): a W3C trace id.
+		{"telemetry", "crewlet.otlp.v1", "4bf92f3577b34da6a3ce929d0e0e4736"},
+		// The tool bridge's (internal/api/mcpbridge): its session's nonce,
+		// "~", the run.
+		{"tool bridge", "crewlet.mcp.v1", "7c9e6679f4a14f3a9d1c0b2e8f5a6d3b~019948a2-7c1e-7000-8000-0123456789ab"},
+		// An artifact view ticket's (internal/artifactserve/ticket): its
+		// claims, base64url, a vendor's key spelled in their middle.
+		{"view ticket", "crewlet.artifact.view.v1", claims[:1200] + "sk-" + strings.Repeat("Q", 24) + claims[1200:]},
+		// No caller mints an empty subject, and Mint signs one and Validate
+		// answers it like any other (TestASubjectSurvivesTheRoundTrip).
+		{"empty subject", "crewlet.test.v1", ""},
+	} {
+		token := signer(t, issuer.domain, ring("k1", k1)).Mint(issuer.subject, time.Hour)
+		for _, printed := range []string{
+			token,
+			"OTEL_EXPORTER_OTLP_ENDPOINT=https://engine.example.com/otlp/" + token + "/v1/traces",
+			"CREWLET_GIT_TOKEN=" + token,
+			`{"mcpServers": {"crewlet": {"url": "https://engine.example.com/mcp/` + token + `"}}}`,
+			"PATH=/usr/bin\nX=" + token + "\nHOME=/home/box",
+		} {
+			want := strings.Replace(printed, token, marker, 1)
+			if got := redact.Secrets(printed); got != want {
+				t.Errorf("%s: a token printed as\n%q\nwas redacted to\n%q\nwant\n%q",
+					issuer.name, printed, got, want)
+			}
 		}
 	}
 }

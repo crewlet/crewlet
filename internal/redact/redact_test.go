@@ -23,6 +23,7 @@ func TestEveryKnownShapeIsReplaced(t *testing.T) {
 		"github_pat_" + strings.Repeat("d", 60):                           "github-token",
 		"glpat-" + strings.Repeat("e", 20):                                "gitlab-token",
 		"glrt-" + strings.Repeat("f", 20):                                 "gitlab-token",
+		runToken("4bf92f3577b34da6a3ce929d0e0e4736"):                      "run-token",
 		"password: hunter2":                                               "password",
 		"PASSWORD=hunter2":                                                "password",
 		"pwd = hunter2":                                                   "password",
@@ -48,6 +49,73 @@ func TestTheMoreSpecificShapeWinsOverThePrefixThatContainsIt(t *testing.T) {
 	got := redact.Secrets("sk-proj-" + strings.Repeat("A", 32))
 	if got != redact.Marker+"api-key]" {
 		t.Fatalf("got %q, want exactly one marker with nothing left over", got)
+	}
+}
+
+// runToken is the shape of the engine's own per-run token (internal/runtoken)
+// over subject, built from filler as every shape here is: the version, an
+// eight-character tag, the subject, a Unix expiry and a 43-character
+// signature, a dot between each.
+func runToken(subject string) string {
+	return "crewlet_rt1.Tq0d_8-x." + subject + ".1792927401." + strings.Repeat("S", 40) + "a_-"
+}
+
+// A RUN TOKEN IS TAKEN WHOLE AND ONCE: the engine's own per-run token is one
+// marker however its subject reads, and redacting it again changes nothing.
+//
+// ITS TAG AND SIGNATURE ARE BASE64URL AND ITS SUBJECT ANYTHING BUT THE DOT
+// THAT ENDS IT, so a vendor's prefix and body can be spelled inside one — an
+// artifact view ticket's subject is base64url of its claims — and one can be
+// written straight after a vendor's key. So it is taken FIRST: taken after the
+// vendors' rules, a piece of its subject would be replaced and the rest of the
+// token, its signature among it, left in the text; and a token run into the
+// key before it would have its own `crewlet_rt1` read as the end of that key,
+// and the rest left. Its subject may be EMPTY, since a runtoken signs and
+// answers an empty one. And what it takes is a token and no more: no line
+// break and no space, since a token rides a URL path, and no marker's
+// bracket, so a value another rule redacted where a subject would stand is
+// not read, on a second pass, as a subject.
+//
+// Mutation: take the run token after the vendors' rules, and the rows with a
+// vendor's shape inside it or before it fail; admit a space or a line break
+// in its subject, and the rows split across one fail; admit a bracket, and a
+// second pass over the value redacted where a subject would stand changes it;
+// require a subject, and the empty one is published.
+func TestARunTokenIsTakenWholeAndOnce(t *testing.T) {
+	t.Parallel()
+	m := redact.Marker + "run-token]"
+	sig := strings.Repeat("S", 40) + "a_-"
+	for name, c := range map[string]struct{ text, want string }{
+		"bare":                    {runToken("4bf92f3577b34da6a3ce929d0e0e4736"), m},
+		"a vendor's key inside":   {runToken("eyJhcnRp" + "sk-" + strings.Repeat("Q", 24) + "In0"), m},
+		"a GitHub token inside":   {runToken("ghp_" + strings.Repeat("b", 36)), m},
+		"after a vendor's key":    {"sk-" + strings.Repeat("A", 24) + runToken("x"), redact.Marker + "api-key]" + m},
+		"an empty subject":        {runToken(""), m},
+		"in a URL, then a line":   {"url: https://engine.example.com/otlp/" + runToken("t") + "/v1/traces\nnext", "url: https://engine.example.com/otlp/" + m + "/v1/traces\nnext"},
+		"a line break in it":      {"crewlet_rt1.Tq0d_8-x.sub\nject.1792927401." + sig, "crewlet_rt1.Tq0d_8-x.sub\nject.1792927401." + sig},
+		"a space in it":           {"crewlet_rt1.Tq0d_8-x.sub ject.1792927401." + sig, "crewlet_rt1.Tq0d_8-x.sub ject.1792927401." + sig},
+		"a signature too short":   {"crewlet_rt1.Tq0d_8-x.s.1792927401." + sig[1:], "crewlet_rt1.Tq0d_8-x.s.1792927401." + sig[1:]},
+		"prose naming its prefix": {"every per-run token opens with crewlet_rt1.", "every per-run token opens with crewlet_rt1."},
+		// No token — its subject would hold a dot, which no token's does —
+		// and the password's value up to the key after it is redacted
+		// where a subject would stand.
+		"a value redacted where a subject would stand": {
+			"crewlet_rt1.Tq0d_8-x.pwd=a.bsk-" + strings.Repeat("Q", 24) + ".1792927401." + sig,
+			"crewlet_rt1.Tq0d_8-x.pwd=" + redact.Marker + "password]" + redact.Marker + "api-key].1792927401." + sig,
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
+			}
+		}
 	}
 }
 

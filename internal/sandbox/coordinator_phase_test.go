@@ -2,13 +2,17 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // phases is every `agent_phase_completed` the coordinator published, in order.
@@ -141,6 +145,102 @@ func TestTheTranscriptRidesThePhaseRecordRedacted(t *testing.T) {
 	}
 	if strings.Contains(recs[0].ActivityTranscript, secret) {
 		t.Errorf("a credential reached the event store: %q", recs[0].ActivityTranscript)
+	}
+}
+
+// A BOX THAT PRINTS ITS TOKENS PERSISTS NONE OF THEM.
+//
+// A coding agent debugging its own setup prints its environment or its MCP
+// configuration, and both hold its run's per-run tokens: the telemetry
+// endpoint's in the endpoint's path, the tool bridge's in the bridge's URL.
+// Either is a credential — the bridge's calls the seat's own tools as the seat
+// — and no node that collects the run holds the tokens its launch minted (the
+// row carries none), so they are redacted by their SHAPE, the version every
+// runtoken opens with, which internal/redact knows. A runner redacts what it
+// collects; this holds the boundary the records leave by, the publish, with a
+// runner that redacted nothing: every record the coordinator publishes for the
+// run — its report, its transcript, its failure, its question, and the answer
+// it resumes the turn with — carries the marker and none of the tokens.
+//
+// Mutation: skip the publish's redaction of a box's result (runPhase's and
+// park's), and the report's, the failure's and the question's records carry
+// the tokens; drop the run-token rule from internal/redact, and every case
+// does.
+func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
+	t.Parallel()
+	const engine = "https://engine.example.com"
+	material := runtoken.OneKey("k1", "the fleet's key material")
+	otel, err := NewOtelTokens(OtelTokenOptions{Domain: OtelKeyDomain, Material: material})
+	if err != nil {
+		t.Fatalf("NewOtelTokens: %v", err)
+	}
+	receiver, err := NewOtelReceiver(OtelReceiverOptions{BaseURL: engine, Tokens: otel})
+	if err != nil {
+		t.Fatalf("NewOtelReceiver: %v", err)
+	}
+	// THE BRIDGE'S, as internal/api/mcpbridge mints it — under its key
+	// domain, over its session's nonce and the run — spelled here because
+	// that package imports this one.
+	bridge, err := runtoken.New(runtoken.Options{Domain: "crewlet.mcp.v1", Material: material})
+	if err != nil {
+		t.Fatalf("runtoken.New: %v", err)
+	}
+
+	for name, result := range map[string]func(printed string) Result{
+		"a report": func(printed string) Result {
+			return Result{Success: true, Text: "my setup:\n" + printed, Transcript: "[tool] bash: env\n" + printed}
+		},
+		"a failure": func(printed string) Result {
+			return Result{Error: "the bridge refused me:\n" + printed, Transcript: "[tool] bash: cat .mcp.json\n" + printed}
+		},
+		"a question": func(printed string) Result {
+			return Result{NeedsInput: true, AskTo: "requester", Question: "is this right?\n" + printed}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			run := rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+			tokens := []string{
+				strings.TrimPrefix(endpoint, engine+"/otlp/"),
+				bridge.Mint("7c9e6679f4a14f3a9d1c0b2e8f5a6d3b~"+run.TurnID, time.Hour),
+			}
+			printed := "OTEL_EXPORTER_OTLP_ENDPOINT=" + endpoint + "\n" +
+				`{"mcpServers": {"crewlet": {"type": "http", "url": "` + engine + "/mcp/" + tokens[1] + `"}}}`
+			rig.runner.Finish(result(printed))
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			records := map[string]string{}
+			rig.queue.mu.Lock()
+			for i, p := range rig.queue.published {
+				encoded, err := json.Marshal(p.event)
+				if err != nil {
+					t.Fatalf("encode %s: %v", p.topic, err)
+				}
+				records[fmt.Sprintf("%s #%d", p.event.Type, i)] = string(encoded)
+			}
+			rig.queue.mu.Unlock()
+			for i, resumed := range rig.resumer.calls() {
+				records[fmt.Sprintf("the answer resumed with #%d", i)] = resumed.Answer
+			}
+			marked := false
+			for record, text := range records {
+				for _, token := range tokens {
+					if strings.Contains(text, token[strings.LastIndexByte(token, '.')+1:]) {
+						t.Errorf("%s carries a run token the box printed: %s", record, text)
+					}
+				}
+				marked = marked || strings.Contains(text, redact.Marker+"run-token]")
+			}
+			if !marked {
+				t.Errorf("no record carries what the box printed, redacted: %v", records)
+			}
+		})
 	}
 }
 
