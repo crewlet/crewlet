@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,12 +73,8 @@ func TestTheStampIdentifiesTheHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read sidecar: %v", err)
 	}
-	pid, ok := pidOf(strings.TrimSpace(string(raw)))
-	if !ok {
-		t.Fatalf("the stamp carries no pid: %q", raw)
-	}
-	if pid != os.Getpid() {
-		t.Fatalf("stamp pid = %d, want this process (%d)", pid, os.Getpid())
+	if want := fmt.Sprintf("pid %d ", os.Getpid()); !strings.HasPrefix(string(raw), want) {
+		t.Fatalf("the stamp is %q, want it to name this process (%q…)", raw, want)
 	}
 }
 

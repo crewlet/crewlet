@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"syscall"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/flock"
 )
 
 // CredentialLockWait bounds how long a writer of a shared login waits for
@@ -74,47 +74,31 @@ func (e *LockWaitError) Error() string {
 
 func (e *LockWaitError) Unwrap() error { return context.DeadlineExceeded }
 
-// LockFile takes an exclusive flock on path, creating it at [FileMode],
-// waiting up to wait — zero for not at all — for another holder to let go, and
-// hands back its release. A lock still held at the end of the wait is a
-// [*LockWaitError] naming holder: who keeps this lock that long is the
-// caller's knowledge, not this function's.
+// LockFile takes an exclusive lock on path ([flock.Try]), waiting up to wait —
+// zero for not at all — for another holder to let go, and hands back its
+// release. A lock still held at the end of the wait is a [*LockWaitError]
+// naming holder: who keeps this lock that long is the caller's knowledge, not
+// this function's.
 //
-// An flock rather than an fcntl lock, for the reason internal/store gives: an
-// fcntl lock is dropped when ANY descriptor for the file is closed in the
-// process. And a fresh descriptor per call, because an flock belongs to the
-// open file description — two takers in one process exclude each other
-// exactly as two processes do, which is what lets a sandbox teardown and a
-// seat in the same engine share the shared login's lock.
+// A fresh lock per call, because the lock belongs to the open file description
+// — two takers in one process exclude each other exactly as two processes do,
+// which is what lets a sandbox teardown and a seat in the same engine share
+// the shared login's lock.
 func LockFile(ctx context.Context, path string, wait time.Duration, holder string) (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(path), DirMode); err != nil {
-		return nil, fmt.Errorf("hostbox: preparing %q: %w", filepath.Dir(path), err)
-	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, FileMode) //nolint:gosec // the caller's own state directory
-	if err != nil {
-		return nil, fmt.Errorf("hostbox: opening the lock %q: %w", path, err)
-	}
-	fd := int(f.Fd()) //nolint:gosec // a descriptor fits an int on every platform this builds for
 	deadline := time.Now().Add(wait)
 	for {
-		err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		lock, err := flock.Try(path)
 		if err == nil {
-			return func() {
-				_ = syscall.Flock(fd, syscall.LOCK_UN)
-				_ = f.Close()
-			}, nil
+			return lock.Release, nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
-			_ = f.Close()
-			return nil, fmt.Errorf("hostbox: locking %q: %w", path, err)
+		if !errors.Is(err, flock.ErrHeld) {
+			return nil, fmt.Errorf("hostbox: %w", err)
 		}
 		if !time.Now().Before(deadline) {
-			_ = f.Close()
 			return nil, &LockWaitError{Path: path, Wait: wait, Holder: holder}
 		}
 		select {
 		case <-ctx.Done():
-			_ = f.Close()
 			return nil, fmt.Errorf("hostbox: waiting for the lock %q: %w", path, ctx.Err())
 		case <-time.After(credentialLockPoll):
 		}
