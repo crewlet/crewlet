@@ -1790,9 +1790,18 @@ cursor-agent:
   prompt_mode: stdin
   output: json
   text_paths: [["result"], ["response"]]
+  # THE COUNTS ARE THE RESULT EVENT'S `usage`, in camelCase: inputTokens,
+  # outputTokens, cacheReadTokens and cacheWriteTokens, the input with the
+  # cached parts taken out (max(input - cacheRead - cacheWrite, 0)) — read
+  # from the 2026.10.22 bundle, where the run's turnEnded update sets them,
+  # and NOT measured: no call through a stand-in gets an answer. Read under
+  # snake_case names, as these paths were, no count ever resolved and every
+  # call was estimated.
   usage:
-    input: [["usage", "input_tokens"]]
-    output: [["usage", "output_tokens"]]
+    input: [["usage", "inputTokens"]]
+    output: [["usage", "outputTokens"]]
+    cache_read: [["usage", "cacheReadTokens"]]
+    cache_write: [["usage", "cacheWriteTokens"]]
   config_env:
     CURSOR_CONFIG_DIR: ".cursor"
   # THE LOGIN IS KEPT PER PLATFORM, and CURSOR_CONFIG_DIR does not move it:
