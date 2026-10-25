@@ -439,6 +439,24 @@ type BridgeCall struct {
 	Output string    `json:"output,omitempty"`
 	Failed bool      `json:"failed,omitempty"`
 	At     time.Time `json:"at"`
+
+	// Seq is the call's place in the order its session admitted the run's
+	// calls, from 1 — the order the CLI made them in. At is when the row was
+	// written, which is the order they FINISHED in, and a CLI making several
+	// calls at once finishes them in whatever order their tools take.
+	Seq int `json:"seq,omitempty"`
+
+	// StartedAt is when the call was handed to the seat's surface, and
+	// DurationMS how long the surface took to answer it. Both absent on a
+	// call answered without running, and on a row a build before them
+	// wrote: absent means "not measured", never "instant".
+	StartedAt  time.Time `json:"started_at,omitzero"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
+
+	// Origin and Server are who answered the call — a builtin, or an MCP
+	// tool and the server it came from — empty where no tool did.
+	Origin string `json:"origin,omitempty"`
+	Server string `json:"server,omitempty"`
 }
 
 // BridgeAppend is one finished bridged call as the bridge hands it to the row
