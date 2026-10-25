@@ -622,6 +622,50 @@ func (r *Reader) InactiveBefore(ctx context.Context, cutoff time.Time, limit int
 		ORDER BY last_activity_at, id LIMIT ?`, store.EncodeTime(cutoff), limit)
 }
 
+// TurnRef names one turn and whose it is.
+type TurnRef struct {
+	Owner, Conversation, Turn uuid.UUID
+}
+
+// ParkedPast nominates parked turns none of whose proposals expires after
+// now, the longest parked first, at most limit of them: the expiry
+// backstop's question. It only nominates: whether a turn has lapsed is
+// decided again against its proposals' states by the one rule that ends a
+// parked turn as expired (internal/assistant/proposal.Lapsed), and the close
+// is arbitrated.
+func (r *Reader) ParkedPast(ctx context.Context, now time.Time, limit int) ([]TurnRef, error) {
+	if limit <= 0 {
+		return nil, invalid("a parked listing names how many it wants")
+	}
+	out := []TurnRef{}
+	err := r.read(ctx, DomainScope(), true, func(tx *sql.Tx) error {
+		out = out[:0]
+		return eachRow(ctx, tx, `
+			SELECT t.owner_id, t.conversation_id, t.id FROM assistant_parked k
+			JOIN assistant_turns t ON t.id = k.turn_id
+			WHERE t.state = ? AND NOT EXISTS (
+				SELECT 1 FROM assistant_proposals p WHERE p.turn_id = t.id AND p.expires_at > ?)
+			ORDER BY t.started_at, t.id LIMIT ?`,
+			[]any{string(wire.TurnWaitingForApproval), store.EncodeTime(now), limit},
+			func(row rowScanner) error {
+				var owner, conversation, turn string
+				if err := row.Scan(&owner, &conversation, &turn); err != nil {
+					return err
+				}
+				o, c, t, err := parseThree(owner, conversation, turn)
+				if err != nil {
+					return err
+				}
+				out = append(out, TurnRef{Owner: o, Conversation: c, Turn: t})
+				return nil
+			})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("assistantdomain: list the parked turns: %w", err)
+	}
+	return out, nil
+}
+
 // Owners is every person who owns a conversation here, in id order: what the
 // erasure's backstop asks the identity estate about.
 func (r *Reader) Owners(ctx context.Context) ([]uuid.UUID, error) {

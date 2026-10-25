@@ -294,6 +294,7 @@ type Turns struct {
 	mu      sync.Mutex
 	resumed []approval.Resumption
 	emitted []approval.Emission
+	lapsed  []uuid.UUID
 }
 
 var _ approval.Turns = (*Turns)(nil)
@@ -315,6 +316,21 @@ func (t *Turns) Emit(_ context.Context, _, _, turn uuid.UUID, e approval.Emissio
 	defer t.mu.Unlock()
 	t.emitted = append(t.emitted, e)
 	return wire.TurnAccepted{TurnID: turn, StreamURL: StreamURL, AfterSeq: 9}, nil
+}
+
+// Lapse records a turn the approval asked to end as expired.
+func (t *Turns) Lapse(_ context.Context, _, _, turn uuid.UUID) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lapsed = append(t.lapsed, turn)
+	return nil
+}
+
+// Lapsed are the turns asked to end as expired, in order.
+func (t *Turns) Lapsed() []uuid.UUID {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.lapsed)
 }
 
 // Resumed are the resumptions, in order.

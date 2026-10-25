@@ -170,6 +170,44 @@ func TestASecondTurnIsRefusedWhileOneIsOpen(t *testing.T) {
 	}
 }
 
+// A PARKED TURN EXPIRES, A RUNNING ONE NEVER DOES: expired is refused for a
+// turn that is running (an approval resumed it a moment before), and the
+// expiry backstop nominates a parked turn only once every proposal of it is
+// past its expiry.
+func TestOnlyAParkedTurnExpiresAndTheBackstopNominatesItPastItsProposals(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	c := person(uuid.New(), "ada")
+	conversation := n.conversation(c, "")
+	turn := n.openTurn(c, conversation)
+	var moved *assistantdomain.TurnMoved
+	if _, err := n.writer.CloseTurn(t.Context(), fresh(c), turn,
+		assistantdomain.TurnEnd{State: wire.TurnExpired}); !errors.As(err, &moved) ||
+		moved.State != wire.TurnRunning {
+		t.Fatalf("a running turn closed expired answers %v, want the turn moved naming running", err)
+	}
+	n.propose(c, turn)
+	if _, err := n.writer.ParkTurn(t.Context(), fresh(c), turn, []byte(`[{"role":"user"}]`)); err != nil {
+		t.Fatalf("park the turn: %v", err)
+	}
+	due, err := n.reader.ParkedPast(t.Context(), monday, 10)
+	if err != nil || len(due) != 0 {
+		t.Fatalf("a turn whose proposal is inside its lifetime is nominated: %v, %v", due, err)
+	}
+	due, err = n.reader.ParkedPast(t.Context(), monday.Add(15*time.Minute), 10)
+	want := assistantdomain.TurnRef{Owner: c.Owner, Conversation: conversation, Turn: turn}
+	if err != nil || len(due) != 1 || due[0] != want {
+		t.Fatalf("past its proposal's expiry the backstop nominates %v, %v; want %v", due, err, want)
+	}
+	if _, err := n.writer.CloseTurn(t.Context(), fresh(c), turn,
+		assistantdomain.TurnEnd{State: wire.TurnExpired}); err != nil {
+		t.Fatalf("close the parked turn expired: %v", err)
+	}
+	if due, err = n.reader.ParkedPast(t.Context(), monday.Add(time.Hour), 10); err != nil || len(due) != 0 {
+		t.Errorf("a closed turn is still nominated: %v, %v", due, err)
+	}
+}
+
 // TWO APPROVALS OF ONE PROPOSAL ARBITRATE TO ONE.
 //
 // Two nodes each decide an approval from `proposed`. The second node decides

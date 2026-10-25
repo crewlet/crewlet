@@ -337,6 +337,9 @@ func TestAnExpiredProposalIsNeverApproved(t *testing.T) {
 	if len(f.API.Sent()) != 0 || f.Store.State(p.ID) != wire.ProposalExpired {
 		t.Errorf("an expired proposal sent %d and is %s", len(f.API.Sent()), f.Store.State(p.ID))
 	}
+	if lapsed := f.Turns.Lapsed(); len(lapsed) != 1 || lapsed[0] != p.Turn {
+		t.Errorf("the expired proposal's turn was asked to lapse %v, want once for %s", lapsed, p.Turn)
+	}
 }
 
 // A REFUSED WRITE FAILS IN THE ENGINE'S OWN WORDS, and the turn is told.
