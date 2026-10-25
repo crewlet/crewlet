@@ -1,6 +1,7 @@
 package cliprofile
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -63,7 +64,24 @@ func (m OutputMode) Valid() bool {
 
 // Path is a route to a value inside a decoded JSON document: successive
 // object keys, or a decimal index into an array.
+//
+// A USAGE path may also take [PathEvery] as a step, for every member of the
+// object or array there — and the count it reads is then the SUM of the count
+// under each member that has one. It exists because a CLI can key its counts
+// by something no profile can know in advance: Gemini CLI reports
+// `stats.models.<model>.tokens`, one entry for every model a call used, and its
+// web tools ask a second model on the side. Only a usage path may carry it
+// ([Profile.Validate]): a count adds up, while an answer, a failure flag or an
+// event's kind is one value, and which member's would be a guess.
 type Path []string
+
+// PathEvery is the [Path] step that stands for every member of the object or
+// array at that point. A key spelled `*` in a CLI's own document is therefore
+// out of a path's reach, which no CLI measured has.
+const PathEvery = "*"
+
+// HasEvery reports whether the path takes [PathEvery] anywhere.
+func (p Path) HasEvery() bool { return slices.Contains(p, PathEvery) }
 
 // String renders a path the way profiles.yaml would be read aloud —
 // `usage.input_tokens` for [][]string{{"usage", "input_tokens"}}.
@@ -106,12 +124,44 @@ func PathList(paths []Path) string {
 // only where the vendor's output count excludes them: OpenAI's own usage, and
 // every CLI that passes it through, counts reasoning INSIDE output already, and
 // adding it there would charge it twice.
+//
+// ToolPrompt is the same on the input side: the prompt a MODEL-SIDE tool put in
+// front of the model — the pages a URL-context fetch retrieved, the results a
+// search grounding returned — which Gemini reports as toolUsePromptTokenCount,
+// apart from the prompt count, and bills as input. A web fetch puts a whole
+// page there, so leaving it out would charge a fetching seat for its question
+// and not for what it read.
 type UsagePaths struct {
 	Input      []Path `yaml:"input,omitempty"`
 	Output     []Path `yaml:"output,omitempty"`
 	CacheRead  []Path `yaml:"cache_read,omitempty"`
 	CacheWrite []Path `yaml:"cache_write,omitempty"`
 	Reasoning  []Path `yaml:"reasoning,omitempty"`
+	ToolPrompt []Path `yaml:"tool_prompt,omitempty"`
+
+	// InputIncludesCache declares that the input count is ALREADY the whole
+	// prompt, the cached tokens inside it, so the cache figures only break it
+	// down. False, the default, reads it as the uncached part alone, which is
+	// how Anthropic's usage — and every CLI passing that through — reports
+	// it, and adds the cache figures to it ([UsagePaths.PromptTokens]).
+	//
+	// A DECLARATION OF THE VENDOR'S ARITHMETIC, because the two shapes name
+	// their fields alike and differ only in what the first one counts:
+	// OpenAI's `input_tokens` holds its `cached_tokens`, and codex's
+	// turn.completed passes that through (its own `non_cached_input` is the
+	// difference). Read the other way, every cached token was charged twice.
+	InputIncludesCache bool `yaml:"input_includes_cache,omitempty"`
+}
+
+// PromptTokens is the whole prompt's token count out of the three input
+// figures a CLI reported, by the arithmetic [UsagePaths.InputIncludesCache]
+// declares: the budget figure a completion's InputTokens carries, which counts
+// every cached token once.
+func (u UsagePaths) PromptTokens(input, cacheRead, cacheWrite int) int {
+	if u.InputIncludesCache {
+		return input
+	}
+	return input + cacheRead + cacheWrite
 }
 
 // CredentialStore is a login a CLI keeps in a DATABASE OF ITS OWN rather than
@@ -243,10 +293,12 @@ type LimitMarker struct {
 // further, and its markers stop being matched against anything the model said,
 // in a failed run or not. That is not
 // a guess per profile: kimi-code writes `provider.rate_limit: …` to stderr
-// with the answer stream empty, pi writes `<status>: <the provider's JSON>`
-// to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
-// there — all three measured. A profile only narrows this when the vendor's
-// own behaviour makes the answer an impossible place for the report.
+// with the answer stream empty, and pi writes `<status>: <the provider's JSON>`
+// to stderr with stdout empty — both measured. A profile only narrows this when
+// the vendor's own behaviour makes the answer an impossible place for the
+// report, and hermes is the warning: only its failures to START reach stderr,
+// while a refused key or a spent plan is printed on stdout with exit 2
+// (measured on 0.21.5), so the stderr scope it once had matched none of them.
 //
 // THE THIRD SCOPE MATCHES STRUCTURE, NOT TEXT, for a CLI that reports a failure
 // as an EVENT OF ITS OWN in a JSON stream. OpenCode 2's `--format json` prints
@@ -354,7 +406,7 @@ func (s SeedScope) Valid() bool { return s == SeedHome || s == SeedWork }
 // SeedFile is a settings file the engine writes for the CLI before a call.
 //
 // Some vendors take their tool policy from a file rather than a flag —
-// Gemini's settings.json, OpenCode's opencode.json, Cursor's cli.json — and
+// Gemini CLI's policy files, OpenCode's opencode.json, Cursor's cli.json — and
 // the seat HOME and the per-call working directory are both places the engine
 // controls, so the file is simply put where the CLI will look. Content is
 // written verbatim at 0600.
@@ -387,9 +439,114 @@ func (f SeedFile) Scope() SeedScope {
 	return f.In
 }
 
-// SystemPromptFile shapes the file a `{file}` system-prompt channel writes,
-// for the vendors whose prompt channel takes a STRUCTURED file rather than a
-// bare one.
+// Channel is one way a CLI takes a system prompt: as an argument, as a file
+// named by an environment variable, or as a file it finds by its location.
+//
+// Three shapes, because vendors ship all three, and `--help` shows only the
+// first: Gemini CLI and its Qwen fork take their prompt from a file a VARIABLE
+// names and have no flag for it at all, which is how both were first recorded
+// here as having no channel; OpenCode takes no path at all and DISCOVERS the
+// file where its vendor says to look.
+type Channel struct {
+	// Args is the argv the channel adds, with one of two placeholders, and
+	// the difference is not cosmetic:
+	//
+	//   {file}    the text is written to a private file in the per-call
+	//             working directory and the PATH is substituted. Prefer
+	//             this always. A seat's system prompt carries the org
+	//             chart, its policies, its backstory, its roster and its
+	//             personal-memory and knowledge prefetches.
+	//   {system}  the text is substituted INTO ARGV, where /proc/<pid>/cmdline
+	//             makes it readable by every account on the machine and
+	//             ARG_MAX bounds it (256 KB on macOS). Only for a CLI that
+	//             offers no file variant.
+	//
+	// With a discovered [Channel.File] it carries neither: the argv only
+	// selects what the CLI found, or is empty where the CLI reads the file
+	// on every run.
+	Args []string `yaml:"args,omitempty"`
+
+	// Env is an environment variable naming a file the CLI reads its
+	// system prompt from — `GEMINI_SYSTEM_MD`, `QWEN_SYSTEM_MD`. Preferred
+	// over Args wherever both exist, because it is a file and the text
+	// never reaches argv. A channel declares one or the other: both would
+	// hand the CLI the same text twice, and which copy wins is the vendor's
+	// business.
+	Env string `yaml:"env,omitempty"`
+
+	// File shapes the file a `{file}`, Env or discovered channel writes —
+	// see [SystemPromptFile]. Nil writes the prompt alone, under a name no
+	// CLI reads on its own.
+	File *SystemPromptFile `yaml:"file,omitempty"`
+}
+
+// Declared reports whether the profile offers this channel at all.
+func (c Channel) Declared() bool {
+	return len(c.Args) > 0 || c.Env != "" || c.File.ReadAlways()
+}
+
+// WritesFile reports whether the channel puts the text in a FILE — `{file}`
+// on argv, the variable, which names a path by construction, or a file the CLI
+// discovers by its location.
+func (c Channel) WritesFile() bool {
+	return c.Env != "" || c.File.Found() || hasPlaceholder(c.Args, "{file}")
+}
+
+// clone deep-copies the channel, because overrides replace its list in place.
+func (c Channel) clone() Channel {
+	out := Channel{Args: append([]string(nil), c.Args...), Env: c.Env}
+	if c.File != nil {
+		spec := *c.File
+		out.File = &spec
+	}
+	return out
+}
+
+// Route is where one call's system prompt travels, and whether the CLI's own
+// system prompt stays in force beside it — see [Profile.RouteFor].
+type Route struct {
+	// Channel carries the text; the zero channel leaves it in the transcript.
+	Channel Channel
+
+	// Field names the profile field the channel came from, `system_prompt`
+	// or `append_system_prompt`, and is empty for the transcript. For a
+	// message or a diagnosis to name what an operator would override.
+	Field string
+
+	// KeepsDefault says the CLI's own system prompt is in force for this
+	// call: the append channel, or no channel at all, where the engine's
+	// text rides the transcript under the vendor's prompt.
+	KeepsDefault bool
+}
+
+// RouteFor picks the channel for one call: the append channel for a seat at
+// work (agent) and the replace channel for a text function, each falling back
+// to the other, and both to the transcript — see [Profile.SystemPrompt].
+//
+// A seat on a CLI that can only replace takes the replacement rather than the
+// transcript: the vendor prompt it would keep is written for a coding agent at
+// a terminal, and the seat's own instructions would arrive as a user message
+// under it.
+func (p *Profile) RouteFor(agent bool) Route {
+	keep := Route{Channel: p.AppendSystemPrompt, Field: "append_system_prompt", KeepsDefault: true}
+	replace := Route{Channel: p.SystemPrompt, Field: "system_prompt"}
+	first, second := replace, keep
+	if agent {
+		first, second = keep, replace
+	}
+	switch {
+	case first.Channel.Declared():
+		return first
+	case second.Channel.Declared():
+		return second
+	default:
+		return Route{KeepsDefault: true}
+	}
+}
+
+// SystemPromptFile shapes the file a channel writes, for the vendors whose
+// channel takes a STRUCTURED file, or finds one by its location, rather than
+// being handed a bare one.
 //
 // Without it the file is the system prompt and nothing else, which is what
 // every other `{file}` profile wants. Kimi Code is the first that cannot take
@@ -401,28 +558,23 @@ func (f SeedFile) Scope() SeedScope {
 //
 // Which makes the frontmatter load-bearing twice over. It is also the only
 // place that CLI can be told which of its own tools to keep, so the file is
-// where this backend's tool denial lives for it — and that is why a profile
-// declaring one passes the channel on EVERY call, including a request that
-// carries no system prompt at all (`crewlet llm doctor`'s isolation probes
-// are two). Passing it only when there is text to put in it would hand the
-// vendor's default agent, and every tool it has, to exactly the calls that
-// exist to prove the tools are off.
+// where this backend's tool denial lives for it — and that is why a channel
+// declaring one is passed on EVERY call, including a request that carries no
+// system prompt at all. Passing it only when there is text to put in it would
+// hand the vendor's default agent, and every tool it has, to exactly the calls
+// that would never notice.
 //
 // OpenCode 2 is the second, and it takes the file a different way: it is
-// handed no path at all. It DISCOVERS agents by their location — `agents/<name>.md`
-// in its configuration directory, with the body as the agent's system prompt —
-// and `--agent <name>` selects one. Its profile points that directory inside
-// the per-call working directory ([Profile.WorkConfigEnv]), so the file is
-// written there and the channel's argv names the agent rather than carrying
-// `{file}`: see [SystemPromptFile.Discovered].
+// handed no path at all. It DISCOVERS the file by its location in its
+// configuration directory, which its profile points inside the per-call
+// working directory ([Profile.WorkConfigEnv]) — see [SystemPromptFile.Discovered].
 type SystemPromptFile struct {
 	// Name is the file to write in the per-call working directory. Empty
 	// takes the default. A bare name for a file whose path the CLI is
 	// handed: a vendor that keys on the extension (`--agent-file` wants
 	// `.md`) is the only reason to set it. A relative path naming a FILE,
-	// staying inside the working directory, for a
-	// [SystemPromptFile.Discovered] one, which the CLI finds where its
-	// vendor says to look.
+	// staying inside the working directory, for a discovered one, which the
+	// CLI finds where its vendor says to look.
 	Name string `yaml:"name,omitempty"`
 
 	// Template is the file's content, with `{system}` substituted by the
@@ -430,10 +582,53 @@ type SystemPromptFile struct {
 	Template string `yaml:"template,omitempty"`
 
 	// Discovered says the CLI FINDS the file by its location in the working
-	// directory rather than being handed its path, so system_prompt_args
-	// select what it found and carry no `{file}`. Written on every call, as
-	// a `{file}` one is, and removed with the working directory on release.
-	Discovered bool `yaml:"discovered,omitempty"`
+	// directory rather than being handed its path — see [Discovery]. Empty
+	// is a file handed over by path.
+	Discovered Discovery `yaml:"discovered,omitempty"`
+}
+
+// Discovery is how a CLI comes to read a file it finds by its location.
+type Discovery string
+
+const (
+	// DiscoverySelected is a file the CLI finds and the channel's argv then
+	// selects by name: OpenCode's `agents/<name>.md`, run with
+	// `--agent <name>`. Found but never selected, it changes nothing.
+	DiscoverySelected Discovery = "selected"
+
+	// DiscoveryAlways is a file the CLI reads on every run it makes in that
+	// directory, with nothing on argv asking for it: OpenCode's global
+	// `AGENTS.md` in its configuration directory. Its channel is declared by
+	// the file alone.
+	DiscoveryAlways Discovery = "always"
+)
+
+// Valid reports whether d is a known discovery, the empty one included.
+func (d Discovery) Valid() bool {
+	return d == "" || d == DiscoverySelected || d == DiscoveryAlways
+}
+
+// Found reports whether the CLI finds this file by its location rather than
+// being handed its path. Nil-safe: no spec is a file handed over by path.
+func (f *SystemPromptFile) Found() bool {
+	return f != nil && f.Discovered != ""
+}
+
+// ReadAlways reports whether the CLI reads this file on every run, so the file
+// alone is the channel. Nil-safe.
+func (f *SystemPromptFile) ReadAlways() bool {
+	return f != nil && f.Discovered == DiscoveryAlways
+}
+
+// CarriesPolicy reports whether the file says something of its own with no
+// system prompt in it: a template beyond `{system}`, such as the frontmatter
+// that names the agent OpenCode's `--agent` selects, or Kimi Code's tool
+// allowlist. A call writes such a file whether or not the request carries a
+// system prompt; a file that would hold the prompt alone is written only when
+// there is one, because written empty it still says something — OpenCode puts
+// an "Instructions from: <path>" line in front of an empty AGENTS.md. Nil-safe.
+func (f *SystemPromptFile) CarriesPolicy() bool {
+	return f != nil && strings.TrimSpace(f.Render("")) != ""
 }
 
 // Render returns the bytes to write for one call's system prompt.
@@ -451,6 +646,24 @@ func (f *SystemPromptFile) FileName() string {
 	}
 	return f.Name
 }
+
+// ProjectRootMarker is the file the engine writes into every call's working
+// directory to make it a project root of its own, and ProjectRootGitdir its
+// content.
+//
+// A FILE, and one naming a gitdir, because those are the two shapes every CLI
+// measured stops at: an empty `.git` DIRECTORY is ignored by git and by the
+// CLIs that ask git where the root is (OpenCode, Qwen Code, Copilot), and Kimi
+// Code accepts a `.git` file only when its first line is `gitdir:`. The gitdir
+// is relative, so it names a path inside the call's own 0700 directory that
+// never exists: git reports "not a git repository" there, and nobody else can
+// create it.
+//
+// Reserved: no seed may claim the path ([Profile.claims]).
+const (
+	ProjectRootMarker = ".git"
+	ProjectRootGitdir = "gitdir: .crewlet-not-a-repository\n"
+)
 
 // DefaultSystemPromptFile is what a {file} substitution writes, in the per-call
 // working directory.
@@ -524,54 +737,37 @@ type Profile struct {
 	// PromptMode is stdin (the default), argv or file.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 
-	// SystemPromptArgs carries the system prompt on its OWN channel rather
-	// than as the first section of the transcript, where a CLI has a flag
-	// for it. Empty leaves it in the transcript, which is what a CLI with
-	// no such flag can take.
+	// SystemPrompt is the channel on which the engine's system prompt
+	// REPLACES the CLI's own, and AppendSystemPrompt the one on which it is
+	// added to the CLI's own, which stays in force. A profile declares what
+	// its vendor offers — either, both or neither — and each CALL takes the
+	// one its kind of work wants ([Profile.RouteFor]):
 	//
-	// A system prompt folded into the prompt text arrives as USER content:
+	//   - a seat at work (a phase of its turn: an Agent request) takes
+	//     the APPEND channel: the vendor's harness prompt is written for
+	//     an agent and moves with every model the vendor ships, and the
+	//     engine's seat prompt follows it;
+	//   - a text function the engine runs on the side (a filter, a
+	//     classifier, a rewrite, a judge) takes the REPLACE channel: its
+	//     system prompt is the whole instruction, its answer is parsed,
+	//     and a coding agent's guidance in front of it would cost a few
+	//     thousand tokens on every call and push it toward prose.
+	//
+	// Each falls back to the other when its own is not declared, and to
+	// the transcript when neither is.
+	//
+	// ON A CHANNEL RATHER THAN IN THE TRANSCRIPT wherever the CLI has one: a
+	// system prompt folded into the prompt text arrives as USER content, and
 	// the model is asked to treat an ordinary message as its standing
-	// instructions, and a vendor whose default prompt says what it is
-	// ("I'm Claude Code, here to help with your software engineering
-	// tasks") keeps saying so over the top of a seat's own identity.
-	//
-	// Two placeholders, and the difference is not cosmetic:
-	//
-	//   {file}    the text is written to a private file in the per-call
-	//             working directory and the PATH is substituted. Prefer
-	//             this always. A seat's system prompt carries the org
-	//             chart, its policies, its backstory, its roster and its
-	//             personal-memory and knowledge prefetches.
-	//   {system}  the text is substituted INTO ARGV, where /proc/<pid>/cmdline
-	//             makes it readable by every account on the machine and
-	//             ARG_MAX bounds it (256 KB on macOS) — the same limit the
-	//             copilot profile's argv prompt already lives under. Only
-	//             for a CLI that offers no file variant.
-	SystemPromptArgs []string `yaml:"system_prompt_args,omitempty"`
+	// instructions.
+	SystemPrompt Channel `yaml:"system_prompt,omitempty"`
 
-	// SystemPromptEnv is the THIRD channel, and the one `--help` does not
-	// show: an environment variable naming a file the CLI reads its system
-	// prompt from. Empty means the CLI has no such variable.
-	//
-	// Gemini CLI and its Qwen fork both work this way and neither has a
-	// flag for a path — `GEMINI_SYSTEM_MD` / `QWEN_SYSTEM_MD`, each taking
-	// a path and REPLACING the built-in prompt. Reading only `--help`
-	// reports both as having no system-prompt channel at all, which is how
-	// they were first recorded here.
-	//
-	// PREFERRED OVER SystemPromptArgs WHEREVER BOTH EXIST, because it is a
-	// file: the text never reaches argv, where /proc/<pid>/cmdline makes it
-	// readable by every account on the machine. Qwen Code has both and
-	// takes this one for exactly that reason.
-	//
-	// The two are mutually exclusive — a profile declaring both would hand
-	// the CLI its system prompt twice — and [Profile.Validate] refuses it.
-	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
-
-	// SystemPromptFile shapes the file either `{file}` channel writes —
-	// see [SystemPromptFile]. Nil writes the prompt alone, which is what
-	// every vendor but Kimi Code takes.
-	SystemPromptFile *SystemPromptFile `yaml:"system_prompt_file,omitempty"`
+	// AppendSystemPrompt is the channel that keeps the CLI's own system
+	// prompt and adds the engine's — see [Profile.SystemPrompt]. WHERE the
+	// vendor puts the added text (after its own, in place of its identity
+	// sentence, in an addendum block) is the vendor's; what the channel
+	// promises is that the vendor's prompt is still in force.
+	AppendSystemPrompt Channel `yaml:"append_system_prompt,omitempty"`
 
 	// PromptArgs introduces the prompt in argv mode, for a CLI that takes it
 	// as a FLAG'S VALUE rather than as a positional argument. Empty appends
@@ -582,13 +778,14 @@ type Profile struct {
 	// a file-mode profile with nothing to substitute the path into would
 	// hand the CLI no prompt at all.
 	//
-	// It exists because xAI's grok breaks the assumption the rest of this
-	// format is built on. Its only headless trigger is `-p <PROMPT>`, and a
-	// value is REQUIRED — so with `-p` sitting in complete_args, the model
-	// flag that follows becomes the prompt and the real prompt becomes a
-	// stray positional: `grok -p --model grok-4 "hi"` exits on
-	// "a value is required for '--single <PROMPT>' but none was supplied".
-	// Every call died at argument parsing.
+	// It exists because a CLI can take its prompt as a flag's VALUE, which
+	// breaks the assumption the rest of this format is built on: with such a
+	// flag sitting in complete_args, the model flag that follows becomes the
+	// prompt and the real prompt becomes a stray positional. xAI's grok did
+	// exactly that with `-p <PROMPT>` — `grok -p --model grok-4 "hi"` exits on
+	// "a value is required for '--single <PROMPT>' but none was supplied" —
+	// and every call died at argument parsing; its profile now takes the
+	// file form, `--prompt-file {file}`, through this same field.
 	//
 	// Appended LAST, after the model and system-prompt arguments, because
 	// that is the only position where the flag and its value stay adjacent.
@@ -655,7 +852,9 @@ type Profile struct {
 	// while a file that cannot be read or is empty logs
 	// `cli_agent_usage_file_unreadable`, and one that does not decode, or in
 	// which usage.input and usage.output do not both resolve, logs
-	// `cli_agent_usage_report_unreadable`.
+	// `cli_agent_usage_report_unreadable` — for a run the CLI did not report
+	// failed: a failed call is charged nothing, and the vendor's report of one
+	// may hold no counts by design.
 	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
 
 	// SessionArgs name the session one call runs in, with `{session}`
@@ -694,7 +893,7 @@ type Profile struct {
 	// which: `cli_agent_usage_report_failed` for a command that failed or
 	// printed nothing, `cli_agent_usage_report_unreadable` for a report that
 	// does not decode or in which usage.input and usage.output do not both
-	// resolve.
+	// resolve, on a run the CLI did not report failed.
 	UsageArgs []string `yaml:"usage_args,omitempty"`
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory
@@ -772,6 +971,23 @@ type Profile struct {
 	// [Profile.Validate].
 	Env map[string]string `yaml:"env,omitempty"`
 
+	// SubscriptionEnv is child environment set under auth.mode subscription
+	// alone, after the operator's env: what tells a CLI that picks its
+	// sign-in from its environment to use the login the seat's home holds.
+	//
+	// A FIELD OF ITS OWN, because the same setting under api-key would
+	// overrule the key. Gemini CLI chooses its sign-in from settings or,
+	// failing those, its environment — GOOGLE_GENAI_USE_GCA=true first,
+	// GEMINI_API_KEY after — and a copied login selects nothing, so every
+	// subscription call exited 41 asking for an auth method (measured on
+	// 0.58.0 and 0.65.0). In env, or as a settings seed, the variable would
+	// have sent every api-key call to the login instead of the key.
+	//
+	// Never a credential, never the profile's token_env or api_key_env
+	// ([Profile.ValidateCredentials]), never a variable the engine sets to
+	// isolate the call or one env sets too, and never an empty value.
+	SubscriptionEnv map[string]string `yaml:"subscription_env,omitempty"`
+
 	// PassthroughEnv names engine environment variables forwarded to the
 	// child. It MAY NOT name a credential, and config refuses a profile
 	// that does ([Profile.ValidateCredentials]): everything here is
@@ -790,6 +1006,20 @@ type Profile struct {
 	// APIKeyEnv is the variable carrying a metered API key, set only
 	// under auth.mode api-key or inherit-env.
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+
+	// APIKeyEnvShared declares that APIKeyEnv is a GENERIC name, one other
+	// vendors' keys are kept under too, so an entry names its key
+	// (auth.api_key) and the engine never reads that variable from its own
+	// secret store or environment in its place — nor forwards the engine's
+	// own under auth.mode inherit-env, which config refuses for such a CLI.
+	//
+	// The fallback exists for a vendor's own variable: ANTHROPIC_API_KEY
+	// read for Claude Code is the key a person exported for exactly that
+	// CLI. Qwen Code reads OPENAI_API_KEY and sends it to whatever endpoint
+	// OPENAI_BASE_URL names — DashScope's when it names none — so falling
+	// back to it handed an OpenAI key, kept on the host for embeddings or
+	// for OpenAI itself, to another vendor.
+	APIKeyEnvShared bool `yaml:"api_key_env_shared,omitempty"`
 
 	// EnvSignIn declares that the CLI reads its model provider's credential
 	// from its OWN environment, under that provider's own variable — so a
@@ -819,6 +1049,18 @@ type Profile struct {
 	// They are what a bundle may carry and what is synced back after a
 	// refresh; anything else in the home is conversation state.
 	CredentialPaths []string `yaml:"credential_paths,omitempty"`
+
+	// LoginKeys names, by a credential file's NAME, the top-level key that
+	// file holds only once the CLI has signed in — for a file the CLI also
+	// keeps state of its own in. Copilot CLI writes `firstLaunchAt` into the
+	// config.json its plaintext login lives in on its first start, and Cursor
+	// Agent its settings into cli-config.json on every run, signed in or
+	// not; carried out of a seat's home, either was a "login" that had the
+	// doctor report a sign-in nobody made and kept a configured bundle from
+	// being restored. Without its key such a file is not a login
+	// ([Profile.HoldsLogin]). A credential file not named here is a login
+	// whenever it exists.
+	LoginKeys map[string]string `yaml:"login_keys,omitempty"`
 
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call. A
@@ -1144,8 +1386,12 @@ func (p *Profile) kept(scope SeedScope) []keptPath {
 			add("seed_files", fmt.Sprintf("seed_files[%d].path", i), f.Path)
 		}
 	}
-	if spf := p.SystemPromptFile; scope == SeedWork && spf != nil && spf.Discovered {
-		add("system_prompt_file.name", "system_prompt_file.name", spf.Name)
+	if scope == SeedWork {
+		for _, ch := range p.channels() {
+			if ch.File.Found() {
+				add(ch.field+".file.name", ch.field+".file.name", ch.File.Name)
+			}
+		}
 	}
 	return out
 }
@@ -1158,23 +1404,19 @@ func within(rel, dir string) bool {
 	return dir == "." || rel == dir || strings.HasPrefix(rel, dir+string(filepath.Separator))
 }
 
-// HasSystemChannel reports whether this profile carries the system prompt on
-// a channel of its own rather than leaving it in the transcript.
-func (p *Profile) HasSystemChannel() bool {
-	return len(p.SystemPromptArgs) > 0 || p.SystemPromptEnv != ""
+// namedChannel is one of a profile's system-prompt channels with the field it
+// is configured under, for a message to name what an operator would override.
+type namedChannel struct {
+	field string
+	Channel
 }
 
-// WritesSystemPromptFile reports whether this profile's system-prompt channel
-// puts the text in a FILE — `{file}` on argv, the env-var channel, which is a
-// path by construction, or a file the CLI discovers by its location.
-func (p *Profile) WritesSystemPromptFile() bool {
-	if p.SystemPromptEnv != "" {
-		return true
+// channels lists the profile's two system-prompt channels, replace first.
+func (p *Profile) channels() []namedChannel {
+	return []namedChannel{
+		{field: "system_prompt", Channel: p.SystemPrompt},
+		{field: "append_system_prompt", Channel: p.AppendSystemPrompt},
 	}
-	if p.SystemPromptFile != nil && p.SystemPromptFile.Discovered {
-		return true
-	}
-	return hasPlaceholder(p.SystemPromptArgs, "{file}")
 }
 
 // hasPlaceholder reports whether any entry of an argv template carries one.
@@ -1281,56 +1523,13 @@ func (p *Profile) problems() []string {
 		add("event_type_path is set but output is %q — an event discriminator "+
 			"only exists in a jsonl stream", p.EffectiveOutput())
 	}
-	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
-		// One channel or the other. Both would hand the CLI the same
-		// system prompt twice, and which copy wins is the vendor's
-		// business rather than something this profile can state.
-		add("system_prompt_args and system_prompt_env are both set — a CLI takes " +
-			"its system prompt on ONE channel; drop whichever this build does not use")
+	p.validateEveryStep(add)
+	for _, ch := range p.channels() {
+		ch.validate(add)
 	}
-	// AND ONE PLACEHOLDER OR THE OTHER WITHIN system_prompt_args, which is
-	// the same rule one level down and was the hole: the renderer writes the
-	// private file for `{file}` and then substitutes `{system}` into argv on
-	// the SAME pass, so `["--agent-file", "{file}", "--system-prompt",
-	// "{system}"]` wrote the seat's identity to a 0600 file and ALSO put
-	// every byte of it in /proc/<pid>/cmdline, where any account on the
-	// machine reads it. The shipped profiles are held to this by a test;
-	// nothing held an operator's overrides to it, and overrides are
-	// exactly where a hand-written argv appears.
-	if hasPlaceholder(p.SystemPromptArgs, "{file}") && hasPlaceholder(p.SystemPromptArgs, "{system}") {
-		add("system_prompt_args names both {file} and {system} — the first writes the " +
-			"seat's system prompt to a private file and the second puts the same text " +
-			"on argv, where /proc/<pid>/cmdline exposes it to every account on the " +
-			"machine; keep the {file} form and drop {system}")
-	}
-	if p.SystemPromptFile != nil {
-		if !p.WritesSystemPromptFile() {
-			// A template with no file to write is not a harmless
-			// extra: on a `{system}` profile the seat's identity goes
-			// on argv bare, and an operator who wrote frontmatter
-			// meant it to reach the CLI.
-			add("system_prompt_file is set but no system-prompt channel writes a " +
-				"file — set system_prompt_args with a {file} placeholder, or " +
-				"system_prompt_env")
-		}
-		if tpl := p.SystemPromptFile.Template; tpl != "" && !strings.Contains(tpl, "{system}") {
-			add("system_prompt_file.template has no {system} placeholder — every " +
-				"call would hand the CLI the same fixed file and no seat's identity")
-		}
-		// `fileName` rather than `name`, which is Validate's own parameter:
-		// the PROFILE's name. Two different names in one validator whose
-		// every message is about the profile is worth a second word.
-		fileName := p.SystemPromptFile.Name
-		switch {
-		case p.SystemPromptFile.Discovered:
-			p.validateDiscoveredPromptFile(add)
-		case fileName != "" && !isBareFileName(fileName):
-			// The path is joined onto the per-call working directory,
-			// and this field is operator-overridable.
-			add("system_prompt_file.name %q must be a plain file name, with no "+
-				"directory separator — only a discovered file, which the CLI finds "+
-				"where its vendor says to look, carries a directory", fileName)
-		}
+	if p.APIKeyEnvShared && p.APIKeyEnv == "" {
+		add("api_key_env_shared is set but api_key_env is empty — it says the key " +
+			"variable is one other vendors' keys go in too, and there is no variable")
 	}
 	p.validateUsageCommand(add)
 	if len(p.UsageFileArgs) > 0 {
@@ -1452,8 +1651,8 @@ func (p *Profile) problems() []string {
 			// home or the working directory (EISDIR on every call), and
 			// `.crewlet-config/` writes a regular FILE where the CLI and
 			// the engine need a directory, so the system prompt's write
-			// under it fails ENOTDIR on every call. The rule
-			// system_prompt_file.name is held to, for the same reason.
+			// under it fails ENOTDIR on every call. The rule a channel's
+			// file.name is held to, for the same reason.
 			// The same directory spelled as a file name, `.crewlet-config`,
 			// is a conflict between two fields rather than a shape, and
 			// [Profile.validateCollisions] refuses it.
@@ -1469,6 +1668,30 @@ func (p *Profile) problems() []string {
 	}
 	p.validateCollisions(add)
 	return bad
+}
+
+// validateEveryStep refuses [PathEvery] in every path that reads ONE value —
+// the answer, the failure flag, an event's kind and its failure class — where
+// only a usage count, which adds up, may take it ([Path]). Refused rather than
+// read as the first member: the members of a decoded object have no order, so
+// the same stdout would answer differently from one call to the next.
+func (p *Profile) validateEveryStep(add func(string, ...any)) {
+	for _, field := range []struct {
+		name  string
+		paths []Path
+	}{
+		{"text_paths", p.TextPaths},
+		{"error_paths", p.ErrorPaths},
+		{"event_type_path", []Path{p.EventTypePath}},
+		{"marker_path", []Path{p.MarkerPath}},
+	} {
+		for _, path := range field.paths {
+			if path.HasEvery() {
+				add("%s %q takes %q, which only a usage path may: a count under every "+
+					"member adds up, and %s reads one value", field.name, path.String(), PathEvery, field.name)
+			}
+		}
+	}
 }
 
 // pathClaim is one path a profile has the engine WRITE a file at, or has the
@@ -1497,19 +1720,44 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 			}
 		}
 	}
+	if scope == SeedWork {
+		// FIRST, so a seed at the same path is the one refused, under a
+		// label that says the engine owns it.
+		file("the call's project-root marker", ProjectRootMarker)
+	}
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
 			file(fmt.Sprintf("seed_files[%d].path", i), f.Path)
 		}
 	}
-	if scope == SeedWork && p.WritesSystemPromptFile() {
-		// Written by every call that has a file channel, discovered or
+	if scope == SeedWork {
+		// Written by every call that takes a file channel, discovered or
 		// handed over by path, so a seed at the same path is overwritten
-		// before the CLI ever reads it.
-		name := p.SystemPromptFile.FileName()
-		discovered := p.SystemPromptFile != nil && p.SystemPromptFile.Discovered
-		if (discovered && staysInside(name) && namesAFile(name)) || (!discovered && isBareFileName(name)) {
-			file("system_prompt_file.name", name)
+		// before the CLI ever reads it. ONE CLAIM PER PATH across the two
+		// channels: a call takes one channel or the other, so two channels
+		// naming one file (Kimi's agent file, with and without the vendor's
+		// own prompt in it) write it once per call, never twice.
+		claimed := map[string]bool{}
+		for _, ch := range p.channels() {
+			if !ch.WritesFile() {
+				continue
+			}
+			// The shapes the channel's own rules admit: a file the CLI
+			// finds is a path inside the call's directory, one handed
+			// over by path a bare file name. A malformed one is that
+			// rule's to report, and claims nothing here.
+			name := ch.File.FileName()
+			claimable := isBareFileName(name)
+			if ch.File.Found() {
+				claimable = staysInside(name) && namesAFile(name)
+			}
+			if !claimable {
+				continue
+			}
+			if clean := filepath.Clean(name); !claimed[clean] {
+				claimed[clean] = true
+				file(ch.field+".file.name", name)
+			}
 		}
 	}
 	field, relocations := "config_env", p.ConfigEnv
@@ -1644,11 +1892,22 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 		}
 		byName[name] = rel
 	}
+	for _, name := range slices.Sorted(maps.Keys(p.LoginKeys)) {
+		switch {
+		case byName[name] == "":
+			add("login_keys names %q, which is the file name of no credential_paths entry — "+
+				"a login key says which of the credential files holds a login only once it "+
+				"carries that key", name)
+		case strings.TrimSpace(p.LoginKeys[name]) == "":
+			add("login_keys.%s is empty — name the top-level key the file holds once the "+
+				"CLI has signed in", name)
+		}
+	}
 	// A HOST FILE IS ADOPTED UNDER ITS FILE NAME, and a seat is seeded only
 	// with the names credential_paths gives — so a host path whose file name
 	// none of them has is adopted, reported as the login found, and read by
 	// no seat: copilot listed gh's `.config/gh/hosts.yml`, adopted as
-	// `hosts.yml` beside the `hosts.json` its credential_paths name.
+	// `hosts.yml` beside the `hosts.json` its credential_paths then named.
 	for i, rel := range p.HostCredentialPaths {
 		if name := filepath.Base(rel); staysInside(rel) && namesAFile(rel) && byName[name] == "" {
 			add("host_credential_paths[%d] %q has a file name (%s) no credential_paths "+
@@ -1757,6 +2016,26 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 			add("passthrough_env names %s, which the engine sets to keep the CLI inside "+
 				"its seat's home and its call's working directory — forwarding the engine's "+
 				"own would hand the CLI the engine user's directories", name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.SubscriptionEnv)) {
+		_, inEnv := p.Env[name]
+		switch {
+		case strings.TrimSpace(name) == "":
+			add("subscription_env names an empty variable")
+		case slices.Contains(isolation, name):
+			add("subscription_env names %s, which the engine sets to keep the CLI inside "+
+				"its seat's home and its call's working directory — a value here would "+
+				"replace that isolation on every subscription call", name)
+		case inEnv:
+			// Two values for one variable, of which the child gets the
+			// subscription one under subscription and the other under
+			// every other mode — a sign-in choice made in two places.
+			add("subscription_env and env both name %s — set it in subscription_env "+
+				"alone, which is the only mode it may apply under", name)
+		case strings.TrimSpace(p.SubscriptionEnv[name]) == "":
+			add("subscription_env.%s is empty — give the value that selects the CLI's "+
+				"login, e.g. \"true\"", name)
 		}
 	}
 }
@@ -1921,51 +2200,105 @@ func (p *Profile) validateUsageCommand(add func(string, ...any)) {
 	}
 }
 
-// validateDiscoveredPromptFile holds a [SystemPromptFile.Discovered] channel to
-// the shape that makes it one: a file the CLI finds in the working directory,
-// and an argv that selects it.
-func (p *Profile) validateDiscoveredPromptFile(add func(string, ...any)) {
-	fileName := p.SystemPromptFile.Name
+// validate holds one system-prompt channel to the shapes that make it one.
+func (ch namedChannel) validate(add func(string, ...any)) {
+	f := ch.field
+	if len(ch.Args) > 0 && ch.Env != "" {
+		// One shape or the other. Both would hand the CLI the same
+		// system prompt twice, and which copy wins is the vendor's
+		// business rather than something this profile can state.
+		add("%s.args and %s.env are both set — a CLI takes its system prompt on ONE "+
+			"channel; drop whichever this build does not use", f, f)
+	}
+	// AND ONE PLACEHOLDER OR THE OTHER WITHIN args, which is the same rule one
+	// level down and was the hole: the renderer writes the private file for
+	// `{file}` and then substitutes `{system}` into argv on the SAME pass, so
+	// `["--agent-file", "{file}", "--system-prompt", "{system}"]` wrote the
+	// seat's identity to a 0600 file and ALSO put every byte of it in
+	// /proc/<pid>/cmdline, where any account on the machine reads it. The
+	// shipped profiles are held to this by a test; nothing held an operator's
+	// overrides to it, and overrides are exactly where a hand-written argv
+	// appears.
+	if hasPlaceholder(ch.Args, "{file}") && hasPlaceholder(ch.Args, "{system}") {
+		add("%s.args names both {file} and {system} — the first writes the seat's "+
+			"system prompt to a private file and the second puts the same text on argv, "+
+			"where /proc/<pid>/cmdline exposes it to every account on the machine; keep "+
+			"the {file} form and drop {system}", f)
+	}
+	if ch.File == nil {
+		return
+	}
+	if !ch.File.Discovered.Valid() {
+		add("%s.file.discovered %q (want selected or always, or unset for a file "+
+			"handed over by path)", f, ch.File.Discovered)
+	}
+	if !ch.WritesFile() {
+		// A template with no file to write is not a harmless extra: on a
+		// `{system}` channel the seat's identity goes on argv bare, and an
+		// operator who wrote frontmatter meant it to reach the CLI.
+		add("%s.file is set but the channel writes no file — give %s.args a {file} "+
+			"placeholder, set %s.env, or make the file discovered", f, f, f)
+	}
+	if tpl := ch.File.Template; tpl != "" && !strings.Contains(tpl, "{system}") {
+		add("%s.file.template has no {system} placeholder — every call would hand "+
+			"the CLI the same fixed file and no seat's identity", f)
+	}
+	switch name := ch.File.Name; {
+	case ch.File.Found():
+		ch.validateDiscovered(add)
+	case name != "" && !isBareFileName(name):
+		// The path is joined onto the per-call working directory, and
+		// this field is operator-overridable.
+		add("%s.file.name %q must be a plain file name, with no directory separator "+
+			"— only a discovered file, which the CLI finds where its vendor says to "+
+			"look, carries a directory", f, name)
+	}
+}
+
+// validateDiscovered holds a discovered file to the shape that makes it one: a
+// file the CLI finds in the working directory, and an argv that selects it —
+// or none at all, for a file the CLI reads on every run.
+func (ch namedChannel) validateDiscovered(add func(string, ...any)) {
+	f, name := ch.field, ch.File.Name
 	switch {
-	case fileName == "":
+	case name == "":
 		// The default name is a bare prompt file no vendor looks for, so a
-		// discovered channel without a name of its own writes a file nothing
-		// will ever find — and the argv then selects an agent that does not
-		// exist.
-		add("system_prompt_file is discovered but its name is empty — say where the " +
-			"CLI looks for it, e.g. .crewlet-config/agents/crewlet-seat.md")
-	case !staysInside(fileName):
-		add("system_prompt_file.name %q must be relative and stay inside the per-call "+
-			"working directory", fileName)
-	case !namesAFile(fileName):
-		// The prompt is written to exactly this path, so a name that cleans
-		// to a DIRECTORY fails every call: `.` and `x/..` are the working
-		// directory itself (a write onto it is EISDIR), and
-		// `.opencode/agents/` writes a regular FILE where the CLI looks for a
-		// directory of agents, so it finds none. The bare-name rule beside
-		// this one refuses `.` and `..` for the same reason.
-		add("system_prompt_file.name %q must name a FILE inside the per-call working "+
-			"directory — not the directory itself, not a path ending in a separator, and "+
-			"not one whose last element is . or .. — e.g. "+
-			".crewlet-config/agents/crewlet-seat.md", fileName)
+		// discovered channel without a name of its own writes a file
+		// nothing will ever find.
+		add("%s.file is discovered but its name is empty — say where the CLI looks "+
+			"for it, e.g. .crewlet-config/agents/crewlet-seat.md", f)
+	case !staysInside(name):
+		add("%s.file.name %q must be relative and stay inside the per-call working "+
+			"directory", f, name)
+	case !namesAFile(name):
+		// The prompt is written to exactly this path, so a name that
+		// cleans to a DIRECTORY fails every call: `.` and `x/..` are the
+		// working directory itself (a write onto it is EISDIR), and
+		// `.opencode/agents/` writes a regular FILE where the CLI looks
+		// for a directory of agents, so it finds none. The bare-name rule
+		// beside this one refuses `.` and `..` for the same reason.
+		add("%s.file.name %q must name a FILE inside the per-call working directory "+
+			"— not the directory itself, not a path ending in a separator, and not one "+
+			"whose last element is . or .. — e.g. .crewlet-config/agents/crewlet-seat.md", f, name)
 	}
 	switch {
-	case len(p.SystemPromptArgs) == 0:
-		// Found but never selected, the file changes nothing: the CLI runs its
-		// own default agent, and the seat's identity is in neither place.
-		add("system_prompt_file is discovered but system_prompt_args is empty — the " +
-			"CLI finds the file, and nothing tells it to use what it found")
-	case hasPlaceholder(p.SystemPromptArgs, "{file}") || hasPlaceholder(p.SystemPromptArgs, "{system}"):
-		// A discovered file is found by where it is. Handing over its path
-		// too is two channels for one prompt, and {system} would put the
-		// text on argv beside the file.
-		add("system_prompt_file is discovered but system_prompt_args carries {file} or " +
-			"{system} — a discovered file is found by its location, and the argv only " +
-			"selects it")
+	case ch.File.Discovered == DiscoverySelected && len(ch.Args) == 0:
+		// Found but never selected, the file changes nothing: the CLI runs
+		// its own default agent, and the seat's identity is in neither
+		// place.
+		add("%s.file is discovered: selected but %s.args is empty — the CLI finds the "+
+			"file, and nothing tells it to use what it found; select it, or make it "+
+			"discovered: always if the CLI reads it on every run", f, f)
+	case hasPlaceholder(ch.Args, "{file}") || hasPlaceholder(ch.Args, "{system}"):
+		// A discovered file is found by where it is. Handing over its
+		// path too is two channels for one prompt, and {system} would put
+		// the text on argv beside the file.
+		add("%s.file is discovered but %s.args carries {file} or {system} — a "+
+			"discovered file is found by its location, and the argv only selects it", f, f)
 	}
-	if p.SystemPromptEnv != "" {
-		add("system_prompt_file is discovered but system_prompt_env is set — the " +
-			"variable hands the CLI a path, and a discovered file needs none")
+	if ch.Env != "" {
+		add("%s.file is discovered but %s.env is set — the variable hands the CLI a "+
+			"path, and a discovered file needs none", f, f)
 	}
 }
 
@@ -2007,6 +2340,16 @@ func (p *Profile) ValidateCredentials(name string) error {
 				"own env", env)
 		}
 	}
+	for _, env := range slices.Sorted(maps.Keys(p.SubscriptionEnv)) {
+		// Set under subscription alone, which removes the key variable and
+		// sets the token's from auth: a credential here would sign the CLI
+		// in with a value no auth field names, stored unredacted.
+		if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+			add("subscription_env names %q, which is a credential variable — it selects "+
+				"the login a subscription call signs in with and carries no secret; give "+
+				"a credential through the entry's auth", env)
+		}
+	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
 		switch {
 		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
@@ -2038,6 +2381,48 @@ func (p *Profile) ValidateCredentials(name string) error {
 		return nil
 	}
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// HoldsLogin reports whether the credential file named name, holding content,
+// is a login: one [Profile.LoginKeys] does not name, or one whose top-level
+// key it names is set to something other than null or an empty string, object
+// or array.
+//
+// Read as JSON once every line opening with `//` is set aside, because the
+// file Copilot CLI keeps its plaintext login in opens with two such lines. A
+// file that does not read that way IS taken for a login: guessing harder would
+// mean parsing a vendor's format here, and a wrong guess in the other
+// direction is a login the engine would not carry, export or keep.
+func (p *Profile) HoldsLogin(name string, content []byte) bool {
+	key, named := p.LoginKeys[name]
+	if !named {
+		return true
+	}
+	var lines []string
+	for line := range strings.Lines(string(content)) {
+		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+			lines = append(lines, line)
+		}
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(strings.Join(lines, "")), &doc); err != nil {
+		return true
+	}
+	var value any
+	if err := json.Unmarshal(doc[key], &value); err != nil {
+		return false
+	}
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	}
+	return true
 }
 
 // EffectivePromptMode is the prompt mode with its default applied.
@@ -2137,6 +2522,14 @@ func (p *Profile) LoginLocation() string {
 		return "a login this profile names no place for"
 	}
 	return strings.Join(where, " and ")
+}
+
+// KeepsLogin reports whether the CLI keeps a login of its own that the engine
+// can hold for it: credential files, or a login in its own database. A profile
+// that keeps none signs in only through what a call's environment carries — its
+// token, its key, or a model provider's key ([Profile.EnvSignIn]).
+func (p *Profile) KeepsLogin() bool {
+	return len(p.CredentialPaths) > 0 || p.CredentialStore != nil
 }
 
 // ReadsUsageReport reports whether this profile takes its counts from a report

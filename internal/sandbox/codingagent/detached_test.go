@@ -45,6 +45,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
+		p.Brief(), p.System(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -126,18 +127,30 @@ func TestTheShimDirectoryIsOnTheAgentsPath(t *testing.T) {
 	}
 }
 
-// The findings path is a property of the box, which the launch does not know.
-func TestTheBriefGainsTheReportInstructionForThisBox(t *testing.T) {
+// The findings path is a property of the box, which the launch does not know —
+// so the runner adds the report instruction, addressed at this box, and adds it
+// to the run's STANDING instructions: it is how every run ends, not part of
+// what this one was asked. A run whose launch gave it no system text of its own
+// still gets it, on the same channel.
+func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
+	p := paths(b)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "fix the flake"})
 
-	if !strings.Contains(script, "fix the flake") {
+	if !strings.Contains(script, "'fix the flake'") {
 		t.Fatalf("the brief was lost:\n%s", script)
 	}
-	if !strings.Contains(script, paths(b).Findings()) {
-		t.Fatalf("the agent was not told where to write its report:\n%s", script)
+	system, err := b.ReadFile(t.Context(), p.System())
+	if err != nil || !strings.Contains(string(system), p.Findings()) {
+		t.Fatalf("the agent was not told where to write its report (system text %q, %v)", system, err)
+	}
+	if strings.Contains(script, p.Findings()) || strings.Contains(script, "Before you finish") {
+		t.Errorf("the report instruction rides the prompt the CLI runs, not its system prompt:\n%s", script)
+	}
+	if !strings.Contains(script, "--append-system-prompt-file") {
+		t.Errorf("the system text was written and never handed to the CLI:\n%s", script)
 	}
 }
 
@@ -163,7 +176,11 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	if cleared == "" {
 		t.Fatal("the prior run's artefacts were never cleared")
 	}
-	for _, want := range []string{p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask()} {
+	for _, want := range []string{
+		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask(),
+		// The previous run's instructions, which are not this run's.
+		p.Brief(), p.System(),
+	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
 		}

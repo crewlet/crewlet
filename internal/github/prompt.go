@@ -12,19 +12,26 @@ import (
 //
 // It dispatches on the ROUTING REASON the parser stamped, because one pull
 // request reaches a reviewer, an assignee, an author and a watcher and asks
-// each for something different. Two shapes here exist nowhere else in the
-// engine:
+// each for something different. Two shapes here are rare in the engine:
 //
 //   - AN EVENT THAT REPORTS THE OUTCOME OF THE RECIPIENT'S OWN ACTION — a
-//     workflow run they triggered going red. Nothing else in the company has
-//     one, and the prompt says so out loud, because a seat that has learned
-//     "I am not told about my own actions" reads its own name as a routing
-//     mistake otherwise.
+//     workflow run they triggered going red. Only the self-hosted host's
+//     failed pipeline and the tracker's unblocked notice share it, and the
+//     prompt says so out loud, because a seat that has learned "I am not told
+//     about my own actions" reads its own name as a routing mistake otherwise.
 //   - A REVIEW THAT ASKS FOR CHANGES. The self-hosted code host carries
 //     approvals and nothing that says "this is not right yet, here is why",
 //     so its prompt has no branch for it. It is the strongest directed ask a
 //     code host makes, and rendering it as ordinary thread activity would
 //     have an agent read a blocking review as news.
+//
+// WHAT IT SAYS IS WHAT ONLY THE ENGINE KNOWS: why the seat is reading this,
+// the item by the reference a person would paste, the product facts a model
+// would not assume (a block that holds the merge, a merge that answers the
+// requester, a close that means stop, where an issue's code changes go), and
+// how each ask is declined on this host. How to review a diff or fix a red
+// build is the model's own, and that a direct ask may not end in silence is
+// the executor's contract — neither is restated here.
 //
 // NOTHING HERE NAMES A TOOL — the deployed MCP server's tool names are not
 // knowable by the engine. See docs/concepts/tool-capabilities.md.
@@ -95,7 +102,7 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 
 // WakesActor implements [notify.Prompt]: only a failed workflow run.
 //
-// THE ONE REAL EXCEPTION TO THE SELF-ACTION RULE, shared with the
+// THIS HOST'S ONE EXCEPTION TO THE SELF-ACTION RULE, shared with the
 // self-hosted host and for the same reason. A run names the person whose
 // push triggered it, and when it goes red they are the one who has to fix it
 // — suppressing it means the only person who can act never learns. Every
@@ -194,22 +201,12 @@ func reviewRequested(b *strings.Builder, n notify.Inbound, parties notify.Partie
 	writeRef(b, "Pull request", n)
 	b.WriteString("**Requested by:** " + senderLabel(n, parties) + "\n\n" +
 		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n")
-	b.WriteString("\n## What you should do" +
-		"\n1. **Read the diff**, not just the description — the changed" +
-		" files are the review. Approve if the change is correct; leave" +
-		" comments on the lines where it is not, so the author can see" +
-		" what you mean without guessing." +
-		"\n2. **Submit a verdict**, not just comments. A pull request with" +
-		" five remarks and no approval or change request is one the author" +
-		" cannot tell is blocked." +
-		"\n3. **Tell the requester** on the conversation this came from" +
-		" that it is approved or that it needs work. A review that lands" +
-		" only on the pull request is a review they have to go looking for." +
-		"\n4. **If you have decided not to review** — out of scope, wrong" +
-		" reviewer, you wrote the code — do NOT go quiet. A review request" +
-		" is a direct ask: re-request review from the right person, or" +
-		" comment naming who should do it and take yourself off the" +
-		" reviewer list so the requester knows to reassign.\n")
+	// THE DECLINE GESTURE AND NOTHING ELSE. How to review a diff is the
+	// model's own, and that a direct ask may not end in silence is the
+	// executor's contract; what only the code host knows is how a review
+	// is declined — it moves to somebody else.
+	b.WriteString("\nIf you are not the right reviewer, request review from" +
+		" whoever is and remove yourself from the reviewers.\n")
 }
 
 // assigned: the work is this seat's.
@@ -222,24 +219,15 @@ func assigned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("You have been assigned " + article(kind) + " " + kind + ".\n\n")
 	writeRef(b, capitalize(kind), n)
 	b.WriteString("**Assigned by:** " + senderLabel(n, parties) + "\n\n" +
-		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n")
-
-	b.WriteString("\n## What you should do" +
-		"\n1. **Read the " + kind + " in full** — the description and the" +
-		" existing discussion — before starting.")
-	if pr {
-		b.WriteString("\n2. **Do the work it describes**, then push and update" +
-			" the pull request.")
-	} else {
-		b.WriteString("\n2. **Do the work it describes.** Code changes go" +
-			" through your sandboxed coding runtime, which opens a pull" +
-			" request under your own identity on the code host.")
+		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n\n")
+	if !pr {
+		// A FACT ABOUT THIS ENGINE, not advice: where code changes go, and
+		// whose name the pull request they produce carries.
+		b.WriteString("Code changes go through your sandboxed coding runtime," +
+			" which opens a pull request under your own identity on the code" +
+			" host. ")
 	}
-	b.WriteString("\n3. **Report back** to whoever assigned it, on the" +
-		" conversation it came from, when you are done — or say so if you" +
-		" have decided not to act (out of scope, wrong person). An" +
-		" unanswered direct assignment looks exactly like a message that" +
-		" was lost.\n")
+	b.WriteString("If the work is not yours, reassign it to whoever it belongs to.\n")
 }
 
 // changesRequested: a reviewer has blocked this seat's pull request.
@@ -248,7 +236,8 @@ func assigned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 // matters: a changes-requested review is the one event on a code host that
 // says the recipient's work is not finished. Rendered as thread activity, an
 // agent reads it as information and moves on — leaving a blocked pull
-// request open with nobody acting on it and a reviewer waiting.
+// request open with nobody acting on it and a reviewer waiting. The opener is
+// the whole instruction: how to answer a review is the model's own.
 func changesRequested(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("A reviewer has REQUESTED CHANGES on your pull request. " +
 		"It cannot merge until this is resolved.\n\n")
@@ -256,21 +245,6 @@ func changesRequested(b *strings.Builder, n notify.Inbound, parties notify.Parti
 	b.WriteString("**Reviewer:** " + senderLabel(n, parties) + "\n\n" +
 		"**Their summary:**\n" + orElse(n.Body, "(no summary — the review is "+
 		"in the line comments)") + "\n")
-	b.WriteString("\n## What you should do" +
-		"\n1. **Read every line comment on the diff**, not only the summary" +
-		" above. The summary says what is wrong; the line comments say" +
-		" where, and a change answering only the summary comes back for a" +
-		" second round." +
-		"\n2. **Address each one** — with a change, or with a reply saying" +
-		" why not. A comment you silently disagreed with reads to the" +
-		" reviewer as one you missed." +
-		"\n3. **Push, then re-request review** from the same reviewer. A" +
-		" changes-requested review stays blocking until they look again," +
-		" and nothing tells them you pushed." +
-		"\n4. **If you believe the review is wrong**, say so on the pull" +
-		" request with your reasoning rather than pushing past it or" +
-		" closing it. The reviewer may know something the diff does not" +
-		" show.\n")
 }
 
 // approved: a reviewer has cleared this seat's pull request.
@@ -285,33 +259,31 @@ func approved(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	if strings.TrimSpace(n.Body) != "" {
 		b.WriteString("\n**Their comment:**\n" + n.Body + "\n")
 	}
-	b.WriteString("\n## What you should do" +
-		"\nMerge it, unless something else is still blocking — another" +
-		" required review, a red check, a change you know is still" +
-		" outstanding. An approved pull request nobody merges is work that" +
-		" never shipped, and the reviewer has no reason to look at it" +
-		" again. If you cannot merge it yourself, say on the pull request" +
-		" what is blocking and who has to act.\n")
+	b.WriteString("\nMerge it, unless something else still blocks it — then" +
+		" say on the pull request what does.\n")
 }
 
 // merged: this seat's pull request has landed.
+//
+// A merge is the moment the requester's question is answered, and nothing
+// else tells them — so the wake says who is owed the news, and that the issue
+// it was for is now this seat's to close.
 func merged(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("Your pull request has been MERGED.\n\n")
 	writeRef(b, "Pull request", n)
 	b.WriteString("**Merged by:** " + senderLabel(n, parties) + "\n")
-	b.WriteString("\n## What you should do" +
-		"\nClose out the work it belonged to: tell whoever asked for it" +
-		" that it has landed, and update or close the issue it was for." +
-		" A merge is the moment the requester's question is answered, and" +
-		" nothing else tells them.\n")
+	b.WriteString("\nTell whoever asked for it that it has landed, and close" +
+		" the issue it was for.\n")
 }
 
 // workflowFailed: something the recipient did has broken.
 //
-// The ONE prompt in the engine addressed to the person who caused the event,
-// which is why it says so explicitly: a seat that has learned "I am not told
-// about my own actions" needs to be told why this one is different, or it
-// reads its own name as a routing mistake.
+// One of the few wakes in the engine addressed to the party who caused it
+// (this host's, the self-hosted host's failed pipeline and the tracker's
+// unblocked notice are the others), which is why it says so explicitly: a
+// seat that has learned "I am not told about my own actions" needs to be told
+// why this one is different, or it reads its own name as a routing mistake.
+// How to debug a red run is the model's own, and is not restated.
 func workflowFailed(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("A workflow run you triggered has FAILED.\n\n")
 	writeRef(b, "Run", n)
@@ -320,34 +292,28 @@ func workflowFailed(b *strings.Builder, n notify.Inbound, parties notify.Parties
 		" You are not normally notified of what you did — but a workflow" +
 		" runs minutes after the push and reports something nobody could" +
 		" have predicted, and you are the one who can fix it.\n")
-	b.WriteString("\n## What you should do" +
-		"\n1. **Read the log of the failing job.** The conclusion alone" +
-		" says nothing about the cause, and guessing at it from the diff" +
-		" is how one red run becomes three." +
-		"\n2. **Fix it and push.** A broken run on your own branch is" +
-		" yours to clear; it does not need reassigning or announcing" +
-		" first." +
-		"\n3. **If the failure is not yours** — a flaky job, an outage in" +
-		" a dependency, a failure that reproduces on the base branch too —" +
-		" say so once on the pull request rather than pushing speculative" +
-		" changes to see what happens.\n")
 }
 
 // mentioned: somebody wrote this seat's name.
+//
+// NO EVALUATION BLOCK. A mention is addressed ([Prompt.Addressed]) and the
+// delivery check holds it to an answer, so asking the seat whether it was
+// really asked — and telling it silence is fine when it was not — buys a
+// corrective round and nothing else.
 func mentioned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	comment := n.Metadata["event_type"] == CommentMention
 	surface, label := "issue or pull-request description", "Description"
 	if comment {
 		surface, label = "comment", "Comment"
 	}
-	b.WriteString("You were mentioned in a " + surface + " on the code host.\n\n")
+	b.WriteString("You were mentioned in " + article(surface) + " " + surface +
+		" on the code host.\n\n")
 	writeRef(b, "On", n)
 	b.WriteString("**By:** " + senderLabel(n, parties) + "\n")
 	if where := diffLocation(n); where != "" {
 		b.WriteString("**On the diff:** " + where + "\n")
 	}
 	b.WriteString("\n**" + label + ":**\n" + orElse(n.Body, "(no text)") + "\n")
-	b.WriteString(notify.EvaluationBlock())
 }
 
 // issueClosed: somebody closed an issue this seat is working on.
@@ -360,13 +326,7 @@ func issueClosed(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("An issue you are assigned to was CLOSED.\n\n")
 	writeRef(b, "Issue", n)
 	b.WriteString("**Closed by:** " + senderLabel(n, parties) + "\n")
-	b.WriteString("\n## What you should do" +
-		"\nStop any in-flight work on it. If you had progress worth keeping," +
-		" say so on the issue — a close is often somebody deciding the work" +
-		" is unnecessary, and they may not know how far it had got. If you" +
-		" believe the close is a mistake, say that on the issue rather than" +
-		" reopening it: whoever closed it had a reason you may not be able" +
-		" to see.\n")
+	b.WriteString("\nStop any in-flight work on it.\n")
 }
 
 // watching: thread activity on something this seat merely follows.

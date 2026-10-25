@@ -672,8 +672,13 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	}
 
 	var surface *tools.Surface
+	// discovers is whether the worker holds its whole discovery pair: a
+	// configured Discovery whose every meta-tool reached the surface.
+	discovers := false
 	if cfg.Discovery != nil {
-		for _, meta := range cfg.Discovery(func() *tools.Surface { return surface }) {
+		metas := cfg.Discovery(func() *tools.Surface { return surface })
+		discovers = len(metas) > 0
+		for _, meta := range metas {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			next, err := universe.With(tools.Entry{Tool: meta, Origin: tools.OriginBuiltin})
 			if err != nil {
@@ -682,6 +687,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 				// the catalogue described the other. Drop the meta-tool — the
 				// worker loses discovery, not correctness.
 				log.WarnContext(ctx, "subagent_meta_tool_skipped", "tool", meta.Name(), "error", err)
+				discovers = false
 				continue
 			}
 			universe = next
@@ -706,21 +712,24 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		}
 	}
 
-	// The catalogue is rendered only for a worker that can act on it.
-	// Listing tools to one with no activate_tool is an invitation to call
-	// a name it was never offered, which costs a round and produces a
-	// refusal.
-	var catalogue string
-	if cfg.Discovery != nil {
-		catalogue = renderCatalogue(grant.Universe)
+	// The tools to discover are rendered only for a worker that can act on
+	// them — one HOLDING its discovery pair, not merely configured with it,
+	// since a meta-tool a granted name shadowed was dropped above. Listing
+	// tools to one with no activate_tool is an invitation to call a name it
+	// was never offered, which costs a round and produces a refusal. And
+	// only what it was NOT granted: a granted tool's whole definition
+	// reaches the worker with every request already.
+	var discoverable string
+	if discovers {
+		discoverable = grant.Universe.Discoverable(surface.Active())
 	}
 	res.SystemPrompt = prompts.BuildSubagent(cfg.Seat, prompts.SubagentInput{
 		ParentSystemPrompt: task.systemPrompt,
-		// Both the offered set AND the discoverable catalogue, so a skill
+		// Both the offered set AND what it can discover, so a skill
 		// covering a tool the worker may later activate is in the prompt
 		// before the first call rather than after the guard blocks it.
 		AvailableTools: union(surface.Active(), grant.Universe.Names()),
-		ToolCatalogue:  catalogue,
+		Discoverable:   discoverable,
 		Submits:        submit != nil,
 		Skills:         cfg.Skills,
 	})
@@ -1124,34 +1133,6 @@ func indexOfID(tasks []resolved, id string) int {
 		}
 	}
 	return 0
-}
-
-// renderCatalogue is the slim catalogue a discovery-capable child is shown:
-// first-party tools by name and one-line description, MCP servers by name
-// only.
-//
-// Servers are named rather than expanded for the same reason the parent's
-// catalogue names them — a real server publishes dozens of tools and a wall
-// of them is what discovery exists to avoid.
-func renderCatalogue(safe tools.Snapshot) string {
-	var lines []string
-	var servers []string
-	for _, e := range safe.Entries() {
-		if server, ok := e.FromMCP(); ok {
-			if !slices.Contains(servers, server) {
-				servers = append(servers, server)
-			}
-			continue
-		}
-		lines = append(lines, tools.CatalogueLine(e.Name(), e.Tool.Description()))
-	}
-	for _, server := range servers {
-		lines = append(lines, "- MCP server `"+server+"` (use the discovery tools to list its tools)")
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
 }
 
 // union merges two name lists, deduplicated and sorted.

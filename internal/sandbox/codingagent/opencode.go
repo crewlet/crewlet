@@ -382,7 +382,8 @@ func jsonStringify(s string) string {
 }
 
 // WriteConfig renders opencode.json in OpenCode 2's own format: the run's
-// posture and the scoped MCP surface.
+// posture, the scoped MCP surface and the instruction file its system text is
+// written to.
 //
 // 2.0's FORMAT, NOT 1.x's, though 2.0 still reads 1.x's by translating it
 // (its migration guide: servers move under `mcp.servers`, `enabled` becomes
@@ -442,6 +443,31 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	}
 	if len(req.MCPServers) > 0 {
 		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers)}
+	}
+	// THE SYSTEM TEXT AS AN INSTRUCTION FILE, named by its absolute path.
+	// OpenCode has no flag that adds to its system prompt; it adds every
+	// instruction file it finds — a global AGENTS.md in its config
+	// directory, a project's AGENTS.md, and each entry of a config's
+	// `instructions` — after its default agent's own prompt, as
+	// "Instructions from: <path>" and the file's text (measured on 2.0.32
+	// and 2.1.4, off the request the CLI sent: the default prompt whole, the
+	// text after it, the user message holding the brief alone).
+	//
+	// An `instructions` entry rather than the global AGENTS.md, because the
+	// entry is ADDITIVE and the file is not ours: 2.x collects the entries of
+	// every config document it reads (2.1.4's own source), so an image's
+	// global config keeps its instructions, where writing AGENTS.md into the
+	// global config directory would overwrite one an operator baked into the
+	// box, and would have to find that directory first — this run sets no
+	// OPENCODE_CONFIG_DIR, so it is wherever the image's environment puts it.
+	// And this file is rewritten on every run, so a reused box never carries
+	// a previous run's entry. ABSOLUTE, because a relative entry is matched
+	// by walking up from the working directory.
+	if req.System != "" {
+		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
+			return "", fmt.Errorf("codingagent: writing the system prompt: %w", err)
+		}
+		cfg["instructions"] = []string{paths.System()}
 	}
 	blob, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

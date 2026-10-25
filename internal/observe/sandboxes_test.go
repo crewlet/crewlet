@@ -63,6 +63,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 			TurnID: "tn-parked", Role: "Coder", AgentHandle: "coder", CodingAgent: "claude-code",
 			SandboxID: "sb-1", Status: sandbox.StatusAwaiting, Owner: "core-2",
 			TaskDescription: "Add retry to the webhook client\nand the rest of the brief",
+			Label:           "Add retry to the webhook client",
 			Question:        "which ceiling?", Audience: "founder", WorkItem: item,
 			AudienceHandles: []string{"founder", "cto"},
 			LaunchID:        "l-1", Launch: sandbox.LaunchRecord{StartedAt: launched},
@@ -98,7 +99,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 		}
 	}
 	if e.Task != "Add retry to the webhook client" {
-		t.Errorf("task = %q, want the first line, as the announcement cuts it", e.Task)
+		t.Errorf("task = %q, want the label its launch announced", e.Task)
 	}
 	if e.StartedAt != launched.Format(time.RFC3339Nano) {
 		t.Errorf("started at %q, want the launch's own instant", e.StartedAt)
@@ -107,6 +108,24 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 	// and dated by the park itself — the reaper's reading.
 	if e.PausedAt != written.Format(time.RFC3339Nano) {
 		t.Errorf("paused at %q, want the held reading %s", e.PausedAt, written)
+	}
+}
+
+// A RUN IS NAMED FROM ITS RECORD AS IT WAS ANNOUNCED: by the label its launch
+// stored, which for an agent-mode executor is its turn's task rather than the
+// heading its brief opens with.
+func TestARecordIsNamedByTheLabelItsLaunchAnnounced(t *testing.T) {
+	t.Parallel()
+	run := sandbox.PendingRun{
+		TurnID: "tn-1", Status: sandbox.StatusRunning,
+		Label: "Ship the login fix", TaskDescription: "## Task\n\nthe turn's task\nand more",
+	}
+	records := observe.SandboxRecords([]sandbox.PendingRun{run})
+	if len(records) != 1 {
+		t.Fatalf("records = %+v, want the run in flight", records)
+	}
+	if got := records[0].Entry.Task; got != run.Label {
+		t.Errorf("the run is named %q, want %q", got, run.Label)
 	}
 }
 

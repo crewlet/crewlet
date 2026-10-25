@@ -1626,7 +1626,8 @@ lists every variable the document reads **without naming it**: a
 conventional variable instead — its CLI's token variable under
 `subscription` (`CLAUDE_CODE_OAUTH_TOKEN`, which `crewlet llm login
 -capture-token` stores), its key variable under `api-key`
-(`ANTHROPIC_API_KEY`), and `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` for the bundle
+(`ANTHROPIC_API_KEY`; never a variable other vendors' keys share, such as Qwen
+Code's `OPENAI_API_KEY`, which such an entry names in `auth.api_key`), and `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` for the bundle
 `crewlet llm export -secret-store` stores — and `providers.embeddings` with no
 `api_key` reads `OPENAI_API_KEY`. Each is reported at the empty field
 (`providers.llm.default.auth.token`), which is where a reference would be

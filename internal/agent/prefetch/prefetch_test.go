@@ -567,8 +567,17 @@ func TestTheFilterIsToldWhoTriggeredTheTurn(t *testing.T) {
 	if len(prompts) == 0 {
 		t.Fatal("the filter was never asked")
 	}
-	if !strings.Contains(prompts[0], "Current sender: Ana Ruiz") {
-		t.Fatalf("the filter was not told the sender:\n%s", prompts[0])
+	// WITH THE IDENTITY, not the name alone: the post-turn classifier
+	// writes a fact as "Ana Ruiz (chat:U1) prefers …", and rule 3 matches
+	// this line against that form.
+	if !strings.Contains(prompts[0], "Current sender: Ana Ruiz (chat:U1)\n") {
+		t.Fatalf("the filter was not told the sender in the form a memory names them:\n%s", prompts[0])
+	}
+	// And its instructions point rule 3 at that line BY ITS LABEL: a line
+	// the system prompt calls something else is a sender the model has no
+	// reason to connect to the rule that needs one.
+	if system := model.asked[0].Messages[0].Content; !strings.Contains(system, `"Current sender:"`) {
+		t.Errorf("the filter's instructions never name the sender line:\n%s", system)
 	}
 }
 

@@ -69,10 +69,8 @@ func (Generic) DigestBody(_, body string) string { return body }
 // THE EVALUATION BLOCK IS THE POINT, and it is here rather than in each
 // third-party app because it is a fact about being an agent in a company,
 // not about the third-party app: a seat that replies to everything it is
-// mentioned in is noise, and a seat that silently declines a direct ask
-// looks like the message was lost.
-// Both failures are the same root cause — reading "my name appeared" as "I was
-// asked" — and both are cheap to fix in the trigger.
+// mentioned in is noise, and an unaddressed wake — which every generic one is
+// ([Generic.Addressed]) — has nothing but this text keeping it quiet.
 func (Generic) Build(n Inbound, _ Parties) string {
 	subject := n.Subject
 	if subject == "" {
@@ -88,20 +86,25 @@ func (Generic) Build(n Inbound, _ Parties) string {
 	return b.String()
 }
 
-// evaluationBlock is the shared "were you actually asked?" guidance.
+// evaluationBlock is the shared "were you actually asked?" guidance, for a
+// wake its source does NOT read as addressed.
 //
 // Exported through Build rather than duplicated per integration: every
-// source's prompt wants it, and a copy per integration is how five of them
-// come to say slightly different things about when silence is correct.
+// source's prompt for activity a seat merely follows wants it, and a copy per
+// integration is how five of them come to say slightly different things about
+// when silence is correct.
+//
+// NEVER ON AN ADDRESSED WAKE. A mention or an assignment owes an answer, and
+// the delivery check refuses a silent end to it — so telling that seat it may
+// stay silent buys a corrective round and nothing else. What a seat does when
+// it declines a direct ask is the executor's contract, stated once there.
 const evaluationBlock = `
 ## Evaluate Before Acting
-1. **Were you actually asked to do something?** Read the verb, not just whether your name appears. Being mentioned in passing (e.g. "check with @you on this") or named as the subject of a message addressed to someone else is NOT a request directed at you.
-2. **If you were not asked** (informational, FYI, addressee is someone else, passing reference) → stay silent. Silence beats noise.
-3. **If you were asked but have decided not to act** (out of scope, already handled, wrong person, declining) → do NOT skip silently. Post a brief reply on the originating channel explaining why — leaving a direct ask unanswered looks like the message was lost.
+Act only if this asks something of you — read the verb, not just whether your name appears — or changes work you have in hand. Otherwise stay silent.
 `
 
 // EvaluationBlock is that guidance, for a third-party app's prompt that
-// builds its own body and wants the same ending.
+// builds its own body and wants the same ending on an unaddressed wake.
 func EvaluationBlock() string { return evaluationBlock }
 
 // renderMetadata lists the metadata a seat can act on.

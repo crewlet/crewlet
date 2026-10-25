@@ -128,8 +128,10 @@ type CLI interface {
 	// Name is the coding agent's config name: "claude-code", "opencode".
 	Name() string
 
-	// Command builds the headless invocation. The brief is already final —
-	// the report instruction is appended by the base.
+	// Command builds the headless invocation. The brief and the system text
+	// are already final — the report instruction is appended to the system
+	// text by the base — and a CLI given system text puts it on the channel
+	// that adds to its own system prompt, never in the prompt it runs.
 	Command(req sandbox.RunRequest, paths Paths, configPath string) string
 
 	// Output is where the CLI's stdout lands and how its result is read
@@ -149,6 +151,8 @@ type CLI interface {
 
 	// WriteConfig renders the agent's config file into the box and returns
 	// the path the CLI is pointed at, or "" when there is nothing to write.
+	// It also writes the system text where the CLI reads it from
+	// ([Paths.System]) when there is any, and nothing when there is none.
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
 }
 
@@ -253,13 +257,15 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 //
 // A reused box still carries the prior run's done marker, result, findings and
 // ask file. Without clearing them the completion poll fires immediately on the
-// stale marker and Collect reads the old result. THE CHECKOUT IS LEFT INTACT —
-// that disk state is the continued context, and it is the whole reason to
-// reuse a box.
+// stale marker and Collect reads the old result. Its brief and system text go
+// too: a run's instructions are its own, and a file this run writes is then
+// always created fresh, at the mode a backend creates a file with. THE
+// CHECKOUT IS LEFT INTACT — that disk state is the continued context, and it is
+// the whole reason to reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief()}
+	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -294,11 +300,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err := r.ClearArtifacts(ctx, box); err != nil {
 		return sandbox.RunHandle{}, err
 	}
+	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
+	// system text from.
+	req.System = finalSystem(req.System, paths)
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
-	req.Brief = finalBrief(req.Brief, paths)
 	out := r.cli.Output(paths)
 	if out.BriefOnStdin {
 		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
@@ -350,19 +358,25 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 	return b.String()
 }
 
-// finalBrief appends the report instruction, addressed at THIS box.
+// finalSystem appends the report instruction, addressed at THIS box, to the
+// run's standing instructions.
 //
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
-// builds the brief.
-func finalBrief(brief string, paths Paths) string {
-	return strings.TrimRight(brief, "\n") + "\n" + FindingsInstruction(paths.Findings())
+// builds the request. On the system side, because it is not part of the task:
+// it is how every run ends, whatever it was asked.
+func finalSystem(system string, paths Paths) string {
+	findings := strings.TrimSpace(FindingsInstruction(paths.Findings()))
+	if system = strings.TrimSpace(system); system == "" {
+		return findings
+	}
+	return system + "\n\n" + findings
 }
 
 // withShimPath prepends the box's shim directory to PATH for one command.
 //
 // The shim lives under the box's own home rather than a system directory (see
-// [Paths.BinDir]), so the brief's `crewlet-ask "..."` instruction only
+// [Paths.BinDir]), so the system text's `crewlet-ask "..."` instruction only
 // resolves if that directory is on the agent's PATH.
 func withShimPath(cmd string, paths Paths) string {
 	return "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
@@ -540,8 +554,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	code := strings.TrimSpace(codeText)
 	crashed := code != "" && code != "0"
 
-	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The brief asks the
-	// agent to write its report there before stopping, and it survives both
+	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The system text asks
+	// the agent to write its report there before stopping, and it survives both
 	// a run whose process group died before its streamed final message was
 	// written and a tool-only run that parses to no text — so it wins for the
 	// result text, and its presence is the success signal unless the process

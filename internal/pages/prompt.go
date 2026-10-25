@@ -196,12 +196,21 @@ func promptGetContext(b *strings.Builder, meta map[string]string) {
 	}
 	b.WriteString("\n## Get full context" +
 		"\nRead the page with `get_page` before deciding whether anything is " +
-		"needed of you. A change summary is not the page.\n")
+		"needed of you: this notice carries what changed, not the page.\n")
 	if url := meta["url"]; url != "" {
 		b.WriteString("Link: " + url + "\n")
 	}
 }
 
+// promptHandling is what a page change asks of the seat it reached.
+//
+// THE TOOLS ARE NAMED, and with the one contract a model could not guess:
+// `save_page` takes the version that was read back as `base_version`, so an
+// edit somebody made in the meantime is refused rather than overwritten. Where
+// an answer goes is the knowledge base's convention — beside the question on
+// the page, and for news, where the affected work is tracked rather than on
+// the page. That a mention may not end in silence is the executor's contract
+// and the decoder's refusal, so it is not restated.
 func promptHandling(b *strings.Builder, meta map[string]string) {
 	if ChangeKind(meta[MetaChangeKind]) == ChangeRemoved {
 		b.WriteString("\n## How to handle this" +
@@ -211,26 +220,16 @@ func promptHandling(b *strings.Builder, meta map[string]string) {
 	}
 	if meta[RoutedViaField] == ViaMention {
 		b.WriteString("\n## How to handle this" +
-			"\n1. **Read the page first.** Somebody named you on it, and the " +
-			"question is almost always about what it says." +
-			"\n2. **Answer where you were asked** — comment on the page with " +
-			"`comment_on_page`, so the answer is beside the question for the " +
-			"next person who reads it." +
-			"\n3. **If the answer is a change to the page**, make it with " +
-			"`save_page` and say in your comment what you changed. Pass the " +
-			"`version` you read back as `base_version`, so an edit somebody " +
-			"else made in the meantime is a refusal rather than a silent " +
-			"overwrite." +
-			"\n4. **If you have decided not to act**, say so in one comment " +
-			"naming who should. An unanswered mention looks exactly like a " +
-			"message that was lost.\n")
+			"\nAnswer on the page with `comment_on_page`, so the answer sits " +
+			"beside the question. If the answer is a change to the page, make " +
+			"it with `save_page`, passing the `version` you read as " +
+			"`base_version`, and say in your comment what you changed.\n")
 		return
 	}
 	b.WriteString("\n## How to handle this" +
-		"\nThis is news, not a request. Read it if it bears on work you have " +
-		"in hand, and otherwise do nothing — a page changing is not an " +
-		"instruction. If it CONTRADICTS something you are doing, say so where " +
-		"that work is tracked rather than commenting on the page.\n")
+		"\nThis is news, not a request: act only if it bears on work you have " +
+		"in hand, and then say so where that work is tracked rather than on " +
+		"the page.\n")
 }
 
 // promptSender renders the actor as a colleague, by HANDLE — the actor on a

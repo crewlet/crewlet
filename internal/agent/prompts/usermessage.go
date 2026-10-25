@@ -9,7 +9,9 @@ import "strings"
 // model re-plans a delivery that already fired. The (read) distinction is the
 // load-bearing part: a read's results are genuinely gone and must be
 // re-fetched, while anything else changed the world and a human reads the
-// second copy as a duplicate.
+// second copy as a duplicate. The markers are the ledger's own
+// (ledger.FormatCalls), so the header reads the lines below it rather than a
+// vocabulary of its own.
 //
 // AND AN EARLIER ROUND'S DELIVERY IS CITABLE, which the header says because a
 // model forbidden to repeat a write it cannot cite is caught between the two:
@@ -17,21 +19,18 @@ import "strings"
 // back for a re-read that believed otherwise submitted with no citation, or
 // went looking for some other surface to deliver on.
 const PriorWorkHeader = "## Already done earlier in this turn" +
-	"\nAn earlier round of this same turn ran and was sent back for another" +
-	" pass. Every call below marked `→ success` ALREADY RAN. How to treat" +
-	" each one:" +
-	"\n- **`(read)`** — it only fetched data, and those results are NOT" +
-	" carried into this round. Re-run it whenever you need the data again;" +
-	" never invent data you no longer have." +
-	"\n- **everything else** — assume it changed something outside the" +
-	" engine (a post, a comment, a status change, a code run). Do NOT issue" +
-	" it again: a human sees the second one as a duplicate. If it was the" +
-	" delivery, it still counts: name it in `submit_work`'s `deliveries`." +
-	"\n- **`→ error`** — it did NOT take effect. Retry it, fixed." +
-	"\nPlan and deliver only what is still missing. If the gap is a follow-up" +
-	" to something already delivered, ADD to it — reply in the existing" +
-	" thread, edit the existing item — rather than re-sending the original." +
-	" Doing that follow-up is expected and is not a duplicate."
+	"\nAn earlier round of this turn was sent back. Every call below marked" +
+	" `→ success` ALREADY RAN:" +
+	"\n- **`(read)`** fetched data only, and its results are not carried" +
+	" over: re-run it if you need the data, never invent it." +
+	"\n- **Everything else** changed something outside the engine: do NOT" +
+	" issue it again — a person sees the second one as a duplicate. If it" +
+	" was the delivery, it still counts: name it in `submit_work`'s" +
+	" `deliveries`." +
+	"\n- **`→ error`** did not take effect: retry it, fixed." +
+	"\nDeliver only what is still missing. A follow-up to an earlier" +
+	" delivery ADDS to it — reply in its thread, edit the item — rather than" +
+	" re-sending it, and is not a duplicate."
 
 // ConversationHistoryHeader introduces this seat's own earlier TURNS on the
 // same thread / issue / item.
@@ -42,19 +41,15 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 // state as current.
 const ConversationHistoryHeader = "## Earlier in this conversation" +
 	"\nYour own earlier turns on this same thread / issue / item, oldest" +
-	" first. This is what YOU already said and did here — nobody else's" +
-	" record of it, and not a transcript of the conversation itself." +
-	"\n- **Do not repeat a reply you already gave.** If your answer to what" +
-	" has just come in is one you have already sent, say the new thing or" +
-	" say nothing — a human reads the second copy as not having been read." +
-	"\n- **`(read)` calls may be stale.** Their results were not carried" +
-	" over and time has passed since. Re-run any whose data you need now;" +
-	" never reuse a remembered value as if it were current." +
-	"\n- **Everything else already took effect.** Treat those as landed," +
-	" and follow up on them rather than re-issuing them." +
-	"\n- **The conversation has moved on.** This is history, not the" +
-	" current state — the task below is the newest thing said, and where" +
-	" the two disagree the task wins."
+	" first — what YOU already said and did here." +
+	"\n- **Do not repeat a reply you already gave:** say the new thing or" +
+	" say nothing." +
+	"\n- **`(read)` calls may be stale:** re-run any whose data you need" +
+	" now rather than reusing a remembered value." +
+	"\n- **Everything else already took effect:** follow up on it rather" +
+	" than re-issuing it." +
+	"\n- **This is history, not the current state:** where it and the task" +
+	" below disagree, the task wins."
 
 // UserMessage is the per-round content of an executor turn.
 //

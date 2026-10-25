@@ -54,11 +54,14 @@ type listMCPTools struct{ surface func() *tools.Surface }
 
 func (t *listMCPTools) Name() string { return ListMCPToolsTool }
 
+// Description says what the call answers and what follows it, in the words a
+// text-mode CLI and an agent-mode one both read truly: "callable from your
+// next round", never "its schema arrives on the next message", which
+// described a vendor's tool channel this engine no longer has.
 func (t *listMCPTools) Description() string {
-	return "List the tools one MCP server offers. Use this when you need a tool " +
-		"from a server and do not yet know its exact name — your system prompt " +
-		"lists server names, not their individual tools. After picking one, call " +
-		"`" + ActivateTool + "` so its schema arrives on the next message."
+	return "List the tools one MCP server offers. Your system prompt names " +
+		"your MCP servers, not their tools; use this when you need one and do " +
+		"not know its exact name, then `" + ActivateTool + "` the one you pick."
 }
 
 func (t *listMCPTools) Parameters() map[string]any {
@@ -124,13 +127,10 @@ type activateTool struct{ surface func() *tools.Surface }
 func (t *activateTool) Name() string { return ActivateTool }
 
 func (t *activateTool) Description() string {
-	return "Activate a tool from your role's catalogue so you can call it " +
-		"directly from the next round on. Its schema appears in your tools then; " +
-		"there is no need to activate twice.\n\n" +
-		"Use it for first-party tools and for MCP tools whose names you got from " +
-		"`" + ListMCPToolsTool + "`. Activate a tool the moment you need it — " +
-		"there is no separate planning step to name it in, and nothing is " +
-		"cheaper about activating it earlier."
+	return "Make a tool you can reach but do not hold callable, from your next " +
+		"round on: a tool your system prompt lists to discover, or an MCP tool " +
+		"whose name you got from `" + ListMCPToolsTool + "`. Activate it when " +
+		"you need it; once is enough."
 }
 
 func (t *activateTool) Parameters() map[string]any {
@@ -152,7 +152,7 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 		}, nil
 	}
 	if t.surface().Activate(name) {
-		return tools.Result{Output: name + " is active; its schema arrives on the next message."}, nil
+		return tools.Result{Output: name + " is active: you can call it from your next round."}, nil
 	}
 	// A miss is almost always a guessed MCP tool name. Saying so, and
 	// naming the way to find the real one, is the difference between a

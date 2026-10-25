@@ -2092,14 +2092,19 @@ refused** (it runs on the engine host, so a denial that stopped working is a
 seat reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
-clock, read by the tool.
+clock, read by the tool. Its `system prompt` lines say where a seat's system
+prompt goes and where a side pass's does — added to the CLI's own, in place of
+it, or in the transcript under it ([which channel a call
+takes](../concepts/llm-backends.md#which-channel-a-call-takes)) — and every probe
+is sent as a seat's call, so it runs under the prompt a seat does.
 
 Both commands answer "signed in" the same way, from the environment the CLI is
 actually given rather than from the configuration: credential files a login
 wrote (or, for OpenCode 2, which keeps its login in its own database, the
 document its export printed), a headless token, the key `auth.mode: api-key`
 puts in the CLI's key variable (`auth.api_key`, or that variable itself —
-`ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex), a
+`ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex; Qwen Code's
+`OPENAI_API_KEY`, which other vendors' keys share, only through `auth.api_key`), a
 variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
 [credential-named](../concepts/llm-backends.md#6-a-provider-key-in-env-opencode-hermes-pi)

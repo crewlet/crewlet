@@ -179,7 +179,7 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 		if launcher.runs != 1 {
 			t.Fatalf("launched %d runs", launcher.runs)
 		}
-		return launcher.req.Brief
+		return launcher.req.System
 	}
 
 	for name, prompt := range map[string]func(*testing.T, *runner.SubagentConfig) string{

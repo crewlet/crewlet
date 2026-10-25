@@ -255,7 +255,7 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 // worse than nothing, because it invites applying it to whoever is asking.
 func renderProfile(p learning.Profile) string {
 	var b strings.Builder
-	b.WriteString("Subject: " + firstNonEmpty(subjectLabel(p.Subject), "(unknown)"))
+	b.WriteString("Subject: " + firstNonEmpty(p.Subject.Label(), "(unknown)"))
 	if p.Subject.Platform != "" {
 		b.WriteString("\nPlatform: " + p.Subject.Platform)
 	}

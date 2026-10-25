@@ -9,7 +9,7 @@ func TestReviewPromptDescribesTheDecisionEnum(t *testing.T) {
 	// The colleague handoff is the next round's outreach, not a decision.
 	excludes(t, p, "ask_colleague")
 	// No catalogue, no policies, no org context, no identity block.
-	excludes(t, p, "## Available tools", "Company Policies", "Company policies",
+	excludes(t, p, "## Available tools", "## Tools to discover", "Company Policies", "Company policies",
 		"Respect teammates.", "Build great things.", "## Your Identity")
 }
 
@@ -31,18 +31,14 @@ func TestReviewHeaderCarriesEveryDecisionRule(t *testing.T) {
 		// An engine-written outcome carries nobody's commitment, and a
 		// reviewer that grades it as the agent's verdict is grading a
 		// claim nobody made.
-		"Incomplete rule", "written by the engine",
-		// The sandbox rule stops the reviewer reading a delegated
-		// investigation as fabrication and looping the turn forever.
-		"Sandbox rule", "run_sandbox",
+		"`incomplete` outcome was written by the engine",
 		// Keyed on target and content, not tool name: keyed on the name it
 		// fired on the in-thread follow-up PriorWorkHeader asks for, and
 		// every corrected turn looped until it terminated failed.
-		"Duplicate-delivery rule", "target and content",
-		"completed_work",
+		"Duplicates", "target and content",
 		// An agent narrating that it lacks a tool is a self_iterate, not a
 		// failure: the next round can discover and activate it.
-		"Missing-tool rule", "discover and activate it",
+		"missing tool", "discover and activate it",
 		"I don't have access to the tool needed to deliver this",
 		// Blocked on a colleague splits on whether they have BEEN TOLD,
 		// because that is the half the tool log can settle: not yet is the
@@ -53,15 +49,43 @@ func TestReviewHeaderCarriesEveryDecisionRule(t *testing.T) {
 		// ended on the max-iterations guard. Both halves are pinned: drop
 		// the split and the loop returns, drop the async fact and the
 		// reviewer has no reason to stop waiting.
-		"Blocked / needs-a-colleague rule", "BEEN TOLD", "re-triggers this agent",
+		"BEEN TOLD", "re-triggers this agent",
+		"still owed a reply where they asked",
 	)
 	// The cross-round half of the duplicate rule is worthless if it can
 	// only see inside one round.
-	contains(t, ReviewHeader, "Earlier rounds", "completed_work")
-	// And the retired instruction must not linger: there is no plan to
+	contains(t, ReviewHeader, "Earlier rounds")
+	// And the retired instructions must not linger: there is no plan to
 	// re-list tools in, and a reviewer told to demand one sends every
-	// blocked turn back for a phase that does not exist.
-	excludes(t, ReviewHeader, "tools_needed", "Plan", "Execute phase")
+	// blocked turn back for a phase that does not exist. What a field
+	// carries — `completed_work` — is the field's own description, beside
+	// it in the submission schema.
+	excludes(t, ReviewHeader, "tools_needed", "Plan", "Execute phase", "completed_work")
+}
+
+// THE RULES ABOUT A TOOL FOLLOW THE TOOL, like the executor's own sections.
+// The sandbox rule stops a reviewer reading a run_sandbox-delegated
+// investigation as fabrication and looping the turn to max_iterations — on
+// the seats offered the box, which is nearly none of them: unconditional, it
+// was prose about a tool on every review in the company. And `a2a_ask` is
+// named among the ways to reach somebody only where the seat holds it, or the
+// reviewer writes notes the next round can only fail to follow.
+func TestTheReviewRulesAboutAToolFollowTheSeatsSurface(t *testing.T) {
+	t.Parallel()
+	plain := BuildReview(engineer(), ReviewInput{}).Text
+	excludes(t, plain, "run_sandbox", "a2a_ask")
+
+	sandbox := BuildReview(engineer(), ReviewInput{OffersSandbox: true}).Text
+	contains(t, sandbox, "A successful `run_sandbox` call IS the code work",
+		"is not fabrication")
+	excludes(t, sandbox, "a2a_ask")
+
+	a2a := BuildReview(engineer(), ReviewInput{OffersA2A: true}).Text
+	contains(t, a2a, "`a2a_ask`")
+	excludes(t, a2a, "run_sandbox")
+	// Inside the blocked rule it belongs to, after "not yet" and before the
+	// two answers past it.
+	order(t, a2a, "Not yet → `self_iterate`", "`a2a_ask`", "Already asked → `done`")
 }
 
 func TestReviewPromptRendersTheEvidenceTimeline(t *testing.T) {

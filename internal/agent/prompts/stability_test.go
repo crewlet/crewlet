@@ -71,7 +71,7 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	frozen := ExecutorInput{
-		ToolCatalogue: "- post_message: Post to a channel.",
+		Discoverable: "- MCP server `github`",
 		// comment_on_work_item DELIBERATELY, so the escalation guidance
 		// it gates is inside the bytes held stable across rounds.
 		AvailableTools:    []string{"post_message", "refresh_memory", "comment_on_work_item"},
@@ -89,7 +89,7 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		}).Text)
 		return BuildExecutor(seat, frozen).Text
 	}, BuildExecutor(seat, ExecutorInput{
-		ToolCatalogue: "- post_message: Post to a channel.", AvailableTools: frozen.AvailableTools,
+		Discoverable: "- MCP server `github`", AvailableTools: frozen.AvailableTools,
 	}).Text)
 
 	// Guard the guard: if the per-round state never moved, the stability
@@ -120,7 +120,11 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 		Outcome:  "delivered",
 		Produced: "Posted the summary.",
 		ToolLog:  "- post_message(...) → success",
-		Skills:   allSkills(),
+		// Both gated rules ON, so the bytes they add are inside what is
+		// held stable across rounds.
+		OffersSandbox: true,
+		OffersA2A:     true,
+		Skills:        allSkills(),
 	}
 	stableAcrossRounds(t, "review",
 		func(int) string { return BuildReview(seat, frozen).Text },
@@ -143,7 +147,7 @@ func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	exec := ExecutorInput{
-		ToolCatalogue:  "- post_message: Post to a channel.",
+		Discoverable:   "- MCP server `github`",
 		AvailableTools: []string{"post_message"},
 		Skills:         allSkills(),
 	}
@@ -173,7 +177,7 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A"},
 		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M"},
 	}}
-	in := ExecutorInput{Skills: cat, ToolCatalogue: "- x: does x"}
+	in := ExecutorInput{Skills: cat, Discoverable: "- x: does x"}
 
 	const builds = 200
 	first := BuildExecutor(seat, in).Text

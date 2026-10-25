@@ -1,8 +1,10 @@
 package pages_test
 
 import (
+	"regexp"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/pages"
 )
@@ -43,5 +45,51 @@ func TestAPageIsBothThePartitionAndTheConversation(t *testing.T) {
 	}
 	if got := (pages.Prompt{}).ConversationIdentity(empty, "subject"); got != "" {
 		t.Errorf("a page-less wake resolved to %q", got)
+	}
+}
+
+// THE PROMPT NAMES ONLY PAGE TOOLS THIS BUILD REGISTERS.
+//
+// It names its tools — they are shipped by this build, under names this build
+// chose — and a seat acts on what it is shown, so a name that drifted from the
+// registered one is a seat told to call something that is not there. The
+// names are literals in the prompt because the builtin surface that registers
+// them imports this package, so this is the one place the two are held
+// together.
+func TestThePromptNamesOnlyRegisteredPageTools(t *testing.T) {
+	t.Parallel()
+	registered := map[string]bool{}
+	for _, name := range builtin.PageTools() {
+		registered[name] = true
+	}
+	tool := regexp.MustCompile("`([a-z]+(?:_[a-z]+)*_page)`")
+	named := map[string]bool{}
+	for _, via := range []string{pages.ViaMention, pages.ViaWatcher, pages.ViaLeadFallback} {
+		for _, kind := range []pages.ChangeKind{
+			pages.ChangeCreated, pages.ChangeSaved, pages.ChangeComment, pages.ChangeRemoved,
+		} {
+			text := (pages.Prompt{}).Build(notify.Inbound{
+				Source: pages.Source, EventType: string(kind), Subject: "Deploy runbook",
+				Body: "@ana is this current?",
+				Metadata: map[string]string{
+					pages.RoutedViaField: via, pages.MetaPageID: "p-1",
+					pages.MetaChangeKind: string(kind), pages.MetaVersion: "3",
+				},
+			}, nil)
+			for _, m := range tool.FindAllStringSubmatch(text, -1) {
+				named[m[1]] = true
+				if !registered[m[1]] {
+					t.Errorf("%s/%s names `%s`, which this build does not register:\n%s",
+						via, kind, m[1], text)
+				}
+			}
+		}
+	}
+	// AND THE GUARD SEES SOMETHING: a pattern that matched nothing would
+	// pass every prompt, renamed tools included.
+	for _, want := range []string{builtin.GetPageTool, builtin.CommentOnPageTool, builtin.SavePageTool} {
+		if !named[want] {
+			t.Errorf("no prompt names `%s`, so this guard is not reading what it guards", want)
+		}
 	}
 }

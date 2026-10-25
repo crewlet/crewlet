@@ -438,7 +438,7 @@ type CLIAgentAuth struct {
 	// CLI's key variable (its profile's api_key_env) under auth.mode
 	// api-key. Empty reads that variable itself through the secret store
 	// and then the environment — ANTHROPIC_API_KEY for Claude Code,
-	// OPENAI_API_KEY for Codex — so a key already exported, or set with
+	// CODEX_API_KEY for Codex — so a key already exported, or set with
 	// `crewlet secrets set`, works with no YAML change.
 	//
 	// ONE key, never a list: a CLI holds one sign-in and rotates nothing,
@@ -604,7 +604,11 @@ func (l *LLMProvider) CredentialSources(key string) CredentialSources {
 	case AuthSubscription:
 		sources.Token.Fallback = profile.TokenEnv
 	case AuthAPIKey:
-		sources.APIKey.Fallback = profile.APIKeyEnv
+		// NOT a variable other vendors' keys go in too: the entry names
+		// its key ([cliprofile.Profile.APIKeyEnvShared]).
+		if !profile.APIKeyEnvShared {
+			sources.APIKey.Fallback = profile.APIKeyEnv
+		}
 	}
 	return sources
 }
@@ -862,7 +866,33 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"the CLI does read a key variable, name it with "+
 					"overrides.api_key_env",
 				agent, profile.LoginLocation())
+		case profile.APIKeyEnvShared && strings.TrimSpace(l.Auth.APIKey) == "":
+			// Refused rather than left to fall back: the variable the
+			// CLI reads holds other vendors' keys too, and the one the
+			// engine would find there is the wrong one more often than
+			// not — sent to this CLI's endpoint all the same.
+			p.add(at(path, "auth.api_key"), ErrMissing,
+				"name this entry's key as auth.api_key: the %q CLI reads its key from "+
+					"%s, a variable other vendors' keys are kept under too, so the "+
+					"engine does not read it from its own environment or secret store "+
+					`in this entry's place — e.g. api_key: "${DASHSCOPE_API_KEY}"`,
+				agent, profile.APIKeyEnv)
 		}
+	}
+
+	// SUBSCRIPTION READS A LOGIN THE CLI KEEPS OR A HEADLESS TOKEN. A CLI that
+	// keeps neither and signs in with a key alone would run signed in to
+	// nothing under it: the mode removes the key variable from the CLI's
+	// environment, and every call is refused for want of a key. Qwen Code is
+	// that CLI — both measured builds refuse the OAuth login it once kept.
+	if mode == AuthSubscription && !profile.KeepsLogin() && profile.TokenEnv == "" &&
+		!profile.EnvSignIn && profile.APIKeyEnv != "" {
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"subscription signs the CLI in with a login it keeps or a headless token, and "+
+				"the %q profile names neither — no credential_paths, credential_store or "+
+				"token_env — so the entry would sign in to nothing: this CLI signs in with "+
+				"its key, so set auth.mode: api-key and give the key as auth.api_key (the "+
+				"CLI reads it from %s)", agent, profile.APIKeyEnv)
 	}
 
 	if l.Auth.Token != "" {
@@ -880,6 +910,18 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		}
 	}
 
+	// NOR FROM THE ENGINE'S ENVIRONMENT BY MODE. inherit-env forwards the key
+	// variable as the engine's process holds it, and a shared one holds
+	// whichever vendor's key was exported under it — the embeddings key, on a
+	// host that runs any — sent to this CLI's endpoint all the same.
+	if mode == AuthInheritEnv && profile.APIKeyEnvShared {
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"inherit-env forwards %s from the engine's own environment, and the %q CLI's key "+
+				"variable is one other vendors' keys are kept under too, so the key it forwarded "+
+				"would be whichever was exported there: set auth.mode: api-key and name this "+
+				`entry's key as auth.api_key, e.g. api_key: "${DASHSCOPE_API_KEY}"`,
+			profile.APIKeyEnv, agent)
+	}
 	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
 		remedy := "sign the CLI in with `crewlet llm login`"
 		if profile.EnvSignIn {
@@ -916,6 +958,16 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"resolves or the engine's environment holds a key of its own. Give "+
 					"the key as auth.api_key with auth.mode api-key", name)
 		default:
+			if subscriptionEnvName(profile, mode, name) {
+				// Set with the mode, over env: a value here would be
+				// replaced on every call without a word.
+				p.add(entry(at(path, "env"), name), ErrConflict,
+					"%s is set by the %q profile under auth.mode subscription, to %q, to "+
+						"choose the login the seat's home holds; a value here is replaced on "+
+						"every call, so drop it — a different value is set with "+
+						"overrides.subscription_env", name, l.Agent, profile.SubscriptionEnv[name])
+				continue
+			}
 			// env is layered OVER the variables that keep each seat's CLI
 			// inside its own home and its call's working directory, so a
 			// value here would replace them for every seat on the entry —
@@ -935,6 +987,14 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		}
 	}
 	return p.err()
+}
+
+// subscriptionEnvName reports whether name is one the profile sets under
+// subscription ([cliprofile.Profile.SubscriptionEnv]) on an entry running
+// under it.
+func subscriptionEnvName(profile cliprofile.Profile, mode CLIAgentAuthMode, name string) bool {
+	_, ok := profile.SubscriptionEnv[name]
+	return ok && mode == AuthSubscription
 }
 
 // isolationRemedy is where an isolation variable's value IS changed, for the

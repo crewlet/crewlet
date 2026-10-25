@@ -66,6 +66,17 @@ func (p Paths) Stream() string { return p.WorkDir() + "/stream.jsonl" }
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 
+// System is where a run's standing instructions ([sandbox.RunRequest.System])
+// are written for its CLI to add to its own system prompt: named on Claude
+// Code's command line, listed in the opencode.json OpenCode reads.
+//
+// A FILE, never argv. The text carries the seat's org chart, policies and
+// memory, and a command line is readable by every process that can list them
+// — on a `direct` box, every account on the engine host — and bounded by
+// ARG_MAX. Under WorkDir, out of the checkout, so a `git clean` cannot remove
+// it from under a run and a commit cannot carry it into a repository.
+func (p Paths) System() string { return p.WorkDir() + "/system.md" }
+
 // CredentialDocument is where a box keeps the login a CLI holds in a database
 // of its own: the CLI's own export of it, which the engine seeds a local box
 // with and writes back from when the box closes ([CredentialDocument]).

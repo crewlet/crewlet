@@ -96,6 +96,14 @@ func signInCases() []signInCase {
 			without: "run `crewlet llm login sub`",
 		},
 		{
+			// Qwen Code keeps no login of its own — both measured builds
+			// refuse the OAuth login it once kept — so there is nothing to
+			// adopt or broker: its key is the sign-in.
+			name: "a CLI that keeps no login", agent: "qwen-code",
+			problem: "set auth.mode: api-key and give the key as auth.api_key (the CLI reads it from OPENAI_API_KEY)",
+			without: "-from-host",
+		},
+		{
 			// The operator wrote a token reference; that it resolved to
 			// nothing is the fault to name, ahead of the routes they did
 			// not take.
@@ -310,13 +318,22 @@ func TestEachModesSignInNamesOnlyTheVariablesItsProfileHas(t *testing.T) {
 			want:      []string{"CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "neither is set there", "export one"},
 		},
 		{
-			agent: "codex", mode: AuthAPIKey, variables: []string{"OPENAI_API_KEY"},
-			want: []string{"its auth.mode is api-key", "providers.llm.sub.auth.api_key, else OPENAI_API_KEY",
+			agent: "codex", mode: AuthAPIKey, variables: []string{"CODEX_API_KEY"},
+			want: []string{"its auth.mode is api-key", "providers.llm.sub.auth.api_key, else CODEX_API_KEY",
 				"`crewlet secrets set`"},
 		},
 		{
-			agent: "codex", mode: AuthInheritEnv, variables: []string{"OPENAI_API_KEY"},
-			want:    []string{"only OPENAI_API_KEY from the engine's own process environment", "it is not set there", "export it"},
+			// OPENAI_API_KEY holds other vendors' keys too: the engine
+			// never reads it in the entry's place, so nothing says to
+			// export it there.
+			agent: "qwen-code", mode: AuthAPIKey, variables: []string{"OPENAI_API_KEY"},
+			want: []string{"its key, as OPENAI_API_KEY (providers.llm.sub.auth.api_key)",
+				"under the name auth.api_key references"},
+			notWant: []string{"else ", "export"},
+		},
+		{
+			agent: "codex", mode: AuthInheritEnv, variables: []string{"CODEX_API_KEY"},
+			want:    []string{"only CODEX_API_KEY from the engine's own process environment", "it is not set there", "export it"},
 			notWant: []string{" or ", "neither"},
 		},
 		{

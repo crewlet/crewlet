@@ -383,6 +383,21 @@ func mostSimilar(seq []string, existing [][]string, threshold float64) (string, 
 	return best, bestAt >= threshold
 }
 
+// skillDraftAnswer is the answer the three drafting prompts ask for —
+// synthesis, clustering and promotion — written once because one decoder reads
+// all three ([parseSkillDraft]), and a prompt that drifted from its keys would
+// draft skills that decode to nothing.
+const skillDraftAnswer = `Answer with one JSON object and nothing else:
+{"name":"kebab-case-name","description":"one line on when to use it",
+ "content":"the procedure, as numbered steps"}`
+
+// skillGenerality is the rule every learned procedure is written under, in
+// all four prompts that write one: it is read on later turns that are not
+// this one, by this seat or — promoted — by its team, and a ticket number or
+// a name in it is an example the reader takes for a step.
+const skillGenerality = `Keep it general: no ticket numbers, names or dates,
+nothing specific to one instance.`
+
 // SynthesisSystemPrompt asks for a reusable procedure or nothing.
 //
 // "Or nothing" is load-bearing and stated twice. A model asked to draft a
@@ -391,23 +406,17 @@ func mostSimilar(seq []string, existing [][]string, threshold float64) (string, 
 // every future turn to show the model things it already knew.
 const SynthesisSystemPrompt = `You distil a completed agent turn into a
 REUSABLE skill — a short procedure the same agent could follow next time it
-faces this kind of task.
+faces this kind of task — or into nothing.
 
-Answer with a JSON object and nothing else:
-{"name":"kebab-case-name","description":"one line, what this is for",
- "content":"markdown steps"}
+` + skillDraftAnswer + `
 
-Draft a skill ONLY when the turn shows a procedure worth repeating: an
-ordered use of tools that solved a recognisable KIND of problem, not this
-one instance of it.
+Draft a skill ONLY when the turn shows an ordered use of tools that solved a
+recognisable KIND of problem. A turn that just answered a question, a one-off
+lookup, or a run whose tools were incidental has no reusable shape: answer
+exactly {}.
 
-Do NOT draft one for: a turn that just answered a question, a one-off lookup,
-anything specific to this particular ticket or person, or a run whose tools
-were incidental. If the turn has no reusable shape, answer exactly {}.
-
-The content is instructions to your future self. Name the tools in order,
-say what to check between them, and say when the procedure does NOT apply.
-Leave out what happened this time — no ticket numbers, no names, no dates.`
+Name the tools in order, say what to check between them, and say when the
+procedure does NOT apply. ` + skillGenerality
 
 // buildSynthesisPrompt renders the one turn the draft is distilled from.
 func buildSynthesisPrompt(t Turn) string {

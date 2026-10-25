@@ -15,9 +15,8 @@ import (
 // behind, not an empty bullet list.
 //
 // They live in this package rather than beside the agent definition because
-// they are prompt text: the words below are as load-bearing as the phase
-// contracts, and one source of truth for them keeps the executor's prompt and any
-// combined single-shot prompt from drifting apart.
+// they are prompt text, held to the package's rule: the engine states only
+// what the model cannot learn from anything else it is sent, once.
 
 // BuildIdentitySection renders the professional identity for the executor.
 //
@@ -28,10 +27,10 @@ import (
 //
 // `##`, like every other section of the executor's prompt. It was the one `#`
 // in the document, which under any structural reading made the company's
-// policies, the roster, the turn contract and the tool catalogue parts of the
-// agent's IDENTITY rather than the next things it reads. They are peers — the
-// builders below all emit `##` — and the dashboard's prompt outline reads the
-// same structure. The words are untouched.
+// policies, the roster, the turn contract and the tools to discover parts of
+// the agent's IDENTITY rather than the next things it reads. They are peers —
+// the builders below all emit `##` — and the dashboard's prompt outline reads
+// the same structure.
 func BuildIdentitySection(s Seat, reports roster) []string {
 	if !s.ok() {
 		return nil
@@ -159,20 +158,23 @@ func approxTokens(s string) int { return utf8.RuneCountInString(s) / charsPerTok
 // rosterAllowanceTokens is the ONE budget the identity line and the roster
 // section spend, together.
 //
-// 1,000 is what the whole turn has room for, and what it buys is worth
-// having. Measured against `profiledReports` in fixtures_test.go, which
-// carries the profile a real company writes: a full agent profile costs ~119
-// tokens, a full human one ~193 (a person also renders contact ids,
-// availability and how to hand them work), a name-and-handle line 7 to 12,
-// and the closing line 11. So 1,000 pays for three full profiles and then
-// NAMES ~36 MORE COLLEAGUES — which names an ordinary unit outright (a lead
-// of 25 reports omits nobody) and gives the lead of a large one real profiles
-// for the head of its list and a lookup for the rest.
+// 1,000, for what it buys. Measured against `profiledReports` in
+// fixtures_test.go, which carries the profile a real company writes: a full
+// agent profile costs ~119 tokens, a full human one ~148 (a person also
+// renders contact ids and availability), a name-and-handle line ~11 for an
+// agent and ~18 for a person (the human marker), and the closing line ~11. So
+// 1,000 pays for three full profiles and then NAMES ~40 MORE COLLEAGUES —
+// which names an ordinary unit outright (a lead of 25 reports omits nobody)
+// and gives the lead of a large one real profiles for the head of its list
+// and a lookup for the rest. More would buy a lead more backstories on every
+// turn it takes, which `lookup_colleague` answers on the one turn that needs
+// them.
 //
-// The ceiling comes from the other end: the turn's own prose measures ~2,806
-// with a 100-tool catalogue, a mixed company pays another ~152 for the
-// `## Human colleagues` note, and the whole turn is held under 4,000 (see
-// TestTheWholeTurnStaysUnderBudget). 1,000 is that headroom, spent
+// It was once what a 4,000-token turn had left over. The turn's own prose
+// shrank to ~1,258 tokens — every gated section of both prompts rendered —
+// when the prompts stopped repeating what the model gets elsewhere, and the
+// allowance did not follow it down: the whole turn's budget is now this
+// allowance plus the prose (see TestTheWholeTurnStaysUnderBudget), spent
 // deliberately on the section a lead assigns work from rather than taken
 // silently by whichever team grew.
 //
@@ -257,14 +259,14 @@ type roster struct {
 // RUNG 1 MAY SPEND AT MOST HALF, which is not a second cap — it is an order
 // of priority inside the one counter, and the total is still the counter's.
 // It is here because the two rungs are an order of magnitude apart: a profile
-// measures 119 tokens for an agent and 193 for a human against 7 to 12 for a
-// name, so an undivided counter buys six profiles and then cannot afford the
-// SEVENTH COLLEAGUE'S NAME. That is a lead which can describe six people and
-// does not know who else works for it — and not knowing a report exists is a
-// worse failure than not knowing their backstory, because `lookup_colleague`
-// answers the second question and cannot be asked the first. Half buys a
-// handful of profiles for the head of the list and names ~36 more, which
-// covers an ordinary unit outright.
+// measures 119 tokens for an agent and 148 for a human against 11 to 18 for a
+// name, so an undivided counter buys seven profiles and one name, and then
+// cannot afford the NINTH COLLEAGUE'S NAME. That is a lead which can describe
+// seven people and does not know who else works for it — and not knowing a
+// report exists is a worse failure than not knowing their backstory, because
+// `lookup_colleague` answers the second question and cannot be asked the
+// first. Half buys a handful of profiles for the head of the list and names
+// ~40 more, which covers an ordinary unit outright.
 func planRoster(s Seat, a *rosterAllowance) roster {
 	reports := s.reports()
 	if len(reports) == 0 {
@@ -364,11 +366,9 @@ func rosterProfile(s Seat, report *org.Role) []string {
 			parts = append(parts, "  - Availability: "+report.Availability)
 		}
 		return append(parts,
-			"  - Working with them: they cannot be reached on any chat or "+
-				"code-host account right now, so there is nobody to "+
-				"@-mention or message. Work for this seat goes in the PM "+
-				"tool, assigned to the seat, where whoever holds it will "+
-				"find it — don't expect a reply in the meantime.")
+			"  - They cannot be reached on any chat or code-host account "+
+				"right now: put work for this seat in the PM tool, assigned "+
+				"to the seat, and expect no reply meanwhile.")
 	}
 	addressable := false
 	if report.Contact != nil {
@@ -397,25 +397,22 @@ func rosterProfile(s Seat, report *org.Role) []string {
 		parts = append(parts, "  - Availability: "+report.Availability)
 	}
 	if addressable {
-		parts = append(parts,
-			"  - Working with them: hand work over in the PM tool "+
-				"and @-mention them on their team's chat or issue "+
-				"tracker; they reply asynchronously — don't expect an "+
-				"engine turn from them.")
+		// NOTHING MORE TO SAY about a person with an account: how a human
+		// is reached and handed work, and that they answer asynchronously,
+		// is the `## Human colleagues` note, which renders wherever a
+		// human report can — once, rather than once per profile out of an
+		// allowance that buys profiles.
 		return parts
 	}
-	// NOBODY TO @-MENTION. A person may hold an operator credential and
-	// no chat account at all — they read their dashboard inbox — and
-	// telling an agent to mention them anyway produces a message
-	// addressed to a handle that resolves to nobody, which reads to
-	// everyone else as work handed over.
-	parts = append(parts,
-		"  - Working with them: hand work over in the PM tool and "+
-			"assign it to them; they have no chat or code-host account "+
-			"here, so there is nobody to @-mention. They read their "+
-			"queue and reply asynchronously — don't expect an engine "+
-			"turn from them.")
-	return parts
+	// NOBODY TO @-MENTION, which is the one way this person differs from
+	// the note. A person may hold an operator credential and no chat
+	// account at all — they read their dashboard inbox — and telling an
+	// agent to mention them anyway produces a message addressed to a handle
+	// that resolves to nobody, which reads to everyone else as work handed
+	// over.
+	return append(parts,
+		"  - No chat or code-host account, so nobody to @-mention: assign "+
+			"their work to them in the PM tool, where they read it.")
 }
 
 // BuildRosterSection renders the team roster — the ladder's three rungs, in
@@ -427,9 +424,10 @@ func rosterProfile(s Seat, report *org.Role) []string {
 // member for as many as the allowance pays for, so the lead can reason about
 // who to assign work to without a separate knowledge fetch; then a name and a
 // handle each; then one line saying how many are left and which tool names
-// them. Human members render with their external contact identities, their
-// availability, and how to hand them work — assignment in the PM tool plus a
-// mention, because there is no engine task assignment that reaches a person.
+// them. Human members render with their external contact identities and their
+// availability — and, where a person cannot be mentioned, how their work
+// reaches them instead; how every other person is reached is the
+// `## Human colleagues` note's to say.
 //
 // It renders a DECISION it did not make. [planRoster] made it, from the same
 // counter [BuildIdentitySection] spends, which is why the two sections can
@@ -453,9 +451,8 @@ func BuildRosterSection(s Seat, r roster) []string {
 
 // capitalize upper-cases the first rune and lower-cases the rest.
 //
-// It is what renders "Github ID:" rather than "GitHub ID:" — carried as-is
-// because the roster line is prompt text, and prompt text is not where a
-// cosmetic improvement is worth an unverifiable behaviour change.
+// It is what renders "Github ID:" rather than "GitHub ID:". A label a model
+// reads the same either way; the id after it is what has to be exact.
 func capitalize(s string) string {
 	if s == "" {
 		return ""
@@ -472,6 +469,13 @@ func capitalize(s string) string {
 // behave (external surfaces, asynchronous replies, no A2A, no engine turns)
 // so handoffs and mentions are shaped correctly on the first attempt. Empty
 // when the org has no human seats, which keeps pure-agent prompts unchanged.
+//
+// THE ONE COPY. A roster profile used to restate it per person — hand work
+// over in the PM tool, mention them, they reply asynchronously — which a lead
+// of a mostly human team paid for once per profile out of the allowance that
+// buys profiles. A profile now says only how its person DIFFERS from this.
+// Both markers are named, because the identity line and the roster mark a
+// person differently ([seatLabel], [rosterHead]).
 func BuildHumanColleaguesNote(s Seat) []string {
 	if !s.ok() {
 		return nil
@@ -488,18 +492,12 @@ func BuildHumanColleaguesNote(s Seat) []string {
 	}
 	return []string{
 		"\n## Human colleagues",
-		"Some seats in this org are held by human teammates — marked " +
-			"**(human)** in your identity and roster, and " +
-			"`kind: human` in `lookup_colleague` results. When you need one " +
-			"of them:",
-		"- Reach them where humans read: an @-mention on the team's " +
-			"chat, or a comment on the issue / doc where the work lives. " +
-			"They are NOT on A2A.",
-		"- They reply asynchronously (think hours, not seconds). Put " +
-			"the full context they need into your message, then finish " +
-			"your turn — their reply re-triggers you. Never wait or poll.",
-		"- Hand them work through the PM tool (assign + mention), not " +
-			"through engine task assignment.",
+		"Seats marked (human) or **human teammate** — `kind: human` in " +
+			"`lookup_colleague` — are held by people. Reach them with an " +
+			"@-mention on the team's chat or a comment where the work lives, " +
+			"never over A2A, and hand them work by assigning it in the PM " +
+			"tool. They reply asynchronously: give them the full context, " +
+			"then finish your turn — their reply wakes you.",
 	}
 }
 
@@ -686,6 +684,12 @@ const escalationTool = "comment_on_work_item"
 // after asking is to finish everything that does not depend on the answer and
 // stop.
 //
+// THE SHAPE ITSELF IS THE SCHEMA'S. The question, the two to four options,
+// the recommendation, the evidence and the role each have a field on the
+// `decision` argument, described there, which reaches the model with the tool
+// on every round; a list of them here was the same contract twice. What only
+// this section can say is WHEN to ask, and that asking ends the branch.
+//
 // GATED ON THE TOOL, the same rule the workers block follows: a prompt never
 // tells a model to call something it does not hold.
 func BuildEscalationSection(availableTools []string) []string {
@@ -696,21 +700,12 @@ func BuildEscalationSection(availableTools []string) []string {
 		"\n## When a decision is not yours to make",
 		"When your work reaches a choice above your authority, one that trades " +
 			"off something your role does not own, or one you are genuinely " +
-			"torn on, ask the person who decides — on the work item, with `" +
-			escalationTool + "` (`ask` and `decision`), or with " +
-			"`create_work_item` (`ask` and `decision`) when there is no item " +
-			"yet. Shape it so it can be answered at a glance:",
-		"- **The question** in one sentence; the context goes in the body.",
-		"- **Two to four options**, each saying what choosing it means.",
-		"- **Your recommendation** and why — you have looked at this longer " +
-			"than they will.",
-		"- **The evidence** you looked at: the work items, pages, turns or " +
-			"links, so they can check rather than trust.",
-		"- **The role** you ask them in: `approver` when their answer IS the " +
-			"decision, `contributor` when it is an input to one.",
+			"torn on, ask the person who decides with an `ask` and a " +
+			"`decision` — on the work item with `" + escalationTool + "`, or " +
+			"with `create_work_item` when there is no item yet.",
 		"Then END THIS TURN BLOCKED ON THAT BRANCH. Do not pick an option " +
 			"yourself and do not wait or poll: finish whatever does not depend " +
 			"on the answer, and stop. Their answer wakes you with the option " +
-			"they chose, and you continue from there.",
+			"they chose.",
 	}
 }

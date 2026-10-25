@@ -24,8 +24,10 @@ import (
 // So it is its own phase with its own budget
 // (turn_engine.onboarding_max_tool_rounds), and onboarding never competes with
 // the work. Its surface is the onboarding builtins plus the discovery
-// meta-tools, so the agent can find its knowledge-base server the same way the
-// executor does — on a separate budget.
+// meta-tools, and its prompt lists every other tool it can reach, so the agent
+// activates its knowledge-base tools — first-party on the native backend, an
+// MCP server's on Confluence — the same way the executor reaches an MCP tool,
+// on a separate budget.
 //
 // NO REQUIRED-SKILL GUARD, deliberately: onboarding is a fixed read → persist
 // → mark workflow and the hint is its own guidance, so the load-before-use tax
@@ -44,15 +46,18 @@ var onboardingLog = logging.Get("agent.onboarding")
 // spends its remaining budget re-deciding something it has decided.
 var onboardingAlwaysOn = []string{ReflectAndPersistTool, MarkOnboardedTool}
 
-// The two builtin names this phase depends on. Named here rather than imported
-// from internal/agent/builtin because that package imports tools, which
-// imports turnctx — and the runner is what builds the surface both sit on.
-// tests/… pins them against the builtin package's own constants, so a rename
-// there fails the build here rather than silently emptying this surface.
+// The builtin names the runner's surfaces and prompts depend on. Named here
+// rather than imported from internal/agent/builtin, which is a leaf the engine
+// wires in: the runner builds the surfaces those tools sit on and must not
+// grow a dependency on every tool to name four of them.
+// TestTheRunnerNamesTheBuiltinsItDependsOn pins them against the builtin
+// package's own constants, so a rename there fails a test here rather than
+// silently emptying a surface or ungating a prompt rule.
 const (
 	ReflectAndPersistTool = "reflect_and_persist"
 	MarkOnboardedTool     = "mark_onboarded"
 	RunSandboxTool        = "run_sandbox"
+	A2AAskTool            = "a2a_ask"
 )
 
 // Markers is what the onboarding pass needs from the learning store.
@@ -237,8 +242,8 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	// WITHOUT run_sandbox: a call of it launches a box and starts a coding
 	// job, and this pass cannot suspend to record that run, so the loop
 	// marks the call failed only after the job has started — leaving a run
-	// nothing collects. A tool in the snapshot is one the catalogue lists
-	// and activate_tool reaches.
+	// nothing collects. A tool in the snapshot is one the prompt lists to
+	// discover and activate_tool reaches.
 	snapshot := r.cfg.Registry.Snapshot().Without(RunSandboxTool)
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
 		onboardingAlwaysOn)
@@ -246,8 +251,10 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		return false, err
 	}
 	system := prompts.BuildOnboarding(r.cfg.Seat, prompts.OnboardingInput{
-		Hint:          learning.Hint(r.cfg.Seat.Org, r.cfg.Seat.Role),
-		ToolCatalogue: snapshot.Catalogue(),
+		Hint: learning.Hint(r.cfg.Seat.Org, r.cfg.Seat.Role),
+		// Everything the pass can reach and does not hold — its
+		// knowledge-base tools among them, which it finds here.
+		Discoverable: snapshot.Discoverable(surface.Active()),
 	})
 	user := prompts.BuildOnboardingUserMessage()
 

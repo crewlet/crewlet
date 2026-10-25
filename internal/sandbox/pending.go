@@ -569,6 +569,11 @@ type PendingRun struct {
 	// it is long gone.
 	TaskDescription string `json:"task_description"`
 
+	// Label is what the run is named by on the running-runs panel — the
+	// label its launch announced ([LaunchRequest.Label]) — so a process that
+	// learns of the run from this row after a restart names it the same way.
+	Label string `json:"label,omitempty"`
+
 	// Reply is who is waiting for the suspended turn — [turn.Reply]'s wire
 	// value, written as a plain string because this row crosses builds.
 	//

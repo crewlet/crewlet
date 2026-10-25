@@ -91,23 +91,57 @@ func (Prompt) DigestBody(eventType, body string) string {
 func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	meta := n.Metadata
 	var b strings.Builder
-	if meta[RoutedViaField] == ViaMention {
+	switch meta[RoutedViaField] {
+	case ViaMention:
 		mentioned(&b, n, parties)
-	} else {
+	case ViaSpaceLead:
 		spaceActivity(&b, n, parties)
+	default:
+		// A SUBSCRIBER, and any reason a later parser adds: activity on a
+		// page the seat has touched is the honest default, because it
+		// claims nothing about the seat's role in the space.
+		subscribed(&b, n, parties)
 	}
 	getFullContext(&b, meta)
 	return b.String()
 }
 
 // mentioned: somebody named this seat on a page or in a comment on one.
+//
+// NO EVALUATION BLOCK. A mention is addressed ([Prompt.Addressed]) and the
+// delivery check holds it to an answer, so telling the seat silence is fine
+// when nothing was asked of it buys a corrective round and nothing else.
 func mentioned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("You were mentioned on a Confluence page.")
 	header(b, n, parties)
 	if n.Body != "" {
 		b.WriteString("\n**What it says:**\n" + n.Body + "\n")
 	}
-	b.WriteString(notify.EvaluationBlock())
+}
+
+// subscribed: a page this seat has edited, or was mentioned on, moved.
+//
+// ITS OWN FRAME, never the lead's. A subscriber copy used to render the
+// space-lead prompt, so a seat that had merely fixed a typo on a page was told
+// it was the lead of the space, that nobody had worked on the page, and that
+// mentioning a teammate would send the next change to them instead — three
+// false sentences, the last because a mention subscribes the teammate and
+// unsubscribes nobody, so the subscriber keeps hearing the page either way.
+func subscribed(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
+	switch n.Metadata["event_type"] {
+	case "page_trashed", "page_removed":
+		b.WriteString("A Confluence page you follow was deleted.")
+	case "comment_created", "comment_updated":
+		b.WriteString("Somebody commented on a Confluence page you follow.")
+	default:
+		b.WriteString("A Confluence page you follow was updated.")
+	}
+	header(b, n, parties)
+	if n.Body != "" {
+		b.WriteString("\n**What changed:**\n" + n.Body + "\n")
+	}
+	b.WriteString("\nYou follow it because you edited it or were mentioned on it.\n")
+	handlePageNews(b)
 }
 
 // spaceActivity: a page moved in a space this seat's team owns.
@@ -129,27 +163,33 @@ func spaceActivity(b *strings.Builder, n notify.Inbound, parties notify.Parties)
 	// THE ROUTING REASON IS WORTH STATING, because it is unusual: this is
 	// not a page the seat subscribed to, and nobody was named on it. A
 	// lead who is not told that reads every edit as a request.
-	//
+	b.WriteString("\nYou received this as the lead of the team that owns the" +
+		" space: nobody was named on the page and no seat has worked on it, so" +
+		" it routes to you by default.\n")
+	handlePageNews(b)
 	// THE DELEGATION SENTENCE IS LOAD-BEARING, not encouragement. Nothing
 	// else subscribes a seat to a page it has not touched, so a lead who
 	// answers by hand keeps receiving every later event on that page —
 	// and a lead who mentions the right teammate stops, because the
 	// mention subscribes them. Saying so is what makes the loop close.
-	b.WriteString("\nYou received this as the lead of the team that owns the" +
-		" space: nobody was named on the page, and no seat has worked on it" +
-		" before, so it routes to you by default.\n" +
-		"\n## How to handle this" +
-		"\n**Staying silent is the ordinary outcome.** Documentation" +
-		" changing is not a request. Read the change only if it plausibly" +
-		" bears on work your team has in flight; if it does, adjust your" +
-		" plans or tell the teammate it concerns. Do NOT comment to" +
-		" acknowledge it — a wiki whose comments are acknowledgements is a" +
-		" wiki whose comments nobody reads.\n" +
-		"\nIf this page belongs to a teammate, **@mention them in a comment**" +
-		" rather than answering it yourself. A mention subscribes them to the" +
-		" page, so the next change reaches them instead of you. Editing the" +
-		" page yourself subscribes YOU, and every later change comes back" +
-		" here.\n")
+	b.WriteString("\nIf this page belongs to a teammate, **@mention them in a" +
+		" comment** rather than answering it yourself: the mention subscribes" +
+		" them, so the next change reaches them instead of you. Editing the" +
+		" page subscribes YOU.\n")
+}
+
+// handlePageNews is what a page change asks of a seat nobody named.
+//
+// SILENCE IS THE ORDINARY OUTCOME, and it is said rather than left to the
+// evaluation block: documentation moving is not a request, and a seat that
+// comments to acknowledge it trains every reader to ignore the page's
+// comments. Shared by the subscriber and the lead, who differ only in why
+// they were told.
+func handlePageNews(b *strings.Builder) {
+	b.WriteString("\n## How to handle this" +
+		"\n**Staying silent is the ordinary outcome.** Documentation changing" +
+		" is not a request: act only if it bears on work in flight, and do not" +
+		" comment to acknowledge it.\n")
 }
 
 // header is the identifying block both openers share.
@@ -173,10 +213,8 @@ func getFullContext(b *strings.Builder, meta map[string]string) {
 		return
 	}
 	b.WriteString("\n## Get full context" +
-		"\nThe text above is an EXTRACT. Fetch page `" + id + "` with your" +
-		" Confluence tools before acting on it — a page is usually far longer" +
-		" than the part that changed, and the part that changed is rarely the" +
-		" part that matters.\n")
+		"\nThe text above is an EXTRACT: fetch page `" + id + "` with your" +
+		" Confluence tools before acting on it.\n")
 	if url := meta["url"]; url != "" {
 		b.WriteString("Link: " + url + "\n")
 	}

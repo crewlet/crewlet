@@ -791,11 +791,17 @@ export function PhaseCard({
                     </div>
                   </div>
                 )}
+                {/* WHAT THE PHASE NEVER HELD, not what its prompt said: the
+                    record's catalogue is its universe less the tools above,
+                    and its prompt names an MCP server's tools only by the
+                    server. "Offered as prose" was true while that prompt
+                    listed every builtin it already held, and false for every
+                    name here once it stopped. */}
                 {record.toolCatalogue.length > 0 && (
                   <div className="col gap-1">
                     <div className="t-label">
-                      Offered as prose
-                      <span className="muted"> · discoverable, not yet callable</span>
+                      Reachable by discovery
+                      <span className="muted"> · not activated this phase</span>
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolCatalogue.map((t) => (

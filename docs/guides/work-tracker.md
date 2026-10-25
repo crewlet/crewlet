@@ -1976,6 +1976,19 @@ change. Below those come assignee, then reporter, then the following
 reasons — collaborator, watcher, and last the lead fallback, which reaches a
 lead only when the change named nobody else at all.
 
+**What a task wake asks follows its reason.** Eight reasons ask something —
+mentioned, asked, answered, a thread reply, assignee, reporter, blocking and
+`prioritised` — and the [turn engine](../concepts/turn-engine.md#who-is-waiting-and-how-they-get-an-answer)
+holds each to an answer, so none of their prompts tells the seat to stay out.
+Only a wake nobody is waiting on — a watcher, a collaborator and the rest — is
+told to stay silent when the task's assignee is outside its team. And only a
+seat that **holds** the task — its assignee, or the assignee of the blocker
+somebody now waits on — is told the decline that is the tracker's own:
+reassign it to the right teammate, or to its manager when it cannot tell.
+A seat asked about somebody else's task is not handed that gesture, because
+the task is not its to move; it declines the way any ask is declined, with a
+reply naming who should answer.
+
 One wake is not about a task, and it exists because the thing that moved is
 not a row on a board:
 

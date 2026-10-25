@@ -181,7 +181,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 // auth.credential_bundle — not by its CLI, so an entry moved to another CLI
 // still restores the bundle it was configured with. Judged by its files' names
 // alone, that bundle was refused only where the two CLIs keep different names:
-// six keep an `auth.json` and two an `oauth_creds.json`, so codex's bundle was
+// six keep an `auth.json`, so codex's bundle was
 // written into pi's empty login, where it is a credential pi cannot read and,
 // as a login already present, turned every later restore away — the right
 // bundle included.
@@ -193,7 +193,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 // with nothing beside its login files.
 //
 // Mutation: skip the manifest's check in restoreBundle, and every pair that
-// shares a file name restores (codex into pi, qwen-code into gemini-cli), and
+// shares a file name restores (codex into pi, among others), and
 // every other pair is refused as a file it does not keep rather than as
 // another CLI's bundle.
 func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
@@ -240,6 +240,11 @@ func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
 			want := map[string]string{}
 			for _, file := range profileLoginNames(source.profile) {
 				want[file] = fmt.Sprintf(`{"cli":%q,"file":%q}`, from, file)
+				if key, ok := source.profile.LoginKeys[file]; ok {
+					// A file the CLI keeps settings in too is a login
+					// only holding its key.
+					want[file] = fmt.Sprintf(`{"cli":%q,"file":%q,%q:"placeholder"}`, from, file, key)
+				}
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
 			blob, err := source.ExportBundle()
@@ -485,6 +490,26 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message does not mention %q: %v", want, err)
 		}
+	}
+}
+
+// A CLI THAT KEEPS NO LOGIN IS SENT TO ITS KEY, not to a login on the host:
+// Qwen Code keeps none — both measured builds refuse the OAuth login it once
+// kept — so `-from-host` would find nothing to adopt.
+func TestBrokeringALoginForACLIThatKeepsNoneNamesItsKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	p, err := New(Config{Key: "qwen", Agent: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = p.BrokerLogin(t.Context(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, ErrNoLoginCommand) {
+		t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+	}
+	if !strings.Contains(err.Error(), "auth.mode: api-key") || strings.Contains(err.Error(), "-from-host") {
+		t.Errorf("the refusal does not send the operator to the key alone: %v", err)
 	}
 }
 

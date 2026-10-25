@@ -54,8 +54,8 @@ func RenderPrompt(req llm.Request) (string, error) {
 	return strings.TrimSpace(b.String()) + "\n", nil
 }
 
-// SplitSystem lifts the system messages out of a request, for a profile whose
-// CLI takes them on their own channel ([cliprofile.Profile.SystemPromptArgs]).
+// SplitSystem lifts the system messages out of a request, for a call whose CLI
+// takes them on a channel of their own ([cliprofile.Profile.RouteFor]).
 //
 // Returned as PLAIN TEXT with no `## system` heading: the heading exists to
 // tell one section of a flattened transcript from the next, and a real system
@@ -64,8 +64,8 @@ func RenderPrompt(req llm.Request) (string, error) {
 //
 // The request comes back with those messages removed, so the caller renders
 // the rest exactly as before. An empty first result means there was nothing to
-// lift and the caller passes no flag at all — a CLI handed an empty system
-// prompt would replace its default with nothing.
+// lift and the caller passes no flag at all — on a replacing channel a CLI
+// handed an empty system prompt would replace its default with nothing.
 func SplitSystem(req llm.Request) (string, llm.Request) {
 	var system []string
 	rest := make([]llm.Message, 0, len(req.Messages))
@@ -80,6 +80,61 @@ func SplitSystem(req llm.Request) (string, llm.Request) {
 	}
 	req.Messages = rest
 	return strings.Join(system, "\n\n"), req
+}
+
+// harnessNote opens the engine's system prompt on a call whose CLI keeps its
+// own ([cliprofile.Route.KeepsDefault]): the append channel, or no channel at
+// all.
+//
+// It exists because the vendor's prompt says what the model is, and says it
+// FIRST. Claude Code 2.1.310 prepends "You are Claude Code, Anthropic's official CLI
+// for Claude" to every request that appends — no flag removes it — and its
+// default goes on to describe a user at a terminal, a software-engineering
+// task and its own file and shell tools. A seat whose prompt only implies its
+// identity loses to that: measured on 2.1.263, a PM seat introduced itself as
+// helping "through Claude Code". So the engine says outright which of the two
+// prompts is the role.
+//
+// CONSTANT, and owned here rather than by the seat's prompt builders, for two
+// reasons. It is the first thing in the engine's text, so it is part of the
+// prefix a vendor caches. And whether it is needed is a fact about this
+// PROVIDER — a seat's fallback chain can move a call from a CLI that keeps
+// its own prompt to one that replaces it, and every auxiliary pass shares the
+// provider without ever touching a seat's prompt.
+const harnessNote = "You are running inside a command-line coding tool as one seat of a " +
+	"Crewlet company, and Crewlet — not a person at a terminal — reads everything you " +
+	"write. The tool's own instructions describe the program you run in, not your role: " +
+	"who you are and what you do are the instructions that follow, and they win wherever " +
+	"the two disagree."
+
+// harnessToolsNote follows [harnessNote] on a call that offers tools, which a
+// vendor's prompt describes as its OWN: a model told to prefer its editor and
+// its shell reaches for tools this backend denies instead of the envelope.
+const harnessToolsNote = " Act through Crewlet's tools, called with the JSON reply the " +
+	"message describes — never through the coding tool's own file, shell or task tools."
+
+// withHarnessNote opens the request's system prompt with [harnessNote], for a
+// call whose CLI keeps its own system prompt in force.
+//
+// Into the FIRST system message rather than as a message of its own, so a
+// transcript-borne system prompt is still one `## system` section. A request
+// with no system prompt gets nothing: the note introduces instructions, and
+// there are none to introduce.
+func withHarnessNote(req llm.Request) llm.Request {
+	for i, msg := range req.Messages {
+		if msg.Role != llm.RoleSystem || strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		note := harnessNote
+		if len(req.Tools) > 0 {
+			note += harnessToolsNote
+		}
+		messages := append([]llm.Message(nil), req.Messages...)
+		messages[i].Content = note + "\n\n" + strings.TrimSpace(msg.Content)
+		req.Messages = messages
+		return req
+	}
+	return req
 }
 
 // renderMessage renders one message under its heading.
@@ -216,31 +271,32 @@ func writePromptFile(prompt, dir string) (string, error) {
 	return path, nil
 }
 
-// systemArgs renders a profile's system-prompt argv, writing the text to a
-// private file where the profile asked for a path.
+// systemArgs renders a channel's argv, writing the text to a private file
+// where the channel asked for a path or finds a file by its location.
 //
 // 0600, and the reason is the same one that keeps it off argv: a seat's system
 // prompt carries the company's org chart, its policies and that seat's own
 // memory, and the box it runs in is a directory on a machine other accounts
 // share.
 //
-// A [cliprofile.SystemPromptFile.Discovered] file is written before the argv is
-// rendered, because nothing in the argv asks for it: the CLI finds it by where
-// it is, and the argv only selects what it found.
-func systemArgs(template []string, spec *cliprofile.SystemPromptFile, system, dir string) ([]string, error) {
+// A discovered file ([cliprofile.SystemPromptFile.Found]) is written before the
+// argv is rendered, because nothing in the argv asks for it: the CLI finds it
+// by where it is, and the argv only selects what it found — or is empty, for a
+// file the CLI reads on every run.
+func systemArgs(ch cliprofile.Channel, system, dir string) ([]string, error) {
 	var path string
-	if spec != nil && spec.Discovered {
+	if ch.File.Found() {
 		var err error
-		if path, err = writeSystemPrompt(spec, system, dir); err != nil {
+		if path, err = writeSystemPrompt(ch.File, system, dir); err != nil {
 			return nil, err
 		}
 	}
-	out := make([]string, 0, len(template))
-	for _, arg := range template {
+	out := make([]string, 0, len(ch.Args))
+	for _, arg := range ch.Args {
 		if strings.Contains(arg, "{file}") {
 			if path == "" {
 				var err error
-				if path, err = writeSystemPrompt(spec, system, dir); err != nil {
+				if path, err = writeSystemPrompt(ch.File, system, dir); err != nil {
 					return nil, err
 				}
 			}
@@ -248,25 +304,25 @@ func systemArgs(template []string, spec *cliprofile.SystemPromptFile, system, di
 		}
 		// NEVER the spec's rendering: `{system}` here substitutes into
 		// ARGV, and a vendor envelope on argv is frontmatter the CLI
-		// reads as part of the prompt. A profile that declares both is
+		// reads as part of the prompt. A channel that declares both is
 		// refused at load.
 		out = append(out, strings.ReplaceAll(arg, "{system}", system))
 	}
 	return out, nil
 }
 
-// systemEnv renders the NAME=path pair for a profile whose CLI reads its
+// systemEnv renders the NAME=path pair for a channel whose CLI reads its
 // system prompt from a file named by an environment variable.
 //
 // The same private file [systemArgs] writes for `{file}`, because it is the
 // same decision: the text is on disk in the per-call directory and never on
 // argv. Only the channel that carries the PATH differs.
-func systemEnv(name string, spec *cliprofile.SystemPromptFile, system, dir string) (string, error) {
-	path, err := writeSystemPrompt(spec, system, dir)
+func systemEnv(ch cliprofile.Channel, system, dir string) (string, error) {
+	path, err := writeSystemPrompt(ch.File, system, dir)
 	if err != nil {
 		return "", err
 	}
-	return name + "=" + path, nil
+	return ch.Env + "=" + path, nil
 }
 
 // writeSystemPrompt puts the text in the per-call working directory, 0600.
