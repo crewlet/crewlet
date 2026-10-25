@@ -292,10 +292,12 @@ type LimitMarker struct {
 // further, and its markers stop being matched against anything the model said,
 // in a failed run or not. That is not
 // a guess per profile: kimi-code writes `provider.rate_limit: …` to stderr
-// with the answer stream empty, pi writes `<status>: <the provider's JSON>`
-// to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
-// there — all three measured. A profile only narrows this when the vendor's
-// own behaviour makes the answer an impossible place for the report.
+// with the answer stream empty, and pi writes `<status>: <the provider's JSON>`
+// to stderr with stdout empty — both measured. A profile only narrows this when
+// the vendor's own behaviour makes the answer an impossible place for the
+// report, and hermes is the warning: only its failures to START reach stderr,
+// while a refused key or a spent plan is printed on stdout with exit 2
+// (measured on 0.21.5), so the stderr scope it once had matched none of them.
 //
 // THE THIRD SCOPE MATCHES STRUCTURE, NOT TEXT, for a CLI that reports a failure
 // as an EVENT OF ITS OWN in a JSON stream. OpenCode 2's `--format json` prints

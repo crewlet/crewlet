@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
@@ -198,19 +200,12 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 		t.Fatal("no built-in hermes profile")
 	}
 	joined := strings.Join(p.CompleteArgs, " ")
-	// --ignore-rules is the isolation: no AGENTS.md, SOUL.md,
-	// .cursorrules, persistent memory or preloaded skills injected from a
-	// host the engine does not control.
-	if !strings.Contains(joined, "--ignore-rules") {
-		t.Errorf("complete_args = %v, want --ignore-rules", p.CompleteArgs)
-	}
-	// NOT these two: both ignore ~/.hermes/config.yaml, which is where the
-	// seeded toolset lives, so either would hand the run the full
-	// hermes-cli tool surface back.
+	// NOT these two: both discard $HERMES_HOME/config.yaml, which is where
+	// the settings that keep a call to itself are seeded.
 	for _, forbidden := range []string{"--ignore-user-config", "--safe-mode"} {
 		if strings.Contains(joined, forbidden) {
-			t.Errorf("complete_args carries %s, which ignores the seeded config.yaml "+
-				"this profile's tool denial lives in", forbidden)
+			t.Errorf("complete_args carries %s, which discards the seeded config.yaml "+
+				"this profile keeps each call to itself with", forbidden)
 		}
 	}
 	// AND NOT --yolo, because `-z` already bypasses approvals — its own flag
@@ -252,11 +247,7 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 			"runs the full hermes-cli surface — a shell, a file editor and code "+
 			"execution on the engine host", p.CompleteArgs)
 	}
-	if len(p.SeedFiles) > 0 {
-		t.Errorf("hermes seeds %d file(s), but its denial is on argv — a second, "+
-			"weaker copy of one policy is one more thing to keep in step",
-			len(p.SeedFiles))
-	}
+	assertHermesSeedKeepsACallToItself(t, p)
 
 	// The counts come from the file, under the vendor's documented key
 	// names — and NOT from reasoning_tokens, which is a subset of the
@@ -280,6 +271,71 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 	}, " "), "reasoning_tokens") {
 		t.Error("reasoning_tokens is read, and it is a SUBSET of output_tokens — " +
 			"adding it double-charges a thinking model's budget")
+	}
+}
+
+// assertHermesSeedKeepsACallToItself holds the hermes profile's one seeded file
+// to what it is for: the settings in $HERMES_HOME/config.yaml that keep a call
+// to itself, and nothing that decides anything else.
+//
+//   - agent.coding_context "off": any project marker within six levels above
+//     the working directory otherwise switched on a coding brief naming tools
+//     the call does not have, so a seat's prompt depended on where state_dir
+//     was put (measured on 0.21.5).
+//   - auxiliary.title_generation.enabled false: every call otherwise made a
+//     second request re-sending the whole prompt, billed and left out of the
+//     usage report's input count.
+//   - memory.memory_enabled and memory.user_profile_enabled false: MEMORY.md
+//     and USER.md are read into every prompt, and calls running at once share
+//     a generation the prune runs only between.
+//
+// AND NO `model` SECTION: a login keeps its provider in auth.json, which
+// travels, and a seeded provider would override it for every seat. No toolsets
+// either: the denial is `--toolsets web` on argv, and a second copy of it in a
+// file is one more thing to keep in step.
+//
+// Mutation: drop a setting, or add a `model:` section, and this is red.
+func assertHermesSeedKeepsACallToItself(t *testing.T, p cliprofile.Profile) {
+	t.Helper()
+	if home := p.ConfigEnv["HERMES_HOME"]; home != ".hermes" {
+		t.Fatalf("HERMES_HOME relocates to %q, and the seed below is written for .hermes", home)
+	}
+	if len(p.SeedFiles) != 1 || p.SeedFiles[0].Path != ".hermes/config.yaml" ||
+		p.SeedFiles[0].Scope() != cliprofile.SeedHome {
+		t.Fatalf("seed_files = %+v, want the one file .hermes/config.yaml in the seat's home", p.SeedFiles)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(p.SeedFiles[0].Content), &doc); err != nil {
+		t.Fatalf("the seeded config.yaml does not decode: %v", err)
+	}
+	at := func(path ...string) any {
+		var node any = doc
+		for _, key := range path {
+			m, ok := node.(map[string]any)
+			if !ok {
+				return nil
+			}
+			node = m[key]
+		}
+		return node
+	}
+	for _, want := range []struct {
+		path  []string
+		value any
+	}{
+		{[]string{"agent", "coding_context"}, "off"},
+		{[]string{"auxiliary", "title_generation", "enabled"}, false},
+		{[]string{"memory", "memory_enabled"}, false},
+		{[]string{"memory", "user_profile_enabled"}, false},
+	} {
+		if got := at(want.path...); got != want.value {
+			t.Errorf("config.yaml %s = %#v, want %#v", strings.Join(want.path, "."), got, want.value)
+		}
+	}
+	for _, forbidden := range []string{"model", "toolsets", "platform_toolsets"} {
+		if _, ok := doc[forbidden]; ok {
+			t.Errorf("the seeded config.yaml sets %q, which is not the seed's to decide", forbidden)
+		}
 	}
 }
 

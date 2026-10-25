@@ -1907,66 +1907,147 @@ kimi-code:
 
 hermes:
   binary: hermes
-  # MEASURED AGAINST 0.21.2: the argv driven through the CLI's own argparse
-  # (hermes_cli/_parser.py), the toolset resolved through its own registry,
-  # the usage-report keys read off hermes_cli/oneshot.py, and the version
-  # line off its `--version` fast path. What is NOT measured is a live
-  # completion — this CLI's 183-package dependency tree would not install
-  # here — so the failure sentinels below are the weakest claim in this entry.
-  written_for: "Hermes Agent 0.21.x (`hermes --version`)"
+  # MEASURED ON 0.21.5, the newest release, through the engine's own code path
+  # against a stub HTTP endpoint on 127.0.0.1 standing in for the model: seat
+  # calls and a side pass, with the state directory inside a git checkout
+  # whose root, and a directory between it and the state directory, each held
+  # an AGENTS.md, an AGENTS.override.md, a .hermes.md or HERMES.md, a
+  # CLAUDE.md, a .cursorrules, a SOUL.md, a .env, skills, an .mcp.json and a
+  # Makefile. None of them reached a request, the two tools offered were
+  # `web_extract` and `web_search`, each call made one model request, and the
+  # engine read each answer. The failure sentinels are the texts this build
+  # printed for a 401, a 429 with a quota body, a 429 with a rate-limit body,
+  # and a start with no credential.
+  written_for: "Hermes Agent 0.21.x, measured on 0.21.5 (`hermes --version`)"
   version_args: ["--version"]
   # THE DENIAL IS ON ARGV, and `--toolsets` is the whole of it.
   #
-  # It was nearly a seeded config.yaml, on the strength of the vendor's docs
-  # listing `--toolsets` under `hermes chat`. Read against the parser
-  # (hermes_cli/_parser.py) it is a TOP-LEVEL flag whose own help says
-  # "Applies to -z/--oneshot", and hermes_cli/oneshot.py states the rule:
-  # "Toolsets = explicit --toolsets, else the user's `cli` toolsets from
-  # `hermes tools`". So passing it REPLACES the set for the invocation and
-  # the config file is not consulted at all — a per-call denial rather than a
-  # file that can quietly stop applying.
+  # `--toolsets` is a TOP-LEVEL flag whose own help says "Applies to
+  # -z/--oneshot", and hermes_cli/oneshot.py states the rule: "Toolsets =
+  # explicit --toolsets, else the user's `cli` toolsets from `hermes tools`".
+  # So passing it REPLACES the set for the invocation and the config file's
+  # toolsets are not consulted at all — a per-call allowlist rather than a
+  # setting that can quietly stop applying.
   #
-  # `web` resolves to exactly `web_search` and `web_extract` (toolsets.py),
-  # which is the surface this backend keeps and nothing else. Everything the
-  # default `hermes-cli` platform toolset carries goes with it: file,
-  # terminal, browser, code_execution, delegation, cronjob, memory, skills,
-  # vision, image_gen, todo, tts, session_search, computer_use and kanban.
+  # `web` resolves to exactly `web_search` and `web_extract` (toolsets.py), the
+  # CLI's own web tools and nothing else; measured, those two are the whole
+  # tool array of every request. Everything the default `hermes-cli` platform
+  # toolset carries goes with it: file, terminal, browser, code_execution,
+  # delegation, cronjob, memory, skills, vision, image_gen, todo, tts,
+  # session_search, computer_use and kanban.
   #
-  # AND IT FAILS THE SAFE WAY, which is the opposite of grok's allowlist. An
-  # entry this build does not know is warned about and dropped; if NOTHING
-  # valid survives, the run stops on "--toolsets did not contain any valid
-  # toolsets" rather than falling back to every tool. A name that goes stale
-  # therefore costs the call, loudly, instead of the restriction.
+  # AND IT FAILS THE SAFE WAY. An entry this build does not know is warned
+  # about and dropped; if NOTHING valid survives, the run stops on "--toolsets
+  # did not contain any valid toolsets" rather than falling back to every tool.
+  # A name that goes stale therefore costs the call, loudly, instead of the
+  # restriction.
   #
-  # `--ignore-rules` is the other half: it skips the auto-injection of
-  # AGENTS.md, SOUL.md, .cursorrules, persistent memory and preloaded skills.
-  # Two things follow, and this backend wants both — no context is admitted
-  # from a host the engine does not control, and the CLI keeps no second,
-  # invisible memory beside the seat's own.
+  # NOT --ignore-rules, which does nothing under `-z`. Measured on 0.21.5 with
+  # it passed, the AGENTS.md chain from the repository root down, an ancestor
+  # .hermes.md, a CLAUDE.md in the working directory, SOUL.md and the memory
+  # files all reached the system prompt: the one-shot path builds its agent
+  # without the skip switches, and HERMES_IGNORE_RULES is read only by `hermes
+  # chat`. What keeps this CLI to its call is the engine's `.git` marker in the
+  # call's directory — .hermes.md and the AGENTS.md chain are looked for from
+  # there up to the nearest repository root, so nothing above the call's
+  # directory is read, and CLAUDE.md and .cursorrules are read from that
+  # directory alone, which holds only the engine's own files — and the seeded
+  # config.yaml below.
   #
-  # NOT --ignore-user-config and NOT --safe-mode. Neither is needed now that
-  # the tools are on argv, and each would discard an operator's own
-  # overrides.seed_files if they ever add one.
+  # NOT --ignore-user-config and NOT --safe-mode: each discards config.yaml,
+  # which is where those settings live.
   #
   # AND NOT --yolo, which the vendor's own flag help makes unnecessary rather
   # than merely unwise: `-z` already says "approvals are auto-bypassed". There
   # is no prompt for a headless run to wedge on, so --yolo would grant
   # something for nothing.
-  complete_args: ["--ignore-rules", "--toolsets", "web"]
+  complete_args: ["--toolsets", "web"]
   local_tools: denied
   model_args: ["--model", "{model}"]
-  # NO SYSTEM-PROMPT CHANNEL. This CLI's identity slot is SOUL.md, a file in
-  # its home rather than a per-call argument — and --ignore-rules deliberately
-  # switches its injection off. So the seat's identity rides the transcript,
-  # as it does for codex, opencode, copilot, cursor-agent and muse-code.
+  # THE SETTINGS THAT KEEP A CALL TO ITSELF, in the CLI's own config file under
+  # HERMES_HOME, written at every generation's open and merged by the CLI over
+  # its defaults:
+  #
+  #   - agent.coding_context "off". Any project marker in the working
+  #     directory or up to six levels above it (a Makefile, go.mod,
+  #     package.json, AGENTS.md — `.git` or not) switches on a coding posture:
+  #     a 2.8K-character brief naming read_file, patch, write_file and
+  #     terminal, none of which the call has, and a workspace snapshot naming
+  #     a root. Measured, it appeared whenever the state directory sat under
+  #     such a file, so what a seat was told depended on where state_dir was
+  #     put. Off, the prompt is the same wherever it is.
+  #   - auxiliary.title_generation.enabled false. Every call otherwise made a
+  #     SECOND request that re-sent the whole prompt to name a session the
+  #     prune then deletes — billed, and left out of the `input_tokens` the
+  #     usage report below is read from. Measured, the call then makes one
+  #     model request; and this build's web_extract no longer summarises a
+  #     page with a model (hermes_cli/config_defaults.py), so a web-only call
+  #     has no other auxiliary request.
+  #   - memory.memory_enabled and memory.user_profile_enabled false.
+  #     memories/MEMORY.md and USER.md are read into every prompt from the
+  #     seat's home. The directory is volatile too, but calls running at once
+  #     share a generation and the prune runs only between generations, so the
+  #     setting is what keeps memory out of every call.
+  #
+  # NO `model` SECTION, so the file chooses no provider. A login keeps its
+  # choice in auth.json (`hermes auth add` sets `active_provider` there) and
+  # its keys in .env, both credential files that travel to every seat; a
+  # provider `hermes setup` writes into config.yaml never reached a seat
+  # before this file existed either, because config.yaml is not a credential
+  # file. An operator who needs config.yaml settings in a seat — a custom
+  # endpoint — puts the whole file in overrides.seed_files, whose list
+  # replaces this one wholesale, and so carries these settings too.
+  seed_files:
+    - path: .hermes/config.yaml
+      content: |
+        agent:
+          coding_context: "off"
+        auxiliary:
+          title_generation:
+            enabled: false
+        memory:
+          memory_enabled: false
+          user_profile_enabled: false
+  # NO SYSTEM-PROMPT CHANNEL, so the seat's text rides the transcript under
+  # the vendor's own prompt, which stays in force (about 5.5K characters on
+  # 0.21.5 with the settings above, opening "You are Hermes Agent, built by
+  # Nous Research."). Measured on 0.21.5 for the two candidates:
+  #
+  #   - REPLACE: SOUL.md, the identity slot, replaces the vendor's identity
+  #     paragraph and keeps the rest — but it lives in HERMES_HOME, which
+  #     every call a seat runs at once shares, so it cannot carry a prompt per
+  #     call.
+  #   - APPEND: a .hermes.md in the call's directory lands in the system
+  #     message under "# Project Context", after the vendor's guidance and
+  #     before the per-call date and working directory. It is NOT used,
+  #     because the CLI scans that file as project content and REPLACES ALL OF
+  #     IT with a "[BLOCKED: … Content not loaded.]" line when anything in it
+  #     matches one of its patterns — silently, exiting 0 with nothing on
+  #     stderr. The patterns match ordinary company prose: run through this
+  #     build's own scanner, "You must report weekly progress to the CEO",
+  #     "Check in with your manager before shipping", "Each morning, pull new
+  #     tasks from the backlog", "You are now a member of the platform team"
+  #     and an HTML comment mentioning "system" in a knowledge page each block
+  #     the file, and a seat's prompt carries its policies, its memory and the
+  #     company's pages, which nobody writes against that list. Nothing can
+  #     switch the scan off, and the engine cannot see that it fired. A file
+  #     longer than max(20,000, 6% of the context window × 4) characters is
+  #     also cut in the middle, with a pointer to a read_file tool the call
+  #     does not have.
+  #
+  # The transcript reaches the model as the user turn, and neither happens
+  # to it. What it costs: the text is user content rather than system, it
+  # follows the per-call working directory the vendor's prompt ends with, so
+  # it is outside any prefix a cache keeps across calls, and it rides `-z` on
+  # argv with the rest of the transcript.
   #
   # `-z` IS THE ONE-SHOT ENTRY POINT and it takes the prompt as its value, so
-  # it goes in prompt_args: the vendor's contract for it is "single prompt in,
-  # final response text out, nothing else on stdout or stderr", which is what
-  # makes `output: text` correct here. `hermes chat --oneshot -q` is the
-  # alternative and is NOT used: the vendor's own note says it is the one to
-  # reach for when "you need tool output in the transcript too", and a tool
-  # transcript spliced into the reply is what this backend must not have.
+  # it goes in prompt_args: on success it prints the final response text and
+  # nothing else (measured), which is what makes `output: text` correct here.
+  # `hermes chat --oneshot -q` is the alternative and is NOT used: the
+  # vendor's own note says it is the one to reach for when "you need tool
+  # output in the transcript too", and a tool transcript spliced into the
+  # reply is what this backend must not have.
   #
   # `-p` IS NOT THE PROMPT FLAG on this CLI — it selects a PROFILE. Nothing
   # here uses it; it is recorded because every other profile in this file
@@ -1981,6 +2062,11 @@ hermes:
   # `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
   # `reasoning_tokens`, `total_tokens`, `estimated_cost_usd`, `model`,
   # `provider` and the completed/failed flags.
+  #
+  # The counts are the main request's: an auxiliary request's go under
+  # `auxiliary`, which is why title generation is off above. On a failed run
+  # they are null (measured, 401 and 429), and a failed call is charged
+  # nothing.
   #
   # `reasoning_tokens` is deliberately not read: it is a SUBSET of the output
   # count on every vendor that reports both, and adding it would double-charge
@@ -1999,7 +2085,8 @@ hermes:
     HERMES_HOME: ".hermes"
   # TWO FILES AGAIN, and for a different reason than kimi-code's: .env holds
   # API keys and bot tokens, auth.json holds the OAuth credential pool that
-  # `hermes auth add --type oauth` writes. An entry may use either or both.
+  # `hermes auth add --type oauth` writes, and the provider a login chose. An
+  # entry may use either or both.
   credential_paths:
     - ".hermes/.env"
     - ".hermes/auth.json"
@@ -2007,8 +2094,9 @@ hermes:
   # SQLite's two sidecars hold the tail of it, so pruning the database and
   # leaving them behind is half a prune. memories/ is the CLI's own persistent
   # memory (MEMORY.md, USER.md) and skills/ is what its skill_manage tool
-  # writes: both are exactly the second invisible memory this backend refuses,
-  # and --ignore-rules already stops them being injected.
+  # writes: the seeded settings keep memory out of the prompt and the toolset
+  # offers no skill tools, and pruning both between generations means nothing
+  # either holds outlives the calls that made it.
   volatile_paths:
     - ".hermes/state.db"
     - ".hermes/state.db-wal"
@@ -2042,32 +2130,40 @@ hermes:
   # which is what env_sign_in declares, so `crewlet llm doctor` counts it.
   env_sign_in: true
   #
-  # THESE SENTINELS ARE GENERIC, and unusually so for this file, because this
-  # CLI publishes no verbatim exhausted-plan wording: it rotates its OWN
-  # credential pool and falls through to its OWN fallback providers first, so
-  # what reaches this backend is whatever the last provider in that chain
-  # said, in its own words. `hermes -z: agent failed:` is the CLI's own
-  # prefix on all of it (hermes_cli/oneshot.py) but says nothing about WHICH
-  # failure it was, so it cannot separate a spent plan from a dead login.
+  # FAILURES ARE PRINTED ON STDOUT, so the default scope is the right one. A
+  # turn the provider refused ends with the CLI's own explanation where the
+  # answer would be, and exit 2 (measured, 401 and both kinds of 429, with
+  # stderr empty); only a run that never reaches a model — no credential, no
+  # valid toolset — writes to stderr. A marker scoped to stderr could
+  # therefore never see a spent plan or a refused key. In the default scope a
+  # sentinel counts anywhere in what a FAILED run printed, and on a run that
+  # exited 0 only where it opens the answer — see [MarkerScope] — so a seat
+  # asked about rate limits cannot answer its way into sitting its entry out.
   #
-  # WHAT MAKES THEM SAFE IS THE SCOPE, not the wording. `-z` writes the final
-  # response text to stdout and nothing else BY CONTRACT, and every failure
-  # goes to stderr — so these are matched against stderr alone and a seat that
-  # was ASKED about rate limits cannot answer its way into sitting its entry
-  # out. See [MarkerScope]. Without that, "quota" in a model's prose
-  # would bench this seat's login, which is the bug this file already fixed
-  # once by dropping a bare "429".
-  #
-  # `hermes auth` is the auth marker because it is the CLI's own remedy
-  # sentence — a command name rather than a phrase a model writes by accident.
-  marker_scope: stderr
+  # THE SENTINELS ARE THE CLI'S OWN SENTENCES (agent/turn_failure_copy.py,
+  # agent/conversation_loop.py and hermes_cli/auth.py on 0.21.5), most with
+  # the provider's label before them, which is why they start mid-sentence.
+  # On stdout: a spent account, "Billing or credits exhausted: HTTP 429: …"
+  # (measured); a rate limit its own retries and fallbacks could not wait
+  # out, "<provider> rate-limited every one of <n> attempts — …" (measured,
+  # after three); a refused key, "<provider> rejected your API key, so the
+  # model can't be reached. …" (measured); a refused OAuth sign-in,
+  # "<provider> rejected your sign-in, so the model can't be reached. …". On
+  # stderr, for a run that never reached a model: no login or key at all,
+  # "hermes -z: agent failed: Hermes is not connected to any AI provider yet.
+  # …" (measured), and a provider named with no credential for it, "hermes
+  # -z: agent failed: provider '<name>' resolved without credentials (…)"
+  # (measured). This CLI rotates its own credential pool and falls through to
+  # its own fallback providers first, so what reaches this backend is the
+  # last provider's verdict.
   limit_markers:
-    - sentinel: "rate limit"
-    - sentinel: "usage limit"
-    - sentinel: "quota"
+    - sentinel: "Billing or credits exhausted"
+    - sentinel: "rate-limited every one of"
   auth_markers:
-    - sentinel: "hermes auth"
-    - sentinel: "No credentials"
+    - sentinel: "rejected your API key, so the model can't be reached"
+    - sentinel: "rejected your sign-in, so the model can't be reached"
+    - sentinel: "is not connected to any AI provider yet"
+    - sentinel: "resolved without credentials"
 
 pi:
   binary: pi

@@ -193,10 +193,12 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// unscoped `kimi-code` package on npm, which is a Claude Code
 		// wrapper and has none of this.
 		"kimi-code": "{file}",
-		// No channel. 0.21.2's identity slot is SOUL.md, a file in the
-		// CLI's home rather than a per-call argument — and this
-		// profile's --ignore-rules switches its injection off. `-p` on
-		// this CLI selects a PROFILE, not a prompt.
+		// No channel, measured on 0.21.5. Its identity slot, SOUL.md,
+		// lives in the CLI's home, which a seat's concurrent calls share,
+		// and a .hermes.md in the call's directory — the one per-call file
+		// it reads — is replaced whole by a "[BLOCKED: …]" line, silently,
+		// when ordinary company prose matches its scan. `-p` on this CLI
+		// selects a PROFILE, not a prompt.
 		"hermes": "",
 		// 0.85.1 and 1.4.0: --system-prompt, which reads its value as a
 		// path when a file exists there — and sends the value itself as
