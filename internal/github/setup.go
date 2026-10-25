@@ -77,6 +77,9 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// value minted here, and nobody has to copy anything.
 			Mintable: true,
 			Help:     "Signs every delivery. Without it the route refuses all of them.",
+			// PROVED BY THE FIRST DELIVERY, and by nothing sooner: GitHub
+			// never presents the secret, it signs with it.
+			CheckNote: "GitHub proves it with the first delivery it signs.",
 			// INGRESS, NOT CREDENTIAL, which jira and confluence already
 			// declare for the same field. It said credential_missing, and
 			// this pass emits that kind nowhere for the webhook secret —
@@ -172,6 +175,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.github.token",
 			SecretName: "GITHUB_TOKEN",
+			Checkable:  true,
 			// NEITHER REQUIRED NOR OPTIONAL: required BY AN ANSWER. It is
 			// the one thing standing between "every repository in the
 			// organization" and that being true, and a credential the

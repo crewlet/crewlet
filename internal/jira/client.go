@@ -282,11 +282,28 @@ func (u user) id() string { return firstOf(u.AccountID, u.Name) }
 // works AND names the account, which is what stops the engine registering a
 // seat under an id somebody assumed.
 func (c *Client) Me(ctx context.Context) (string, error) {
-	var out user
-	if err := c.api(ctx, http.MethodGet, "/myself", nil, nil, &out); err != nil {
+	me, err := c.myself(ctx)
+	return me.id(), err
+}
+
+// MyName is the display name this credential authenticates as, or its
+// identity where the account has none: what a person reads to confirm they
+// pasted the account they meant to, where [Client.Me] is what routing keys on.
+func (c *Client) MyName(ctx context.Context) (string, error) {
+	me, err := c.myself(ctx)
+	if err != nil {
 		return "", err
 	}
-	return out.id(), nil
+	return firstOf(me.DisplayName, me.id()), nil
+}
+
+// myself is GET /myself, the one read both answers above are made from.
+func (c *Client) myself(ctx context.Context) (user, error) {
+	var out user
+	if err := c.api(ctx, http.MethodGet, "/myself", nil, nil, &out); err != nil {
+		return user{}, err
+	}
+	return out, nil
 }
 
 // WatchersOf implements [Watchers]: the accounts following an issue.

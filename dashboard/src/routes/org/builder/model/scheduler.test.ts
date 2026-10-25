@@ -43,7 +43,7 @@ import { fixtureCompany, fixtureDerived } from "./testkit.ts";
 describe("requests", () => {
   const base = fixtureCompany();
   const draftDoc = (): IndexedDocument => {
-    const changed: CompanyDocument = { ...base, mission: "Changed" };
+    const changed: CompanyDocument = { ...base, name: "Changed" };
     return toDocument(fromDocument(changed));
   };
 
@@ -56,16 +56,16 @@ describe("requests", () => {
       query: { dry_run: "true" },
       contentType: "application/merge-patch+json",
       headers: { "If-Match": '"rev-1"' },
-      body: { mission: "Changed" },
+      body: { name: "Changed" },
     });
     const save = saveRequest(
       { mode: "edit", baseRevision: "rev-1", base, sent, scope: null },
-      "Update the mission (write abc)",
+      "Rename the company (write abc)",
     );
     expect(save).toEqual({
       ...check,
       query: {},
-      body: { mission: "Changed", _summary: "Update the mission (write abc)" },
+      body: { name: "Changed", _summary: "Rename the company (write abc)" },
     });
   });
 

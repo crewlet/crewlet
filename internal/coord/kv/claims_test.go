@@ -22,7 +22,7 @@ func openFleetClaims(t *testing.T, js jetstream.JetStream, prefix string,
 		BucketPrefix: prefix, RateWindow: time.Minute, MaxClaimTTL: maxClaim,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
-		CooldownMax: time.Hour, BudgetRetention: time.Hour,
+		BudgetRetention: time.Hour,
 		StatusFreshness: 10 * time.Minute, CustodyRetention: 10 * time.Minute,
 	})
 }

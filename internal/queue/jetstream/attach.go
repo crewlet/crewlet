@@ -67,16 +67,17 @@ const defaultNakDelay = time.Second
 //
 // FLAT SPACING SPENT THE WHOLE BUDGET IN HALF A MINUTE. A message gets
 // maxDeliver attempts, and one second apart puts the last of them 25 seconds
-// after the first failure — so a benched LLM credential, a vendor's rate-limit
+// after the first failure — so an LLM entry sitting out, a vendor's rate-limit
 // window or a database coming back up all dead-letter a message that would
 // have been handled on the next attempt. It is also the shape that hammers
 // whatever is already struggling: 25 requests a second apart is what a
 // provider that just answered "slow down" receives.
 //
 // Doubling from a second to this spends the budget over about ten minutes,
-// which covers the five-minute auth cooldown a benched provider credential
-// serves (internal/providers/credential) twice over while still
-// retrying a momentary blip within a second or two. A failure that outlasts
+// which covers the minute an LLM entry sits out after its CLI reports a spent
+// plan or a rate limit (internal/providers/llm/cliagent, bench.go)
+// several times over while still retrying a momentary blip within a second or
+// two. A failure that outlasts
 // that window is not transient, and holding a seat's mailbox behind it is
 // worse than the dead-letter copy.
 //

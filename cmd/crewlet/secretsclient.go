@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,7 +87,7 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 			Source        secrets.Source `json:"source"`
 		} `json:"secrets"`
 	}
-	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
+	if err := c.listing(ctx, &body); err != nil {
 		return nil, err
 	}
 	out := make([]secrets.Record, 0, len(body.Secrets))
@@ -185,14 +186,32 @@ func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
 		EngineKeys secrets.EngineKeys     `json:"engine_keys"`
 		Identity   *iamdomain.SealedCount `json:"identity_values"`
 	}
-	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
+	if err := c.listing(ctx, &body); err != nil {
 		return engineHeld{}, err
 	}
 	return engineHeld{Keys: body.EngineKeys, Identity: body.Identity}, nil
 }
 
-// call performs one request and decodes the answer, or explains the refusal.
+// call performs one request whose answer is at most one credential, and
+// decodes it, or explains the refusal.
 func (c *secretsClient) call(ctx context.Context, method, path string, body []byte, out any) error {
+	return c.callWithin(ctx, method, path, body, out, maxSecretResponseBytes,
+		"a credential this long is not one this build stores, and a clipped "+
+			"one would be worse than none")
+}
+
+// listing reads GET /secrets, which names every stored secret and holds no
+// value, under its own bound ([maxListingBytes]).
+func (c *secretsClient) listing(ctx context.Context, out any) error {
+	return c.callWithin(ctx, http.MethodGet, "/secrets", nil, out, maxListingBytes,
+		"a listing this long names more secrets than this build reads at once")
+}
+
+// callWithin performs one request, refusing an answer longer than limit with
+// why such an answer is not one to read, and decodes it, or explains the
+// refusal.
+func (c *secretsClient) callWithin(ctx context.Context, method, path string, body []byte,
+	out any, limit int, tooLong string) error {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -217,23 +236,21 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 			"-api names its address", c.base, err)
 	}
 	defer resp.Body.Close()
-	// BOUNDED, AND REFUSED PAST THE BOUND. Every answer here is a small JSON
-	// object or one credential; the reveal route's value is capped by the
-	// same limit the write is, and nothing else this client reads is larger.
+	// BOUNDED, AND REFUSED PAST THE BOUND, by what the route returns: a
+	// small JSON object or one credential, whose value is capped by the same
+	// limit the write is, or the listing ([maxListingBytes]).
 	//
 	// The refusal is what the bound needs to be worth having: io.LimitReader
 	// stops at its cap and reports a clean EOF, so an over-long answer used
 	// to arrive CLIPPED — and a clipped credential is one this command prints
 	// for an operator to paste somewhere, silently missing its tail.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSecretResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return fmt.Errorf("reading the answer from %s: %w", c.base, err)
 	}
-	if len(raw) > maxSecretResponseBytes {
-		return fmt.Errorf(
-			"the node's answer to %s exceeded %d bytes, so it was not read: a "+
-				"credential this long is not one this build stores, and a clipped "+
-				"one would be worse than none", path, maxSecretResponseBytes)
+	if len(raw) > limit {
+		return fmt.Errorf("the node's answer to %s exceeded %d bytes, so it was not "+
+			"read: %s", path, limit, tooLong)
 	}
 	if resp.StatusCode/100 != 2 {
 		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
@@ -254,6 +271,18 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 // client ever reads back is a revealed credential, and one the node refused
 // to store cannot come back out of it.
 const maxSecretResponseBytes = (64 << 10) + (4 << 10)
+
+// maxListingBytes bounds the answer to GET /secrets.
+//
+// NOT the credential bound above, which the listing used to share: a row is
+// some 224 bytes and a name, so a fleet of about 300 stored values passed it,
+// and every command that resolves a company through a running node — they
+// all start with the listing — failed before reading one, blaming a
+// credential. 64 MiB is some 290,000 rows: ten thousand seats holding a
+// credential at each of the eight surfaces stay under a third of it. And it
+// stays a bound, so a node answering garbage cannot make this process read
+// without end.
+const maxListingBytes = 64 << 20
 
 // refusal turns a status code into something an operator can act on.
 func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {
@@ -282,12 +311,26 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 				strings.SplitN(path, "?", 2)[0], "/secrets/"), "", body.Hint))
 	}
 	if msg, ok := credentialRefusal(status, raw, true); ok {
-		return fmt.Errorf("%s: %s", c.base, msg)
+		return &nodeRefusal{Status: status, Code: body.Error, msg: c.base + ": " + msg}
 	}
 	msg := body.Error
 	if msg == "" {
 		msg = foreignAnswer(contentType, raw)
 	}
-	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
-		withRefusalDetail(msg, body.Detail, body.Hint))
+	// A [nodeRefusal], so a caller can tell a refused credential from a
+	// node that is failing ([refusedTheToken]): the remedy for the first is
+	// the token, and for the second the node.
+	return &nodeRefusal{Status: status, Code: body.Error, detail: body.Detail, hint: body.Hint,
+		msg: fmt.Sprintf("%s answered %d for %s: %s",
+			c.base, status, path, withRefusalDetail(msg, body.Detail, body.Hint))}
+}
+
+// refusedTheToken reports whether err is the node refusing the credential
+// this command sent: 401, or 403. A node that is down, draining or failing
+// answers the same for any token, and naming the token then sends an operator
+// to change one that works.
+func refusedTheToken(err error) bool {
+	var refusal *nodeRefusal
+	return errors.As(err, &refusal) &&
+		(refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden)
 }

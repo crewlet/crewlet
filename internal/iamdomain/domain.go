@@ -161,7 +161,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		// linearizable read behind every other one and write an anchor
 		// row per read into the transaction holding this store's only
 		// writer; and the trim's trimmed record removes anchors, so
-		// arbitrated it would write one of its own (ADR-0046).
+		// arbitrated it would write one of its own (ADR-0047).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
@@ -285,7 +285,7 @@ func (Domain) OpsTable() string { return "iam_ops" }
 // why this is the longest answer in the file. It does not decide whether this
 // node's copy of the identity estate is judged: every domain's copy is, on its
 // own, and a wrong one goes out of service for that domain's operations alone
-// whatever this answers (ADR-0045).
+// whatever this answers (ADR-0046).
 //
 // The tracker and the knowledge base both say true, and the argument is the
 // same each time: a node behind on them serves a turn from state that is

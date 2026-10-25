@@ -877,7 +877,7 @@ A project's files are live rows, and a file never retires one: a replaced
 file's bytes go at the first hourly pass once nothing names them and they were
 uploaded more than a day ago (see
 [One object per upload](#one-object-per-upload)). The decision is
-[ADR-0047](https://github.com/crewlet/crewlet/blob/main/adr/0047-a-retired-reference-keeps-its-object-for-a-grace.md).
+[ADR-0048](https://github.com/crewlet/crewlet/blob/main/adr/0048-a-retired-reference-keeps-its-object-for-a-grace.md).
 
 ### Unfinished uploads
 

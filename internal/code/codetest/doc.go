@@ -29,7 +29,7 @@
 // from rows alone, and a drift between that fake and the reader fails there,
 // named, before any push case muddies it. After every case each git node's
 // cache, synced at the log's head, must hold exactly the repository's rows —
-// its refs, its HEAD, its packs — which is the cache's one rule (ADR-0050).
+// its refs, its HEAD, its packs — which is the cache's one rule (ADR-0051).
 //
 // RunFleet runs the cases only a fleet can — a push decided by its
 // repository's committer whichever node received it, a committer that dies

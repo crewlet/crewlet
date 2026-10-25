@@ -35,9 +35,8 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useNavigator } from "~/app/router.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -53,6 +52,7 @@ import {
   TableKeyCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -277,7 +277,9 @@ export function SavedViews({ id }: { id?: string }) {
               header: "View",
               sortValue: (v) => v.name,
               cell: (v) => (
-                <TableTextCell icon={<Mark name={"columns-3"} size="xs" />}>{v.name}</TableTextCell>
+                <TableTextCell icon={<NamedGlyph name={"columns-3"} size="xs" />}>
+                  {v.name}
+                </TableTextCell>
               ),
             },
             {

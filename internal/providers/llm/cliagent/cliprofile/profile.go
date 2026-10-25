@@ -192,8 +192,10 @@ type StdinLogin struct {
 // limit" appears in a model's own answer about rate limits, and a vendor's
 // wording changes under it. So a marker matches by
 // STRUCTURE: a literal sentinel the vendor emits verbatim, plus the field
-// that carries the reset instant. A marker that finds its sentinel but no
-// reset value still classifies; one that finds neither does not fire.
+// that carries the reset instant — and, in what a run that did not fail
+// says, only where the sentinel opens it ([MarkerScope]). A marker that finds
+// its sentinel but no reset value still classifies; one that finds neither
+// does not fire.
 type LimitMarker struct {
 	// Sentinel is the exact substring the vendor emits. It is compared
 	// case-sensitively against the extracted text: the vendors write these
@@ -219,17 +221,27 @@ type LimitMarker struct {
 // The default searches the model's ANSWER as well as stderr, and it has to:
 // Claude Code reports a spent plan on a ZERO exit with the vendor's sentence
 // about the plan standing where the answer should be, so a marker that
-// searched stderr alone would never fire and the fallback chain would never
-// carry the seat onto a metered key.
+// searched stderr alone would never fire and the entry would never sit out.
 //
-// It is also a false-positive surface, and a real one rather than a
-// theoretical one: the haystack is the model's own words, so a seat ASKED
-// about rate limits — "what is our quota?" — can answer in prose that trips a
-// generic sentinel, and a KindRateLimit benches a perfectly good credential.
-// This file already lost a "429" sentinel to exactly that.
+// THE ANSWER IS SEARCHED ON TERMS, because on a healthy run it is the model's
+// own words — its prose and the arguments of every tool call it makes. On a run
+// the CLI did not report failed, a sentinel counts only where it BEGINS the
+// answer's first non-empty line, so that the answer IS the vendor's report; it
+// counts anywhere only in a run the CLI reported failed, by a non-zero exit or
+// [Profile.ErrorPaths]. (Stderr is matched anywhere: the answer does not reach
+// it.) Matched anywhere on every run, a seat ASKED about rate limits — "what
+// is our quota?" — answered in prose that tripped a generic sentinel, the
+// answer was thrown away as a spent plan, and the entry sat out for every seat
+// on the node. The anchoring is what makes the shipped GENERIC sentinels safe
+// to keep — "rate limit", "quota", "usage limit" are not measured vendor
+// sentences, and a vendor's report opening with one is the only place they
+// count on a clean run. Nothing about it saves a sentinel that is not words:
+// this file lost a "429" to the same false positive, and an answer can open
+// with digits as readily as mention them.
 //
-// So a CLI that reports its failures on STDERR and nowhere else says so, and
-// its markers stop being matched against anything the model said. That is not
+// A CLI that reports its failures on STDERR and nowhere else narrows it
+// further, and its markers stop being matched against anything the model said,
+// in a failed run or not. That is not
 // a guess per profile: kimi-code writes `provider.rate_limit: …` to stderr
 // with the answer stream empty, pi writes `<status>: <the provider's JSON>`
 // to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
@@ -453,9 +465,10 @@ const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 // AuthMarker recognises a login the CLI has stopped honouring.
 //
 // Same reasoning as [LimitMarker]: an expired OAuth login exits non-zero with
-// prose on stderr, and the chain needs AUTH rather than the FATAL an
-// unrecognised failure would get, so that a role keeps working off its
-// metered fallback while the operator re-runs `crewlet llm login`.
+// prose on stderr. Unrecognised, that is the SERVER failure any failed run is,
+// which moves the seat's chain on as AUTH does — so what the marker buys is
+// the NAME: a seat working off its metered fallback says its login is what
+// failed, and the operator knows that `crewlet llm login` is what mends it.
 type AuthMarker struct {
 	// Sentinel is matched exactly as a [LimitMarker]'s is, in the same scope.
 	Sentinel string `yaml:"sentinel,omitempty"`
@@ -464,7 +477,7 @@ type AuthMarker struct {
 // Profile is everything the engine needs to drive one coding CLI.
 //
 // It is DATA, not code, and every field is replaceable from YAML
-// (`cli.overrides`), because these flags and JSON shapes belong to vendors
+// (`overrides`), because these flags and JSON shapes belong to vendors
 // who rename them between releases. A vendor renaming --output-format must be
 // an operator's config edit, not a Crewlet release; a profile hard-coded in a
 // switch statement makes it the latter.
@@ -701,7 +714,7 @@ type Profile struct {
 	// and plugins, from the working directory and EVERY ANCESTOR of it, and a
 	// project's permissions beat the seat's — so an `opencode.json` anywhere
 	// above the state directory (the engine user's home, a repository
-	// cli.state_dir was put in) handed every seat a shell, and a plugin there
+	// state_dir was put in) handed every seat a shell, and a plugin there
 	// ran its code in every call (measured on 2.0.32). With that walk switched
 	// off (OPENCODE_CONFIG_PROJECT_DISABLE, in [Profile.IsolationEnv]) the
 	// only configuration OpenCode reads from a directory is the one
@@ -729,10 +742,10 @@ type Profile struct {
 	// A FIELD APART FROM [Profile.Env], whose values are settings, because a
 	// switch here is part of the isolation and has to be protected like the
 	// rest of it: the profile's env and passthrough_env, and an entry's
-	// cli.env, are all layered OVER the isolation, and each is refused naming
+	// env, are all layered OVER the isolation, and each is refused naming
 	// one of [Profile.IsolationVariables] — which an ordinary env entry is not.
-	// Written in env, OpenCode's project switch was replaced by
-	// `cli.env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an EMPTY value,
+	// Written in env, OpenCode's project switch was replaced by an entry's
+	// `env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an EMPTY value,
 	// which it reads as off — with nothing to say so, and every ancestor's
 	// `opencode.json`, agents and plugins were configuration for every seat
 	// again: measured on 2.0.32, the model's tools widened to shell, write and
@@ -780,8 +793,8 @@ type Profile struct {
 
 	// EnvSignIn declares that the CLI reads its model provider's credential
 	// from its OWN environment, under that provider's own variable — so a
-	// credential-named variable the operator sets in `cli.env` signs it in.
-	// False, the default, means a credential in cli.env is not a sign-in
+	// credential-named variable the operator sets in an entry's `env` signs
+	// it in. False, the default, means a credential there is not a sign-in
 	// this CLI reads, which is the right answer for a profile that says
 	// nothing.
 	//
@@ -792,8 +805,8 @@ type Profile struct {
 	// a profile naming one variable would be wrong for every other entry —
 	// which is why these profiles have no api_key_env at all.
 	//
-	// And a declaration at all, rather than counting any credential in
-	// cli.env, because only the profile knows whether the CLI reads one:
+	// And a declaration at all, rather than counting any credential in an
+	// entry's env, because only the profile knows whether the CLI reads one:
 	// kimi-code is handed KIMI_API_KEY and ignores it, reading its key only
 	// from config.toml.
 	//
@@ -904,8 +917,9 @@ var credentialWords = []string{
 // one of [credentialWords].
 //
 // One predicate for every question this backend asks of a name — which
-// passthrough_env and env entries are refused, which cli.env entries sign a
-// CLI in, and which travel into a coding box — so the answers cannot drift.
+// passthrough_env and env entries are refused, which of an entry's env
+// entries sign a CLI in, and which travel into a coding box — so the answers
+// cannot drift.
 func IsCredentialName(name string) bool {
 	components := strings.FieldsFunc(strings.ToUpper(name), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
@@ -994,7 +1008,7 @@ var HomeIsolation = []string{
 // [Profile.IsolationEnv], each sorted.
 //
 // One list for the three places that must not set one of them — the profile's
-// own env and passthrough_env ([Profile.Validate]) and an entry's cli.env
+// own env and passthrough_env ([Profile.Validate]) and an entry's env
 // (config) — because every one of those is layered OVER the isolation when the
 // child's environment is built, so a value there silently replaces the seat's
 // home with whatever it names: the engine user's own dotfiles, a
@@ -1013,7 +1027,7 @@ func (p *Profile) IsolationVariables() []string {
 type IsolationLayer string
 
 // The layers, each but the engine's own named by the profile field that sets
-// it, which is what an operator overrides it with (cli.overrides.<field>).
+// it, which is what an operator overrides it with (overrides.<field>).
 const (
 	// IsolationHome is [HomeIsolation]: HOME, the XDG homes and TMPDIR, set
 	// by the engine for every CLI, whatever its profile says, and changed by
@@ -1041,8 +1055,8 @@ const (
 //
 // For the refusals that have to say WHERE a variable's value is changed,
 // rather than a second copy of the lists beside each of them: an entry's
-// cli.env naming OPENCODE_CONFIG_DIR used to be sent to
-// cli.overrides.config_env, which [Profile.Validate] refuses for that very
+// env naming OPENCODE_CONFIG_DIR used to be sent to
+// overrides.config_env, which [Profile.Validate] refuses for that very
 // variable as work_config_env's, and naming OPENCODE_CONFIG_PROJECT_DISABLE
 // to the same field, refused there as an isolation_env switch.
 func (p *Profile) IsolationLayerOf(name string) (IsolationLayer, bool) {
@@ -1076,7 +1090,7 @@ func hasKey(m map[string]string, key string) bool {
 // agent file under OPENCODE_CONFIG_DIR — so pointing the variable somewhere
 // else and leaving them where they were is a CLI that never reads its login,
 // never has its sessions pruned, or never sees the tool policy that denies it
-// a shell. The refusal of an entry's cli.env naming the variable says which
+// a shell. The refusal of an entry's env naming the variable says which
 // fields move with it; a profile that moves the directory without them does
 // not load ([Load]).
 func (p *Profile) KeptUnder(name string) []string {
@@ -1218,7 +1232,7 @@ func (p *Profile) problems() []string {
 	}
 
 	if strings.TrimSpace(p.Binary) == "" {
-		add("binary is empty — set cli.overrides.binary")
+		add("binary is empty — set overrides.binary")
 	}
 	if len(p.CompleteArgs) == 0 && p.EffectivePromptMode() == PromptStdin {
 		// Only stdin mode can end up with NO argv at all. The other two
@@ -1226,7 +1240,7 @@ func (p *Profile) problems() []string {
 		// invoked as `mycli --prompt-file <path>` and nothing else is a
 		// legitimate shape rather than a profile that forgot to say how
 		// to run its binary.
-		add("complete_args is empty — set cli.overrides.complete_args")
+		add("complete_args is empty — set overrides.complete_args")
 	}
 	if p.PromptMode != "" && !p.PromptMode.Valid() {
 		add("prompt_mode %q (want stdin, argv or file)", p.PromptMode)
@@ -1251,7 +1265,7 @@ func (p *Profile) problems() []string {
 		// session or by printing usage — neither of which looks like the
 		// configuration error it is.
 		add("prompt_mode is file but no prompt_args entry contains {file} — set " +
-			`cli.overrides.prompt_args, e.g. ["--prompt-file", "{file}"]`)
+			`overrides.prompt_args, e.g. ["--prompt-file", "{file}"]`)
 	}
 	switch {
 	case len(p.EventTypePath) > 0 && len(p.TextEvents) == 0:
@@ -1281,7 +1295,7 @@ func (p *Profile) problems() []string {
 	// "{system}"]` wrote the seat's identity to a 0600 file and ALSO put
 	// every byte of it in /proc/<pid>/cmdline, where any account on the
 	// machine reads it. The shipped profiles are held to this by a test;
-	// nothing held an operator's cli.overrides to it, and overrides are
+	// nothing held an operator's overrides to it, and overrides are
 	// exactly where a hand-written argv appears.
 	if hasPlaceholder(p.SystemPromptArgs, "{file}") && hasPlaceholder(p.SystemPromptArgs, "{system}") {
 		add("system_prompt_args names both {file} and {system} — the first writes the " +
@@ -1589,7 +1603,8 @@ func collision(claims []pathClaim, i int, scope SeedScope) string {
 // them is a login nothing ever finds. And two credential paths sharing a base
 // name are ONE file in the shared directory and in every bundle, so the second
 // overwrote the first there, and every seat was seeded with one login in both
-// places.
+// places — as one named [BundleManifest] would be one entry in every bundle with
+// the manifest saying which CLI the bundle was exported from.
 //
 // A volatile path may name a directory — most do — so it is held only to
 // staying inside the home.
@@ -1613,8 +1628,14 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 		}
 	}
 	byName := map[string]string{}
-	for _, rel := range p.CredentialPaths {
+	for i, rel := range p.CredentialPaths {
 		name := filepath.Base(rel)
+		if name == BundleManifest {
+			add("credential_paths[%d] %q has the file name %s, which every bundle keeps its "+
+				"manifest under — the entry naming the CLI it was exported from — so a login "+
+				"file by that name could not travel in one", i, rel, BundleManifest)
+			continue
+		}
 		if first, taken := byName[name]; taken {
 			add("credential_paths names %q and %q, which share the file name %s — the "+
 				"shared directory and every bundle keep a login file under its file name, "+
@@ -1668,7 +1689,7 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 			// muse-code, `XDG_CONFIG_HOME: .x` left the seeded tool policy
 			// in a `.config` the CLI no longer read, handing every seat
 			// its default tools. It was also the one overlap between the
-			// isolation layers, so an entry's cli.env naming XDG_CONFIG_HOME
+			// isolation layers, so an entry's env naming XDG_CONFIG_HOME
 			// could not be told that no field changes it.
 			add("config_env may not name %s — the engine points it at or inside the "+
 				"seat home for every CLI already; config_env relocates a variable of "+
@@ -1949,7 +1970,7 @@ func (p *Profile) validateDiscoveredPromptFile(add func(string, ...any)) {
 }
 
 // ValidateCredentials reports every place this profile routes a credential
-// around cli.auth: a passthrough_env or env entry whose name says it carries a
+// around auth: a passthrough_env or env entry whose name says it carries a
 // secret, and an env entry naming the profile's own token_env or api_key_env.
 //
 // APART FROM [Profile.Validate], which [Load] runs, because these are
@@ -1982,7 +2003,8 @@ func (p *Profile) ValidateCredentials(name string) error {
 		if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
 			add("isolation_env names %q, which is a credential variable — a switch the "+
 				"engine sets on every command is forwarded whatever auth.mode says and is "+
-				"stored unredacted; give the credential through cli.auth or cli.env", env)
+				"stored unredacted; give the credential through the entry's auth or its "+
+				"own env", env)
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
@@ -1990,26 +2012,26 @@ func (p *Profile) ValidateCredentials(name string) error {
 		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
 			// Named apart from the shape rule below because an
 			// overridden token_env or api_key_env need not LOOK like a
-			// credential. cli.env and then cli.auth are layered over
+			// credential. The entry's env and then its auth are layered over
 			// this one, so whether a value here reaches the CLI turns on
 			// the mode and on whether the secret store or the engine's
 			// environment holds a credential of its own — which no
 			// document can see.
 			add("env names %q, which is this profile's token_env or api_key_env — "+
-				"cli.auth owns that variable, and whether a value here reaches the CLI "+
+				"auth owns that variable, and whether a value here reaches the CLI "+
 				"depends on auth.mode and on whether the secret store or the engine's "+
-				"environment holds one; give the credential through cli.auth "+
-				"(auth.token, or api_keys with auth.mode api-key)", env)
+				"environment holds one; give the credential through auth "+
+				"(auth.token, or auth.api_key with auth.mode api-key)", env)
 		case IsCredentialName(env):
 			// The same reason passthrough_env refuses one, and a second:
 			// the profile's env is forwarded whatever auth.mode says,
-			// and cli.overrides is neither ${VAR}-resolved nor marked
+			// and overrides is neither ${VAR}-resolved nor marked
 			// secret, so a key written here sits in the stored revision
 			// in plain text and is shown unredacted on every read.
 			add("env names %q, which looks like a credential — the profile's env "+
-				"is forwarded whatever auth.mode says, and cli.overrides is stored "+
-				"and shown unredacted; put it in cli.env, which is ${VAR}-resolved "+
-				"and redacted, or give it through cli.auth", env)
+				"is forwarded whatever auth.mode says, and overrides is stored "+
+				"and shown unredacted; put it in the entry's own env, which is "+
+				"${VAR}-resolved and redacted, or give it through its auth", env)
 		}
 	}
 	if len(bad) == 0 {
@@ -2038,12 +2060,14 @@ func (p *Profile) EffectiveOutput() OutputMode {
 // "" when it can.
 //
 // A SENTINEL IS THE VENDOR'S WORDS. It is matched as a plain substring against
-// whatever the CLI printed — which on a healthy run is the model's own answer
-// — so a sentinel that can occur inside ordinary text does not recognise a
-// spent plan, it misclassifies arbitrary replies as one. And the cost is not
-// a wrong log line: both kinds a marker produces, KindRateLimit and KindAuth,
-// BENCH THE CREDENTIAL for a cooldown and hand the seat to the fallback chain
-// (see [llm.ErrorKind.ExhaustsCredential]). A company degrades quietly.
+// stderr and a failed run's output, and against the opening of a healthy
+// run's answer — which is the model's own ([MarkerScope]) — so a sentinel that
+// can occur inside ordinary text does not recognise a spent plan, it
+// misclassifies arbitrary replies as one. And the cost is not a wrong log
+// line: both kinds a marker produces, KindRateLimit and KindAuth, hand the
+// seat to the fallback chain, and a rate limit SITS THE ENTRY OUT for a while
+// besides (internal/providers/llm/cliagent, bench.go). A company degrades
+// quietly.
 //
 // The shipped profiles carried `sentinel: "429"`, which is the failure in its
 // purest form: three digits matched inside free text, so a model quoting an

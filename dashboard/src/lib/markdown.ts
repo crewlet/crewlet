@@ -301,7 +301,7 @@ export const UnbrokenCode = 32;
  * document's. A page, a description or a comment is a DOCUMENT: a newline
  * inside a paragraph is a soft wrap somebody typed to keep a source line
  * short, and a heading opens a section of it. A MODEL'S WORDS — a round's
- * speech and thinking, a coding run's report, a prompt the engine built for a
+ * speech, a coding run's report, a prompt the engine built for a
  * model — are neither. A model writes one fact per line and means each line,
  * and a "## Summary" in the middle of a transcript is emphasis inside one item
  * of the page, not a section of it.
@@ -541,9 +541,8 @@ function renderBlock(
       return createElement("p", { key }, renderInline(block.text, key, options));
     case "code":
       // `md-code`, in the same family as `md-table`, `md-tasks` and
-      // `md-task-body`. It was `code plain`, which is two names this
-      // stylesheet spends on something else — `.grid-th.plain` is a table
-      // header — and NEITHER of them was ever a recipe for this block. So a
+      // `md-task-body`. It was `code plain`, two generic names (a table
+      // header once spent `plain`), and NEITHER of them was ever a recipe for this block. So a
       // fenced sample in a page body, a work item's description, a comment or
       // a phase prompt had no surface, no padding and, because a `pre`
       // defaults to `white-space: pre` with `overflow: visible`, no way to
@@ -695,7 +694,7 @@ export function renderMarkdown(source: string, options: RenderOptions = {}): Rea
 }
 
 /**
- * How a MODEL'S WORDS are rendered: a round's speech and thinking, a coding
+ * How a MODEL'S WORDS are rendered: a round's speech, a coding
  * run's report. Every newline is the line break the model meant, and a heading
  * is emphasis inside one transcript item rather than a section of the page —
  * see [RenderOptions]. One constant, so the transcript's every block of a

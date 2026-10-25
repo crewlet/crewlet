@@ -427,7 +427,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 // faultedUnasked reports whether this node's TRACKER copy is OUT OF SERVICE as
 // far as it can tell without waiting: a verdict read and found that domain's
-// copy wrong (ADR-0045). The tracker's alone, because the inbox movements come
+// copy wrong (ADR-0046). The tracker's alone, because the inbox movements come
 // from the tracker's applier: a wrong copy of any other domain leaves this
 // node's own announcements complete. A copy nobody has judged yet and a node
 // whose core is not up are not — [localEstate.For] serves both — and a stale

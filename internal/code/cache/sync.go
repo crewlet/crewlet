@@ -292,7 +292,7 @@ func (c *Cache) entryFor(repoID string) *entry {
 // Only from an incarnation CONVERGED IN THIS PROCESS — never from a state a
 // previous one left: the state's position names a record of the log it was
 // read from, and a log restored from an older copy while the node was down
-// keeps its identity (ADR-0049) and reuses those positions for other
+// keeps its identity (ADR-0050) and reuses those positions for other
 // records, so a stale or session answer from the state would serve a
 // history the log no longer holds. A repository's first caller after a boot
 // pays the full round D3 reads anyway; every one after it is answered here.

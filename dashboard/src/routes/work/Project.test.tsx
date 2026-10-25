@@ -126,7 +126,7 @@ test("the purpose is the sentence under the name, above the census", async () =>
   serving({ work_project: detail(), work_activity: { records: [], complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Build and ship the product")).toBeTruthy());
-  const note = container.querySelector(".page-note");
+  const note = container.querySelector(".crewlet-page-note");
   expect(note?.textContent).toBe("Build and ship the product");
   expect(precedes(container.querySelector(".crewlet-object-header"), note)).toBe(true);
   expect(precedes(note, container.querySelector(".work-census"))).toBe(true);
@@ -147,8 +147,8 @@ test("a project with no purpose says whose it is, and whether anything is in it"
     work_items: { items: [], groups: [], complete: true },
   });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelector(".page-note")).toBeTruthy());
-  expect(container.querySelector(".page-note")?.textContent).toBe(
+  await waitFor(() => expect(container.querySelector(".crewlet-page-note")).toBeTruthy());
+  expect(container.querySelector(".crewlet-page-note")?.textContent).toBe(
     "ENG is Platform’s project. Nothing has been filed in it yet.",
   );
   cleanup();
@@ -160,8 +160,8 @@ test("a project with no purpose says whose it is, and whether anything is in it"
     work_items: { items: [], groups: [], complete: true },
   });
   const filled = mount();
-  await waitFor(() => expect(filled.container.querySelector(".page-note")).toBeTruthy());
-  const lede = filled.container.querySelector(".page-note")?.textContent ?? "";
+  await waitFor(() => expect(filled.container.querySelector(".crewlet-page-note")).toBeTruthy());
+  const lede = filled.container.querySelector(".crewlet-page-note")?.textContent ?? "";
   expect(lede).toBe("ENG is Platform’s project. Add a purpose in Edit org.");
   // A SENTENCE, not a configuration key in backticks.
   expect(lede).not.toContain("`");
@@ -385,7 +385,7 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
   const head = container.querySelector(".crewlet-object-header");
-  const note = container.querySelector(".page-note");
+  const note = container.querySelector(".crewlet-page-note");
   const banner = screen.getByText(/New work here reaches nobody/).closest(".crewlet-callout");
   expect(precedes(head, note)).toBe(true);
   expect(precedes(note, banner)).toBe(true);

@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { setStepUpConfirmer, type OrgProjection } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
@@ -520,9 +521,15 @@ test("a company with no model provider is told so, and one with a provider is no
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
   // caution says the agents cannot work rather than claiming nothing is applied.
-  expect(
-    await screen.findByText(/No model provider is set, so agents can’t work\. Add one with/),
-  ).toBeDefined();
+  const caution = (
+    await screen.findByText(/No model provider is set, so agents can’t work\./)
+  ).closest(".crewlet-callout") as HTMLElement;
+  // And it gives the steps that add one, the card's own: the declaration the
+  // engine walks from a company only the store holds.
+  fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
+  expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
+    PROVIDER_STEPS,
+  );
   cleanup();
 
   const engineWith = new Engine(company());
@@ -590,8 +597,9 @@ describe("the selection in the URL", () => {
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
   // locate: it is the root rather than an element of a list. Read as absent,
   // the card an operator selected was deselected again on the next answer,
-  // and the charter's Edit was unreachable from the toolbar.
-  test("the company stays selected, and the toolbar offers the charter's actions", async () => {
+  // and the company's actions were unreachable from the toolbar, the one place
+  // its principles are offered.
+  test("the company stays selected, and the toolbar offers the company's actions", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
@@ -600,7 +608,13 @@ describe("the selection in the URL", () => {
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for Acme, selected" });
     // Nothing moves or deletes the document the company IS.
-    expect(labels(menu)).toEqual(["Add unit", "Add agent seat", "Add human seat", "Edit"]);
+    expect(labels(menu)).toEqual([
+      "Add unit",
+      "Add agent seat",
+      "Add human seat",
+      "Edit principles",
+      "Rename company",
+    ]);
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // And it survives the next answer about the draft, which is what a
@@ -609,6 +623,26 @@ describe("the selection in the URL", () => {
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     expect(screen.getByRole("button", { name: "Actions for Acme, selected" })).toBeDefined();
+  });
+
+  // THE PRINCIPLES ARE COMPANY › PRINCIPLES, in edit for a reader who may
+  // write them and plainly for one who may not, and never a form of the
+  // builder's own, whose draft is kept for the return.
+  test("the principles open Company › Principles, in edit only for a reader who may write them", async () => {
+    mountBuilder({ engine: new Engine(company()) });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
+    await waitFor(() => expect(location.hash).toBe("#/company/principles?edit=mission"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+
+    mountBuilder({
+      engine: new Engine(company()),
+      viewer: () => ({ ...EDITOR, grants: ["tracker", "knowledge"], leads: [] }),
+    });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
+    await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   });
 
   test("a link naming a seat selects it and opens its editor, and the toolbar offers that seat's actions", async () => {
@@ -969,6 +1003,33 @@ describe("a document another system manages", () => {
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(screen.queryByText(/managed by gitops/i)).toBeNull();
   });
+
+  // ITS MODEL IS ADDED WHERE IT IS WRITTEN. The terminal steps end in an
+  // offline `crewlet config import`, which a managed document refuses to every
+  // caller, and the managing system would replace any other write at its next
+  // reconcile — so a managed company with no model is told where the model
+  // comes from and is given no steps, a writer it names included: managed is
+  // where the document is written, not who may edit it here.
+  test.each([
+    ["a reader it blocks", MANAGED],
+    ["a writer it names", { ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }],
+  ])(
+    "a managed company with no model is told it is added there, not given steps: %s",
+    async (_, viewer) => {
+      const without = company();
+      delete without.providers;
+      mountBuilder({ engine: new Engine(without), viewer: () => viewer });
+      const caution = (
+        await screen.findByText(/No model provider is set, so agents can’t work\./)
+      ).closest(".crewlet-callout") as HTMLElement;
+      expect(caution.textContent).toContain(
+        "The company’s configuration is managed by gitops, so the model is added there.",
+      );
+      expect(within(caution).queryByRole("button", { name: "The steps" })).toBeNull();
+      expect(document.body.textContent).not.toContain("crewlet config");
+      expect(document.body.textContent).not.toContain("crewlet llm");
+    },
+  );
 });
 
 // WORK'S NEW PROJECT ARRIVES HERE, naming the unit by its key: the node's

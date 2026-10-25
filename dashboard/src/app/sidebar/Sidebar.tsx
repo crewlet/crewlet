@@ -59,7 +59,7 @@
  * number.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo } from "react";
 import {
   AppShell,
   ArtifactKindGlyph,
@@ -69,9 +69,9 @@ import {
   SidebarNav,
   StatusDot,
   useAppShell,
+  type NavItemProps,
 } from "@crewlethq/ui";
 import { ActivityGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
-import { LockMark } from "../frame/LockMark.tsx";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   SIDEBAR_GROUPS,
@@ -87,8 +87,8 @@ import {
 } from "~/app/nav.ts";
 import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { useNeedsYouCount } from "~/lib/decisions.ts";
-import { accessNames, type Grant } from "~/lib/access.ts";
-import { glyphFor } from "~/ui/glyph.tsx";
+import { groupLock, lockReason } from "~/lib/access.ts";
+import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
@@ -107,7 +107,7 @@ import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
 import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
-import { UserBlock } from "./UserBlock.tsx";
+import { UserBlock, type FootPlace } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import { useKeyHints } from "~/app/layout.ts";
 
@@ -176,7 +176,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
     [index],
   );
 
-  const figures: Partial<Record<WorkspaceRow["key"], Pick<NavRowProps, "badge" | "count">>> = {
+  const figures: Partial<Record<WorkspaceRow["key"], Pick<NavItemProps, "badge" | "count">>> = {
     // WHERE THE COMPANY RUNS NO CREWLET WORKS no notice reaches the Inbox,
     // and its badge counts what still does: what waits on the reader's
     // decision ([useNeedsYouCount]).
@@ -240,16 +240,30 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
     stars.some((s) => samePath(route.path, s.path)) ||
     running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path));
 
+  const lockOf = (ws: WorkspaceRow) => lockReason(held === null ? [] : workspaceMissing(ws, held));
+  const footPlace = (ws: WorkspaceRow): FootPlace => {
+    const lock = lockOf(ws);
+    return {
+      key: ws.key,
+      label: ws.label,
+      icon: <WorkspaceGlyph icon={ws.icon} />,
+      ...linkTo(landingPath(ws, held, runs)),
+      current: here === ws.key && !shortcutHere,
+      title: lock ? `${ws.label}. ${lock}` : ws.label,
+    };
+  };
   const row = (ws: WorkspaceRow) => {
-    const needs = held === null ? [] : workspaceMissing(ws, held);
     return (
-      <NavRow
+      <SidebarNav.Item
         key={ws.key}
-        label={needs.length > 0 ? <Locked label={ws.label} needs={needs} /> : ws.label}
-        icon={ws.icon}
+        label={ws.label}
+        // LOCKED, NEVER HIDDEN, by the one rule every lock is drawn by; in a
+        // group the reader holds none of, the group's label carries the key.
+        locked={lockOf(ws)}
+        icon={<WorkspaceGlyph icon={ws.icon} />}
         // WHERE THE ROW OPENS for this reader ([landingPath]): Settings' row
         // opens the first of its sections the reader may open.
-        path={landingPath(ws, held, runs)}
+        {...linkTo(landingPath(ws, held, runs))}
         current={here === ws.key && !shortcutHere}
         {...figures[ws.key]}
       />
@@ -258,53 +272,26 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
 
   return (
     <AppShell.Rail
+      // THE COMPANY IS THE TITLE, beside the product's mark: the lockup the
+      // approved design draws ("Nimbus", no second line). The kit's own
+      // default puts the product's name first and the company under it,
+      // reasoning that a home link named by the product reads the same on
+      // every deployment; on this screen the company is the subject, one
+      // browser is one company, and the product is in the mark and the tab.
+      // "Crewlet" stands in only while no company has been sent. The rail's
+      // head gives the lockup its width, so a long name truncates.
       header={
-        <div className="side-head">
-          <BrandLockup
-            // THE COMPANY IS THE TITLE, beside the product's mark — the lockup
-            // the approved design draws ("Nimbus", no second line). The kit's
-            // own default puts the product's name first and the company under
-            // it, reasoning that a home link named by the product reads the same
-            // on every deployment; on this screen the company is the subject,
-            // one browser is one company, and the product is in the mark and the
-            // tab. "Crewlet" stands in only while no company has been sent.
-            name={org?.name || "Crewlet"}
-            href={href(["home"])}
-            // A LITERAL PATH under the dashboard's own `base`, which the dev
-            // server serves itself — written out so `protocol/proxy.test.ts`
-            // can read it and hold it against the proxy table.
-            mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
-          />
-        </div>
+        <BrandLockup
+          name={org?.name || "Crewlet"}
+          href={href(["home"])}
+          // A LITERAL PATH under the dashboard's own `base`, which the dev
+          // server serves itself, written out so `protocol/proxy.test.ts`
+          // can read it and hold it against the proxy table.
+          mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
+        />
       }
-      footer={
-        <>
-          <SidebarNav label="Settings">
-            {/* THE LOCK IS ON THE ROW, NOT INSTEAD OF IT — see the module's
-                note — and drawn by the same rule as every other row's. */}
-            {shown("foot").map(row)}
-          </SidebarNav>
-          <RailBoundary label="Engine" resetKey={at}>
-            <EnginePanel
-              reading={engineReading({
-                connected,
-                authRejected,
-                accessRefused,
-                lostAt,
-                everConnected,
-                health,
-              })}
-              readsReport={readsReport}
-              onSignIn={goSignIn}
-            />
-          </RailBoundary>
-          <RailBoundary label="You" resetKey={at}>
-            <UserBlock viewer={viewer} seatName={seatName} />
-          </RailBoundary>
-        </>
-      }
-    >
-      <div className="side-search">
+      // THE RAIL'S FIELD, in the kit's own slot on the nav's columns.
+      search={
         <SearchTrigger
           variant="rail"
           label="Ask or jump to…"
@@ -318,10 +305,43 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             keyHints ? <Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle /> : undefined
           }
         />
-      </div>
+      }
+      // THE ENGINE'S STATE ON THE NAME'S LINE, compact: a dot and the
+      // alarms, its words in its name and title, the panel below it.
+      status={
+        <RailBoundary label="Engine" resetKey={at} compact>
+          <EnginePanel
+            reading={engineReading({
+              connected,
+              authRejected,
+              accessRefused,
+              lostAt,
+              everConnected,
+              health,
+            })}
+            readsReport={readsReport}
+            onSignIn={goSignIn}
+          />
+        </RailBoundary>
+      }
+      // THE FOOT IS THE READER'S OWN ROW, and the places it reaches by their
+      // glyphs (Settings) stand beside it, before Preferences: each a real
+      // link to where its row opened, saying so when the reader is there,
+      // fetching it on the pointer, and naming its lock, never hidden.
+      footer={
+        <RailBoundary label="You" resetKey={at}>
+          <UserBlock viewer={viewer} seatName={seatName} places={shown("foot").map(footPlace)} />
+        </RailBoundary>
+      }
+    >
       <SidebarNav label="Navigation">
         {SIDEBAR_GROUPS.map((group) => (
-          <SidebarNav.Group key={group.place} {...(group.label ? { label: group.label } : {})}>
+          <SidebarNav.Group
+            key={group.place}
+            {...(group.label ? { label: group.label } : {})}
+            // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on its label.
+            locked={groupLock(shown(group.place).map(lockOf))}
+          >
             {shown(group.place).map(row)}
           </SidebarNav.Group>
         ))}
@@ -345,59 +365,20 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   );
 }
 
-/**
- * A row's label with the lock beside it ([LockMark]): its title names what
- * would open it, and a screen reader hears it after the label.
- */
-function Locked({ label, needs }: { label: string; needs: readonly Grant[] }) {
-  return (
-    <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
-      {label}
-      <LockMark needs={needs} />
-    </span>
-  );
-}
-
-interface NavRowProps {
-  label: ReactNode;
-  icon?: WorkspaceRow["icon"];
-  glyph?: ReactNode;
-  lead?: string;
-  path: string[];
-  /** The address's query, for a row that is a question rather than a place. */
-  query?: Record<string, string>;
-  current: boolean;
-  badge?: { value: number | string; label: string };
-  count?: { value: number | string; label: string; mark?: ReactNode };
+/** A workspace's glyph, by its name in the table. */
+function WorkspaceGlyph({ icon }: { icon: WorkspaceRow["icon"] }) {
+  const Glyph = glyphFor(icon);
+  return <Glyph size="sm" />;
 }
 
 /**
- * One row, a plain anchor: a hash link is a real link, so ⌘-click opens a tab.
- *
- * HOVER OR FOCUS STARTS FETCHING WHERE IT LEADS (`lazyScreen.ts`'s
- * `preload`), so the chunk is usually in by the time the click lands — the
- * pointer's hover and the keyboard's focus are both the reader deciding.
+ * Where a row goes, as the kit's row takes it: a plain hash link (a real
+ * link, so a modified press opens a tab), and the fetch of where it leads,
+ * started when the pointer reaches the row or the keyboard focuses it
+ * (`lazyScreen.ts`'s `preload`), so the chunk is usually in by the press.
  */
-function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }: NavRowProps) {
-  const Glyph = icon ? glyphFor(icon) : undefined;
-  const warm = () => preload(path);
-  return (
-    <SidebarNav.Item
-      label={label}
-      icon={glyph ?? (Glyph ? <Glyph size="sm" /> : undefined)}
-      lead={lead}
-      href={href(path, query)}
-      current={current}
-      badge={badge}
-      count={count}
-      // THE KIT'S OWN ELEMENT, with two listeners added: its class, its
-      // `href` and its `aria-current` pass through untouched, so the row is
-      // drawn exactly as the kit draws it.
-      renderLink={({ className, ...link }) => (
-        <a className={className} {...link} onPointerEnter={warm} onFocus={warm} />
-      )}
-    />
-  );
+function linkTo(path: string[], query?: Record<string, string>) {
+  return { href: href(path, query), onPrefetch: () => preload(path) };
 }
 
 /**
@@ -483,13 +464,12 @@ function PinnedSection({
         // `#/work/views`, one tab over.
         const run = viewRun(v);
         return (
-          <NavRow
+          <SidebarNav.Item
             key={v.id}
             label={v.name}
-            glyph={<PinGlyph size="sm" />}
+            icon={<PinGlyph size="sm" />}
             lead={v.container.kind === "project" ? v.container.id : undefined}
-            path={run.path}
-            query={run.query}
+            {...linkTo(run.path, run.query)}
             current={samePath(path, run.path) && viewKey === v.key}
             count={
               v.count === undefined
@@ -502,11 +482,11 @@ function PinnedSection({
       {pinnedArtifacts.map((item) => {
         const at = artifactPath(item.id);
         return (
-          <NavRow
+          <SidebarNav.Item
             key={`artifact:${item.id}`}
             label={item.title}
-            glyph={<ArtifactKindGlyph kind={item.kind} size="sm" />}
-            path={at}
+            icon={<ArtifactKindGlyph kind={item.kind} size="sm" />}
+            {...linkTo(at)}
             current={samePath(path, at)}
           />
         );
@@ -528,11 +508,11 @@ function StarredSection({ path, stars }: { path: string[]; stars: ReturnType<typ
   return (
     <SidebarNav.Group label="Starred">
       {stars.map((s) => (
-        <NavRow
+        <SidebarNav.Item
           key={s.path.join("/")}
           label={s.label}
-          glyph={<StarGlyph size="sm" />}
-          path={s.path}
+          icon={<StarGlyph size="sm" />}
+          {...linkTo(s.path)}
           current={samePath(path, s.path)}
         />
       ))}
@@ -583,10 +563,10 @@ function RunningSection({
         const watch = watchLink(turnIdOf(row));
         const item = turnItemKey(row);
         return (
-          <NavRow
+          <SidebarNav.Item
             key={row.id}
             label={name}
-            glyph={
+            icon={
               <SeatAvatar
                 name={name}
                 kind="agent"
@@ -597,18 +577,17 @@ function RunningSection({
               />
             }
             lead={item || undefined}
-            path={watch.path}
-            query={watch.query}
+            {...linkTo(watch.path, watch.query)}
             current={samePath(path, watch.path)}
           />
         );
       })}
       {more > 0 && (
-        <NavRow
+        <SidebarNav.Item
           key="more"
           label={shown.length ? `${more} more running` : `${more} running`}
-          glyph={<ActivityGlyph size="sm" />}
-          path={["live"]}
+          icon={<ActivityGlyph size="sm" />}
+          {...linkTo(["live"])}
           current={false}
         />
       )}

@@ -36,8 +36,8 @@ func TestAShortRoundIsSentWhole(t *testing.T) {
 
 // Slicing UTF-8 by bytes can cut a character in half, and the replacement
 // glyph would be the first thing on screen every time the cut landed
-// mid-character — which, on a reasoning trace full of em dashes and quotes,
-// is most of the time.
+// mid-character — which, on prose full of em dashes and quotes, is most of
+// the time.
 func TestTheElisionCutsOnACharacterNotAByte(t *testing.T) {
 	t.Parallel()
 	// Three-byte runes, so most byte offsets land mid-character.

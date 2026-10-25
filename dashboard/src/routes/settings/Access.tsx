@@ -125,6 +125,7 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
@@ -134,6 +135,7 @@ import {
   BotGlyph,
   ShieldGlyph,
   TriangleAlertGlyph,
+  UserGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -162,7 +164,6 @@ import type { ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -375,7 +376,7 @@ const KIND_WORDS: Record<string, string> = {
 /** What a Tier A token's login names in the directory. */
 export const TOKEN_ROW_WORDS: Record<string, Words> = {
   none: {
-    label: "None",
+    label: "Not bound",
     tone: "neutral",
     hint: "Not bound to a seat. Bind it with crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none.",
   },
@@ -431,6 +432,31 @@ const CONTACT_SURFACES: Record<string, string> = {
   gitlab_username: "GitLab",
 };
 
+/**
+ * A state in a list's column: QUIET WORDS while it is the resting one, a pill
+ * only when it is news. "Active" on every person and every service account,
+ * and a binding state on every token, were pills down whole columns that a
+ * reader learned to skip, so the row that differs was the one they missed.
+ */
+function StateCell({
+  words,
+  fallback,
+  resting,
+}: {
+  words: Words | undefined;
+  fallback: string;
+  resting: boolean;
+}) {
+  if (resting) {
+    return (
+      <span title={words?.hint}>
+        <TableTextCell>{words?.label ?? fallback}</TableTextCell>
+      </span>
+    );
+  }
+  return <WordTag words={words} fallback={fallback} />;
+}
+
 function WordTag({ words, fallback }: { words: Words | undefined; fallback: string }) {
   return (
     <Tag size="sm" variant={words?.tone ?? "neutral"} title={words?.hint}>
@@ -454,49 +480,35 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
  * told so with the way to add one. A listing refused for any other reason
  * says nothing about the seats, so the callout claims nothing about them.
  */
-function FirstPerson({
-  waiting,
-  seats,
-}: {
-  waiting: InvitationRow[];
-  seats: RestResult<HumanSeat[]>;
-}) {
+/** The one next step of a company nobody has joined: what to say, and its control. */
+interface FirstStep {
+  body: React.ReactNode;
+  action?: React.ReactNode;
+}
+
+function firstPersonStep(waiting: InvitationRow[], seats: RestResult<HumanSeat[]>): FirstStep {
   if (waiting.length > 0) {
-    return (
-      <Callout variant="neutral" title="Nobody has joined yet">
-        Lost the invitation link? Cancel it and invite again.
-      </Callout>
-    );
+    return { body: "Lost the invitation link? Cancel it and invite again." };
   }
   if (listsNoCompany(seats)) {
-    return (
-      <Callout
-        variant="neutral"
-        title="Nobody has joined yet"
-        action={
-          <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH)}>
-            Create the company
-          </ButtonLink>
-        }
-      >
-        No company yet. Create one in Edit org.
-      </Callout>
-    );
+    return {
+      body: "No company yet. Create one in Edit org.",
+      action: (
+        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH)}>
+          Create the company
+        </ButtonLink>
+      ),
+    };
   }
   if (seats.data && seats.data.length === 0) {
-    return (
-      <Callout
-        variant="neutral"
-        title="Nobody has joined yet"
-        action={
-          <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH, { add: "human" })}>
-            Add a human seat
-          </ButtonLink>
-        }
-      >
-        No people in the chart yet. Add one in Edit org.
-      </Callout>
-    );
+    return {
+      body: "No people in the chart yet. Add one in Edit org.",
+      action: (
+        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH, { add: "human" })}>
+          Add a human seat
+        </ButtonLink>
+      ),
+    };
   }
   const chart = (
     <ButtonLink size="small" variant="primary" href={href(["company", "org"])}>
@@ -504,20 +516,32 @@ function FirstPerson({
     </ButtonLink>
   );
   if (!seats.data) {
-    return (
-      <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
-        This company has no person in it, so nobody can sign in with a password yet. Every person is
-        invited or created on a human seat in the org chart; this node could not list the seats just
-        now, so Human seats below says why. The API token you are using stays the way back in.
-      </Callout>
-    );
+    return {
+      body: (
+        <>
+          This company has no person in it, so nobody can sign in with a password yet. Every person
+          is invited or created on a human seat in the org chart; this node could not list the seats
+          just now, so Human seats below says why. The API token you are using stays the way back
+          in.
+        </>
+      ),
+      action: chart,
+    };
   }
+  return { body: "Invite yourself from your seat in the org chart.", action: chart };
+}
+
+/** The first-run step as a callout, over a directory that already lists somebody. */
+function FirstPerson({ step }: { step: FirstStep }) {
   return (
-    <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
-      Invite yourself from your seat in the org chart.
+    <Callout variant="neutral" title={FIRST_RUN_TITLE} action={step.action}>
+      {step.body}
     </Callout>
   );
 }
+
+/** What a company nobody has joined is told, wherever the step is drawn. */
+const FIRST_RUN_TITLE = "Nobody has joined yet";
 
 /**
  * Whether a read has said something — answered or been refused — rather than
@@ -742,9 +766,19 @@ export function People() {
   // could still invite somebody onto.
   const vacant = seatRows.filter((s) => !s.holder && !s.invitation).length;
   const invited = seatRows.filter((s) => !s.holder && s.invitation).length;
-  // FIRST RUN: nobody has joined, and the first-person callout below names
-  // the one next step. See [FirstPerson].
+  // FIRST RUN: nobody has joined, and the first-person step names the one
+  // next step. See [firstPersonStep].
   const firstRun = health?.identity === "unclaimed" && settled(invitations) && settled(seats);
+  const firstStep = firstRun
+    ? firstPersonStep(
+        (invitations.data ?? []).filter((i) => i.state === "open"),
+        seats,
+      )
+    : null;
+  // NOBODY LISTED: the People card's empty state IS the step. Over an empty
+  // directory the callout, two stat tiles of zero and the card's own "Nobody's
+  // here yet" said one thing four times before any data.
+  const nobody = directory.data !== null && people.length === 0;
 
   return (
     <>
@@ -804,39 +838,36 @@ export function People() {
           or, with no human seat at all, adding one. Drawn once the
           invitations AND the seats have answered or been refused, so it never
           says the wrong one first. */}
-      {firstRun && (
-        <FirstPerson
-          waiting={(invitations.data ?? []).filter((i) => i.state === "open")}
-          seats={seats}
-        />
-      )}
+      {firstStep && !nobody && <FirstPerson step={firstStep} />}
 
       <DirectoryState directory={directory} />
 
       {directory.data && (
         <>
-          <Card padding="none">
-            <StatGroup columns={2}>
-              <StatCard
-                icon={<UsersGlyph size="xs" />}
-                label="People"
-                value={people.length}
-                sub={`${active} active`}
-              />
-              <StatCard
-                icon={<TriangleAlertGlyph size="xs" />}
-                label="Open seats"
-                value={seats.data ? vacant : EMPTY_VALUE}
-                sub={
-                  seats.data
-                    ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
-                    : listsNoCompany(seats)
-                      ? "no company yet"
-                      : "not read"
-                }
-              />
-            </StatGroup>
-          </Card>
+          {!nobody && (
+            <Card padding="none">
+              <StatGroup columns={2}>
+                <StatCard
+                  icon={<UsersGlyph size="xs" />}
+                  label="People"
+                  value={people.length}
+                  sub={`${active} active`}
+                />
+                <StatCard
+                  icon={<TriangleAlertGlyph size="xs" />}
+                  label="Open seats"
+                  value={seats.data ? vacant : EMPTY_VALUE}
+                  sub={
+                    seats.data
+                      ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
+                      : listsNoCompany(seats)
+                        ? "no company yet"
+                        : "not read"
+                  }
+                />
+              </StatGroup>
+            </Card>
+          )}
 
           <Findings
             check={checkFor(check, "people", byId)}
@@ -847,7 +878,7 @@ export function People() {
 
           <Card padding="none">
             <Card.Header icon={<UsersGlyph size="sm" />} count={people.length}>
-              People
+              <Card.Title>People</Card.Title>
             </Card.Header>
             <DataGrid<DirectoryRow>
               rows={people}
@@ -859,10 +890,14 @@ export function People() {
               onRowActivate={peekRow(openPeek)}
               // THE HINT ADDS WHAT THE PAGE NOTE DOES NOT: it repeated the note
               // word for word 530px below it.
-              empty={{
-                title: "Nobody’s here yet",
-                hint: "A person is listed once they accept their invitation, or are created on their seat.",
-              }}
+              empty={
+                firstStep
+                  ? { title: FIRST_RUN_TITLE, hint: firstStep.body, action: firstStep.action }
+                  : {
+                      title: "Nobody’s here yet",
+                      hint: "A person is listed once they accept their invitation, or are created on their seat.",
+                    }
+              }
               columns={[
                 {
                   key: "person",
@@ -896,7 +931,13 @@ export function People() {
                   header: "Stage",
                   shrink: true,
                   sortValue: (p) => p.stage,
-                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
+                  cell: (p) => (
+                    <StateCell
+                      words={STAGE_WORDS[p.stage]}
+                      fallback={p.stage}
+                      resting={p.stage === "active"}
+                    />
+                  ),
                 },
                 {
                   key: "seat",
@@ -932,8 +973,8 @@ export function People() {
           />
 
           <Card padding="none">
-            <Card.Header icon={<UsersGlyph size="sm" />} count={seatRows.length}>
-              Human seats
+            <Card.Header icon={<UserGlyph size="sm" />} count={seatRows.length}>
+              <Card.Title>Human seats</Card.Title>
             </Card.Header>
             {/* NO COMPANY IS NOT A FAILURE: the listing's 409 is the node
                 saying it has no seat to list yet, which the generic refusal
@@ -1067,8 +1108,17 @@ export function ServiceAccounts() {
             held={viewer.grants}
           />
           <Card padding="none">
-            <Card.Header icon={<BotGlyph size="sm" />} count={accounts.length}>
-              Service accounts
+            {/* HOW MANY ACT AS A SEAT is the card's fact, said in its head
+                rather than as a footnote floating inside the card under the
+                table. */}
+            <Card.Header
+              icon={<BotGlyph size="sm" />}
+              count={accounts.length}
+              subtitle={
+                accounts.length > 0 ? `${bound} of ${accounts.length} act as a seat` : undefined
+              }
+            >
+              <Card.Title>Service accounts</Card.Title>
             </Card.Header>
             <DataGrid<DirectoryRow>
               rows={accounts}
@@ -1104,32 +1154,34 @@ export function ServiceAccounts() {
                   header: "Stage",
                   shrink: true,
                   sortValue: (p) => p.stage,
-                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
+                  cell: (p) => (
+                    <StateCell
+                      words={STAGE_WORDS[p.stage]}
+                      fallback={p.stage}
+                      resting={p.stage === "active"}
+                    />
+                  ),
                 },
+                // SIZED TO WHAT THEY HOLD, so the name takes the spare width:
+                // as two more flexible tracks, Acts as held a dash in 226px
+                // while the name beside it was cut at 174.
                 {
                   key: "seat",
                   header: "Acts as",
-                  floor: "8rem",
+                  shrink: true,
                   sortValue: (p) => p.seat ?? "",
                   cell: (p) => <SeatHandle seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
                   header: "Access",
-                  floor: "8rem",
+                  shrink: true,
                   drop: 1,
                   sortValue: (p) => accessLine(p.grants ?? []),
                   cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
                 },
               ]}
             />
-            {accounts.length > 0 && (
-              <Card.Body padding="md">
-                <Text as="p" variant="caption" tone="tertiary">
-                  {bound} of {accounts.length} act as a seat.
-                </Text>
-              </Card.Body>
-            )}
           </Card>
         </>
       )}
@@ -1153,15 +1205,15 @@ export function ApiTokens() {
   return (
     <>
       <PageNote>
-        Declared in this node&rsquo;s bootstrap file (api.auth.tokens), and changed with a restart.
-        A person&rsquo;s own tokens are on their Account.
+        Declared under <InlineCode>api.auth.tokens</InlineCode> in this node&rsquo;s bootstrap file,
+        and changed with a restart. A person&rsquo;s own tokens are on their Account.
       </PageNote>
       <Card padding="none">
         <Card.Header
           icon={<KeyGlyph size="sm" />}
           count={tokens.data ? tokenRows.length : undefined}
         >
-          API tokens on this node
+          <Card.Title>API tokens on this node</Card.Title>
         </Card.Header>
         {companyWriters.length > 0 && (
           <Card.Body padding="md">
@@ -1195,10 +1247,12 @@ export function ApiTokens() {
                 sortValue: (t) => t.id,
                 cell: (t) => <TableKeyCell value={t.id} />,
               },
+              // THE LOGIN TAKES THE SPARE WIDTH, never cut (its floor is its
+              // content): a Seat column holding a dash took 530px of it.
               {
                 key: "login",
                 header: "Signs in as",
-                width: "max-content",
+                floor: "max-content",
                 sortValue: (t) => t.login,
                 cell: (t) => <TableKeyCell value={t.login} />,
               },
@@ -1207,14 +1261,26 @@ export function ApiTokens() {
                 header: "Seat entry",
                 shrink: true,
                 sortValue: (t) => t.row,
-                cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
+                cell: (t) => (
+                  <StateCell
+                    words={TOKEN_ROW_WORDS[t.row]}
+                    fallback={t.row}
+                    resting={t.row === "none"}
+                  />
+                ),
               },
-              {
-                key: "seat",
-                header: "Seat",
-                sortValue: (t) => t.seat ?? "",
-                cell: (t) => <BoundSeat seat={t.seat} index={index} />,
-              },
+              // A SEAT COLUMN ONLY WHERE A TOKEN IS BOUND TO ONE.
+              ...(tokenRows.some((t) => t.seat)
+                ? [
+                    {
+                      key: "seat",
+                      header: "Seat",
+                      shrink: true,
+                      sortValue: (t: NodeToken) => t.seat ?? "",
+                      cell: (t: NodeToken) => <BoundSeat seat={t.seat} index={index} />,
+                    },
+                  ]
+                : []),
             ]}
           />
         </QueryState>
@@ -1430,7 +1496,7 @@ function Findings({
   return (
     <Card padding="none">
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
-        Needs attention
+        <Card.Title>Needs attention</Card.Title>
       </Card.Header>
       <QueryState
         error={check.code}
@@ -1562,7 +1628,7 @@ function Invitations({
         count={rows.length}
         actions={<Checkbox label="Show used and expired" checked={all} onCheckedChange={onAll} />}
       >
-        Invitations
+        <Card.Title>Invitations</Card.Title>
       </Card.Header>
       <QueryState
         error={invitations.code}
@@ -1578,10 +1644,15 @@ function Invitations({
             title: all ? "No invitations" : "No open invitations",
           }}
           columns={[
+            // THE ADDRESS IS THE ONE FLEXIBLE TRACK, and is never cut (its
+            // floor is its content): it is what a reader matches against the
+            // mail they sent, and it ended in an ellipsis at 1440 while Seat
+            // and Access beside it held 203px each of air. They size to what
+            // they hold.
             {
               key: "email",
               header: "Address",
-              floor: "12rem",
+              floor: "max-content",
               sortValue: (i) => i.email ?? "",
               cell: (i) =>
                 i.sealed ? (
@@ -1598,6 +1669,7 @@ function Invitations({
             {
               key: "seat",
               header: "Seat",
+              shrink: true,
               drop: 2,
               sortValue: (i) => i.seat ?? "",
               cell: (i) => <BoundSeat seat={i.seat} index={index} />,
@@ -1605,6 +1677,7 @@ function Invitations({
             {
               key: "grants",
               header: "Access",
+              shrink: true,
               drop: 1,
               sortValue: (i) => accessLine(i.grants ?? []),
               cell: (i) => <TableTextCell>{accessLine(i.grants ?? [])}</TableTextCell>,

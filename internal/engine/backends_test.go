@@ -389,9 +389,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
   embeddings:
     type: openai
     model: text-embedding-3-large
@@ -918,9 +916,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
 roles:
   - name: CEO
     handle: ceo
@@ -931,9 +927,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
   embeddings:
     type: openai
     model: text-embedding-3-large

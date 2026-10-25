@@ -77,23 +77,33 @@ token_budget:
 
 providers:
   llm:
-    # Any OpenAI-compatible endpoint works here: OpenAI itself, OpenRouter,
-    # Together, a local vLLM or LiteLLM gateway, … — set LLM_BASE_URL to the
-    # provider's /v1/ endpoint and LLM_MODEL to the model name it serves.
+    # Every model is reached through a coding CLI the engine drives — the
+    # vendor's own harness, not an HTTP client of Crewlet's.  This company
+    # runs on OpenCode, which reaches any model on any provider it speaks
+    # to: open models through OpenRouter here, set LLM_MODEL to
+    # <provider>/<model> as OpenCode spells it (`opencode models` lists
+    # them), and the provider's key under ITS OWN variable in `env`.
     #
-    # Prefer Anthropic?  Swap the default for:
+    # Prefer Anthropic's models on an API key?  Swap the default for:
     #   default:
-    #     type: anthropic
-    #     model: claude-sonnet-5-5
-    #     api_keys:
-    #       - "${ANTHROPIC_API_KEY}"
+    #     agent: claude-code
+    #     model: sonnet
+    #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
+    # (and set providers.sandbox.default_coding_agent: claude-code below,
+    # since a seat's code work runs on its entry's own CLI).  OpenAI's?
+    # `agent: codex`, `model: gpt-5`, the same `auth`, reading OPENAI_API_KEY.
+    #
+    # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
+    # package) on the machine running `crewlet run`.  Check the whole entry
+    # end to end before the first turn with
+    #   crewlet llm doctor default -company examples/nimbus.company.yaml \
+    #                              -config  examples/nimbus.config.yaml
+    # See docs/concepts/llm-backends.md.
     default:
-      type: openai-compatible
+      agent: opencode
       model: "${LLM_MODEL}"
-      base_url: "${LLM_BASE_URL}"
-      timeout_seconds: 300          # large-model turns can be slow — raise the per-call HTTP timeout (default 120)
-      api_keys:
-        - "${LLM_API_KEY}"
+      env:
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
   embeddings:
     type: openai
     # The model decides the width — 3072 here — so `dimensions` is left
@@ -113,16 +123,15 @@ providers:
   # block is the engine-wide provider.  See
   # docs/concepts/code-sandbox.md and docs/integrations/gitlab.md.
   #
-  # default_coding_agent: opencode is deliberate.  Nimbus's only LLM
-  # provider is the openai-compatible entry above, and OpenCode is
-  # provider-agnostic — it drives the coding agent with that SAME
-  # ${LLM_API_KEY} provider, so the sandbox needs NO extra secret.  Claude
-  # Code only speaks the Anthropic API, so choosing it here would require
-  # adding an 'anthropic' providers.llm entry and pointing each engineer's
-  # role.llm_sandbox at it, or giving each engineer a Claude Code sign-in
-  # of its own in role.sandbox.env (otherwise the launch is refused with a
-  # SandboxModelError: Claude Code can read neither this entry's model nor
-  # its key).
+  # default_coding_agent: opencode is deliberate.  A seat's code work runs
+  # on its providers.llm entry, and that entry's model is written in its
+  # own CLI's grammar and signed in the way that CLI reads: so the coding
+  # agent must BE that CLI.  Nimbus's only entry is the OpenCode one above,
+  # so the box drives OpenCode with that SAME model and the same
+  # OPENROUTER_API_KEY, and needs NO extra secret.  Choosing claude-code
+  # here would need a claude-code entry pointed at by each engineer's
+  # role.llm_sandbox (otherwise the launch is refused with a
+  # SandboxModelError naming the mismatch).
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
     # seat picks one with `role.sandbox.run_in`. Configure `local:`, `e2b:`,
@@ -185,7 +194,7 @@ providers:
     # answer: `direct` runs the coding agent as the engine's user, which is
     # a trade to make deliberately and never one to inherit by accident.
     default_run_in: direct                       # direct | container | e2b
-    default_coding_agent: opencode               # provider-agnostic → reuses the openai-compatible LLM above
+    default_coding_agent: opencode               # the CLI the default entry drives, so a box reuses its model and key
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
     # ENGINE-WIDE setup steps — applied to every sandbox-enabled seat's box
@@ -1276,8 +1285,8 @@ units:
             # coding agent that implements the framework story in the Phase-2
             # repo and opens an MR as Agent AI Systems Engineer's own GitLab
             # identity (${GITLAB_TOKEN_AI}).  coding_agent inherits the
-            # provider default (opencode) — the same openai-compatible LLM, so
-            # a Python framework change needs no extra coding-agent secret.
+            # provider default (opencode) — the CLI the default entry drives,
+            # so a Python framework change needs no extra coding-agent secret.
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox

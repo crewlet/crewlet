@@ -42,7 +42,7 @@ const (
 
 // withDevCredential adds the developer's token to boot, beside the fixture's
 // ([withCredential]). It lists no grant: what a person may do to a repository
-// is their standing on it (ADR-0054), never a grant a token carries.
+// is their standing on it (ADR-0055), never a grant a token carries.
 func withDevCredential(boot *config.Bootstrap) {
 	boot.API.Auth.Tokens = append(boot.API.Auth.Tokens,
 		config.APIToken{ID: e2eDevID, Token: e2eDevToken})
@@ -116,9 +116,9 @@ func codeCompany(repo string, archived bool) func(doc string) string {
 const fleetRepo = "fleet-web"
 
 // fleetCompanyDoc is the company every fleet member boots on: the golden
-// company, hosting [fleetRepo].
-func fleetCompanyDoc(modelURL string) string {
-	return withCode(fleetRepo)(fmt.Sprintf(companyDoc, modelURL))
+// company over model, hosting [fleetRepo].
+func fleetCompanyDoc(model *scriptedModel) string {
+	return withCode(fleetRepo)(goldenCompany(model))
 }
 
 // gitURL is repo's address on n's API, as a person's git is given it.
@@ -339,7 +339,7 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 	// the write, and every member then refuses a push.
 	member := c.nodes[0]
 	c.awaitEpoch(t, putCompany(t, member,
-		codeCompany(fleetRepo, true)(fmt.Sprintf(companyDoc, member.model.url)),
+		codeCompany(fleetRepo, true)(goldenCompany(member.model)),
 		"archive fleet-web"))
 	awaitRepo(t, fleetRepo, code.RepoStatusArchived, c.nodes...)
 	third := dev.Commit(work, map[string]string{"README.md": "# fleet-web\n\nthird\n"}, "third")
@@ -366,7 +366,7 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 
 	// UNARCHIVED THE SAME WAY, and a push lands again — through the third
 	// member, so every member has received one.
-	c.awaitEpoch(t, putCompany(t, member, fleetCompanyDoc(member.model.url), "unarchive fleet-web"))
+	c.awaitEpoch(t, putCompany(t, member, fleetCompanyDoc(member.model), "unarchive fleet-web"))
 	awaitRepo(t, fleetRepo, code.RepoStatusActive, c.nodes...)
 	pushed = dev.Push(t.Context(), work, gitURL(c.nodes[2], fleetRepo), "main")
 	if pushed.Err != nil || !pushed.OK("refs/heads/main") {

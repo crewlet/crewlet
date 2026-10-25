@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +20,7 @@ import (
 // position. That holds only if one request appends to both without another
 // getting in between — and it did not: serve appended the prompt, the offered
 // tools and the body before its switch (it must, since the phase is not known
-// until the body is parsed), released the lock, and saw appended the phase
+// until the request is read), released the lock, and saw appended the phase
 // after. Two requests in flight — two seats, or a seat and one of the
 // prefetch's auxiliary passes, which is the ordinary case — interleave between
 // those sections, and from then on calls[i] describes one call while
@@ -76,16 +78,21 @@ func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 	}
 }
 
-// post sends one request carrying the given system prompt and no tools, which
-// is the shape both branches under test take.
+// post sends one call the way the scripted CLI does, carrying the given system
+// prompt and a transcript that offers no tools, which is the shape both
+// branches under test take.
 // IT TAKES THE SERVER, not its URL: sixty goroutines post concurrently here
 // and the pool must be this server's own, never the process-global one every
 // httptest cleanup in the binary sweeps — see
 // [github.com/crewlet/crewlet/internal/httpx/httpxtest].
 func post(t *testing.T, srv *httptest.Server, system string) {
 	t.Helper()
-	body := fmt.Sprintf(`{"system":%q,"messages":[]}`, system)
-	resp, err := srv.Client().Post(srv.URL, "application/json", strings.NewReader(body))
+	body, err := json.Marshal(cliCall{System: system, Prompt: "## user\n\nHow did the week go?\n"})
+	if err != nil {
+		t.Errorf("encode the call: %v", err)
+		return
+	}
+	resp, err := srv.Client().Post(srv.URL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Errorf("post: %v", err)
 		return

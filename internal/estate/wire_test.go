@@ -261,7 +261,7 @@ var seatCopyOps = map[string]string{
 // EVERY OPERATION NAMES THE COPY IT READS, because that is the verdict the
 // router and the server ask before running it here: a domain's copy that is
 // wrong runs none of that domain's operations and every other domain's
-// (ADR-0045). An operation naming no domain — the search ops once did, since
+// (ADR-0046). An operation naming no domain — the search ops once did, since
 // they carry no floor — would be asked of no domain's verdict at all: run from
 // a copy out of service, or held to one it does not read.
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
@@ -305,7 +305,7 @@ var readsSeveral = map[string][]string{
 
 // AN OPERATION THAT READS SEVERAL DOMAINS DECLARES EACH ONE, and is routed by
 // all of them: a node whose copy of any is out of service runs none of it
-// (ADR-0045), and the router's memory of where it stays is kept for that set
+// (ADR-0046), and the router's memory of where it stays is kept for that set
 // of copies rather than for one domain's.
 func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 	t.Parallel()

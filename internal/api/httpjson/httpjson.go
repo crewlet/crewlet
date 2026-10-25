@@ -816,13 +816,15 @@ const (
 	CodeBadPath Code = "bad_path"
 	// CodeBadIfMatch is an If-Match header that is not a version as its
 	// ETag carries it: a project file's, or an artifact's head (`"<n>"`).
-	// 400.
+	// 400; 428 where the write requires one and none was sent (an
+	// artifact's publish, the company's charter).
 	CodeBadIfMatch Code = "bad_if_match"
 	// CodeVersionMoved is a write whose If-Match names a version the thing
-	// it writes has moved past: a project file, or an artifact whose head
-	// is past the version a publish was based on. 412: read it again and
-	// decide again. An artifact's carries the live head and its entry's
-	// text to merge onto.
+	// it writes has moved past: a project file, an artifact whose head is
+	// past the version a publish was based on, or the company's charter
+	// changed since an editor read it. 412: read it again and decide again.
+	// An artifact's carries the live head and its entry's text to merge
+	// onto, and the charter's the charter as it stands (`current`).
 	CodeVersionMoved Code = "version_moved"
 	// CodeUploadExpired is an upload whose bytes cannot be recorded any
 	// more: stored, and older than a write may name its object after (409),
@@ -1020,7 +1022,7 @@ const (
 	// running check instead.
 	CodeVerifyRunning Code = "verify_running"
 	// CodeNotPermitted is a code read the asker's grant on the repository
-	// does not cover (ADR-0054): the same word a refused push prints, so
+	// does not cover (ADR-0055): the same word a refused push prints, so
 	// one refusal has one spelling on every surface that names it. 403,
 	// the detail naming who asked, the repository and what would admit
 	// them.

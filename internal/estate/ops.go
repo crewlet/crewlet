@@ -277,7 +277,7 @@ type Backend struct {
 	// every data node whose copy does not has run nothing, by a remote asker
 	// and by this node's own router alike — a worse node to ask, never no
 	// node ([Router.route]). A lagging knowledge base never holds back a
-	// tracker read (ADR-0045), for the reason a floor on another domain's log
+	// tracker read (ADR-0046), for the reason a floor on another domain's log
 	// is not waited for ([ready]).
 	//
 	// NOT A SEAT'S ADMISSION, which refuses at a lag of one: a busy
@@ -386,7 +386,7 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 // SeatCopy is the domain an operation names when what it asks about is the
 // copy a SEAT is served by, rather than one domain's: every domain whose health
 // gates seat admission ([statelog.Domain.GatesSeatAdmission]) in service at
-// once (ADR-0045). Admission's ping names it ([opPing]), and so does
+// once (ADR-0046). Admission's ping names it ([opPing]), and so does
 // [Router.Serves].
 //
 // EMPTY, and no operation that reads a domain's rows may name it: the gate over
@@ -1591,7 +1591,7 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, fals
 // THE USAGE DOMAIN'S READS cross like every other domain's, so a node whose
 // usage copy is out of service answers its operator's spend and activity
 // screens from a peer's copy rather than from the one it stopped serving
-// (ADR-0045). FLOORLESS: no write this node makes lands on the usage log —
+// (ADR-0046). FLOORLESS: no write this node makes lands on the usage log —
 // every node publishes its own days from its own event log — so there is no
 // position an operator's read must see, and the rows are compacted, one per
 // object, each replaced whole.
@@ -1696,7 +1696,7 @@ type linkedFromArgs struct {
 // A PAGE'S BACKLINKS READ BOTH CORPORA — the pages and the tasks whose bodies
 // link to it, named from the rows of each, a task's linked-page relations
 // included — so they run only where this node's copies of the knowledge base
-// AND the tracker are in service ([op.alsoReads], ADR-0045). Read straight off
+// AND the tracker are in service ([op.alsoReads], ADR-0046). Read straight off
 // a node's own index, a node whose pages or tracker copy had stopped serving
 // merged a peer's page with links derived from rows it no longer answered for,
 // presented as complete. They carry no floor, for [opKnowledgeSearch]'s

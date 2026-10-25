@@ -11,10 +11,23 @@
  * a unit declares no lead.
  */
 
-import { describe, expect, test } from "vitest";
-import type { LeadView, UnitView } from "./chartModel.ts";
+import { describe, expect, test, vi } from "vitest";
+import type { MenuEntry, MenuItem } from "@crewlethq/ui";
+import type { BuilderApi, CompanyEdit } from "./BuilderContext.tsx";
+import type { CompanyView, LeadView, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { leadChipLabel, leadLabel, leadSentence } from "./nodeActions.tsx";
+import { fixtureCompany } from "./model/testkit.ts";
+import {
+  cardMenu,
+  editsInPlace,
+  leadChipLabel,
+  leadLabel,
+  leadSentence,
+  nodeMenu,
+  rowMenu,
+} from "./nodeActions.tsx";
+import type { Reorder } from "./reorder.ts";
+import { keyedState, scopedState } from "./testState.ts";
 
 /** A unit with the lead answer under test and nothing else that matters here. */
 function unit(lead: LeadView | null | undefined): UnitView {
@@ -99,5 +112,103 @@ describe("a unit's lead, as a screen reader hears it", () => {
     expect(leadSentence(unit(led("VP Engineering")))).toBe("Lead: VP Engineering.");
     expect(leadSentence(unit(null))).toBe("No lead.");
     expect(leadSentence(unit(undefined))).toBe("Lead after the check.");
+  });
+});
+
+/*
+ * THE COMPANY HAS NO EDIT. Its mission, vision and standing policies are
+ * written on Company › Principles alone, a page of its own, so its menu
+ * offers that page by name and never an Edit of the node, and the builder's
+ * one company field, the name, is an entry of its own. The node's own surfaces
+ * offer neither the pencil nor the page (`editsInPlace`, `cardMenu`,
+ * `rowMenu`): only the toolbar's whole menu goes there.
+ */
+describe("the company's menu", () => {
+  const company: CompanyView = {
+    type: "company",
+    key: COMPANY_KEY,
+    name: "Acme",
+    seats: [],
+    units: [],
+  };
+
+  function api(principles: CompanyEdit, state = keyedState(fixtureCompany())): BuilderApi {
+    return {
+      state,
+      readOnly: false,
+      principles,
+      openEditor: vi.fn(),
+      openCompanyRename: vi.fn(),
+      openPrinciples: vi.fn(),
+      openAdd: vi.fn(),
+    } as unknown as BuilderApi;
+  }
+
+  const items = (menu: MenuEntry[]): MenuItem[] =>
+    menu.filter((e): e is MenuItem => e.kind !== "separator");
+  const entries = (menu: MenuEntry[]) => items(menu).map((e) => [e.label, e.disabled === true]);
+  const item = (menu: MenuEntry[], label: string) => items(menu).find((e) => e.label === label)!;
+  const reorder = { movable: () => false, move: vi.fn() } as unknown as Reorder;
+
+  test("a reader who may write them is offered Edit principles and Rename company", () => {
+    const at = api("write");
+    const menu = nodeMenu(at, company, vi.fn());
+    expect(entries(menu)).toEqual([
+      ["Add unit", false],
+      ["Add agent seat", false],
+      ["Add human seat", false],
+      ["Edit principles", false],
+      ["Rename company", false],
+    ]);
+    item(menu, "Edit principles").onSelect();
+    expect(at.openPrinciples).toHaveBeenCalledTimes(1);
+    expect(at.openEditor).not.toHaveBeenCalled();
+    item(menu, "Rename company").onSelect();
+    expect(at.openCompanyRename).toHaveBeenCalledTimes(1);
+  });
+
+  test("a reader who may only read them is offered to open them, not to edit them", () => {
+    expect(entries(nodeMenu(api("read"), company, vi.fn()))).toContainEqual([
+      "Open principles",
+      false,
+    ]);
+  });
+
+  // A LEAD'S DRAFT may open the principles to read them, and is refused the
+  // rename with the reason every company change gets.
+  test("a lead's draft refuses the rename, with the reason", () => {
+    const menu = nodeMenu(
+      api("read", scopedState(fixtureCompany(), "engineering")),
+      company,
+      vi.fn(),
+    );
+    expect(item(menu, "Rename company")).toMatchObject({
+      disabled: true,
+      description:
+        "The company's name and settings are not part of Engineering: changing them takes Admin access.",
+    });
+  });
+
+  // A COMPANY STILL BEING CREATED has no Principles page yet: it is named
+  // through Rename company like a saved one, and never through an Edit.
+  test("a company this draft is creating is renamed, and has no Edit", () => {
+    const labels = entries(nodeMenu(api(null), company, vi.fn())).map(([label]) => label);
+    expect(labels).toContain("Rename company");
+    expect(labels).not.toContain("Edit");
+    expect(labels.filter((l) => String(l).includes("principles"))).toEqual([]);
+  });
+
+  // THE NODE ITSELF CARRIES NO EDIT, on either surface: its card and its row
+  // keep Rename company and drop the way to the principles, which is the
+  // toolbar's alone. Mutation: let the subtraction keep the principles entry
+  // and the root of the chart offers an edit again.
+  test("the company's card and row offer no edit of any kind", () => {
+    expect(editsInPlace(company)).toBe(false);
+    for (const surface of [cardMenu, rowMenu]) {
+      const labels = entries(surface(api("write"), company, vi.fn(), reorder)).map(([l]) => l);
+      expect(labels).toContain("Rename company");
+      expect(labels).not.toContain("Edit principles");
+      expect(labels).not.toContain("Edit");
+    }
   });
 });

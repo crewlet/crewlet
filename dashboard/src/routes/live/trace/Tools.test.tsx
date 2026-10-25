@@ -43,7 +43,8 @@ function mount(onOpen = vi.fn()) {
   return { model, onOpen };
 }
 
-const row = (name: string) => screen.getByText(name).closest(".grid-row") as HTMLElement;
+const row = (name: string) =>
+  screen.getByText(name).closest(".crewlet-data-grid__row") as HTMLElement;
 
 test("a stamped call that took under a millisecond is timed on both tabs", () => {
   const { model } = mount();
@@ -65,9 +66,9 @@ test("a call nothing measured is not timed on both tabs", () => {
 // the waterfall has no row for.
 test("a row opens its span, or the Timeline when it has none", () => {
   const { model, onOpen } = mount();
-  fireEvent.click(row("submit_work"));
+  fireEvent.click(row("submit_work").querySelector(".crewlet-data-grid__row-link")!);
   const id = model.spans.find((s) => s.label === "submit_work")!.id;
   expect(onOpen).toHaveBeenLastCalledWith(id);
-  fireEvent.click(row("bridged_call"));
+  fireEvent.click(row("bridged_call").querySelector(".crewlet-data-grid__row-link")!);
   expect(onOpen).toHaveBeenLastCalledWith("");
 });

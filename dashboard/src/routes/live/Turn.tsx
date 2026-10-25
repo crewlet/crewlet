@@ -50,7 +50,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
-import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
@@ -76,6 +75,7 @@ import {
   EmptyState,
   Skeleton,
   Tag,
+  Tabs,
   Menu,
   cx,
   tabId,
@@ -1935,7 +1935,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           status={turnStatus(view, now)}
           facts={turnFacts(view, now)}
         />
-        <ObjectTabs
+        <Tabs
+          overflow="menu"
+          variant="underline"
           ariaLabel="The turn's sections"
           className="trace-tabs"
           value={tab}
@@ -2189,7 +2191,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
  * Which phases ran, one line each.
  *
  * NOT `PhaseCard`. That is the page's, and it is a transcript — a model's
- * reasoning, its arguments and its results — which in a rail 420 px wide is a
+ * words, its arguments and its results — which in a rail 420 px wide is a
  * page in a narrow column, and the reason the rail exists is that the list
  * behind it stays on screen. What a reader wants HERE is the shape of the
  * turn: which phases it ran, what each decided, and what each cost. The

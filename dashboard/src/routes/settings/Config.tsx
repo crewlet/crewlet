@@ -18,11 +18,10 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useParam } from "~/app/router.tsx";
 import {
   ButtonLink,
-  Callout,
   Card,
   CodeBlock,
   CopyButton,
@@ -35,6 +34,8 @@ import {
   TableKeyCell,
   TableTextCell,
   Tag,
+  PageNote,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   FileTextGlyph,
@@ -132,7 +133,7 @@ export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   return (
     // THE NAME OUTRANKS ITS KIND. In a narrow By column the name was cut to
     // "n…" beside a whole `operator` chip, which is the half of the fact a
-    // reader can least do without. In a revisions table (`.grid-cell >
+    // reader can least do without. In a revisions table (`.crewlet-data-grid__cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
     // before the name gives up a character; the title keeps both.
     <span
@@ -303,7 +304,9 @@ function AppliedAcross({
   }
   return (
     <Card>
-      <Card.Header icon={<ServerGlyph size="sm" />}>Across the fleet</Card.Header>
+      <Card.Header icon={<ServerGlyph size="sm" />}>
+        <Card.Title>Across the fleet</Card.Title>
+      </Card.Header>
       {body}
     </Card>
   );
@@ -398,7 +401,9 @@ function RevisionBody({
         </section>
       ) : (
         <Card>
-          <Card.Header icon={<FileTextGlyph size="sm" />}>Where it came from</Card.Header>
+          <Card.Header icon={<FileTextGlyph size="sm" />}>
+            <Card.Title>Where it came from</Card.Title>
+          </Card.Header>
           {provenance}
         </Card>
       )}
@@ -602,7 +607,7 @@ export function ConfigScreen({
    * carries no button at all and is never "open elsewhere".
    */
   const openRevision = useCallback(
-    (row: RevisionMeta, e: React.MouseEvent | React.KeyboardEvent) => {
+    (row: RevisionMeta, e: DataGridActivationEvent) => {
       const go = () => {
         setRevision(row.revision_id);
         // AND DROPS THE SIDE A LINK NAMED. A row picked here is "compare this
@@ -653,14 +658,26 @@ export function ConfigScreen({
             value={lens}
             onValueChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: <Mark name="file-text" size="xs" /> },
-              { value: "entities", label: "Entities", icon: <Mark name="layers" size="xs" /> },
-              { value: "audit", label: "History", icon: <Mark name="clock" size="xs" /> },
-              { value: "diff", label: "Diff", icon: <Mark name="split" size="xs" /> },
+              { value: "active", label: "Active", icon: <NamedGlyph name="file-text" size="xs" /> },
+              {
+                value: "entities",
+                label: "Entities",
+                icon: <NamedGlyph name="layers" size="xs" />,
+              },
+              { value: "audit", label: "History", icon: <NamedGlyph name="clock" size="xs" /> },
+              { value: "diff", label: "Diff", icon: <NamedGlyph name="split" size="xs" /> },
             ]}
           />
         </PageActions>
       )}
+
+      {/* WHAT THE SCREEN IS, said first and once, as every Settings page
+          that needs it says it: a callout under the last card was a footnote
+          a reader met after everything it qualifies. */}
+      <PageNote>
+        Read only here. Change the company document with{" "}
+        <InlineCode>crewlet config import</InlineCode>.
+      </PageNote>
 
       {/* THE REVISION THIS PATH NAMES, above the lens rather than below it:
           the reader followed a link to one revision, so what it is has to be
@@ -724,13 +741,15 @@ export function ConfigScreen({
           {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
           <QueryState error={active.error} refusal={active.refusal} loading={active.loading}>
             {active.data ? (
-              <Card>
+              // FLUSH: the block is the card's content, so it takes the
+              // card's surface rather than drawing a second frame inside it.
+              <Card padding="none">
                 <Card.Header
                   icon={<FileTextGlyph size="sm" />}
                   subtitle="as the engine resolved it"
                   actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
                 >
-                  Active revision
+                  <Card.Title>Active revision</Card.Title>
                 </Card.Header>
                 {/* BOUNDED, like every other record block, by the ceiling the
                     shell declares once (`--record-ceiling`, frame.css). A
@@ -958,7 +977,7 @@ export function ConfigScreen({
           >
             <Card padding="none">
               <Card.Header icon={<ClockGlyph size="sm" />} count={rows.length}>
-                Revisions
+                <Card.Title>Revisions</Card.Title>
               </Card.Header>
               <DataGrid<RevisionMeta>
                 rows={rows}
@@ -1036,10 +1055,6 @@ export function ConfigScreen({
           </QueryState>
         </>
       )}
-
-      <Callout variant="neutral">
-        Read-only here. Change it with <InlineCode>crewlet config import</InlineCode>.
-      </Callout>
     </>
   );
 }

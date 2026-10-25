@@ -310,7 +310,7 @@ Every refusal is about **one domain's copy**. A node whose tracker copy refuses
 pages, and the estate's router sends a seat's call on the tracker to a data
 node whose copy of the tracker is in service, while the node's other logs keep
 answering here
-([ADR-0045](https://github.com/crewlet/crewlet/blob/main/adr/0045-a-domains-fault-takes-only-its-own-copy-out-of-service.md);
+([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md);
 see [how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
 
 ### A write's refusals

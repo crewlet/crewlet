@@ -59,9 +59,9 @@ func TestTheStoredFormCarriesTheDeclarationOrder(t *testing.T) {
 name: Acme
 providers:
   llm:
-    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
-    alpha: {type: anthropic, model: m, api_keys: ["${K}"]}
-    mike: {type: anthropic, model: m, api_keys: ["${K}"]}
+    zulu: {model: m}
+    alpha: {model: m}
+    mike: {model: m}
 roles:
   - {name: CEO, handle: ceo, llm: zulu}
 `))
@@ -109,8 +109,8 @@ name: Acme
 providers:
   llm:
     llm_order: ["mike", "zulu"]
-    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
-    mike: {type: anthropic, model: m, api_keys: ["${K}"]}
+    zulu: {model: m}
+    mike: {model: m}
 roles:
   - {name: CEO, handle: ceo, llm: zulu}
 `))
@@ -123,8 +123,8 @@ name: Acme
 providers:
   llm_order: ["mike", "zulu"]
   llm:
-    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
-    mike: {type: anthropic, model: m, api_keys: ["${K}"]}
+    zulu: {model: m}
+    mike: {model: m}
 roles:
   - {name: CEO, handle: ceo, llm: zulu}
 `))
@@ -144,7 +144,7 @@ func TestAnUnknownFieldInAStoredRevisionIsToleratedNotFatal(t *testing.T) {
 	// the previous build refuses to boot the moment one node upgrades and
 	// activates.
 	payload := []byte(`{"name":"Acme","some_future_setting":{"on":true},
-	  "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
+	  "providers":{"llm":{"zulu":{"model":"m"}}},
 	  "roles":[{"name":"CEO","handle":"ceo","llm":"zulu"}]}`)
 	cfg, err := config.DecodeCompany(payload)
 	if err != nil {
@@ -170,7 +170,7 @@ func TestAnUnknownFieldInAStoredRevisionIsToleratedNotFatal(t *testing.T) {
 func TestAStoredRevisionDecodesAndIsValidatedSeparately(t *testing.T) {
 	t.Parallel()
 	cfg, err := config.DecodeCompany([]byte(
-		`{"name":"Acme","providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},` +
+		`{"name":"Acme","providers":{"llm":{"zulu":{"model":"m"}}},` +
 			`"roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`))
 	if err != nil {
 		t.Fatalf("a stored revision this build would refuse did not decode: %v", err)
@@ -201,7 +201,7 @@ func TestTheAdmissionRulesAreAClassApartFromTheRunnableOnes(t *testing.T) {
 name: Acme
 providers:
   llm:
-    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
+    zulu: {model: m}
 units:
   - name: Engineering
     children:
@@ -250,7 +250,7 @@ func TestAStoredRevisionGetsTheSameDefaults(t *testing.T) {
 name: Acme
 providers:
   llm:
-    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
+    zulu: {model: m}
 roles:
   - {name: CEO, handle: ceo, llm: zulu}
 `))
@@ -258,7 +258,7 @@ roles:
 		t.Fatal(err)
 	}
 	stored, err := config.DecodeCompany([]byte(
-		`{"name":"Acme","providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}}},` +
+		`{"name":"Acme","providers":{"llm":{"zulu":{"model":"m"}}},` +
 			`"roles":[{"name":"CEO","handle":"ceo","llm":"zulu"}]}`))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -340,7 +340,7 @@ func TestDuplicateSetupStepNamesAreAnAdmissionRule(t *testing.T) {
 name: Acme
 providers:
   llm:
-    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
+    zulu: {model: m}
   sandbox:
     fake: true
     setup:

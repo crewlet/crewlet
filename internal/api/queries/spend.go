@@ -247,7 +247,7 @@ func (s Sources) personCells(ctx context.Context, w spendWindow, q usage.SpendQu
 // UsageReads is the usage domain's reads (ADR-0020), as the spend, activity
 // and skill-reader answers ask them: [usage.Reader] over one estate, or the
 // estate router's facade, which answers from a data node whose usage copy is
-// in service — this node's own where it is (ADR-0045). The router is what a
+// in service — this node's own where it is (ADR-0046). The router is what a
 // running node hands this surface, so a node whose usage copy is out of
 // service draws its screens from a peer's rather than from the copy it
 // stopped serving.

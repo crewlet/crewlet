@@ -70,9 +70,7 @@ name: Acme
 providers:
   llm:
     gateway:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
+      model: sonnet
 `))
 			return &passConverger{pass: pass, engine: e}
 		}
@@ -111,9 +109,7 @@ name: Acme
 providers:
   llm:
     gateway:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
+      model: sonnet
 `)
 	for _, kind := range integration.Kinds {
 		if empty.Config.DeclaresIntegration(kind.String()) {

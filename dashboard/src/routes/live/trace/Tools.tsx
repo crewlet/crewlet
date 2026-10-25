@@ -20,7 +20,8 @@
  */
 
 import { Tag, InlineCode } from "@crewlethq/ui";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { type DataGridColumn } from "@crewlethq/ui";
 import { fmtDuration } from "~/lib/format.ts";
 import { callMeasured, phaseLabel, type Waterfall } from "~/lib/waterfall.ts";
 import type { PhaseRecord, ToolCall } from "~/lib/phases.ts";
@@ -41,7 +42,7 @@ export function originLabel(call: Pick<ToolCall, "origin" | "server">): string {
   return call.origin || "no tool answered";
 }
 
-const COLUMNS: GridColumn<Row>[] = [
+const COLUMNS: DataGridColumn<Row>[] = [
   {
     key: "tool",
     header: "Tool",

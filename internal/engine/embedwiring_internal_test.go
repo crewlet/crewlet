@@ -77,9 +77,7 @@ name: Nimbus
 providers:
   llm:
     scripted:
-      type: anthropic
       model: claude-x
-      api_keys: ["sk-test"]
   embeddings:
     type: openai
     model: text-embedding-3-small

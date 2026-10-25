@@ -111,6 +111,8 @@ export function EditorSection({
 export const SCREENS = {
   integrations: ["company", "integrations"],
   schedules: ["company", "schedules"],
+  /** The company's mission, vision and policies, which only that page writes. */
+  principles: ["company", "principles"],
   /** The company's credentials: Settings › Secrets, the engine's own word
    *  (`/secrets`). */
   secrets: ["settings", "secrets"],
@@ -621,9 +623,10 @@ export function placeOnFields(
 }
 
 /** Where a problem the builder cannot fix is fixed instead. */
-const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
+export const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
   integrations: "Open Integrations",
   schedules: "Open Schedules",
+  principles: "Open Principles",
 };
 
 /**

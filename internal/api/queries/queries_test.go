@@ -275,7 +275,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
 		"mcp_servers_status": "admin", "backups": "admin",
-		"credential_pool": "admin", "fleet_broker": "admin",
+		"fleet_broker": "admin",
 		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
 		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",

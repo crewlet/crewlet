@@ -118,8 +118,6 @@ func everySeam(t *testing.T) queries.Sources {
 		Retention: func(context.Context) any { return nil },
 		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
 		FleetBroker: emptyBroker{},
-		// EVERY MODEL'S KEY BAG, which the engine always supplies.
-		CredentialPools: func() []engine.CredentialPool { return nil },
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a

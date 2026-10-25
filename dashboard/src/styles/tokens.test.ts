@@ -58,9 +58,9 @@ const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
     why: "listReserve() for the frame on screen, set on .app with data-peek=column",
   },
   {
-    name: "--section-column",
-    by: "app/Shell.tsx",
-    why: "columnWidth() for the workspace's column, set on .section-frame — the same number the peek threshold counts",
+    name: "--budget-tracks",
+    by: "routes/spend/Budgets.tsx",
+    why: "TRACKS, the one track list the company's budget row and the seats' table are both handed, set on .budget-row",
   },
 ];
 

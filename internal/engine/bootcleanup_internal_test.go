@@ -51,9 +51,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
   embeddings:
     type: openai
     model: "${CREWLET_TEST_EMBEDDING_MODEL_NOBODY_SETS}"

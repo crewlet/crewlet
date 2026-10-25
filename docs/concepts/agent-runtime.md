@@ -98,10 +98,7 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
          round of it, so a delivery an earlier round made is citable.
          A round that ends in prose instead is not an end: the loop
          asks again, naming submit_work, at most twice in a row, before
-         the phase is rescued as incomplete. A round that did not FINISH
-         never gets that far: a refusal, a response cut off at the output
-         cap, a full context window or a paused turn ends the phase by
-         name, with nothing rescued and nothing re-asked
+         the phase is rescued as incomplete
 
 3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends
@@ -126,7 +123,7 @@ The executor and the reviewer can run on different LLM models — see the [Turn 
 
 ## The LLM ↔ Tool Proxy
 
-The LLM is an external HTTP service — it cannot access local code, MCP servers, or engine internals directly. The shared tool-call loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
+The LLM is reached through a coding CLI the engine drives as a process — in text mode its own tools are denied, and it cannot reach MCP servers or engine internals directly. The shared tool-call loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
 
 ```mermaid
 flowchart TD
@@ -149,14 +146,13 @@ flowchart TD
         S5 --> S6
         S6 --> S2
     end
-    LLM["LLM API (external)<br/>Claude, GPT, …"]
+    LLM["The model, through its coding CLI<br/>Claude Code · Codex · OpenCode · …"]
     S2 --> LLM
     LLM --> S3
     S6 -->|"LLM responds without tool_calls"| DONE["phase ends"]
-    S3 -->|"stop reason: refusal, max_tokens,<br/>context_exceeded or paused"| FAIL["phase fails by name<br/>(its calls are not run)"]
 ```
 
-Step 3 reads **why the model stopped** before anything else reads the response. Every backend normalises its own stop reason (`end_turn`, `length`, `content_filter`, …) onto one vocabulary, and a round the output cap cut off, one that filled the context window, a turn the provider paused, or a model that **declined** the request ends the phase with that reason as its `error_kind` — the tools that round asked for are not run, and no corrective is sent. A refusal is never handed to the next model in the fallback chain and its turn is not redelivered. A tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [A round that did not finish](turn-engine.md#a-round-that-did-not-finish).
+In text mode the CLI has no tool-call channel of its own, so the tools ride the prompt as a catalogue and a response contract, and step 3 reads the calls out of the envelope the reply carries. Each round records **why the model stopped** — an answer (`end`) or calls to run (`tool_use`), the two a CLI can report — and a tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [How a round ends](turn-engine.md#how-a-round-ends).
 
 Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: a function it can ask the engine to call.
 
@@ -317,9 +313,9 @@ The engine runs **genuinely parallel** work within a single process:
 
 **A turn past the ceiling waits, in this process.** It is not handed back for the broker to redeliver on the broker's own schedule — for a chat message someone is waiting on, that turns a busy moment into a visible stall. The waiting turn starts the instant a slot frees. The one exception is a drain, below.
 
-**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the engine's one auxiliary seam, so that counter sees it and every spend figure records it ([Budgets and spend § Auxiliary spend](../guides/budgets-and-spend.md#auxiliary-spend)) — a pass the model **refused** included: a refusal returns no answer, but the response the vendor billed travels with it and is recorded like any other (`llm.Billed` is the one reading every meter uses).
+**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the engine's one auxiliary seam, so that counter sees it and every spend figure records it ([Budgets and spend § Auxiliary spend](../guides/budgets-and-spend.md#auxiliary-spend)).
 
-**Sizing it.** It is per *node*, so a fleet's ceiling is N × the value — see [Scaling Out](scaling.md#what-stays-per-process-deliberately). The default of 32 is above the seat count of a single-node company (the example company runs a handful of seats; a large one runs tens) so it changes nothing for a company running today, while still bounding a node that has been handed far more seats than its host can serve. Raise it on a bigger host; lower it on a satellite running one agent. There is no "unbounded" — `0` means "take the default", and effectively-no-limit is a large number you can see in your config. Note this is a *different* knob from a cli-agent provider's own `max_concurrent`, which caps that provider's subprocesses; see [Subscription LLM backends](subscription-llm-backends.md).
+**Sizing it.** It is per *node*, so a fleet's ceiling is N × the value — see [Scaling Out](scaling.md#what-stays-per-process-deliberately). The default of 32 is above the seat count of a single-node company (the example company runs a handful of seats; a large one runs tens) so it changes nothing for a company running today, while still bounding a node that has been handed far more seats than its host can serve. Raise it on a bigger host; lower it on a satellite running one agent. There is no "unbounded" — `0` means "take the default", and effectively-no-limit is a large number you can see in your config. Note this is a *different* knob from a `providers.llm` entry's own `max_concurrent`, which caps that entry's CLI processes; see [LLM Backends](llm-backends.md).
 
 That is real parallelism rather than one cooperative loop, which is the
 single biggest behavioural difference from the engine's first
@@ -506,7 +502,7 @@ flowchart TD
     S5["5. Wait for in-flight handlers"] --> S6
     S6["6. Release every seat"] --> S7
     S7["7. Finish the git requests, then close the HTTP listener<br/>dashboard · REST · webhooks · git · probes"] --> S8
-    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · object collector · code retention · trash reaper · credential cooldown"] --> S9
+    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · object collector · code retention · trash reaper"] --> S9
     S9["9. Reap shared MCP servers; custody flush (node without data);<br/>close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
@@ -590,8 +586,7 @@ flowchart TD
    still leaves that day whole, and before the trim and the logs it publishes
    into. Then the integration reconcile loop, memory sync, the object store's
    collector, the code-retention duty and the trash reaper (every duty loop
-   stops before the node gives its duty leases back), and the credential
-   cooldown refresh. Everything that appends to a state log stops BEFORE the
+   stops before the node gives its duty leases back). Everything that appends to a state log stops BEFORE the
    node withdraws its admission to a
    [ceiling change](../guides/retention.md#changing-a-logs-ceiling) — the
    trim, the embedding duty, the usage publisher, the code-retention duty, the

@@ -37,7 +37,6 @@ import { plural } from "~/lib/format.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 import { allSeats, allUnits, type Draft } from "./draft.ts";
 import {
-  CHARTER_FIELDS,
   DATADOG_ROUTE_TO,
   GITLAB_ACCESS_LEVELS,
   type PathIndex,
@@ -94,8 +93,7 @@ export interface ChangeSet {
     readonly to: EntityRef;
   }[];
   readonly edited: readonly { readonly ref: EntityRef; readonly fields: readonly string[] }[];
-  /** Charter fields that changed. */
-  readonly charter: readonly string[];
+  /** The company's new name, when this save renames it. */
   readonly companyRename: { readonly before: string; readonly after: string } | null;
   /** Agent seats whose onboarding chain changed, grouped by the first cause that applies. */
   readonly onboarding: readonly {
@@ -325,7 +323,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     if (from !== to) moved.push({ ref: ref(next, key), from: ref(base, from), to: ref(next, to) });
   }
 
-  const charter = CHARTER_FIELDS.filter((f) => !jsonEqual(base.document[f], next.document[f]));
   const beforeName = companyName(base.document);
   const afterName = companyName(next.document);
   const companyRename =
@@ -508,7 +505,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     renamed,
     moved,
     edited,
-    charter,
     companyRename,
     onboarding,
     unitRenames,
@@ -523,7 +519,15 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     gitlabAccessLevels,
     massRemoval,
     acknowledgements,
-    summary: auditSummary({ added, removed, renamed, moved, edited, charter, ops: inputs.ops }),
+    summary: auditSummary({
+      added,
+      removed,
+      renamed,
+      moved,
+      edited,
+      companyRename,
+      ops: inputs.ops,
+    }),
   };
 }
 
@@ -647,7 +651,7 @@ function auditSummary(parts: {
   renamed: readonly { ref: EntityRef }[];
   moved: readonly { ref: EntityRef }[];
   edited: readonly { ref: EntityRef }[];
-  charter: readonly string[];
+  companyRename: { readonly after: string } | null;
   ops: readonly Operation[];
 }): string {
   const template = parts.ops.find((op) => op.type === "applyTemplate");
@@ -660,7 +664,7 @@ function auditSummary(parts: {
   };
   const phrases: string[] = [];
   if (template && template.type === "applyTemplate")
-    phrases.push(`created ${template.charter.name} in the organization builder`);
+    phrases.push(`created ${template.name} in the organization builder`);
   const add = (verb: string, refs: readonly { kind: string }[]) => {
     const text = count(refs);
     if (text) phrases.push(`${verb} ${text}`);
@@ -679,7 +683,8 @@ function auditSummary(parts: {
     "edited",
     parts.edited.map((r) => r.ref),
   );
-  if (!template && parts.charter.length > 0) phrases.push("edited the charter");
+  if (!template && parts.companyRename)
+    phrases.push(`renamed the company to ${parts.companyRename.after}`);
   if (phrases.length === 0) return "Saved with no chart changes";
   const sentence = phrases.join(", ");
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);

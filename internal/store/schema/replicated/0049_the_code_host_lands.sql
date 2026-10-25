@@ -42,7 +42,7 @@
 --
 -- It names the object a push stored, and internal/objstore/references declares
 -- the table, so the collector keeps the object, the audit asks the store for
--- it and every backup carries it — REQUIRED (ADR-0047). The object is a pack
+-- it and every backup carries it — REQUIRED (ADR-0048). The object is a pack
 -- BUNDLE: the pack, then its .idx and its .rev, back to back, so one GET
 -- installs a push on any git node with no index-pack. `size` is the WHOLE
 -- object's, which the collector's audit compares, and `index_bytes` and

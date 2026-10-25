@@ -122,7 +122,7 @@ func runCode(environ config.Source, args []string, stdout, stderr io.Writer) err
 const maxCredentialInput = 64 << 10
 
 // codeCredentialUser is the user name the helper answers. FIXED: the API
-// reads only the password of a Basic credential (ADR-0051), so a name would
+// reads only the password of a Basic credential (ADR-0052), so a name would
 // say something the node never reads.
 const codeCredentialUser = "crewlet"
 

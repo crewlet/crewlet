@@ -305,7 +305,7 @@ What the binding buys:
   keep one team's seats out of another's
   ([Visibility](code-host.md#visibility)). The [Code guide](../guides/code.md)
   is how to set it up, and
-  [ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-person-reaches-git-with-their-own-bound-token.md)
+  [ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-a-person-reaches-git-with-their-own-bound-token.md)
   why there is no second credential for git.
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the

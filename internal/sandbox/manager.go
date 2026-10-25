@@ -236,7 +236,7 @@ func (m *Manager) configured(placement Placement) (Provider, error) {
 		return nil, &ConfigError{msg: fmt.Sprintf(
 			"no cell named for this run and providers.sandbox names no "+
 				"default_run_in (configured: %v): set one, or name the cell "+
-				"on the seat's role.sandbox.run_in or the entry's cli.run_in",
+				"on the seat's role.sandbox.run_in or the entry's run_in",
 			slices.Sorted(maps.Keys(m.providers)))}
 	}
 	provider, ok := m.providers[placement]

@@ -475,7 +475,9 @@ func (c *Company) Warnings() []Warning {
 }
 
 // AdmissionWarnings is every admission rule c breaks, as warnings located
-// exactly like the problems a write keeping them is refused with.
+// exactly like the problems a write keeping them is refused with, and every
+// charter rule it breaks ([Company.CharterWarnings]), which a write is refused
+// for only where it changes the part at fault.
 //
 // Built from those problems rather than beside them, so the two cannot place
 // one violation differently: one warning per entity it is about (a duplicated
@@ -483,7 +485,12 @@ func (c *Company) Warnings() []Warning {
 // problem's path, segments, seat, unit and message. Ref, From and To are
 // empty, because an admission rule names no reference.
 func (c *Company) AdmissionWarnings() []Warning {
-	problems := Problems(c.ValidateAdmission())
+	return append(warningsOf(c.ValidateAdmission()), c.CharterWarnings()...)
+}
+
+// warningsOf is the problems err reports, as admission warnings.
+func warningsOf(err error) []Warning {
+	problems := Problems(err)
 	out := make([]Warning, 0, len(problems))
 	for _, p := range problems {
 		out = append(out, Warning{
@@ -554,8 +561,8 @@ func (c *Company) ReferenceWarnings() []Warning {
 // in to.
 //
 // So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]),
-// and an LLM entry worth a second look ([Providers.llmWarnings]): an anthropic
-// model the capability table does not know, named with no claude_model.
+// and a code setting that grants or protects less than it reads as
+// ([Company.codeWarnings]).
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
@@ -576,8 +583,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
 	out = append(out, c.budgetWarnings()...)
-	out = append(out, c.codeWarnings()...)
-	return append(out, c.Providers.llmWarnings()...)
+	return append(out, c.codeWarnings()...)
 }
 
 // peoplelessWarnings is the one warning a company declaring no human seat

@@ -10,7 +10,7 @@
 // push's objects into the repository it runs in before any hook can refuse
 // them, and a refused push's objects would then be served, and connected
 // against, by a cache that is supposed to be a function of the rows
-// (ADR-0050). The one hook, proc-receive, relays every ref update to the
+// (ADR-0051). The one hook, proc-receive, relays every ref update to the
 // engine over a unix socket; the engine checks what only it can (a forced
 // update under a protection, a blob over the limit), uploads the push's one
 // pack bundle to the object store, and proposes the push to the repository's
@@ -236,7 +236,7 @@
 // its auth and paced leaves, and nothing from the engine or the estate: its
 // seams (Estate, Uploader, Audit) are declared here and filled by the engine.
 //
-// What the admitted request may do is its GRANT (code.GrantOf, ADR-0054),
+// What the admitted request may do is its GRANT (code.GrantOf, ADR-0055),
 // built from ONE principal — the admission's principal(), the credential and
 // the seat the guard resolved it to, the same value the push's session and
 // proposal carry — and asked with no roster, since a person's grant reads no

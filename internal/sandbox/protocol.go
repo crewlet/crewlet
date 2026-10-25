@@ -210,51 +210,6 @@ type Spec struct {
 	CredentialFiles map[string]string
 }
 
-// AgentLLM is the seat's resolved model and endpoint, for a coding agent that
-// must configure its own provider rather than read credentials from the env.
-//
-// Some agents resolve a bare "<provider>/<model>" against a catalogue AND the
-// vendor's default endpoint — so a custom gateway plus an unlisted model id
-// either fails to resolve or silently hits the wrong host. A runner uses this
-// to declare a provider with an explicit base URL and the exact model,
-// bypassing both. An agent that reads its credentials from the environment
-// ignores it.
-//
-// TWO KINDS OF ENTRY, and they name a model in different grammars. An API
-// entry's Model is a vendor's model id and ProviderType names that vendor's
-// wire, so a runner may address it in its own grammar. A cli-agent entry's
-// Model is written in the grammar of the CLI that entry drives — OpenCode
-// reads `<provider>/<model>`, Claude Code an alias or an id — and CLI names
-// that CLI: such a model reaches a runner VERBATIM, and only a runner driving
-// that same CLI can read it, which is why the engine refuses a run pairing a
-// cli-agent entry with another CLI's runner rather than letting a runner
-// rebuild an id it cannot know.
-//
-// THE API KEY IS NOT HERE. It rides the run env, and a written config
-// references it by variable name, so the secret is never duplicated into a
-// config file inside the box.
-type AgentLLM struct {
-	// Model is the model the run works under: an API entry's resolved model
-	// id, or a cli-agent entry's model exactly as its text calls hand it to
-	// its CLI.
-	Model string
-
-	// CLI is the cli-agent profile a cli-agent entry drives (claude-code,
-	// opencode, …), and empty for an API entry.
-	CLI string
-
-	// ProviderType is an API entry's providers.llm type (anthropic,
-	// openai, openai-compatible): the wire its model is served on. Empty
-	// for a cli-agent entry, whose provider is named by its Model in its
-	// CLI's own grammar rather than by a family the engine could know.
-	ProviderType string
-
-	// BaseURL is the endpoint. Empty means the vendor default, and so no
-	// custom provider declaration at all. Always empty for a cli-agent
-	// entry, which talks to its vendor.
-	BaseURL string
-}
-
 // RunHandle points at a detached job.
 //
 // PERSISTED, which is the whole point: the command id and pid go into the
@@ -614,9 +569,15 @@ type RunRequest struct {
 	Env    map[string]string
 	Limits Limits
 
-	// LLM is the seat's model and endpoint, for a runner that configures its
-	// own provider. Nil leaves the agent to read the env.
-	LLM *AgentLLM
+	// Model is the model the run works under, written in the grammar of the
+	// CLI the runner drives: the seat's providers.llm entry's model exactly
+	// as its text calls hand it to that same CLI, which is the only CLI the
+	// engine lets reach this runner. Empty leaves the agent's own choice.
+	//
+	// NO ENDPOINT AND NO KEY: an entry talks to its CLI's own vendor, and its
+	// sign-in rides the run env, so nothing secret is written into a file
+	// inside the box.
+	Model string
 
 	// MCPServers is the scoped MCP surface, keyed by server name.
 	// SERVER-LEVEL SCOPING ONLY — there is no per-tool allowlist, because

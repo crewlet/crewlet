@@ -229,6 +229,11 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // It validates the ORG as well: building the hierarchy is where duplicate
 // handles, unrunnable schedules and human-seat rule violations surface, and
 // a config that parses into a company nobody can run has not been validated.
+//
+// The CHARTER's rules are not among them: they judge what a write changes
+// against the revision it replaces rather than the document it leaves, so an
+// old fault never refuses an unrelated write. Every writer asks
+// [Company.ValidateCharterChange] beside this.
 func (c *Company) Validate() error {
 	o, index := c.organization()
 	return index.locate(errors.Join(c.validateRunnable(o), c.validateAdmission(o)))
@@ -261,11 +266,11 @@ func (c *Company) ValidateRunnable() error {
 // NAME is held unique), a unit with no id, duplicate sandbox setup step names
 // within one list, a code access tier or a GitHub App on a human seat
 // ([Company.validateHumanSeatCode]), an avatar the dashboard cannot draw or
-// one on a human seat ([Company.validateAvatars]), a cli-agent entry's
+// one on a human seat ([Company.validateAvatars]), a providers.llm entry's
 // credential configured where its CLI never reads it
-// ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
-// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), a seat
-// whose code work hands a cli-agent entry to another CLI's coding agent
+// ([LLMProvider.validateCredentials]), a model with no provider segment on a
+// CLI that reads one ([LLMProvider.validateModel]), a seat whose code work
+// hands a providers.llm entry to another CLI's coding agent
 // ([Company.validateSandboxCodingAgents]), a sandbox gate saying what nothing
 // reads ([Company.validateSandboxGates]), a setup step writing a file a box
 // it reaches refuses ([Company.validateSetupFileHomes]), a coding run's
@@ -287,7 +292,7 @@ func (c *Company) ValidateAdmission() error {
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateAvatars(),
-		c.validateCLIAgentCredentials(), c.validateCLIAgentModels(),
+		c.validateLLMCredentials(), c.validateLLMModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateFileRules(),
 		c.Code.validateAdmission(field("code")))
@@ -426,14 +431,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	// that comes from this process rather than from the document's author.
 	// A credential still holding the marker means a config read was edited
 	// and sent back, and the mask could not be matched to what it hid: a
-	// member that is NEW or RENAMED has no prior value of its own, a member
-	// whose identity the stored revision does not give to exactly one member
-	// (a duplicate, or an empty one) cannot be matched without guessing, and
-	// a list of bare credentials that changed length no longer says by
-	// position which one is which. Storing it silently would hand a
-	// provider the literal "__redacted__" as an API key, and the failure
-	// would surface hours later as an authentication error naming nothing
-	// about where it came from.
+	// member that is NEW or RENAMED has no prior value of its own, and a
+	// member whose identity the stored revision does not give to exactly one
+	// member (a duplicate, or an empty one) cannot be matched without
+	// guessing. Storing it silently would hand a provider the literal
+	// "__redacted__" as an API key, and the failure would surface hours later
+	// as an authentication error naming nothing about where it came from.
 	//
 	// The message names every cause, because the restore does not record
 	// which one applied and an operator reading only "new or renamed" about
@@ -444,10 +447,9 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 				"not be matched to the value it hid. A seat is matched by its "+
 				"handle, a unit by its key, and an MCP server and a sandbox "+
 				"setup step by its name, so this happens when the member is "+
-				"new or was renamed, when the stored revision gives that "+
-				"identity to more than one member or the member has none, or "+
-				"when a list of bare credentials changed length. Write the real "+
-				"value or a ${VAR} reference here",
+				"new or was renamed, or when the stored revision gives that "+
+				"identity to more than one member or the member has none. Write "+
+				"the real value or a ${VAR} reference here",
 			Redacted)
 	}
 
@@ -1258,7 +1260,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 		where := at(box.At, "sandbox.run_in")
 		if box.Executor != "" {
-			where = at(agentModeEntryPath(box.Executor), "run_in")
+			where = at(entryPath(box.Executor), "run_in")
 		}
 		reached[box.Cell] = where.String()
 	}
@@ -1284,18 +1286,12 @@ func (c *Company) agentModeExecutorKeys() []string {
 	seen := map[string]struct{}{}
 	for role := range c.EachRole() {
 		key, entry, resolved := c.executorProvider(role, fallback)
-		if !resolved || !entry.CLI.AgentMode() {
+		if !resolved || !entry.AgentMode() {
 			continue
 		}
 		seen[key] = struct{}{}
 	}
 	return slices.Sorted(maps.Keys(seen))
-}
-
-// agentModeEntryPath is where an agent-mode entry's placement is written, for
-// the messages that point at it.
-func agentModeEntryPath(name string) Path {
-	return at(entry(field("providers.llm"), name), "cli")
 }
 
 // ExecutorProvider is the providers.llm entry a seat's EXECUTOR actually runs
@@ -1417,9 +1413,9 @@ func (c *Company) codingAgent(gate *RoleSandbox) CodingAgent {
 }
 
 // validateSandboxCodingAgents refuses a seat whose code work would hand a
-// cli-agent entry to ANOTHER CLI's coding agent.
+// providers.llm entry to ANOTHER CLI's coding agent.
 //
-// A cli-agent entry's model is written in its own CLI's grammar and its
+// An entry's model is written in its own CLI's grammar and its
 // sign-in is that CLI's, so a different runner can read neither: Claude Code
 // was handed `--model openrouter/anthropic/claude-sonnet-5` from an OpenCode
 // entry, and OpenCode `anthropic/sonnet` from a Claude Code one. The launch
@@ -1441,18 +1437,18 @@ func (c *Company) validateSandboxCodingAgents() error {
 		if gate == nil || !gate.Enabled || gate.RunIn == PlacementSelf {
 			continue
 		}
-		if _, executor, resolved := c.executorProvider(role, fallback); resolved && executor.CLI.AgentMode() {
+		if _, executor, resolved := c.executorProvider(role, fallback); resolved && executor.AgentMode() {
 			// Never offered run_sandbox, so it has no code work to hand
 			// anybody: its one run is its executor's, on that entry's
 			// own CLI.
 			continue
 		}
 		key, entry, resolved := c.sandboxProvider(role, fallback)
-		if !resolved || entry.Type != LLMCLIAgent || entry.CLI == nil {
+		if !resolved {
 			continue
 		}
 		runner := c.codingAgent(gate)
-		cli := entry.CLI.Name()
+		cli := entry.AgentName()
 		if cli == string(runner) {
 			continue
 		}
@@ -1462,16 +1458,15 @@ func (c *Company) validateSandboxCodingAgents() error {
 }
 
 // CodingAgentMismatch is the one sentence for a coding run whose runner is not
-// the CLI its cli-agent entry drives, shared by the config rule and the
+// the CLI its providers.llm entry drives, shared by the config rule and the
 // engine's launch refusal so the write and the run say the same thing.
 func CodingAgentMismatch(runner, key, cli string) string {
-	remedy := fmt.Sprintf("point role.llm_sandbox at an API entry (type anthropic, openai "+
-		"or openai-compatible) or at a cli-agent entry with cli.agent: %s", runner)
+	remedy := fmt.Sprintf("point role.llm_sandbox at an entry with agent: %s", runner)
 	if slices.Contains(CodingAgents, CodingAgent(cli)) {
 		remedy += fmt.Sprintf(", or set role.sandbox.coding_agent: %s", cli)
 	}
 	return fmt.Sprintf("this seat's code work runs the %s coding agent on providers.llm.%s, "+
-		"a cli-agent entry driving %s: that entry's model is written for %s and its "+
+		"an entry driving %s: that entry's model is written for %s and its "+
 		"sign-in is %s's, so %s can read neither. To fix it, %s",
 		runner, key, cli, cli, cli, runner, remedy)
 }
@@ -1482,7 +1477,7 @@ func CodingAgentMismatch(runner, key, cli string) string {
 //
 // A seat whose executor runs in AGENT MODE is never offered run_sandbox (the
 // runner's offersSandbox): it already holds a shell, and its one box is the
-// executor's, placed by that entry's `cli.run_in`. So its gate's `run_in`
+// executor's, placed by that entry's `run_in`. So its gate's `run_in`
 // places nothing — `self`, which says exactly that, or nothing at all — and
 // its `coding_agent` drives nothing, the run being the entry's own CLI. Each
 // was accepted and read as a working choice, and a `run_in: container` made
@@ -1510,22 +1505,22 @@ func (c *Company) validateSandboxGates() error {
 		where := at(path, "sandbox")
 		if hasExecutor {
 			key, entry, resolved := c.executorProvider(role, fallback)
-			if resolved && entry.CLI.AgentMode() {
+			if resolved && entry.AgentMode() {
 				if gate.RunIn != "" && gate.RunIn != PlacementSelf {
 					p.add(at(where, "run_in"), ErrConflict,
 						"this seat's executor runs in agent mode on providers.llm.%s, "+
-							"which places the one box it works in (its cli.run_in, else "+
+							"which places the one box it works in (its run_in, else "+
 							"providers.sandbox.default_run_in), and such a seat is never "+
 							"offered run_sandbox, so %q here places nothing. Write `self` "+
-							"or leave it out, and name the cell on providers.llm.%s.cli.run_in",
+							"or leave it out, and name the cell on providers.llm.%s.run_in",
 						key, gate.RunIn, key)
 				}
-				if gate.CodingAgent != "" && string(gate.CodingAgent) != entry.CLI.Name() {
+				if gate.CodingAgent != "" && string(gate.CodingAgent) != entry.AgentName() {
 					p.add(at(where, "coding_agent"), ErrConflict,
 						"this seat's executor runs in agent mode on providers.llm.%s, "+
 							"which is %s's own run, and such a seat is never offered "+
 							"run_sandbox, so %q here drives nothing. Leave it out",
-						key, entry.CLI.Name(), gate.CodingAgent)
+						key, entry.AgentName(), gate.CodingAgent)
 				}
 				continue
 			}
@@ -1560,7 +1555,7 @@ func (c *Company) validateSandboxPlacement() error {
 			continue
 		}
 		if hasExecutor {
-			if _, entry, resolved := c.executorProvider(role, fallback); resolved && entry.CLI.AgentMode() {
+			if _, entry, resolved := c.executorProvider(role, fallback); resolved && entry.AgentMode() {
 				// AN AGENT-MODE SEAT'S GATE PLACES NOTHING: such a seat
 				// is never offered run_sandbox, and its one box is its
 				// executor's, placed by the entry and asked these same
@@ -1593,7 +1588,7 @@ func (c *Company) validateSandboxPlacement() error {
 					"`self` means code work rides this seat's own executor run, "+
 						"which only a coding CLI in agent mode has. This seat's "+
 						"executor is providers.llm.%s. Set `mode: agent` on a "+
-						"cli-agent entry and point the seat at it, or name a "+
+						"providers.llm entry and point the seat at it, or name a "+
 						"cell the catalogue configures (%s)",
 					key, names(catalogue.available()))
 			}
@@ -1627,15 +1622,15 @@ func (c *Company) validateSandboxPlacement() error {
 	// field in the file appeared to be missing.
 	for _, key := range c.agentModeExecutorKeys() {
 		entry := c.Providers.LLM[key]
-		where := at(agentModeEntryPath(key), "run_in")
+		where := at(entryPath(key), "run_in")
 		if !catalogue.Enabled() {
-			p.add(at(agentModeEntryPath(key), "mode"), ErrMissing,
+			p.add(at(entryPath(key), "mode"), ErrMissing,
 				"agent mode runs the executor in a box, and this company "+
 					"configures no sandbox. Add providers.sandbox, or set "+
 					"`mode: text` to keep the CLI a subprocess of the engine")
 			continue
 		}
-		run := entry.CLI.RunIn
+		run := entry.RunIn
 		if run == "" {
 			run = catalogue.RunIn()
 		}

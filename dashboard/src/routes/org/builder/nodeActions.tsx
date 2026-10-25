@@ -38,6 +38,7 @@ import {
   TrashGlyph,
   PencilGlyph,
   FolderInputGlyph,
+  TextCursorGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { Kbd, isApplePlatform, type AddPillSection, type MenuEntry } from "@crewlethq/ui";
@@ -132,8 +133,71 @@ function seatScreen(view: SeatView): string[] | null {
   return view.saved ? seatPath({ handle: view.saved.handle, name: view.saved.name }) : null;
 }
 
+/**
+ * What a unit's or a seat's Edit is called on the pencil a surface draws:
+ * named after the node, because a chart draws one per card.
+ */
+export function editLabel(name: string): string {
+  return name ? `Edit ${name}` : "Edit";
+}
+
+/**
+ * Whether a node carries an Edit of its own: a pencil on its card and its row,
+ * Enter and a double-click on it, and Edit in its menu.
+ *
+ * THE COMPANY CARRIES NONE. Its mission, vision and standing policies are
+ * written on Company › Principles, a page of its own, and a pencil on the root
+ * of the chart that left the builder for another page read as editing the
+ * node it was drawn on. So the company's principles are the toolbar's entry
+ * alone ([principlesEntry]), and its name is Rename company in its menu.
+ */
+export function editsInPlace(view: NodeView): boolean {
+  return view.type !== "company";
+}
+
+/** The key of [principlesEntry], which only the toolbar offers. */
+const PRINCIPLES_ENTRY = "principles";
+
+/**
+ * The toolbar's way to the company's principles, once the company exists
+ * ([BuilderApi.principles]): "Edit principles", opening the page in edit, or
+ * "Open principles" for a reader who may only read them there, since a page
+ * they cannot change is not an edit. A company this draft is still creating
+ * has no such page yet, and no entry.
+ */
+function principlesEntry(api: BuilderApi): MenuEntry[] {
+  if (api.principles === null) return [];
+  const write = api.principles === "write";
+  return [
+    {
+      key: PRINCIPLES_ENTRY,
+      label: write ? "Edit principles" : "Open principles",
+      icon: write ? <PencilGlyph /> : <ArrowUpRightGlyph />,
+      onSelect: () => api.openPrinciples(),
+    },
+  ];
+}
+
 /** Every action of a node, in the order every surface offers them. */
 export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): MenuEntry[] {
+  if (view.type === "company") {
+    // THE COMPANY HAS NO EDIT ([editsInPlace]): its principles are a page of
+    // their own and its name, the one company field the builder writes, is an
+    // entry of its own. A lead's draft refuses the rename with the reason, as
+    // every company change.
+    return [
+      ...addEntries(api, view.key),
+      { kind: "separator", key: "sep" },
+      ...principlesEntry(api),
+      {
+        key: "rename",
+        label: "Rename company",
+        icon: <TextCursorGlyph />,
+        ...refusedEntry(api, view.key, "edit"),
+        onSelect: () => api.openCompanyRename(),
+      },
+    ];
+  }
   const edit: MenuEntry = {
     key: "edit",
     label: "Edit",
@@ -157,9 +221,6 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     ...refusedEntry(api, view.key, "place"),
     onSelect: () => api.openMove(view.key),
   };
-  if (view.type === "company") {
-    return [...addEntries(api, view.key), { kind: "separator", key: "sep" }, edit];
-  }
   if (view.type === "unit") {
     return [
       ...addEntries(api, view.key),
@@ -285,6 +346,10 @@ export function rowMenu(
  * one draft. The toolbar draws no control of its own and therefore keeps
  * `nodeMenu` whole.
  *
+ * THE COMPANY'S PRINCIPLES ARE THE TOOLBAR'S ALONE ([editsInPlace]): a card or
+ * a row of the company offers no way to them, so the root of the chart carries
+ * no edit of any kind.
+ *
  * SEPARATORS ARE PART OF THE SUBTRACTION. `nodeMenu` groups its entries with
  * rules, and taking the adds and Delete out of a unit's menu left a rule at
  * the top, a rule at the bottom and two in a row in the middle: a menu of
@@ -298,7 +363,8 @@ function surfaceMenu(
   reached: ReadonlySet<string>,
 ): MenuEntry[] {
   const kept = [...nodeMenu(api, view, open), ...moveEntries(api, reorder, view.key)].filter(
-    (entry) => entry.kind === "separator" || !reached.has(entry.key),
+    (entry) =>
+      entry.kind === "separator" || (!reached.has(entry.key) && entry.key !== PRINCIPLES_ENTRY),
   );
   const menu: MenuEntry[] = [];
   for (const entry of kept) {

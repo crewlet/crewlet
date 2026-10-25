@@ -14,7 +14,7 @@
 // listed here fails the build, and so does a listed table the schema does not
 // have, or one whose key column no index leads with.
 //
-// # Required and retired (ADR-0047)
+// # Required and retired (ADR-0048)
 //
 // Every declaration states its STANDING ([objstore.Standing]), and the gate
 // below refuses one that states neither. A REQUIRED table's rows are live
@@ -59,7 +59,7 @@
 // list against the estates it hands them, so a table declared in a domain the
 // engine reads no estate of fails the build rather than the boot.
 //
-// # The log half (ADR-0048)
+// # The log half (ADR-0049)
 //
 // A backup reads more than rows: a restore brings its store copy back and
 // replays the declaring domain's log from the copy's position — and a newer

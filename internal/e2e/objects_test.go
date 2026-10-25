@@ -178,7 +178,7 @@ func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 	t.Parallel()
 	logs.attribute(t)
 	model := newScriptedModel(t)
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	cfg, err := config.ParseCompany([]byte(goldenCompany(model)))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}

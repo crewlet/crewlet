@@ -15,7 +15,7 @@ import (
 )
 
 // liveRefs and retiredRefs are one domain's two declared tables — what a
-// domain that retires the objects it replaces declares (ADR-0047) — in a
+// domain that retires the objects it replaces declares (ADR-0048) — in a
 // database of the test's own, read through [Sources] exactly as the engine
 // builds the collector's: the fake source the other cases use stands in for
 // the declarations, and so cannot say what a declaration's standing does.
@@ -103,7 +103,7 @@ func (h *standingHarness) unname(ref objstore.ReferenceTable, k objstore.Key) {
 }
 
 // A RETIRED REFERENCE KEEPS ITS OBJECT FROM COLLECTION, for as long as its row
-// stands, and no longer (ADR-0047). The collector's grace dates an object's
+// stands, and no longer (ADR-0048). The collector's grace dates an object's
 // UPLOAD, so a replaced object older than a day would go at the first pass
 // after its live row stopped naming it; a retired row is what keeps it for a
 // reader that has not caught up — and once its domain sweeps the row, the
@@ -144,7 +144,7 @@ func TestARetiredReferenceKeepsItsObjectFromCollection(t *testing.T) {
 	}
 }
 
-// THE AUDIT ASKS ONLY AFTER REQUIRED REFERENCES (ADR-0047). An object a
+// THE AUDIT ASKS ONLY AFTER REQUIRED REFERENCES (ADR-0048). An object a
 // retired row keeps is one the company has let go of: a store that lost it,
 // or holds it wrong, has lost nothing anybody can miss, so it is never asked
 // after, never counted and never raises objects_missing — while a required

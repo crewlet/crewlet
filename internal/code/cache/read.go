@@ -117,7 +117,7 @@ func (m *logMark) set(stream time.Time, at statelog.Position) {
 //  1. Page 1 asks from at (zero when full).
 //  2. A page-1 DELTA keyed to another stream than the incarnation's is the
 //     log RECREATED under the cache — provisioned anew, its stamp not the
-//     one the cache read under (a snapshot restore keeps it, ADR-0049) —
+//     one the cache read under (a snapshot restore keeps it, ADR-0050) —
 //     which Since cannot tell the reader: asked again from nothing, once
 //     (restreamed).
 //  3. An answer on the incarnation's own stream below at is BEHIND; what that

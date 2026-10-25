@@ -87,6 +87,18 @@ type SeatAppOptions struct {
 	// Seats are the agents to reconcile.
 	Seats []SeatApp
 
+	// Unrecorded names the agents that carry no `integrations.github` block
+	// at all, which [Seats] cannot hold: the block is where an app's id,
+	// slug and key are recorded, so a seat that has never had one has no
+	// [SeatApp] to put in the list.
+	//
+	// ONE OWNER FOR "NO APP". They are reported together with the seats in
+	// [Seats] whose block records no app, as the one finding
+	// [SeatsWithNoApp] makes. Reported apart, a seat carrying an empty block
+	// was named by the caller's roster walk and by this pass both, so one
+	// agent was told twice to do the same thing.
+	Unrecorded []string
+
 	// Record persists an installation this pass discovered, or clears one
 	// it found gone. Nil is a DRY RUN: the pass reads and reports and
 	// writes nothing, which is what a check is.
@@ -139,17 +151,18 @@ type SeatAppResult struct {
 // [ReconcileSeatApps] walks the seats that HAVE an app and says what is
 // outstanding on each, because each is a different act: install this one,
 // re-create that one. A seat with no app at all is the same act for every one
-// of them — a person creates it from Settings › Integrations — so N of those
-// is one sentence, not N findings, and a fifty-agent company that has just
+// of them (a person creates it from GitHub's page under Company ›
+// Integrations), so N of those is one sentence, not N findings, and a fifty-agent company that has just
 // connected does not get fifty rows saying the same thing.
 //
 // # And why they are reported at all
 //
 // They were invisible. The engine builds its seat list from the seats
 // carrying an `integrations.github` block, because that block is where an
-// app's id, slug and key are recorded — so a seat that has never had one is
-// absent from the pass's input, the AppID == 0 arm below cannot be reached
-// for it, and no finding is produced. Measured on a live connect: a company
+// app's id, slug and key are recorded, so a seat that has never had one was
+// absent from the pass's input and produced no finding. The engine now names
+// those as [SeatAppOptions.Unrecorded], and [ReconcileSeatApps] reports them
+// with the seats whose block records no app, in this one finding. Measured on a live connect: a company
 // with one agent, no app, `phase: ready`, `findings: []`, and a seat row
 // three screens away saying "no app of its own yet, so this agent acts as
 // nobody on GitHub".
@@ -180,7 +193,7 @@ func SeatsWithNoApp(handles []string) *integration.Finding {
 		Detail:  detail,
 		// NOT "from the Integrations screen", which is the screen this is
 		// rendered on, beside that agent's own Create button.
-		Remedy: "Create one per agent — GitHub offers no API for it, so a " +
+		Remedy: "Create one per agent. GitHub offers no API for it, so a " +
 			"person clicking is the only thing that can.",
 		Subjects: handles,
 	}
@@ -200,6 +213,7 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 		}
 	}
 	out := &SeatAppResult{Findings: []integration.Finding{}}
+	noApp := slices.Clone(opts.Unrecorded)
 	for _, seat := range opts.Seats {
 		// CHECKED BEFORE THE SEAT, not only after its read. The two arms
 		// below that conclude before any call — no app, no key — read the
@@ -209,9 +223,21 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 		if err := interrupted(ctx); err != nil {
 			return out, err
 		}
+		// A STEP, NOT A FAULT, and the wording says so: nobody has done
+		// anything wrong, there is a click outstanding. Gathered rather than
+		// reported here, because it is the same act for every such agent and
+		// [SeatsWithNoApp] says it once for all of them.
+		if seat.AppID == 0 {
+			noApp = append(noApp, seat.Handle)
+			continue
+		}
 		if err := out.reconcileSeat(ctx, opts, seat, build); err != nil {
 			return out, err
 		}
+	}
+	slices.Sort(noApp)
+	if missing := SeatsWithNoApp(slices.Compact(noApp)); missing != nil {
+		out.Findings = append(out.Findings, *missing)
 	}
 	return out, nil
 }
@@ -224,28 +250,9 @@ func (r *SeatAppResult) reconcileSeat(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp,
 	build func(int64, string, string) (*AppClient, error),
 ) error {
-	switch {
-	case seat.AppID == 0:
-		// A STEP, NOT A FAULT, and the wording says so: nobody has done
-		// anything wrong, there is a click outstanding. The action URL is
-		// empty because creating an app is a form POST from a page and
-		// not an address anybody can be sent to.
-		//
-		// APPROVAL_REQUIRED, NOT IDENTITY_MISSING, and the difference is
-		// who acts. identity_missing reads as the ENGINE provisioning an
-		// account, which is what happens on Slack and Mattermost; here
-		// the engine can do nothing at all until a person creates the app
-		// at GitHub, and a card reading "Setting up agents" over that
-		// waits for an act nobody is performing.
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:    integration.FindingApprovalRequired,
-			Subject: seat.Handle,
-			Detail: seat.Handle + " has no GitHub App of its own, so nothing it " +
-				"does on GitHub is its own: create one from Settings › Integrations",
-		})
-		return nil
-
-	case strings.TrimSpace(seat.Key) == "":
+	// A SEAT WITH NO APP NEVER GETS HERE: [ReconcileSeatApps] gathers those
+	// into one finding before calling, so every seat this reads has an app.
+	if strings.TrimSpace(seat.Key) == "" {
 		// THE KEY IS GONE AND CANNOT BE REISSUED. GitHub hands it over
 		// once, at creation, so this is not a credential to re-enter: the
 		// app has to be created again.
@@ -405,7 +412,7 @@ func (r *SeatAppResult) reconcileSeat(
 // person at GitHub, because the engine cannot create an app for anybody.
 func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat SeatApp) {
 	detail := seat.Handle + "'s GitHub App no longer exists at GitHub, so nothing " +
-		"it does there is its own: create one from Settings › Integrations"
+		"it does there is its own: create one from GitHub's Agents tab under Company › Integrations"
 	if opts.Forget != nil {
 		if err := opts.Forget(ctx, seat.Handle); err != nil {
 			// REPORTED, NOT SWALLOWED, and the finding still says the
@@ -538,7 +545,7 @@ func (e *errNotRecorded) detail(handle string) string {
 	}
 	return handle + "'s app IS installed at GitHub and this engine could not " +
 		"record which installation, so the seat mints no token until the " +
-		"write succeeds — nothing at GitHub needs changing: " + e.err.Error()
+		"write succeeds. Nothing at GitHub needs changing: " + e.err.Error()
 }
 
 // TokenFor mints the credential one seat acts with.

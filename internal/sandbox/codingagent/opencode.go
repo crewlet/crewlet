@@ -21,12 +21,6 @@ import (
 // OpenCodeName is this runner's config name.
 const OpenCodeName = "opencode"
 
-// OpenCodeProviderID is the provider a run's config declares.
-//
-// Its own id rather than one of the vendor names, because it points at the
-// SEAT's endpoint and model, which may be neither vendor's default.
-const OpenCodeProviderID = "crewlet"
-
 // transcriptDetailLimit caps one transcript line's echoed command or path.
 //
 // A bare "[tool] bash" is useless when a run fails — you cannot see WHAT ran —
@@ -145,8 +139,8 @@ func (OpenCode) Name() string { return OpenCodeName }
 // outright, and an export left for the end would be lost with it. A SIGTERM,
 // SIGINT or SIGHUP to the script exports once more before it goes, with the
 // conventional status. No export holding no login ever replaces the
-// document. A box given none — a remote one, or an API entry's — has nothing
-// exported, and signs in with the run environment's key.
+// document. A box given none — a remote one — has nothing exported, and signs
+// in with the run environment's key.
 //
 // THE USAGE, from the session rather than the stream: `run --format json`
 // drops the final step's counts, while the session the run worked in holds
@@ -213,8 +207,14 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
 		"--title", "crewlet", "--session", shellQuote(sid)}
-	if model := openCodeModelArg(req.LLM); model != "" {
-		run = append(run, "--model", shellQuote(model))
+	// THE ENTRY'S MODEL AS WRITTEN. It is the string every text call on
+	// the same providers.llm entry hands `opencode run --model`, which
+	// OpenCode splits at its first slash into a provider and a model — so
+	// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5`
+	// means one thing in both places, signed in by the login or the key of
+	// the provider it names. The engine refuses every other CLI's entry here.
+	if req.Model != "" {
+		run = append(run, "--model", shellQuote(req.Model))
 	}
 
 	var b strings.Builder
@@ -381,48 +381,8 @@ func jsonStringify(s string) string {
 	return b.String()
 }
 
-// openCodeModelArg is the fully-formed --model value.
-//
-// AN OPENCODE ENTRY'S MODEL IS PASSED AS WRITTEN. It is the string every text
-// call on the same providers.llm entry hands `opencode run --model`, which
-// OpenCode splits at its first slash into a provider and a model — so
-// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5` means
-// one thing in both places, signed in by the login or the key of the provider
-// it names. Prefixing a family here addressed `anthropic/openrouter/…` and
-// left the entry's own key unread: no value of `model` worked for both the box
-// and the text calls.
-//
-// Otherwise the entry is an API one (the engine refuses another CLI's entry
-// before a run starts): a custom base URL means the run's own declared
-// provider, and with none the model is addressed under the OpenCode provider
-// of the entry's wire, whose built-in key variable the run environment
-// carries.
-func openCodeModelArg(llm *sandbox.AgentLLM) string {
-	if llm == nil || llm.Model == "" {
-		return ""
-	}
-	if llm.CLI == OpenCodeName {
-		return llm.Model
-	}
-	if llm.BaseURL != "" {
-		return OpenCodeProviderID + "/" + llm.Model
-	}
-	return openCodeFamily(llm.ProviderType) + "/" + llm.Model
-}
-
-// openCodeFamily is the OpenCode provider an API entry's wire is served by:
-// Anthropic's for an `anthropic` entry, OpenAI's for an `openai` or
-// `openai-compatible` one — the two wires the engine's own providers speak,
-// and the two key variables the run environment carries.
-func openCodeFamily(providerType string) string {
-	if providerType == "anthropic" {
-		return "anthropic"
-	}
-	return "openai"
-}
-
 // WriteConfig renders opencode.json in OpenCode 2's own format: the run's
-// posture, the custom provider and the scoped MCP surface.
+// posture and the scoped MCP surface.
 //
 // 2.0's FORMAT, NOT 1.x's, though 2.0 still reads 1.x's by translating it
 // (its migration guide: servers move under `mcp.servers`, `enabled` becomes
@@ -432,14 +392,14 @@ func openCodeFamily(providerType string) string {
 // match wins — exists only in the new shape, and a file written in the old one
 // would be a translation of somebody else's to keep right.
 //
-// THE API KEY IS NEVER IN THE PAYLOAD. It rides the run env and the provider
-// names the VARIABLE it is read from (`env`), so the secret is not written
-// into a file inside the box where the agent could read it back and echo it
-// into its report.
+// NO CREDENTIAL IS IN THE PAYLOAD. A key rides the run env under the variable
+// of the provider the model names, so the secret is not written into a file
+// inside the box where the agent could read it back and echo it into its
+// report.
 //
-// IT IS WRITTEN ON EVERY RUN, including one that names no provider and no
-// server. The posture keys below are not decoration a minimal run can go
-// without — and because this CLI takes no config flag, the file's LOCATION is
+// IT IS WRITTEN ON EVERY RUN, including one that names no server. The posture
+// keys below are not decoration a minimal run can go without — and because
+// this CLI takes no config flag, the file's LOCATION is
 // the wiring, so a run that writes nothing does not run on the vendor's
 // defaults: it runs on whatever the PREVIOUS run left in the checkout, which
 // on a reused box is that run's MCP block with its dead per-run bridge URL in
@@ -480,9 +440,6 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		// copy of its tree per step, for nothing.
 		"snapshots": false,
 	}
-	if req.LLM != nil && req.LLM.BaseURL != "" && req.LLM.Model != "" {
-		cfg["providers"] = openCodeProvider(*req.LLM)
-	}
 	if len(req.MCPServers) > 0 {
 		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers)}
 	}
@@ -497,40 +454,6 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		return "", err
 	}
 	return path, nil
-}
-
-// openCodeProvider is the `crewlet` provider declared for an API entry with a
-// base URL: the native package for the entry's wire, pointed at the entry's
-// endpoint, signed in by the variable the run environment carries the entry's
-// key under.
-//
-// THE ENDPOINT IS TRANSLATED FOR THE ANTHROPIC PACKAGE, because the two
-// conventions disagree about where /v1 lives. An `anthropic` entry's base_url
-// is the host ROOT — the convention of Anthropic's own SDK, which the engine's
-// provider is built on and which appends /v1/messages, and of Claude Code's
-// ANTHROPIC_BASE_URL — while OpenCode's anthropic-compatible package takes a
-// prefix that already ends in /v1 and posts to `<baseURL>/messages` (measured
-// on 2.0.32: the root posted to /messages, the root plus /v1 to /v1/messages).
-// An `openai` or `openai-compatible` entry's base_url already ends where both
-// its readers expect, so it passes through as written.
-func openCodeProvider(llm sandbox.AgentLLM) map[string]any {
-	pkg := "@opencode/ai/providers/openai-compatible"
-	keyEnv := "OPENAI_API_KEY"
-	baseURL := llm.BaseURL
-	if openCodeFamily(llm.ProviderType) == "anthropic" {
-		pkg = "@opencode/ai/providers/anthropic-compatible"
-		keyEnv = "ANTHROPIC_API_KEY"
-		baseURL = strings.TrimRight(baseURL, "/") + "/v1"
-	}
-	return map[string]any{
-		OpenCodeProviderID: map[string]any{
-			"package":  pkg,
-			"name":     "Crewlet role LLM",
-			"env":      []string{keyEnv},
-			"settings": map[string]any{"baseURL": baseURL},
-			"models":   map[string]any{llm.Model: map[string]any{}},
-		},
-	}
 }
 
 // openCodeMCP translates the generic launch specs into OpenCode 2's schema.

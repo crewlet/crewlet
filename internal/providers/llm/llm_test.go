@@ -1,6 +1,7 @@
 package llm_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -10,94 +11,29 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// THE SET IS CLOSED, and empty means no level was named. A backend maps these
-// onto two vendors' parameters and takes the lower of two of them, so a value
-// outside the set is one it can neither send nor compare.
-func TestTheEffortSetIsClosedAndEmptyMeansUnnamed(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		effort llm.Effort
-		valid  bool
-	}{
-		{"", true},
-		{llm.EffortLow, true},
-		{llm.EffortMedium, true},
-		{llm.EffortHigh, true},
-		{llm.EffortXHigh, true},
-		{llm.EffortMax, true},
-		{"x-high", false},  // The spelling a person reaches for.
-		{"HIGH", false},    // Not case-folded: neither vendor's parameter is.
-		{"minimal", false}, // OpenAI-only, and below what the contract orders.
-		{"none", false},
-	} {
-		if got := tc.effort.Valid(); got != tc.valid {
-			t.Errorf("Effort(%q).Valid() = %v, want %v", tc.effort, got, tc.valid)
-		}
-	}
-}
-
-// A CEILING ONLY EVER LOWERS. The caller knows what a call is for, the
-// operator what the entry costs, and neither may raise the other: a `low`
-// classifier on a `high` entry runs low, a `max` request on a `medium` entry
-// stays medium, and an entry with no level is left alone, since lowering a
-// level nobody named could raise it above the vendor's own default.
-func TestAtMostTakesTheLowerAndNeverRaises(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		entry, ceiling, want llm.Effort
-	}{
-		{llm.EffortHigh, llm.EffortLow, llm.EffortLow},
-		{llm.EffortMedium, llm.EffortMax, llm.EffortMedium},
-		{llm.EffortXHigh, llm.EffortXHigh, llm.EffortXHigh},
-		{llm.EffortMax, llm.EffortXHigh, llm.EffortXHigh},
-		{llm.EffortXHigh, llm.EffortHigh, llm.EffortHigh},
-		{llm.EffortLow, llm.EffortMedium, llm.EffortLow},
-		{llm.EffortHigh, "", llm.EffortHigh},
-		{"", llm.EffortLow, ""},
-		{"", "", ""},
-		{llm.EffortHigh, "bogus", llm.EffortHigh},
-	} {
-		if got := tc.entry.AtMost(tc.ceiling); got != tc.want {
-			t.Errorf("Effort(%q).AtMost(%q) = %q, want %q", tc.entry, tc.ceiling, got, tc.want)
-		}
-	}
-}
-
 // THE STOP VOCABULARY IS CLOSED, and the zero value is not in it: it is a
 // backend that reported no reason, which the tool loop reads as an ordinary
 // end rather than as one of these.
 func TestTheStopReasonSetIsClosedAndEmptyIsUnreported(t *testing.T) {
-	for _, r := range []llm.StopReason{
-		llm.StopEnd, llm.StopToolUse, llm.StopMaxTokens,
-		llm.StopRefusal, llm.StopContextExceeded, llm.StopPaused,
-	} {
+	t.Parallel()
+	for _, r := range []llm.StopReason{llm.StopEnd, llm.StopToolUse} {
 		if !r.Valid() {
 			t.Errorf("%q: Valid() = false, want true", r)
 		}
 	}
-	for _, r := range []llm.StopReason{"", "end_turn", "length", "stop", "tool_calls"} {
+	for _, r := range []llm.StopReason{"", "end_turn", "length", "stop", "tool_calls", "max_tokens"} {
 		if r.Valid() {
 			t.Errorf("%q: Valid() = true — a vendor's own spelling must be mapped, never passed through", r)
 		}
 	}
 }
 
-// A REFUSAL IS NOT HANDED DOWN THE CHAIN AND BENCHES NO KEY. Retryable is
-// what the fallback chain reads, and a refusal it read as retryable would be
-// routed round every model until one answered — circumventing the decision
-// rather than recovering from a fault. ExhaustsCredential is what the key pool
-// reads, and a policy decision about content says nothing about the key.
-func TestARefusalIsNeitherRetriedNorAKeysFault(t *testing.T) {
-	if llm.KindRefusal.Retryable() {
-		t.Error("KindRefusal is retryable: the chain would ask the next model")
-	}
-	if llm.KindRefusal.ExhaustsCredential() {
-		t.Error("KindRefusal exhausts a credential: a refusal would bench a healthy key")
-	}
-	if got := llm.KindRefusal.String(); got != "refusal" {
-		t.Errorf("String() = %q, want refusal — it is the error_kind a record carries", got)
-	}
-	// The controls: every other kind keeps its answer.
+// ONLY A FATAL STOPS THE CHAIN. Retryable is what the fallback chain reads:
+// a fatal is a call the engine or its host cannot make, and every other kind —
+// a spent plan, a login, a slow, silent or failed CLI run — is one the next
+// member may well answer.
+func TestOnlyAFatalStopsTheChain(t *testing.T) {
+	t.Parallel()
 	for kind, retryable := range map[llm.ErrorKind]bool{
 		llm.KindFatal: false, llm.KindRateLimit: true, llm.KindAuth: true,
 		llm.KindTimeout: true, llm.KindServer: true,
@@ -108,51 +44,48 @@ func TestARefusalIsNeitherRetriedNorAKeysFault(t *testing.T) {
 	}
 }
 
-// The classified error a backend returns keeps the refusal reachable under it,
-// with what the vendor said and what the refused call cost.
-func TestRefusedCarriesTheRefusalAndItsCompletion(t *testing.T) {
-	comp := &llm.Completion{Model: "m", InputTokens: 7, StopReason: llm.StopRefusal}
-	err := error(llm.Refused("anthropic", "m",
-		&llm.Refusal{Category: "cyber", Explanation: "not this", Completion: comp}))
-	if llm.KindOf(err) != llm.KindRefusal {
-		t.Fatalf("KindOf = %s, want refusal", llm.KindOf(err))
+// AN UNCLASSIFIED FAILURE IS FATAL, a deadline is a timeout, and a classified
+// one keeps its kind through any wrapping — the three answers [llm.KindOf]
+// gives the chain.
+func TestKindOfReadsThroughWrappingAndDefaultsToFatal(t *testing.T) {
+	t.Parallel()
+	classified := &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code", Model: "sonnet",
+		Err: errors.New("Usage limit reached")}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want llm.ErrorKind
+	}{
+		{"classified", classified, llm.KindRateLimit},
+		{"wrapped", fmt.Errorf("toolloop: %w", classified), llm.KindRateLimit},
+		{"a deadline", fmt.Errorf("call: %w", context.DeadlineExceeded), llm.KindTimeout},
+		{"anything else", errors.New("boom"), llm.KindFatal},
+	} {
+		if got := llm.KindOf(tc.err); got != tc.want {
+			t.Errorf("%s: KindOf = %s, want %s", tc.name, got, tc.want)
+		}
 	}
-	var refusal *llm.Refusal
-	if !errors.As(err, &refusal) {
-		t.Fatal("the *Refusal is not reachable under the classified error")
-	}
-	if refusal.Category != "cyber" || refusal.Completion != comp {
-		t.Errorf("refusal = %+v", refusal)
-	}
-	if msg := err.Error(); !strings.Contains(msg, "declined") || !strings.Contains(msg, "cyber") ||
-		!strings.Contains(msg, "not this") {
-		t.Errorf("Error() = %q, want the decline, its category and its explanation", msg)
+	if msg := classified.Error(); !strings.Contains(msg, "rate_limit") ||
+		!strings.Contains(msg, "Usage limit reached") || !strings.Contains(msg, "cli-agent/claude-code") {
+		t.Errorf("Error() = %q, want the backend, the kind and what the CLI said", msg)
 	}
 }
 
-// WHAT A METER CHARGES: the answer, or the refused response under the error —
-// wrapped as a caller would wrap it — and nothing for a failure that billed
-// nothing.
-func TestBilledIsTheAnswerOrTheRefusedResponse(t *testing.T) {
-	answer := &llm.Completion{Model: "m", InputTokens: 3}
-	refused := &llm.Completion{Model: "m", InputTokens: 7, StopReason: llm.StopRefusal}
-	refusal := fmt.Errorf("judge: %w", llm.Refused("anthropic", "m", &llm.Refusal{Completion: refused}))
-	for _, tc := range []struct {
-		name       string
-		completion *llm.Completion
-		err        error
-		want       *llm.Completion
-	}{
-		{"an answer", answer, nil, answer},
-		{"a refusal, wrapped", nil, refusal, refused},
-		{"a refusal that carried no response", nil, llm.Refused("anthropic", "m", &llm.Refusal{}), nil},
-		{"a failure that billed nothing", nil, &llm.Error{Kind: llm.KindServer}, nil},
-		{"nothing at all", nil, nil, nil},
-	} {
-		if got := llm.Billed(tc.completion, tc.err); got != tc.want {
-			t.Errorf("%s: Billed = %+v, want %+v", tc.name, got, tc.want)
-		}
+// AN EMPTY FRAGMENT IS NOT SENT. A keep-alive carries no text, and a
+// callback that published a frame for each one spent a running seat's whole
+// socket queue on nothing; a restart is sent although it carries none,
+// because it is news.
+func TestSendDropsEmptyFragmentsAndKeepsRestarts(t *testing.T) {
+	t.Parallel()
+	var got []llm.Delta
+	req := llm.Request{OnDelta: func(d llm.Delta) { got = append(got, d) }}
+	req.Send(llm.Delta{})
+	req.Send(llm.Delta{Content: "hi"})
+	req.Send(llm.Delta{Restart: true, Model: "sonnet"})
+	if len(got) != 2 || got[0].Content != "hi" || !got[1].Restart {
+		t.Errorf("sent %+v, want the text and the restart only", got)
 	}
+	llm.Request{}.Send(llm.Delta{Content: "nobody asked"}) // no callback: no panic
 }
 
 // fill sets every exported field reachable from v to a non-zero value derived
@@ -192,10 +125,7 @@ func fill(v reflect.Value, seed string) {
 // conversation grows by is built in one place, and this holds that place to
 // the two types: every field of the answer that the turn also has is copied,
 // and a field added to EITHER type fails here until it is decided — copied,
-// or named below as belonging to one side only. The vendor's own blocks were
-// the field this exists for: dropped between the answer and the turn, they
-// reach no later call, and nothing anywhere reports that the reasoning they
-// carried is gone.
+// or named below as belonging to one side only.
 func TestACompletionsTurnCarriesEverythingItShares(t *testing.T) {
 	t.Parallel()
 	var c llm.Completion
@@ -205,18 +135,14 @@ func TestACompletionsTurnCarriesEverythingItShares(t *testing.T) {
 	if m.Role != llm.RoleAssistant {
 		t.Errorf("role = %q, want assistant", m.Role)
 	}
-	if m.Origin != (llm.Origin{Provider: c.Provider, Model: c.Model}) {
-		t.Errorf("origin = %+v, want the backend and the model that answered", m.Origin)
-	}
 
-	// The turn's own fields: a role, where it came from, and the three
-	// that describe a tool RESULT rather than an answer.
-	turnOnly := map[string]bool{"Role": true, "Origin": true, "ToolCallID": true, "Name": true, "Failed": true}
+	// The turn's own fields: a role, and the three that describe a tool
+	// RESULT rather than an answer.
+	turnOnly := map[string]bool{"Role": true, "ToolCallID": true, "Name": true, "Failed": true}
 	// The answer's own: who served it and what it cost and why it stopped
-	// — the round's record, not the conversation's. Model and Provider
-	// reach the turn as its Origin.
+	// — the round's record, not the conversation's.
 	answerOnly := map[string]bool{
-		"Model": true, "ProviderKey": true, "Provider": true, "StopReason": true,
+		"Model": true, "ProviderKey": true, "StopReason": true,
 		"InputTokens": true, "OutputTokens": true, "CacheRead": true, "CacheWrite": true,
 	}
 	cv, mv := reflect.ValueOf(c), reflect.ValueOf(m)

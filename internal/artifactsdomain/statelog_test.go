@@ -36,7 +36,7 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 			Rows:       artifactsdomain.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
-			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0046).
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0047).
 			EncodeTrimmed: artifactsdomain.EncodeTrimmed,
 		}
 	})

@@ -12,7 +12,7 @@ import (
 
 // payloadAt is the body of the record the log holds at seq: the signed frame
 // the broker stores, opened and verified as a backup opens it before handing
-// it to the declaration's reader (ADR-0031, ADR-0048).
+// it to the declaration's reader (ADR-0031, ADR-0049).
 func (r *roundTrip) payloadAt(t *testing.T, seq uint64) []byte {
 	t.Helper()
 	_, payload, _, ok, err := statelog.VerifiedLog{Log: r.log, Verifier: r.verifier}.At(t.Context(), seq)
@@ -47,7 +47,7 @@ func rewritten(t *testing.T, payload []byte, fn func(map[string]any)) []byte {
 	return out
 }
 
-// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0048). A backup reads the
+// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0049). A backup reads the
 // tracker's log past its store copy and carries every object a record names,
 // because a restore replays those records into the rows — so what the
 // declaration's reader says one record writes has to be what the applier

@@ -38,6 +38,7 @@ import {
   TableNumberCell,
   TableDateCell,
   TableEntityCell,
+  PageNote,
 } from "@crewlethq/ui";
 import { BrainGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -45,7 +46,6 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { seatKindKey } from "~/app/crumbs.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DiaryCard, EpisodesCard, heldWords } from "~/components/memory.tsx";

@@ -16,7 +16,7 @@ import (
 // forty-seat company is some ten thousand (day, node, seat) groups of several
 // spend cells each, tens of megabytes of rows. Read in-process that is one
 // transaction and no wire; answered by ANOTHER data node — the case a node
-// whose usage copy is out of service routes to (ADR-0045) — it crosses one
+// whose usage copy is out of service routes to (ADR-0046) — it crosses one
 // message, which carries at most [queue.MaxPayloadBytes]. So every read that
 // can grow with a window has a PAGED form ([SpendPage], [SeatTurnsPage],
 // [PersonSpendPage], [SeatDaysPage], [PageReadsPage]), and the whole read is

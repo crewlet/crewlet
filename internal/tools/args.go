@@ -68,11 +68,11 @@ func RecordArgs(args map[string]any) (string, error) {
 // A resumed turn losing one line's arguments is a worse-rendered ledger;
 // failing the resume over it loses the whole conversation.
 //
-// NOT [github.com/crewlet/crewlet/internal/providers/llm/httpapi.DecodeArgs],
-// which reads the same shape off a PROVIDER's wire: that one REPORTS what it
-// could not parse, because a model's malformed arguments are a fact about this
-// round that the tool loop answers the model with rather than running the call.
-// Here the text came out of a record this engine wrote.
+// NOT the model's own reply, which the cli-agent backend reads to the same
+// number rule ([github.com/crewlet/crewlet/internal/providers/llm/cliagent.ParseEnvelope])
+// but REPORTS what it could not parse, because a model's malformed arguments
+// are a fact about this round that the tool loop answers the model with rather
+// than running the call. Here the text came out of a record this engine wrote.
 func ReadArgs(raw string) map[string]any {
 	if raw == "" {
 		return nil

@@ -45,7 +45,7 @@ func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 // anchor row per read into the transaction holding this store's only writer.
 // And the trim's trimmed record removes anchors: identical ones are each meant
 // to land, and an anchor of its own is the row it exists not to leave
-// (ADR-0046).
+// (ADR-0047).
 func TestOnlyTheTurnTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
 	t.Parallel()
 	var unarbitrated []tracker.ObjectKind

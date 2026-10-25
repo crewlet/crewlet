@@ -9,10 +9,10 @@ import (
 // opencodeEntry is a company whose one entry drives OpenCode on model.
 func opencodeEntry(model string, lines ...string) string {
 	var b strings.Builder
-	b.WriteString("name: Acme\nproviders:\n  llm:\n    oc:\n      type: cli-agent\n")
-	b.WriteString("      model: " + model + "\n      cli:\n        agent: opencode\n")
+	b.WriteString("name: Acme\nproviders:\n  llm:\n    oc:\n")
+	b.WriteString("      model: " + model + "\n      agent: opencode\n")
 	for _, line := range lines {
-		b.WriteString("        " + line + "\n")
+		b.WriteString("      " + line + "\n")
 	}
 	return b.String()
 }

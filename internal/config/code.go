@@ -197,7 +197,7 @@ const DefaultCodeBranch = "main"
 
 // CodeVisibility is who among the SEATS may read a repository. A person — a
 // bound or unbound API token — reads every repository whatever it says
-// (ADR-0054): visibility narrows the seats an AI company runs, never the
+// (ADR-0055): visibility narrows the seats an AI company runs, never the
 // people who run it.
 type CodeVisibility string
 

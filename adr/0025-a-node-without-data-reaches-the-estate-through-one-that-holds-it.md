@@ -112,4 +112,4 @@ whether a copy lags rather than whether it is level this instant — and choosin
 a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
 
-A copy goes out of service one DOMAIN at a time — ADR-0045.
+A copy goes out of service one DOMAIN at a time — ADR-0046.

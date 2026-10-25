@@ -78,7 +78,6 @@ export type Workspace =
   | "inbox"
   | "me"
   | "company"
-  | "policies"
   | "org"
   | "schedules"
   | "integrations"
@@ -255,8 +254,8 @@ export interface WorkspaceRow {
   /**
    * A sentence at the end of the section tabs that holds for every section —
    * how to read what the workspace draws. It gives way to the tabs: drawn only
-   * where the strip has room for it beside every tab (`noteFits` in
-   * `header/PageHeader.tsx`), so never on a phone.
+   * where the strip has room for it beside every tab (the kit's `Tabs` note,
+   * with `overflow="menu"`), so never on a phone.
    */
   note?: string;
 }
@@ -471,34 +470,23 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
-    // THE COMPANY'S OWN PAGE: its name, mission, vision and clock, which
-    // every signed-in reader reads (the charter is the org projection's).
+    // THE COMPANY'S PRINCIPLES: its mission, its vision and the standing
+    // policies every agent reads on every turn, in the order an agent reads
+    // them, which every signed-in reader reads (the charter is the org
+    // projection's). Its name is the Org chart's, renamed on the company's
+    // own node, and its clock is the company document's. The Company
+    // landing: `#/company` opens it too. The caps the engine holds a turn to
+    // are engine settings, and live once, in Settings › Limits.
     key: "company",
-    // ONE NAME EVERYWHERE: the row reads "Overview" under the Company
-    // heading, and the page it opened was titled "Company", so the active row
-    // and the page disagreed. The trail says both, Company › Overview
-    // (`crumbs.ts`), and the palette finds it by either.
-    label: "Overview",
+    label: "Principles",
     icon: "building-complex",
-    path: ["company"],
-    hint: "Who the company is: its name, mission, vision and clock",
-    keywords: ["company", "charter", "mission", "vision", "timezone", "general"],
+    path: ["company", "principles"],
+    // THE COMPANY LANDING IS THIS PAGE, so the row owns the bare `#/company`
+    // too: the longest prefix decides, and every other Company row is longer.
+    owns: ["company"],
+    hint: "Who the company is and the policies every agent reads on every turn",
+    keywords: ["principles", "mission", "vision", "policies", "charter", "values"],
     chord: "c",
-    place: "company",
-    renderer: "none",
-    sections: [],
-  },
-  {
-    // THE STANDING POLICIES every agent reads on every turn, in plain words.
-    // The caps the engine holds a turn to are engine settings, and live once,
-    // in Settings › Limits.
-    key: "policies",
-    label: "Policies",
-    icon: "shield",
-    path: ["company", "policies"],
-    hint: "The standing policies every agent reads on every turn",
-    keywords: ["policy", "rules", "values", "charter"],
-    chord: "o",
     place: "company",
     renderer: "none",
     sections: [],
@@ -509,7 +497,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     icon: "network",
     path: ["company", "org"],
     hint: "The org chart and every seat on it",
-    keywords: ["agents", "seats", "hierarchy", "reporting lines"],
+    keywords: ["agents", "seats", "hierarchy", "reporting lines", "company name"],
     chord: "a",
     place: "company",
     renderer: "tabs",
@@ -566,19 +554,20 @@ export const WORKSPACES: WorkspaceRow[] = [
     sections: [],
   },
   {
-    // THE SERVICES BUILT INTO CREWLET above the third-party apps the company
-    // connects, on one page: a company sees what it already has before what
-    // it could connect. ADMIN'S, as connecting a tool always was.
+    // THE SERVICES BUILT INTO CREWLET beside the third-party apps the company
+    // connects, in one directory grouped by need. EVERY READER'S: what the
+    // company runs is the overview every reader holds, so a reader without
+    // Admin sees the services in full and the apps with no state, while
+    // connecting and the apps' own state stay an Admin's.
     key: "integrations",
     label: "Integrations",
     icon: "plug",
     path: ["company", "integrations"],
-    hint: "Crewlet's own services, and the apps the company connects",
+    hint: "Crewlet's own services and the apps the company connects",
     keywords: ["integrations", "connect", "apps", "crewlet works", "crewlet knowledge"],
     chord: "n",
     place: "company",
     renderer: "none",
-    grants: ["admin"],
     sections: [],
   },
   {
@@ -826,7 +815,8 @@ export const WORKSPACES: WorkspaceRow[] = [
     // its own row.
     key: "settings",
     label: "Settings",
-    icon: "sliders-vertical",
+    // THE GEAR: what a reader looks for to change how the engine runs.
+    icon: "settings",
     path: ["settings", "models"],
     owns: ["settings"],
     hint: "What the engine runs: models, tools, spend, access and its nodes",
@@ -843,8 +833,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Models & keys",
         icon: "cpu",
         path: ["settings", "models"],
-        hint: "Models and their API keys",
-        keywords: ["models", "llm", "provider", "api key"],
+        hint: "Models, the CLIs they run through, and how each signs in",
+        keywords: ["models", "llm", "provider", "cli", "api key", "subscription"],
         group: "Runtime",
         grants: ["admin"],
       },
@@ -971,6 +961,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "code",
         path: ["settings", "config"],
         hint: "The active company revision, its history and its diffs",
+        keywords: ["company document", "timezone"],
         group: "Engine",
         grants: ["admin"],
       },
@@ -1071,7 +1062,7 @@ export function framelessOf(path: readonly string[]): FramelessRoute | null {
  */
 export const RESERVED_SEGMENTS: string[] = [
   "company",
-  "policies",
+  "principles",
   "org",
   "tasks",
   "views",

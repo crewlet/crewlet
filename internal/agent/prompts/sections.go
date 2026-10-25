@@ -508,34 +508,94 @@ func BuildHumanColleaguesNote(s Seat) []string {
 // Both fields are short by convention (a sentence or two each); inlining is a
 // token-cheap way to keep them in front of the executor without a knowledge
 // round-trip.
+//
+// NO LINE OF EITHER STANDS ON ITS OWN. They are the company's words dropped
+// into the prompt's structure, so a line of them that began at the margin
+// could read as a line of the prompt itself, a `## ` heading included. The
+// mission is one line by the company document's own rule and is kept to one
+// here ([inline]); the vision may be written in paragraphs, and a vision of
+// more than one line is QUOTED under its label, every line of it, so each
+// stays inside the vision.
 func BuildOrgMissionVisionSection(s Seat) []string {
 	if !s.ok() || (s.Org.Mission == "" && s.Org.Vision == "") {
 		return nil
 	}
 	parts := []string{"\n## Company Context"}
 	if s.Org.Mission != "" {
-		parts = append(parts, "**Mission:** "+s.Org.Mission)
+		parts = append(parts, "**Mission:** "+inline(s.Org.Mission))
 	}
 	if s.Org.Vision != "" {
-		parts = append(parts, "**Vision:** "+s.Org.Vision)
+		parts = append(parts, labelled("**Vision:**", s.Org.Vision))
 	}
 	return parts
 }
 
 // BuildPoliciesSection inlines the full company-policy text.
 //
-// Policies are short by convention — a couple of sentences each — so the full
+// Policies are short by convention (a couple of sentences each), so the full
 // text is inlined rather than truncated to one-liners, keeping the executor's
-// context complete.
+// context complete. Each is ONE ITEM of the list, on one line ([inline]): a
+// line break inside a policy would end its item, and what followed would read
+// as a line of the prompt of its own.
 func BuildPoliciesSection(s Seat) []string {
 	if !s.ok() || len(s.Org.Policies) == 0 {
 		return nil
 	}
 	parts := []string{"\n## Company policies"}
 	for _, policy := range s.Org.Policies {
-		parts = append(parts, "- "+strings.TrimSpace(policy))
+		parts = append(parts, "- "+inline(policy))
 	}
 	return parts
+}
+
+// isLineBreak reports whether r ends a line: a line feed, a carriage return,
+// or one of the separators Unicode defines as ending one.
+func isLineBreak(r rune) bool {
+	switch r {
+	case '\n', '\r', '\v', '\f', '\u0085', '\u2028', '\u2029':
+		return true
+	}
+	return false
+}
+
+// inline is text the company wrote, on ONE line: every line of it trimmed and
+// joined by a space, the blank ones dropped. Text written on one line comes
+// back as it was, trimmed.
+func inline(text string) string {
+	lines := strings.FieldsFunc(text, isLineBreak)
+	kept := lines[:0]
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
+// labelled is text the company wrote, under its label: on the label's own
+// line when it is one line, and otherwise QUOTED beneath it, every line
+// prefixed `> ` (a blank one `>`), so no line of it begins at the margin.
+func labelled(label, text string) string {
+	text = strings.TrimSpace(text)
+	if !strings.ContainsFunc(text, isLineBreak) {
+		return label + " " + text
+	}
+	// One break per line ending, whichever spelling it came in.
+	text = strings.Map(func(r rune) rune {
+		if isLineBreak(r) {
+			return '\n'
+		}
+		return r
+	}, strings.ReplaceAll(text, "\r\n", "\n"))
+	var b strings.Builder
+	b.WriteString(label)
+	for line := range strings.SplitSeq(text, "\n") {
+		b.WriteString("\n>")
+		if line = strings.TrimSpace(line); line != "" {
+			b.WriteString(" " + line)
+		}
+	}
+	return b.String()
 }
 
 // The agent's own role profile, as three sections: its backstory, its

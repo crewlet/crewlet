@@ -240,7 +240,7 @@ func TestAnEntityWriteNeverCreates(t *testing.T) {
 	s.seed(t, entityDoc)
 
 	res := s.do(t, http.MethodPut, "/config/llm-providers/xray",
-		`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${X}"]}`,
+		`{"model":"claude-sonnet-5","auth":{"mode":"api-key","api_key":"${X}"}}`,
 		map[string]string{"X-Summary": "add a provider sideways"})
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("PUT to an unknown id = %d, want 404: %s", res.Code, res.Body.String())
@@ -263,7 +263,7 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 	s.seed(t, entityDoc)
 
 	res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
-		`{"type":"anthropic","model":"claude-sonnet-5"}`, nil)
+		`{"model":"claude-sonnet-5"}`, nil)
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("PUT with no summary = %d, want 400", res.Code)
 	}
@@ -329,13 +329,15 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-literal", "${ROTATED}"]
+      auth:
+        token: sk-literal
+        credential_bundle: "${ROTATED}"
     yankee:
-      type: anthropic
       model: claude-haiku-4-5
-      api_keys: ["${YANKEE_KEY}"]
+      auth:
+        mode: api-key
+        api_key: "${YANKEE_KEY}"
 mcp_servers:
   - name: tracker
     transport: http
@@ -543,7 +545,7 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 		},
 		{
 			name: "an llm provider", kind: configapi.EntityLLMProviders, id: "nothing",
-			body: `{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${K}"]}`,
+			body: `{"model":"claude-sonnet-5","auth":{"mode":"api-key","api_key":"${K}"}}`,
 		},
 		{
 			// And a body that cannot be read at all: the path is what went
@@ -556,7 +558,7 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 		{
 			name: "an llm provider whose body has a typo",
 			kind: configapi.EntityLLMProviders, id: "nothing",
-			body: `{"type":"anthropic","modell":"claude-sonnet-5"}`,
+			body: `{"agent":"claude-code","modell":"claude-sonnet-5"}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -597,8 +599,8 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 		// a refusal's problems are placed on every route.
 		at string
 	}{
-		{configapi.EntityLLMProviders, "zulu", `{"type":"anthropic","modell":"claude-sonnet-5"}`, "providers.llm.zulu.modell"},
-		{configapi.EntityLLMProviders, "yankee", `{"type":"anthropic","model":"m","api_kies":["${K}"]}`, "providers.llm.yankee.api_kies"},
+		{configapi.EntityLLMProviders, "zulu", `{"agent":"claude-code","modell":"claude-sonnet-5"}`, "providers.llm.zulu.modell"},
+		{configapi.EntityLLMProviders, "yankee", `{"model":"m","auth":{"mode":"api-key","api_kies":"${K}"}}`, "providers.llm.yankee.auth.api_kies"},
 		{configapi.EntityMCPServers, "tracker", `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`,
 			"mcp_servers[0].comand"},
 		// A MISSPELT KEY IS THIS CASE'S INPUT, as every row's is.

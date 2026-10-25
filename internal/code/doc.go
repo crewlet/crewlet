@@ -16,13 +16,13 @@
 // its pack BUNDLE, the pack and the two indexes the receiving node's
 // receive-pack wrote for it, back to back (bundle.go) — and a code_packs row
 // names it. That table is declared [objstore.Required] ([PackReferences],
-// ADR-0026 and ADR-0047), so the collector keeps every object a live row names,
+// ADR-0026 and ADR-0048), so the collector keeps every object a live row names,
 // the audit checks each one and a backup carries them. A git node's bare
 // repository is never the record: it is a cache derived from these rows,
 // disposable, rebuilt from them whenever it is lost or wrong — which holds
 // only because a repository's refs and packs move by records on its own
 // subject and by nothing else, receive-pack never runs in a cache, and git is
-// told `ok` only from a push's applied row (ADR-0050).
+// told `ok` only from a push's applied row (ADR-0051).
 //
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
@@ -238,7 +238,7 @@
 // # Who may read and push
 //
 // A principal's standing on a repository is DERIVED from the chart and never
-// stored (ADR-0054): there is no table of who may push where, because such a
+// stored (ADR-0055): there is no table of who may push where, because such a
 // table is a second chart, and it drifts from the first the day a seat moves
 // units. [GrantOf] computes it, every time it is asked, from the repository's
 // row and a [Roster] — the chart of the node that answers or decides, which

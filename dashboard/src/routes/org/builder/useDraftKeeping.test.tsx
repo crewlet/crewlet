@@ -81,7 +81,7 @@ test("an edit is kept as its operation log and nothing of the document", async (
   expect(value.baseRevision).toBe("r1");
   expect(value.ops).toHaveLength(1);
   expect(kept()).not.toContain("Designer");
-  expect(kept()).not.toContain("anthropic");
+  expect(kept()).not.toContain("claude-sonnet-5-5");
 });
 
 test("a kept draft of the same revision waits for Keep or Discard, and Keep restores it", async () => {
@@ -170,7 +170,7 @@ test("declining to restore a kept draft onto a newer revision discards it", asyn
 });
 
 test("a draft kept for creating a company is discarded, with a word, when a company exists", async () => {
-  const built = templateIntent({ template: "empty", charter: { name: "Acme" } }, countingKeys("t"));
+  const built = templateIntent({ template: "empty", name: "Acme" }, countingKeys("t"));
   if (!built.ok) throw new Error(built.message);
   const op = record(EMPTY_DRAFT, built.intent);
   if (!op.ok) throw new Error(op.message);

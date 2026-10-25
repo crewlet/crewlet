@@ -20,7 +20,7 @@ import (
 // seat is there to be left out.
 const githubAppsDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "Builder", "handle": "builder", "llm": "zulu", "code": {"access": "full_access"},
@@ -489,7 +489,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
@@ -543,7 +543,7 @@ func TestASeatsAppIsBegunAtItsCodeAccess(t *testing.T) {
 	s := newSurface(t)
 	res := s.do(t, http.MethodPut, "/config", `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu", "code": {"access": "full_access"}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
@@ -643,7 +643,7 @@ func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Datadog Standard Role"}}},
@@ -682,7 +682,7 @@ func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Acme On-Call"}}},
@@ -750,7 +750,7 @@ func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
 	// seat has an app.
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {
 		    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
 	               "provisioning": {"org": "crewbed"}}

@@ -490,6 +490,11 @@ type Token struct {
 	// question using the token cannot: how long it will GO ON working,
 	// which is what [Result.CredentialExpires] warns about.
 	ExpiresAt Date `json:"expires_at"`
+	// Scopes are what the token may do, as GitLab names them (`api`,
+	// `read_api`). Read where a token is CHECKED before it is stored: a
+	// token without the scope its field needs authenticates and then is
+	// refused on the first call that matters.
+	Scopes []string `json:"scopes"`
 	// Value is the plaintext, present on a mint response only.
 	Value string `json:"token"`
 }

@@ -3,14 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// bundleProvider is a cli-agent provider with a credential directory of its
-// own and nothing else — import and export never run the vendor's binary, so
+// bundleProvider is a provider with a credential directory of its own and
+// nothing else — import and export never run the vendor's binary, so
 // none has to exist.
 func bundleProvider(t *testing.T) []cliAgentProvider {
 	t.Helper()
@@ -182,68 +177,7 @@ func TestOperatorCommandsTakeTheirLevelFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// --- doctor over an anthropic entry ------------------------------------------
-
-// fakeClaude is an Anthropic endpoint for the doctor: it serves a model record
-// on the Models API and answers every round with the given stream.
-type fakeClaude struct {
-	mu   sync.Mutex
-	seen []string
-}
-
-func (f *fakeClaude) saw() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.seen)
-}
-
-// serveClaude starts it. calls is whether a round calls the smoke tool or
-// answers in prose.
-func serveClaude(t *testing.T, calls bool) (*fakeClaude, string) {
-	t.Helper()
-	f := &fakeClaude{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		f.mu.Lock()
-		f.seen = append(f.seen, r.Method+" "+r.URL.Path)
-		f.mu.Unlock()
-		switch {
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/models/"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"id":"claude-opus-5-5","type":"model","display_name":"Claude Opus 5.5",`+
-				`"created_at":"2026-01-01T00:00:00Z","max_tokens":128000,"max_input_tokens":1000000,`+
-				`"capabilities":{"thinking":{"supported":true,"types":{"adaptive":{"supported":true},`+
-				`"enabled":{"supported":false}}},"effort":{"supported":true,"low":{"supported":true},`+
-				`"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},`+
-				`"max":{"supported":true}}}}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/messages":
-			w.Header().Set("Content-Type", "text/event-stream")
-			block := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"no"}}`
-			stop := "end_turn"
-			if calls {
-				block = `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use",` +
-					`"id":"tu_1","name":"crewlet_smoke","input":{"ok":true}}}`
-				stop = "tool_use"
-			}
-			for _, e := range [][2]string{
-				{"message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message",` +
-					`"role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,` +
-					`"usage":{"input_tokens":10,"output_tokens":1}}}`},
-				{"content_block_start", block},
-				{"content_block_stop", `{"type":"content_block_stop","index":0}`},
-				{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"` + stop + `"},` +
-					`"usage":{"output_tokens":5}}`},
-				{"message_stop", `{"type":"message_stop"}`},
-			} {
-				_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e[0], e[1])
-			}
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return f, srv.URL
-}
+// --- doctor over every entry --------------------------------------------------
 
 // doctorCompany writes a company whose providers are the given block, and
 // returns the flags pointing doctor at it. The bootstrap path does not exist,
@@ -256,76 +190,52 @@ func doctorCompany(t *testing.T, providers string) []string {
 	return []string{"-company", company, "-config", filepath.Join(dir, "absent.yaml")}
 }
 
-func anthropicEntry(key, model, baseURL string) string {
-	return fmt.Sprintf("    %s:\n      type: anthropic\n      model: %s\n      base_url: %s\n", key, model, baseURL)
-}
-
-const openAIEntry = "    gpt:\n      type: openai\n      model: gpt-5\n"
-
-// AN ANTHROPIC ENTRY IS EXAMINED, which it never used to be: a model the
-// capability table has drifted from is refused on every call, and nothing else
-// before a seat's first turn would say so. The record is read and a round is
-// sent, and an openai entry beside it is passed over rather than reported on.
-func TestDoctorExaminesAnAnthropicEntry(t *testing.T) {
-	t.Parallel()
-	api, url := serveClaude(t, true)
-	args := append([]string{"doctor"}, doctorCompany(t,
-		anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...)
-	var out, notes bytes.Buffer
-	if err := runLLM(noEnviron, args, &out, &notes); err != nil {
-		t.Fatalf("doctor: %v\n%s", err, out.String())
-	}
-	for _, want := range []string{
-		"provider      : claude\n",
-		"type          : anthropic\n",
-		"models api    : served — Claude Opus 5.5 (claude-opus-5-5)",
-		"smoke test    : ok — called crewlet_smoke",
-		"problems      : none\n",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("report lacks %q:\n%s", want, out.String())
-		}
-	}
-	if strings.Contains(out.String(), "gpt") {
-		t.Errorf("an openai entry was reported on:\n%s", out.String())
-	}
-	if got, want := api.saw(), []string{"GET /v1/models/claude-opus-5-5", "POST /v1/messages"}; !slices.Equal(got, want) {
-		t.Errorf("requests = %v, want %v", got, want)
-	}
-}
-
-// A PROBLEM IS A NON-ZERO EXIT, because doctor is what a deploy script gates
-// on.
-func TestDoctorFailsOnAnAnthropicEntryThatDoesNotCall(t *testing.T) {
-	t.Parallel()
-	_, url := serveClaude(t, false)
-	args := append([]string{"doctor", "claude"}, doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...)
-	var out, notes bytes.Buffer
-	err := runLLM(noEnviron, args, &out, &notes)
-	if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
-		t.Fatalf("err = %v\n%s", err, out.String())
-	}
-	if !strings.Contains(out.String(), "answered in prose") {
-		t.Errorf("the report does not say why:\n%s", out.String())
-	}
+// healthyDoctorEntry is a providers.llm entry, under key, that doctor reports healthy
+// without a billed call: a CLI that is on PATH and prints a version, reads its
+// usage figures, and is handed a headless token — its model the given one,
+// which may be a ${VAR}.
+//
+// `custom` over /bin/sh, because doctor runs the binary and no vendor's CLI is
+// installed where this suite runs; the token is the one sign-in that needs no
+// file and no login, and the token variable is the profile's own, so it is
+// the CLI's sign-in rather than an env entry doctor would have to judge.
+func healthyDoctorEntry(t *testing.T, key, model string) string {
+	t.Helper()
+	return fmt.Sprintf(`    %s:
+      agent: custom
+      model: %s
+      state_dir: %q
+      auth: {token: fake-headless-token}
+      overrides:
+        binary: /bin/sh
+        version_args: ["-c", "echo fake-cli 1.0"]
+        complete_args: ["-c", "exit 1"]
+        model_args: ["--model", "{model}"]
+        output: json
+        text_paths: [["result"]]
+        token_env: FAKE_CLI_TOKEN
+        usage: {input: [["usage", "input_tokens"]], output: [["usage", "output_tokens"]]}
+`, key, model, t.TempDir())
 }
 
 // AN ENTRY THAT DOES NOT BUILD IS REPORTED BESIDE THE OTHERS, not instead of
 // them: the engine would refuse the document over it, and an operator wants
-// that and every other entry's state from one run.
+// that and every other entry's state from one run. And A PROBLEM IS A NON-ZERO
+// EXIT, because doctor is what a deploy script gates on.
 func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 	t.Parallel()
-	_, url := serveClaude(t, true)
-	args := append([]string{"doctor"}, doctorCompany(t,
-		anthropicEntry("claude", "claude-opus-5-5", url)+
-			anthropicEntry("broken", `"${CREWLET_DOCTOR_TEST_UNSET_MODEL}"`, url))...)
+	args := append([]string{"doctor", "-no-smoke"}, doctorCompany(t,
+		healthyDoctorEntry(t, "claude", "m")+
+			healthyDoctorEntry(t, "broken", `"${CREWLET_DOCTOR_TEST_UNSET_MODEL}"`))...)
 	var out, notes bytes.Buffer
 	err := runLLM(noEnviron, args, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
 	for _, want := range []string{
-		"smoke test    : ok — called crewlet_smoke",
+		"provider      : claude\n",
+		"version       : fake-cli 1.0\n",
+		"problems      : none\n",
 		"provider      : broken\nproblems:\n  - it does not build",
 		"CREWLET_DOCTOR_TEST_UNSET_MODEL resolved to nothing",
 	} {
@@ -335,28 +245,22 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 	}
 }
 
-// AN ENTRY DOCTOR DOES NOT EXAMINE IS REFUSED BY NAME, rather than answered
-// with a report of nothing — and a document with none it examines says so.
-func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
+// A KEY NO ENTRY CARRIES IS REFUSED BY NAME, naming the ones doctor examines,
+// rather than answered with a report of nothing — and a document with no
+// entries at all, which is a company whose models are not added yet, says so.
+func TestDoctorNamesTheEntriesItExamines(t *testing.T) {
 	t.Parallel()
-	_, url := serveClaude(t, true)
 	var out, notes bytes.Buffer
-	err := runLLM(noEnviron, append([]string{"doctor", "gpt"},
-		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...), &out, &notes)
-	if err == nil || !strings.Contains(err.Error(), `provider "gpt" is type "openai"`) {
-		t.Errorf("err = %v", err)
-	}
-	err = runLLM(noEnviron, append([]string{"doctor", "nobody"},
-		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes)
+	err := runLLM(noEnviron, append([]string{"doctor", "nobody"},
+		doctorCompany(t, healthyDoctorEntry(t, "claude", "m"))...), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), `no provider "nobody" (doctor examines claude)`) {
 		t.Errorf("err = %v", err)
 	}
 
 	dir := t.TempDir()
-	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+openAIEntry+
-		"roles:\n  - name: CEO\n    handle: ceo\n    llm: gpt\n")
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\n")
 	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
-	if err == nil || !strings.Contains(err.Error(), "declares no cli-agent or anthropic providers") {
+	if err == nil || !strings.Contains(err.Error(), "declares no providers.llm entries") {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -376,10 +280,10 @@ func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
 	// The claude-code profile over a binary no host has, so the report
 	// runs nothing on the machine the suite runs on.
 	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n"+
-		"  sandbox: {fake: true}\n  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n"+
-		"      cli:\n        agent: claude-code\n        mode: agent\n"+
-		"        state_dir: "+filepath.Join(dir, "sub")+"\n"+
-		"        overrides: {binary: crewlet-no-such-cli-binary}\n"+
+		"  sandbox: {fake: true}\n  llm:\n    sub:\n      agent: claude-code\n      model: sonnet\n"+
+		"      mode: agent\n"+
+		"      state_dir: "+filepath.Join(dir, "sub")+"\n"+
+		"      overrides: {binary: crewlet-no-such-cli-binary}\n"+
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: sub\n")
 	var out, notes bytes.Buffer
 	err := runLLM(environ, []string{"doctor", "sub", "-no-smoke", "-company", company,
@@ -401,25 +305,24 @@ func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
 
 // A BOX URL THE ENGINE REFUSES ITS BOOT ON FAILS THE DOCTOR, WHATEVER MODE THE
 // COMPANY'S ENTRIES RUN IN. The doctor read the bridge's URL only for an
-// agent-mode entry and the receiver's never, so a company of text-mode and
-// anthropic entries — this one — got a clean report and a zero exit beside a
-// value the next boot refuses, and a deploy script gating on doctor passed a
-// node that then ran no seat at all. Both URLs a box dials back to the engine
-// are the NODE's, so the refusal is reported as the node's, ahead of the
-// entries, and never repeats the value.
+// agent-mode entry and the receiver's never, so a company of text-mode entries
+// — this one — got a clean report and a zero exit beside a value the next boot
+// refuses, and a deploy script gating on doctor passed a node that then ran no
+// seat at all. Both URLs a box dials back to the engine are the NODE's, so the
+// refusal is reported as the node's, ahead of the entries, and never repeats
+// the value.
 //
 // The variables travel in the environment the invocation is HANDED, which is
 // where the doctor reads them, as the engine reads its own.
 func TestTheLLMDoctorRefusesABoxURLTheBootRefuses(t *testing.T) {
 	t.Parallel()
-	_, url := serveClaude(t, true)
 	for _, variable := range []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar} {
 		t.Run(variable, func(t *testing.T) {
 			t.Parallel()
 			environ := config.MapSource{variable: "https://ops:hunter2@engine.example.com"}
 			var out, notes bytes.Buffer
 			err := runLLM(environ, append([]string{"doctor", "-no-smoke"},
-				doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes)
+				doctorCompany(t, healthyDoctorEntry(t, "claude", "m"))...), &out, &notes)
 			report := out.String()
 			if err == nil || !strings.Contains(err.Error(), "the engine refuses to boot on 1 of this node's box URLs") {
 				t.Fatalf("err = %v, want the node's refusal\n%s", err, report)
@@ -440,6 +343,197 @@ func TestTheLLMDoctorRefusesABoxURLTheBootRefuses(t *testing.T) {
 			}
 			if strings.Contains(report, "hunter2") || strings.Contains(err.Error(), "hunter2") {
 				t.Errorf("the doctor repeats the URL's password:\n%s", report)
+			}
+		})
+	}
+}
+
+// tokenLoginProvider is a claude-code entry under mode whose token mint is `sh`
+// printing one, so a capture that ran would have a token to store.
+func tokenLoginProvider(t *testing.T, mode cliagent.AuthMode) []cliAgentProvider {
+	t.Helper()
+	p, err := cliagent.New(cliagent.Config{
+		Key: "claude", Agent: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+		Timeout: 30 * time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary":             "sh",
+			"capture_token_args": []any{"-c", "echo sk-ant-oat01-MINTED"},
+		},
+		Auth: cliagent.Auth{Mode: mode},
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
+	return []cliAgentProvider{{key: "claude", provider: p}}
+}
+
+// A HEADLESS TOKEN IS STORED ONLY WHERE THE ENTRY'S AUTH MODE READS ONE. Under
+// api-key the token variable is removed from the CLI's environment, and under
+// inherit-env it is forwarded from the engine's own environment, never the
+// secret store — yet `-capture-token` and `-token-stdin` minted and stored one
+// under both, and printed an auth.token snippet that validation refuses under
+// either. Each is now refused before anything is minted, read or stored,
+// naming what the mode reads; inherit-env keeps -print-token, whose token
+// reaches the CLI once exported in the engine's environment. Subscription is
+// the control: it stores, so "nothing stored" below is a refusal and not a
+// store the harness could not reach.
+//
+// Mutation: drop the refusal, and every api-key and inherit-env case stores a
+// token (or prints one under api-key) and goes red.
+func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
+	t.Parallel()
+	const tokenVar = "CLAUDE_CODE_OAUTH_TOKEN"
+	for _, tc := range []struct {
+		name    string
+		mode    cliagent.AuthMode
+		req     loginRequest
+		stdin   string
+		stored  string
+		printed string
+		// refused is what the error must name, empty for a run that
+		// succeeds; never is what the error and the output must not.
+		refused []string
+		hint    string
+		never   []string
+	}{
+		{
+			name: "subscription mints and stores", mode: cliagent.AuthSubscription,
+			req: loginRequest{captureToken: true}, stored: "sk-ant-oat01-MINTED",
+		},
+		{
+			name: "subscription stores a token it is handed", mode: cliagent.AuthSubscription,
+			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n", stored: "sk-ant-oat01-PASTED",
+		},
+		{
+			name: "api-key refuses a mint", mode: cliagent.AuthAPIKey,
+			req: loginRequest{captureToken: true},
+			refused: []string{"auth.mode api-key", "removes " + tokenVar,
+				"providers.llm.claude.auth.api_key, else ANTHROPIC_API_KEY", "`crewlet secrets set`"},
+			never: []string{"${" + tokenVar + "}"},
+		},
+		{
+			name: "api-key refuses a token it is handed", mode: cliagent.AuthAPIKey,
+			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n",
+			refused: []string{"auth.mode api-key", "ANTHROPIC_API_KEY"},
+			never:   []string{"sk-ant-oat01-PASTED"},
+		},
+		{
+			name: "api-key refuses a mint even to stdout", mode: cliagent.AuthAPIKey,
+			req:     loginRequest{captureToken: true, printToken: true},
+			refused: []string{"auth.mode api-key"},
+			never:   []string{"sk-ant-oat01-MINTED"},
+		},
+		{
+			name: "inherit-env refuses to store a mint", mode: cliagent.AuthInheritEnv,
+			req: loginRequest{captureToken: true},
+			refused: []string{"auth.mode inherit-env", "never from the secret store",
+				"`crewlet llm login claude -capture-token -print-token`", "export it as " + tokenVar},
+			never: []string{"${" + tokenVar + "}"},
+		},
+		{
+			name: "inherit-env refuses to store a token it is handed", mode: cliagent.AuthInheritEnv,
+			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n",
+			refused: []string{"auth.mode inherit-env", "export the token you have as " + tokenVar},
+			never:   []string{"sk-ant-oat01-PASTED"},
+		},
+		{
+			name: "inherit-env prints a mint to export", mode: cliagent.AuthInheritEnv,
+			req: loginRequest{captureToken: true, printToken: true}, printed: "sk-ant-oat01-MINTED",
+			hint:  "Export it as " + tokenVar + " in the engine's environment",
+			never: []string{"${" + tokenVar + "}"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := bootstrapWithKeyring(t, "k1")
+			req := tc.req
+			req.providers, req.key, req.bootstrapPath = tokenLoginProvider(t, tc.mode), "claude", cfg
+			stdin := strings.NewReader(tc.stdin)
+			req.stdin = stdin
+			var out, errOut bytes.Buffer
+			err := loginLLM(t.Context(), noEnviron, req, &out, &errOut)
+
+			switch {
+			case len(tc.refused) > 0 && err == nil:
+				t.Fatalf("a token the mode never reads was accepted:\n%s%s", out.String(), errOut.String())
+			case len(tc.refused) == 0 && err != nil:
+				t.Fatalf("loginLLM: %v\n%s", err, errOut.String())
+			}
+			for _, want := range tc.refused {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			if len(tc.refused) > 0 && stdin.Len() != len(tc.stdin) {
+				t.Error("the token was read from stdin before the refusal")
+			}
+			if tc.hint != "" && !strings.Contains(errOut.String(), tc.hint) {
+				t.Errorf("stderr does not say %q:\n%s", tc.hint, errOut.String())
+			}
+			if got := strings.TrimSpace(out.String()); tc.printed != "" && got != tc.printed {
+				t.Errorf("stdout = %q, want the token %q alone", got, tc.printed)
+			}
+			said := out.String() + errOut.String()
+			if err != nil {
+				said += err.Error()
+			}
+			for _, bad := range tc.never {
+				if strings.Contains(said, bad) {
+					t.Errorf("the command said %q, which this mode never reads:\n%s", bad, said)
+				}
+			}
+
+			got, _, getErr := secretsCmd(t, cfg, "get", tokenVar, "-reveal")
+			switch {
+			case tc.stored == "" && getErr == nil:
+				t.Errorf("%s was stored as %q, where this run must store nothing", tokenVar, got)
+			case tc.stored != "" && got != tc.stored:
+				t.Errorf("%s = %q (%v), want %q", tokenVar, got, getErr, tc.stored)
+			}
+		})
+	}
+}
+
+// -FROM-HOST RECOMMENDS A TOKEN ONLY WHERE THE ENTRY WOULD READ ONE. After an
+// adopted login it says to prefer `-capture-token`, which avoids the shared
+// refresh token — advice that, under api-key or inherit-env, leads to the
+// refusal above. Subscription is the control: it is told.
+//
+// Mutation: print the preference whatever the mode, and the api-key and
+// inherit-env cases go red.
+func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode   cliagent.AuthMode
+		prefer bool
+	}{
+		{cliagent.AuthSubscription, true},
+		{cliagent.AuthAPIKey, false},
+		{cliagent.AuthInheritEnv, false},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			t.Parallel()
+			home := t.TempDir()
+			path := filepath.Join(home, ".claude", ".credentials.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(`{"token":"personal"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			err := loginLLM(t.Context(), noEnviron, loginRequest{
+				providers: tokenLoginProvider(t, tc.mode), key: "claude", home: home,
+				fromHost: true, stdin: strings.NewReader(""),
+			}, &out, &errOut)
+			if err != nil {
+				t.Fatalf("-from-host: %v\n%s", err, errOut.String())
+			}
+			if !strings.Contains(out.String(), "Adopted") {
+				t.Fatalf("the premise: nothing was adopted:\n%s", out.String())
+			}
+			if got := strings.Contains(out.String(), "-capture-token"); got != tc.prefer {
+				t.Errorf("recommends -capture-token = %v, want %v:\n%s", got, tc.prefer, out.String())
 			}
 		})
 	}

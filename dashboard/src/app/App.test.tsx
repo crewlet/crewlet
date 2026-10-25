@@ -123,9 +123,10 @@ describe("the shell", () => {
   test("mounts against an engine that has answered nothing", () => {
     mount();
     // The chrome is present and honest: not connected yet, and saying so, in
-    // the sidebar's engine row and in the landing screen's own sentence. A tab
-    // still dialling has lost nothing, so the row says it is connecting.
-    expect(screen.getAllByText("Connecting").length).toBeGreaterThan(0);
+    // the rail head's engine status and in the landing screen's own sentence.
+    // A tab still dialling has lost nothing, so the status says it is
+    // connecting, as its name and its title.
+    expect(screen.getAllByTitle("Connecting").length).toBeGreaterThan(0);
     // AND THE LANDING SCREEN IS HOME, whose one sentence an engine condition
     // takes over rather than sitting beside a claim that all is well.
     expect(screen.getByText(/Not connected\. Showing the last state received/)).toBeDefined();
@@ -147,8 +148,7 @@ describe("the shell", () => {
       "Home",
       "Inbox",
       "My work",
-      "Overview",
-      "Policies",
+      "Principles",
       "Org chart",
       "Schedules",
       "Integrations",
@@ -160,8 +160,9 @@ describe("the shell", () => {
     ]) {
       expect(nav.textContent, label).toContain(label);
     }
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.textContent).toContain("Settings");
+    // AT THE FOOT, AS ITS GLYPH beside the reader's own row: a link named in words.
+    const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+    expect(within(foot).getByRole("link", { name: "Settings" })).toBeTruthy();
   });
 
   // A LOCK GOES WHERE THE CLOSED THING IS. This reader holds none of the
@@ -175,12 +176,13 @@ describe("the shell", () => {
     const column = await screen.findByRole("navigation", { name: "Settings sections" });
     await waitFor(() =>
       expect(within(column).getByRole("link", { name: /^Nodes/ }).textContent).toMatch(
-        /needs Admin/,
+        /Needs Admin/,
       ),
     );
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.querySelector(".side-locked")).toBeNull();
-    expect(foot.textContent).not.toMatch(/need a grant/);
+    // The foot's Settings names no lock: its title is its name alone.
+    const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+    const settings = within(foot).getByRole("link", { name: "Settings" });
+    expect(settings.getAttribute("title")).toBe("Settings");
   });
 });
 
@@ -259,7 +261,7 @@ describe("the drawer's search", () => {
     const restore = touch(on);
     try {
       mount();
-      const search = document.querySelector(".side-search")!;
+      const search = document.querySelector(".crewlet-app-shell__rail-search")!;
       expect(search.textContent).toContain("Ask or jump to…");
       expect(search.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(caps);
     } finally {
@@ -580,8 +582,11 @@ describe("a section, for a reader holding none of its grants", () => {
       location.hash = buildHash(section.path);
       const { view } = mountAs(Promise.reject(new QueryError("timeout")));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
-      for (let i = 0; i < 8; i++) await Promise.resolve();
-      await new Promise((r) => setTimeout(r, 0));
+      // THE FAILED READ'S RENDER IS AWAITED INSIDE `act`, which flushes the
+      // update the rejection schedules. Awaited outside it, the render waited
+      // on React's scheduler, and a timer tick only usually came after it: on
+      // a loaded runner the screen still said "Checking your access".
+      for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
       expect(
         screen.queryByText(`You need ${accessNames(section.grants!)} access`),
         section.key,
@@ -622,7 +627,7 @@ describe("a section, for a reader holding none of its grants", () => {
       expect(within(column).getAllByText(group).length).toBeGreaterThan(0);
     }
     const row = (href: string) => rows.find((a) => a.getAttribute("href") === href);
-    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
+    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/Needs Admin/));
     expect(row("#/settings/spend")?.textContent).toBe("Token spend");
     expect(row("#/settings/people")?.getAttribute("title")).toBe(
       settings.sections.find((s) => s.key === "people")!.hint,
@@ -640,10 +645,10 @@ describe("a section, for a reader holding none of its grants", () => {
       within(column)
         .getAllByRole("link")
         .find((a) => a.getAttribute("href") === href);
-    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
-    expect(row("#/settings/mcp-tools")?.textContent).toMatch(/needs Admin access/);
-    expect(row("#/settings/limits")?.textContent).toMatch(/needs Admin access/);
-    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/needs Tracker access/);
+    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/Needs Admin/));
+    expect(row("#/settings/mcp-tools")?.textContent).toMatch(/Needs Admin access/);
+    expect(row("#/settings/limits")?.textContent).toMatch(/Needs Admin access/);
+    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/Needs Tracker access/);
     expect(row("#/settings/spend")?.textContent).toBe("Token spend");
   });
 
@@ -656,7 +661,7 @@ describe("a section, for a reader holding none of its grants", () => {
         grants: ["admin", "tracker", "knowledge"],
       }),
     );
-    expect(await screen.findByText(/Log positions are under/)).toBeDefined();
+    expect(await screen.findByRole("navigation", { name: "Related" })).toBeDefined();
     expect(screen.queryByText("Nodes needs Admin")).toBeNull();
   });
 

@@ -49,7 +49,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Announcer, AppShell, useMediaMatch } from "@crewlethq/ui";
+import { AppShell, SectionFrame, useMediaMatch } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
@@ -645,12 +645,11 @@ function Frame({ children }: { children: ReactNode }) {
         >
           {row && sectionColumn > 0 ? (
             // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
-            // ([columnWidth]), handed to the grid rather than written again
-            // in the stylesheet, so the two cannot drift.
-            <div
-              className="section-frame"
-              style={{ "--section-column": `${sectionColumn}px` } as CSSProperties}
-            >
+            // ([columnWidth]), and the fold is the same answer the peek's
+            // width reads ([SECTION_COLUMN_MIN]), both handed to the kit's
+            // frame rather than written again in a stylesheet, so the column
+            // drawn and the column counted cannot drift.
+            <SectionFrame columnWidth={`${sectionColumn}px`} folded={!sideBySide}>
               <SectionColumn
                 row={row}
                 path={route.path}
@@ -659,8 +658,8 @@ function Frame({ children }: { children: ReactNode }) {
                 figures={figures}
                 runs={runs}
               />
-              <div className="section-body">{screen}</div>
-            </div>
+              <SectionFrame.Body>{screen}</SectionFrame.Body>
+            </SectionFrame>
           ) : (
             screen
           )}
@@ -687,9 +686,6 @@ function Frame({ children }: { children: ReactNode }) {
           </LayerBoundary>
         )}
         {legendOpen && <KeyLegend runs={runs} onClose={() => setLegendOpen(false)} />}
-        {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
-            without moving focus (the switcher's "3 projects"). */}
-        <Announcer />
       </PeekNeighbours>
     </NewTaskOpener.Provider>
   );

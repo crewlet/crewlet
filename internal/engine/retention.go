@@ -40,7 +40,7 @@ import (
 // write fence knows what may be gone — and only THEN applies the answer to the
 // broker, for the reason [retention.apply] gives. Last, on a log that writes
 // arbitration anchors, it appends the trimmed records that have every node
-// remove the anchors below what the log no longer holds (ADR-0046,
+// remove the anchors below what the log no longer holds (ADR-0047,
 // [retention.sweepAnchors]): an anchor there names a record that is gone, and
 // can only send its subject's next write to be refused.
 //
@@ -444,7 +444,7 @@ func (r *retention) tick(ctx context.Context) {
 		}
 		sweeps = append(sweeps, sweepTarget{running: running, below: below})
 	}
-	// AND THEN THE ANCHORS BELOW WHAT EACH LOG NO LONGER HOLDS — ADR-0046 —
+	// AND THEN THE ANCHORS BELOW WHAT EACH LOG NO LONGER HOLDS — ADR-0047 —
 	// once every log's purge has landed, so the sweeps share their one
 	// interval among the logs that have anything to sweep.
 	r.sweepAnchors(ctx, sweeps)

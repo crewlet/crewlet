@@ -461,7 +461,7 @@ func Catalogue() []Instrument {
 			Name: StatelogAnchorsSwept, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Arbitration anchors this node's applier removed under the " +
-				"trim's `trimmed` records (ADR-0046), counted once the " +
+				"trim's `trimmed` records (ADR-0047), counted once the " +
 				"transaction that removed them commits. Every node applies " +
 				"every record, so every data node counts the same removals. " +
 				"Flat is the normal reading of a log whose purged objects all " +

@@ -144,9 +144,7 @@ name: Acme
 providers:
   llm:
     primary:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
 roles:
   - name: CEO
     handle: ceo

@@ -9,8 +9,8 @@ detailed setup steps live.
 
 **Only the LLM is required.** The tracker and the knowledge base ship with the
 engine and are on by default; everything else is a surface you add when you
-want your company working where your people already are. A company with an API
-key and nothing else runs.
+want your company working where your people already are. A company with one
+signed-in coding CLI and nothing else runs.
 
 A useful mental model: for each integration there is usually
 
@@ -32,47 +32,60 @@ A useful mental model: for each integration there is usually
 
 ## LLM provider (required)
 
-| Option | Config | Notes |
-|---|---|---|
-| **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Each request is shaped for its Claude model — adaptive thinking and an effort level on the current generation, a thinking budget only on the older models that take one (see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)). Required if you want Claude Code as the sandbox coding agent. |
-| **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
-| **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. A reasoning model's reasoning goes back to its host in the host's own field, as models like Kimi K3 require (see [Reasoning models behind an OpenAI-compatible endpoint](configuration.md#reasoning-models-behind-an-openai-compatible-endpoint)). OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
-| **A gateway or proxy in front of a vendor** | `base_url` on `anthropic` / `openai` | `base_url` is not an `openai-compatible`-only field. It is merely *required* there. On a vendor entry it redirects that vendor's own wire format at an egress proxy, an Anthropic-API gateway, or a subscription OAuth proxy. The last of those has terms and trade-offs worth reading first: [Subscription LLM Backends § the proxy shape](../concepts/subscription-llm-backends.md#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry). |
-| **A coding CLI you subscribe to** | `type: cli-agent` + `cli.agent` | No API key: drives a coding CLI already installed on the engine host — the `claude`, `codex`, `gemini`, `qwen`, `opencode`, `cursor-agent`, `copilot`, `grok`, `muse`, `kimi`, `hermes` or `pi` **binary** — on the operator's own subscription. `cli.agent` names the profile rather than the binary (`claude-code`, `gemini-cli`, `kimi-code`, …); [Supported CLIs](../concepts/subscription-llm-backends.md#supported-clis) pairs them up. The CLI must be installed on the engine host. Flat-rate cost, higher per-call latency, and each seat gets an isolated CLI home so agents never share memory. See [Subscription LLM Backends](../concepts/subscription-llm-backends.md). |
+**Every model is reached through a coding CLI** the engine drives as a process —
+the vendor's own harness, which follows every model the vendor ships, signed in
+with your plan or your key. So the choice is which vendor's models you want,
+and how you pay for them:
 
-You can configure several named providers and pick per role (`role.llm`), plus
+| Models | Config | Pay with | Notes |
+|---|---|---|---|
+| **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `agent` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one CLI that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs the executor itself in [agent mode](../concepts/llm-backends.md#agent-mode), and is a sandbox coding agent. |
+| **OpenAI's** (GPT) | `agent: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | A text model behind the engine's tool loop; a seat on it that writes code takes its sandbox work to a Claude Code or OpenCode entry. |
+| **Open models** — OpenRouter, a hosted provider, your own server | `agent: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or a login of OpenCode's own; nothing at all for a server that takes no key | OpenCode 2. Fully self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Agent mode and a sandbox coding agent, like Claude Code. |
+| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `agent:` the profile's name | the vendor's login or key | Text models. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
+
+Whichever you pick, the CLI's binary has to be installed on the engine host —
+the container image ships none, see [Installation](installation.md#a-coding-cli)
+— and each seat gets an isolated home in it, so agents never share a CLI's
+memory. See [LLM Backends](../concepts/llm-backends.md) for the whole design.
+
+You can configure several named entries and pick per role (`role.llm`), plus
 a cheap auxiliary model per role (`role.llm_auxiliary`) for reflection and
-summarisation work. `role.llm` also accepts a **list**, which is how a
-subscription and a metered key compose: `llm: [subscription, default]` runs
-on the flat-rate CLI and falls through to the API key when the subscription
-window is spent. See [Quickstart § LLM options](quickstart.md#llm-options).
+summarisation work — worth choosing deliberately, because each of those calls
+pays a CLI launch under a fixed deadline
+([why](../concepts/llm-backends.md#auxiliary-work-and-latency)). `role.llm` also
+accepts a **list**, which is how a plan and a key compose: `llm: [plan, key]`
+runs on the flat-rate plan and falls through to the metered key while the
+plan's window is spent. See [Quickstart § LLM options](quickstart.md#llm-options).
 
-**Which to pick.** A metered key is the default answer for a fleet that has
-to be fast and always available. A subscription CLI is the better answer when
-you are developing, evaluating, or running a small company yourself and want
-predictable cost — check your plan's terms, which are generally written for
-interactive use by the subscriber. A subscription can also back the
-[code sandbox](../concepts/code-sandbox.md) — via a headless token on any
-backend, or via a local cell (`providers.sandbox.local` plus `run_in:
+**Which to pick.** A key is the answer for a fleet that has to be fast and
+always available: it is billed per token and throttled far less than a plan.
+A plan is the better answer when you are developing, evaluating, or running a
+small company yourself and want predictable cost — check its terms, which are
+generally written for interactive use by the subscriber. Both are the same CLI,
+so the choice is one `auth.mode` and can change at any time. A plan can also
+back the [code sandbox](../concepts/code-sandbox.md) — via a headless token on
+any backend, or via a local cell (`providers.sandbox.local` plus `run_in:
 direct`), which runs the coding agent on the engine host against the same
 login.
 
-**And a subscription CLI can run the turn itself.** `cli.mode: agent` makes
-the seat's executor the CLI's own agentic loop — a real shell, a real editor,
-a real checkout — with the seat's tools reaching it over an MCP bridge, as a
-detached run that outlives the turn. It needs more than a login: a CLI with a
-coding-agent runner (`claude-code` or `opencode`), a `providers.sandbox`
-catalogue to place the run in, and `CREWLET_MCP_BRIDGE_URL` set to something a
-box can dial. `crewlet llm doctor` checks all three. Text mode stays the
-default and is the better answer when you want the tool log to be the
-engine's own. See
-[Subscription LLM Backends § Two modes](../concepts/subscription-llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
+**And the CLI can run the turn itself.** `mode: agent` makes the seat's executor
+the CLI's own agentic loop — a real shell, a real editor, a real checkout — with
+the seat's tools reaching it over an MCP bridge, as a detached run that outlives
+the turn. It needs more than a sign-in: a CLI with a coding-agent runner
+(`claude-code` or `opencode`), a `providers.sandbox` catalogue to place the run
+in, and `CREWLET_MCP_BRIDGE_URL` set to something a box can dial. `crewlet llm
+doctor` checks all three. Text mode stays the default and is the better answer
+when you want the tool log to be the engine's own. See
+[LLM Backends § Two modes](../concepts/llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
 
 **Embeddings** (`providers.embeddings`) power the semantic half of a native
 knowledge search — the company's own pages and work items, embedded once for
 the whole fleet, and each search's query — and the agent-learning subsystem's
-similarity recall (personal diary + episode recall). Any OpenAI-compatible
-embeddings endpoint works via `base_url`, including a self-hosted one; a model
+similarity recall (personal diary + episode recall). They are the one model
+call the engine makes itself, since a coding CLI computes no vectors: any
+OpenAI-compatible embeddings endpoint works via `base_url`, including a
+self-hosted one; a model
 this build does not know states its width and its limits (the tokens one input
 may hold, and the inputs and tokens one request may carry), and so do the
 request limits of `gemini-embedding-001` and `embed-v4.0`, whose compatible
@@ -378,12 +391,12 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 | **None** | omit `providers.sandbox` | Roles use the native executor tool-loop; no code authoring. |
 | **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
 | **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
-| **Local — container** | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You supply an image with the coding CLI installed. Can use a [subscription login](../concepts/subscription-llm-backends.md) instead of an API key. |
-| **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for a subscription backend — but the coding agent runs as the engine user, so it isolates *state*, not the host. Workstation or dedicated VM only. |
+| **Local — container** | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You supply an image with the coding CLI installed. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
+| **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs as the engine user, so it isolates *state*, not the host. Workstation or dedicated VM only. |
 
 `providers.sandbox` is a **catalogue**, so these are not exclusive: configure
 `e2b:` and `local:` together and give each seat its own `run_in` — the seat
-that needs the host's subscription login runs `direct`, the seat whose
+that needs the host's plan login runs `direct`, the seat whose
 generated code must never touch that host runs `e2b`. Where a seat that names
 none goes is `default_run_in`, which is required whenever some seat (or
 agent-mode entry) would fall to it on a catalogue offering more than one cell
@@ -391,17 +404,18 @@ agent-mode entry) would fall to it on a catalogue offering more than one cell
 needs none — as long as *something* names a cell, since a backend is only
 built for a cell that is reached.
 
-Coding-agent choice: **OpenCode** — version 2, the `@opencode/cli` package,
-in the box — is provider-agnostic (reuses the key of
-any `anthropic`, `openai` or OpenAI-compatible provider you already
-configured — no extra secret — and runs an `opencode`
-[`cli-agent`](../concepts/subscription-llm-backends.md) entry);
-**Claude Code** requires an `anthropic` provider entry, a `claude-code`
-`cli-agent` one, or a Claude Code sign-in of the seat's own in
-`role.sandbox.env` (select the entry per role via `role.llm_sandbox`). A
-`cli-agent` entry's code work needs that same CLI as the seat's
-`coding_agent` — an `opencode` entry needs `coding_agent: opencode` — and
-any other pairing is [refused](../concepts/code-sandbox.md#failure-modes).
+Coding-agent choice: the coding agent **is** the CLI of the entry the seat's
+code work runs on (`role.llm_sandbox`, else its `llm`), with that entry's model
+and that entry's sign-in, so it needs no extra secret. **Claude Code** runs a
+`claude-code` entry; **OpenCode** — version 2, the `@opencode/cli` package, in
+the box — runs an `opencode` entry and so any model OpenCode reaches, which
+takes `coding_agent: opencode` on the seat (or as the provider default). Any
+other pairing is [refused](../concepts/code-sandbox.md#failure-modes), and a
+seat whose own model is on a CLI with no coding-agent runner — Codex, Gemini
+CLI, the rest — points `role.llm_sandbox` at a `claude-code` or `opencode`
+entry. A sign-in the seat carries itself in `role.sandbox.env` — a Claude Code
+token, say — counts toward the check that refuses a remote box its entry's login
+cannot follow.
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
 reach services on your laptop (`localhost` GitLab) — in-sandbox tool
@@ -414,22 +428,23 @@ the same network.
 
 Two bundled **Nimbus examples** model the same seven-seat company at opposite
 ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
-is the **reference**: a pick from every row — GitLab, Mattermost, a metered
-`openai-compatible` key, a sandbox its engineers push merge requests from, the
-engine's own tracker and knowledge base rather than a vendor's, and two
-repositories on the engine's own code host beside GitLab's. Read it to
+is the **reference**: a pick from every row — GitLab, Mattermost, open models
+through OpenCode on an OpenRouter key, a sandbox its engineers push merge
+requests from, the engine's own tracker and knowledge base rather than a
+vendor's, and two repositories on the engine's own code host beside GitLab's.
+Read it to
 see what a full stack looks like written out, and
 [Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
 for the blocks that move those two halves to Atlassian.
 
 `examples/nimbus-claude-cli.company.yaml` + `examples/nimbus-claude-cli.config.yaml`
 is the **short path**: every pick that costs nothing extra to stand up — chat
-on **Mattermost**, the model a **coding CLI on your own subscription**, the
+on **Mattermost**, the model **Claude Code on your own Claude plan**, the
 tracker and knowledge base the **engine's own**, and the code sandbox on the
-**engine host** (`run_in: direct`), which reuses that same subscription login
+**engine host** (`run_in: direct`), which reuses that same plan login
 rather than needing an account of its own. Its three
 engineering seats run that CLI in
-[agent mode](../concepts/subscription-llm-backends.md#agent-mode), so their
+[agent mode](../concepts/llm-backends.md#agent-mode), so their
 executor *is* the CLI's own agentic loop with a real shell. The rows that need
 somebody else's service are deliberately empty, which is what lets the whole
 thing run from one compose profile and one `crewlet llm login`:

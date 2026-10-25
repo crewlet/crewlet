@@ -1,24 +1,23 @@
 package main
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // The cases here hold WHERE `crewlet llm` restores an entry's configured
 // credential bundle. Every one sets the conventional variable the engine reads
 // a bundle from, so none runs in parallel.
 
-// bundledEntry writes a company whose one cli-agent entry, "sub", keeps its
+// bundledEntry writes a company whose one entry, "sub", keeps its
 // login in a credential file and runs `true` for every command, configures
 // bundle through the conventional CREWLET_LLM_CLI_SUB_CREDENTIALS, and has an
 // empty state directory. It returns the flags pointing a command at it and the
@@ -36,59 +35,88 @@ func bundledEntryWithLogout(t *testing.T, bundle, logout string) (flags []string
 	t.Helper()
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state")
-	t.Setenv(cliagent.BundleVarName("sub"), bundle)
+	t.Setenv(cliprofile.BundleVarName("sub"), bundle)
 	binary, status, signIn, logoutArgs := "true", `["status"]`, `["login"]`, ""
 	if logout != "" {
 		binary, status, signIn = "sh", `["-c", "exit 0"]`, `["-c", "exit 0"]`
-		logoutArgs = fmt.Sprintf("\n          logout_args: [\"-c\", %q]", logout)
+		logoutArgs = fmt.Sprintf("\n        logout_args: [\"-c\", %q]", logout)
 	}
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
     sub:
-      type: cli-agent
+      agent: custom
       model: m
-      cli:
-        agent: custom
-        state_dir: %q
-        overrides:
-          binary: %q
-          complete_args: ["-p"]
-          model_args: ["--model", "{model}"]
-          output: text
-          credential_paths: [".fake/creds.json"]
-          status_args: %s
-          login_args: %s%s
+      state_dir: %q
+      overrides:
+        binary: %q
+        complete_args: ["-p"]
+        model_args: ["--model", "{model}"]
+        output: text
+        credential_paths: [".fake/creds.json"]
+        status_args: %s
+        login_args: %s%s
 roles:
   - name: CEO
     handle: ceo
     llm: sub
 `, state, binary, status, signIn, logoutArgs))
 	return []string{"-company", company, "-config", filepath.Join(dir, "absent.yaml")},
-		filepath.Join(state, "credentials", "creds.json")
+		filepath.Join(state, "custom", "credentials", "creds.json")
 }
 
-// llmBundle packs one creds.json the way `crewlet llm export` does.
+// llmBundle is a bundle of the entry's CLI, `custom`, holding one creds.json:
+// exported by `crewlet llm export`'s own writer from a state directory of its
+// own, so it is a bundle the export writes — the CLI it names included —
+// rather than this file's copy of one.
 func llmBundle(t *testing.T, body string) string {
 	t.Helper()
-	var raw bytes.Buffer
-	zw := gzip.NewWriter(&raw)
-	tw := tar.NewWriter(zw)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "creds.json", Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg,
-	}); err != nil {
+	p, err := cliagent.New(cliagent.Config{
+		Key: "sub", Agent: "custom", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary": "true", "complete_args": []any{"-p"}, "output": "text",
+			"credential_paths": []any{".fake/creds.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("building the exporting entry: %v", err)
+	}
+	login := filepath.Join(p.Workspace().CredentialsDir(), "creds.json")
+	if err := os.MkdirAll(filepath.Dir(login), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tw.Write([]byte(body)); err != nil {
+	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := tw.Close(); err != nil {
+	blob, err := p.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+	return blob
+}
+
+// codexBundle is a bundle `crewlet llm export` writes from a codex login, from
+// a state directory of its own: another CLI's, to the `custom` entry above.
+func codexBundle(t *testing.T, body string) string {
+	t.Helper()
+	p, err := cliagent.New(cliagent.Config{
+		Key: "sub", Agent: "codex", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatalf("building the exporting entry: %v", err)
+	}
+	login := filepath.Join(p.Workspace().CredentialsDir(), "auth.json")
+	if err := os.MkdirAll(filepath.Dir(login), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := zw.Close(); err != nil {
+	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return base64.StdEncoding.EncodeToString(raw.Bytes())
+	blob, err := p.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+	return blob
 }
 
 // runSub runs `crewlet llm <sub> sub` with extra flags against the company.
@@ -135,7 +163,7 @@ func TestALogoutOutlastsTheCommandsThatRestoreTheBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("logout: %v (%s)", err, stderr)
 	}
-	for _, want := range []string{"Logged sub out", cliagent.BundleVarName("sub"), "fresh volume",
+	for _, want := range []string{"Logged sub out", cliprofile.BundleVarName("sub"), "fresh volume",
 		"`crewlet llm login sub`"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the logout does not say %q about the configured bundle:\n%s", want, stdout)
@@ -216,6 +244,42 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 				t.Errorf("%s does not report the restored login (%q):\n%s", c.command, c.say, out.String())
 			}
 		})
+	}
+}
+
+// A BUNDLE FROM ANOTHER CLI IS REFUSED BY EVERY COMMAND THAT RESTORES IT, as
+// the engine refuses it: an entry moved to another CLI keeps the bundle it was
+// configured with, which names the CLI it was exported from. `status` says so
+// on stderr and restores nothing, and `doctor` reports it with the export that
+// replaces it — named with the entry's key, where it named a bare `crewlet llm
+// export`, which a company of more than one entry refuses for want of one.
+//
+// Mutation: drop the key from doctor's remedy, or the manifest's check from the
+// restore, and this is red.
+func TestABundleFromAnotherCLIIsRefusedByTheCommandsThatRestoreIt(t *testing.T) {
+	flags, login := bundledEntry(t, codexBundle(t, `{"token":"k-codex"}`))
+
+	stdout, _, err := runSub(t, flags, "doctor", "-no-smoke")
+	if err == nil {
+		t.Error("doctor called an entry whose bundle is another CLI's healthy")
+	}
+	for _, want := range []string{`it names "codex"`, "export the bundle again (`crewlet llm export sub`)"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("doctor does not say %q:\n%s", want, stdout)
+		}
+	}
+
+	_, stderr, err := runSub(t, flags, "status")
+	if err != nil {
+		t.Fatalf("status: %v (%s)", err, stderr)
+	}
+	for _, want := range []string{"did not restore", `it names "codex"`, `"sub" moved to "custom"`} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("status does not say %q:\n%s", want, stderr)
+		}
+	}
+	if got := readLogin(t, login); got != "" {
+		t.Errorf("another CLI's bundle was restored as the entry's login: %q", got)
 	}
 }
 
@@ -304,7 +368,7 @@ func TestALogoutWhoseVendorHalfFailedStillNamesTheBundle(t *testing.T) {
 	if strings.Contains(stdout, "Logged sub out") {
 		t.Errorf("a logout whose vendor half failed reported success:\n%s", stdout)
 	}
-	for _, want := range []string{cliagent.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
+	for _, want := range []string{cliprofile.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the failed logout does not say %q about the bundle it holds back:\n%s", want, stdout)
 		}

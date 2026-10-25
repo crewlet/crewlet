@@ -676,6 +676,26 @@ describe("editing", () => {
     ).toMatchObject({ refusal: "forbidden_field" });
   });
 
+  // THE PRINCIPLES ARE WRITTEN ON COMPANY › PRINCIPLES, and only there: the
+  // builder's one company field is its name, so a mission, a vision or a
+  // policy list is refused at the recording door, and a stored log that holds
+  // one is malformed rather than replayed over what that page wrote.
+  test.each(["mission", "vision", "policies"])(
+    "the company's %s is not the builder's to write",
+    (field) => {
+      const draft = fixture();
+      expect(
+        record(draft, { type: "updateCompany", set: [{ path: [field], value: "x" }] }),
+      ).toMatchObject({
+        refusal: "forbidden_field",
+        message: expect.stringContaining("Company › Principles"),
+      });
+      expect(
+        malformedReason({ type: "updateCompany", changes: [{ path: [field], after: "x" }] }),
+      ).not.toBeNull();
+    },
+  );
+
   test("a created seat may choose its handle, moving its access level off the old one", () => {
     const added = run(fixture(), {
       type: "addSeat",
@@ -726,17 +746,17 @@ describe("editing", () => {
     expect(recordOk(leveled, intentOf(op))).toEqual(op);
   });
 
-  test("the charter, the lead and the reports are edited through their own operations", () => {
+  test("the company's name, the lead and the reports are edited through their own operations", () => {
     let draft = fixture();
     draft = run(draft, {
       type: "updateCompany",
-      set: [{ path: ["vision"], value: "Everywhere" }],
+      set: [{ path: ["name"], value: "Acme Labs" }],
     }).draft;
     draft = run(draft, { type: "setLead", target: "unit:sales", lead: "account-executive" }).draft;
     draft = run(draft, { type: "setManages", target: "seat:ceo", manages: ["designer"] }).draft;
     draft = run(draft, { type: "setManages", target: "seat:vp-engineering", manages: [] }).draft;
     const out = doc(draft);
-    expect(out.vision).toBe("Everywhere");
+    expect(out.name).toBe("Acme Labs");
     expect(out.units![1]!.lead).toBe("account-executive");
     expect(out.roles![0]!.manages).toEqual(["designer"]);
     expect(out.units![0]!.roles![0]).not.toHaveProperty("manages");
@@ -975,7 +995,7 @@ describe("an operation as data", () => {
         schedule: "standup",
         enabled: false,
       },
-      { type: "updateCompany", set: [{ path: ["mission"] }] },
+      { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
     ];
     for (const intent of intents) {
       const op = recordOk(draft, intent);
@@ -1176,7 +1196,7 @@ describe("editing a node in one operation", () => {
     expect(touchedKeys(op)).toEqual(["seat:dev"]);
   });
 
-  test("a unit's lead, fields and schedule toggle apply together, and the charter edits as the company", () => {
+  test("a unit's lead, fields and schedule toggle apply together, and a rename edits as the company", () => {
     const draft = fixture();
     const { op, draft: next } = run(draft, {
       type: "edit",
@@ -1202,15 +1222,12 @@ describe("editing a node in one operation", () => {
       "Edited Engineering: purpose, lead, disabled schedule standup.",
     );
 
-    const charter = recordOk(draft, {
+    const company = recordOk(draft, {
       type: "edit",
       target: COMPANY_KEY,
-      intents: [
-        { type: "updateCompany", set: [{ path: ["mission"], value: "Make more" }] },
-        { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
-      ],
+      intents: [{ type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] }],
     });
-    expect(describeOperation(charter, draft)).toBe("Edited the charter: mission, vision.");
+    expect(describeOperation(company, draft)).toBe("Edited the company: name.");
   });
 
   test("what every part moved is reported together", () => {

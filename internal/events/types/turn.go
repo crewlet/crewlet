@@ -151,47 +151,30 @@ type PromptSize struct {
 	// a pair of strings; measuring only the pair reported every resumed
 	// executor as a phase with no prompt at all.
 	//
-	// WHAT IS COUNTED, per message: every message's text, each assistant
-	// round's reasoning, and the compact JSON of its tool calls' arguments.
-	// The reasoning is counted ONCE — the structured thinking blocks where a
-	// round has them, the reasoning prose where it does not, never both,
-	// because on Anthropic the prose is a rendering of the same thinking and
-	// summing the two would double the biggest term a parked turn carries.
-	// Reasoning is in the figure at all because it is billed: Anthropic puts
-	// every thinking block back into the request and charges for it, and the
-	// `cli-agent` text backend writes the prose into the prompt literally.
+	// WHAT IS COUNTED, per message: every message's text and the compact
+	// JSON of its tool calls' arguments.
 	//
 	// WHAT IS STILL OUT, in the same spirit as ToolBytes naming the
-	// cli-agent fence as the larger rendering: a thinking block's signature
-	// — a fixed-size opaque token the provider mints per block, so counting
-	// it would move this figure with a vendor's token format rather than
-	// with the prompt — and each tool call's id and name, bounded
-	// identifiers beside arguments that run to kilobytes. Out too is every
-	// per-message envelope a backend adds around all of it (role labels,
-	// content-block framing, the cli-agent transcript's own `## assistant`
-	// headings), so on any backend the real figure is larger than this one.
+	// cli-agent fence as the larger rendering: each tool call's id and name,
+	// bounded identifiers beside arguments that run to kilobytes, and the
+	// envelope the backend adds around all of it (the cli-agent transcript's
+	// own `## assistant` headings, its role labels), so the real figure is
+	// larger than this one.
 	MessageBytes int `json:"message_bytes"`
 
 	// ToolBytes is the COMPACT JSON size of the tool-definition array
 	// offered with the prompt, in ONE CANONICAL SHAPE — `{name,
 	// description, parameters}` per tool — chosen so a single number means
-	// the same thing whichever provider served the phase, and so a seat
-	// whose fallback chain moved it between vendors is comparable with
-	// itself.
+	// the same thing whichever CLI served the phase, and so a seat whose
+	// fallback chain moved it between CLIs is comparable with itself.
 	//
-	// SO IT IS A FLOOR, and no backend sends exactly it. The OpenAI one
-	// wraps every entry as `{"type":"function","function":{…}}`, about
-	// thirty bytes a tool. The Anthropic one spells the schema
-	// `input_schema` where this says `parameters` and hangs a
-	// `cache_control` breakpoint on the last entry. Both write an absent
-	// schema out as `{"type":"object","properties":{}}` where this drops
-	// it, so an argument-less tool is undercounted on either. And the
+	// SO IT IS A FLOOR, and the backend never sends exactly it: the
 	// `cli-agent` text backend renders those same definitions INDENTED,
-	// inside a fenced catalogue and followed by a response contract, which
-	// is larger again. The same property ApproximateTokens' ratio has, for
-	// the same reason: a figure that changed shape with the provider could
-	// not be compared across a chain or across builds, and comparison is
-	// what this row exists for.
+	// inside a fenced catalogue and followed by a response contract, and an
+	// agent-mode CLI reads them over MCP in its own vendor's wrapping. The
+	// same property ApproximateTokens' ratio has, for the same reason: a
+	// figure that changed shape with the CLI could not be compared across a
+	// chain or across builds, and comparison is what this row exists for.
 	//
 	// ROUND ONE'S ARRAY. The tool loop re-reads the surface at the top of
 	// every round precisely so a mid-phase activate_tool is offered on the

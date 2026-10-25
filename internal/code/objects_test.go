@@ -83,7 +83,7 @@ func TestThePackReferencesAreReadThroughTheCodeEstate(t *testing.T) {
 // A RECORD'S PACK REFERENCES ARE WHAT ITS APPLY WRITES: a push names the row
 // the applier writes for its pack, spelled as the walk spells it; every other
 // record this build reads names none; and a record this build cannot read
-// that may reach a repository refuses — the backup's ADR-0048 contract.
+// that may reach a repository refuses — the backup's ADR-0049 contract.
 func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 	t.Parallel()
 	records := code.PackReferences.Records

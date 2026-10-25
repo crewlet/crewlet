@@ -107,6 +107,7 @@ func AdminCredential() setup.Requirement {
 		Kind:       setup.KindSecret,
 		ConfigPath: "integrations.mattermost.provisioning.admin_token",
 		Required:   true,
+		Checkable:  true,
 		// BLOCKS THE FINDING THIS FIELD ACTUALLY CLEARS. It declared
 		// none, and `url` and `team` (or `signing_secret`) claimed
 		// credential_missing instead — none of which is the credential.

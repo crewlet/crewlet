@@ -30,15 +30,17 @@ import { DIRECTORY_READ, useHumanSeats } from "~/components/people.tsx";
 import { alarmKindTitle, alarmsLink } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
-import { POOL_STATE_WORDS, modelLine, needsAttention } from "~/lib/models.ts";
+import { authWords, modelLine, usesOf } from "~/lib/models.ts";
 import { SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { rest, type SecretRow } from "~/protocol/index.ts";
 import { OPERATOR_SOURCE } from "~/contract/audit.ts";
-import { CATALOG, entryState } from "~/routes/settings/Integrations.tsx";
+import { CATALOG, entryState } from "~/routes/settings/integrations/catalogue.tsx";
+import { ADMIN } from "~/lib/access.ts";
 import { useRetentionReport } from "~/routes/settings/Retention.tsx";
+import { useModels } from "~/routes/settings/Models.tsx";
 import {
   FINDING_WORDS,
   type DirectoryFinding,
@@ -265,45 +267,57 @@ function McpServers() {
 // ---- Models & keys ----------------------------------------------------------------------
 
 function Models() {
-  const pool = useQuery("credential_pool", undefined, { pollMs: POLL_MS });
-  const providers = useMemo(
-    () =>
-      [...(pool.data?.providers ?? [])].sort(
-        (a, b) => Number(needsAttention(b)) - Number(needsAttention(a)),
-      ),
-    [pool.data],
-  );
+  // THE PAGE'S OWN QUESTION, read the way the page reads it. A model no seat
+  // names is the one thing here that drifts, so it leads.
+  const models = useModels();
+  const entries = useMemo(() => {
+    const all = models.entries.map((entry) => ({
+      entry,
+      seats: usesOf(models.seats, entry.key).length,
+    }));
+    return [...all.filter((m) => m.seats === 0), ...all.filter((m) => m.seats > 0)];
+  }, [models.entries, models.seats]);
+  const unused = entries.filter((m) => m.seats === 0).length;
   return (
     <WidgetCard title="Models & keys" from="settings">
       <QueryState
-        error={pool.error}
-        refusal={pool.refusal}
-        loading={pool.loading && !pool.data}
+        error={models.error}
+        refusal={models.refusal}
+        // NOT "AND NO DATA": a company with nothing configured answers null,
+        // which is an answer, and would otherwise read as loading for ever.
+        loading={models.loading}
         empty={
-          pool.data && providers.length === 0
-            ? { title: "No models configured", hint: "Add one from Models & keys." }
+          !models.loading && !models.error && entries.length === 0
+            ? { title: "No models configured", hint: "Add one under providers.llm." }
             : undefined
         }
       >
         <List>
-          {providers.slice(0, ROWS).map((p) => {
-            const words = POOL_STATE_WORDS[p.state];
+          {entries.slice(0, ROWS).map(({ entry, seats: n }) => {
+            const sign = authWords(entry.authMode);
             return (
               <ListItem
-                key={p.key}
-                href={href(["settings", "models", p.key])}
+                key={entry.key}
+                href={href(["settings", "models", entry.key])}
                 trailing={
-                  <Tag variant={words.tone} title={words.hint}>
-                    {words.label}
-                  </Tag>
+                  n === 0 ? (
+                    <Tag variant="warning" title="No seat’s chain names this model.">
+                      Unused
+                    </Tag>
+                  ) : (
+                    <Tag title={sign.hint}>{sign.label}</Tag>
+                  )
                 }
               >
-                {modelLine(p)}
+                {modelLine(entry)}
               </ListItem>
             );
           })}
         </List>
-        <More total={providers.length} to={["settings", "models"]} />
+        <More total={entries.length} to={["settings", "models"]} />
+        {unused === 0 && entries.length > 0 && (
+          <WidgetNote>{`${plural(entries.length, "model")}, each run by a seat.`}</WidgetNote>
+        )}
       </QueryState>
     </WidgetCard>
   );
@@ -336,23 +350,13 @@ async function readSecrets(signal: AbortSignal): Promise<SecretsRead> {
   return { rows: list?.secrets ?? [], used };
 }
 
-/** A reference as the variable it names: `${ANTHROPIC_API_KEY}` and `ANTHROPIC_API_KEY` are one name. */
-const varName = (ref: string) => ref.replace(/^\$\{(.*)\}$/, "$1");
-
 function Secrets() {
   const now = useNow();
   const read = useRest("/secrets+/config/references", readSecrets, { pollMs: POLL_MS });
-  // A MODEL'S KEY IS A USE TOO, its default variable included, which names no
-  // setting: the credential pool says which names each model's keys read.
-  const pool = useQuery("credential_pool", undefined, { pollMs: POLL_MS });
   const rows = read.data?.rows ?? [];
-  const used = useMemo(() => {
-    const refs = read.data?.used;
-    if (!refs || !pool.data) return null;
-    return new Set(
-      [...refs, ...pool.data.providers.flatMap((p) => p.keys.map((k) => k.ref))].map(varName),
-    );
-  }, [read.data, pool.data]);
+  // THE PAGE'S OWN ANSWER, `/config/references`: a model's credential is a
+  // use like any other field's, and the engine names it there.
+  const used = read.data?.used ?? null;
   const unused = used ? rows.filter((r) => !used.has(r.name)) : [];
   const newest = [...rows].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
   return (
@@ -637,6 +641,8 @@ export const widgets = defineWidgets([
     label: "Integrations",
     description: "Connected tools and any that need attention",
     icon: PlugGlyph,
+    // THE CONNECTED APPS ARE AN ADMIN'S READING on a page every reader opens.
+    grants: [ADMIN],
     hue: "purple",
     size: { w: 4, minW: 3, minH: 6, vertical: true },
     once: true,
@@ -657,7 +663,7 @@ export const widgets = defineWidgets([
     key: "settings.models",
     from: "settings",
     label: "Models & keys",
-    description: "Model providers and whether their keys work",
+    description: "Each model’s CLI, how it signs in, and any no seat runs",
     icon: CpuGlyph,
     hue: "blue",
     size: { w: 4, minW: 3, minH: 6, vertical: true },

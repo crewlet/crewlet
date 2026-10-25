@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -28,21 +27,24 @@ import (
 
 // A golden company: two seats, one scripted model, one embedded broker.
 //
-// `anthropic` with a base_url rather than a `mock` provider type, deliberately.
-// A mock type would be test-only machinery in shipped config — a thing an
-// operator could set and a thing this suite could get right while the real
-// backends were wrong. Pointing a REAL backend at a scripted endpoint tests the
-// wire format, the credential pool, the tool-call decoding and the fallback
-// chain, all of which sit between the model and everything asserted here.
+// Its model entry is a REAL cli-agent entry whose CLI is this test binary
+// ([scriptedEntry]), rather than a `mock` provider type, deliberately. A mock
+// type would be test-only machinery in shipped config — a thing an operator
+// could set and a thing this suite could get right while the real backend was
+// wrong. Driving the REAL backend against a scripted CLI tests what sits
+// between the model and everything asserted here: the transcript a request is
+// flattened into, the system prompt's own channel, the process launched in a
+// seat's own home on an allowlisted environment, the response envelope and
+// the tool calls decoded from it, the usage read off the CLI's output, and the
+// fallback chain.
+//
+// The `%s` is that entry, under the key `scripted` every seat here names —
+// rendered by [goldenCompany], which is the one way to fill it.
 const companyDoc = `
 name: Nimbus
 providers:
   llm:
-    scripted:
-      type: anthropic
-      model: claude-golden
-      base_url: %s
-      api_keys: ["${CREWLET_TEST_KEY}"]
+%s
 roles:
   - name: CEO
     handle: ceo
@@ -82,6 +84,12 @@ turn_engine:
   max_iterations: 1
   max_tool_rounds: 3
 `
+
+// goldenCompany is the golden company document with its model entry driving
+// model's scripted CLI.
+func goldenCompany(model *scriptedModel) string {
+	return fmt.Sprintf(companyDoc, model.entry("scripted"))
+}
 
 // tickInterval is the shared tick's cadence on a single node here. Short enough
 // that the spend rollup lands inside a test, long enough not to drown the
@@ -256,7 +264,8 @@ type node struct {
 //
 // Everything real: a real embedded stream on a real temp directory, a real
 // store, the real API in front of them, and the real observability pipeline
-// wired the way cmd/crewlet wires it. The one stub is the vendor endpoint.
+// wired the way cmd/crewlet wires it. The one stub is the model, behind the
+// CLI the node's real backend launches ([scriptedEntry]).
 func start(t *testing.T) *node { return startNode(t, nodeSpec{}) }
 
 // startWith stands a node up over a company document the caller may amend, for
@@ -294,11 +303,11 @@ type nodeSpec struct {
 // no other reason — and a case asserting that a reference resolves to NOTHING
 // held only on a runner that happened not to export the variable.
 //
-// The scripted endpoint takes any key, so CREWLET_TEST_KEY is a placeholder,
-// set so every node runs on a key as a deployment does rather than on whatever
-// the runner exports.
+// The harness itself resolves nothing through it: the scripted CLI signs in to
+// nothing, and what its child needs is written into its entry's own `env`
+// ([scriptedEntry]).
 func nodeEnvironment(vars map[string]string) config.MapSource {
-	env := config.MapSource{"CREWLET_TEST_KEY": "sk-ant-e2e-placeholder"}
+	env := config.MapSource{}
 	maps.Copy(env, vars)
 	return env
 }
@@ -309,7 +318,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	logs.attribute(t)
 	model := newScriptedModel(t)
 
-	doc := fmt.Sprintf(companyDoc, model.url)
+	doc := goldenCompany(model)
 	if spec.company != nil {
 		doc = spec.company(doc)
 	}
@@ -389,7 +398,9 @@ func seedStore(t *testing.T, boot *config.Bootstrap) {
 	}
 }
 
-// scriptedModel is an Anthropic Messages endpoint that answers by PHASE.
+// scriptedModel is the model behind the scripted CLI ([scriptedEntry]): every
+// call the engine makes reaches it as the one request the CLI posts, and it
+// answers by PHASE.
 //
 // Keyed on the tools the request offers rather than on call ORDER: a phase that
 // retries, a rescue, or an extension all send another request, and a script
@@ -399,22 +410,27 @@ func seedStore(t *testing.T, boot *config.Bootstrap) {
 type scriptedModel struct {
 	url string
 
-	// close shuts this model's HTTP server down. See newScriptedModel for
-	// why it is a field as well as a t.Cleanup.
+	// stateDir is where the entry driving this model's CLI keeps its seats'
+	// homes ([scriptedEntry]) — this model's own, so no two nodes' entries
+	// share one unless they share the model.
+	stateDir string
+
+	// close shuts this model's HTTP server down. See [scriptedModel.listen]
+	// for why it is a field as well as a t.Cleanup.
 	close func()
 
 	mu      sync.Mutex
 	calls   []string
 	offered []string
-	// bodies is the raw request body of every call, so a test can read what
-	// came BACK from a tool as well as what went out — a tool result rides
-	// the conversation, not the system prompt.
-	bodies [][]byte
+	// prompts is the transcript of every call, as the CLI read it on stdin,
+	// so a test can read what came BACK from a tool as well as what went
+	// out — a tool result rides the conversation, not the system prompt.
+	prompts []string
 
-	// systems is the SYSTEM prompt of every call, which is where the
-	// turn-start prefetch's blocks land. Captured because "the block was
-	// rendered" and "the model was shown it" are different claims and only
-	// the second one matters.
+	// systems is the SYSTEM prompt of every call, as the CLI read it off
+	// its own channel, which is where the turn-start prefetch's blocks
+	// land. Captured because "the block was rendered" and "the model was
+	// shown it" are different claims and only the second one matters.
 	systems []string
 
 	// engages makes the executor call a tool before answering, which is
@@ -507,10 +523,27 @@ func (m *scriptedModel) shouldEngage() bool {
 	return true
 }
 
+// newScriptedModel is a scripted model whose CLI keeps its state in a
+// directory of the test's own.
 func newScriptedModel(t *testing.T) *scriptedModel {
 	t.Helper()
-	m := &scriptedModel{}
-	srv := httptest.NewServer(http.HandlerFunc(m.serve))
+	return newScriptedModelIn(t, t.TempDir())
+}
+
+// newScriptedModelIn is a scripted model whose CLI keeps its state under
+// stateDir — for a caller off the test's goroutine, where t.TempDir may not
+// fail the test, and which names a directory it already holds instead.
+func newScriptedModelIn(t *testing.T, stateDir string) *scriptedModel {
+	t.Helper()
+	m := &scriptedModel{stateDir: stateDir}
+	m.listen(t, m.serve)
+	return m
+}
+
+// listen serves handler as this model, for as long as the test runs.
+func (m *scriptedModel) listen(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	m.url = srv.URL
 	// EXPOSED as well as registered, for the one caller whose lifetime is
@@ -519,17 +552,24 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 	// started. httptest.Server.Close is idempotent, so the cleanup above
 	// stays correct for every other caller.
 	m.close = srv.Close
-	return m
+}
+
+// entry is the providers.llm entry, under key, whose CLI answers from this
+// model ([scriptedEntry]).
+func (m *scriptedModel) entry(key string) string {
+	return scriptedEntry(key, m.url, m.stateDir)
 }
 
 func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
-	raw, _ := io.ReadAll(r.Body)
-	offered := offeredTools(raw)
+	call, offered, ok := readCall(w, r)
+	if !ok {
+		return
+	}
 	names := slices.Sorted(maps.Keys(offered))
 	// ONE RECORD PER CALL, WRITTEN WHERE THE PHASE IS KNOWN — see
 	// [scriptedModel.sawCall] for what pairing them separately cost.
 	saw := func(phase string) {
-		m.sawCall(phase, strings.Join(names, "+"), systemPrompt(raw), raw)
+		m.sawCall(phase, strings.Join(names, "+"), call.System, call.Prompt)
 	}
 
 	// Keyed on the tool that DISTINGUISHES each phase, in the order that
@@ -587,31 +627,29 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		reply = toolUse("mark_onboarded", map[string]any{
 			"notes": "Read the team pages; deploys go out on Thursdays.",
 		})
-	case auxiliaryPass(raw) != "":
+	case auxiliaryPass(call.System) != "":
 		// AN AUXILIARY PASS, not a phase. The prefetch's memory filter,
 		// knowledge query and episode summary all reach this same
-		// endpoint with no tools offered, and counting them as Execute
+		// model with no tools offered, and counting them as Execute
 		// made the phase list report work that never happened — and made
 		// "the first execute call" name a prompt the executor never saw.
-		pass := auxiliaryPass(raw)
+		pass := auxiliaryPass(call.System)
 		saw("aux:" + pass)
 		reply = textReply(auxiliaryAnswer(pass))
 	default:
 		saw("execute")
 		reply = textReply("Three PRs merged, one incident, zero regressions.")
 	}
-	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, reply)
 }
 
 // auxiliaryPass names which prefetch pass a request is, or "" for a phase.
 //
 // Keyed on each pass's own system prompt, which is the only thing that
-// distinguishes them: they share an endpoint, a model and an empty tool
-// list. Matching on a phrase each prompt OPENS with, so a later edit to the
+// distinguishes them: they share a CLI, a model and an empty tool list.
+// Matching on a phrase each prompt OPENS with, so a later edit to the
 // guidance below it cannot silently turn every pass back into "execute".
-func auxiliaryPass(raw []byte) string {
-	system := systemPrompt(raw)
+func auxiliaryPass(system string) string {
 	switch {
 	case strings.Contains(system, "memory-relevance filter"):
 		return "memory"
@@ -657,32 +695,9 @@ func auxiliaryAnswer(pass string) string {
 	}
 }
 
-// offeredTools names the tools a Messages request actually offers.
-//
-// The TOOL DEFINITIONS, not the prose. What distinguishes the phases is what
-// each can invoke — submit_work, submit_review, or neither — and that is a
-// structured field. Substring-matching the body reads the same names out of
-// prompts that merely mention them, which is exactly how the first version of
-// this answered the reviewer with a work submission.
-func offeredTools(raw []byte) map[string]bool {
-	var req struct {
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools"`
-	}
-	out := map[string]bool{}
-	if json.Unmarshal(raw, &req) != nil {
-		return out
-	}
-	for _, t := range req.Tools {
-		out[t.Name] = true
-	}
-	return out
-}
-
 // sawCall records everything ONE model call is known by, in ONE critical
 // section: the phase it was, the tools it was offered, the system prompt it
-// was shown and its whole body.
+// was shown and its whole transcript.
 //
 // # Why they cannot be appended separately
 //
@@ -690,10 +705,10 @@ func offeredTools(raw []byte) map[string]bool {
 // in calls and reads systems at the same position — and that only holds if one
 // call appends to all of them without another getting in between. It did not.
 // serve appended the prompt, the tools and the body before the switch (it has
-// to: the phase is not known until the body is parsed), released the lock, and
-// saw appended the phase after. Two requests in flight — two seats, or a seat
-// and one of the prefetch's auxiliary passes, which is the ordinary case —
-// interleave between those two sections, and from then on calls[i] and
+// to: the phase is not known until the request is read), released the lock,
+// and saw appended the phase after. Two requests in flight — two seats, or a
+// seat and one of the prefetch's auxiliary passes, which is the ordinary case
+// — interleave between those two sections, and from then on calls[i] and
 // systems[i] are different calls.
 //
 // Measured: the end-to-end skills case read a prompt with no "## Tool skills"
@@ -705,16 +720,16 @@ func offeredTools(raw []byte) map[string]bool {
 // So the phase is what the record is BUILT WITH rather than appended
 // alongside, which is the same rule the engine's own write authority states:
 // take one snapshot and decide inside it.
-func (m *scriptedModel) sawCall(phase, tools, system string, body []byte) {
+func (m *scriptedModel) sawCall(phase, tools, system, prompt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, phase)
 	m.offered = append(m.offered, tools)
 	m.systems = append(m.systems, system)
-	m.bodies = append(m.bodies, body)
+	m.prompts = append(m.prompts, prompt)
 }
 
-// saw records a phase alone, for a scripted endpoint that keeps no prompts —
+// saw records a phase alone, for a scripted model that keeps no prompts —
 // see [newSandboxModel], whose handler never recorded them.
 func (m *scriptedModel) saw(phase string) {
 	m.mu.Lock()
@@ -735,110 +750,22 @@ func (m *scriptedModel) systemPrompts() []string {
 	return append([]string(nil), m.systems...)
 }
 
-// toolResults is every tool_result block the model was handed back, flattened.
+// toolResults is every tool result the model was handed back, flattened.
 //
 // What a tool ANSWERED is only visible here: it rides the conversation as a
-// user-role content block, never the system prompt, so a test asserting that a
-// tool's output reached the model has nowhere else to read it.
+// section of the transcript ([toolResultsIn]), never the system prompt, so a
+// test asserting that a tool's output reached the model has nowhere else to
+// read it.
 func (m *scriptedModel) toolResults() []string {
 	m.mu.Lock()
-	bodies := append([][]byte(nil), m.bodies...)
+	prompts := append([]string(nil), m.prompts...)
 	m.mu.Unlock()
 
 	var out []string
-	for _, raw := range bodies {
-		var req struct {
-			Messages []struct {
-				Content []struct {
-					Type    string `json:"type"`
-					Content any    `json:"content"`
-				} `json:"content"`
-			} `json:"messages"`
-		}
-		if json.Unmarshal(raw, &req) != nil {
-			continue
-		}
-		for _, msg := range req.Messages {
-			for _, block := range msg.Content {
-				if block.Type != "tool_result" {
-					continue
-				}
-				out = append(out, fmt.Sprint(block.Content))
-			}
-		}
+	for _, prompt := range prompts {
+		out = append(out, toolResultsIn(prompt)...)
 	}
 	return out
-}
-
-// systemPrompt reads a Messages request's system block, which the SDK sends
-// either as a string or as a list of content parts.
-func systemPrompt(raw []byte) string {
-	var asString struct {
-		System string `json:"system"`
-	}
-	if json.Unmarshal(raw, &asString) == nil && asString.System != "" {
-		return asString.System
-	}
-	var asParts struct {
-		System []struct {
-			Text string `json:"text"`
-		} `json:"system"`
-	}
-	if json.Unmarshal(raw, &asParts) != nil {
-		return ""
-	}
-	var b strings.Builder
-	for _, part := range asParts.System {
-		b.WriteString(part.Text)
-	}
-	return b.String()
-}
-
-// replyUsage is the usage block one scripted response reports.
-type replyUsage struct{ input, output, cacheRead, cacheWrite int }
-
-// The usage each scripted response reports. NAMED rather than inlined in the
-// JSON, because a case that reasons about a budget has to know what each call
-// costs, and a figure restated in a comment beside a literal goes stale the
-// first time the literal moves — the budget case's own comment said 150 and
-// 130 long after the fixture began reporting cache tokens.
-var (
-	toolUseUsage   = replyUsage{input: 120, output: 30, cacheRead: 80, cacheWrite: 15}
-	textReplyUsage = replyUsage{input: 90, output: 40, cacheRead: 60, cacheWrite: 25}
-)
-
-// tokens is what the engine charges for one such response: the Anthropic
-// adapter folds both cache figures into the input, so every one of them is
-// counted (see providers/llm/anthropic).
-func (u replyUsage) tokens() int { return u.input + u.cacheRead + u.cacheWrite + u.output }
-
-func (u replyUsage) json() string {
-	return fmt.Sprintf(`{"input_tokens":%d,"output_tokens":%d,`+
-		`"cache_read_input_tokens":%d,"cache_creation_input_tokens":%d}`,
-		u.input, u.output, u.cacheRead, u.cacheWrite)
-}
-
-// toolUse renders a Messages response whose content is one tool call.
-func toolUse(name string, input map[string]any) string {
-	args, _ := json.Marshal(input)
-	return fmt.Sprintf(`{
-		"id":"msg_1","type":"message","role":"assistant","model":"claude-golden",
-		"content":[{"type":"tool_use","id":"call_1","name":%q,"input":%s}],
-		"stop_reason":"tool_use",
-		"usage":%s
-	}`, name, args, toolUseUsage.json())
-}
-
-// textReply renders a Messages response that is plain prose — a phase that
-// finished without calling anything.
-func textReply(text string) string {
-	body, _ := json.Marshal(text)
-	return fmt.Sprintf(`{
-		"id":"msg_2","type":"message","role":"assistant","model":"claude-golden",
-		"content":[{"type":"text","text":%s}],
-		"stop_reason":"end_turn",
-		"usage":%s
-	}`, body, textReplyUsage.json())
 }
 
 // waitBudget is how long every wait in this suite gets.

@@ -22,10 +22,10 @@
  *
  * AND WHAT REACHES OUTSIDE IT IS REFUSED HERE FIRST ([scopeLimit]). The
  * engine refuses a lead every change outside what they lead; the parts of the
- * draft that are outside are few and known — the company's charter and
+ * draft that are outside are few and known (the company's name and
  * settings, its top level, the unit's own place and lead, which decide who
  * leads it, and the KEYS another system finds a seat or unit by ([KEYED]),
- * which no two documents can say who else holds — so the builder disables
+ * which no two documents can say who else holds), so the builder disables
  * those controls with the reason and refuses the operation at its recording
  * door, rather than letting a lead build a draft the engine will only refuse.
  */
@@ -147,7 +147,7 @@ export function scopedTransport(
 }
 
 /**
- * What about a node a lead's draft may not change: the company's own charter
+ * What about a node a lead's draft may not change: the company's own name
  * and settings (`edit` of the company), anything at its top level (`add`
  * under the company), the unit's own place and lead (`place` and `lead`
  * of the draft's one top-level unit), and any node's [KEYED] fields (`key`).
@@ -190,7 +190,7 @@ export function scopeLimit(
   const top = draft.units[0];
   const name = top?.data.name || "this unit";
   if (key === COMPANY_KEY && change === "edit") {
-    return `The company's charter and settings are not part of ${name}: changing them takes Admin access.`;
+    return `The company's name and settings are not part of ${name}: changing them takes Admin access.`;
   }
   if (key === COMPANY_KEY && change === "add") {
     return `Only ${name} and what is inside it can be changed here: the company's top level takes Admin access.`;

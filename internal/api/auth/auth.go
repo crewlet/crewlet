@@ -55,7 +55,7 @@
 // # A git client is answered in git's own terms, as a person
 //
 // git is the third person transport beside the dashboard's act route and the
-// operator's MCP (ADR-0051): a person's own token, presented by their git
+// operator's MCP (ADR-0052): a person's own token, presented by their git
 // client, pushes as that person where it is bound to their seat and fetches
 // only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
 // public listener. Which requests under /git/ are fetches and which pushes is

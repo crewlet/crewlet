@@ -242,7 +242,7 @@ const (
 	// node evicted, its rows below the log), so it answers none of that
 	// domain's operations until the copy recovers, while every other
 	// domain's copy keeps serving and its own seats' calls on this one go to
-	// the other data nodes ([LocalBackends.For], ADR-0045).
+	// the other data nodes ([LocalBackends.For], ADR-0046).
 	unservedOutOfService unservedReason = "out_of_service"
 
 	// unservedUnauthenticated: the request's envelope does not verify on
@@ -315,7 +315,7 @@ type opSpec struct {
 
 	// domain is the domain whose COPY the operation reads — the verdict the
 	// router and the server ask before running it here ([LocalBackends.For],
-	// ADR-0045) — or [SeatCopy] for admission's ping. floorStream is that
+	// ADR-0046) — or [SeatCopy] for admission's ping. floorStream is that
 	// domain's log, the one log its floors are on ([Router.floorsFor],
 	// [ready]), or empty for an operation that carries no floor
 	// ([op.floorless]): what it reads is not the log's rows at a position
@@ -452,7 +452,7 @@ func (o op[A, R]) floorless() op[A, R] {
 // the verdict of each is asked before it runs here, and a node whose copy of
 // any of them is out of service answers `out_of_service` naming that copy,
 // which sends the asker on to a node whose copies of all of them serve
-// (ADR-0045). Routed on its own domain alone, it answered from a copy the node
+// (ADR-0046). Routed on its own domain alone, it answered from a copy the node
 // had stopped serving. Its FLOOR stays on its own domain's log: a second
 // floor would hold it to an applier its answer does not wait on.
 func (o op[A, R]) alsoReads(domains ...string) op[A, R] {

@@ -128,7 +128,7 @@ func TestEveryWriterOfTheSharedLoginWaitsForItsLock(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			p := loginProvider(t)
-			blob := bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+			blob := bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 			err := whileTheLockIsHeld(t, p.ws, func() error { return restore(p, blob) }, func() {
 				if p.ws.HasLogin() {
 					t.Errorf("%s wrote while another holder had the lock: %v", name, p.ws.LoginFiles())
@@ -159,7 +159,7 @@ func TestABundleIsDecidedUnderTheLockItWritesUnder(t *testing.T) {
 	t.Run("a login lands", func(t *testing.T) {
 		t.Parallel()
 		p := loginProvider(t)
-		blob := bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+		blob := bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 		err := whileTheLockIsHeld(t, p.ws, func() error { return p.ImportBundle(t.Context(), blob) }, func() {
 			// Another holder's login, written under the lock it holds.
 			writeCreds(t, p, `{"token":"k-landed"}`)
@@ -174,7 +174,7 @@ func TestABundleIsDecidedUnderTheLockItWritesUnder(t *testing.T) {
 	t.Run("a logout lands", func(t *testing.T) {
 		t.Parallel()
 		p := loginProvider(t)
-		blob := bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+		blob := bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 		err := whileTheLockIsHeld(t, p.ws, func() error { return p.RestoreBundle(t.Context(), blob) }, func() {
 			// Another holder's logout of an empty directory, recorded
 			// under the lock it holds.

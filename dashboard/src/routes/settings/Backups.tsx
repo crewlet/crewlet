@@ -112,8 +112,8 @@ export function Backups({ domain }: { domain?: string }) {
         </Button>
       </PageActions>
       {/* WHAT IS WRONG LEADS: the alarms, each once with the logs it stands
-          on, and the backup they ask for one press away. */}
-      <RetentionStatus retention={retention} onTakeBackup={() => setTaking(true)} />
+          on, and the backup they ask for one press away in the bar. */}
+      <RetentionStatus retention={retention} />
       <QueryState
         error={backups.error}
         refusal={backups.refusal}
@@ -237,7 +237,7 @@ export function BackupRecord({
         <>
           <Card padding="none">
             <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
-              Newest per owner
+              <Card.Title>Newest per owner</Card.Title>
             </Card.Header>
             <DataGrid<BackupPointRow>
               name="points"
@@ -331,7 +331,7 @@ export function BackupRecord({
               count={answer.history.length}
               subtitle="Newest first"
             >
-              Backup history
+              <Card.Title>Backup history</Card.Title>
             </Card.Header>
             <CoverageNote
               coverage={[answer.coverage]}

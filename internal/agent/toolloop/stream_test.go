@@ -11,16 +11,14 @@ import (
 )
 
 // The whole point of streaming: a round's text reaches the live view WHILE it
-// is being written. Before this, a phase composing a long reasoning block
-// published nothing at all until the provider call returned, so the screen sat
-// visibly frozen for the length of the answer.
+// is being written. Before this, a phase composing a long answer published
+// nothing at all until the provider call returned, so the screen sat visibly
+// frozen for the length of the answer.
 func TestARoundIsVisibleWhileItIsStillBeingWritten(t *testing.T) {
 	t.Parallel()
 	p := &streamingProvider{
-		fragments: []llm.Delta{
-			{Reasoning: "which tool"}, {Content: "look"}, {Content: "ing it up"},
-		},
-		final: llm.Completion{Content: "looking it up", ReasoningContent: "which tool"},
+		fragments: []llm.Delta{{Content: "look"}, {Content: "ing it up"}},
+		final:     llm.Completion{Content: "looking it up"},
 	}
 	var partials []string
 	_, err := toolloop.Run(t.Context(), toolloop.Config{

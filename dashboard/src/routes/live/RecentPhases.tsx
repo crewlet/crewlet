@@ -41,12 +41,13 @@ import {
   TableNumberCell,
   TableDateCell,
   TableEntityCell,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import type { GridColumn } from "~/app/frame/DataGrid.tsx";
+import type { DataGridColumn } from "@crewlethq/ui";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
@@ -169,7 +170,7 @@ export function RecentPhases({
   }, [socket, seat, last]);
 
   const openRow = useCallback(
-    (r: PhaseRecord, e: React.MouseEvent | React.KeyboardEvent) => {
+    (r: PhaseRecord, e: DataGridActivationEvent) => {
       // NO TURN TO PEEK: the row's own link is the way in, so the click is
       // left to the browser rather than opening an empty rail.
       if (!r.turnId) {
@@ -189,7 +190,7 @@ export function RecentPhases({
     [openPeek, nav],
   );
 
-  const columns = useMemo<GridColumn<PhaseRecord>[]>(
+  const columns = useMemo<DataGridColumn<PhaseRecord>[]>(
     () => [
       {
         key: "seat",

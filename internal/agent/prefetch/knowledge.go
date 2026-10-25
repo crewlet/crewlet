@@ -36,33 +36,12 @@ const (
 	// turn's start rather than the turn.
 	AuxTimeout = 30 * time.Second
 
-	// auxTemperature keeps these passes reproducible without going
-	// greedy. Not zero: each is a judgement, and greedy decoding on a
-	// judgement makes a model commit hard to a first token it would
-	// otherwise reconsider. Honoured only where the model takes a sampling
-	// parameter and the call is not thinking.
-	auxTemperature = 0.2
-
-	// auxEffort is the most thinking an auxiliary pass is worth: each one
-	// filters, summarises or rewrites what it is handed, which is
-	// extraction, and the prefetch is latency a person waits through. On a
-	// thinking model the thinking comes out of the same cap as the answer,
-	// so a pass at its entry's level is the empty answer the summary and
-	// the query rewrite already log.
-	auxEffort = llm.EffortLow
-
 	// knowledgeHits is how many pages are rendered.
 	//
 	// Six, against a block that is a pointer rather than the content: each
 	// bullet is a title and a snippet, and the seat opens what looks
 	// relevant. A dozen would crowd the task it was fetched for.
 	knowledgeHits = 6
-
-	// knowledgeQueryTokens is headroom for the query call. The visible
-	// answer is one short line, and this is room to spare for it on a call
-	// that does not think. A thinking call is sent the model's own ceiling
-	// instead (llm.Request.MaxTokens), and auxEffort keeps it short.
-	knowledgeQueryTokens = 1000
 )
 
 // EmptyKnowledgeHint is what the block says when a search was skipped or
@@ -236,7 +215,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
 		"Task the agent is about to work on:\n\""+r.Ask+
-			"\"\n\nKnowledge-base search query:", knowledgeQueryTokens)
+			"\"\n\nKnowledge-base search query:")
 	if !ok {
 		return ""
 	}
@@ -273,7 +252,7 @@ func renderHit(hit knowledge.Hit) string {
 }
 
 // auxRequest is the shape every auxiliary pass here sends.
-func auxRequest(system, user string, maxTokens int) llm.Request {
+func auxRequest(system, user string) llm.Request {
 	return llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: system},
@@ -282,8 +261,5 @@ func auxRequest(system, user string, maxTokens int) llm.Request {
 		// NO TOOLS. Each of these passes wants text back, and a tool on
 		// the surface invites a model to call it and answer nothing —
 		// there is no tool any of them could usefully use.
-		Temperature: llm.Temp(auxTemperature),
-		Effort:      auxEffort,
-		MaxTokens:   maxTokens,
 	}
 }

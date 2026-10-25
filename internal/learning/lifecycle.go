@@ -1540,8 +1540,8 @@ func ParseSummary(raw string) (Summary, error) {
 			NotablePatterns:   jsonText(obj["notable_patterns"]),
 		}, nil
 	}
-	// THE ANSWER WHOLE: it is bounded by the pass's own output cap, and
-	// the part of an unparseable answer worth reading is rarely its opening.
+	// THE ANSWER WHOLE: the prompt asks for one JSON object, and the part
+	// of an unparseable answer worth reading is rarely its opening.
 	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)", text)
 }
 

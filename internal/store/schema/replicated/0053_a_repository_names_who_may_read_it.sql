@@ -1,7 +1,7 @@
 -- A repository names who may read it.
 --
 -- code_repos.visibility is who reads the repository besides persons and the
--- tokens of Tier A (internal/code, ADR-0054): `company`, every seat; `unit`,
+-- tokens of Tier A (internal/code, ADR-0055): `company`, every seat; `unit`,
 -- the seats of the owning unit's subtree, the leads above it and the owning
 -- seat, and no other seat. A person's standing never depends on it — a
 -- credential presented by a person, or a token bound to nobody, reads every

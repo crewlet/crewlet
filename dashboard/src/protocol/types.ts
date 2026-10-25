@@ -33,7 +33,6 @@ import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
-import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
@@ -275,7 +274,6 @@ export interface PromptMessage {
  */
 export interface PartialRound {
   round?: number;
-  reasoning?: string;
   content?: string;
   abandoned?: RoundNarration[] | null;
 }
@@ -283,7 +281,6 @@ export interface PartialRound {
 /** One round's model turn, as the engine recorded it. */
 export interface RoundNarration {
   round?: number;
-  reasoning?: string;
   content?: string;
   /**
    * The model answered this round in prose and called no tool, in a phase
@@ -308,9 +305,9 @@ export interface PhaseRound {
   cache_write_tokens: number;
   tool_calls: number;
   /**
-   * Why the model stopped writing this round's response. Absent where its
-   * backend reported none — "not reported", never "ended normally". `max_tokens`, `refusal`, `context_exceeded` and
-   * `paused` each END the phase; see `contract/stops.ts`.
+   * Why the model stopped writing this round's response: `end` or
+   * `tool_use` (see `contract/stops.ts`). Absent where its backend reported
+   * none — "not reported", never "ended normally".
    */
   stop_reason?: StopReason;
 }
@@ -424,7 +421,7 @@ export interface LiveCall {
   total_tokens: number;
   tool_executions?: ToolExecution[] | null;
   /**
-   * Per-round model turns — `{round, reasoning, content}` — where `round`
+   * Per-round model turns — `{round, content}` — where `round`
    * matches `tool_executions[].round`, which is what lets the two lists
    * interleave into one ledger. Absent on a phase this engine recorded
    * before it sent them.
@@ -3786,6 +3783,19 @@ export interface SetupRequirement {
    * already the value) and on a reference naming nothing.
    */
   resolved_value?: string;
+  /**
+   * Whether the engine can check a typed value for this field at the app
+   * without storing it (`POST /setup/integrations/{kind}/verify`): the form
+   * offers Test key only where this is set.
+   */
+  checkable?: boolean;
+  /**
+   * For a credential the engine cannot check ahead without acting on it,
+   * the engine's sentence on when the app proves it ("Slack proves it with
+   * the first event it signs."). The form says it rather than offering a
+   * test it would have to fake.
+   */
+  check_note?: string;
   mintable?: boolean;
   /**
    * Written without being asked for.
@@ -3993,6 +4003,20 @@ export interface SetupRun {
   findings?: ReconcileFinding[];
   error?: string;
   report?: ReconcileStatus;
+}
+
+/** What checking one typed credential at the app, without storing it, found. */
+export type VerifyOutcome = "works" | "refused" | "unreachable" | "unchecked";
+
+/**
+ * The answer of `POST /setup/integrations/{kind}/verify`: `works` (the app
+ * accepted it), `refused` (the app answered and refused it), `unreachable`
+ * (the app did not answer; nothing was stored) or `unchecked` (the app only
+ * proves this value later), with one sentence for a person.
+ */
+export interface SetupVerdict {
+  outcome: VerifyOutcome;
+  detail: string;
 }
 
 export interface SetupListing {
@@ -6131,7 +6155,6 @@ export interface QueryMap {
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
   mcp_servers_status: McpServersStatusAnswer;
-  credential_pool: CredentialPoolAnswer;
   backups: BackupsAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;

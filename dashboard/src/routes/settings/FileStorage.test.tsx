@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 
 import {
   auditRow,
@@ -92,7 +92,7 @@ describe("file storage", () => {
     expect(new Set(files.map((m) => m.finding))).toEqual(new Set(OBJECT_FINDINGS));
     expect(screen.getByText("1,828 named, 1 missing, 1 damaged, 1 unanswered")).toBeTruthy();
     expect(
-      screen.getByText("The fleet's own NATS bucket, replicated as the stream is"),
+      screen.getByText("The fleet's own NATS object bucket, replicated like the stream"),
     ).toBeTruthy();
   });
 
@@ -141,7 +141,19 @@ describe("file storage", () => {
     expect(screen.getByText("Where files are kept")).toBeTruthy();
     expect(screen.getByText("Collector passes")).toBeTruthy();
     expect(screen.queryByText("File storage")).toBeNull();
-    expect(screen.getByText("Last pass run by")).toBeTruthy();
+    // THE STORE IS A SETTING, in the settings table every Settings page draws
+    // one in, with its key; the node that ran the passes heads their card.
+    const store = screen.getByRole("table", { name: "Where files are kept" });
+    const row = within(store).getByRole("row", { name: /Store/ });
+    expect(within(row).getByText("store.objects.backend")).toBeTruthy();
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((c) => c.textContent),
+    ).toEqual(["S3 bucket https://s3.example.com/files/acme/", "crewlet.yaml"]);
+    const passes = screen.getByText("Collector passes").closest(".crewlet-card") as HTMLElement;
+    expect(within(passes).getByText("Last run by", { exact: false })).toBeTruthy();
+    expect(within(passes).getByRole("link", { name: "data-a" })).toBeTruthy();
   });
 
   test("a node that reads no record says it keeps none", () => {

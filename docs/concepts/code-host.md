@@ -936,7 +936,7 @@ engine's own, reading the token from the environment; the user name is
 ignored). There is no second credential for git — no SSH key and
 no deploy token — because the token is already how the engine knows who a
 person is, and a second identity system would be one more thing to revoke and
-audit ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-person-reaches-git-with-their-own-bound-token.md)).
+audit ([ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-a-person-reaches-git-with-their-own-bound-token.md)).
 
 - **A credential acting as a human seat pushes as that person** — every
   person holds one ([humans in the org](humans-in-the-org.md)), so a person's
@@ -977,7 +977,7 @@ no list of who may push to which repository, because such a list is a second
 org chart, and it drifts from the first the day a seat moves units. It is
 computed every time it is asked, from the repository's row and the chart the
 deciding node runs, by one rule
-([ADR-0054](https://github.com/crewlet/crewlet/blob/main/adr/0054-a-repository-grant-is-derived-from-the-chart.md)).
+([ADR-0055](https://github.com/crewlet/crewlet/blob/main/adr/0055-a-repository-grant-is-derived-from-the-chart.md)).
 
 | Who | What they may do |
 |---|---|
@@ -1123,7 +1123,7 @@ in a node's cache would leave a refused push's objects there — fetchable by id
 from that one node, and a base a later push could build on that no other node
 holds. So a push is received in a throwaway **scratch** repository whose one
 alternate is the cache, and its pack enters the cache only once its row has
-applied ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
+applied ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
 The scratch is removed when the request ends, and a node that crashed with one
 open sweeps it at its next boot.
 

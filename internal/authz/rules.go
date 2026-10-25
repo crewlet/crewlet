@@ -85,7 +85,7 @@ const (
 	// ADMITTED AT THE ROUTE AND DECIDED PER REPOSITORY, as a work item's
 	// thread is. Who may read a repository, fetch from it or push to it is
 	// a GRANT the serving node derives from the chart for the repository a
-	// request names (code.GrantOf, ADR-0054): a person maintains every
+	// request names (code.GrantOf, ADR-0055): a person maintains every
 	// repository, and a seat holds the least of its code tier and its
 	// relation to the repository's owner — a question the route cannot ask
 	// before the repository is read, and that this table has no chart arm

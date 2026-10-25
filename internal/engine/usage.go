@@ -146,7 +146,7 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 // this node's estate router, as its tracker and knowledge-base reads are
 // ([OperatorWork]): a data node whose usage copy is in service answers from
 // it, and one whose copy is out of service answers from a peer's rather than
-// from the copy it stopped serving (ADR-0045).
+// from the copy it stopped serving (ADR-0046).
 func (e *Engine) UsageReads() estate.Usage { return e.router.Usage() }
 
 // usageEstate is the replicated estate as this node's own reader of the usage

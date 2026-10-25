@@ -138,13 +138,19 @@ func TestTheFeedKeepsOnlyTheKindsWhoseHalfIsKept(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-		{Task: "a", Kind: tracker.FeedCompleted, At: base,
-			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
-	}, Complete: true}}
-	wiki := &stubPages{changes: []pages.PageChange{
-		{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
-	}}
+	// A STUB PER CASE: each records what it was asked, and the cases run in
+	// parallel, so one stub shared between them was written by two at once.
+	work := func() *stubWork {
+		return &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
+			{Task: "a", Kind: tracker.FeedCompleted, At: base,
+				Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+		}, Complete: true}}
+	}
+	wiki := func() *stubPages {
+		return &stubPages{changes: []pages.PageChange{
+			{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
+		}}
+	}
 
 	rowKinds := func(t *testing.T, s queries.Sources, kinds string) ([]string, error) {
 		t.Helper()
@@ -173,23 +179,23 @@ func TestTheFeedKeepsOnlyTheKindsWhoseHalfIsKept(t *testing.T) {
 		want    []string
 		wantErr error
 	}{
-		{"both halves kept", queries.Sources{Work: keptWork{work}, Pages: wiki,
+		{"both halves kept", queries.Sources{Work: keptWork{work()}, Pages: wiki(),
 			Usage: usage.Reader{Estate: db.Replicated()}}, "", []string{"work", "schedule", "page"}, nil},
 		{"the company runs Jira", queries.Sources{Work: absentWork{err: errNotOurs},
-			Pages: wiki, Usage: usage.Reader{Estate: db.Replicated()}}, "", []string{"schedule", "page"}, nil},
-		{"the company runs Confluence", queries.Sources{Work: keptWork{work},
+			Pages: wiki(), Usage: usage.Reader{Estate: db.Replicated()}}, "", []string{"schedule", "page"}, nil},
+		{"the company runs Confluence", queries.Sources{Work: keptWork{work()},
 			Pages: absentPages{err: errNotOurs}, Usage: usage.Reader{Estate: db.Replicated()}}, "",
 			[]string{"work", "schedule"}, nil},
 		{"neither half is the engine's", queries.Sources{Work: absentWork{err: errNotOurs},
 			Pages: absentPages{err: errNotOurs}, Usage: usage.Reader{Estate: db.Replicated()}}, "",
 			[]string{"schedule"}, nil},
 		{"a tracker kind named on Jira", queries.Sources{Work: absentWork{err: errNotOurs},
-			Pages: wiki, Usage: usage.Reader{Estate: db.Replicated()}}, "completed,schedule", nil, queries.ErrBadParams},
-		{"the page kind named on Confluence", queries.Sources{Work: keptWork{work},
+			Pages: wiki(), Usage: usage.Reader{Estate: db.Replicated()}}, "completed,schedule", nil, queries.ErrBadParams},
+		{"the page kind named on Confluence", queries.Sources{Work: keptWork{work()},
 			Pages: absentPages{err: errNotOurs}, Usage: usage.Reader{Estate: db.Replicated()}}, "page", nil,
 			queries.ErrBadParams},
 		{"a half this node cannot place yet", queries.Sources{Work: absentWork{err: errNotUpYet},
-			Pages: wiki, Usage: usage.Reader{Estate: db.Replicated()}}, "", nil, queries.ErrUnavailable},
+			Pages: wiki(), Usage: usage.Reader{Estate: db.Replicated()}}, "", nil, queries.ErrUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

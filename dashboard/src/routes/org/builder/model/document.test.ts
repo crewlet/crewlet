@@ -262,19 +262,29 @@ describe("buildPatch", () => {
 
   test("names only the changed top-level keys it edits, whole", () => {
     const draft = cloneJson(base);
-    draft.mission = "Make better things.";
+    draft.name = "Acme Labs";
     draft.roles![0]!.goal = "Lead well";
     draft.providers = { llm: { changed: true } };
     const patch = buildPatch(base, draft);
-    expect(Object.keys(patch).sort()).toEqual(["mission", "roles"]);
+    expect(Object.keys(patch).sort()).toEqual(["name", "roles"]);
     expect(patch.roles).toEqual(draft.roles);
   });
 
-  test("a removed charter field or list is an explicit null", () => {
+  // A SAVE FROM HERE NEVER WRITES THE PRINCIPLES. Company › Principles writes
+  // them, and a draft holding an older copy (one started before that page
+  // saved, then updated onto the newer revision) must not send it back.
+  test("never names the principles, whatever the draft holds", () => {
     const draft = cloneJson(base);
-    delete draft.mission;
+    draft.mission = "A stale mission.";
+    draft.vision = "A stale vision.";
+    draft.policies = ["A stale policy."];
+    expect(buildPatch(base, draft)).toEqual({});
+  });
+
+  test("a removed list is an explicit null", () => {
+    const draft = cloneJson(base);
     delete draft.roles;
-    expect(buildPatch(base, draft)).toEqual({ mission: null, roles: null });
+    expect(buildPatch(base, draft)).toEqual({ roles: null });
   });
 
   test("an empty list and an absent one are the same document", () => {

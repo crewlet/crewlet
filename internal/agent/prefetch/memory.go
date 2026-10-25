@@ -62,19 +62,6 @@ const (
 	// an unbounded detached write on a store that never answers would
 	// park a goroutine per turn for the life of the process.
 	memoryMarkBudget = 5 * time.Second
-
-	// memoryFilterTokens is headroom for the filter's answer.
-	//
-	// The visible output is a JSON array of at most eight integers — ten
-	// tokens. Two thousand is not that answer's size but a RUNAWAY bound
-	// on a call that does not think: an unused cap costs nothing, and one
-	// cut to the answer's size truncates the first model that wraps the
-	// array in a sentence, so the block renders empty with no error to say
-	// why. A thinking call is not given it at all — its thinking would be
-	// spent from it, which is that same empty block — and is sent the
-	// model's own ceiling instead (llm.Request.MaxTokens), with auxEffort
-	// keeping it short.
-	memoryFilterTokens = 2000
 )
 
 // EmptyMemoryHint is what the block says when the seat HAS memories and none
@@ -213,7 +200,7 @@ func (f *Fetcher) recentMemories(ctx context.Context, r Request) []learning.Diar
 // filterMemories asks the auxiliary model which candidates bear on the task.
 func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []learning.DiaryEntry) []learning.DiaryEntry {
 	answer, ok := f.auxCall(ctx, r, types.AuxMemoryFilter, memoryFilterSystemPrompt,
-		memoryFilterPrompt(r, candidates), memoryFilterTokens)
+		memoryFilterPrompt(r, candidates))
 	if !ok {
 		return nil
 	}

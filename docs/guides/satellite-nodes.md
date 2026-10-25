@@ -214,7 +214,7 @@ without the `ingress` role binds it for its [probes](#probe-it) alone —
 (`api_probes_listening`). Every other path answers `404`, or `401` for a write
 or an always-guarded prefix, exactly as an unknown path does on an ingress
 node. The one route it adds is for a seat in
-[agent mode](../concepts/subscription-llm-backends.md#the-tool-bridge): its box
+[agent mode](../concepts/llm-backends.md#the-tool-bridge): its box
 calls the seat's tools back over `/mcp/{token}`, and only the node that runs
 the seat can answer, so a satellite with `CREWLET_MCP_BRIDGE_URL` set serves
 that route (`tool_bridge=true` on the same line) — beside the probes, or on
@@ -438,10 +438,11 @@ the dependency surface before choosing a host for it:
   in a store deleted at its next boot), so `GET /events` on that data node
   shows it; its seats' memory rides the compacted changelog every seat's
   memory does and is rehydrated after a restart.
-- **Whatever its LLM provider needs.** Usually outbound HTTPS to the
-  provider. A network with no egress at all can still work if the role
-  uses a [subscription CLI backend](../concepts/subscription-llm-backends.md)
-  or an on-premises OpenAI-compatible endpoint.
+- **The coding CLI of every model its seats name, installed and signed in
+  on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
+  is a CLI the node runs, and it calls its own vendor over outbound HTTPS. A
+  network with no egress at all can still work if the role's models are
+  OpenCode entries whose model names an on-premises server.
 - **The MCP servers its role declares, installed on that host** — the
   whole reason the seat is there.
 - **The same keyring** every other node holds. The satellite opens the

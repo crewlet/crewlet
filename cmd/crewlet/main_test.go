@@ -45,9 +45,7 @@ name: Acme
 providers:
   llm:
     primary:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
 roles:
   - name: CEO
     handle: ceo
@@ -2309,24 +2307,24 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 	return bridge
 }
 
-// A CLI-AGENT ENTRY'S PROFILE IS JUDGED BY THE VALIDATOR, NOT ONLY BY THE
-// EPOCH BUILD — so the refusal is located at the field to change. Built-only,
-// an unloadable profile came back with an empty path and an `engine:` prefix,
-// and a key with no variable to go in validated clean.
-func TestValidateLocatesACLIAgentProfileRefusal(t *testing.T) {
+// AN ENTRY'S CLI PROFILE IS JUDGED BY THE VALIDATOR, NOT ONLY BY THE EPOCH
+// BUILD — so the refusal is located at the field to change. Built-only, an
+// unloadable profile came back with an empty path and an `engine:` prefix, and
+// a key with no variable to go in validated clean.
+func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, entry, path string }{
-		{"an unloadable profile", "      cli: {agent: custom}\n", "providers.llm.sub.cli.overrides"},
+		{"an unloadable profile", "      agent: custom\n", "providers.llm.sub.overrides"},
 		{"an api key with nowhere to go",
-			"      api_keys: [\"${OPENROUTER_API_KEY}\"]\n      cli: {agent: hermes, auth: {mode: api-key}}\n",
-			"providers.llm.sub.cli.auth.mode"},
+			"      agent: hermes\n      auth: {mode: api-key, api_key: \"${OPENROUTER_API_KEY}\"}\n",
+			"providers.llm.sub.auth.mode"},
 		{"a profile with no model flag",
-			"      cli: {agent: codex, overrides: {model_args: []}}\n",
-			"providers.llm.sub.cli.overrides.model_args"},
+			"      agent: codex\n      overrides: {model_args: []}\n",
+			"providers.llm.sub.overrides.model_args"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: m\n" + tc.entry
+			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      model: m\n" + tc.entry
 			path := writeYAML(t, "company.yaml", doc)
 			var out, errOut bytes.Buffer
 			if err := run([]string{"validate", path, "-tier", "company", "-json"}, &out, &errOut); err == nil {

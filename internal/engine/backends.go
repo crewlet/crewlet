@@ -48,8 +48,8 @@ type Backends struct {
 	Coord coord.Backend
 
 	// Fleet is the shared state beyond ownership: the notification valve's
-	// counter, inbound-delivery claims, the turn-completion ledger,
-	// credential cooldowns and the config activation pointer.
+	// counter, inbound-delivery claims, the turn-completion ledger and the
+	// config activation pointer.
 	//
 	// Beside Coord rather than inside Store, because Store is this node's
 	// LOCAL database — one file, one process — and every one of these has
@@ -879,7 +879,6 @@ func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered
 		FireRetention:    coord.FireRetention,
 		FollowRetention:  coord.FollowRetention,
 		RebaseRetention:  coord.RebaseRetention,
-		CooldownMax:      coord.CooldownMax,
 		BudgetRetention:  coord.BudgetRetention,
 		StatusFreshness:  coord.StatusFreshness,
 		CustodyRetention: coord.CustodyRetention,

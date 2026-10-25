@@ -139,7 +139,7 @@ the code log is out of service, since the evictions and the arbitration anchors
 it counts are in those rows: such a node
 declines the duty (`retention_duty_declined`), gives its lease back if it holds
 it (`retention_duty_given_back`), and one whose copies serve takes it at its
-next tick ([ADR-0045](https://github.com/crewlet/crewlet/blob/main/adr/0045-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+next tick ([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 Left to lapse, the duty's 45-minute lease would leave every log untrimmed for
 up to an hour.
 Every node still evaluates its own alarms on every tick, whatever duty it holds.
@@ -443,7 +443,7 @@ own copy holds below the log's **first surviving record** and appends one
 anchors per record, lowest first, in the transaction that applies it — the
 same rows on every node, because it is a record on the log rather than a sweep
 each node runs on its own schedule
-([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-an-anchor-below-the-trim-floor-is-removed-by-a-record.md)).
+([ADR-0047](https://github.com/crewlet/crewlet/blob/main/adr/0047-an-anchor-below-the-trim-floor-is-removed-by-a-record.md)).
 
 - **A tick with nothing below appends nothing**, so an idle fleet's log gains no
   record. A tick whose purge was blocked still counts below the log's own first

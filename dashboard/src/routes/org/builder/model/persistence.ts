@@ -465,14 +465,11 @@ export function isOperation(v: unknown): v is Operation {
       return exactKeys(v, ["type", "changes"]) && list(v.changes, isFieldChange);
     case "applyTemplate":
       return (
-        exactKeys(v, ["type", "template", "charter", "roles", "units"]) &&
+        exactKeys(v, ["type", "template", "name", "roles", "units"]) &&
         (v.template === "empty" ||
           v.template === "new_company" ||
           v.template === "established_company") &&
-        isRecord(v.charter) &&
-        exactKeys(v.charter, ["name"], ["mission"]) &&
-        typeof v.charter.name === "string" &&
-        isOptionalString(v.charter.mission) &&
+        typeof v.name === "string" &&
         list(v.roles, isDraftSeat) &&
         list(v.units, isDraftUnit)
       );

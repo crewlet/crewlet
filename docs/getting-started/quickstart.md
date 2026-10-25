@@ -1,7 +1,8 @@
 # Quickstart: Build a Company with CEO, CTO, PM & Engineer
 
 This guide brings up a four-agent company on your machine, with no external
-integrations — just the engine, its infrastructure, and an LLM key. At the end
+integrations — just the engine, its infrastructure, and a model: Claude Code
+signed in with an Anthropic API key or your Claude plan. At the end
 you'll watch an agent run its first turn on the dashboard, then wire in real
 integrations one at a time.
 
@@ -28,6 +29,12 @@ embeds, and its database is a local file it creates — so a company runs with
 no broker to operate and nothing to point a DSN at. Both slots take an
 external address when a deployment outgrows that; see
 [Deployment](../guides/deployment.md).
+
+What it does need is the **coding CLI its model runs through**: every model is
+reached through one, driven as a process on this machine. This page uses
+Claude Code, so `claude --version` should answer before you go on — see
+[Installation § A coding CLI](installation.md#a-coding-cli) for it, Codex and
+OpenCode.
 
 The compose file in a repo checkout is for the *integration* loops
 (Mattermost, GitLab) further down this page, not for the engine.
@@ -132,11 +139,12 @@ policies:
 
 providers:
   llm:
-    default:
-      type: anthropic
-      model: claude-sonnet-5-5
-      api_keys:
-        - "${ANTHROPIC_API_KEY}"
+    default:                            # Claude Code, the default CLI
+      model: sonnet                     # in the CLI's own grammar: an alias or a model id
+      auth:
+        mode: api-key                   # your Anthropic API key, read from ANTHROPIC_API_KEY.
+                                        #   On a Claude Pro / Max plan instead, drop this block
+                                        #   and sign in once — see "LLM options" below
   embeddings:
     type: openai
     model: text-embedding-3-large       # the model decides the vector width
@@ -246,76 +254,66 @@ units:
 
 ### LLM options
 
-The `providers.llm` map takes named provider entries (roles select one via
-`role.llm`; `default` is the fallback). Three provider types are built in:
+The `providers.llm` map takes named entries (roles select one via `role.llm`;
+`default` is the fallback). **Every entry is a coding CLI** the engine drives —
+the vendor's own harness, signed in with your plan or your key — and its fields
+are that CLI's settings: which CLI (`agent`), which model in its grammar, and
+how it signs in (`auth`):
 
 ```yaml
 providers:
   llm:
-    # Anthropic (official SDK)
+    # Anthropic's models through Claude Code, on an API key
     default:
-      type: anthropic
-      model: claude-sonnet-5-5
-      api_keys: ["${ANTHROPIC_API_KEY}"]
+      model: sonnet
+      auth: { mode: api-key }           # ANTHROPIC_API_KEY
 
-    # OpenAI (official SDK)
+    # ... or on your Claude Pro / Max plan: no key at all
+    plan:
+      model: sonnet
+
+    # OpenAI's models through Codex
     gpt:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
+      agent: codex
+      model: gpt-5
+      auth: { mode: api-key }           # OPENAI_API_KEY; leave it out for a ChatGPT login
 
-    # ANY OpenAI-compatible endpoint — a hosted aggregator (OpenRouter,
-    # Together, ...), a cloud provider's OpenAI-compatible gateway, or your
-    # own vLLM / LiteLLM deployment.
-    hosted:
-      type: openai-compatible
-      model: "your-provider/model-id"
-      base_url: "https://api.your-llm-provider.example/v1/"
-      timeout_seconds: 300            # large models can be slow; default 120
-      api_keys: ["${LLM_API_KEY}"]
-
-    # A coding CLI you already subscribe to (Claude Pro/Max, ChatGPT
-    # Plus/Pro, Google AI Pro, a Copilot or Cursor seat) — no API key.
-    # The CLI must be installed on the machine running `crewlet run`.
-    subscription:
-      type: cli-agent
-      model: sonnet                   # whatever the CLI's --model accepts
-                                      #   (opencode: <provider>/<model>)
-      cli:
-        agent: claude-code            # or codex | gemini-cli | opencode
-                                      #    | muse-code | kimi-code | hermes
-                                      #    | pi | ...
+    # Open models through OpenCode — on OpenRouter here, or any provider it speaks to
+    open:
+      agent: opencode
+      model: openrouter/qwen/qwen3-coder  # <provider>/<model>
+      env:
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
 ```
 
-A `cli-agent` entry is authenticated once, on the engine host, and then
-verified:
+An entry on a **plan** is signed in once, on the engine host — the CLI's own
+login, landing in a directory of Crewlet's rather than your personal one:
 
 ```bash
-crewlet llm login subscription -capture-token    # or plain `login` for the
-                                                 # vendor's browser flow
-crewlet llm doctor subscription
+crewlet llm login plan -from-host       # adopt the `claude` login this machine already has
+crewlet llm login plan -capture-token   # or mint a headless token into the secret store
 ```
 
-Each seat gets its own isolated CLI home, so agents never inherit one
-another's sessions or memory — that and the auth options are covered in
-[Subscription LLM Backends](../concepts/subscription-llm-backends.md).
+An entry on a **key** needs nothing but the key, exported or stored with
+`crewlet secrets set ANTHROPIC_API_KEY`. Either way, `crewlet llm doctor` checks
+every entry end to end — the binary, its version, how it is signed in, and a
+real tool call — before a seat depends on it. Each seat gets its own isolated
+CLI home, so agents never inherit one another's sessions or memory — that,
+every sign-in route and the rest of the CLIs are covered in
+[LLM Backends](../concepts/llm-backends.md).
 
-Useful knobs: on an API entry (`anthropic`, `openai`, `openai-compatible`)
-`api_keys` accepts **multiple** keys (the provider rotates on
-rate-limit/auth errors) — a `cli-agent` entry takes one, and only under
-`cli.auth.mode: api-key` (see [what a cli-agent entry
-refuses](../concepts/subscription-llm-backends.md#configuration-reference)) —
-`reasoning_effort` sets how
-hard the model thinks (`low` to `max`; an `anthropic` entry thinks on every
-call and defaults to `high`, an `openai` one sends it once `reasoning: true`
-— see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)
-for what each Claude model accepts), and different
-roles can use different entries (e.g. executives on a frontier model, junior
-agents on a cheaper one). A role's `llm` also accepts a **list** — 
-`llm: [subscription, default]` runs on the flat-rate CLI and falls through
-to the metered key when the subscription window is spent. Embeddings (`providers.embeddings`) power the
-agent-learning subsystem and accept any OpenAI-compatible embeddings endpoint
-via `base_url`.
+Useful knobs: different roles can use different entries (executives on a
+frontier model, junior agents on a cheaper one), and a role's `llm` also
+accepts a **list** — `llm: [plan, default]` runs on the flat-rate plan and
+falls through to the metered key while the plan's window is spent. Point a
+role's `llm_auxiliary` (reflection, summaries, the turn-start filters) at a
+fast, cheap entry: each of those calls pays a CLI launch under a fixed
+deadline — see [Auxiliary work and
+latency](../concepts/llm-backends.md#auxiliary-work-and-latency). There is no
+temperature, effort or output cap to set: each CLI configures its own model.
+Embeddings (`providers.embeddings`) power the agent-learning subsystem and are
+the one model call the engine makes itself, to any OpenAI-compatible embeddings
+endpoint via `base_url`.
 
 ### Token budgets (optional)
 
@@ -370,7 +368,7 @@ with `PUT /config/roles/{handle}` (see
 crewlet secrets keygen -key-id 2026-01   # prints the export line below
 export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_API_KEY="sk-ant-..."   # the `default` entry's key (auth.mode api-key)
 export OPENAI_API_KEY="sk-..."          # embeddings
 export MATTERMOST_FOUNDER_USERNAME="you"  # your chat username (the human seat)
 ```
@@ -381,6 +379,15 @@ exported):
 
 ```bash
 crewlet validate            # both tiers, from ./crewlet.yaml and ./company.yaml
+```
+
+Then check the model end to end. This one *does* read the environment, and it
+sends real calls — a smoke test with a tool and two isolation probes — so it is
+the one check that proves the CLI is installed, signed in and still matches the
+profile Crewlet drives it with:
+
+```bash
+crewlet llm doctor          # every providers.llm entry; -no-smoke skips the real calls
 ```
 
 **One command** — migrate the store, seed the Tier B company and run the
@@ -715,10 +722,12 @@ it ticked to build the company — or to lead a unit, whose own team they may
 edit without it. The dashboard adds no model provider — Settings › Models &
 keys edits one the configuration already declares — so one step stays outside
 it. Until it is done the company runs and no agent seat takes a turn; whatever
-is sent to a seat waits on its inbox. Add `providers.llm` afterwards with a
-`PATCH /config` merge patch, as the builder's next steps show
-([The Org Builder](../guides/org-builder.md#creating-the-company)), and the
-work that waited runs.
+is sent to a seat waits on its inbox. The builder's next steps give it: with
+`crewlet run` stopped, write the company to a file with `crewlet config
+export`, add `providers.llm` to it, sign the CLI in with `crewlet llm login`,
+import the file and start the node again
+([Giving the company a model](../guides/org-builder.md#giving-the-company-a-model)),
+and the work that waited runs.
 
 ## Split deployment (optional)
 
@@ -871,14 +880,17 @@ each), then wire them in:
   write, and that seal is also what lets a peer trust a revision it fetches.
   See [Configuration § Secrets](../concepts/configuration.md#secrets)
 - Stop exporting a variable per credential — with that keyring in place,
-  `crewlet secrets set LLM_API_KEY` puts the value in the encrypted
+  `crewlet secrets set ANTHROPIC_API_KEY` puts the value in the encrypted
   [secret store](../concepts/secret-store.md), which the engine consults ahead
-  of the process environment when resolving the `${...}` references you already wrote.
+  of the process environment when resolving the `${...}` references you already
+  wrote — and when an `api-key` entry reads its CLI's own key variable.
   Provisioners can write there directly (`crewlet gitlab provision …
   -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the [Nimbus example](../../examples/) — a seven-seat company on
-  Mattermost, running on a coding-CLI subscription rather than an API key.
+  Mattermost, running on Claude Code with your Claude plan rather than an API
+  key (`nimbus-claude-cli`), its engineering seats running that CLI as their own
+  agentic loop.
   It is the next step up from this page and still needs nothing but the chat
   server in this repo's compose file; every integration above adds on top of
   it

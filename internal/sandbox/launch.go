@@ -139,7 +139,10 @@ type LaunchRequest struct {
 	Spec       Spec
 	Setup      []SetupStep
 	MCPServers map[string]MCPServer
-	LLM        *AgentLLM
+
+	// Model is the model the run works under — see [RunRequest.Model].
+	// Empty names none, and the CLI chooses its own.
+	Model string
 
 	// ReuseBox is a box this turn already has, paused from an earlier
 	// run_sandbox call. Reattaching keeps the checkout; an empty value
@@ -256,7 +259,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Requester: req.Turn.Requester,
 		// The model the run's phase record is filed under; the store keys
 		// the rest of that record on the launch it mints.
-		Launch:    LaunchRecord{Model: launchModel(req.LLM)},
+		Launch:    LaunchRecord{Model: req.Model},
 		CreatedAt: now(),
 	}, fence)
 	if err != nil {
@@ -300,7 +303,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// question, and it was the one nobody filled in: every coding run
 		// went out uncapped while the field looked wired.
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
-		LLM:        req.LLM,
+		Model:      req.Model,
 		MCPServers: req.MCPServers,
 	})
 	if err != nil {
@@ -565,14 +568,4 @@ func otelTokenTTL(spec Spec) time.Duration {
 // arrive somewhere.
 func RunEnvFor(m *Manager, req LaunchRequest) map[string]string {
 	return withTelemetry(m, req)
-}
-
-// launchModel is the model a launch points its coding agent at, empty when it
-// names none and the CLI chooses its own — in which case nothing here can
-// honestly say which model ran.
-func launchModel(llm *AgentLLM) string {
-	if llm == nil {
-		return ""
-	}
-	return llm.Model
 }

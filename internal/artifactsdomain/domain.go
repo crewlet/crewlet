@@ -222,7 +222,7 @@ func (Domain) OpsTable() string { return "artifacts_ops" }
 //
 // FALSE, unlike the tracker's and the pages': a seat reads no artifact on its
 // turn path, so a stalled artifacts copy must not stop a node admitting seats.
-// The copy is still judged, as every domain's is (ADR-0045), and goes out of
+// The copy is still judged, as every domain's is (ADR-0046), and goes out of
 // service for its own readers (a stalled strict replay is a fault, and the
 // framework refuses every read of it), and the estate router and the serving
 // origin decide through a peer that serves.

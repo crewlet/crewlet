@@ -34,7 +34,7 @@ type Source interface {
 	Referenced(ctx context.Context, among []objstore.Key, at statelog.Position) (map[objstore.Key]struct{}, bool, error)
 
 	// Required is a walk of each of the domain's REQUIRED tables — never a
-	// retired one's, whose objects the company is not owed (ADR-0047) —
+	// retired one's, whose objects the company is not owed (ADR-0048) —
 	// read no earlier than at, each in KEY ORDER ([objstore.Key.Compare]).
 	//
 	// IN KEY ORDER because the audit merges every walk into one ordered

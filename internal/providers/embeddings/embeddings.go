@@ -474,11 +474,10 @@ func (e *Error) Unwrap() []error { return []error{e.Class, e.Err} }
 
 // classForStatus is the class of an HTTP status the provider answered with.
 //
-// Its own table rather than the chat contract's (llm.KindForStatus), because
-// the question differs: that one asks whether to bench a credential or fall
-// back to another model, and so files a 400 with a 404 as fatal; this one asks
-// whether the INPUT is what the provider objects to, which is exactly the
-// difference between those two.
+// The question it answers is whether the INPUT is what the provider objects
+// to, which is why a 400 and a 404 land in different classes: the first will
+// refuse this request again unchanged, the second refuses every request until
+// somebody fixes the model name or the endpoint.
 func classForStatus(status int) error {
 	switch {
 	case status == 400 || status == 413 || status == 422:

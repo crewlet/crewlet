@@ -51,7 +51,6 @@ type Refiner struct {
 	onFailure bool
 
 	timeout      time.Duration
-	maxTokens    int
 	bodyMax      int
 	keepVersions int
 	now          func() time.Time
@@ -70,9 +69,6 @@ type RefinerOptions struct {
 	// CallTimeout bounds one auxiliary call; zero takes DefaultAuxTimeout.
 	CallTimeout time.Duration
 
-	// MaxTokens caps one refinement; zero takes DefaultRefinementTokens.
-	MaxTokens int
-
 	// MaxBodyChars is the ceiling on the refined body; zero takes
 	// DefaultRefinementBodyMax. A refinement that would breach it is
 	// skipped, not truncated.
@@ -87,11 +83,6 @@ type RefinerOptions struct {
 
 // The refiner's own defaults, kept equal to config.DefaultSkillRefinement.
 const (
-	// DefaultRefinementTokens caps one refinement's completion. A bullet is
-	// a sentence, and the budget is generous rather than tight because the
-	// call also has to read the skills it is choosing between.
-	DefaultRefinementTokens = 3000
-
 	// DefaultRefinementBodyMax is the ceiling on a refined skill's body.
 	DefaultRefinementBodyMax = 20000
 )
@@ -115,16 +106,12 @@ func NewRefiner(models Models, s *Skills, opts RefinerOptions) (*Refiner, error)
 		onSuccess:    opts.OnSuccess == nil || *opts.OnSuccess,
 		onFailure:    opts.OnFailure == nil || *opts.OnFailure,
 		timeout:      opts.CallTimeout,
-		maxTokens:    opts.MaxTokens,
 		bodyMax:      opts.MaxBodyChars,
 		keepVersions: opts.KeepVersions,
 		now:          opts.Now,
 	}
 	if r.timeout <= 0 {
 		r.timeout = DefaultAuxTimeout
-	}
-	if r.maxTokens <= 0 {
-		r.maxTokens = DefaultRefinementTokens
 	}
 	if r.bodyMax <= 0 {
 		r.bodyMax = DefaultRefinementBodyMax
@@ -199,9 +186,6 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 			{Role: llm.RoleSystem, Content: RefinementSystemPrompt},
 			{Role: llm.RoleUser, Content: buildRefinementPrompt(t, candidates)},
 		},
-		Temperature: llm.Temp(auxTemperature),
-		Effort:      auxEffort,
-		MaxTokens:   r.maxTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("learning: refining a skill for %s: %w", handle, err)

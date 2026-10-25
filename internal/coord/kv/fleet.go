@@ -406,7 +406,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why NINETEEN buckets and not one
+// # Why EIGHTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -420,7 +420,6 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           enough that a deliberate re-send later is not swallowed
 //	ledger     turn-completion retention, days: it has to outlast the
 //	           redelivery horizon and the scheduler's catchup floor
-//	cooldowns  the longest credential cooldown, a day
 //	status     peer freshness, a minute: a node that STOPS reporting must
 //	           vanish from the fleet view, which the bucket does for free
 //	config     none at all: the activation pointer is the fencing sequence,
@@ -489,8 +488,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           lets it delete records that node still needs
 //
 // Putting two of those in one bucket would give one of them the other's
-// retention, and every such mistake is silent — a cooldown that expired in a
-// second, a fleet view showing a node that died last week.
+// retention, and every such mistake is silent — a turn completion forgotten
+// in a minute, a fleet view showing a node that died last week.
 //
 // # The activation epoch IS the pointer's revision
 //
@@ -504,7 +503,6 @@ const (
 	rateSuffix         = "_rate"
 	claimsSuffix       = "_claims"
 	ledgerSuffix       = "_ledger"
-	cooldownSuffix     = "_cooldowns"
 	statusSuffix       = "_status"
 	configSuffix       = "_config"
 	budgetSuffix       = "_token_windows"
@@ -559,11 +557,6 @@ type FleetConfig struct {
 	// RebaseRetention is how long a unit of work's recorded rebase is kept
 	// — see [coord.RebaseRetention], which is what every deployment passes.
 	RebaseRetention time.Duration
-
-	// CooldownMax is the longest credential cooldown, and therefore the
-	// bucket's age: a cooldown is stored as its own end instant, so the
-	// bucket only has to outlive the longest one anybody sets.
-	CooldownMax time.Duration
 
 	// BudgetRetention is how long a token counter outlives its last write.
 	// It must outlast the longest calendar window a counter has a slot for,
@@ -623,7 +616,6 @@ func (c *FleetConfig) normalize() error {
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
 		{"RebaseRetention", c.RebaseRetention},
-		{"CooldownMax", c.CooldownMax},
 		{"BudgetRetention", c.BudgetRetention},
 		{"StatusFreshness", c.StatusFreshness},
 		{"CustodyRetention", c.CustodyRetention},
@@ -653,7 +645,6 @@ type FleetStore struct {
 	rate         jetstream.KeyValue
 	claims       jetstream.KeyValue
 	ledger       jetstream.KeyValue
-	cooldowns    jetstream.KeyValue
 	status       jetstream.KeyValue
 	config       jetstream.KeyValue
 	budgets      jetstream.KeyValue
@@ -711,7 +702,6 @@ type FleetStore struct {
 	// (casline.go).
 	tallies  writeLines[coord.Tally]
 	rates    writeLines[rateRecord]
-	cools    writeLines[[]byte]
 	channelW writeLines[coord.Channel]
 
 	// The round trips of the buckets whose compare-and-swap loops are not
@@ -736,7 +726,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, nineteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, eighteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -790,14 +780,6 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		decode: decodeRate, encode: encodeRate,
 		reading: "read the rate window", decoding: "decode the rate window",
 	}
-	store.cools.codec = codec[[]byte]{
-		// A cooldown's value is its end instant as text, and one that does
-		// not parse is OVERWRITTEN rather than refused ([FleetStore.Cool]),
-		// so it reaches the decision as the bytes it is.
-		decode:  func(raw []byte) ([]byte, error) { return raw, nil },
-		encode:  func(raw []byte) ([]byte, error) { return raw, nil },
-		reading: "read the cooldown", decoding: "decode the cooldown",
-	}
 	store.channelW.codec = codec[coord.Channel]{
 		decode: decodeChannelRecord, encode: encodeChannel,
 		reading: "read the channel", decoding: "decode the channel",
@@ -819,9 +801,6 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
 			cfg.LedgerRetention},
-		{&store.cooldowns, cooldownSuffix,
-			"Crewlet credential cooldowns; each value carries its own end instant",
-			cfg.CooldownMax},
 		{&store.status, statusSuffix,
 			"Crewlet per-node config-apply status; a node that stops reporting ages out",
 			cfg.StatusFreshness},
@@ -883,7 +862,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 
 	log.DebugContext(ctx, "coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
 		"rate_window", cfg.RateWindow, "max_claim_ttl", store.maxClaim,
-		"ledger_retention", cfg.LedgerRetention, "cooldown_max", cfg.CooldownMax,
+		"ledger_retention", cfg.LedgerRetention,
 		"budget_retention", cfg.BudgetRetention,
 		"status_freshness", cfg.StatusFreshness)
 	return store, nil
@@ -1175,70 +1154,6 @@ func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at t
 }
 
 func ledgerKey(scope, key string) string { return encodeKey(scope + "|" + key) }
-
-// ---- the credential cooldowns ------------------------------------------ //
-
-// Cool records a credential as unusable until an instant.
-//
-// ITS WRITERS ARE EVERY CALL REFUSED ON ONE CREDENTIAL ACROSS THE FLEET AT
-// ONCE, which grows with the company the way the token counter's do, and the
-// latest deadline loses to each earlier one that lands first — so a node's
-// calls are coalesced into one contender on the key (below), and the key's
-// contenders are the nodes, within the shared bound ([fleetCASAttempts]),
-// rather than a burst of refusals a count of attempts could be outnumbered by.
-func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) error {
-	if key == "" {
-		return errors.New("coord/kv: a cooldown needs a key")
-	}
-	encoded := encodeKey(key)
-	value := []byte(until.UTC().Format(time.RFC3339Nano))
-
-	// COALESCED PER KEY ([writeLines]): every call a vendor refused on one
-	// credential at once publishes the bench from its own goroutine, so a
-	// burst of refusals is one contender per node on the key rather than
-	// one per call in flight.
-	_, err := f.cools.write(ctx, f.cooldowns, f.js, encoded, key, "record the cooldown",
-		func(stored []byte, found bool) ([]byte, bool) {
-			// The LONGER of the two survives: both nodes saw a real
-			// refusal, and shortening a peer's cooldown sends this node
-			// straight back at a credential the peer already knows is
-			// spent. A stored value that does not parse is no instant to
-			// keep, and is written over.
-			if existing, parsed := time.Parse(time.RFC3339Nano, string(stored)); found && parsed == nil &&
-				existing.After(until) {
-				return stored, false
-			}
-			return value, true
-		})
-	return err
-}
-
-// Since returns every cooldown that has not yet lapsed.
-func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.Time, error) {
-	out := map[string]time.Time{}
-	err := f.each(ctx, f.cooldowns, func(kve jetstream.KeyValueEntry) error {
-		until, err := time.Parse(time.RFC3339Nano, string(kve.Value()))
-		//nolint:nilerr // An unreadable cooldown row is SKIPPED, not raised:
-		// this listing answers "which credentials are benched", and one
-		// undecodable row must not bench the whole pool by failing the read.
-		// The conservative direction here is to treat the row as absent —
-		// a key that is not benched is simply tried, and a real failure
-		// benches it again.
-		if err != nil || !until.After(now) {
-			return nil
-		}
-		decoded, ok := decodeKey(kve.Key())
-		if !ok {
-			return nil
-		}
-		out[decoded] = until
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
 
 // ---- the token counters ------------------------------------------------ //
 

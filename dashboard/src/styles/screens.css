@@ -114,17 +114,17 @@
    agent, and worse at nine rounds. So a round is BRACKETED by a rail that
    runs from its numbered node down its own content, and adjacent rounds are
    told apart by an alternating surface tint that is two steps rather than N.
-   Colour inside a round is reserved for what it can actually distinguish:
-   thinking from speech, and a failed call from a successful one.
+   Colour inside a round is reserved for what it can actually distinguish: a
+   failed call from a successful one.
 
    Those are two different jobs and it took a reader to notice only one of
    them was being done. The rail used to be drawn strictly BETWEEN rounds and
    the tint only on even ones, so both devices described the SEQUENCE and
    neither bounded a round: a phase with a single round — the common case, and
    the one a reader complained about — got neither, and rendered as a bare
-   numeral in the gutter beside a flat stack of look-alike disclosure rows,
-   where `Thinking` and `submit_work` read as two siblings rather than as a
-   thought and the call it asked for. */
+   numeral in the gutter beside a flat stack of look-alike rows, where the
+   model's words and `submit_work` read as two siblings rather than as a
+   sentence and the call it asked for. */
 .round-ledger {
   list-style: none;
   margin: 0;
@@ -175,8 +175,8 @@
   position: relative;
 }
 /* Drawn from under the node to the bottom of THIS round's own content, on
-   every round including the last — the bracket that says the thinking, the
-   speech and the calls beside it are one round.
+   every round including the last — the bracket that says the speech and the
+   calls beside it are one round.
 
    It used to stop short of the last round (`:not(:last-child)`) and to bleed
    past its own content into the gap below, which is the shape you draw when
@@ -215,7 +215,6 @@
    other half of "these do not belong together". */
 .round-body > .prose,
 .round-body > .abandoned,
-.round-body > .round-thinking,
 .round-body > .round-note {
   margin-inline: var(--spacing-2);
 }
@@ -235,12 +234,6 @@
 }
 .round-note.caution {
   color: var(--color-feedback-warning-ink);
-}
-/* A ROUND THAT DID NOT FINISH — cut off at the output cap, refused, out of
-   context, paused. DANGER, unlike a declined round: this round ended the phase
-   and its turn, and nothing follows it. */
-.round-note.critical {
-  color: var(--color-feedback-danger-ink);
 }
 
 /* ---- A phase's prompt: a map, an outline and one section -----------------
@@ -680,10 +673,10 @@
   overflow-y: auto;
 }
 
-/* PROSE. The model's reasoning and its speech are natural language, and were
+/* PROSE. The model's speech is natural language, and was
    set in the monospace code block that tool JSON uses — 11px, tight
-   leading, unbounded measure. That is a wall of text nobody reads. Here they
-   get a proportional face, real leading and a bounded measure, while
+   leading, unbounded measure. That is a wall of text nobody reads. Here it
+   gets a proportional face, real leading and a bounded measure, while
    monospace stays where it means something. `pre-wrap` keeps the model's own
    paragraph breaks, which are load-bearing in a long answer. */
 .prose {
@@ -787,9 +780,9 @@
 .live-card {
   min-width: 0;
 }
-/* 928px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
+/* 944px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
    and the run rows need the width the running column would leave them. */
-@container page (width < 928px) {
+@container page (width < 944px) {
   .live-row-pair {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -827,6 +820,32 @@
 }
 
 /* ---- Backups & retention ------------------------------------------------ */
+
+/* The standing alarms: a row each on the card's own inset, ruled from the one
+   above, the warning glyph in the warning ink beside the alarm's words. */
+.alarm-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.alarm-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+.alarm-row + .alarm-row {
+  border-top: 1px solid var(--color-border-default);
+}
+.alarm-row-glyph {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--color-feedback-warning-ink);
+}
+.alarm-title {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
 
 /* An alarm's measurement, the logs it stands on and its remedy, spaced by the
    column's gap rather than by margins of their own. */
@@ -1648,11 +1667,6 @@ a.prof-row:hover {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.prof-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1);
-}
 .prof-chain {
   display: inline-flex;
   flex-wrap: wrap;
@@ -1879,6 +1893,14 @@ a.prof-row:hover {
   flex: 0 0 auto;
   max-width: 100%;
   min-width: 0;
+}
+/* The unit's kind and its lead, quiet facts beside the name: the crown sits
+   on the words' line. */
+.org-unit-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  white-space: nowrap;
 }
 /* A count is one phrase: broken across two lines it reads as two facts. */
 .org-unit-count {
@@ -2713,13 +2735,17 @@ a.prof-row:hover {
   }
 }
 
-/* A screen's column: the landing, a space, the results. */
+/* A screen's column: the landing, a space, the results. AT THE SHEET'S FULL
+   WIDTH, as every screen's column is (`frame.css`, "NO MAX WIDTH"): it was
+   capped at `--size-content-max`, which put the landing's tiles and a space's
+   outline in a 1600px column against the left edge of a 2560px sheet with a
+   third of it empty beside them. The tiles' grid divides whatever width it is
+   given, and prose inside a tile takes its own measure. */
 .knowledge-home {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-6);
   width: 100%;
-  max-width: var(--size-content-max);
   min-width: 0;
 }
 
@@ -2744,7 +2770,8 @@ a.prof-row:hover {
    small tiles pair up, and below 640px everything is one column. */
 .knowledge-tiles {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  /* EQUAL COLUMNS, so a small tile is one width in either row. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
     "latest latest written"
     "reading pinned written"
@@ -3475,13 +3502,17 @@ a.knowledge-reader-how:hover {
 
 /* ---- The composer ------------------------------------------------------- */
 
+/* THE PAGE IS WRITTEN AT THE MEASURE IT IS READ AT (`.knowledge-read-page`),
+   with what helps file it beside. The writing column was the rest of a
+   1600px cap instead, so on a wide screen a page was drafted on lines twice
+   as long as the ones it is then read on, and the cap left the sheet's other
+   side empty. */
 .knowledge-composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 16rem;
+  grid-template-columns: minmax(0, var(--size-measure)) 16rem;
   gap: var(--spacing-6);
   align-items: start;
   width: 100%;
-  max-width: var(--size-content-max);
 }
 @container page (width < 760px) {
   .knowledge-composer {
@@ -3695,7 +3726,7 @@ a.knowledge-reader-how:hover {
    dead sticky head — the audit's 84 rows and the cost breakdown's 50 scrolled
    their column names off the top of the window, so the reader was left
    matching values to headers they could no longer see. This is the SAME
-   correction `.grid-wrap` already carries in frame.css, for the same reason
+   correction `.crewlet-data-grid` already carries in frame.css, for the same reason
    and against the same property.
 
    `clip` gives up programmatic scrolling, which is all `hidden` ever offered
@@ -3747,46 +3778,6 @@ a.knowledge-reader-how:hover {
 ) {
   flex-shrink: 0;
   max-width: 100%;
-}
-
-/* A STAT'S SECOND LINE WRAPS RATHER THAN ENDING IN AN ELLIPSIS. uilet sets it
-   `nowrap` and reserves exactly one line, so that a row of tiles where only
-   some carry one still stands at one height — but inside a StatGroup the grid
-   already stretches every tile in a row to the tallest, so the reserve buys
-   nothing there and the ellipsis costs the ending of every sentence longer
-   than a tile: "6 seats idle and waiting for …" on a phone, and a caption cut
-   mid-clause at 1440. The line qualifies the number above it, so its end is
-   the half that says what the number means. The one-line reserve stays; this
-   only lets a longer line have a second. What uilet needs is the same rule
-   upstream, after which this one and its ALLOWED entry go. */
-.crewlet-statcard__sub {
-  white-space: normal;
-  text-wrap: balance;
-}
-
-/* A ROW OF TILES SHARES ITS LINES, so every figure in a row stands at one
-   height whatever its label does. uilet stacks a tile's three lines — label,
-   number, sub — in a flex column of its own, so a label that wraps pushed its
-   number down by a line and no other: beside a node's peek at 1440, "Behind on
-   config" broke over two lines and its figure sat 18px below the other three.
-   As a subgrid over the group's rows, each line of every tile in a row takes
-   the tallest of that line across the row: a two-line label makes the label
-   row two lines tall for all four, and the numbers stay on one line. The span
-   is the three children uilet's StatCard always renders — a sub it was not
-   given is still an element, holding the reserve. */
-.crewlet-stat-group > .crewlet-statcard {
-  display: grid;
-  grid-template-rows: subgrid;
-  grid-row: span 3;
-}
-
-/* A LABEL SITS ON ITS NUMBER. Where one label in the row takes two lines, the
-   others end at the foot of the label row rather than floating in its middle,
-   so every label stands the kit's one gap above its own figure and the
-   wrapped label's first line is the one that rises. The label is the first
-   of the tile's three lines. */
-.crewlet-stat-group > .crewlet-statcard > :first-child {
-  align-self: end;
 }
 
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
@@ -3895,311 +3886,289 @@ a.knowledge-reader-how:hover {
   }
 }
 
-/* ---- The integrations catalogue: one tile per tool --------------------------
-   A GRID OF TILES, the shape the rest of the product's catalogues take: mark,
-   name and the engine's state word, one sentence, and a foot carrying a quiet
-   count and ONE action. Every tile is the same height in its row (the grid
-   stretches them), and the sentence reserves two lines so a tile saying what
-   the tool does and one saying what is owed keep their feet aligned.
+/* ---- Company › Integrations ------------------------------------------------
+   The directory and the column beside it are the kit's (`DirectoryList` in a
+   `ListDetail`), so this screen draws only what fills the detail: a tool's or
+   a service's tabs, its issues, its agents, a feed, and the engine's address
+   at the foot of the directory. No part draws a frame inside a frame: rows are
+   divided by hairlines. */
 
-   The columns come from the width a tile needs rather than from a breakpoint:
-   three at 1440 beside the Settings column, two at 1280, one on a phone. */
-.int-bar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--spacing-3) var(--spacing-6);
-  flex-wrap: wrap;
-}
-.int-bar > .page-note {
-  margin: 0;
-  flex: 1 1 22rem;
-}
-
-.int-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(16.5rem, 100%), 1fr));
-  gap: var(--spacing-3);
-}
-
-/* CREWLET'S OWN SERVICES: three tiles, so three tracks, never the
-   catalogue's four-up grid with a quarter of its row empty, and never two
-   up with Chat alone on a second row. One track on a phone. */
-.int-grid-builtin {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+/* On a phone the detail is the whole page, and this is its way back. */
+.int-back {
+  display: none;
+  align-self: flex-start;
 }
 @media (width < 640px) {
-  .int-grid-builtin {
-    grid-template-columns: minmax(0, 1fr);
+  .int-back {
+    display: inline-flex;
   }
 }
 
-.int-tile {
+.int-detail,
+.int-tab,
+.int-agents,
+.int-service-off {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  gap: var(--spacing-5);
   min-width: 0;
-  padding: var(--spacing-4);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  color: var(--color-text-primary);
 }
-/* AN UNCONFIGURED TILE SITS ON THE FRAME rather than on the card rung. It is
-   not dimmed — an unconnected tool is the one a reader came here to set up,
-   and opacity would take its text below contrast in the light theme — it is
-   one rung lower, which is the system's word for "nothing is running here
-   yet" without claiming anything is off. Only its MARK is drained (the kit's
-   `muted` VendorMark): the mark is decoration beside the name, so draining
-   it costs no text its contrast. */
-.int-tile.is-absent {
-  background: var(--color-surface-background);
+.int-agents {
+  gap: var(--spacing-4);
+}
+.int-service-off {
+  max-width: 44rem;
+}
+/* THE COLUMN SPACES ITS PARTS, so prose and headings inside it carry no
+   margin of their own, and a lone control keeps its own width. */
+:where(.int-detail, .int-tab, .int-agents, .int-service-off, .int-before, .int-soon-copy)
+  > :where(p, h3) {
+  margin: 0;
+}
+:where(.int-detail, .int-tab, .int-agents) > :where(a, button) {
+  align-self: flex-start;
+}
+.int-detail h3.t-label,
+.int-before h3.t-label {
+  margin-bottom: var(--spacing-2);
+}
+.int-checks svg {
+  color: var(--color-feedback-success-ink);
 }
 
-.int-tile-head {
+.int-row-start {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-3);
-  min-width: 0;
 }
-.int-tile .int-brand {
-  width: var(--size-row-lg);
-  height: var(--size-row-lg);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-hover);
+
+/* What connecting gives the agents, how each gets in, and what to have ready. */
+.int-before {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: var(--spacing-5);
 }
-.int-tile-title {
+
+/* ONE ISSUE A ROW: what is wrong, who owes the next move, and the control
+   that makes it. */
+.int-issues,
+.int-seats {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
+}
+.int-issues > * + *,
+.int-seats > * + * {
+  border-top: 1px solid var(--color-border-default);
+}
+.int-issue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+}
+.int-issue:has(.int-issue-mark) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.int-issue-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
   min-width: 0;
 }
-.int-tile-title .int-name {
-  margin: 0;
+.int-issue-problem {
   font-size: var(--font-size-sm);
-  line-height: 1.25;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
 }
-.int-tile-text {
-  margin: 0;
-  flex: 1;
-  min-height: calc(2 * 1.5em);
-  font-size: var(--font-size-compact);
-  line-height: 1.5;
+.int-issue-owner {
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
-.int-tile-foot {
-  display: flex;
+.int-issue-act:empty {
+  display: none;
+}
+
+/* AN AGENT'S LINE: its mark, its name and one line under it, its standing,
+   and its own step at the app where it has one. */
+.int-seat {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--spacing-2);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+  min-width: 0;
+}
+.int-seat-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.int-seat-id .t-caption {
+  overflow-wrap: anywhere;
+}
+.int-seat-act:empty {
+  display: none;
+}
+@media (width < 640px) {
+  .int-issue,
+  .int-issue:has(.int-issue-mark) {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .int-issue:not(:has(.int-issue-mark)) .int-issue-act {
+    grid-column: 1 / -1;
+  }
+  .int-issue:has(.int-issue-mark) .int-issue-act {
+    grid-column: 2;
+  }
+  .int-seat {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .int-seat-act {
+    grid-column: 2 / -1;
+  }
+}
+
+/* A FEED: one change or one item a line, its time at the end. */
+.int-feed {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.int-feed > * + * {
+  border-top: 1px solid var(--color-border-default);
+}
+.int-feed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) 0;
+  font-size: var(--font-size-sm);
+}
+/* A line that leads with its app's mark: the mark, the line, its time. */
+.int-feed-row--marked {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-3);
+}
+.int-feed-mark {
+  display: inline-flex;
+  align-self: center;
+}
+.int-feed-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+a.int-feed-what:hover {
+  text-decoration: underline;
+}
+.int-feed-what strong {
+  font-weight: var(--font-weight-semibold);
+}
+.int-feed-at {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* CREWLET CHAT, still to come: its mark large on the brand's soft ground. */
+.int-soon {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-6);
+  align-items: start;
+  padding: var(--spacing-6);
+  border-radius: var(--radius-xl);
+  background: var(--color-brand-accent-soft);
+}
+.int-soon-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+@media (width < 640px) {
+  .int-soon {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--spacing-4);
+  }
+}
+.int-step-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* THE ADDRESS APPS DELIVER TO, at the foot of the directory: a small label
+   over the address, cut to fit, with the whole of it in its title. */
+/* THE HOME, with nothing chosen: what is in use, in one close column. One
+   small step between its parts, so a section heading reads as the head of what
+   it names rather than a band between two runs of cards. */
+.int-landing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.int-landing-foot {
   padding-top: var(--spacing-3);
   border-top: 1px solid var(--color-border-default);
 }
-.int-tile-meta {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-/* THE WAY OUT TO EVERY OTHER TOOL: a link, drawn as the empty slot a tile
-   would fill, so it reads as "more of these" rather than as one of them. */
-.int-tile-more {
-  border-style: dashed;
-  border-color: var(--color-border-hover);
-  background: transparent;
-  justify-content: center;
-  gap: var(--spacing-2);
-  text-decoration: none;
-  color: var(--color-text-secondary);
-}
-.int-tile-more:hover {
-  border-color: var(--color-border-strong);
-  background: var(--color-surface-hover);
-}
-.int-tile-more:focus-visible {
-  outline: 2px solid var(--color-brand-accent);
-  outline-offset: 2px;
-}
-.int-tile-more .int-name {
-  color: var(--color-text-primary);
-}
-.int-tile-more .int-tile-text {
-  flex: none;
-  min-height: 0;
-}
-.int-brand.int-brand-more {
-  background: transparent;
-  border-style: dashed;
-  color: var(--color-text-secondary);
-}
-
-/* ---- One integration's own page -------------------------------------------
-   The card a tile's Manage leads to: a bordered box that discloses the tool's
-   agents and faulted surfaces, with the settings square and Disconnect in its
-   head. */
-
-.int-card {
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-hover);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  transition: border-color var(--motion-duration-base) var(--motion-easing-emphasized);
-}
-.int-card:hover {
-  border-color: var(--color-border-strong);
-}
-
-/* A tool nobody has connected: one row, no disclosure. */
-.int-card-absent {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  padding: var(--spacing-4) var(--spacing-6);
-}
-/* NOT DIMMED. An unconfigured tool is the one a reader came here to set up,
-   so it is the last thing that should look switched off: greying it reads as
-   "unavailable" when it means "available, and yours to connect". The state is
-   already said twice, in the badge and in the action beside it, and colour
-   here carries STATE and never identity. The only difference from a connected
-   card is that there is nothing yet to disclose. */
-.int-card-absent:hover {
-  border-color: var(--color-border-hover);
-}
-
-.int-card-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding-right: var(--spacing-6);
-}
-
-/* The disclosure is the identity block rather than the whole header, so the
-   card's own buttons are not nested inside a button and a keyboard reader
-   gets one predictable target. */
-.int-card-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  flex: 1;
-  min-width: 0;
-  padding: var(--spacing-4) var(--spacing-2) var(--spacing-4) var(--spacing-6);
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
+/* AN ITEM'S NAME IS THE WAY TO ITS PAGE, drawn as the title it is: the
+   title's own ink, underlined only under the pointer. */
+.int-tile-link {
   color: inherit;
-  font: inherit;
+  text-decoration: none;
 }
-/* Hovering the disclosure tints the whole header rather than the strip the
-   button happens to cover: the row is what a reader perceives as the thing
-   they are about to press, and a highlight stopping halfway reads as a
-   rendering fault. */
-.int-card-head:has(.int-card-toggle:hover) {
-  background: var(--color-surface-hover);
-}
-.int-card-toggle:focus-visible {
-  outline: 2px solid var(--color-brand-accent);
-  outline-offset: -2px;
+.int-tile-link:hover {
+  text-decoration: underline;
 }
 
-/* The third-party app's mark (`VendorMark`, from @crewlethq/icons), in a
-   circle the way the console draws it. Its colours are the third-party app's
-   own; see the "one rule" in reference/dashboard-design.md for why that is the
-   one exception to colour carrying state. */
-.int-brand {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: var(--size-row-lg);
-  height: var(--size-row-lg);
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-elevated);
-  color: var(--color-text-primary);
-}
-.int-heading {
+.int-engine-address {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-.int-name {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-/* The second line carries whatever the card most needs to say: what the tool
-   is for when there is nothing wrong, and what is wrong when there is. */
-.int-desc {
-  display: inline-flex;
-  align-items: center;
   gap: var(--spacing-1);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.int-desc.attention {
-  color: var(--color-feedback-warning-ink);
+  min-width: 0;
 }
 
-.int-card-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex: none;
-}
-
-/* A real control rather than decoration inside the identity button, so it
-   can sit beside the actions and still toggle the body. */
-.int-chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--size-row-sm);
-  height: var(--size-row-sm);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-.int-chevron:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-.int-chevron:focus-visible {
-  outline: 2px solid var(--color-brand-accent);
-  outline-offset: 2px;
-}
-.int-chevron svg {
-  transition: transform var(--motion-duration-base) var(--motion-easing-emphasized);
-}
-.int-chevron.is-open svg {
-  transform: rotate(180deg);
-}
-@media (prefers-reduced-motion: reduce) {
-  .int-chevron svg {
-    transition: none;
-  }
-}
-
-.int-card-body {
+/* THE SETTINGS FORM, in the pane where the tabs were: its heading, the
+   fields, and the actions ruled off at its foot. */
+.int-setup {
   display: flex;
   flex-direction: column;
-  padding: var(--spacing-1) var(--spacing-6) var(--spacing-3);
+  gap: var(--spacing-5);
+  min-width: 0;
+  max-width: 44rem;
+}
+.int-setup-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+.int-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-4);
   border-top: 1px solid var(--color-border-default);
 }
+/* A KEY'S CHECK, under its field: the control and the engine's verdict. */
+.int-key-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-sm);
+}
 
-/* ONE ROW PER THING THE CARD IS MADE OF, surfaces and seats alike, separated
-   by a rule rather than by whitespace. The body used to stack loose lines of
-   prose, which made a tool with three surfaces read as one paragraph with no
-   edges: nothing said where Jira stopped and Confluence began. */
+/* ONE ROW PER THING A TOOL IS MADE OF, surfaces and seats alike, separated
+   by a rule rather than by whitespace: stacked as loose lines of prose, a tool
+   with three surfaces read as one paragraph with no edges, and nothing said
+   where Jira stopped and Confluence began. */
 .int-rows {
   list-style: none;
   margin: 0;
@@ -4308,16 +4277,11 @@ a.knowledge-reader-how:hover {
  * something that needs attention. It was a chip out on the right next to
  * "ready", where two chips on one row read as two verdicts and a reader
  * scanning a roster for what is wrong stopped on "read-only" every time.
+ *
+ * THROUGH THE TOKENS, all of it: the pill is made small by its PADDING on the
+ * smallest step of the type ramp (--font-size-2xs), never by a size of its own,
+ * because a step nothing else uses is a scale of ten pretending to be nine.
  */
-/* THROUGH THE TOKENS, all of it. This arrived with six literals — a 9px
-   font-size off the nine-step ramp, its own margin, padding, radius,
-   line-height and tracking — and the design rules name that as the one thing
-   a change may not do: "No new colour, size, radius or spacing literal. If a
-   component needs one, the TOKEN is what gets added."
-   
-   --font-size-2xs is the smallest step and the pill is made small by its PADDING
-   rather than by a tenth type size, because a step nothing else uses is a
-   scale of ten pretending to be a scale of nine. */
 .int-seat-tier {
   margin-left: var(--spacing-2);
   padding: 0 var(--spacing-1);
@@ -4501,10 +4465,11 @@ a.knowledge-reader-how:hover {
 /* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
    FOLDED, because it is forty lines of JSON and the two boxes under it are
    what the form is for: it is opened once per agent, at the start. */
+/* A ROW OF THE AGENT'S BLOCK, ruled off from the fields above it, never a
+   second bordered box inside the block's own frame. */
 .int-manifest {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-3);
 }
 /* The label, the aside, and the Copy button on one line: copying is what an
    operator does with this, and a button below the fold is one they have to
@@ -4628,19 +4593,6 @@ a.knowledge-reader-how:hover {
   color: var(--color-text-tertiary);
 }
 
-/* THE OTHER FINDINGS, ruled off. A disclosure that opens into more sentences
-   needs to be visibly not part of the sentence above it. */
-.int-more {
-  margin: 0;
-  padding-top: var(--spacing-2);
-  border-top: 1px solid var(--color-border-default);
-}
-.int-more .int-findings > li {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-}
-
 /* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
    drawn at the muted step rather than the faint one: tokens.css marks
    --color-text-muted decoration only, never a fact, and it falls under the 4.5:1
@@ -4660,12 +4612,16 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* A section heading inside the setup dialog, for a tool the engine reaches
    over more than one surface. */
+/* A SURFACE'S HEADING in a sheet that sets up several (Atlassian's Jira and
+   Confluence): a real subheading in the words as written, never the
+   uppercase eyebrow, which under "Connect Slack" repeated the vendor. */
 .int-section {
-  font-size: var(--font-size-compact);
-  font-weight: 600;
-  color: var(--color-text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  margin: 0;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-normal);
+  color: var(--color-text-primary);
 }
 .int-findings {
   margin: var(--spacing-1) 0 0;
@@ -4679,7 +4635,7 @@ details > summary.int-summary::-webkit-details-marker {
    meant reading the whole line. Laid out, the same six are one glance.
 
    Scrolls past a point rather than growing, because thirty-six service
-   accounts is the measured case and a card is not a page. */
+   accounts is the measured case and a peek is not a page. */
 .int-subjects {
   display: flex;
   flex-wrap: wrap;
@@ -4695,9 +4651,8 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 1px var(--spacing-2);
   border: 1px solid var(--color-border-hover);
   border-radius: var(--radius-sm);
-  /* THE RUNG ABOVE ITS GROUND. A chip inside `.int-card`, which is a panel, so
-   at the panel rung it drew nothing — and it drew nothing before this ramp was
-   named either, when both were the page's colour. */
+  /* THE RUNG ABOVE ITS GROUND: a chip sits on a peek's panel, and at the
+     panel's own rung it drew nothing. */
   background: var(--color-surface-elevated);
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
@@ -5585,7 +5540,7 @@ span.list-position-step {
    than a button label's. Selected by ELEMENT rather than by the kit's class
    names: the menu's markup is the kit's, and the one button a `.cell-edit`
    holds is its trigger (the menu's items are portalled out of it). */
-.props > dd > .cell-edit button {
+.crewlet-property-list .crewlet-description-list__detail > .cell-edit button {
   margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
   font-size: inherit;
   color: inherit;
@@ -5927,7 +5882,7 @@ span.list-position-step {
   background: var(--color-surface-subtle);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
-  /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.grid-wrap` gives
+  /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.crewlet-data-grid` gives
      in frame.css, and for the same reason. What the panel wants is the rows
      rounded off at its own radius, which `clip` does exactly as `hidden` did;
      what `hidden` ADDS is a scroll container, and a sticky box is confined to
@@ -6771,15 +6726,6 @@ span.list-position-step {
   flex-direction: column;
   gap: var(--spacing-1);
 }
-/* EVERY HEADING IN THE RAIL IN ONE CASE: the property groups' headings
-   ("Fields", "Record") take the sentence case its own sections (Relations,
-   Pages, Watching) are set in, rather than the frame rail's small caps — one
-   column, one voice, as the artboard sets it. */
-.task-rail-body .props-section {
-  font-size: var(--font-size-xs);
-  letter-spacing: normal;
-  text-transform: none;
-}
 .task-rail-assignee {
   flex-wrap: wrap;
 }
@@ -7246,9 +7192,9 @@ a.work-cal-chip {
 .prose.md > * + .md-heading {
   margin-top: var(--spacing-4);
 }
-/* Inside dimmed words — a round's thinking — it keeps the dimming: emphasis
-   within a block the reader can skip by its shape, never a line louder than
-   the block it is in. */
+/* Inside dimmed words — the palette's answer — it keeps the dimming: emphasis
+   within a block set quieter than the page, never a line louder than the
+   block it is in. */
 .prose.md.muted .md-heading {
   color: var(--color-text-secondary);
 }
@@ -7789,7 +7735,9 @@ a.work-cal-chip {
 .home-kpis {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--spacing-3);
+  /* THE BOARD'S OWN GAP, read from the board it stands on: at 12px the
+     figures' gutters sat 4px off the 16px gutters of every block under them. */
+  gap: var(--crewlet-arrange-board-gap, var(--spacing-4));
 }
 /* FEWER FIGURES, FEWER COLUMNS: a board's Figure widget draws one or a few of
    the five, and each takes its share of the cell rather than a fifth of it. */
@@ -7811,15 +7759,15 @@ a.work-cal-chip {
   white-space: nowrap;
 }
 
-/* 928px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
+/* 944px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
    kit's 96px trend slot inside 16px of padding each side, 176px, and five of
-   them take four 12px gaps. Below it the figures fold into rows that FILL:
+   them take four of the board's 16px gaps. Below it the figures fold into rows that FILL:
    four are two by two, and five are three over two on a six-track grid (the
    first three spanning two tracks, the last two spanning three), since three
    a row left a third-width hole beside the last two. The board's blocks stack
    too (`STACKS_BELOW` in `routes/home/Home.tsx`), since the decisions card's
    buttons need the width the live column would take. */
-@container page (width < 928px) {
+@container page (width < 944px) {
   .home-kpis[data-count="4"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7847,12 +7795,6 @@ a.work-cal-chip {
   margin-inline-start: var(--spacing-2);
   vertical-align: middle;
 }
-.home-card-title {
-  margin: 0;
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
 .home-card-caption {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
@@ -7871,15 +7813,6 @@ a.work-cal-chip {
 }
 .home-decisions-icon {
   color: var(--color-feedback-warning-ink);
-}
-
-/* THE QUIET BAND sits on the card's own inset. */
-.home-quiet {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
 }
 
 /* ---- Home's board ------------------------------------------------------ */
@@ -8564,18 +8497,6 @@ a.live-row:focus-visible {
 .home-chart .crewlet-stacked-columns__slot:last-child .crewlet-stacked-columns__segment {
   background: var(--color-brand-accent);
 }
-.home-chart-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-}
-.home-chart-title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
 .home-chart-figure {
   flex: none;
   font-size: var(--font-size-lg);
@@ -9094,8 +9015,8 @@ a.live-row:focus-visible {
   border-bottom: 1px solid var(--color-border-default);
 }
 .trace-tabs {
-  /* STRETCHED, never shrunk to its tabs: \`ObjectTabs\` folds what does not
-     fit by measuring the box it is given, so a box sized by its own content
+  /* STRETCHED, never shrunk to its tabs: the kit's folding \`Tabs\` folds what
+     does not fit by measuring the box it is given, so a box sized by its own content
      measures itself — a strip laid out before its count or its web font
      arrived folded three tabs into "More" and never saw room to unfold
      (\`styles/frame.test.ts\` refuses the shrink). */
@@ -9719,38 +9640,40 @@ a.live-row:focus-visible {
      at their own width — the compact row gives EVERY lead cell the rest of
      the line, which is right for a key-and-title row and wrong for figures. */
   .spend-agents
-    .grid-wrap[data-phone-rows="compact"]
-    .grid-cell[data-lead]:not(:has(.crewlet-table-cell__entity)) {
+    .crewlet-data-grid[data-phone-rows="compact"]
+    .crewlet-data-grid__cell[data-lead]:not(:has(.crewlet-table-cell__entity)) {
     flex: none;
     font-weight: inherit;
   }
   /* A TASK'S PHONE ROW READS ALONG ITS FIRST LINE: the key and the tokens sit
      on the title's baseline, not centred against a title and the facts under
      it — centred, a two-line title left its key floating between the two. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .grid-row {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .crewlet-data-grid__row {
     align-items: baseline;
   }
   /* THE KEY IS A COLUMN ON A PHONE TOO, so every title starts at one x:
      sized to its own width, ENG-4 and LEAD-6 put the titles beside them at
      two different indents. Seven characters of the key's own monospace fit a
      project key and a two-digit number; a longer key grows its own row. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .crewlet-table-cell__key {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .crewlet-table-cell__key {
     display: inline-block;
     min-width: 7ch;
   }
   /* THE BAR IS FOR SCANNING A COLUMN, and a compact row has none — and the
      figure takes its own width at the line's end, where the compact row
      would otherwise split the line between it and the title. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-share-track {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .spend-share-track {
     display: none;
   }
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:has(.spend-task-spend) {
+  .spend-tasks
+    .crewlet-data-grid[data-phone-rows="compact"]
+    .crewlet-data-grid__cell[data-lead]:has(.spend-task-spend) {
     flex: none;
   }
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .spend-task-spend {
     width: auto;
   }
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend > :last-child {
+  .spend-tasks .crewlet-data-grid[data-phone-rows="compact"] .spend-task-spend > :last-child {
     flex: none;
   }
   .spend-agents .spend-share-track {
@@ -9760,13 +9683,13 @@ a.live-row:focus-visible {
      has none: the percentage and its unit say the same. With the bar, a capped
      seat's second line did not fit and the seat stood three lines tall at
      every density. */
-  .spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter {
+  .spend-agents .crewlet-data-grid[data-phone-rows="compact"] .spend-day-meter {
     display: none;
   }
   /* ONE LINE FOR A NAME on the compact row: the card layout wraps a value
      because it has a line of its own, and here a wrapped name stood a seat
      three lines tall beside figures that fit on one. */
-  .spend-agents .grid-cell[data-lead] .truncate {
+  .spend-agents .crewlet-data-grid__cell[data-lead] .truncate {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -9914,25 +9837,36 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
-.budget-readonly {
-  margin: 0 0 var(--spacing-3);
-  color: var(--color-text-tertiary);
-}
-/* THE COMPANY'S THREE WINDOWS side by side, on the same elevated rung and at
-   the same gap as the Spend overview's tiles, so a window reads as the same
-   object on both screens. They stack below the width where a tile's figure,
-   bar and ceiling editor no longer fit a third of the card. THE CARD'S
-   INSET ON EVERY SIDE: with none on top the tiles sat flush against the
-   header's rule while keeping 16px on the other three. */
-.budget-tiles {
+/* THE COMPANY'S ROW, ON THE SEATS' COLUMNS. Budgets.tsx hands this row and the
+   seats' table one track list (`TRACKS`), so each window stands over its
+   column in the table below (as `--budget-tracks`). The cells keep the table cell's own inline inset
+   (`.crewlet-data-grid__cell`: --spacing-3), which is what puts their words on the table's
+   words. No ground of its own: a grey tile inside the card was a frame
+   inside the frame. A hairline between windows, as a stat row draws. */
+.budget-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-3);
-  padding: var(--spacing-4);
+  grid-template-columns: var(--budget-tracks);
+  align-items: stretch;
 }
+.budget-row > * {
+  padding: var(--spacing-3);
+}
+.budget-row > .budget-tile {
+  border-left: 1px solid var(--color-border-default);
+}
+.budget-row-scope {
+  margin: 0;
+  align-self: center;
+}
+/* Narrow, the row is a column: the scope's line, then each window under the
+   one before it, as the table's phone card stacks its cells. */
 @container page (width < 760px) {
-  .budget-tiles {
+  .budget-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .budget-row > .budget-tile {
+    border-left: 0;
+    border-top: 1px solid var(--color-border-default);
   }
 }
 .budget-tile {
@@ -9940,9 +9874,6 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-2);
   min-width: 0;
-  padding: var(--spacing-3);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
 }
 .budget-tile-head,
 .budget-tile-figure,
@@ -10129,7 +10060,7 @@ a.live-row:focus-visible {
    a small control's height, which holds the chip at every density, and the
    name is set on it, so the line is that tall with or without the chip and
    the name sits where it does in every other cell. The title says both. */
-.grid-cell > .revision-author {
+.crewlet-data-grid__cell > .revision-author {
   flex-wrap: wrap;
   row-gap: var(--spacing-1);
   height: var(--size-control-sm);
@@ -10229,45 +10160,21 @@ a.live-row:focus-visible {
 
 /* ---- Settings › Models & keys ------------------------------------------ */
 
-/* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the vendor id under it:
-   the key is what a seat's `llm:` names, the id is what the vendor bills. The
-   id line cuts at its end rather than wrapping a long gateway model name
-   across the row. */
+/* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the CLI and the model
+   under it: the key is what a seat's `llm:` names, the CLI and the model are
+   what runs. The second line cuts at its end rather than wrapping a long model
+   id across the row. The sign-in cell is the same pair: the mode over where
+   its credential comes from. */
 .model-name {
   min-width: 0;
   gap: 2px;
 }
 
-/* A key's mark: its variable in the mono face, and a cooling key's time left
-   beside it in the tag's own ink — one number, read at a glance down a list. */
-.model-key {
-  font-size: var(--font-size-xs);
-}
-.model-key-left {
-  font-variant-numeric: tabular-nums;
-}
-
-/* One key per row in the edit form: the field (or, for a key written inline,
-   the locked sentence standing where the field would be) and its remove
-   button, which sits on the field's baseline. A slot is the row and, under
-   the last locked row, the one sentence about it — kept WITH the row, since
-   under Add key it read as a rule about the new key. */
-.model-key-slot {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.model-key-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--spacing-2);
-  align-items: end;
-}
-/* THE INPUT'S OWN SIZE (the kit's `compact` step), not the body's: it stands
-   where a field would, and at the body step it read as a different component
-   among the inputs. */
-.model-key-locked {
+/* A credential written into the document, in the edit form: the locked
+   sentence stands where the field would be, at THE INPUT'S OWN SIZE (the
+   kit's `compact` step), not the body's — at the body step it read as a
+   different component among the inputs. */
+.model-credential-locked {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
@@ -10279,41 +10186,30 @@ a.live-row:focus-visible {
   font-size: var(--font-size-compact);
   line-height: var(--font-line-height-normal);
 }
-.model-key-locked-text {
+.model-credential-locked-text {
   flex: 1 1 auto;
   min-width: 0;
 }
-.model-key-locked > button {
+.model-credential-locked > button {
   flex: none;
 }
 
-/* A FACT IN PARTS, each kept whole — a model's two bench times, or its ready
-   keys and its duplicates. On a row they stay on one line; in a header fact
-   they stack, one per line with no separator, since a wrapped "·" dangled at
-   the end of the first line and a count split from its noun. */
-.model-parts {
-  display: inline-flex;
-  flex-wrap: nowrap;
-  column-gap: 0.35em;
-}
-.model-parts.is-stacked {
+/* The variables a model's CLI is handed, one per line: a name and the
+   reference it reads, which wrap at the reference rather than mid-name. */
+.model-env {
+  display: flex;
   flex-direction: column;
-  min-width: 0;
-  max-width: 100%;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
 }
-/* AND A STACKED PART THAT STILL DOES NOT FIT ENDS IN AN ELLIPSIS, its whole
-   words on its title: a grid cell clips, and a clipped "auth 24h" read as
-   "auth 2" — a different value, with nothing to say it was cut. */
-.model-parts.is-stacked > .model-part {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.model-parts-sep {
-  color: var(--color-text-tertiary);
-}
-.model-part {
-  white-space: nowrap;
+
+/* The way out to Configuration, under the sign-in it changes: inside the
+   card's own padding, a step below the list it follows. */
+.model-signin-change {
+  margin: var(--spacing-3) 0 0;
 }
 
 /* ---- Signing in ----------------------------------------------------------
@@ -10394,23 +10290,6 @@ a.live-row:focus-visible {
 /* START A NEW ARTIFACT: a quiet heading over the kinds' tray, which lays
    itself out by its own width (`ArtifactMakeRow`): every kind in view at
    once, none hidden past an edge a reader has to discover by swiping. */
-.artifacts-make {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.artifacts-make-title,
-.artifacts-group-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.4;
-}
-
 /* THE TOOLBAR'S END: the trash and the shape, kept together at the far end
    of whichever line they land on. */
 .artifacts-bar-end {
@@ -10431,10 +10310,10 @@ a.live-row:focus-visible {
    ledger's and every row of it stands at one height. The facts after the
    name are the quieter steps: who can open it and the owner in the
    secondary, when and the reader's role in the tertiary. */
-.artifacts-list .grid-row {
+.artifacts-list .crewlet-data-grid__row {
   min-height: calc(var(--size-row-md) + var(--spacing-4));
 }
-.artifacts-list .grid-cell {
+.artifacts-list .crewlet-data-grid__cell {
   color: var(--color-text-secondary);
 }
 .artifacts-when,
@@ -10452,9 +10331,6 @@ a.live-row:focus-visible {
 .artifacts-group + .artifacts-group,
 .artifacts-group + * > .artifacts-group {
   margin-top: var(--spacing-5);
-}
-.artifacts-group-title > svg {
-  color: var(--color-text-tertiary);
 }
 
 /* THE GRID: four cards across a laptop's page, three on a narrower one (a
@@ -10529,59 +10405,12 @@ a.live-row:focus-visible {
   inset: 0;
 }
 
-/* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
-   in a row, each a figure over a thin bar, under a hairline that says the
-   gallery has ended. */
-.artifacts-storage {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  margin-top: var(--spacing-8);
-  padding-top: var(--spacing-6);
-  border-top: 1px solid var(--color-border-default);
-}
-.artifacts-storage-title {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-}
-.artifacts-storage-quotas {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 14rem));
-  gap: var(--spacing-3) var(--spacing-8);
-  margin: 0;
-}
-@container page (width < 640px) {
-  .artifacts-storage-quotas {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-.artifacts-storage-quota {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.artifacts-storage-quota > dt {
+/* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
+   settings table draws a key. */
+.storage-quota-key {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-}
-.artifacts-storage-quota > dd {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-}
-.artifacts-storage-figure {
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  font-variant-numeric: tabular-nums;
-}
-.artifacts-storage-note {
-  margin: 0;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
 }
 
 /* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one
@@ -11754,12 +11583,52 @@ a.live-row:focus-visible {
   height: 100%;
 }
 
-/* ---- A Settings page of term lists that read as one table ----------------
-   Limits and Sign-in policy stack several cards of terms and values, and each
-   list sized its term column to its own longest term, so the values started
-   at a different x in every card. The kit's term track is an inherited custom
-   property (`--crewlet-description-list-term`), set here once for the page;
-   below the kit's narrow step a term stands over its value as before. */
-.settings-terms {
-  --crewlet-description-list-term: 18rem;
+/* ---- Company › Principles ----------------------------------------------------
+   Two equal statement cards side by side, the standing policies one card
+   across the page under them, the engine's caps a related row under that.
+   The cards, the statements' passage text and the compact rows are the
+   kit's; what is here is how the two statement cards stand together. */
+
+.principles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+/* NEITHER OUTRANKS THE OTHER: two equal columns sharing their rows on a
+   SUBGRID, so the two heads are one height whatever controls each carries (a
+   head with an Edit stood 3px taller than one without), the bodies one height
+   however long either statement runs, and an editor's Save and Cancel on one
+   line across the pair. */
+.principles-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 1fr auto;
+  column-gap: var(--spacing-4);
+}
+
+.principles-card {
+  min-width: 0;
+}
+
+.principles-pair > .principles-card {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+}
+
+/* 720px OF THE PAGE'S OWN WIDTH is where two statements of a few lines each
+   stop fitting side by side at a readable measure: one column below it. */
+@container page (width < 720px) {
+  .principles-pair {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-4);
+  }
+
+  .principles-pair > .principles-card {
+    display: flex;
+    flex-direction: column;
+  }
 }

@@ -136,8 +136,7 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		BucketPrefix: "cutfleet", Clustered: true, Replicas: 3,
 		RateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
-		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, CooldownMax: time.Hour,
-		RebaseRetention:  10 * time.Minute,
+		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, RebaseRetention: 10 * time.Minute,
 		StatusFreshness:  10 * time.Minute,
 		CustodyRetention: 10 * time.Minute,
 	}

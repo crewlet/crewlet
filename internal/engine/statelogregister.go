@@ -54,7 +54,7 @@ import (
 // wrong: every entry states its generation encoder, every identity-claiming
 // entry its gate, and every entry a feed exactly when its domain declares one.
 // A FOURTH is the TRIMMED record the trim removes a log's anchors by
-// ([registration.Trimmed], ADR-0046), which fails the same silent way — a log
+// ([registration.Trimmed], ADR-0047), which fails the same silent way — a log
 // with anchors and no record keeps one for every subject it ever wrote — so
 // every entry states one exactly when its log writes anchors.
 //
@@ -185,7 +185,7 @@ type registration struct {
 	// NoBarrier is the explicit form of a nil Barrier. See Barrier.
 	NoBarrier bool
 
-	// Trimmed encodes the trim's TRIMMED record (ADR-0046) as one of this
+	// Trimmed encodes the trim's TRIMMED record (ADR-0047) as one of this
 	// domain's own records: what removes the log's arbitration anchors below
 	// its first surviving record on every node, in the transaction that
 	// applies it ([statelog.SweepAnchors]). Nil for a domain whose log
@@ -567,7 +567,7 @@ func register() []registration {
 			},
 		},
 		{
-			// THE COMPANY'S GIT REPOSITORIES (ADR-0050): the eighth domain
+			// THE COMPANY'S GIT REPOSITORIES (ADR-0051): the eighth domain
 			// and its sixth strict, identity-claiming one — settings,
 			// protections, refs, packs and pushes as rows only its applier
 			// writes, a pack's bytes one object a push in the object store.
@@ -700,7 +700,7 @@ func checkRegister(entries []registration) error {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
 				"a trimmed-record encoder=%v on a log that writes anchors=%v — a log "+
 				"with anchors and no record keeps one for every subject it ever "+
-				"wrote, and a record on a log with none removes nothing (ADR-0046)",
+				"wrote, and a record on a log with none removes nothing (ADR-0047)",
 				name, entry.Trimmed != nil, anchors)
 		}
 	}
@@ -921,6 +921,6 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 // verified under — [recordKeyring] over its own Tier A — for the one reader
 // outside the engine that opens a log's frames itself: the backup, which reads
 // the records a restore replays past its store copy for the files they name
-// (internal/backup, ADR-0048). Handed this rather than reading Tier A again,
+// (internal/backup, ADR-0049). Handed this rather than reading Tier A again,
 // so the backup and the appliers can never open a record under two keyrings.
 func (e *Engine) RecordKeyring() statelog.Keyring { return recordKeyring(e.boot) }

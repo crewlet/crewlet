@@ -359,7 +359,6 @@ every other route.
 | `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Takes `admin`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are) |
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Takes `admin`** and a recent proof, as the removal by name does |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
-| `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Takes `admin`** (see [below](#get-credential-pool)) |
 | `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
@@ -719,7 +718,7 @@ told they lead nobody goes looking for an authority they already hold.
 | **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions — an agent's **status**, with its **body** to an administrator and to whoever leads the seat ([below](#a-status-reader-never-receives-a-transcript)) — `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row — `/feed`, `decisions` and the `knowledge` question |
 | `tracker` | The reads under `/work/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /work/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s tracker half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `knowledge` | The reads under `/pages/*` and `/containers`, the page questions, and writing the company's own pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/credential-pool`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/work/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model — a coding CLI the host runs — a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/work/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and a coding run's tail (`/sandbox-runs/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -1652,7 +1651,8 @@ one is the managing system's to hold, not the caller's to retry with. See
 | `GET` | `/config/revisions` | Paginated history (newest first), metadata only |
 | `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
-| `GET` | `/config/references` | Every `${VAR}` the active document names, each with the config path of the field that names it, plus the `revision` they were read from |
+| `GET` | `/config/references` | Every `${VAR}` the active document names, and every variable it reads without naming it, each with the config path of the field that reads it, plus the `revision` they were read from |
+| `GET` | `/config/charter` | The company's mission, vision and policies, with an `ETag` of their content. See [The charter](#the-charter-mission-vision-and-policies) |
 
 The dashboard reads four of those facts over the query channel rather than
 these routes — `config`, `config_audit`, `config_diff` and `config_entities`,
@@ -1673,19 +1673,30 @@ credential only when it is one whole `${VAR}`, so `"Bearer ${TOKEN}"` arrives
 as `"__redacted__"`. The index is built from the unredacted document and
 answers names and paths only, never a value. The path is the operator's own spelling
 (`integrations.github.webhook_secret`), the same one a validation failure
-reports, and a name with several readers appears once per reader. It carries
-the document's own `ETag`, because the index changes exactly when the revision
-does.
+reports, and a name with several readers appears once per reader. It also
+lists every variable the document reads **without naming it**: a
+`providers.llm` entry whose credential field is empty signs in from a
+conventional variable instead — its CLI's token variable under
+`subscription` (`CLAUDE_CODE_OAUTH_TOKEN`, which `crewlet llm login
+-capture-token` stores), its key variable under `api-key`
+(`ANTHROPIC_API_KEY`), and `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` for the bundle
+`crewlet llm export -secret-store` stores — and `providers.embeddings` with no
+`api_key` reads `OPENAI_API_KEY`. Each is reported at the empty field
+(`providers.llm.default.auth.token`), which is where a reference would be
+written instead; removing that row signs the entry out as surely as removing
+one it names. It carries the document's own `ETag`, because the index changes
+exactly when the revision does.
 
 **Full-document write:**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config` | Replace the active revision. The body is JSON or YAML, read the same way whatever `Content-Type` says. Requires a revision summary: an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match`, see [below](#conditional-requests). `?dry_run=true` checks it and stores nothing, see [Dry runs](#dry-runs) |
+| `PUT` | `/config` | Replace the active revision. The body is JSON or YAML, read the same way whatever `Content-Type` says. Requires a revision summary: an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match`, see [below](#conditional-requests). `?dry_run=true` checks it and stores nothing, see [Dry runs](#dry-runs). `?import=true` writes it as an import of a restored file, see [The charter](#the-charter-mission-vision-and-policies) |
 | `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
 | `PATCH` | `/config` | Merge one or more sections into the active revision, see [below](#patch-config--the-narrower-write). `?dry_run=true` checks it and stores nothing |
 | `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
+| `PUT` | `/config/charter` | Replace the mission, vision and policies, as a new revision of the whole document. Requires `If-Match`. See [The charter](#the-charter-mission-vision-and-policies) |
 
 #### `PATCH /config` — the narrower write
 
@@ -1924,6 +1935,116 @@ Independently of any header, every write names the revision it derived from as t
 
 **Nothing under `/config` is cacheable.** Every response the surface writes carries `Cache-Control: no-store`: reads, `304`s, writes, refusals and error bodies, and the `404` and `405` it answers for a path or method it does not serve. A body here is the company's settings: which integrations are wired and where, and the `${VAR}` name behind every credential, and a stored copy would outlive the session and the token that read it. Revalidation still works, because it never depended on a cache: a client that wants a `304` sends `If-None-Match` with the `ETag` it kept.
 
+#### The charter: mission, vision and policies
+
+The company's **charter** is the part of the document every seat is handed
+word for word on every turn: `mission`, `vision` and `policies`. It has a
+resource of its own, which is what Company › Principles edits in place.
+
+```http
+GET /config/charter
+
+200 OK
+ETag: "charter-5f0c…"
+
+{"mission": "Help friends split costs fairly.",
+ "vision": "Splitting a bill is never the awkward part again.",
+ "policies": ["Every amount is exact to the cent.", "Work is tracked on the board."]}
+```
+
+Every field is always sent: `""` and `[]` when nothing is written.
+
+```http
+PUT /config/charter
+If-Match: "charter-5f0c…"
+X-Summary: tighten the money policy
+
+{"mission": "…", "vision": "…", "policies": ["…", "…"]}
+
+200 OK
+ETag: "charter-91ab…"
+
+{"charter": {"mission": "…", "vision": "…", "policies": ["…", "…"]},
+ "changed": true, "revision_id": "0192…", "epoch": 42}
+```
+
+- **The body names all three fields and nothing else**, and replaces the
+  charter whole: `policies` is the list in the order every seat reads it.
+  A missing or unknown field is `400 invalid_body`. Each value is trimmed of
+  the space around it, and an empty mission or vision is removed from the
+  document.
+- **`If-Match` is required** (`428 bad_if_match` without it) and its tag is
+  the charter's **content**, not the revision's. A write elsewhere in the
+  document is not a conflict, so a draft of the mission is not refused because
+  somebody connected an integration meanwhile. A charter that changed since
+  the tag was read is `412 version_moved`, carrying the charter now as
+  `current` and its tag as `etag` (and in `ETag`): show the draft beside it,
+  then send the draft again with that tag to keep it. `If-Match: *` writes
+  whatever the charter says now.
+- **It is a revision like any other write.** The same pipeline as `PATCH
+  /config`: the managed-document check, the whole document validated, a sealed
+  revision recording its author and credential, the fleet's compare-and-set
+  and the `config_revision_activated` event. `X-Summary` is optional here: one
+  left out is derived from what changed (`edited the company's mission and
+  policies`). A revision that moved for another reason between the read and
+  the compare-and-set is merged onto, up to three attempts, after which the
+  answer is `409 revision_advanced`.
+- **A charter that changes nothing writes nothing**: `200` with
+  `"changed": false` and the active `revision_id`, because a new revision
+  re-activates every node and rebuilds every seat. This is asked before
+  `If-Match`, which makes a save safe to send again: a retry whose first
+  answer was lost finds the charter already saying what it asks for, and is
+  answered rather than refused.
+- `?dry_run=true` judges the write and stores nothing, answering
+  `{"valid": true, "charter": …, "changed": …}`.
+- It is `admin`'s, read and written (`config.read`, `config.write`), and the
+  write asks a recent proof as every write here does.
+
+**The bounds**, in characters (Unicode code points, the count an editor shows),
+because every character is in every seat's prompt on every round. A charter
+past one is `400 validation_error` with the problem located at `mission`,
+`vision`, `policies` or `policies[i]` (`segments` `["policies", 3]`):
+
+| Field | Bound |
+|-------|-------|
+| `mission` | at most 1024 characters, on one line |
+| `vision` | at most 2048 characters; paragraphs allowed |
+| `policies` | at most 25 entries |
+| each policy | at most 1024 characters, on one line, not blank, and not a repeat of another |
+
+The mission and each policy are one line because a seat reads the mission
+inline after its label and each policy as one item of a list; a line break is
+refused with kind `shape`. A vision in paragraphs is quoted line by line in the
+prompt, so no line of it reads as the prompt's own.
+
+Each bound is counted on the trimmed value. Every write of the document
+through the API (`PUT` and `PATCH /config`, a per-entity write, `/setup`)
+holds them too, judged on [what the write
+changes](../concepts/configuration.md#mission-vision-and-policies): a write
+that leaves a faulty part untouched is admitted, with a warning naming it in
+its answer, so an old fault never locks a company out of its other settings.
+Here, the parts the charter write changes are judged, and the parts it leaves
+as they were are not.
+
+**An import is never refused for the charter.** `PUT /config?import=true`
+writes the document as an import of a restored or migrated file: every other
+rule holds as for any write, and the charter is judged warn-only, its faults
+named in the answer's `warnings`. It is what `crewlet config import` sends to a
+running node, so a file that ran under an earlier build always imports, as it
+does into a stopped node and at boot. It is `admin`'s alone (a lead the route
+admits for their own units is refused `403` before the body is read), asks a
+recent proof as every write does, and records the revision with `source`
+`file`, as an offline import does, and its activation event with
+`revision_source: file`, beside the author and the credential (`operator_id`).
+Decided by `config.write` on the authority table, so a Tier A token may use it
+(fresh by construction), and so may a machine token whose owner holds `admin`;
+on a [managed](../concepts/configuration.md#managed-configuration) document
+only the listed writers may. It relaxes the charter's change rule and nothing
+else: every other rule, `If-Match` and the managed check hold as for any write.
+The flag is `true` or `false`, given once, or `400 invalid_query`. The
+dashboard never sends it (a gate fails if its source does), and the operator's
+MCP and act surfaces serve no `/config` write at all.
+
 #### Per-entity read and write
 
 Four collections, `GET` and `PUT`:
@@ -2009,7 +2130,7 @@ changed. Every node serving the API serves them, because every node opens the fl
 | `GET /secrets/{name}?reveal=true` | `admin`, a **person present** — a request that presented a machine token is refused `403 token_refused` — and a proof of identity inside `step_up`, decided before the store is read, so a caller refused is refused alike for a name that exists and one that does not |
 | `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `admin`, and a proof inside `step_up` |
 | `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `admin` |
-| `POST /setup/integrations/{kind}/inputs`, `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `admin` |
+| `POST /setup/integrations/{kind}/inputs`, `POST /setup/integrations/{kind}/verify`, `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `admin` |
 | `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
 
 **Connecting is `admin`'s and nothing more.** `/setup` performs no write of
@@ -2024,6 +2145,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `external_url` carries a single `value` and the `config_path` it was read from: `api.public.external_url` when the node has a [public listener](#which-listener-serves-what), and `api.external_url` otherwise — never the person's address where the two differ, since every webhook, manifest and redirect is built on it. Both are Tier A, required on a node serving this listing and resolved before that file is decoded, so the `present`/`resolved`/`reference` triple the Tier B pointer needed describes a state that can no longer occur |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
+| `POST` | `/setup/integrations/{kind}/verify` | Check one typed credential at its vendor with a read-only call, before anything stores it. Writes nothing: no secret, no config, no revision and no reconcile state. See [Checking a credential before it is stored](#checking-a-credential-before-it-is-stored) |
 | `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
 | `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
@@ -2106,15 +2228,16 @@ On a `409`, re-read `/config` and send the edit again.
 
 ### Status codes
 
-- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`)
+- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`), or a [charter](#the-charter-mission-vision-and-policies) write (`{"charter", "changed", "revision_id", "epoch"}`), which replaces a resource rather than creating one
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key — asked last, once the write is admitted and its document checked, so a caller who may not make the change is answered the `403` first; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`; and `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them — a person's session, a machine token and a lead's write among them — with `managed_by`, `detail` and `hint`, a write and its dry run alike, never a read or a reload, and asked before the body is read (see [Managed configuration](../concepts/configuration.md#managed-configuration))
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
-- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
-- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
+- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH`, a charter write or a per-entity write on an unconfigured node, or a reload)
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's `If-Match` names a charter that has changed, carrying the charter now as `current` and its `etag`
+- `428 Precondition Required`: `bad_if_match` for a charter write with no `If-Match`
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
 - `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
 
@@ -2480,6 +2603,13 @@ that this input being absent produces, which is what lets a row reporting
 `mintable` means the engine can generate the value, so nobody should be asked
 to invent it. **No route here ever returns a credential.**
 
+`checkable` means the credential can be [checked at its
+vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a
+form offers a Test button for it. A `secret` that cannot be checked ahead
+carries `check_note` instead: the sentence saying when the vendor proves it. A
+webhook signing secret is the usual case, since the vendor never presents it
+and only signs its deliveries with it.
+
 ### Supplying them
 
 ```bash
@@ -2543,6 +2673,70 @@ What the route does, in this order:
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 `409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`.
+
+### Checking a credential before it is stored
+
+`POST /setup/integrations/{kind}/verify` asks the vendor whether a credential
+somebody has typed works, with one read-only identity call, and **stores
+nothing**: not the value, not a `${VAR}` pointer, not a revision and not a
+reconcile finding. It is what a connect form's Test button calls, so a key is
+checked while the vendor's page is still open rather than by the next
+reconcile pass, minutes later. It is `setup.connect`, the verb connecting is,
+because it spends a credential at a vendor on a person's hand.
+
+```bash
+curl -X POST https://engine.example.com/setup/integrations/datadog/verify \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"field": "api_key", "value": "<the typed key>",
+       "values": {"site": "datadoghq.eu", "app_key": "${DATADOG_APP_KEY}"}}'
+```
+
+| Field | Meaning |
+|---|---|
+| `field` | The requirement to check, by its `field`. It must be a `secret` |
+| `value` | What was typed, or a whole `${NAME}` naming a stored secret |
+| `seat` | The seat a per-seat credential belongs to, such as a Slack agent's bot token |
+| `values` | The other fields typed in the same form, by `field`. Each may be a whole `${NAME}` too |
+
+**Every field the person did not type is read the way a submission would read
+it**: what the company document holds for it (a whole `${VAR}` resolved
+through this node's chain), else the field's `default`. So a key changed on a
+working integration is checked against the region, the instance and the other
+key already in force. Jira and Confluence are checked under the company's
+declared `integrations.atlassian.deployment`, and at the site the Atlassian
+organization names when neither the form nor the document gives one.
+
+Answers `200 {"outcome", "detail"}`. `detail` is one sentence for a person and
+never repeats the value that was checked.
+
+| `outcome` | Meaning |
+|---|---|
+| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Datadog accepted it for the FairSplit organization in datadoghq.eu." |
+| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is repeated where it is short |
+| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The detail says nothing was stored |
+| `unchecked` | The field cannot be checked ahead without acting on it, and `detail` is its `check_note` |
+
+What each surface checks, and with what:
+
+| Surface | Checkable | Read-only call | Proved later, by the vendor's first delivery |
+|---|---|---|---|
+| `atlassian` | `api_key`, against `org_id` | one page of the organization's service accounts, which a scoped key is refused | |
+| `confluence` | `token`, with `email` on Cloud | `GET /rest/api/user/current` | `webhook_token` (Cloud), `webhook_secret` (Data Center) |
+| `datadog` | `api_key` and `app_key`, checked together in `site` | `GET /api/v1/org` | `webhook_token` |
+| `github` | `token`, at `url` for Enterprise Server | `GET /user` | `webhook_secret` |
+| `gitlab` | `admin_token` (needs `api`) and `token` (needs `read_api`), at `url` | `GET /user`, then the token's own scopes and expiry where the instance describes them | `signing_secret` |
+| `jira` | `token`, with `email` on Cloud | `GET /myself` | `webhook_secret` |
+| `mattermost` | `admin_token`, at `url` | `GET /users/me`, and the `system_admin` role | |
+| `slack` | a seat's `bot_token` | `auth.test` | a seat's `signing_secret` |
+
+Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when
+`field` is not a requirement of that surface (or seat) or is not a `secret`,
+when `value` is empty, when a key in `values` is not a field of the surface,
+when a `${NAME}` names no stored secret ("There is no secret NAME."), and when
+the check cannot be made from what was given (Datadog's other key, a site
+address, an organization id), each with a sentence saying what is missing;
+`404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat
+setup; `409 no_active_revision`.
 
 ### Running the provisioning pass
 
@@ -3132,7 +3326,7 @@ own envelopes.
 
 Crucially, the projection holds each agent's **in-flight LLM call** —
 the latest `agent_turn_progress` (phase, round, model, accumulated
-response *including the model's reasoning*, tool calls so far) — and
+response, tool calls so far) — and
 surfaces it as a `live_call` field on the agent in every snapshot.  Its
 `response` is built by the same function that builds the finished
 phase record's, so the live row and the turn you expand afterwards are
@@ -3897,7 +4091,7 @@ while an LLM call is under
 way. The fields are these:
 
 - `prompt_messages` is `[{role, content, sections}]`, the conversation the phase opened with. `sections` is that message's outline as the prompt's builder recorded it — `[{key, title, bytes, headed?}]`, tiling `content` exactly, with `headed: true` on a part that opens on its own heading line whose text is `title` (absent on a part the builder named, which may still open on a heading of its content's) — and is absent on a message no builder outlined or whose text is not valid UTF-8; a finished phase record carries the same maps as `system_sections` and `user_sections`. See [a prompt carries its outline](../concepts/turn-engine.md#what-streams-during-a-turn) for the keys and the rules a reader checks before slicing by one.
-- `round_narration` is `[{round, reasoning, content, declined}]`, what the model said in each round so far; `declined: true` marks a round that answered in prose where the phase had to end in a call, and is absent otherwise.
+- `round_narration` is `[{round, content, declined}]`, what the model said in each round so far; `declined: true` marks a round that answered in prose where the phase had to end in a call, and is absent otherwise.
 - `rounds_used` is the round the phase is on, counted from one: the rounds that have come back, and the one in flight from the frame the engine publishes as that round's provider call is made. A finished phase record carries the same count under the same name.
 - `rounds` is each round's own timing and tokens, `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. This used to be the count, under the name the phase record uses for the list.
 - `max_rounds` is the round cap currently granted, which an extension can raise mid-phase.
@@ -4091,10 +4285,9 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's key), which is what a `schedules` row carries and what the ledger keys on — hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
-| `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Takes `admin`**. See [below](#get-credential-pool) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
-| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.max_tool_rounds`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
+| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.max_tool_rounds`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
@@ -7167,67 +7360,6 @@ shared knowledge backend, reachable by all members via query-time search.
 
 ## Fleet, Sandbox Runs & Schedules
 
-### `GET /credential-pool`
-
-Backs **Settings › Models & keys**: every model the company configures, in
-config order (the order a seat that names no model falls back through), the
-keys each rotates through and which of them is benched. **It takes
-`admin`, reads included** — which variable holds each model's key and
-when each is refused is a map of which credential to take.
-
-**Names, never values.** A key is `ref`, the variable a whole `${VAR}` names
-(or the vendor's conventional variable, `source: "default"`, for a model that
-names no `api_keys`), or its position alone for a value written into the
-document (`source: "inline"`, `ref: ""`). `hint` is the 12-character,
-non-reversible identifier the engine's `credential_cooled` log lines carry.
-
-**The pool and the fleet's ledger, the later deadline winning.** A bench is
-published to the fleet when a node takes it and pulled by every other node
-every 15 s; this answer reads the ledger directly, so a key a peer benched a
-second ago is `cooling` here before the answering node has pulled it, and a
-bench whose publish failed still reads `cooling` on the node that took it. A
-ledger that cannot be read does not fail the answer: `fleet` is `false`,
-`fleet_error` says why, and every deadline is the answering node's own.
-`uses` and `in_flight` are the answering node's leases of the key since it
-applied its configuration, and `unresolved` is what ITS environment and the
-company's secrets resolve.
-
-| key `state` | Means |
-|---|---|
-| `ready` | A call can lease it now |
-| `cooling` | Benched after a rate-limit or auth refusal until `cooling_until` |
-| `unresolved` | It resolved to nothing on the answering node and is not in the pool |
-| `duplicate` | The same value as the key at `same_as` (1-based), held once |
-
-| model `state` | Means |
-|---|---|
-| `ready` | Every key resolves and none is cooling |
-| `degraded` | Some keys can be leased and some cannot |
-| `exhausted` | Every key that resolves is cooling: each call falls through to the seat's next model |
-| `no_key` | No key resolves: every call is refused as unauthorised |
-| `login` | A `cli-agent` entry — one login held by the CLI, no key bag |
-
-```json
-{
-  "node": "node-1",
-  "fleet": true,
-  "fleet_error": "",
-  "providers": [
-    {"key": "smart", "type": "anthropic", "model": "claude-sonnet-5", "state": "degraded",
-     "ready": 1, "rate_limit_seconds": 3600, "auth_seconds": 300,
-     "keys": [
-       {"ref": "ANTHROPIC_KEY_A", "source": "reference", "hint": "3f9a1c0b7e2d", "state": "ready",
-        "cooling_until": null, "same_as": 0, "uses": 12, "in_flight": 1},
-       {"ref": "ANTHROPIC_KEY_B", "source": "reference", "hint": "8c41d2e9a0f7", "state": "cooling",
-        "cooling_until": "2026-09-29T12:40:00Z", "same_as": 0, "uses": 4, "in_flight": 0}
-     ]}
-  ]
-}
-```
-
-To change a model's keys, `PUT /config/llm-providers/{id}` — see
-[Per-entity read and write](#per-entity-read-and-write).
-
 ### `GET /mcp-servers`
 
 Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
@@ -8356,7 +8488,7 @@ The rollup: the window's spend by phase, model, provider entry, worker and seat.
     ...
   ],
   "by_provider": [
-    { "provider_key": "anthropic", "models": ["claude-sonnet-5", "claude-haiku-4-5"],
+    { "provider_key": "claude", "models": ["claude-sonnet-5"],
       "seats": ["pm", "coder", "reviewer"], "seats_total": 5,
       "total_tokens": 20100, "calls": 5, ... }
   ],

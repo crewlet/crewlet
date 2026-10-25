@@ -64,7 +64,6 @@ name: Nimbus
 providers:
   llm:
     fast:
-      type: anthropic
       model: claude-golden
   sandbox:
     local: {}

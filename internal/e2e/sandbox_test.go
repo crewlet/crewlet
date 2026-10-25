@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,35 +52,47 @@ func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
 // GATE G6 — the golden coding turn.
 //
 // A real local sandbox, a real detached process, the real suspend and the real
-// resume. The one stub is the vendor endpoint, exactly as in the gate above:
-// what is under test is the ENGINE's half of a coding turn, and a real coding
-// CLI would test the vendor's.
+// resume. The one stub is the model, behind the scripted CLI the seat's text
+// calls run on, exactly as in the gate above: what is under test is the
+// ENGINE's half of a coding turn, and a real coding CLI would test the
+// vendor's.
 //
 // The "coding agent" here is a shell script installed as `claude` on the box's
 // PATH. That makes the whole detached protocol real — a process group, a
 // background job, a done marker, a findings file, an ask signal — while
 // leaving what the agent DOES up to the test.
 
-// sandboxCompany adds a code-enabled seat to the golden company.
+// sandboxCompanyDoc is the golden company with a code-enabled seat, filled by
+// [sandboxCompany].
 //
 // containment `direct`, because the point is the engine's protocol and a
 // container would make this suite need Docker. The path escape guards and the
 // container argv have their own tests in internal/sandbox.
+//
+// TWO MODEL ENTRIES, because a coding run and a text call are two different
+// CLIs here. The seat's text calls — onboarding, the executor that launches the
+// run, the reviewer — run on the scripted entry. The RUN takes its runner from
+// the seat's coding agent and its model from llm_sandbox, and those must be
+// one CLI's: an entry's model is written in its own CLI's grammar, so config
+// refuses a Claude Code run on an entry driving any other. So llm_sandbox names
+// `coder`, a Claude Code entry none of the seat's text phases names, whose
+// model the stand-in below is handed — on a state directory of its own, since
+// two CLIs never share one.
 const sandboxCompanyDoc = `
 name: Nimbus
 providers:
   llm:
-    scripted:
-      type: anthropic
-      model: claude-golden
-      base_url: %s
-      api_keys: ["${CREWLET_TEST_KEY}"]
+%s
+    coder:
+      agent: claude-code
+      model: sonnet
+      state_dir: %q
   sandbox:
     default_run_in: direct
     default_coding_agent: claude-code
     default_pause_ttl_seconds: 1800
     local:
-      state_dir: %s
+      state_dir: %q
     setup:
       # A REAL setup step, which is also how the stand-in coding CLI gets
       # onto the agent's PATH. The box's PATH inside the run wrapper is the
@@ -95,6 +106,7 @@ roles:
   - name: SWE
     handle: swe
     llm: scripted
+    llm_sandbox: coder
     sandbox:
       enabled: true
       # The seat's own round cap. Nothing about the stand-in agent honours
@@ -119,6 +131,14 @@ turn_engine:
   max_iterations: 1
   max_tool_rounds: 4
 `
+
+// sandboxCompany is the coding company's document: its text calls on model's
+// scripted CLI, its boxes under stateDir, and its coding runs' Claude Code
+// entry on a directory of the test's own.
+func sandboxCompany(t *testing.T, model *scriptedModel, stateDir string) string {
+	t.Helper()
+	return fmt.Sprintf(sandboxCompanyDoc, model.entry("scripted"), t.TempDir(), stateDir)
+}
 
 // codingNode is a running node whose seat can run code.
 type codingNode struct {
@@ -154,7 +174,7 @@ func startCoding(t *testing.T, mode string) *codingNode {
 	env["FAKE_AGENT_ARGV"] = argv
 
 	model := newSandboxModel(t)
-	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
+	doc := sandboxCompany(t, model, stateDir)
 	n := bootCompany(t, doc, model, env)
 	return &codingNode{node: n, stateDir: stateDir, binDir: binDir, argvPath: argv}
 }
@@ -298,7 +318,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	return &node{engine: e, app: app, server: srv, model: model}
 }
 
-// sandboxModel is the scripted endpoint for a coding turn.
+// newSandboxModel is the scripted model for a coding turn.
 //
 // The executor calls run_sandbox on its FIRST Execute round and reports on the
 // resumed one, which is what makes the suspend and the re-entry both real:
@@ -306,10 +326,12 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 // job has finished and its result has been spliced in.
 func newSandboxModel(t *testing.T) *scriptedModel {
 	t.Helper()
-	m := &scriptedModel{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		offered := offeredTools(raw)
+	m := &scriptedModel{stateDir: t.TempDir()}
+	m.listen(t, func(w http.ResponseWriter, r *http.Request) {
+		call, offered, ok := readCall(w, r)
+		if !ok {
+			return
+		}
 		var reply string
 		switch {
 		case offered["submit_review"]:
@@ -320,7 +342,7 @@ func newSandboxModel(t *testing.T) *scriptedModel {
 		case offered["mark_onboarded"]:
 			m.saw("onboarding")
 			reply = toolUse("mark_onboarded", map[string]any{"notes": "read the handbook"})
-		case offered["submit_work"] && sawSandboxResult(raw):
+		case offered["submit_work"] && sawSandboxResult(call.Prompt):
 			// The RESUMED executor round: the conversation now carries the
 			// tool message the engine spliced in. Submitting is the
 			// executor reporting and finishing.
@@ -339,24 +361,27 @@ func newSandboxModel(t *testing.T) *scriptedModel {
 			})
 		default:
 			// AN AUXILIARY PASS, not a phase. The prefetch's filters reach
-			// this same endpoint with no tools offered, and counting them
+			// this same model with no tools offered, and counting them
 			// as executor rounds made "the executor opened once" a claim
 			// about the memory filter.
 			m.saw("aux")
 			reply = textReply("")
 		}
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, reply)
-	}))
-	t.Cleanup(srv.Close)
-	m.url = srv.URL
+	})
 	return m
 }
 
-// sawSandboxResult reports whether this request's conversation already carries
+// sawSandboxResult reports whether this prompt's conversation already carries
 // the sandbox's answer — which is what makes it the resumed round.
-func sawSandboxResult(raw []byte) bool {
-	return strings.Contains(string(raw), "The sandbox coding run")
+//
+// IN A TOOL RESULT, which is where the engine splices it: the run's report is
+// the answer to the round's run_sandbox call, and a mention anywhere else in
+// the transcript is not the run having come back.
+func sawSandboxResult(prompt string) bool {
+	return slices.ContainsFunc(toolResultsIn(prompt), func(result string) bool {
+		return strings.Contains(result, "The sandbox coding run")
+	})
 }
 
 // ---------------------------------------------------------------------
@@ -480,6 +505,14 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	if argv[i+1] != "7" {
 		t.Fatalf("--max-turns %s, want the seat's own 7", argv[i+1])
 	}
+	// AND THE MODEL ITS llm_sandbox ENTRY NAMES, which is the half of a
+	// coding run's pairing the seat's text calls cannot show: those run on
+	// another entry altogether, so a run handed their model — or none, on
+	// the CLI's own default — would look the same from everywhere else.
+	m := slices.Index(argv, "--model")
+	if m < 0 || m == len(argv)-1 || argv[m+1] != "sonnet" {
+		t.Fatalf("the coding agent was not handed the coder entry's model sonnet: %v", argv)
+	}
 	// AND THE CONVERSATION KNOWS THE TURN HAPPENED. A turn that ends on the
 	// resume path ends a thread's turn as surely as one that ends on the
 	// inbox path, and only the inbox path recorded it: the thread's history
@@ -592,7 +625,7 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	}
 	// What the resumed round was handed is the spliced answer and not a
 	// fresh brief, which is what the "resumed" phase itself records: that
-	// branch of the scripted endpoint fires only for a request whose
+	// branch of the scripted model fires only for a request whose
 	// conversation already carries the run_sandbox reply. That the reply
 	// carries the person's own words is pinned where the text is built, in
 	// internal/sandbox's own suite.
@@ -797,7 +830,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	streamDir := filepath.Join(dir, "stream")
 
 	model := newSandboxModel(t)
-	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
+	doc := sandboxCompany(t, model, stateDir)
 
 	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
 	firstNode := &codingNode{node: first, stateDir: stateDir, binDir: binDir}
@@ -1009,7 +1042,7 @@ func startCodingWithPause(t *testing.T, mode string, pauseTTL int) *codingNode {
 
 	model := newSandboxModel(t)
 	doc := strings.Replace(
-		fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir),
+		sandboxCompany(t, model, stateDir),
 		"default_pause_ttl_seconds: 1800",
 		fmt.Sprintf("default_pause_ttl_seconds: %d", pauseTTL), 1)
 	n := bootCompany(t, doc, model, fakeAgentEnv(binDir, mode))

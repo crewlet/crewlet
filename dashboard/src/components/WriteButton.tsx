@@ -126,7 +126,9 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
   const { refusal, busy } = write;
   if (!refusal) return null;
   return (
-    <span className="write-refusal" role="alert">
+    // ABOVE A GRID ROW'S LINK (`data-above-row`), so its sentence can be
+    // selected and its link followed rather than opening the row.
+    <span className="write-refusal" role="alert" data-above-row="">
       {/* ONE SENTENCE where access would admit: the refusal and its remedy
           said the same thing twice. */}
       <span>

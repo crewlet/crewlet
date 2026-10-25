@@ -124,7 +124,7 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 			// A TOKEN STATES WHAT IT MAY DO — Tier A refuses one that
 			// lists nothing — and no app is a code permission: what a
 			// credential may do to a repository is the standing of the
-			// person it is bound to (ADR-0054), so the grant decides
+			// person it is bound to (ADR-0055), so the grant decides
 			// nothing a code case reads.
 			b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
 				ID: id, Token: tokens[id], Grants: []iam.Grant{iam.GrantTracker}})

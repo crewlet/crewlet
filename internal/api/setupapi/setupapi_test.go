@@ -66,7 +66,7 @@ var testAuthor = secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}
 // Connect for the first time is in.
 const companyDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "CTO", "handle": "cto", "llm": "zulu"}
@@ -219,6 +219,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.Passes == nil {
 		opts.Passes = setup.NewRunner(nil, nil, func() time.Time { return pinned })
 	}
+	if opts.Probes == nil {
+		opts.Probes = inertProbes()
+	}
 	if opts.Sink == nil {
 		opts.Sink = func(by iam.Actor) (provision.TokenSink, error) {
 			return provision.NewSecretStoreSink(sinkStore{v}, authorOf(by)), nil
@@ -264,6 +267,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			Secrets:        v,
 			Resolve:        v.get,
 			Passes:         setup.NewRunner(nil, nil, nil),
+			Probes:         inertProbes(),
 			Sink:           func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
 			Status:         &statusStore{},
 			SlackApps:      func() map[string]string { return nil },
@@ -281,6 +285,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Secrets":        func(o *setupapi.Options) { o.Secrets = nil },
 		"Resolve":        func(o *setupapi.Options) { o.Resolve = nil },
 		"Passes":         func(o *setupapi.Options) { o.Passes = nil },
+		"Probes":         func(o *setupapi.Options) { o.Probes = nil },
 		"Sink":           func(o *setupapi.Options) { o.Sink = nil },
 		"Status":         func(o *setupapi.Options) { o.Status = nil },
 		"SlackApps":      func(o *setupapi.Options) { o.SlackApps = nil },
@@ -1933,7 +1938,7 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {"gitlab": {"enabled": true, "url": "https://gitlab.com",
 	    "signing_secret": "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=",
 	    "provisioning": {"group": "acme", "admin_token": "glpat-x"}}},
@@ -2255,6 +2260,9 @@ func TestEverySetupRouteIsAdmins(t *testing.T) {
 			"/setup/integrations/datadog/provision", `{}`},
 		{"a GitHub App", http.MethodPost, "/setup/integrations/github/app",
 			`{"seat": "sre-lead"}`},
+		// A CHECK SPENDS A CREDENTIAL AT A VENDOR, on a person's hand.
+		{"a credential check", http.MethodPost, "/setup/integrations/datadog/verify",
+			`{"field": "api_key", "value": "dd-api"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

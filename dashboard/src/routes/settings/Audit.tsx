@@ -120,7 +120,8 @@ import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -886,7 +887,7 @@ export function Audit() {
   }, [workData, identity.page, runtimeData, knowledgeData, configData, artifactsData, since]);
 
   const anyDetail = rows.some((row) => row.detail);
-  const columns = useMemo<GridColumn<AuditEntry>[]>(
+  const columns = useMemo<DataGridColumn<AuditEntry>[]>(
     () => [
       {
         key: "at",

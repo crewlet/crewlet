@@ -302,14 +302,13 @@ func priorRounds(state execstate.State) toolloop.Result {
 		if !ok {
 			continue
 		}
-		reasoning, _ := narr["reasoning"].(string)
 		content, _ := narr["content"].(string)
 		// A declined round before the suspend stays one after it, or the
 		// resumed record says the model answered in prose where the phase
 		// allowed it.
 		declined, _ := narr["declined"].(bool)
 		out.Narration = append(out.Narration, toolloop.Narration{
-			Round: round, Reasoning: reasoning, Content: content, Declined: declined,
+			Round: round, Content: content, Declined: declined,
 		})
 	}
 	return out

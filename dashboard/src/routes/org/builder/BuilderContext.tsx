@@ -108,6 +108,16 @@ export interface BuilderDerived {
 export type EditorSectionName = "reports" | "leadership" | "project";
 
 /**
+ * How the toolbar offers the company's principles. Its mission, vision and
+ * standing policies are written on Company › Principles alone, so once the
+ * company exists the toolbar's entry goes there: in edit for a reader who may
+ * write them (`write`), plainly for one who may not (`read`). A company this
+ * draft is still creating has no such page yet, and no entry (`null`). The
+ * company's node carries no edit of its own (`nodeActions.editsInPlace`).
+ */
+export type CompanyEdit = "write" | "read" | null;
+
+/**
  * What an address asks an opening editor to hold on top of the node's own
  * values: New project's key, in the Project field, as a change the reader has
  * still to apply. A node that already owns a project keeps it.
@@ -139,8 +149,20 @@ export interface BuilderApi {
   documentProblems: ConfigProblem[];
   /** The selected node, mirrored in the URL's `unit=` and `seat=` filters. */
   selection: { key: NodeKey | null; select(key: NodeKey | null): void };
-  /** Opens the node's editor, at `section` when one is named. */
+  /** Opens a unit's or a seat's editor, at `section` when one is named. */
   openEditor(key: NodeKey, section?: EditorSectionName): void;
+  /** Opens the form that renames the company, the one company field the builder writes. */
+  openCompanyRename(): void;
+  /**
+   * Leaves the builder for Company › Principles, in edit for a reader who may
+   * write them ([BuilderApi.principles]). The draft is kept for the return.
+   */
+  openPrinciples(): void;
+  /**
+   * How the toolbar offers the company's principles: Company › Principles in
+   * edit (`write`), the same page to read (`read`), or nothing (`null`).
+   */
+  principles: CompanyEdit;
   /** `parent` is a unit's key, or `null` for the company root. */
   openAdd(parent: NodeKey | null, kind?: AddKind): void;
   openMove(key: NodeKey): void;

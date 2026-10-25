@@ -9,7 +9,7 @@
  * this product's data and routes:
  *
  *  - a glyph is named (`icon: GlyphName`, the prop every screen fills in), and
- *    the name to drawing lookup is `~/ui/glyph.tsx`'s;
+ *    the name to drawing lookup is the icons registry's `NamedGlyph`;
  *  - a fact's link is a route (`path` and `query`), turned into an href here;
  *  - who set a value names the turn that did it by id, and the turn's page is
  *    a route of ours.
@@ -34,7 +34,7 @@ import {
 } from "@crewlethq/ui";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { href } from "../router.tsx";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 /** Who last changed a value, as the engine's change log records it. */
 export interface SetBy {
@@ -54,7 +54,7 @@ export interface SetBy {
 }
 
 /** The provenance, with the turn that set it turned into its page. */
-function kitSetBy(setBy: SetBy): KitSetBy {
+export function kitSetBy(setBy: SetBy): KitSetBy {
   return {
     actor: setBy.actor,
     ago: setBy.ago,
@@ -114,6 +114,7 @@ export function FactLine({ facts }: { facts: Fact[] }) {
 export function ObjectHeader({
   kind,
   icon,
+  mark,
   identifier,
   within,
   title,
@@ -127,6 +128,8 @@ export function ObjectHeader({
   kind: string;
   /** The eyebrow's glyph: a name from the glyph set, or a drawn glyph (an artifact's own icon). */
   icon?: GlyphName | ReactElement;
+  /** The object's own mark beside its title: a vendor's, a product's. See uilet's `ObjectHeader.mark`. */
+  mark?: ReactNode;
   /** The key, handle or id, in the mono face. */
   identifier?: string;
   /** WHOSE the object is, where that is part of its identity and is a name rather than a key. */
@@ -143,7 +146,8 @@ export function ObjectHeader({
   return (
     <KitObjectHeader
       kind={kind}
-      icon={typeof icon === "string" ? <Mark name={icon} size="xs" /> : icon}
+      icon={typeof icon === "string" ? <NamedGlyph name={icon} size="xs" /> : icon}
+      mark={mark}
       description={description}
       identifier={identifier}
       within={within}

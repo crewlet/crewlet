@@ -258,15 +258,17 @@ function mount(
     refuse = false,
     roster = org,
     answer = status,
+    catalogue = tools,
   }: {
     viewer?: Record<string, unknown>;
     refuse?: boolean;
     roster?: unknown;
     answer?: McpServersStatusAnswer;
+    catalogue?: ToolRow[];
   } = {},
 ) {
   const store = new Store();
-  store.applyTools(tools);
+  store.applyTools(catalogue);
   store.applyOrg(withDerived(roster) as never);
   store.setConnected(true);
   const socket = new LiveSocket(store);
@@ -356,6 +358,27 @@ test("the catalogue clamps a description and keeps the whole of it in reach", as
   expect(cell.getAttribute("title")).toBe("Open an issue on a repository");
 });
 
+// THE LIST SAYS ONLY WHAT TELLS ROWS APART. A description stands alone (the
+// hint sentence under it repeated the Can tags, cut on every row), an origin
+// is words in a column drawn only where origins differ, the chips name them
+// the same way, and the bar carries no count the Total tile already says.
+test("the catalogue names origins in words, and only where they differ", async () => {
+  mount(<Tools />);
+  await settle();
+  expect(screen.queryByText(/tools? registered/)).toBeNull();
+  expect(screen.queryByText(/nothing said about/)).toBeNull();
+  expect(screen.getByRole("radio", { name: /^Built in/ })).toBeDefined();
+  expect(screen.getByRole("radio", { name: /^github/ })).toBeDefined();
+  // Drawn, or listed as hidden to fit: jsdom gives the grid no width.
+  expect(document.body.textContent).toMatch(/Origin/);
+  cleanup();
+
+  mount(<Tools />, { catalogue: tools.filter((t) => t.source === "builtin") });
+  await settle();
+  expect(screen.queryByRole("radiogroup", { name: "Tool origin" })).toBeNull();
+  expect(document.body.textContent).not.toMatch(/Origin/);
+});
+
 // PER-SERVER, PER-NODE, AS THE ENGINE SENT IT — the state its word, each node
 // its cell, the failing node's reason and seat under it, and the node whose
 // last heartbeat carried no status named once and drawn unknown rather than as
@@ -363,13 +386,15 @@ test("the catalogue clamps a description and keeps the whole of it in reach", as
 test("each server is drawn with the engine's state and a cell per node", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("Partly failing")).toBeDefined();
   expect(within(github).getByText(/401 Bad credentials/)).toBeDefined();
   expect(within(github).getByText(/backend-dev/)).toBeDefined();
   expect(within(github).getAllByText(/not reported/).length).toBe(1);
   expect(within(github).getByText("1 seat")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).getByText("Running")).toBeDefined();
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
   expect(screen.getByText(/No report from/).textContent).toBe(
@@ -463,7 +488,9 @@ test("a server waiting for a provisioned credential names what it waits for, not
   };
   mount(<Tools />, { answer: waiting });
   await settle();
-  const github = screen.getByText("Waiting for credentials").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Waiting for credentials")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText(/1 waiting/)).toBeDefined();
   const line = within(github).getByText(`for backend-dev: ${wait}`);
   expect(line.classList.contains("mcp-wait")).toBe(true);
@@ -484,7 +511,9 @@ test("a server waiting for a provisioned credential names what it waits for, not
 test("a node's failure sits under its chip without repeating the node", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   const reason = within(github).getByText("for backend-dev: 401 Bad credentials");
   expect(reason.classList.contains("mcp-failure")).toBe(true);
   expect(reason.textContent?.startsWith("node-b")).toBe(false);
@@ -496,9 +525,11 @@ test("a node's failure sits under its chip without repeating the node", async ()
 test("a server's annotation keys that match no tool are counted in its row and named on its page", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("1 tool_annotations key matches no tool")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).queryByText(/tool_annotations/)).toBeNull();
   cleanup();
 
@@ -514,9 +545,11 @@ test("a server's annotation keys that match no tool are counted in its row and n
 test("each server's reach in the grid is the seats the engine grants it", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("1 seat")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
 });
 
@@ -546,7 +579,7 @@ test("a server with no tools opens its page, never an empty quoted search", asyn
     screen.getByText(/executable file not found in \$PATH/, { selector: ".mcp-failure-whole" }),
   ).toBeDefined();
   // The filter in force has a chip, and it is the chosen one.
-  const chip = screen.getByRole("radio", { name: /mcp:notes/ });
+  const chip = screen.getByRole("radio", { name: /^notes/ });
   expect(chip.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText("notes has registered no tools")).toBeDefined();
   await act(async () => {

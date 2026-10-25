@@ -12,7 +12,7 @@ const appSeatsDoc = `
 name: Acme
 providers:
   llm:
-    primary: {type: anthropic, model: claude-sonnet-5, api_keys: ["k"]}
+    primary: {model: claude-sonnet-5}
 roles:
   - name: SRE Lead
     handle: sre-lead
@@ -135,7 +135,7 @@ func TestATokenResolvedAccountIsRegisteredFolded(t *testing.T) {
 name: Acme
 providers:
   llm:
-    primary: {type: anthropic, model: claude-sonnet-5, api_keys: ["k"]}
+    primary: {model: claude-sonnet-5}
 roles:
   - name: SRE Lead
     handle: sre-lead
@@ -166,7 +166,7 @@ func TestAnAppOutranksALeftoverToken(t *testing.T) {
 name: Acme
 providers:
   llm:
-    primary: {type: anthropic, model: claude-sonnet-5, api_keys: ["k"]}
+    primary: {model: claude-sonnet-5}
 roles:
   - name: SRE Lead
     handle: sre-lead
@@ -203,7 +203,7 @@ func TestASeatWithNoAppKeepsItsToken(t *testing.T) {
 name: Acme
 providers:
   llm:
-    primary: {type: anthropic, model: claude-sonnet-5, api_keys: ["k"]}
+    primary: {model: claude-sonnet-5}
 roles:
   - name: SRE Lead
     handle: sre-lead

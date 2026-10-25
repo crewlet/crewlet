@@ -786,13 +786,13 @@ describe("what a person comes for is where they look", () => {
     engine();
     mount();
     const mark = await screen.findByText("This browser");
-    const grid = mark.closest<HTMLElement>(".grid-wrap")!;
-    const labels = [...grid.querySelectorAll(".grid-row > .grid-cell")].map((c) =>
-      c.getAttribute("data-label"),
-    );
+    const grid = mark.closest<HTMLElement>(".crewlet-data-grid")!;
+    const labels = [
+      ...grid.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell"),
+    ].map((c) => c.getAttribute("data-label"));
     expect(labels).toContain("Signed in");
     expect(labels).not.toContain("Sign out");
-    expect(mark.closest(".grid-cell")!.hasAttribute("data-label")).toBe(false);
+    expect(mark.closest(".crewlet-data-grid__cell")!.hasAttribute("data-label")).toBe(false);
   });
 });
 

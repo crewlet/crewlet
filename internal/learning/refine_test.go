@@ -385,7 +385,7 @@ func TestThePromptShowsTheSkillsAndTheTurn(t *testing.T) {
 	db := newStore(t)
 	sk := seedSkill(t, db, "cut-a-release", "1. run the pipeline")
 	r, p := refinerWith(t, db, &auxProvider{replies: []llm.Completion{{Content: "{}"}}},
-		learning.RefinerOptions{MaxTokens: 1234})
+		learning.RefinerOptions{})
 	if _, err := r.Reflect(t.Context(), usedTurn("failed", sk.ID)); err != nil {
 		t.Fatalf("Reflect: %v", err)
 	}
@@ -393,10 +393,7 @@ func TestThePromptShowsTheSkillsAndTheTurn(t *testing.T) {
 		t.Fatalf("calls = %d, want 1", len(p.seen))
 	}
 	req := p.seen[0]
-	if req.MaxTokens != 1234 {
-		t.Fatalf("MaxTokens = %d, want the company's budget_tokens", req.MaxTokens)
-	}
-	wantLowEffort(t, req)
+	wantNoTools(t, req)
 	user := req.Messages[len(req.Messages)-1].Content
 	for _, want := range []string{"cut-a-release", "1. run the pipeline", "failed", "ship the release"} {
 		if !strings.Contains(user, want) {

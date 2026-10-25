@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"maps"
@@ -342,7 +341,7 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 		kept := restoreInto(t, backupDir, manifest)
 		fakeC := s3fake.Start(t, restoreBucket)
 		copyObjects(t, fakeC, backupDir, manifest)
-		doc := withCode(repo)(fmt.Sprintf(companyDoc, b.model.url))
+		doc := withCode(repo)(goldenCompany(b.model))
 		cfg, err := config.ParseCompany([]byte(doc))
 		if err != nil {
 			t.Fatalf("company config: %v", err)

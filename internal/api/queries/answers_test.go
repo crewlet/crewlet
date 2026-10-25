@@ -196,7 +196,7 @@ func namesakes(t *testing.T) (*config.Company, map[string]string) {
 name: Acme
 providers:
   llm:
-    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+    p: {model: m}
 roles:
   - name: Engineer
     handle: ada
@@ -746,7 +746,7 @@ name: Acme
 timezone: Europe/Berlin
 providers:
   llm:
-    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+    p: {model: m}
 roles:
   - name: CEO
     handle: ceo
@@ -836,7 +836,7 @@ func TestBudgetsAreNearAtNineTenthsAndNotATokenBefore(t *testing.T) {
 name: Acme
 providers:
   llm:
-    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+    p: {model: m}
 roles:
   - name: CEO
     handle: ceo
@@ -880,7 +880,7 @@ name: Acme
 timezone: America/Los_Angeles
 providers:
   llm:
-    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+    p: {model: m}
 roles:
   - name: CEO
     handle: ceo
@@ -931,7 +931,7 @@ func TestBudgetsWithNoCounterSayNobodyLooked(t *testing.T) {
 name: Acme
 providers:
   llm:
-    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+    p: {model: m}
 roles:
   - name: CEO
     handle: ceo
@@ -966,7 +966,7 @@ func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 name: Acme
 providers:
   llm:
-    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+    p: {model: m}
 roles:
   - name: CEO
     handle: ceo

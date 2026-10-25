@@ -32,7 +32,7 @@
 /** A builder node's stable name. */
 export type NodeKey = string;
 
-/** The company itself: the charter's node, and the parent of root seats and units. */
+/** The company itself: the root node, and the parent of root seats and units. */
 export const COMPANY_KEY: NodeKey = "company";
 
 const SEAT = "seat:";

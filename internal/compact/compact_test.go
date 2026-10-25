@@ -107,7 +107,8 @@ func TestOverBudgetTextIsRewrittenFromTheWhole(t *testing.T) {
 	}
 }
 
-// THE LIMIT REACHES THE MODEL, as a number, and the call is reproducible.
+// THE LIMIT REACHES THE MODEL, as a number: the prompt is the one channel a
+// coding CLI reads, so it is the only place a budget can be stated.
 func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	t.Parallel()
 	m := &model{answer: short}
@@ -125,9 +126,6 @@ func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	}
 	if !strings.Contains(system, "how do I rotate the signing key?") {
 		t.Fatalf("a source's question is not in the instructions:\n%s", system)
-	}
-	if temp := m.asked[0].Temperature; temp == nil || *temp != 0 {
-		t.Fatalf("a rewrite must be reproducible, temperature %v", temp)
 	}
 	if len(m.asked[0].Tools) != 0 {
 		t.Fatal("a rewrite offers no tools")

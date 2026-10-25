@@ -50,7 +50,7 @@ export interface Draft {
   readonly units: readonly DraftUnit[];
 }
 
-/** A draft with no charter, seats or units: the start of create mode. */
+/** A draft with no company name, seats or units: the start of create mode. */
 export const EMPTY_DRAFT: Draft = { company: {}, roles: [], units: [] };
 
 /**

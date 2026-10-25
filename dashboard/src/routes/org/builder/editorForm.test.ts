@@ -84,13 +84,11 @@ describe("an untouched form", () => {
 
   // THE COMPANY'S NAME IS THE ONE THAT COSTS MOST: an agent seat's id is
   // derived from it, so a phantom rename of a name stored with a space gives
-  // every agent seat a new id over an edit to the mission.
-  test("a charter whose name the document stored with spaces is not renamed by another edit", () => {
+  // every agent seat a new id over a form nobody typed in.
+  test("a company whose name the document stored with spaces is not renamed by an untouched form", () => {
     const company = { ...fixtureCompany(), name: " Acme " };
     const initial = companyForm(company);
-    expect(companyParts(initial, { ...initial, mission: "Make more things." })).toEqual([
-      { type: "updateCompany", set: [{ path: ["mission"], value: "Make more things." }] },
-    ]);
+    expect(companyParts(initial, { ...initial })).toEqual([]);
     expect(companyParts(initial, { ...initial, name: "Acme Labs" })).toEqual([
       { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
     ]);
@@ -442,14 +440,20 @@ describe("a unit and the company", () => {
     ]);
   });
 
-  test("the charter's changed fields are one part", () => {
-    const company = fixtureCompany();
+  // THE PRINCIPLES ARE WRITTEN ON COMPANY › PRINCIPLES: the company's form
+  // holds its name alone, so no Apply here can carry a mission, a vision or a
+  // policy, a stale copy of one included.
+  test("the company's form holds its name and none of its principles", () => {
+    const company = {
+      ...fixtureCompany(),
+      mission: "Make things.",
+      vision: "Everywhere",
+      policies: ["Be kind."],
+    };
     const initial = companyForm(company);
-    expect(companyParts(initial, { ...initial, vision: "Everywhere", policies: [] })).toEqual([
-      {
-        type: "updateCompany",
-        set: [{ path: ["vision"], value: "Everywhere" }, { path: ["policies"] }],
-      },
+    expect(initial).toEqual({ name: "Acme" });
+    expect(companyParts(initial, { name: "Acme Labs" })).toEqual([
+      { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
     ]);
   });
 });

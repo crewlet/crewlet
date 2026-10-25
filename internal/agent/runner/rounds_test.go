@@ -40,7 +40,7 @@ import (
 //     frame collapsed a twenty-round ledger to a single round;
 //   - the round in flight was never renumbered at all, so its streaming text
 //     was written into the block of a committed round twenty rounds earlier —
-//     that round's thinking replaced, its tool calls still underneath;
+//     that round's prose replaced, its tool calls still underneath;
 //   - the completed record took the invocation's token counters, so every
 //     round before the extension was billed and dropped from the report.
 //
@@ -52,9 +52,9 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 	// Three rounds of work against a two-round cap, so the phase exhausts
 	// its budget once, is granted an extension, and re-enters the loop.
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "read_file", `{"path":"/a"}`, "start with the file"),
-		thinkAndCall(t, "read_file", `{"path":"/b"}`, "and the other one"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "read_file", `{"path":"/a"}`, "start with the file"),
+		sayAndCall(t, "read_file", `{"path":"/b"}`, "and the other one"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"read both"}`, "that is enough"),
 		text("done"),
 	}}
@@ -88,7 +88,7 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 	}
 	// Every call belongs to a round the narration knows. A round that called
 	// a tool and said nothing narrates nothing, but this script has the model
-	// thinking in every round, so a call landing outside `seen` means the two
+	// speaking in every round, so a call landing outside `seen` means the two
 	// lists were folded on different scales.
 	for _, ex := range done.ToolExecutions {
 		round, _ := ex["round"].(int)
@@ -115,9 +115,9 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 func TestALiveFrameNeverDropsTheRoundsBehindIt(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "read_file", `{"path":"/a"}`, "start with the file"),
-		thinkAndCall(t, "read_file", `{"path":"/b"}`, "and the other one"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "read_file", `{"path":"/a"}`, "start with the file"),
+		sayAndCall(t, "read_file", `{"path":"/b"}`, "and the other one"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"read both"}`, "that is enough"),
 		text("done"),
 	}}
@@ -167,12 +167,12 @@ func (alwaysExtend) Decide(context.Context, extension.Request) (extension.Decisi
 	return extension.Decision{Extend: true, Reason: "still making progress"}, nil
 }
 
-// thinkAndCall is a round in which the model reasons and then asks for a tool
-// — the shape whose two halves have to end up in one block.
-func thinkAndCall(t *testing.T, name, argsJSON, reasoning string) llm.Completion {
+// sayAndCall is a round in which the model says something and then asks for a
+// tool — the shape whose two halves have to end up in one block.
+func sayAndCall(t *testing.T, name, argsJSON, prose string) llm.Completion {
 	t.Helper()
 	call := submitCall(t, name, argsJSON)
-	call.ReasoningContent = reasoning
+	call.Content = prose
 	call.InputTokens, call.OutputTokens = 60, 40
 	return call
 }
@@ -280,8 +280,8 @@ func progressFrames(t *testing.T, c *capture, ph string) []*types.AgentTurnProgr
 func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"shipped it","deliveries":["slack_post"]}`,
 			"the box did the work"),
 		text("done"),
@@ -453,8 +453,8 @@ func suspendedAfterTwoRounds() execstate.State {
 			{"name": "run_sandbox", "arguments": "{}", "result": "started", "success": true, "round": 2},
 		},
 		RoundNarration: []types.RoundNarration{
-			{"round": 1, "reasoning": "what do we already know", "content": ""},
-			{"round": 2, "reasoning": "this needs code", "content": "Starting a coding run."},
+			{"round": 1, "content": "Checking what we already know."},
+			{"round": 2, "content": "Starting a coding run."},
 		},
 	}
 }
@@ -470,9 +470,9 @@ func suspendedAfterTwoRounds() execstate.State {
 func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"read both"}`, "enough"),
 		text("done"),
 	}}
@@ -526,7 +526,7 @@ func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 func TestNoJudgePhaseIsPublishedWhenNoJudgeWasAsked(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"done in one"}`, "straight in"),
 		text("done"),
 	}}
@@ -564,9 +564,9 @@ func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decis
 func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		thinkAndCall(t, runner.SubmitWorkTool,
+		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"read both"}`, "enough"),
 		text("done"),
 	}}
@@ -607,11 +607,11 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{
 		execute: []llm.Completion{
-			thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-			thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+			sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+			sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
 		},
 		review: []llm.Completion{
-			thinkAndCall(t, runner.SubmitReviewTool, `{"decision":"done","notes":"ok"}`, "judged"),
+			sayAndCall(t, runner.SubmitReviewTool, `{"decision":"done","notes":"ok"}`, "judged"),
 		},
 	}
 	pub := newCapture()
@@ -644,8 +644,8 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 func TestTheJudgeIsNotCalledOnARefusalAlreadyCertain(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
-		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
 	}}
 	pub := newCapture()
 	meter := &ceilingMeter{ceiling: 200}
@@ -747,7 +747,7 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 	return out
 }
 
-// A REVIEWER THAT THINKS AND STOPS IS ASKED AGAIN, not rescued.
+// A REVIEWER THAT ANSWERS IN PROSE AND STOPS IS ASKED AGAIN, not rescued.
 //
 // The tool loop's corrective re-prompt was once gated on the caller requiring
 // a tool call, and no caller did — so it was unreachable and the package doc's
@@ -760,8 +760,8 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{review: []llm.Completion{
-		// Round 1: thinks, calls nothing. Nothing forces a call and
-		// some models think-then-stop; this is that round.
+		// Round 1: says something, calls nothing. Nothing forces a call
+		// and some models answer-then-stop; this is that round.
 		text("The work looks fine to me."),
 		submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","notes":"the delivery matches the ask"}`),
@@ -924,7 +924,7 @@ func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 		t.Parallel()
 		calls := turnctx.NewCallLog()
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-			execute: []llm.Completion{thinkAndCall(t, runner.SubmitWorkTool,
+			execute: []llm.Completion{sayAndCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"done"}`, "finish"), text("done")},
 		}}}, buildOpts{
 			resume: &runner.Resume{State: parked, Answer: "the run succeeded"},

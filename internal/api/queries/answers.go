@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -79,7 +78,7 @@ type Sources struct {
 	// Usage is the replicated estate's usage domain: every node's company
 	// days, for every NAMED spend window and its series (ADR-0020), read
 	// through the estate's router ([UsageReads]) so a node whose own copy
-	// is out of service answers from a peer's (ADR-0045). Not this node's
+	// is out of service answers from a peer's (ADR-0046). Not this node's
 	// event log, which answered for this node alone and only thirty days
 	// back. Nil leaves `token_series` unregistered and a named `tokens`
 	// window empty.
@@ -350,7 +349,7 @@ type Sources struct {
 	// lexical index, which derives the links from the bodies it reads
 	// ([search.Backlinks]), asked through the estate router of a data node
 	// whose copies of both the knowledge base and the tracker serve, since
-	// the links are named from both (ADR-0045). Nil leaves the `page`
+	// the links are named from both (ADR-0046). Nil leaves the `page`
 	// answer without `linked_from`, which is absent rather than empty:
 	// "nothing links here" is a claim only a data node holding the index,
 	// and serving the copies it is named from, can make.
@@ -405,22 +404,6 @@ type Sources struct {
 	// for a node running no state log: it has no applier and no floor to
 	// say anything about.
 	Retention func(ctx context.Context) any
-
-	// CredentialPools is every LLM provider entry in this node's current
-	// epoch, each configured key's provenance beside this node's pool state
-	// for it — hints, never values (see [engine.Engine.CredentialPools]).
-	// A FUNCTION for the reason [Sources.Company] is one: an apply replaces
-	// every pool. Nil leaves `credential_pool` unregistered.
-	CredentialPools func() []engine.CredentialPool
-
-	// Cooldowns is the fleet's credential cooldown ledger, read so a key a
-	// PEER benched is reported cooling here before this node's refresher
-	// has pulled it. Nil answers with this node's cooldowns alone and says
-	// so (`fleet: false`), rather than calling every key the fleet benched
-	// ready.
-	Cooldowns interface {
-		Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
-	}
 
 	// Backups is the fleet's backup register — each owner's newest
 	// announced point, which is what the trim's backup term reads. With
@@ -637,14 +620,6 @@ func Register(r *Registry, s Sources) {
 		// the register and no history would read as a fleet nobody ever
 		// asked for a backup.
 		r.Register("backups", Requires(iam.GrantAdmin), s.backups)
-	}
-	if s.CredentialPools != nil {
-		// ADMIN'S: which variable holds each model's keys and which of
-		// them a vendor is refusing right now is a map of which
-		// credential to take, and of when — what the company document's
-		// own reader is already trusted with. See
-		// [Sources.credentialPool].
-		r.Register("credential_pool", Requires(iam.GrantAdmin), s.credentialPool)
 	}
 	if s.FleetBroker != nil {
 		// ADMIN'S, for the fleet question's reason: node ids, their roles

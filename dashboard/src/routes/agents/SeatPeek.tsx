@@ -136,7 +136,7 @@ const TOOL_CHIPS = 3;
 
 /** A tool source in the words a reader uses: `mcp:gitlab` is "gitlab". */
 export function toolSourceLabel(source: string): string {
-  if (source === "builtin") return "built-in";
+  if (source === "builtin") return "Built-in";
   return source.startsWith("mcp:") ? source.slice(4) : source;
 }
 

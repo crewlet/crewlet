@@ -424,7 +424,7 @@ const (
 
 // sweepAnchors removes up to [AnchorsPerTrimmedRecord] of this stream's
 // anchors below below, LOWEST FIRST, and reports how many went — a trimmed
-// record's whole effect (ADR-0046).
+// record's whole effect (ADR-0047).
 //
 // A RANGE OVER `statelog_anchor_swept_idx (stream, anchor)`, the index the
 // replicated estate's first migration shipped for exactly this delete. PACKED

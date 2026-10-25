@@ -67,7 +67,7 @@ import (
 // declaration ([statelog.Domain.GatesSeatAdmission]): a compacted domain's gap
 // is a coverage number rather than a fault, so withholding seats for one would
 // be the outage the number exists to avoid. And the copy verdict is per domain
-// too, for every domain (ADR-0045): a domain's copy that is WRONG goes out of
+// too, for every domain (ADR-0046): a domain's copy that is WRONG goes out of
 // service for its own operations, whatever it declares about seats.
 
 // native holds this node's native-backend runtime: the tracker's and the
@@ -408,7 +408,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// `knowledge.vectors` off.
 	vectors := search.NewQueryVectors(e.queryModel)
 	// EVERY SCAN THIS NODE RUNS ASKS ITS COPIES' VERDICT FIRST — its own
-	// searches' range and every peer's slice alike (ADR-0045): a range
+	// searches' range and every peer's slice alike (ADR-0046): a range
 	// over a copy out of service is counted missing, never answered from
 	// rows this node has stopped serving.
 	copies := e.copies()

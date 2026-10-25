@@ -1,7 +1,7 @@
 /**
- * Editing one model from Settings › Models & keys: its model id, the keys it
- * rotates through, its endpoint and its bench times. A cli-agent entry holds
- * at most one key, and only under `cli.auth.mode: api-key` (see [keySlots]).
+ * Editing one model from Settings › Models & keys: the model it runs, the
+ * credential its sign-in reads, and its two caps — the wall clock on one CLI
+ * invocation and how many run at once.
  *
  * A NEW CONFIGURATION REVISION, not an act: a model is a `providers.llm`
  * entry, so the write is the entity PUT at `/config/llm-providers/{id}`
@@ -11,50 +11,50 @@
  * overwrite.
  *
  * ONLY WHAT THE FORM SHOWS CHANGES. The entity is read as the engine serves it
- * and sent back whole with the edited fields replaced — the type, reasoning,
- * the timeout and a cli-agent's block ride through untouched.
+ * and sent back whole with the edited fields replaced — the CLI, the mode,
+ * where it runs, its state directory, its environment, its overrides and the
+ * login bundle ride through untouched. Those are the entry's identity rather
+ * than its tuning (a different CLI reads the model id in another grammar; a
+ * different sign-in bills another account), and are changed in Configuration
+ * with the whole entry in view.
  *
- * A KEY IS A POINTER. Every key field is a secret field: typing `$` offers the
+ * ONE CREDENTIAL, THE ONE ITS SIGN-IN READS: the token under `subscription`,
+ * the API key under `api-key`, none under `inherit-env` (see
+ * [credentialField]). The engine refuses a credential under a mode that does
+ * not read it, so the form never offers one.
+ *
+ * A CREDENTIAL IS A POINTER. It is a secret field: typing `$` offers the
  * company's sealed entries by name, a whole `${NAME}` reads as the name, and a
- * literal is masked. A key the document holds INLINE was served as the mask
- * and is drawn locked: its value never reached this page, so it can be kept
- * or replaced IN ITS PLACE, never shown or edited. And while one is in the
- * list the list neither grows nor shrinks — the engine puts an inline key's
- * value back by its position (`keysKeepInlinePlaces`), so Add and every
- * removal that would move one are unavailable, with the reason, rather than
- * offered and refused (or, at an unchanged length, silently answered with the
- * wrong key).
+ * literal is masked. One the document holds INLINE was served as the mask and
+ * is drawn locked: its value never reached this page, so it can be kept or
+ * replaced, never shown or edited.
  *
  * CHECKED BEFORE IT IS STORED, against the company's own warnings, so only a
  * warning this edit introduces stops the save.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Callout, Disclosure, IconButton, Modal, Skeleton, useToast } from "@crewlethq/ui";
-import { CpuGlyph, KeyGlyph, PlusGlyph, XGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Disclosure, Modal, Skeleton, useToast } from "@crewlethq/ui";
+import { CpuGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { ConfigField } from "~/components/ConfigField.tsx";
-import { REDACTED } from "~/lib/format.ts";
+import { REDACTED, fmtSetting } from "~/lib/format.ts";
 import {
+  authModeOf,
+  authWords,
+  credentialField,
   editSummary,
   formChanged,
   formErrors,
   formOf,
-  inlinePlaceWords,
-  keysKeepInlinePlaces,
-  keySlots,
-  MAX_BENCH_SECONDS,
-  MIN_BENCH_SECONDS,
   modelEntity,
-  newKeyField,
   problemsByField,
-  type KeyField,
-  type KeySlots,
   type ModelField,
   type ModelForm,
 } from "~/lib/models.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
+import { DEFAULT_CLI_MAX_CONCURRENT, DEFAULT_CLI_TIMEOUT_SECONDS } from "~/contract/models.ts";
 import {
   introducedWarnings,
   managedSentence,
@@ -158,13 +158,7 @@ export function EditModelDialog({
   }, [id]);
   useEffect(() => () => inflight.current?.abort(), []);
 
-  const local = useMemo(
-    () =>
-      form && loaded.kind === "entity"
-        ? formErrors(form, loaded.read, keySlots(loaded.entity))
-        : {},
-    [form, loaded],
-  );
+  const local = useMemo(() => (form ? formErrors(form) : {}), [form]);
   const engine = state.kind === "refused" ? state.fields : {};
   const errorOf = (field: ModelField): string | undefined =>
     (tried ? local[field] : undefined) ?? engine[field];
@@ -192,7 +186,7 @@ export function EditModelDialog({
       id,
       sent,
       loaded.etag,
-      editSummary(id, loaded.read, form),
+      editSummary(id, loaded.entity, loaded.read, form),
       signal,
     );
     if (outcome.kind === "saved") {
@@ -276,8 +270,6 @@ export function EditModelDialog({
     else submit();
   };
 
-  const cli = loaded.kind === "entity" && loaded.entity.type === "cli-agent";
-
   return (
     <Modal
       open
@@ -315,58 +307,44 @@ export function EditModelDialog({
             onChange={(model) => edit({ model })}
             disabled={busy}
             error={errorOf("model")}
-            help="The vendor’s model id."
+            help="As the CLI names it: an alias or id for Claude Code, <provider>/<model> for OpenCode."
             // FOCUS STARTS ON THE FIRST FIELD. The body is a skeleton when
             // the dialog opens, so the frame's own first-control rule found
             // only the footer and put the reader on Cancel.
             autoFocus
           />
-          <KeysEditor
-            keys={form.keys}
-            read={loaded.read.keys}
-            onChange={(keys) => edit({ keys })}
+          <CredentialEditor
+            entity={loaded.entity}
+            value={form.credential}
+            onChange={(credential) => edit({ credential })}
             secrets={secrets}
             onSecretsNeeded={refresh}
             disabled={busy}
-            error={errorOf("keys")}
-            slots={keySlots(loaded.entity)}
+            error={errorOf("credential")}
           />
-          {!cli && (
-            <ConfigField
-              label="Endpoint"
-              kind="url"
-              required={false}
-              value={form.baseUrl}
-              onChange={(baseUrl) => edit({ baseUrl })}
-              placeholder="gateway.example.com/v1"
-              disabled={busy}
-              error={errorOf("baseUrl")}
-              help="Empty is the vendor's own. Required for an openai-compatible model."
-            />
-          )}
-          <Disclosure title="Bench times">
+          <Disclosure title="Limits">
             <div className="mcp-add-pair">
               <ConfigField
-                label="After a rate limit"
+                label="Timeout"
                 kind="text"
                 required={false}
-                value={form.rateLimit}
-                onChange={(rateLimit) => edit({ rateLimit })}
-                placeholder="3600"
+                value={form.timeout}
+                onChange={(timeout) => edit({ timeout })}
+                placeholder={String(DEFAULT_CLI_TIMEOUT_SECONDS)}
                 disabled={busy}
-                error={errorOf("rateLimit")}
-                help={`Seconds, ${MIN_BENCH_SECONDS} to ${MAX_BENCH_SECONDS}. Empty is one hour.`}
+                error={errorOf("timeout")}
+                help={`Seconds one CLI call may take. Empty is ${fmtSetting(DEFAULT_CLI_TIMEOUT_SECONDS)}.`}
               />
               <ConfigField
-                label="After an auth failure"
+                label="At once"
                 kind="text"
                 required={false}
-                value={form.auth}
-                onChange={(auth) => edit({ auth })}
-                placeholder="300"
+                value={form.concurrency}
+                onChange={(concurrency) => edit({ concurrency })}
+                placeholder={String(DEFAULT_CLI_MAX_CONCURRENT)}
                 disabled={busy}
-                error={errorOf("auth")}
-                help={`Seconds, doubling each time, ${MIN_BENCH_SECONDS} to ${MAX_BENCH_SECONDS}. Empty is five minutes.`}
+                error={errorOf("concurrency")}
+                help={`CLI processes running together, each a few hundred MB. Empty is ${DEFAULT_CLI_MAX_CONCURRENT}.`}
               />
             </div>
           </Disclosure>
@@ -378,119 +356,82 @@ export function EditModelDialog({
 }
 
 /**
- * The keys, in the order a call tries them. A key written into the document
- * is a locked row: kept, or replaced in its place, never drawn. Every gesture
- * whose result would move an inline key off the place it was read at is
- * unavailable and says why (see [keysKeepInlinePlaces]).
+ * The credential the entry's sign-in reads, or the sentence saying it reads
+ * none from here. One written into the document is a locked row: kept, or
+ * replaced, never drawn.
  */
-function KeysEditor({
-  keys,
-  read,
+function CredentialEditor({
+  entity,
+  value,
   onChange,
   secrets,
   onSecretsNeeded,
   disabled,
   error,
-  slots,
 }: {
-  keys: ModelForm["keys"];
-  /** The keys as read, whose inline places every gesture must keep. */
-  read: readonly KeyField[];
-  onChange: (next: ModelForm["keys"]) => void;
+  entity: Record<string, unknown>;
+  value: string;
+  onChange: (next: string) => void;
   secrets: string[];
   onSecretsNeeded: () => void;
   disabled: boolean;
   error: string | undefined;
-  slots: KeySlots;
 }) {
-  const set = (i: number, value: string) =>
-    onChange(keys.map((k, j) => (j === i ? { ...k, value } : k)));
-  const kept = (next: readonly KeyField[]) => keysKeepInlinePlaces(read, next);
-  const without = (i: number) => keys.filter((_, j) => j !== i);
-  const added = [...keys, newKeyField()];
-  const held = inlinePlaceWords(keys);
-  const lastLocked = keys.map((k) => k.value).lastIndexOf(REDACTED);
-  // AT ITS LIMIT, Add says why rather than offering a row the engine refuses:
-  // a cli-agent entry holds one key under api-key and none in any other mode.
-  const atLimit = keys.length >= slots.max;
-  const addReason = atLimit ? slots.full : kept(added) ? undefined : held;
-  return (
-    <fieldset className="mcp-add-pairs">
-      <legend className="t-label">{slots.legend}</legend>
-      {keys.length === 0 && <p className="t-caption">{slots.empty}</p>}
-      {keys.map((k, i) => {
-        const removable = kept(without(i));
-        return (
-          <div className="model-key-slot" key={k.id}>
-            <div className="model-key-row">
-              {k.value === REDACTED ? (
-                <span className="model-key-locked">
-                  <KeyGlyph size="sm" />
-                  <span className="model-key-locked-text">Key {i + 1} is inline.</span>
-                  <Button
-                    variant="ghost"
-                    size="small"
-                    disabled={disabled}
-                    aria-label={`Replace key ${i + 1} with a reference`}
-                    // IN ITS PLACE: an empty field at the same position, so
-                    // no other key moves and nothing is left to restore.
-                    onClick={() => set(i, "")}
-                  >
-                    Replace
-                  </Button>
-                </span>
-              ) : (
-                <ConfigField
-                  label={`Key ${i + 1}`}
-                  kind="secret"
-                  value={k.value}
-                  onChange={(value) => set(i, value)}
-                  placeholder="${ANTHROPIC_KEY}"
-                  secrets={secrets}
-                  onSecretsNeeded={onSecretsNeeded}
-                  disabled={disabled}
-                />
-              )}
-              <IconButton
-                className="mcp-add-pair-remove"
-                label={`Remove key ${i + 1}`}
-                icon={<XGlyph size="sm" />}
-                variant="ghost"
-                disabled={disabled}
-                disabledReason={removable ? undefined : held}
-                title={removable ? undefined : held}
-                onClick={() => onChange(without(i))}
-              />
-            </div>
-            {/* SAID UNDER THE ROW IT IS ABOUT, once, after the last locked
-                row — under Add key it read as a rule about the new key. */}
-            {i === lastLocked && (
-              <p className="t-caption">Replace it with a secret to add or remove keys.</p>
-            )}
-          </div>
-        );
-      })}
-      {error && (
-        <p className="t-caption mcp-add-pairs-error" role="alert">
-          {error}
-        </p>
-      )}
-      {slots.max > 0 && (
-        <div>
+  const field = credentialField(entity);
+  const sign = authWords(authModeOf(entity));
+  if (field === null) {
+    return (
+      <p className="t-caption">
+        Signs in with {sign.label.toLowerCase()}: {sign.hint} Nothing to set here.
+      </p>
+    );
+  }
+  const label = field === "token" ? "Token" : "API key";
+  const help =
+    field === "token"
+      ? "A long-lived subscription token, for a CLI that mints one. Empty uses the CLI’s own token variable, or its login."
+      : "Billed to the metered account. Empty reads the CLI’s own key variable.";
+  if (value === REDACTED) {
+    return (
+      <div className="col gap-1">
+        <span className="t-label">{label}</span>
+        <span className="model-credential-locked">
+          <KeyGlyph size="sm" />
+          <span className="model-credential-locked-text">The {label.toLowerCase()} is inline.</span>
           <Button
-            variant="secondary"
+            variant="ghost"
             size="small"
-            leadingIcon={<PlusGlyph size="sm" />}
             disabled={disabled}
-            disabledReason={addReason}
-            title={addReason}
-            onClick={() => onChange(added)}
+            aria-label={`Replace the ${label.toLowerCase()} with a reference`}
+            // AN EMPTY FIELD, so nothing is left to restore and the reader
+            // types the reference that replaces it.
+            onClick={() => onChange("")}
           >
-            Add key
+            Replace
           </Button>
-        </div>
-      )}
-    </fieldset>
+        </span>
+        {error && (
+          <p className="t-caption mcp-add-pairs-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <ConfigField
+      label={label}
+      kind="secret"
+      required={false}
+      value={value}
+      onChange={onChange}
+      placeholder={field === "token" ? "${CLI_TOKEN}" : "${CLI_API_KEY}"}
+      secrets={secrets}
+      onSecretsNeeded={onSecretsNeeded}
+      disabled={disabled}
+      error={error}
+      help={help}
+    />
   );
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -71,6 +72,44 @@ func CredentialOf(seat *org.Role, value func(string) string) string {
 		return strings.TrimSpace(raw)
 	}
 	return ""
+}
+
+// CredentialReads is every variable the reconcile's identity scan reads
+// ([CredentialOf] over [agentSeats]): each spelling of [CredentialKeys] in the
+// [SeatEnv] block a seat holds or inherits from its unit, each name once,
+// sorted.
+//
+// THE SAME KEYS, BLOCK AND SEATS the scan uses, for a caller that has to know
+// what it will read before it runs: `crewlet github provision` asks a running
+// node for exactly these, each a reveal logged by name — not for the whole
+// block, whose other keys the scan never reads, nor for a unit's block that
+// no seat inherits.
+func CredentialReads(o *org.Organization) []string {
+	var names []string
+	for _, seat := range agentSeats(o) {
+		block := seat.MCPEnv[SeatEnv]
+		for _, key := range CredentialKeys {
+			names = append(names, envref.Names(block[key])...)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// agentSeats is every seat of the organization that is not a person, in the
+// order [org.Organization.AllRoles] walks them: the seats whose credentials
+// the reconcile reads. A person holds none ([CredentialOf]).
+func agentSeats(o *org.Organization) []*org.Role {
+	if o == nil {
+		return nil
+	}
+	var seats []*org.Role
+	for seat := range o.AllRoles() {
+		if !seat.IsHuman() {
+			seats = append(seats, seat)
+		}
+	}
+	return seats
 }
 
 // credentialSlot names the key a seat writes its code-host credential into,

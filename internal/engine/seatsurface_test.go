@@ -121,9 +121,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
   sandbox:
     fake: true
 roles:

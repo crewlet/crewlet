@@ -11,6 +11,7 @@
  */
 
 import { WORKSPACES, type Workspace } from "~/app/nav.ts";
+import { holdsAny } from "~/lib/access.ts";
 import { WIDGET_PROBLEMS, destinationOf, pageOpens, type WidgetDef } from "./kit.tsx";
 
 const found = import.meta.glob<{ widgets: readonly WidgetDef[] }>("../../*/home.widgets.tsx", {
@@ -37,10 +38,10 @@ export const WIDGETS = collect();
 
 export const widgetDef = (key: string): WidgetDef | undefined => WIDGETS.get(key);
 
-/** Whether a reader holding `grants` may read the page a widget summarises. */
+/** Whether a reader holding `grants` may read the page a widget summarises, and what it reads itself. */
 export function canUse(def: WidgetDef, grants: readonly string[]): boolean {
   const dest = destinationOf(def.from);
-  return dest !== undefined && pageOpens(dest, grants);
+  return dest !== undefined && pageOpens(dest, grants) && holdsAny(grants, def.grants);
 }
 
 export interface Area {

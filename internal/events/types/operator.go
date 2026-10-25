@@ -109,7 +109,7 @@ const (
 // of the four transports: the dashboard's act route, an operator's assistant
 // over MCP and the human write surface's tool-backed routes call the same
 // catalogue, and a person's git client pushes through the code host — a person
-// transport of its own (ADR-0051), one record a push (internal/code/host). An
+// transport of its own (ADR-0052), one record a push (internal/code/host). An
 // audit that depended on which one a person used would be missing whichever
 // surface nobody tested.
 //

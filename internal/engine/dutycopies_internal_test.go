@@ -91,7 +91,7 @@ func collectorReferences(t *testing.T) collect.References {
 	return refs
 }
 
-// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0045.
+// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0046.
 //
 // A fleet-singleton duty that decides from a domain's rows decides for the
 // whole fleet: the embedding duty publishes the vectors every node applies —

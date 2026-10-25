@@ -29,7 +29,12 @@ vi.mock("~/lib/store-hooks.ts", async () => {
 });
 vi.mock("~/lib/viewer.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
-  return { ...actual, useViewer: () => ({ owner: "token:review", admin: false, handle: "" }) };
+  return {
+    ...actual,
+    useViewer: () => ({ owner: "token:review", admin: viewerAdmin, handle: "" }),
+    // THE GRANTS A GATED LINK WOULD ASK WITH, the same reader's.
+    useHeldReading: () => ({ login: "token:review", grants: viewerAdmin ? ["admin"] : [] }),
+  };
 });
 vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
@@ -69,6 +74,8 @@ function row(over: Partial<ArtifactListItem>): ArtifactListItem {
 let items: ArtifactListItem[];
 /** Whether the reader may make an artifact (`useArtifactAccess`'s `can`). */
 let authoring = true;
+/** The reader is an administrator, the one a storage pointer would be for. */
+let viewerAdmin = false;
 
 beforeEach(() => {
   items = [
@@ -86,6 +93,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   authoring = true;
+  viewerAdmin = false;
 });
 
 /** The list shape, as a reader who chose it on this browser before. */
@@ -116,9 +124,13 @@ test("the reader's own artifact is owned by You, and anybody else's by their nam
   const grid = document.body;
   // It said "token:review", the credential's spelling, on every row.
   expect(within(grid).queryByText("token:review")).toBeNull();
-  const own = within(grid).getByText("Architecture notes").closest(".grid-row") as HTMLElement;
+  const own = within(grid)
+    .getByText("Architecture notes")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(own).getByText("You")).toBeTruthy();
-  const theirs = within(grid).getByText("Vendor scorecard").closest(".grid-row") as HTMLElement;
+  const theirs = within(grid)
+    .getByText("Vendor scorecard")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(theirs).getByText("maya")).toBeTruthy();
   expect(within(theirs).getByText("Can edit")).toBeTruthy();
 });
@@ -143,13 +155,17 @@ test("a list row draws the kind's mark, the kind and description under the title
   ];
   mount("all");
   expect(headers()).toEqual(["Name", "Access", "Owner", "Edited", "Your role", ""]);
-  const own = screen.getByText("Architecture notes").closest(".grid-row") as HTMLElement;
+  const own = screen
+    .getByText("Architecture notes")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(own.querySelector(".crewlet-artifact-name__mark.crewlet-kind--doc")).not.toBeNull();
   expect(own.querySelector(".crewlet-artifact-name__detail")?.textContent).toBe(
     "Doc·, How the engine replicates its estate",
   );
   expect(within(own).getByText("Private")).toBeTruthy();
-  const theirs = screen.getByText("Vendor scorecard").closest(".grid-row") as HTMLElement;
+  const theirs = screen
+    .getByText("Vendor scorecard")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(theirs.querySelector(".crewlet-artifact-name__mark.crewlet-kind--sheet")).not.toBeNull();
   expect(theirs.querySelector(".crewlet-artifact-name__detail")?.textContent).toBe("Sheet");
   expect(within(theirs).getByText("Company")).toBeTruthy();
@@ -389,7 +405,19 @@ test("a reader who cannot make an artifact is not told to start one above", () =
   authoring = false;
   items = [];
   mount("all");
-  expect(document.querySelector(".artifacts-make")).toBeNull();
+  expect(screen.queryByRole("region", { name: "Start a new artifact" })).toBeNull();
   expect(screen.getByText("Artifacts shared with you appear here.")).toBeTruthy();
   expect(screen.queryByText(/Start one above/)).toBeNull();
+});
+
+// THE GALLERY ENDS ON ITS ARTIFACTS: the company's storage quotas are
+// Settings › File storage's, and All points nowhere at them, not even for the
+// administrator that page is for. Mutation: draw the related row back and an
+// administrator's All carries a link out of the gallery again.
+test("All ends on its artifacts, with no pointer to the company's storage", () => {
+  viewerAdmin = true;
+  mount("all");
+  expect(screen.queryByRole("navigation", { name: "Related" })).toBeNull();
+  expect(screen.queryByText("Company storage")).toBeNull();
+  expect(document.querySelector('a[href="#/settings/storage"]')).toBeNull();
 });

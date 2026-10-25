@@ -40,7 +40,6 @@ import (
 func TestAStartingNodeAnswersItsProbesBeforeItServes(t *testing.T) {
 	// Not parallel, for the drain case's reason.
 	client := drainProbeClient(t)
-	model := newHeldModel(t)
 	port, socket := reserveNodeSocket(t)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
@@ -78,10 +77,8 @@ api:
 providers:
   llm:
     held:
-      type: anthropic
       model: claude-startup-probe
-      base_url: %s
-      api_keys: ["${CREWLET_DRAIN_PROBE_KEY}"]
+      state_dir: %q
 mcp_servers:
   - name: silent
     command: /bin/sh
@@ -91,11 +88,10 @@ roles:
   - name: CEO
     handle: ceo
     llm: held
-`, model.url, release))
+`, filepath.Join(dir, "llm"), release))
 
 	node := startNodeChild(t, "TestAStartingNodeAnswersItsProbesBeforeItServes", socket,
-		[]string{"-config", boot, "-company", company, "-log-format", "json"},
-		"CREWLET_DRAIN_PROBE_KEY="+drainProbeKey)
+		[]string{"-config", boot, "-company", company, "-log-format", "json"})
 	// LET GO BEFORE THE CHILD IS KILLED (LIFO), so a failed case does not
 	// leave the boot waiting on the server through the teardown.
 	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })

@@ -26,7 +26,7 @@
  */
 
 import { useMemo } from "react";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import {
   AvatarStack,
   Button,
@@ -128,7 +128,7 @@ function ToolSkills() {
               header: "Skill",
               sortValue: (r) => r.title,
               cell: (r) => (
-                <TableTextCell icon={<Mark name={"wand-sparkles"} size="xs" />}>
+                <TableTextCell icon={<NamedGlyph name={"wand-sparkles"} size="xs" />}>
                   {r.title}
                 </TableTextCell>
               ),

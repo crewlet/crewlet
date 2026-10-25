@@ -69,7 +69,17 @@
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useState } from "react";
-import { Button, ButtonLink, Callout, EmptyState, Menu, Skeleton, Tag, tabId } from "@crewlethq/ui";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyState,
+  Menu,
+  Skeleton,
+  Tabs,
+  Tag,
+  tabId,
+} from "@crewlethq/ui";
 import {
   ActivityGlyph,
   ChartNoAxesGanttGlyph,
@@ -89,7 +99,6 @@ import {
   seatPlaceKey,
   seatUnitKey,
 } from "~/app/crumbs.ts";
-import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
@@ -409,7 +418,9 @@ export function SeatScreen({ handle }: { handle: string }) {
         {/* WHAT DOES NOT FIT FOLDS INTO "MORE", the tab the reader is on
             always drawn: scrolled, a phone's strip hid Settings past its edge
             with nothing to say it was there. */}
-        <ObjectTabs
+        <Tabs
+          overflow="menu"
+          variant="underline"
           ariaLabel={`${seat.name}'s sections`}
           className="prof-tabs"
           value={tab}
@@ -431,7 +442,10 @@ export function SeatScreen({ handle }: { handle: string }) {
       </header>
 
       <div className="prof-body">
-        {readsSeats && seat.handle && (
+        {/* A SEAT NOBODY HOLDS says so in its Overview's empty state, with
+            the ways to fill it; the notice is for a seat somebody holds, a
+            listing that could not say, and the seat's other tabs. */}
+        {readsSeats && seat.handle && (!unheld || tab !== "overview") && (
           <Holder seat={{ handle: seat.handle, name: seat.name }} seats={humanSeats} />
         )}
         <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
@@ -456,6 +470,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               nameOf={nameOf}
               now={now}
               unheld={unheld}
+              humanSeats={humanSeats}
             />
           )}
           {tab === "work" &&
@@ -524,7 +539,9 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
               names the same seat — two `h1`s reading the same words are two
               page titles to a reader navigating by heading. */}
           <h2 className="prof-name">{seat.name}</h2>
-          <Tag appearance="outline">{human ? "Person" : "Agent"}</Tag>
+          {/* ONE PILL, THE STATE: the kind is a fact, said first on the line
+              under the name, where an outline "Agent" beside the state's pill
+              read as two states. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
               {pillWord(agent)}
@@ -532,7 +549,9 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           )}
         </div>
         <p className="prof-line">
-          {[handleLabel(seat.handle), place || "above every unit"].filter(Boolean).join(" · ")}
+          {[human ? "Person" : "Agent", handleLabel(seat.handle), place || "above every unit"]
+            .filter(Boolean)
+            .join(" · ")}
           {seat.manager ? (
             <>
               {" · reports to "}

@@ -111,12 +111,13 @@ turn_engine:                            # optional — executor/reviewer turn co
     retention_days: 30                  # matches the event store's horizon; applied at next start
 
 learning:                               # optional — agent-learning subsystem
-                                        #   Every `*budget_tokens` / `*_max_tokens` cap here
-                                        #   bounds the ANSWER of a call that does not think. A
-                                        #   thinking model spends its thinking from the same cap,
-                                        #   so a call to one is sent the model's own output cap
-                                        #   instead, and these passes ask for `low` effort to keep
-                                        #   it short (see "Claude models" under Providers)
+                                        #   Every pass here calls the seat's auxiliary
+                                        #   model (`llm_auxiliary`), a coding CLI like
+                                        #   every model, under a FIXED deadline — 60 s
+                                        #   after a turn, 30 s for a turn-start
+                                        #   briefing — so point that key at a fast,
+                                        #   cheap model (see concepts/llm-backends.md
+                                        #   § Auxiliary work and latency)
   enabled: true                         # master switch (auto-disables without DB + embeddings)
   episodic:
     retrieval_limit: 5                  # default hits query_episodes returns when the
@@ -124,18 +125,14 @@ learning:                               # optional — agent-learning subsystem
   reflect:
     enabled: true                       # ReflectEngine + reflect_and_persist tool
     persist_decider: true               # run the post-turn PersistDecider on every turn
-    budget_tokens: 5000                 # soft cap on the decider's LLM call (0 disables)
     summarize_episodes: true            # cheap-model briefing of the turn-start
                                         # Similar prior work hits (query_episodes is
                                         # never summarised)
-    summarize_max_tokens: 400           # soft cap on that briefing, in tokens
   counterparty:
     enabled: true                       # CounterpartyProfiler + auto-inject + lookup inline
-    budget_tokens: 3000                 # soft cap on the profiler's LLM call per turn
   skill_synthesis:
     enabled: true                       # SkillSynthesizer (single-turn + clustered)
     min_tool_calls: 5                   # single-turn trigger threshold
-    budget_tokens: 4000                 # soft cap on the synthesizer's LLM call
     max_skills_per_agent: 50            # hard cap; once reached the synthesizer no-ops
     duplicate_jaccard_threshold: 0.7    # reject near-duplicates of existing skills
     # Clustered synthesis (opt-in). A fleet singleton: one node runs the tick.
@@ -165,7 +162,6 @@ learning:                               # optional — agent-learning subsystem
                                         # self_iterate is never refined: the turn
                                         # is not settled yet. Both false leaves
                                         # the refiner unbuilt
-    budget_tokens: 3000                 # soft cap on the refiner's LLM call
     max_body_chars: 20000               # a refinement whose result exceeds this
                                         # is refused, not truncated
     max_versions_kept: 10               # history retention per skill (older pruned)
@@ -178,7 +174,13 @@ learning:                               # optional — agent-learning subsystem
                                         #   with four similar skills is a catalogue
                                         #   to curate, not a team practice
     jaccard_threshold: 0.6              # similarity that pools two seats' skills
-    budget_tokens: 4000                 # soft cap on the promotion LLM call
+  skill_curator:
+    enabled: true                       # age unused skills out: active → stale → archived.
+                                        #   Pinned skills are exempt; an archived skill stays in
+                                        #   the table, and restoring one is a state change
+    interval_hours: 24                  # how often the curator walks the skill table
+    stale_after_days: 30                # unused days before a skill goes stale
+    archive_after_days: 90              # unused days before it is archived (≥ stale_after_days)
   personal_memory:
     max_refreshes_per_turn: 3           # cap on distinct context_hint values per turn
                                         # (idempotent repeats of the same hint are free)
@@ -188,6 +190,9 @@ learning:                               # optional — agent-learning subsystem
     max_raw_episodes_per_agent: 500     # threshold that fires CompactionRequested
     # Action 1: drop non-terminal mid-state rows past this age.
     non_terminal_max_age_days: 14
+    # Action 1b: drop raw turns that called no tools past this age — the one
+    # bound on a chat-only seat's rows, which compaction cannot cluster.
+    tool_free_max_age_days: 90
     # Action 2: drop skill-consolidated rows past this grace.
     consolidated_grace_days: 30
     # Action 3: cluster + LLM-compact remaining raw rows past this age.
@@ -195,7 +200,6 @@ learning:                               # optional — agent-learning subsystem
     compaction_min_cluster_size: 3      # singletons / pairs left raw
     compaction_jaccard_threshold: 0.6   # tool-sequence similarity to pool a cluster
     compaction_batch_size: 200          # max raw rows pulled per pass
-    compaction_budget_tokens: 4000      # soft cap on the compactor LLM call
     exemplar_count: 2                   # raw rows kept per cluster for drill-down
     # Action 4 (optional): evict ancient compacted entries for hard storage caps.
     compacted_max_age_days: 0           # 0 = disabled
@@ -207,10 +211,15 @@ extension-judge model:
 ```yaml
 roles:
   - name: Engineer
-    llm: claude-sonnet                  # the seat's own model — what the executor runs on
-    llm_auxiliary: gpt-4o-mini          # cheap/fast model for reflection
-    llm_judge: gpt-4o-mini              # cheap/fast model for the round-cap extension judge
+    llm: sonnet                         # the seat's own model — what the executor runs on
+    llm_auxiliary: haiku                # cheap/fast model for reflection
+    llm_judge: haiku                    # cheap/fast model for the round-cap extension judge
 ```
+
+Each names a `providers.llm` key (see [Providers](#providers)). Both satellite
+calls run under a fixed deadline and pay a CLI launch each, which is why they
+want a fast model rather than the seat's own — see
+[Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency).
 
 `llm_judge` is invoked when the executor or the onboarding pass exhausts its tool-round cap;
 it decides whether the agent is making progress (extend) or thrashing
@@ -320,167 +329,130 @@ per-task wall-clock timeout.
 
 ## Providers
 
+Every model a seat runs on is reached through a **coding CLI** the engine
+drives as a process — Claude Code for Anthropic's models, Codex for OpenAI's,
+OpenCode for open models on any provider it speaks to — so a `providers.llm`
+entry is that CLI's settings: which CLI, which model in its grammar, and how it
+signs in. [LLM Backends](../concepts/llm-backends.md) is the whole story: why
+there is no other kind of entry, picking a CLI per vendor, isolation, the tool
+channel and every sign-in route.
+
 ```yaml
 providers:
   llm:
-    default:                            # named provider (referenced by roles via `llm: default`)
-      type: openai                      # openai | anthropic | openai-compatible | cli-agent
-      model: gpt-4o                     # required, and supports ${ENV_VAR}. A reference that
-                                        #   resolves to nothing is REFUSED naming the variable —
-                                        #   unlike a missing api_key, which still builds: every
-                                        #   call then comes back a clean 401 that names the
-                                        #   provider, where a missing model has no such tell and
-                                        #   the request is simply malformed
-      api_keys:                         # one or more keys; multiple enables rate-limit rotation
-        - "${LLM_API_KEY}"              # supports ${ENV_VAR} references
-        # - "${LLM_API_KEY_BACKUP}"     # add more for rate-limit rotation
-                                        # an empty list takes the conventional variable
-                                        # (OPENAI_API_KEY / ANTHROPIC_API_KEY, from the secret
-                                        # store, then the environment); with neither, the
-                                        # provider still builds and sends no key, and a vendor
-                                        # that needs one refuses its calls as unauthorized
-                                        # (401), each failure naming the provider.
-                                        # A NAMED key that resolves to nothing stays
-                                        # nothing: the entry never borrows the
-                                        # conventional variable in its place.
-                                        # Settings › Models & keys shows each key by
-                                        # the variable it names, whether it resolves,
-                                        # and when a benched one comes back
-      cooldowns:                        # optional — TTL when a key is marked exhausted
-        rate_limit_seconds: 3600        #   429 / 402 default cooldown (a Retry-After / x-ratelimit-reset
-        auth_seconds: 300               #   401 / 403 default cooldown   header on the error overrides it;
-                                        #   repeated auth failures on one key back off exponentially)
-                                        #   a bench is SHARED across the fleet, so a peer's 429 benches the
-                                        #   key here too — see concepts/coordination.md
-      base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
-                                        #   REQUIRED for openai-compatible and REFUSED when it is
-                                        #   empty — including when a ${VAR} resolved to nothing.
-                                        #   `openai-compatible` means "not OpenAI", and an empty
-                                        #   base_url would take the OpenAI backend's own default:
-                                        #   the company's whole model traffic sent to
-                                        #   api.openai.com under a key that is not an OpenAI key,
-                                        #   with a 401 naming a vendor nobody configured as the
-                                        #   only symptom.
-                                        #   On `openai` / `anthropic` it is genuinely optional and
-                                        #   points the vendor's own wire format at a gateway or
-                                        #   proxy instead of the vendor host
-      timeout_seconds: 600              # optional — bounds one HTTP attempt (default: 600). A unary call IN TOTAL;
-                                        #   a streamed call (every anthropic call, and an executor's rounds
-                                        #   elsewhere) by its SILENCE — the longest
-                                        #   wait with nothing arriving, first byte included — never its length,
-                                        #   so a round thinking for many minutes is not cut off half-way
-                                        #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
-      reasoning: false                  # optional, openai only — send reasoning_effort to a reasoning
-                                        #   model (default: false). REFUSED on anthropic, where thinking is
-                                        #   not a switch (see "Claude models" below), and on openai-compatible.
-                                        #   gpt-4o is not a reasoning model, so this entry sets no
-                                        #   reasoning_effort: with reasoning off it is refused (see `reasoner`)
-                                        # There is NO temperature field, on any type: the phases of a turn
-                                        #   send none, so every round runs at the vendor's own default
-                                        #   (1.0 on OpenAI), and only a call that needs one names it — the
-                                        #   extension judge asks for 0, the knowledge answer and the auxiliary
-                                        #   passes for 0.2. openai sends it on a call that is not reasoning;
-                                        #   anthropic only where the model samples (see "Claude models" below)
-    reasoner:                           # an OpenAI reasoning model
-      type: openai
+    default:                            # named provider (referenced by roles via `llm: default`;
+                                        #   `default` is also the fallback for a seat naming none)
+      agent: claude-code                # optional — which CLI to drive (default claude-code):
+                                        #   claude-code | codex | opencode | gemini-cli | qwen-code
+                                        #   | cursor-agent | copilot | grok | muse-code | kimi-code
+                                        #   | hermes | pi | custom
+      model: sonnet                     # REQUIRED — in the CLI's own grammar: an alias or id for
+                                        #   claude-code (sonnet, opus, claude-opus-5-5), an OpenAI
+                                        #   id for codex, <provider>/<model> for opencode. Supports
+                                        #   ${ENV_VAR}; a reference that resolves to nothing is
+                                        #   REFUSED naming the variable — unlike a missing
+                                        #   credential, which still builds: every call then fails
+                                        #   with the CLI's own sign-in error, which names it, where
+                                        #   a missing model has no such tell
+      mode: text                        # optional — text (default): a model behind the engine's
+                                        #   tool loop; agent: the CLI runs the executor itself
+                                        #   (claude-code and opencode only)
+      run_in: ""                        # agent mode only — direct | container | e2b; empty takes
+                                        #   providers.sandbox.default_run_in
+      state_dir: ""                     # optional — the login + per-seat CLI homes, each CLI
+                                        #   under <state_dir>/<agent>. Empty:
+                                        #   $CREWLET_LLM_CLI_HOME/<key>, else ~/.crewlet/llm-cli/<key>.
+                                        #   Use a persistent volume in an ephemeral container.
+                                        #   Entries naming the SAME dir and driving the same CLI
+                                        #   share one login (how per-phase models run off one
+                                        #   `crewlet llm login`); on different CLIs they share
+                                        #   nothing, so moving an entry to another CLI applies
+                                        #   live and starts that CLI signed out. Its bundle
+                                        #   (auth.credential_bundle) stays the old CLI's and is
+                                        #   refused until re-exported from the new one
+      timeout_seconds: 600              # optional — one CLI invocation, wall clock (default 600):
+                                        #   the process launch, the model's whole answer and the
+                                        #   CLI's own retries. A breach is a retryable `timeout`
+      max_concurrent: 4                 # optional — CLI processes at once (default 4). Each is a
+                                        #   200-400 MB runtime, and subscription plans throttle
+                                        #   concurrency hard
+      env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
+                                        #   child gets an ALLOWLISTED environment, never the
+                                        #   engine's, so declare anything else the CLI needs here —
+                                        #   for opencode, the key of the provider its model names
+      auth:
+        mode: subscription              # subscription (default) | api-key | inherit-env.
+                                        #   subscription: the CLI's own login, or a headless token.
+                                        #   api-key: ONE key in the CLI's key variable
+                                        #   (ANTHROPIC_API_KEY for claude-code, OPENAI_API_KEY for
+                                        #   codex); refused for a CLI with none (hermes, pi,
+                                        #   opencode, kimi-code). inherit-env: forward the engine's
+                                        #   own value of either variable
+        token: ""                       # optional — ${VAR} holding a headless subscription token;
+                                        #   empty falls back to the profile's own variable
+                                        #   (CLAUDE_CODE_OAUTH_TOKEN). subscription mode only, and
+                                        #   only on a CLI that mints one (claude-code)
+        api_key: ""                     # optional — ${VAR} holding the API key; empty falls back
+                                        #   to the profile's own key variable, from the secret
+                                        #   store, then the environment. api-key mode only — a
+                                        #   write is refused elsewhere, where it would reach nothing
+        credential_bundle: ""           # optional — ${VAR} holding a `crewlet llm export` blob;
+                                        #   empty falls back to CREWLET_LLM_CLI_<KEY>_CREDENTIALS
+      overrides: {}                     # optional — replace any profile field when a vendor
+                                        #   renames a flag OR moves the field the answer lives in
+                                        #   (`text_paths`); validated here, so a typo is refused by
+                                        #   `crewlet validate` and by every API write. A moved
+                                        #   answer field is the drift that passes validation and
+                                        #   fails at a seat's first turn — `crewlet llm doctor`
+                                        #   names it
+
+    claude-key:                         # Anthropic's models on an API key rather than a plan
+      model: sonnet
+      auth:
+        mode: api-key                   # reads ANTHROPIC_API_KEY
+
+    gpt:                                # OpenAI's models through Codex
+      agent: codex
       model: gpt-5
-      api_keys:
-        - "${OPENAI_API_KEY}"
-      reasoning: true
-      reasoning_effort: high            # optional — how hard the model thinks: low | medium | high | xhigh | max
-                                        #   openai: sent while `reasoning` is on (unset: nothing is sent, the
-                                        #     endpoint's own default, and no call can lower it, since that
-                                        #     default is not a level the engine can compare). Refused with
-                                        #     reasoning off, where it would do nothing
-                                        #   anthropic: output_config.effort on EVERY call (unset: high), on a
-                                        #     model that takes effort at all; a level the model does not take
-                                        #     is refused (see "Claude models" below)
-                                        #   A CEILING for every call on this entry: a call may ask for less (the
-                                        #   extension judge, the knowledge answer, the turn-start filters and every
-                                        #   learning pass ask for `low`) and never for more
-    claude:
-      type: anthropic
-      model: claude-sonnet-5-5          # the request SHAPE follows the model — see "Claude models" below
-      reasoning_effort: high            # optional (default: high)
-    claude-gateway:
-      type: anthropic
-      model: fast                       # a gateway's own alias for a model...
-      claude_model: claude-haiku-4-5    # optional, anthropic only — ...named here, so its requests are
-                                        #   shaped as that model's. An exact id from the table below;
-                                        #   refused beside a model the table already reads
-      base_url: "${CLAUDE_GATEWAY_URL}"
-      reasoning_budget_tokens: 8000     # optional, anthropic BUDGET-ERA models only (claude-haiku-4-5,
-                                        #   claude-sonnet-4-5, claude-opus-4-5 and older): the thinking
-                                        #   budget, at least 1024 and below the model's output cap.
-                                        #   Unset: that model does not think. Refused on every other model
-                                        #   and every other type
-                                        # reasoning, reasoning_effort and reasoning_budget_tokens are all
-                                        #   REFUSED on a cli-agent entry: a coding CLI driven headlessly takes
-                                        #   no per-call reasoning flag and carries its own configuration.
-                                        #   Pick the reasoning model with `model` instead
-    budget:                             # multiple providers supported
-      type: openai
-      model: gpt-4o-mini
-      api_keys:
-        - "${OPENAI_API_KEY}"
+      auth:
+        mode: api-key                   # reads OPENAI_API_KEY; leave it out to run on a
+                                        #   ChatGPT login (`crewlet llm login gpt`)
 
-    subscription:                       # a coding CLI you already subscribe to,
-                                        # driven headless — NO API key.
-                                        # See concepts/subscription-llm-backends.md
-      type: cli-agent
-      model: sonnet                     # whatever the CLI's --model accepts
-                                        #   (opencode: <provider>/<model>,
-                                        #   e.g. anthropic/claude-sonnet-5)
-      cli:
-        agent: claude-code              # claude-code | codex | gemini-cli | qwen-code
-                                        #   | opencode | cursor-agent | copilot | grok
-                                        #   | muse-code | kimi-code | hermes | pi
-                                        #   | custom
-        state_dir: ""                   # optional — credential dir + per-seat CLI homes.
-                                        #   Empty: $CREWLET_LLM_CLI_HOME/<key>, else
-                                        #   ~/.crewlet/llm-cli/<key>. Use a persistent
-                                        #   volume in an ephemeral container.
-                                        #   Entries naming the SAME dir share one login
-                                        #   (how per-phase models run off one
-                                        #   `crewlet llm login`); they must then also
-                                        #   share the same `agent`.
-        timeout_seconds: 300            # optional — one CLI invocation, wall clock.
-                                        #   Separate from the entry's HTTP
-                                        #   timeout_seconds: this covers process
-                                        #   launch + the model call + the CLI's retries
-        max_concurrent: 4               # optional — CLI processes at once. Each is a
-                                        #   200-400 MB runtime, and subscription plans
-                                        #   throttle concurrency hard
-        env: {}                         # optional — extra child env, ${ENV_VAR}-resolved.
-                                        #   The child gets an ALLOWLISTED environment,
-                                        #   never the engine's, so declare anything else
-                                        #   the CLI needs here
-        auth:
-          mode: subscription            # subscription | api-key | inherit-env.
-                                        #   api-key puts the entry's ONE api_keys value
-                                        #   in the CLI's key variable, and a write is
-                                        #   refused for a CLI with none (hermes, pi,
-                                        #   opencode, kimi-code); api_keys is refused in
-                                        #   any other mode, since nothing would read it
-          token: ""                     # optional — ${VAR} holding a headless
-                                        #   subscription token; empty falls back to the
-                                        #   profile's own var (CLAUDE_CODE_OAUTH_TOKEN).
-                                        #   subscription mode only, and only on a CLI
-                                        #   that mints one (claude-code); a write is
-                                        #   refused elsewhere, where it would reach
-                                        #   nothing
-          credential_bundle: ""         # optional — ${VAR} holding a `crewlet llm export`
-                                        #   blob; empty falls back to
-                                        #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS
-        overrides: {}                   # optional — replace any profile field when a
-                                        #   vendor renames a flag OR moves the field the
-                                        #   answer lives in (`text_paths`); validated
-                                        #   here, so a typo is refused by `crewlet
-                                        #   validate` and by every API write.
-                                        #   A moved answer field is the drift that
-                                        #   passes validation and fails at a seat's
-                                        #   first turn — `crewlet llm doctor` names it
+    open:                               # open models through OpenCode
+      agent: opencode
+      model: openrouter/qwen/qwen3-coder  # <provider>/<model>, split at the first slash;
+                                        #   a bare id is refused on a write
+      env:
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"  # the key of the provider the model names
+```
 
+**One entry is one CLI on one model, signed in one way.** Per-phase models
+are one entry per model, and entries that share a `state_dir` and drive one
+CLI share one login. A seat's `llm` takes a list, which is how a plan and a key compose:
+`llm: [default, claude-key]` runs on the plan and falls through to the key while
+the plan is spent — see [Falling back between
+entries](../concepts/llm-backends.md#falling-back-between-entries).
+
+**What an entry does not set.** There is no temperature, effort, thinking
+switch, output cap, endpoint or key list on an entry, and none on a call: a
+coding CLI driven headlessly reads its model's behaviour from its own
+configuration, and an entry holds one sign-in. See [What an entry does not
+set](../concepts/llm-backends.md#what-an-entry-does-not-set).
+
+Sign an entry in and check it end to end before the first turn:
+
+```bash
+crewlet llm login default -from-host        # adopt the login this machine already has
+crewlet llm doctor                          # every entry: binary, version, sign-in, a real tool call
+```
+
+The CLI itself must be installed on the engine host — see
+[Installation](installation.md#a-coding-cli).
+
+### Embeddings
+
+```yaml
+providers:
   embeddings:                           # optional — the semantic half of a native
                                         #   knowledge search (the company's pages and
                                         #   work items, embedded once for the fleet)
@@ -500,8 +472,10 @@ providers:
                                         #   rests on and it is not a knob worth
                                         #   guessing
     api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references; empty falls
-                                        #   back to OPENAI_API_KEY, the same variable
-                                        #   the chat backend reads
+                                        #   back to OPENAI_API_KEY, the variable
+                                        #   OpenAI's own SDK documents. Embeddings are
+                                        #   the one model call the engine makes itself:
+                                        #   a coding CLI computes no vectors
     base_url: "..."                     # optional — custom endpoint. This is the only
                                         #   difference between `openai` and
                                         #   `openai-compatible`, so a local embedding
@@ -658,189 +632,6 @@ the model's per-input window (`max_input_tokens`, or the model's own) — one
 input must fit one request, so a request total below the window is also the most
 one input may hold, and the knowledge corpus would then embed a shorter opening
 of every long source, each under a new digest and so embedded again.
-
-### Claude models: thinking, effort and sampling
-
-An `anthropic` request's SHAPE is a function of its model, because the Claude
-generations accept different requests and a field a model does not accept is
-an HTTP 400 — which the [fallback chain](../concepts/architecture.md#2-inside-one-node) does not
-retry, since a refusal of the request itself is not something another attempt
-fixes. So the engine reads what each model accepts from one table
-(`internal/providers/llm/anthropic/claudemodel`) and sends nothing the model in
-front of it would refuse:
-
-| Models | Thinking | `reasoning_effort` | `reasoning_budget_tokens` | Output cap |
-|---|---|---|---|---|
-| `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-mythos-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5-5`, `claude-sonnet-5` | adaptive, every call | low · medium · high · xhigh · max | refused | 128K |
-| `claude-opus-4-6`, `claude-sonnet-4-6` | adaptive, every call | low · medium · high · max | refused | 128K |
-| `claude-opus-4-5` | only with a budget | low · medium · high | 1024 to below the cap | 64K |
-| `claude-sonnet-4-5`, `claude-haiku-4-5` and older | only with a budget | refused | 1024 to below the cap | 64K (older: 32K–64K) |
-| any id the table does not know | adaptive, every call | every level | refused | 64K |
-
-- **There is no thinking switch.** On a model with adaptive thinking every
-  call sends `thinking: {type: adaptive, display: summarized}` — the summary
-  is what fills the round's reasoning and the live thinking text on the
-  dashboard, and it costs the same as the hidden default. Turning thinking off
-  is refused outright by Opus 5.5, Fable and Mythos, and on Opus 4.8 and 5 it
-  makes the model write a tool call into its prose instead of making it. How
-  hard the model thinks is `reasoning_effort`, which defaults to `high`: every
-  phase this engine runs is long-horizon agentic tool use, and Opus 5.5's own
-  default is `medium`, so an unset level would silently think less after a
-  model upgrade. The calls that need little — the round-cap judge, the
-  knowledge answer, the turn-start filters and the learning passes — ask for
-  `low` on their own, and no call can ask for more than the entry's level. A
-  call's level that falls on one the model skips (`xhigh` on Opus 4.6) is
-  sent as the next level down that it takes.
-- **A budget-era model thinks only with a budget.** `reasoning_budget_tokens`
-  turns thinking on with that many tokens; unset, it does not think.
-- **No temperature is sent by default.** A call that names one (the judge asks
-  for 0, the auxiliary passes for 0.2) gets it only on a model that takes a
-  sampling parameter and on a call that is not thinking — in practice a
-  budget-era model with no budget. Elsewhere it is dropped rather than
-  refused, because those models answer any temperature with a 400.
-- **`max_tokens` is the model's own cap.** Thinking is spent from the same
-  cap as the answer, so a smaller one truncates a round or empties it; an
-  unused cap costs nothing, and spend is bounded by
-  [token budgets](#token-budgets) instead. A call's own smaller cap is honoured
-  only on a call that is not thinking.
-- **No forced tool choice and no prefill** are ever sent: a phase that must
-  end in a call names it and is asked again when a round ends without it,
-  and a conversation always ends on a user turn or a tool result.
-- **Reasoning written under an earlier tool set is shed** on
-  `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5` and any id the
-  table does not know. Those models bind each thinking block to the system
-  prompt and the tools of the request that wrote it, and refuse it with a 400
-  once either has changed. A phase's tools do change: `activate_tool` adds
-  one, and a resumed run renders them again. So the rounds before a change
-  are replayed without their thinking, while their text and calls are
-  replayed whole. Every other model is replayed every block, because it runs
-  no such check. See
-  [the conversation only grows](../concepts/turn-engine.md#the-conversation-only-grows).
-
-A Bedrock or Vertex spelling of a model (`anthropic.claude-opus-5-5`,
-`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `claude-opus-4-5@20251101`)
-and a dated snapshot are read as the model they spell. An id the table does
-not know — most likely a model released after this build — gets the current
-generation's shape, and `crewlet validate` warns about it at `claude_model`:
-if it is a gateway alias for an older model, name that model there, or its
-calls may be refused. Every rule above is checked when the config is
-validated, and again when the provider is built, where a model written as a
-`${VAR}` is first known.
-
-The table is compiled into the build and the models are not, so
-`crewlet llm doctor <key>` checks an entry against the live model: it reads
-the model's record from the vendor's Models API, reports every place the
-table disagrees with it — a **problem** when the disagreement puts a field the
-model refuses on every call — and sends one real round in a phase's shape,
-which must come back as a tool call. A gateway that does not serve
-`/v1/models` is reported as *not served* rather than as a failure. See the
-[CLI reference](../reference/cli.md#crewlet-llm).
-
-### Reasoning models behind an OpenAI-compatible endpoint
-
-OpenAI's Chat Completions format has no field for a model's reasoning, so
-every host that serves a reasoning model over it added its own, and most now
-require it back on the next request. An `openai` or `openai-compatible` entry
-keeps whatever reasoning a response carried, **exactly as the host sent it**,
-and sends it back on every later round of the same tool loop, in the same
-field and the same shape:
-
-| Host | What a response carries | What the vendor says about sending it back |
-|---|---|---|
-| Moonshot (`kimi-k3`, `kimi-k2.7-code`), Together's Kimi K3 | `reasoning_content` | Required for K3 "in multi-turn conversations and tool-call loops"; K3 always thinks and was trained to read it |
-| DeepSeek | `reasoning_content` | With `tools` in the request, every earlier turn's, or a **400**; ignored without `tools` |
-| Fireworks, Z.ai, SGLang, MiniMax | `reasoning_content` (MiniMax: or `reasoning_details`, when its thinking is split out) | Interleaved thinking must see it again |
-| OpenRouter | `reasoning` and `reasoning_details` (text with a signature, summaries, encrypted payloads) | The details' sequence must match what the model produced; `reasoning_content` is accepted as an alias |
-| Groq, vLLM, Ollama, Together's other models | `reasoning` | Accepted on input (vLLM's interleaved thinking relies on it) |
-| A LiteLLM proxy in front of Claude | `thinking_blocks`, signed | Required beside a tool call, or Anthropic answers **400** |
-| Gemini 3 on Google's OpenAI-compatible endpoint | a thought signature on each tool call (`extra_content`; LiteLLM's `provider_specific_fields`) | Required on the first call of every step of the current turn, or **400**; for a call Gemini did not generate, Google documents `skip_thought_signature_validator` in its place |
-| Mistral reasoning models | `content` as a list of chunks, the thinking in a `thinking` chunk | Send the whole message back, thinking chunk included |
-| OpenAI | nothing | — |
-
-There is **no setting** for this. Every field above goes back only to the
-**endpoint that wrote it** — the same `base_url`, whatever the model or the
-key — because a field one host emits is one another may refuse, and a refused
-request is a 400 the [fallback chain](../concepts/architecture.md#2-inside-one-node)
-does not retry. A response that carried none of it (OpenAI's own, and any
-model that does not reason) changes nothing about the requests that follow.
-The reasoning is read for the dashboard as before (the readable trace, from
-`reasoning_content`, `reasoning` or a thinking chunk), and a Mistral answer's
-visible text is its `text` chunks rather than the list's JSON.
-
-**An empty reasoning is still sent.** A round that reasoned nothing goes back
-with the empty value its host sent (`"reasoning_content": ""`); only a `null`
-counts as no field. And once any turn of a request carries `reasoning_content`
-— on DeepSeek's and Moonshot's own APIs, from the first request — every
-assistant turn of it does: the empty string for a round whose stream never
-named the field, and for a turn another endpoint or backend wrote, whose
-reasoning this host cannot read — because Moonshot refuses an assistant
-tool-call message whose `reasoning_content` is missing while thinking is on,
-and DeepSeek wants every earlier turn's. No other field is filled in: an empty
-`reasoning_details` block would be a sequence the model never produced.
-
-**Within one tool loop, and across a suspension.** Every assistant turn in a
-request belongs to the phase that is still running: a new turn starts from
-its [conversation ledger](../concepts/conversation-sessions.md), never from an
-earlier turn's messages, so no reasoning crosses from one task into the next.
-A coding run that suspends the loop parks the reasoning with the conversation,
-and the resumed rounds send it back as the suspended ones would have.
-
-**A fallback to another endpoint carries none of the first one's reasoning.**
-When a chain moves a running loop to a member on a different `base_url`, the
-turns the first member wrote go to the second without their reasoning. Once the
-second member has written a turn of that loop carrying `reasoning_content`, the
-first member's turns go to it with an empty one, which is what Moonshot and
-DeepSeek check for — and on their own APIs, which the `base_url` names
-(`api.deepseek.com`; `api.moonshot.ai` and `api.moonshot.cn`), from the first
-request after the fallback, since that request is the one either would refuse.
-Before that on another host speaking the field (Together's Kimi K3, whose host
-serves other models beside it), and on a host whose rule needs a value only its
-own model can write (a LiteLLM proxy's signed thinking blocks), the request may
-be refused, and the turn then fails on that member as it would on any 400. A
-chain whose members serve such a model should keep them on one endpoint: two
-`providers.llm` entries on the same `base_url` with different keys or models
-share their reasoning.
-
-**Gemini 3 is given what it checks from the first request.** Google refuses a
-tool-call step that has no thought signature, and a fallback onto Gemini hands
-it steps it never signed: the other members' rounds, a round Google's *other*
-endpoint signed (whose signature, like all reasoning, goes back only to the
-endpoint that wrote it), and a round an older Gemini wrote on the same
-`base_url` without one (a round that endpoint wrote goes back with whatever it
-kept, whatever the model). Each such step goes with
-`skip_thought_signature_validator` as the thought signature of its first call,
-beside whatever else that call carries — the value Google documents for
-"functionCall parts that were not generated by the API" — and a step that
-carries a signature of its own keeps it. This applies to:
-
-- **Google's own endpoints**, known from the `base_url`'s host: the Gemini API
-  (`generativelanguage`) or Vertex AI (`aiplatform`) under any of the names
-  [Google gives a service's endpoints](https://docs.cloud.google.com/docs/security/compliance/endpoints)
-  — global (`aiplatform.googleapis.com`), locational
-  (`us-central1-aiplatform.googleapis.com`), regional or multi-regional
-  (`aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com`,
-  Vertex AI's jurisdictional endpoints, which serve only Gemini 3 and later),
-  the private name of a regional one (`aiplatform.us.p.rep.googleapis.com`),
-  and a Private Service Connect endpoint's
-  (`aiplatform-<endpoint>.p.googleapis.com`) — with a model whose id names a
-  Gemini (`gemini-…`, or `google/gemini-…`);
-- **any other `base_url` that has passed Google's signature through** — a
-  gateway forwarding Google's own fields — once it has written a signed step in
-  the loop.
-
-A Gemini from before generation 3 (`gemini-2.5-…` and older), which Google
-does not hold to this rule, is sent none; an id that names no generation
-(`gemini-flash-latest`) is taken as the current one. Every unsigned step of the
-loop carries it, not only those of the turn Google validates, because how
-Google counts a turn across a user message after tool results (a person's note
-to a running turn, an extension's nudge) is not documented; a step outside
-that turn is not checked, and the stand-in carries no reasoning, as the step
-without it carried none. Google calls the stand-in a last resort that "will
-negatively impact model performance" — and a step written elsewhere has no
-signature of Gemini's to offer instead. A gateway that carries the signature
-in a field of its own (LiteLLM, OpenRouter) is sent nothing extra: it
-translates its field into Google's, and what it sends for a step it holds no
-signature for is its own decision (LiteLLM sends Google's stand-in).
 
 ## Tier A
 
@@ -1938,7 +1729,7 @@ units:
 | `backstory` | string | no | Personality, background, expertise |
 | `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge`, `sandbox` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it |
 | `llm_review` / `llm_subagent` / `llm_sandbox` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
-| `llm_auxiliary` | string | no | Cheap/fast model used by reflection workers (PersistDecider, episode summariser) |
+| `llm_auxiliary` | string | no | Cheap/fast model used by the turn-start prefetch, the condensing of large tool results, and the reflection workers (PersistDecider, episode summariser). Each call pays a CLI launch under a fixed deadline, so name a fast model — see [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
 | `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
 | `learning_enabled` | bool | no | Overrides the company's [learning](../concepts/agent-learning.md) setting for this seat alone. Unset inherits it; `false` skips reflection for this seat's turns while still writing its episodes, which are cheap and useful to a person regardless |
@@ -1956,7 +1747,7 @@ units:
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on the engine's own tracker it is what an item filed with no `unit` belongs to — whoever filed it (see [the work tracker](../guides/work-tracker.md#which-team-an-item-belongs-to)). **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
-| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — when the seat's code work resolves to a `cli-agent` entry it must be that entry's own CLI ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared, every `${VAR}` in it resolving before a `run_sandbox` box starts unless its key is listed under `optional_keys`, which leaves it out instead ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)) — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. On a seat whose executor runs in [agent mode](../concepts/subscription-llm-backends.md#agent-mode) the gate places nothing and drives nothing — that seat is never offered `run_sandbox`, and its one box is its executor's, placed by the entry's `cli.run_in` — so its `run_in` may only be `self` or empty and its `coding_agent` only empty or that entry's own CLI, while its `setup`, `env`, `mcp`, `pause_ttl_seconds` and `max_turns` reach that box whether or not `enabled` is set. On any other seat a block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read. Each of these is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
+| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — the seat's code work runs on the entry its `llm_sandbox` resolves to, and the coding agent must be that entry's own CLI, so only a `claude-code` or `opencode` entry can do code work ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared, every `${VAR}` in it resolving before a `run_sandbox` box starts unless its key is listed under `optional_keys`, which leaves it out instead ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)) — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. On a seat whose executor runs in [agent mode](../concepts/llm-backends.md#agent-mode) the gate places nothing and drives nothing — that seat is never offered `run_sandbox`, and its one box is its executor's, placed by the entry's `run_in` — so its `run_in` may only be `self` or empty and its `coding_agent` only empty or that entry's own CLI, while its `setup`, `env`, `mcp`, `pause_ttl_seconds` and `max_turns` reach that box whether or not `enabled` is set. On any other seat a block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read. Each of these is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
 | `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
@@ -2260,7 +2051,7 @@ mcp_servers:
     request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required; `crewlet` is reserved — it is the name every agent-mode box sees the seat's own [tool bridge](../concepts/subscription-llm-backends.md#the-tool-bridge) under, and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
+Full field reference: `name` (required; `crewlet` is reserved — it is the name every agent-mode box sees the seat's own [tool bridge](../concepts/llm-backends.md#the-tool-bridge) under, and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
 
 ### Timeouts
 
@@ -2303,8 +2094,10 @@ Only the braced identifier form is substituted — `${NAME}` where `NAME` matche
 providers:
   llm:
     default:
-      api_keys:                        # resolved at startup (one or many)
-        - "${LLM_API_KEY}"
+      agent: opencode
+      model: "${LLM_MODEL}"                          # resolved where the entry is built
+      env:
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"  # the secret store first, then the environment
 ```
 
 See [Environment Variables](../reference/environment-variables.md) for a full list.

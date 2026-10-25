@@ -62,6 +62,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -188,6 +189,17 @@ type Options struct {
 	// API.
 	Passes *setup.Runner
 
+	// Probes check a typed credential at its vendor before anything stores
+	// it, one per integration kind: what answers
+	// POST /setup/integrations/{kind}/verify.
+	//
+	// EVERY KIND IN [integration.Kinds], and [New] refuses a set missing
+	// one by name: every integration this build sets up has a credential a
+	// person types, so a missing probe is a Test button that fails on that
+	// integration's form. Built beside the passes, where the engine says
+	// which concrete client satisfies which seam.
+	Probes map[integration.Kind]setup.Probe
+
 	// Sink builds the recorder a pass writes minted credentials through,
 	// recording each under the party the pass runs for.
 	Sink func(by iam.Actor) (provision.TokenSink, error)
@@ -248,6 +260,7 @@ type Service struct {
 	slackApps func() map[string]string
 	secrets   setup.Secrets
 	passes    *setup.Runner
+	probes    map[integration.Kind]setup.Probe
 	sink      sinkFactory
 	status    Status
 	clock     func() time.Time
@@ -271,6 +284,7 @@ func New(opts Options) (*Service, error) {
 		{"Secrets", opts.Secrets == nil},
 		{"Resolve", opts.Resolve == nil},
 		{"Passes", opts.Passes == nil},
+		{"Probes", opts.Probes == nil},
 		{"Sink", opts.Sink == nil},
 		{"Status", opts.Status == nil},
 		{"SlackApps", opts.SlackApps == nil},
@@ -286,6 +300,11 @@ func New(opts Options) (*Service, error) {
 		return nil, fmt.Errorf("setupapi: %s required: the setup surface is "+
 			"built beside the engine, which supplies every one of them",
 			strings.Join(missing, ", "))
+	}
+	if gaps := probesComplete(opts.Probes); len(gaps) > 0 {
+		return nil, fmt.Errorf("setupapi: Options.Probes has no probe for %s: "+
+			"every integration this build sets up takes a credential a person "+
+			"types, and its Test button needs one", strings.Join(gaps, ", "))
 	}
 	// THE CLOCK IS DEFAULTED HERE, not at each use. Every caller but the
 	// tests leaves it nil, and one path called it without a guard: the
@@ -304,6 +323,7 @@ func New(opts Options) (*Service, error) {
 		webhookBaseKey: opts.WebhookBaseKey,
 		secrets:        opts.Secrets,
 		passes:         opts.Passes,
+		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
 		slackApps:      opts.SlackApps,
@@ -336,6 +356,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /setup/integrations/{kind}", authz.ActionSetupRead, s.one)
 	mount("POST /setup/integrations/{kind}/inputs", authz.ActionSetupConnect, s.inputs)
 	mount("DELETE /setup/integrations/{kind}", authz.ActionSetupConnect, s.disconnect)
+	// A TYPED CREDENTIAL CHECKED AT ITS VENDOR, and nothing stored. The
+	// connect verb, because it spends a credential at a vendor on a
+	// person's hand; see verify.go for why it asks nothing more.
+	mount("POST /setup/integrations/{kind}/verify", authz.ActionSetupConnect, s.verify)
 	// The two that RUN something at the third-party app, and the read that follows
 	// one. See pass.go for why check and provision are one function. BOTH
 	// are the connect verb: a check writes nothing at the app, and it is

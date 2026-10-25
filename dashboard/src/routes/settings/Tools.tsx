@@ -6,7 +6,7 @@
  * that can say.
  */
 
-import { useCallback, useMemo, useRef, type CSSProperties } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plural, fmtCount } from "~/lib/format.ts";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
@@ -24,7 +24,9 @@ import {
   StatGroup,
   Tag,
   TableKeyCell,
+  TableTextCell,
   TableNumberCell,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   WrenchGlyph,
@@ -93,6 +95,18 @@ function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
   if (idx < 0) return { kind: source || "unknown", detail: "" };
   return { kind: source.slice(0, idx), detail: source.slice(idx + 1) };
+}
+
+/**
+ * An origin in a reader's words, for the filter's chips and the Origin column:
+ * Built in, or the MCP server by its name. Any other kind keeps its own
+ * spelling, since this build has no words for it.
+ */
+function originWords(source: string): string {
+  const { kind, detail } = originOf(source);
+  if (kind === "builtin") return "Built in";
+  if (kind === "mcp" && detail) return detail;
+  return source || "unknown";
 }
 
 /** The server behind an `mcp:<server>` origin, empty for a builtin or an A2A tool. */
@@ -606,7 +620,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
    * carries no button at all and is never "open elsewhere".
    */
   const openTool = useCallback(
-    (tool: ToolRow, e: React.MouseEvent | React.KeyboardEvent) => {
+    (tool: ToolRow, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "tool", id: tool.name });
       if (!("button" in e)) {
         go();
@@ -633,7 +647,6 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   return (
     <>
       <PageActions>
-        <Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>
         {/* NEVER HIDDEN: drawn for every reader, and disabled with the reason
             for one whose token cannot change the configuration. */}
         <Button
@@ -766,20 +779,24 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
             `All` is the ABSENCE of a filter rather than one of them, so it is
             a chip with the empty value: the group then always has a chosen
             member and needs no `allowNone`. */}
-        <FilterChipGroup
-          label="Tool origin"
-          hideLabel
-          semantics="radio"
-          value={origin}
-          onValueChange={(next) => pick(next ?? "")}
-        >
-          <FilterChip value="">All</FilterChip>
-          {origins.map(([source, count]) => (
-            <FilterChip key={source} value={source} count={count}>
-              {source}
-            </FilterChip>
-          ))}
-        </FilterChipGroup>
+        {/* ONLY WHERE THERE IS A CHOICE: with every tool from one origin the
+            chips were All beside the one origin, both naming the same list. */}
+        {origins.length > 1 && (
+          <FilterChipGroup
+            label="Tool origin"
+            hideLabel
+            semantics="radio"
+            value={origin}
+            onValueChange={(next) => pick(next ?? "")}
+          >
+            <FilterChip value="">All</FilterChip>
+            {origins.map(([source, count]) => (
+              <FilterChip key={source} value={source} count={count}>
+                {originWords(source)}
+              </FilterChip>
+            ))}
+          </FilterChipGroup>
+        )}
       </div>
 
       {tools.length > 0 && rows.length === 0 && !q.trim() && origin ? (
@@ -842,22 +859,21 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 sortValue: (t) => t.name,
                 cell: (t) => <TableKeyCell value={t.name} />,
               },
-              {
-                key: "origin",
-                header: "Origin",
-                shrink: true,
-                drop: 2,
-                sortValue: (t) => t.source,
-                cell: (t) => {
-                  const { kind, detail } = originOf(t.source);
-                  return (
-                    <span className="row gap-1">
-                      <Tag appearance="outline">{kind}</Tag>
-                      {detail && <span className="t-caption mono">{detail}</span>}
-                    </span>
-                  );
-                },
-              },
+              // A COLUMN ONLY WHERE ORIGINS DIFFER, as quiet words: a
+              // "builtin" pill on all 46 rows of a catalogue that had no
+              // other origin said nothing a reader could compare.
+              ...(origins.length > 1
+                ? [
+                    {
+                      key: "origin",
+                      header: "Origin",
+                      shrink: true,
+                      drop: 2,
+                      sortValue: (t: ToolRow) => t.source,
+                      cell: (t: ToolRow) => <TableTextCell>{originWords(t.source)}</TableTextCell>,
+                    },
+                  ]
+                : []),
               {
                 key: "desc",
                 header: "What it does",
@@ -869,18 +885,13 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 // 350px column of prose and the table showed two tools a
                 // screen. The list is for finding a tool; its page is for
                 // reading one.
+                // THE DESCRIPTION ALONE: the hint sentence under it ("can
+                // write, is reversible...") said what the Can column's tags
+                // say, cut by an ellipsis on every row. The tool's page keeps
+                // it whole, with what nobody advertised.
                 cell: (t) => (
-                  <span className="col" style={{ gap: 2 }}>
-                    <span className="t-caption clamp" title={t.description || undefined}>
-                      {t.description || <span className="muted">no description</span>}
-                    </span>
-                    <span
-                      className="t-caption clamp"
-                      style={{ "--clamp-lines": 1 } as CSSProperties}
-                      title={hintSentence(t.annotations)}
-                    >
-                      {hintSentence(t.annotations)}
-                    </span>
+                  <span className="t-caption clamp" title={t.description || undefined}>
+                    {t.description || <span className="muted">No description</span>}
                   </span>
                 ),
               },

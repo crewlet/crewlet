@@ -71,7 +71,11 @@ import {
   configGuardedReason,
   useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
-import { managedSentence } from "~/protocol/configAnswer.ts";
+import { PRINCIPLES_PATH } from "~/app/routes.ts";
+import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
+import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
+import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
+import { managedSentence, managerOf } from "~/protocol/configAnswer.ts";
 import { useLeadScope, type LedUnit } from "~/lib/leadScope.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
@@ -82,6 +86,7 @@ import {
   type BuilderApi,
   type BuilderViewHandle,
   type ChartKind,
+  type CompanyEdit,
   type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
@@ -121,7 +126,7 @@ import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
-import { CreateCompany, NextSteps } from "./CreateCompany.tsx";
+import { CreateCompany, managedModelSentence, NextSteps } from "./CreateCompany.tsx";
 import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
 import { configTransport } from "~/protocol/configWrite.ts";
 import { browserClock, randomKeys, sessionDraftStorage } from "./runtime.ts";
@@ -130,7 +135,7 @@ import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { screenPath } from "./dialogParts.tsx";
+import { PROBLEM_LINKS, ScreenLink, screenPath } from "./dialogParts.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { ChartSwitch, chartKindOf } from "~/ui/orgNodes.tsx";
 import {
@@ -161,10 +166,11 @@ import {
   Button,
   ButtonLink,
   Callout,
+  CodeBlock,
   cx,
+  Disclosure,
   EmptyState,
   IconButton,
-  InlineCode,
   Kbd,
   LayerHost,
   Menu,
@@ -438,10 +444,11 @@ interface SelectionParams {
 /**
  * Whether a key still names something in the draft.
  *
- * The company is a node like any other to a view (its card carries the
- * charter's Edit and the Add menu) and the only one `locate` cannot find: it
- * is the tree's root rather than an element of a list. Read as absent, a
- * selected company card was cleared again on the next state change.
+ * The company is a node like any other to a view (its card carries the Add
+ * menu and Rename company, and selecting it puts its actions on the toolbar)
+ * and the only one `locate` cannot find: it is the tree's root rather than an
+ * element of a list. Read as absent, a selected company card was cleared again on the next
+ * state change.
  */
 function isPresent(state: BuilderState, key: NodeKey): boolean {
   return key === COMPANY_KEY || locate(state.draft, key) !== undefined;
@@ -486,7 +493,9 @@ function addKindOf(value: string): AddKind | null {
 /**
  * What the address a reader ARRIVED at asks the builder to do, beyond showing
  * the organization: open one node's editor (`seat=` or `unit=`), or open an
- * Add (`add=`, under the unit `unit=` names or at the company's root).
+ * Add (`add=`, under the unit `unit=` names or at the company's root). The
+ * company's principles are not opened here: they are written on Company ›
+ * Principles, which every way into them links to directly.
  *
  * WHY A LINK OPENS SOMETHING AT ALL. Every way into this section from another
  * screen is a request to change one thing: the profile's "Edit" beside a
@@ -509,9 +518,9 @@ function addKindOf(value: string): AddKind | null {
  * this section from the profile a node's "Open seat" went to, mounts on the
  * address the builder itself wrote, and nothing in it tells that from a link
  * somebody sent: both open the editor. `docs/guides/org-builder.md` says so.
- * Telling them apart needs a request the address spends (an `edit=` the link
- * sets and this removes, as `add=` is), which is a change to the section's
- * URL grammar rather than to this effect.
+ * Telling them apart needs a request the address spends (a parameter the
+ * link sets and this removes, as `add=` is), which is a change to the
+ * section's URL grammar rather than to this effect.
  *
  * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, in edit
  * mode and not paused — a kept draft waiting for Keep or Discard, a save whose
@@ -960,6 +969,13 @@ function BuilderScreen({
   const checkManagedBy = status === "managed" ? managedByOf(state) : null;
   const managedBy = checkManagedBy ?? (viewerManaged !== null ? viewer.configManagedBy : null);
   const managed = managedBy === null ? null : managedSentence(managedBy);
+  // AND WHO MANAGES THE DOCUMENT AT ALL, whoever reads it — a writer it names
+  // included, whose edits `managedBy` lets through. It decides where a model
+  // comes from rather than whether this reader may edit: no reader of a
+  // managed document can take the terminal steps, whose offline import it
+  // refuses ([managedModelSentence]).
+  const documentManagedBy =
+    checkManagedBy ?? (viewer.configManagedBy.length > 0 ? viewer.configManagedBy : null);
 
   // Why editing is paused, as the sentence the live region says after
   // "Editing is paused."
@@ -968,7 +984,7 @@ function BuilderScreen({
       return "The outcome of the last save is not known yet.";
     }
     if (managedBy !== null) {
-      return `This company's configuration is managed by ${managedBy.join(", ") || "another system"}.`;
+      return `This company's configuration is managed by ${managerOf(managedBy)}.`;
     }
     if (keeping.offer) return "A kept draft is waiting for Keep or Discard.";
     if (guarded) return signedIn ? configGuardedReason(guardedCode) : "Nobody is signed in.";
@@ -1129,6 +1145,23 @@ function BuilderScreen({
     },
     [readOnlyReason, announce, openDialog],
   );
+
+  // WHERE THE TOOLBAR'S PRINCIPLES ENTRY GOES. They are written on Company ›
+  // Principles and nowhere else, so once a company exists the toolbar offers
+  // that page, in edit for a reader who may write them and plainly for one
+  // who may not, as a seat's Edit opens a read-only editor. Who may write them
+  // is the page's own gate (`useMayWriteCharter`), so the builder never offers
+  // an editor the page then withholds. A company this draft is still CREATING
+  // has no page yet, so there is no entry. The company's node offers none of
+  // this (`nodeActions.editsInPlace`). The move goes through the leave guard,
+  // and the draft is kept for the return either way (`useDraftKeeping`).
+  const principlesWritable = useMayWriteCharter();
+  const principles: CompanyEdit =
+    state.mode === "create" ? null : principlesWritable ? "write" : "read";
+  const openPrinciples = useCallback(() => {
+    if (principles === "write") nav.to(PRINCIPLES_PATH, principlesEditQuery());
+    else nav.to(PRINCIPLES_PATH);
+  }, [principles, nav]);
 
   // WHAT THE ADDRESS THIS BUILDER WAS MOUNTED ON ASKED FOR — see [Arrival].
   // Read once, in the first render, and spent the moment it is answered or the
@@ -1407,6 +1440,9 @@ function BuilderScreen({
         : [],
       selection: { key: selection, select },
       openEditor: (key, section) => openDialog({ type: "editor", key, section }),
+      openCompanyRename: () => openIfWritable({ type: "editor", key: COMPANY_KEY }),
+      openPrinciples,
+      principles,
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),
       openDelete: (key) => openIfWritable({ type: "remove", key }),
@@ -1427,6 +1463,8 @@ function BuilderScreen({
     select,
     openDialog,
     openIfWritable,
+    openPrinciples,
+    principles,
     announce,
     focusNode,
     readOnly,
@@ -1465,11 +1503,17 @@ function BuilderScreen({
   // THE COMPANY RUNS AND ITS AGENTS WAIT. The engine applies a company with no
   // providers.llm and places its seats, then holds every delivery on the
   // seat's inbox until an apply brings a provider (engine/nomodels.go). The
-  // dashboard writes none, so the builder says where one comes from.
-  // A lead's draft holds one unit and no settings, so it says nothing either way.
+  // dashboard writes none, so the builder gives the terminal steps that add
+  // one — the same the card after a create gives, from the same declaration —
+  // or, on a document another system manages, says the model is added there,
+  // since those steps end in an import a managed document refuses.
+  // So while that card is up the caution waits: it would say the same thing
+  // twice, steps and all. A lead's draft holds one unit and no settings, so it
+  // says nothing either way.
   const noProvider =
     state.mode === "edit" &&
     state.scope === null &&
+    !created &&
     !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
@@ -1875,8 +1919,20 @@ function BuilderScreen({
         )}
         {noProvider && (
           <Callout variant="warning" icon={<CpuGlyph />}>
-            No model provider is set, so agents can’t work. Add one with{" "}
-            <InlineCode>crewlet config import</InlineCode>.
+            {documentManagedBy === null ? (
+              <>
+                No model provider is set, so agents can’t work. One is added from a terminal on the
+                node’s host, starting from the company the store holds:
+                <Disclosure title="The steps" size="compact" headingLevel="none">
+                  <CodeBlock plain wrap code={PROVIDER_STEPS} />
+                </Disclosure>
+              </>
+            ) : (
+              <>
+                No model provider is set, so agents can’t work.{" "}
+                {managedModelSentence(documentManagedBy)}
+              </>
+            )}
           </Callout>
         )}
         {refusal && (
@@ -1917,7 +1973,7 @@ function BuilderScreen({
           </Callout>
         )}
 
-        {created && <NextSteps onDismiss={() => setCreated(false)} />}
+        {created && <NextSteps onDismiss={() => setCreated(false)} managedBy={documentManagedBy} />}
 
         {startingCompany ? (
           <CreateCompany
@@ -2248,20 +2304,10 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
         {problems.map((p, i) => (
           <li key={i}>
             <span>{engineSentence(p.message)}</span>
-            {p.link === "integrations" && (
+            {p.link !== null && (
               <>
                 {" "}
-                <a className="t-link prose-link" href={href(screenPath("integrations"))}>
-                  Open Integrations
-                </a>
-              </>
-            )}
-            {p.link === "schedules" && (
-              <>
-                {" "}
-                <a className="t-link prose-link" href={href(screenPath("schedules"))}>
-                  Open Schedules
-                </a>
+                <ScreenLink to={p.link}>{PROBLEM_LINKS[p.link]}</ScreenLink>
               </>
             )}
           </li>

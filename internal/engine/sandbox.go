@@ -1407,7 +1407,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	if refused != nil {
 		return sandbox.LaunchResult{}, refused
 	}
-	agentLLM, env := coding.llm, coding.env
+	model, env := coding.model, coding.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		// The seat's cell, empty inheriting providers.sandbox's default.
 		// Resolved at LAUNCH rather than at config time, for the same
@@ -1434,7 +1434,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		Ask:        askBrief(company.Org, seat),
 		Setup:      setup,
 		Spec:       spec,
-		LLM:        agentLLM,
+		Model:      model,
 		MCPServers: servers,
 		ReuseBox:   reuse,
 	})
@@ -2638,21 +2638,20 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //
 // THREE things travel, and they travel differently on purpose:
 //
-//   - The MODEL and its endpoint, so the agent addresses the model the seat
-//     runs on at the right host rather than its catalogue's default — a
-//     cli-agent entry's model exactly as its text calls name it, for its own
-//     CLI only.
+//   - The MODEL, so the agent addresses the model the seat runs on rather
+//     than its catalogue's default — the entry's model exactly as its text
+//     calls name it, for its own CLI only.
 //   - A TOKEN OR A KEY, in the run environment, which reaches any box
 //     including a remote one: it is one scoped, revocable variable — a
-//     subscription's headless token or cli.env key, or an API entry's own
-//     key under the variable its runner reads.
+//     subscription's headless token, an api-key entry's key, or a key the
+//     entry's env names.
 //   - The credential FILES, only as a host-path map the LOCAL backend seeds
 //     and writes back. They carry a refresh token whose rotation is shared
 //     fleet state, so pushing them onto somebody else's VM is a materially
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
 type codingRun struct {
-	llm   *sandbox.AgentLLM
+	model string
 	files map[string]string
 	env   map[string]string
 }
@@ -2670,26 +2669,23 @@ type codingRun struct {
 // on the model it chose for a subordinate job, silently, on any seat that set
 // both.
 //
-// THE RUNNER IS AN INPUT, because what an entry can give a box depends on
-// which coding agent reads it. A run_sandbox launch takes its runner from
-// role.sandbox.coding_agent and its model from llm_sandbox independently, so
-// the pairing is the operator's and two of them cannot work, which used to
-// start a box that failed inside it:
-//
-//   - A cli-agent entry under ANOTHER CLI's runner. Its model is written in
-//     its own CLI's grammar and its sign-in is that CLI's, so Claude Code was
-//     handed an OpenCode entry's `openrouter/anthropic/claude-sonnet-5`, and
-//     OpenCode a Claude Code entry's `sonnet` with a login it never reads. An
-//     agent-mode run never meets this while its turn's epoch holds: its
-//     runner is its entry's own CLI. Config refuses the same pairing on a
-//     write ([config.Company.validateSandboxCodingAgents]) and both say one
-//     sentence ([config.CodingAgentMismatch]).
-//   - Claude Code on an API entry that does not speak Anthropic's wire. See
-//     [claudeCodeOnForeignEntry].
+// THE RUNNER IS AN INPUT, because an entry's model is written in its own
+// CLI's grammar and its sign-in is that CLI's. A run_sandbox launch takes its
+// runner from role.sandbox.coding_agent and its model from llm_sandbox
+// independently, so the pairing is the operator's, and one entry under ANOTHER
+// CLI's runner cannot work: Claude Code was handed an OpenCode entry's
+// `openrouter/anthropic/claude-sonnet-5`, and OpenCode a Claude Code entry's
+// `sonnet` with a login it never reads, each starting a box that failed inside
+// it. An agent-mode run never meets this while its turn's epoch holds: its
+// runner is its entry's own CLI. Config refuses the same pairing on a write
+// ([config.Company.validateSandboxCodingAgents]) and both say one sentence
+// ([config.CodingAgentMismatch]).
 //
 // A seat with no resolvable model is not an error here: a company with no
 // models takes no turn, so launches no run (see nomodels.go), and the run
-// carries the seat's own environment and nothing else.
+// carries the seat's own environment and nothing else. Neither is a provider
+// that is not a CLI, which only a test's fake is: it names no model a coding
+// agent could read, so the run carries the seat's environment alone.
 func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 	seatEnv map[string]string) (codingRun, error) {
 	run := codingRun{env: seatEnv}
@@ -2702,106 +2698,62 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 			"phase", ph.String(), "error", err)
 		return run, nil
 	}
-	if agent, isCLI := member.Provider.(*cliagent.Provider); isCLI {
-		if agent.Agent() != runner {
-			return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q: %s",
-				seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent()))}
-		}
-		// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS
-		// WRITTEN FOR. A cli-agent entry's model is in that CLI's own
-		// grammar — OpenCode reads `<provider>/<model>`, Claude Code an
-		// alias — so the run is handed the exact string every text call on
-		// the entry gives the CLI, resolved and rendered as they render it.
-		// Every cli-agent entry shares one providers.llm type, so no family
-		// is sent: one inferred from the CLI addressed an OpenCode entry's
-		// `openrouter/…` as `anthropic/openrouter/…`, which no key signs in.
-		//
-		// No base URL: a cli-agent entry has none of its own — the CLI
-		// talks to its vendor, and declaring a custom provider for it would
-		// point a coding agent at an endpoint nothing is serving.
-		//
-		// Its sign-in UNDERLAID BY NAME, so a variable the seat names in
-		// role.sandbox.env wins: each CLI ranks its own credentials, and a
-		// subscription token is the lowest of Claude Code's, so whatever the
-		// seat brought is what signs the run in.
-		run.llm = &sandbox.AgentLLM{Model: agent.ModelArgument(), CLI: agent.Agent()}
-		run.files = agent.SandboxCredentials()
-		// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document
-		// its export printed, mapped where the runner imports it from — the
-		// runner's path, not the profile's, because the runner is what reads
-		// it ([codingagent.Paths.CredentialDocument]).
-		if doc := agent.SandboxCredentialDocument(); doc != "" {
-			if run.files == nil {
-				run.files = map[string]string{}
-			}
-			run.files[codingagent.CredentialDocument] = doc
-		}
-		run.env = underlay(seatEnv, agent.SandboxEnv())
+	agent, isCLI := member.Provider.(*cliagent.Provider)
+	if !isCLI {
 		return run, nil
 	}
-	spec, ok := c.Config.Providers.LLM[member.Key]
-	if !ok {
-		return run, nil
+	if agent.Agent() != runner {
+		return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q: %s",
+			seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent()))}
 	}
-	ep := c.endpoints[member.Key]
-	if runner == codingagent.ClaudeCodeName && spec.Type != config.LLMAnthropic {
-		return claudeCodeOnForeignEntry(seat, member.Key, spec.Type, seatEnv)
+	// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS WRITTEN
+	// FOR. An entry's model is in that CLI's own grammar — OpenCode reads
+	// `<provider>/<model>`, Claude Code an alias — so the run is handed the
+	// exact string every text call on the entry gives the CLI, resolved and
+	// rendered as they render it.
+	//
+	// No base URL: an entry has none of its own — the CLI talks to its
+	// vendor, and declaring a custom provider for it would point a coding
+	// agent at an endpoint nothing is serving.
+	run.model = agent.ModelArgument()
+	run.env = underlay(seatEnv, entrySignIn(agent, runner, seatEnv))
+	run.files = agent.SandboxCredentials()
+	// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document its
+	// export printed, mapped where the runner imports it from — the runner's
+	// path, not the profile's, because the runner is what reads it
+	// ([codingagent.Paths.CredentialDocument]).
+	if doc := agent.SandboxCredentialDocument(); doc != "" {
+		if run.files == nil {
+			run.files = map[string]string{}
+		}
+		run.files[codingagent.CredentialDocument] = doc
 	}
-	run.llm = &sandbox.AgentLLM{Model: ep.model, ProviderType: string(spec.Type), BaseURL: ep.baseURL}
-	run.env = underlay(seatEnv, apiEntryEnv(spec, ep, runner, seatEnv))
 	return run, nil
 }
 
-// apiEntryEnv is the sign-in an API entry contributes to a box its runner
-// reads: the entry's key under the variable that runner's SDK reads for the
-// entry's wire ([config.LLMProvider.ConventionalKeyVar] — ANTHROPIC_API_KEY for
-// an `anthropic` entry, OPENAI_API_KEY for an `openai` or `openai-compatible`
-// one) and, for Claude Code alone, its base URL as ANTHROPIC_BASE_URL.
+// entrySignIn is the sign-in an entry contributes to a run's environment,
+// beneath what the seat brought: its headless token, its API key, or the
+// provider key its env names ([cliagent.Provider.SandboxEnv]).
 //
-// RESOLVED, NEVER RAW. Tier B stores `${VAR}` verbatim, so the entry's own
-// fields would hand a box the literal "${LLM_BASE_URL}" as its endpoint; ep
-// is the epoch's resolution, the one its seats' own calls are made with.
-//
-// THE KEY TRAVELS, because nothing else in the box can sign the agent in:
-// Claude Code reads only its environment, and OpenCode's providers read the
-// same variable, its declared one by naming it (`env`) rather than holding the
-// value. It is one scoped, revocable variable, exactly the trust step a
-// subscription's headless token already takes into every box. The FIRST key
-// of the entry's pool, because a box cannot rotate: the pool's cooldowns live
-// in this process, and a run holds whatever it was started with.
-//
-// THE BASE URL TRAVELS ONLY WHERE IT IS READ. Claude Code reads its endpoint
-// from ANTHROPIC_BASE_URL. OpenCode is handed its endpoint in opencode.json's
-// declared provider ([codingagent.OpenCode.WriteConfig]), translated to the
-// convention of the SDK it loads there, and that provider is the one place
-// its run takes the entry's endpoint from — a variable beside it would be read
-// by nothing the run is addressed to.
+// UNDERLAID BY NAME, so a variable the seat names in role.sandbox.env wins.
+// For OpenCode that is the whole rule: it reads one key per model provider,
+// and the provider the run's model names reads the one variable it reads.
 //
 // ONE UNIT FOR CLAUDE CODE: when the seat's own environment already signs
 // Claude Code in ([codingagent.ClaudeCodeCredentialEnv]), the entry adds
-// neither its key nor its endpoint. Claude Code ranks ANTHROPIC_API_KEY above
-// a plan's CLAUDE_CODE_OAUTH_TOKEN and a cloud toggle routes away from the
-// Anthropic API altogether, so a company key underlaid beside the seat's own
-// sign-in silently moved a plan-billed seat onto metered billing, and a
-// company endpoint underlaid beside the seat's own key sent that key to the
-// company's gateway. Each was underlaid by NAME, which cannot see either.
-func apiEntryEnv(spec config.LLMProvider, ep endpoint, runner string, seatEnv map[string]string) map[string]string {
+// nothing. Claude Code has several sign-ins under different names and ranks
+// them — a cloud toggle routes away from the Anthropic API altogether, and
+// ANTHROPIC_API_KEY outranks a plan's CLAUDE_CODE_OAUTH_TOKEN — so underlaying
+// by name cannot see that a seat is already signed in. An api-key entry's key
+// underlaid beside a seat's own plan token silently moved that seat onto the
+// company's metered key, and beside a Bedrock toggle it rode into a box that
+// never reads it.
+func entrySignIn(agent *cliagent.Provider, runner string, seatEnv map[string]string) map[string]string {
 	if runner == codingagent.ClaudeCodeName && signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
 		return nil
 	}
-	env := map[string]string{}
-	if len(ep.keys) > 0 {
-		env[spec.ConventionalKeyVar()] = ep.keys[0]
-	}
-	if runner == codingagent.ClaudeCodeName && ep.baseURL != "" {
-		env[anthropicBaseURLVar] = ep.baseURL
-	}
-	return env
+	return agent.SandboxEnv()
 }
-
-// anthropicBaseURLVar is the variable Claude Code reads its endpoint from:
-// the host root, Anthropic's own SDK convention and the engine's base_url's.
-const anthropicBaseURLVar = "ANTHROPIC_BASE_URL"
 
 // signsIn reports whether env carries a non-blank value under any of names.
 // Blank does not count: a value written blank authenticates nothing. (An
@@ -2814,33 +2766,6 @@ func signsIn(env map[string]string, names []string) bool {
 		}
 	}
 	return false
-}
-
-// claudeCodeOnForeignEntry is a Claude Code run on an `openai` or
-// `openai-compatible` entry: refused, unless the seat's own environment signs
-// Claude Code in, when the run carries none of the entry at all.
-//
-// CLAUDE CODE SPEAKS ANTHROPIC'S API ONLY, so such an entry has nothing it can
-// read — not its key, which is OpenAI's, and not its model, an OpenAI-side id
-// (`gpt-5`, or a gateway's `anthropic/claude-sonnet-5`) that `claude --model`
-// refuses at its first call however the run is signed in. So a seat that
-// brought its own sign-in — an Anthropic key, a plan token, a Bedrock, Vertex
-// or Foundry toggle — runs on THAT, under Claude Code's own model choice
-// (ANTHROPIC_MODEL in role.sandbox.env picks one), and the entry's key does
-// not ride into a box that cannot use it. One that brought none is refused
-// with the three edits that make it run.
-func claudeCodeOnForeignEntry(seat *org.Role, key string, kind config.LLMProviderType,
-	seatEnv map[string]string) (codingRun, error) {
-	if signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
-		return codingRun{env: seatEnv}, nil
-	}
-	return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q runs code with Claude "+
-		"Code, which speaks the Anthropic API only, on providers.llm.%s, a %q entry whose "+
-		"model and key it cannot use. Point role.llm_sandbox at an anthropic entry, set "+
-		"role.sandbox.coding_agent: %s (which reads OpenAI's wire too), or give the seat a "+
-		"Claude Code sign-in of its own in role.sandbox.env (%s), on which it runs under its "+
-		"own model choice", seat.Handle(), key, kind, codingagent.OpenCodeName,
-		strings.Join(codingagent.ClaudeCodeCredentialEnv, ", "))}
 }
 
 // SandboxModelError reports a coding run whose coding agent cannot use the
@@ -2857,9 +2782,10 @@ func (e *SandboxModelError) Error() string { return e.msg }
 // SandboxCredentialError reports a coding run whose box could never
 // authenticate, refused before the box is minted.
 //
-// A distinct type because the remedies (a token that travels, a provider key
-// that travels, a local cell) are different config edits and an operator has
-// to be told which one is theirs — and because this is the one launch failure
+// A distinct type because the remedies (a token that travels, an api-key
+// entry's key, a provider key that travels, a variable in the engine's own
+// environment, a local cell) are different config edits and an operator has
+// to be told which one is theirs ([credentialRefusal]) — and because this is the one launch failure
 // that is a CONFIGURATION mistake rather than a provider outage, so it must
 // not be retried as if the vendor were down.
 type SandboxCredentialError struct{ msg string }
@@ -2913,19 +2839,25 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	}
 	agent, isCLI := member.Provider.(*cliagent.Provider)
 	if !isCLI {
-		// An api-key entry exports its key into the run environment on
-		// every backend; there is no host-bound half to strand.
+		// Only a test's fake is not a CLI: it signs nothing in, so there
+		// is no host-bound half to strand.
 		return nil
 	}
-	for _, name := range agent.CredentialEnvNames() {
-		if strings.TrimSpace(env[name]) != "" {
-			return nil
-		}
+	if signsIn(env, agent.CredentialEnvNames()) {
+		return nil
+	}
+	// CLAUDE CODE'S OTHER SIGN-INS COUNT TOO — a bearer token, a Bedrock,
+	// Vertex AI or Foundry toggle — because a seat that brought one is handed
+	// none of the entry's ([entrySignIn]). Judged by the profile's two names
+	// alone, that seat's remote run was refused as signed in to nothing when
+	// it was signed in to its own cloud.
+	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(env, codingagent.ClaudeCodeCredentialEnv) {
+		return nil
 	}
 	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
 	// variable to ask about: which one it reads depends on the provider the
 	// entry's model names, and an operator may give it in role.sandbox.env
-	// rather than cli.env. So any credential-named variable the run carries
+	// rather than env. So any credential-named variable the run carries
 	// passes. That is looser than the question — a code-host token the seat
 	// declared for git passes too — and deliberately so: this guard refuses,
 	// and a refusal of a run whose key it could not recognise would block a
@@ -2947,35 +2879,82 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 			}
 		}
 	}
-	remedy := fmt.Sprintf("Give this seat a local cell — role.sandbox.run_in: %q or %q",
-		sandbox.Direct, sandbox.Container)
+	return credentialRefusal(agent, member.Key, seat.Handle(), placement)
+}
+
+// credentialRefusal is the [SandboxCredentialError] for a remote run nothing
+// in whose environment signs its CLI in, carrying the remedy for THIS entry.
+//
+// THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE, because the mode decides
+// what the entry reads at all ([cliagent.Provider.ModeSignIn]). Chosen by the
+// profile alone, an api-key Claude Code entry whose key resolved to nothing was
+// told to mint a subscription token: `-capture-token` stored one the entry
+// never reads (api-key gives the token no fallback, and the child has the token
+// variable removed), and the next launch was refused with the same advice. An
+// inherit-env entry reads the engine's process environment and never the secret
+// store the token lands in; its credential files are seeded as under every
+// mode, but those never leave the engine host. So:
+//
+//   - api-key: the key, worded once in cliagent for every message that names
+//     it, or the seat's own in role.sandbox.env;
+//   - inherit-env: one of the variables it forwards, in the engine's
+//     environment or the seat's role.sandbox.env, or a local cell, which is
+//     seeded with the entry's login;
+//   - subscription: a token that travels where the CLI mints one, the
+//     provider's key where the CLI reads it from its environment, and
+//     otherwise a local cell, which is seeded with the login itself.
+//
+// Its own function rather than the tail of [sandboxCredentials] so that the
+// guard's VERDICT — which runs are refused — reads apart from its wording.
+func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) *SandboxCredentialError {
+	localCell := fmt.Sprintf("role.sandbox.run_in: %q or %q", sandbox.Direct, sandbox.Container)
+	if sign, fromEnv := agent.ModeSignIn(); fromEnv {
+		lead := fmt.Sprintf("seat %q runs code in %q, and nothing in this run's environment "+
+			"authenticates %q: %s", seat, placement, key, sign.Missing())
+		switch {
+		case len(sign.Variables) == 0:
+			// The mode hands the CLI nothing, so the remedy is the mode
+			// — and the login it names reaches a box only in a local cell.
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; that login reaches this seat's box only in a local cell (%s)", lead, localCell)}
+		case sign.Mode == cliagent.AuthAPIKey:
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0])}
+		default:
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or set %s in this seat's role.sandbox.env, or give this seat a local cell "+
+					"(%s), which is seeded with the entry's login",
+				lead, strings.Join(sign.Variables, " or "), localCell)}
+		}
+	}
+	remedy := "Give this seat a local cell — " + localCell
 	switch {
 	case agent.MintsHeadlessToken():
 		remedy = fmt.Sprintf("Mint a token that travels with `crewlet llm login %s "+
-			"-capture-token`, or give this seat a local cell (role.sandbox.run_in: %q or %q)",
-			member.Key, sandbox.Direct, sandbox.Container)
+			"-capture-token`, or give this seat a local cell (%s)", key, localCell)
 	case agent.SignsInThroughEnv():
 		// This CLI's key travels the way a token does, so the one-line
 		// fix is the key rather than a placement change — named by the
 		// provider segment of the very value the box is handed, the one
 		// fact here that says which provider it is. The VARIABLE stays
-		// the CLI's to name (see above), so it is not guessed at.
+		// the CLI's to name (see [sandboxCredentials]), so it is not
+		// guessed at.
 		provider := "the provider its model names"
 		if name, _, found := strings.Cut(agent.ModelArgument(), "/"); found && name != "" {
 			provider = fmt.Sprintf("%q, the provider its model names", name)
 		}
 		remedy = fmt.Sprintf("Set the key of %s, under the variable %s reads for "+
-			"that provider, in providers.llm.%s.cli.env or in this seat's "+
+			"that provider, in providers.llm.%s.env or in this seat's "+
 			"role.sandbox.env — both are exported into the box — or give this seat a "+
-			"local cell (role.sandbox.run_in: %q or %q)",
-			provider, agent.Agent(), member.Key, sandbox.Direct, sandbox.Container)
+			"local cell (%s)",
+			provider, agent.Agent(), key, localCell)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(
 		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
 			"the login stays on the engine host because it carries a refresh token whose "+
 			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
-		seat.Handle(), placement, member.Key, remedy)}
+		seat, placement, key, remedy)}
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

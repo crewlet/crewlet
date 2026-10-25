@@ -48,7 +48,7 @@ type ServerOptions struct {
 
 // Serve makes this node answer the fleet on its own subjects, one a [lane],
 // from its own copy of the estate — and `out_of_service` for the operations of
-// a domain whose copy is wrong (ADR-0045). The returned withdrawal ends every
+// a domain whose copy is wrong (ADR-0046). The returned withdrawal ends every
 // lane.
 //
 // EVERY DATA NODE SERVES, whether or not any other node asks yet, and from

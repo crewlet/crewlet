@@ -60,7 +60,7 @@ func TestAPendingLoginNeverOverwritesALaterAdoptedHostLogin(t *testing.T) {
 func TestAPendingLoginNeverOverwritesALaterImportedBundle(t *testing.T) {
 	t.Parallel()
 	p := pendingLogin(t, nil)
-	if err := p.ImportBundle(t.Context(), bundleOf(t, "exported-credentials",
+	if err := p.ImportBundle(t.Context(), bundleOf(t, p.agent, "exported-credentials",
 		`[{"id":"cred_b","key":"k-bundle"}]`)); err != nil {
 		t.Fatalf("ImportBundle: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestAPendingLoginStillOutranksASeatsRefresh(t *testing.T) {
 func TestAPendingLoginOutranksABootRestore(t *testing.T) {
 	t.Parallel()
 	p := pendingLogin(t, nil)
-	if err := p.RestoreBundle(t.Context(), bundleOf(t, "exported-credentials", `[{"id":"cred_b","key":"k-bundle"}]`)); err != nil {
+	if err := p.RestoreBundle(t.Context(), bundleOf(t, p.agent, "exported-credentials", `[{"id":"cred_b","key":"k-bundle"}]`)); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	if err := p.Status(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {

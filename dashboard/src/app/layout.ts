@@ -140,7 +140,7 @@ export const SCROLLBAR_GUTTER = 10;
 /**
  * What a screen's content keeps on EACH side before the list starts, at the
  * normal density: the kit's `.crewlet-app-shell__content` padding, and
- * `.section-body`'s beside the Settings column, which takes the kit's back
+ * `.crewlet-section-frame__body`'s beside the Settings column, which takes the kit's back
  * and gives the same to the section.
  */
 export const CONTENT_PADDING = px(spacing["5"]);

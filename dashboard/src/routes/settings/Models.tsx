@@ -1,48 +1,58 @@
 /**
- * Settings › Models & keys: every model the company configures, the keys each
- * one rotates through, which of those a vendor is refusing right now, and which
- * seats would feel it.
+ * Settings › Models & keys: every model the company configures — the coding
+ * CLI it drives, the model it runs, how it signs in — and which seats run on
+ * it.
  *
- * # One answer for the state, the chart for the reach
+ * # The document for the entries, the chart for the reach
  *
- * `credential_pool` is the engine's: each key's provenance as the answering
- * node resolved it, beside its pool and the FLEET's cooldown ledger, the later
- * deadline winning — so a key a peer benched a second ago reads cooling here,
- * not ready. Which seats run on a model is the chain the engine resolved for
- * each seat, pushed on the org projection. Neither is worked out again here.
+ * Every model is a `providers.llm` entry of the company document, read through
+ * the same Admin-only `config` question the Configuration screen asks, and
+ * drawn as the engine will run it: a field the entry leaves out is said as the
+ * default the engine applies (`contract/models.ts`, held to the engine's own).
+ * Which seats run on a model is the chain the engine resolved for each seat,
+ * pushed on the org projection. Neither is worked out again here.
+ *
+ * There is no per-key state to show. A model is a CLI, and a CLI holds one
+ * sign-in and rotates nothing, so what an operator needs is how it signs in —
+ * which mode, and which variable the credential is read from — and whether
+ * anything still runs on it.
  *
  * # Names, never values
  *
- * A key is the variable it names, the vendor's conventional variable, or its
- * position when it is written into the document; the answer has no member a
- * value could travel in, and neither does this screen. The edit is one entity
- * write (`PUT /config/llm-providers/{id}`) of what the configuration already
- * serves redacted: a key written inline goes back as the mask, and the engine
- * restores it from the revision it was read from.
+ * The document is served redacted: a credential written as one whole
+ * `${NAME}` is that name, and anything else is the mask, which this screen
+ * says is "written inline" and never draws. The edit is one entity write
+ * (`PUT /config/llm-providers/{id}`) of that same redacted entity: a
+ * credential written inline goes back as the mask, and the engine restores it
+ * from the revision it was read from.
  *
- * Operator-only, like the rest of the column: which variable holds each
- * model's key, and when each is benched, is a map of which credential to take.
+ * Operator-only, like the rest of the column: which variable signs each model
+ * in is a map of which credential to take.
  */
 
-import { Fragment, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
-  Callout,
+  ButtonLink,
   Card,
+  DescriptionList,
   EmptyState,
-  EMPTY_VALUE,
   EmptyValue,
   IconButton,
   InlineCode,
   Skeleton,
   StatCard,
   StatGroup,
-  Tag,
-  TableKeyCell,
   TableEntityCell,
   TableTextCell,
 } from "@crewlethq/ui";
-import { ClockGlyph, CpuGlyph, KeyGlyph, PencilGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CpuGlyph,
+  KeyGlyph,
+  PencilGlyph,
+  SquareTerminalGlyph,
+  UsersGlyph,
+} from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { linkedSeat } from "~/app/frame/cells.tsx";
@@ -50,67 +60,75 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
-import { useNow } from "~/lib/clock.ts";
-import { fmtTime, inTimeExact, plural } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import {
-  benchParts,
-  KEY_STATE_WORDS,
-  KEY_SOURCE_WORDS,
-  keyBackWords,
-  keyMark,
-  keyName,
-  keyWhy,
+  authWords,
+  credentialWords,
+  modeWords,
+  modelEntries,
   modelLine,
-  needsAttention,
-  nextLift,
-  POOL_STATE_WORDS,
+  signInCredential,
+  signInFallback,
+  signInSource,
+  timeoutWords,
   usesOf,
+  type Credential,
+  type ModelEntry,
   type ModelUse,
 } from "~/lib/models.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import type {
-  CredentialKeyRow,
-  CredentialPoolAnswer,
-  CredentialPoolRow,
-} from "~/contract/credentials.ts";
 import { EditModelDialog } from "./EditModelDialog.tsx";
 
 /**
- * How often the answer is asked again, in ms.
+ * The company's models and its seats, as this page and its Home widget read
+ * them: the document's `providers.llm` entries (`config`, Admin's) and the org
+ * projection the seats' chains ride on.
  *
- * The node's own cooldown refresher pulls the fleet's ledger every 15 s
- * (`internal/engine/cooldowns.go`), and the shortest bench an operator can
- * configure is a minute: polling at the refresher's cadence shows a new bench
- * within one interval and a lifted one no later than the pool itself learns
- * of it. Slower would show a key cooling that the pools already use again.
+ * RE-READ ON EVERY PUBLISHED COMPANY, and never on a clock. The document
+ * changes only with a revision, and the engine re-sends the org projection on
+ * each one it publishes — which is also what the seats are drawn from — so
+ * the two move together, and a poll would only ask about a document that
+ * cannot have changed.
  */
-export const MODELS_POLL_MS = 15_000;
-
-export function Models({ id }: { id?: string }) {
-  const { data, loading, error, refusal, refetch } = useQuery("credential_pool", undefined, {
-    pollMs: MODELS_POLL_MS,
-  });
+export function useModels() {
+  const query = useQuery("config");
+  const { refetch } = query;
   const org = useOrg();
   const seats = useMemo(() => indexOrg(org).seats, [org]);
+  const seen = useRef(org);
+  useEffect(() => {
+    if (seen.current === org) return;
+    seen.current = org;
+    refetch();
+  }, [org, refetch]);
+  const entries = useMemo(() => modelEntries(query.data), [query.data]);
+  return { ...query, entries, seats };
+}
+
+export function Models({ id }: { id?: string }) {
+  const { entries, seats, loading, error, refusal, data, refetch } = useModels();
   const [editing, setEditing] = useState<string | null>(null);
 
-  const providers = useMemo(() => data?.providers ?? [], [data]);
-  const addressed = id ? (providers.find((p) => p.key === id) ?? null) : null;
+  const addressed = id ? (entries.find((e) => e.key === id) ?? null) : null;
+  // NULL IS AN ANSWER: no company is configured yet, which has no model — not
+  // a question still out. And a document already read stays on screen through
+  // a later read that failed: `useQuery` keeps its last good answer for that.
+  const answered = data !== null || (!loading && !error);
 
   return (
     <>
       {error && !data && <QueryState error={error} refusal={refusal} loading={false} />}
-      {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
+      {loading && <Skeleton variant="text" rows={6} label="Loading" />}
 
-      {data && !id && <ModelList answer={data} seats={seats} onEdit={setEditing} />}
+      {answered && !id && <ModelList entries={entries} seats={seats} onEdit={setEditing} />}
 
-      {data && id && addressed && (
-        <ModelPage row={addressed} answer={data} seats={seats} onEdit={setEditing} />
+      {answered && id && addressed && (
+        <ModelPage entry={addressed} seats={seats} onEdit={setEditing} />
       )}
-      {data && id && !addressed && (
+      {answered && id && !addressed && (
         <EmptyState
           icon={<CpuGlyph size="xl" />}
           title={`No model called “${id}”`}
@@ -129,7 +147,7 @@ export function Models({ id }: { id?: string }) {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            void refetch();
+            refetch();
           }}
         />
       )}
@@ -137,136 +155,128 @@ export function Models({ id }: { id?: string }) {
   );
 }
 
-/** Every model, with its keys as marks and who runs on it. */
+/** Every model, with the CLI it drives, how it signs in and who runs on it. */
 function ModelList({
-  answer,
+  entries,
   seats,
   onEdit,
 }: {
-  answer: CredentialPoolAnswer;
+  entries: ModelEntry[];
   seats: readonly Seat[];
   onEdit: (id: string) => void;
 }) {
-  const now = useNow();
-  const providers = answer.providers;
-  const pooled = providers.filter((p) => p.state !== "login");
-  const keys = pooled.flatMap((p) => p.keys.filter((k) => k.state !== "duplicate"));
-  const ready = keys.filter((k) => k.state === "ready").length;
-  const cooling = keys.filter((k) => k.state === "cooling").length;
-  const attention = providers.filter(needsAttention).length;
-  const lift = nextLift(providers);
+  const unused = entries.filter((e) => usesOf(seats, e.key).length === 0).length;
+  const agentMode = entries.filter((e) => e.mode === "agent").length;
+  const metered = entries.filter((e) => e.authMode === "api-key").length;
 
   return (
     <>
-      <FleetNote answer={answer} />
-
       <Card padding="none">
         <StatGroup columns={3}>
           <StatCard
             icon={<CpuGlyph size="xs" />}
             label="Models"
-            value={providers.length}
-            // NONE IS NOT ALL READY: "0, all ready" said every model worked on
-            // a node with no model to run a turn on.
+            value={entries.length}
+            // NONE IS NOT ALL IN USE: "0, every one in use" said every model
+            // ran a seat on a company with no model to run a turn on.
             sub={
-              providers.length === 0
+              entries.length === 0
                 ? "none configured"
-                : attention
-                  ? `${attention} need${attention === 1 ? "s" : ""} attention`
-                  : "all ready"
+                : unused
+                  ? `${unused} named by no seat`
+                  : "every one in use"
+            }
+          />
+          <StatCard
+            icon={<SquareTerminalGlyph size="xs" />}
+            label="Agent mode"
+            value={agentMode}
+            sub={
+              agentMode
+                ? `run${agentMode === 1 ? "s" : ""} the executor in its CLI`
+                : "every model behind the engine’s loop"
             }
           />
           <StatCard
             icon={<KeyGlyph size="xs" />}
-            label="Keys ready"
-            value={`${ready} of ${keys.length}`}
-            sub={cooling ? `${cooling} cooling` : "none cooling"}
-          />
-          <StatCard
-            icon={<ClockGlyph size="xs" />}
-            label="Next key back"
-            value={lift ? inTimeExact(lift, now).replace(/^in /, "") : EMPTY_VALUE}
-            sub={lift ? `at ${fmtTime(lift)}` : "nothing is cooling"}
+            label="On an API key"
+            value={metered}
+            sub={metered ? "billed to a metered account" : "none billed per token"}
           />
         </StatGroup>
       </Card>
 
       <Card padding="none">
-        <Card.Header icon={<CpuGlyph size="sm" />} count={providers.length}>
-          Models
+        <Card.Header icon={<CpuGlyph size="sm" />} count={entries.length}>
+          <Card.Title>Models</Card.Title>
         </Card.Header>
-        {providers.length === 0 ? (
-          <div style={{ padding: "var(--spacing-4)" }}>
-            <p className="t-body muted">
-              No model configured. Add one under <InlineCode>providers.llm</InlineCode>.
-            </p>
-          </div>
+        {entries.length === 0 ? (
+          // THE KIT'S EMPTY STATE, as the MCP servers card beside it draws its
+          // own, with the way to where a model is added: a plain sentence in
+          // a padded box was the one empty card on Settings drawn by hand.
+          <EmptyState
+            size="compact"
+            icon={<CpuGlyph size="xl" />}
+            title="No model configured yet"
+            description={
+              <>
+                Add one under <InlineCode>providers.llm</InlineCode> in the company document.
+              </>
+            }
+            action={
+              <ButtonLink variant="secondary" size="small" href={href(["settings", "config"])}>
+                Open Configuration
+              </ButtonLink>
+            }
+          />
         ) : (
-          <DataGrid<CredentialPoolRow>
-            rows={providers}
-            rowKey={(p) => p.key}
-            rowHref={(p) => href(["settings", "models", p.key])}
+          <DataGrid<ModelEntry>
+            rows={entries}
+            rowKey={(e) => e.key}
+            rowHref={(e) => href(["settings", "models", e.key])}
             columns={[
               {
                 key: "model",
                 header: "Model",
                 floor: "12rem",
-                sortValue: (p) => p.key,
-                cell: (p) => (
+                sortValue: (e) => e.key,
+                cell: (e) => (
                   <span className="col model-name">
-                    <span className="mono">{p.key}</span>
-                    <span className="t-caption muted truncate" title={p.model || undefined}>
-                      {modelLine(p)}
+                    <span className="mono">{e.key}</span>
+                    <span className="t-caption muted truncate" title={modelLine(e)}>
+                      {modelLine(e)}
                     </span>
                   </span>
                 ),
               },
               {
-                key: "state",
-                header: "State",
+                key: "mode",
+                header: "Mode",
                 shrink: true,
-                sortValue: (p) => p.state,
-                cell: (p) => <PoolTag row={p} />,
+                drop: 1,
+                sortValue: (e) => e.mode,
+                cell: (e) => <ModeLine entry={e} />,
               },
               {
-                key: "keys",
-                header: "Keys",
-                // TWICE THE MODEL COLUMN'S SHARE of what is left: a key's mark
-                // is its whole variable name and a model carries several, so
-                // at an even split they stood one per line beside a Model
-                // column holding a short key and its id.
-                width: "minmax(0, 2fr)",
-                cell: (p) => <KeyMarks row={p} now={now} />,
+                key: "signin",
+                header: "Signs in with",
+                sortValue: (e) => e.authMode,
+                cell: (e) => <SignInLine entry={e} />,
               },
               {
                 key: "seats",
                 header: "Runs",
                 shrink: true,
                 drop: 2,
-                sortValue: (p) => usesOf(seats, p.key).length,
-                cell: (p) => <ReachLine uses={usesOf(seats, p.key)} />,
-              },
-              {
-                key: "bench",
-                header: "Bench",
-                shrink: true,
-                drop: 1,
-                // STACKED, one cause per line: on one line the pair outgrew
-                // the column's cap at 1280 and was clipped mid-glyph ("auth 2"
-                // for "auth 24h"), and a cell that clips shows a wrong value.
-                cell: (p) =>
-                  p.state === "login" ? (
-                    <EmptyValue label="Nothing rotates" />
-                  ) : (
-                    <BenchLine row={p} stacked />
-                  ),
+                sortValue: (e) => usesOf(seats, e.key).length,
+                cell: (e) => <ReachLine uses={usesOf(seats, e.key)} />,
               },
               {
                 key: "act",
                 header: "",
                 action: true,
                 shrink: true,
-                cell: (p) => <EditButton id={p.key} onEdit={onEdit} icon />,
+                cell: (e) => <EditButton id={e.key} onEdit={onEdit} icon />,
               },
             ]}
           />
@@ -276,71 +286,62 @@ function ModelList({
   );
 }
 
-/** One model: its keys whole, and every seat it reaches. */
+/** One model: what it runs, how it signs in, and every seat it reaches. */
 function ModelPage({
-  row,
-  answer,
+  entry,
   seats,
   onEdit,
 }: {
-  row: CredentialPoolRow;
-  answer: CredentialPoolAnswer;
+  entry: ModelEntry;
   seats: readonly Seat[];
   onEdit: (id: string) => void;
 }) {
-  const now = useNow();
-  const uses = usesOf(seats, row.key);
-  const words = POOL_STATE_WORDS[row.state];
-  const duplicates = row.keys.filter((k) => k.state === "duplicate").length;
-  const counted = row.keys.length - duplicates;
+  const uses = usesOf(seats, entry.key);
+  const mode = modeWords(entry.mode);
   const access = useConfigWriteAccess();
   // ON A PHONE EDIT FOLDS INTO THE BAR'S "MORE": beside the trail it took a
   // line of its own under the crumb. The inline button is the wide bar's.
   usePageMenu([
     {
       key: "edit",
-      label: `Edit ${row.key}`,
+      label: `Edit ${entry.key}`,
       icon: <PencilGlyph size="sm" />,
       disabled: !access.can,
       description: access.can ? undefined : access.reason,
-      onSelect: () => onEdit(row.key),
+      onSelect: () => onEdit(entry.key),
     },
   ]);
   const facts: Fact[] = [
     {
       label: "Model",
-      // ONE TOKEN: a vendor id broken across a line is not one anybody can
+      // ONE TOKEN: a model id broken across a line is not one anybody can
       // search for, so it keeps its line and the title carries the whole id
       // where even two tracks are too narrow.
-      value: row.model ? (
-        <span className="mono" title={row.model}>
-          {row.model}
+      value: entry.model ? (
+        <span className="mono" title={entry.model}>
+          {entry.model}
         </span>
       ) : null,
       token: true,
     },
     {
-      label: "Keys",
-      // THE SAME SET THE KEYS CARD COUNTS, said whole: a duplicate is a row
-      // there and is not a key the pool holds, so it is named rather than
-      // left as the difference between two numbers.
-      // STACKED like the bench beside it, so a narrow fact never wraps
-      // between a number and its noun.
-      value:
-        row.state === "login" ? (
-          "a CLI login"
-        ) : duplicates ? (
-          <span className="model-parts is-stacked">
-            <span className="model-part">{`${row.ready} of ${counted} ready`}</span>
-            <span className="model-part">{plural(duplicates, "duplicate")}</span>
-          </span>
-        ) : (
-          `${row.ready} of ${counted} ready`
-        ),
+      label: "CLI",
+      value: <span className="mono">{entry.agent}</span>,
+      note: entry.agentDefault ? "The default: the entry names no agent." : undefined,
     },
     {
-      label: "Bench",
-      value: row.state === "login" ? "nothing rotates" : <BenchLine row={row} stacked />,
+      label: "Mode",
+      value: entry.runIn ? `${mode.label}, in ${entry.runIn}` : mode.label,
+    },
+    {
+      label: "Timeout",
+      value: timeoutWords(entry.timeoutSeconds),
+      note: entry.timeoutSet ? undefined : "The default: the entry names no timeout_seconds.",
+    },
+    {
+      label: "At once",
+      value: plural(entry.maxConcurrent, "process", "processes"),
+      note: entry.concurrencySet ? undefined : "The default: the entry names no max_concurrent.",
     },
     {
       label: "Runs",
@@ -354,135 +355,23 @@ function ModelPage({
     <>
       <PageActions>
         <span className="page-action-folds">
-          <EditButton id={row.key} onEdit={onEdit} />
+          <EditButton id={entry.key} onEdit={onEdit} />
         </span>
       </PageActions>
       <ObjectHeader
         kind="Model"
         icon="cpu"
-        identifier={row.type}
-        title={row.key}
-        status={<PoolTag row={row} />}
+        identifier={entry.agent}
+        title={entry.key}
+        description={mode.hint}
         facts={facts}
       />
-      <FleetNote answer={answer} />
-      {row.state !== "ready" && (
-        <Callout
-          variant={
-            words.tone === "danger" ? "danger" : words.tone === "warning" ? "warning" : "neutral"
-          }
-        >
-          {words.hint}
-        </Callout>
-      )}
 
-      {row.state !== "login" && (
-        <Card padding="none">
-          <Card.Header icon={<KeyGlyph size="sm" />} count={row.keys.length}>
-            Keys
-          </Card.Header>
-          {row.keys.length === 0 ? (
-            <div style={{ padding: "var(--spacing-4)" }}>
-              <p className="t-body muted">This model names no key.</p>
-            </div>
-          ) : (
-            <DataGrid<{ key: CredentialKeyRow; at: number }>
-              name="keys"
-              rows={row.keys.map((key, i) => ({ key, at: i + 1 }))}
-              rowKey={(r) => String(r.at)}
-              defaultSort="at"
-              columns={[
-                {
-                  key: "at",
-                  header: "#",
-                  shrink: true,
-                  sortValue: (r) => r.at,
-                  cell: (r) => <span className="muted">{r.at}</span>,
-                },
-                {
-                  key: "name",
-                  header: "Key",
-                  floor: "10rem",
-                  sortValue: (r) => keyName(r.key, r.at),
-                  cell: (r) => <KeyLabel keyRow={r.key} at={r.at} />,
-                },
-                {
-                  key: "state",
-                  header: "State",
-                  shrink: true,
-                  sortValue: (r) => r.key.state,
-                  cell: (r) => <KeyTag keyRow={r.key} />,
-                },
-                {
-                  key: "lifts",
-                  header: "Back",
-                  shrink: true,
-                  sortValue: (r) => r.key.cooling_until ?? "",
-                  cell: (r) =>
-                    r.key.cooling_until ? (
-                      <span title={r.key.cooling_until}>
-                        {fmtTime(r.key.cooling_until)}{" "}
-                        <span className="muted">{inTimeExact(r.key.cooling_until, now)}</span>
-                      </span>
-                    ) : r.key.state === "duplicate" ? (
-                      // SAID, NOT A DASH: a duplicate is in the pool — as the
-                      // key it repeats, which comes back whenever that one does.
-                      <span className="muted">{keyBackWords(r.key)}</span>
-                    ) : (
-                      <EmptyValue label={keyBackWords(r.key)} />
-                    ),
-                },
-                {
-                  key: "why",
-                  header: "Why",
-                  drop: 1,
-                  cell: (r) => <span className="t-caption muted">{keyWhy(r.key)}</span>,
-                },
-                {
-                  key: "uses",
-                  header: "Calls here",
-                  shrink: true,
-                  align: "right",
-                  drop: 2,
-                  sortValue: (r) => r.key.uses,
-                  cell: (r) =>
-                    r.key.state === "unresolved" || r.key.state === "duplicate" ? (
-                      <EmptyValue label="None" />
-                    ) : (
-                      <span
-                        className="t-num"
-                        title={`${plural(r.key.uses, "use")}, ${r.key.in_flight} in progress`}
-                      >
-                        {r.key.uses}
-                        {r.key.in_flight > 0 && (
-                          <span className="muted"> · {r.key.in_flight} live</span>
-                        )}
-                      </span>
-                    ),
-                },
-                {
-                  key: "hint",
-                  header: "Hint",
-                  shrink: true,
-                  drop: 3,
-                  cell: (r) =>
-                    r.key.hint ? (
-                      <span className="mono t-caption muted" title="How logs refer to this key">
-                        {r.key.hint}
-                      </span>
-                    ) : (
-                      <EmptyValue label="None" />
-                    ),
-                },
-              ]}
-            />
-          )}
-        </Card>
-      )}
+      <SignInCard entry={entry} />
 
       <Card padding="none">
         <Card.Header icon={<UsersGlyph size="sm" />} count={uses.length}>
-          Seats on it
+          <Card.Title>Seats on it</Card.Title>
         </Card.Header>
         {uses.length === 0 ? (
           <div style={{ padding: "var(--spacing-4)" }}>
@@ -542,119 +431,118 @@ function ModelPage({
   );
 }
 
-/** Said only when the fleet's ledger was not read: every deadline is this node's alone. */
-function FleetNote({ answer }: { answer: CredentialPoolAnswer }) {
-  if (answer.fleet) return null;
-  return (
-    <Callout variant="warning" role="status">
-      <span className="col" style={{ gap: 4 }}>
-        <span>
-          Showing <span className="mono">{answer.node}</span>’s cooldowns only. Other nodes’ may
-          differ.
-        </span>
-        {answer.fleet_error && <span className="t-caption">{answer.fleet_error}</span>}
-      </span>
-    </Callout>
-  );
-}
-
-function PoolTag({ row }: { row: CredentialPoolRow }) {
-  const words = POOL_STATE_WORDS[row.state];
-  return (
-    <Tag size="sm" variant={words.tone} title={words.hint}>
-      {words.label}
-    </Tag>
-  );
-}
-
-function KeyTag({ keyRow }: { keyRow: CredentialKeyRow }) {
-  const words = KEY_STATE_WORDS[keyRow.state];
-  return (
-    <Tag size="sm" variant={words.tone} title={keyWhy(keyRow)}>
-      {words.label}
-    </Tag>
-  );
-}
-
-/** A key's name as it reads in a row: the variable, or its place in the list. */
-function KeyLabel({ keyRow, at }: { keyRow: CredentialKeyRow; at: number }) {
-  if (keyRow.source === "inline") {
-    return (
-      <span className="muted" title={`Key ${at}: ${KEY_SOURCE_WORDS.inline}`}>
-        {keyName(keyRow, at)}
-      </span>
-    );
-  }
-  return (
-    <span className="row gap-2">
-      <TableKeyCell value={keyRow.ref} />
-      {keyRow.source === "default" && (
-        <Tag size="sm" appearance="outline" title={`${keyRow.ref}: ${KEY_SOURCE_WORDS.default}`}>
-          default
-        </Tag>
-      )}
-    </span>
-  );
-}
-
 /**
- * A model's keys as one mark each, in declaration order: the state in its
- * tone, the variable in its title. A cooling key carries how long it has left,
- * which is the one number a person watching a rate limit wants.
+ * How a model signs in: the mode, the credential that mode reads — by the
+ * variable it names, never its value — and what else its CLI is handed. The
+ * CLI, the mode and the sign-in are changed in Configuration, where the whole
+ * entry is in view; the link goes to this entry there.
  */
-function KeyMarks({ row, now }: { row: CredentialPoolRow; now: number }) {
-  if (row.state === "login") return <EmptyValue label="A CLI login" />;
-  if (row.keys.length === 0) return <EmptyValue label="No key" />;
+function SignInCard({ entry }: { entry: ModelEntry }) {
+  const auth = authWords(entry.authMode);
+  const read = signInCredential(entry);
   return (
-    <span className="row gap-1 wrap" role="list" aria-label={`${row.key} keys`}>
-      {row.keys.map((k, i) => {
-        const words = KEY_STATE_WORDS[k.state];
-        const name = keyName(k, i + 1);
-        const left =
-          k.state === "cooling" && k.cooling_until ? inTimeExact(k.cooling_until, now) : "";
-        return (
-          <span role="listitem" key={i}>
-            <Tag
-              size="sm"
-              appearance="outline"
-              variant={words.tone}
-              title={`${name}: ${words.label.toLowerCase()}${left ? `, back ${left}` : ""}. ${keyWhy(k)}`}
-            >
-              <span className="mono model-key">{keyMark(k, i + 1)}</span>
-              {/* THE STATE IN WORDS for a reader who does not get the tone:
-                  a screen reader, or eyes that cannot tell the inks apart. */}
-              <span className="sr-only">, {words.label.toLowerCase()}</span>
-              {left && <span className="model-key-left"> {left.replace(/^in /, "")}</span>}
-            </Tag>
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-/**
- * "rate limit 1h · auth 5m": a model's bench times, each kept whole, the
- * status codes behind them in each part's title. STACKED where the line is
- * narrow (a header fact): one part per line and no separator, because a
- * wrapped "·" is left dangling at the end of the first line.
- */
-function BenchLine({ row, stacked = false }: { row: CredentialPoolRow; stacked?: boolean }) {
-  const parts = benchParts(row);
-  return (
-    <span className={stacked ? "model-parts is-stacked" : "model-parts"}>
-      {parts.map((part, i) => (
-        <Fragment key={part.key}>
-          {i > 0 && !stacked && (
-            <span className="model-parts-sep" aria-hidden="true">
-              ·
+    <Card>
+      <Card.Header icon={<KeyGlyph size="sm" />}>
+        <Card.Title>Signing in</Card.Title>
+      </Card.Header>
+      <DescriptionList>
+        <DescriptionList.Item term="Signs in with">
+          <span className="col model-name">
+            <span>{auth.label}</span>
+            <span className="t-caption muted">
+              {auth.hint}
+              {entry.authDefault ? " The default: the entry names no auth.mode." : ""}
             </span>
-          )}
-          <span className="model-part" title={part.title}>
-            {part.words}
           </span>
-        </Fragment>
-      ))}
+        </DescriptionList.Item>
+        {read && (
+          <DescriptionList.Item term={read.label}>
+            {read.value ? (
+              <CredentialName value={read.value} />
+            ) : (
+              <span className="muted">{signInFallback(entry)}</span>
+            )}
+          </DescriptionList.Item>
+        )}
+        {entry.bundle && (
+          <DescriptionList.Item term="Login bundle">
+            <CredentialName value={entry.bundle} />
+          </DescriptionList.Item>
+        )}
+        <DescriptionList.Item term="Login kept in">
+          {entry.stateDir ? (
+            <span className="mono">{entry.stateDir}</span>
+          ) : (
+            <span className="muted">A directory derived from the key on each node.</span>
+          )}
+        </DescriptionList.Item>
+        {entry.env.length > 0 && (
+          <DescriptionList.Item term="Environment">
+            <ul className="model-env" aria-label={`${entry.key} environment`}>
+              {entry.env.map((v) => (
+                <li key={v.name}>
+                  <span className="mono">{v.name}</span>
+                  <span className="muted"> from </span>
+                  {v.value ? (
+                    <CredentialName value={v.value} />
+                  ) : (
+                    <span className="muted">nothing</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </DescriptionList.Item>
+        )}
+      </DescriptionList>
+      <p className="t-caption model-signin-change">
+        <a
+          className="t-link"
+          href={href(["settings", "config"], {
+            lens: "entities",
+            kind: "llm-providers",
+            entity: entry.key,
+          })}
+        >
+          Change the CLI, its mode or how it signs in under Configuration →
+        </a>
+      </p>
+    </Card>
+  );
+}
+
+/** A credential by the variable it names, or said to be inline — never a value. */
+function CredentialName({ value }: { value: Credential }) {
+  return value.kind === "reference" ? (
+    <span className="mono">{value.name}</span>
+  ) : (
+    <span className="muted">{credentialWords(value)}</span>
+  );
+}
+
+/** "Agent · e2b": how the engine uses the CLI, and where an agent-mode run happens. */
+function ModeLine({ entry }: { entry: ModelEntry }) {
+  const words = modeWords(entry.mode);
+  return (
+    <span className="truncate" title={words.hint}>
+      {words.label}
+      {entry.runIn && <span className="muted"> · {entry.runIn}</span>}
+    </span>
+  );
+}
+
+/** "API key" over "ANTHROPIC_KEY_A": the sign-in, and where its credential comes from. */
+function SignInLine({ entry }: { entry: ModelEntry }) {
+  const words = authWords(entry.authMode);
+  const source = signInSource(entry);
+  const named = signInCredential(entry)?.value?.kind === "reference";
+  return (
+    <span className="col model-name" title={words.hint}>
+      <span>{words.label}</span>
+      {source && (
+        <span className={`t-caption muted truncate${named ? " mono" : ""}`} title={source}>
+          {source}
+        </span>
+      )}
     </span>
   );
 }

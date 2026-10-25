@@ -18,7 +18,7 @@ import (
 
 // The asking half: the seams every node's tools are handed, each answered by a
 // data node whose copy of the operation's domain serves — this one where it
-// does (ADR-0045).
+// does (ADR-0046).
 //
 // Each method has the signature of the in-process one it stands in for, so
 // the tool layer is handed these on every node and cannot tell which node
@@ -642,7 +642,7 @@ func (k Knowledge) Building(ctx context.Context) bool {
 }
 
 // Usage is the usage domain's reads (ADR-0020), answered by a data node whose
-// usage copy is in service — this node's own where it is one (ADR-0045).
+// usage copy is in service — this node's own where it is one (ADR-0046).
 type Usage struct{ r *Router }
 
 // Usage answers the usage domain.

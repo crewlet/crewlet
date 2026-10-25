@@ -159,7 +159,7 @@
 // from the copy of its own domain, and a participant whose VECTORS copy is
 // out of service asks that verdict itself, in the scanner, and answers
 // without the half, saying so ([search.Copies]). And the seats were never the
-// problem, the copy was, so the node keeps them. This is ADR-0045, which
+// problem, the copy was, so the node keeps them. This is ADR-0046, which
 // refines ADR-0025's amendment to one domain at a time; the copy a SEAT is
 // served by — what admission asks of — is every domain that gates seat
 // admission at once ([SeatCopy]).

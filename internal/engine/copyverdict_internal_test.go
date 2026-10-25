@@ -15,7 +15,7 @@ import (
 
 // A FAULT IN A DOMAIN NO SEAT DEPENDS ON SHEDS NO SEAT AND WITHHOLDS NO CLAIM —
 // even on a node whose view of the fleet cannot name a peer — while a fault in
-// one a seat does still makes the node's seats depend on that view (ADR-0045).
+// one a seat does still makes the node's seats depend on that view (ADR-0046).
 //
 // A wrong vectors copy goes out of service for the vectors alone: the seat copy
 // — the tracker and the knowledge base — is still this node's, so the node

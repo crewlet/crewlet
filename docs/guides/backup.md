@@ -50,13 +50,12 @@ A deployment's durable state lives in six places:
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
-| **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
+| **LLM CLI homes** | Each `providers.llm` entry's state directory on the engine host (`state_dir`, or one per key under `CREWLET_LLM_CLI_HOME`), each CLI's files under `<state_dir>/<agent>` | The coding CLIs' logins and per-seat homes (a login is portable via `crewlet llm export`) |
 
 Classify before you size the job:
 
 - **Rebuildable, safe to lose:** every TTL'd coordination bucket — the rate
-  valve, delivery dedupe and node status regenerate, credential cooldowns
-  re-learn at the cost of some rate-limit errors, and the
+  valve, delivery dedupe and node status regenerate, and the
   [rebase records](../concepts/coordination.md#what-the-fleet-shares)
   re-form at the next attempt, at the cost that a turn whose work began more
   than twenty-nine days ago, retried after the loss, writes again what its

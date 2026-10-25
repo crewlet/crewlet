@@ -94,10 +94,6 @@ var namedRoutes = []struct {
 	// which is the configuration's own collection — this is what the fleet
 	// did with it, from the heartbeats.
 	{method: "GET", pattern: "/mcp-servers", what: "mcp_servers_status"},
-	// EVERY MODEL'S KEY BAG AND WHICH KEYS ARE COOLING. Not under
-	// /config/llm-providers either — the configuration names the keys, and
-	// this is what the pools and the fleet's ledger did with them.
-	{method: "GET", pattern: "/credential-pool", what: "credential_pool"},
 	// WHAT THE FLEET HAS BACKED UP, and every backup a person asked for.
 	// Plural beside `POST /backup`, which TAKES one: the read is a
 	// collection and the write is one act, and neither is the other's

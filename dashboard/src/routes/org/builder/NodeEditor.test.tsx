@@ -199,7 +199,7 @@ describe("applying", () => {
 
   test("a refused edit stays open with the reducer's reason, and nothing is recorded", () => {
     // Before the company has loaded, the reducer records nothing against it:
-    // the charter's editor is the one with a node to open on an empty draft.
+    // the company's form is the one with a node to open on an empty draft.
     const view = edit(INITIAL_BUILDER, COMPANY_KEY);
     // A company with no name yet is named, not renamed: nothing to acknowledge.
     type("Company name", "Acme");
@@ -219,7 +219,7 @@ describe("applying", () => {
   // THE BANNER SAYS THESE FIELDS ARE FOR READING, so every one of them is: a
   // box that still takes typing makes the form dirty, asks whether to discard
   // work that was never going anywhere, and reads as a save the builder lost.
-  test("every field of a read-only editor is for reading, the charter's and a unit's type included", () => {
+  test("every field of a read-only editor is for reading, the company's and a unit's type included", () => {
     const readOnly = { readOnly: true };
     const enabled = () =>
       ["textbox", "combobox", "checkbox"]
@@ -242,20 +242,20 @@ describe("applying", () => {
   });
 });
 
-// A LEAD'S DRAFT OF ONE UNIT (`model/scope.ts`): the company's charter and
+// A LEAD'S DRAFT OF ONE UNIT (`model/scope.ts`): the company's name and
 // the unit's own lead are outside what they lead, and say so where they are
 // drawn; everything else about the unit, and a unit inside it, is theirs.
 describe("a lead's draft of one unit", () => {
   const disabled = (el: HTMLElement) =>
     (el as HTMLInputElement).disabled || el.getAttribute("aria-disabled") === "true";
 
-  test("the charter is for reading, with the reason", () => {
+  test("the company's name is for reading, with the reason", () => {
     edit(scopedState(fixtureCompany(), "engineering"), COMPANY_KEY);
     expect(disabled(field("Company name"))).toBe(true);
     expect(applyRefuses()).toBe(true);
     expect(
       shownReason(
-        "The company's charter and settings are not part of Engineering: changing them takes Admin access.",
+        "The company's name and settings are not part of Engineering: changing them takes Admin access.",
       ),
     ).toBeDefined();
   });
@@ -768,7 +768,7 @@ describe("seat fields", () => {
     expect(screen.getByText(/GitLab isn’t set up\./)).toBeDefined();
   });
 
-  test("a seat, a unit and the charter each need a name before Apply", () => {
+  test("a seat, a unit and the company each need a name before Apply", () => {
     const cases: [NodeKey, string, string][] = [
       ["seat:dev", "Name", "A seat needs a name."],
       ["unit:engineering", "Name", "A unit needs a name."],
@@ -1657,7 +1657,20 @@ describe("opening at a part of the form", () => {
   });
 });
 
-describe("the charter", () => {
+describe("the company's name", () => {
+  // THE PRINCIPLES ARE WRITTEN ON COMPANY › PRINCIPLES, so the company's form
+  // here holds its name alone and says where the rest is written.
+  test("the form holds the name alone, and points to where the principles are written", () => {
+    edit(keyedState(fixtureCompany()), COMPANY_KEY);
+    expect(field("Company name")).toBeDefined();
+    for (const label of ["Mission", "Vision", "Policies"]) {
+      expect(screen.queryByLabelText(labelled(label))).toBeNull();
+    }
+    expect(screen.getByRole("link", { name: "Company › Principles" }).getAttribute("href")).toBe(
+      "#/company/principles",
+    );
+  });
+
   test("renaming the company needs its consequences confirmed before Apply", () => {
     const view = edit(keyedState(fixtureCompany()), COMPANY_KEY);
     type("Company name", "Acme Labs");
@@ -1676,26 +1689,24 @@ describe("the charter", () => {
 
   // The acknowledgement is about what THIS Apply does: a name the draft
   // already carries, or one the document stored with a space around it, is
-  // not a rename of the mission edit that follows.
-  test("a charter edit that renames nothing asks nothing, and renames nothing", () => {
+  // not a rename of a form nobody typed in.
+  test("a company form left as it opened asks nothing, and renames nothing", () => {
     const renamed = builderReducer(keyedState(fixtureCompany()), {
       type: "record",
       intent: { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
     });
     const view = edit(renamed, COMPANY_KEY);
-    type("Mission", "Make more things.");
     expect(screen.queryByRole("checkbox", { name: /renaming the company/ })).toBeNull();
     apply();
-    expect(view.state().log.ops).toHaveLength(2);
+    expect(view.state().log.ops).toHaveLength(1);
     cleanup();
 
     const padded = { ...fixtureCompany(), name: " Acme" };
     const second = edit(keyedState(padded), COMPANY_KEY);
-    type("Mission", "Make more things.");
     expect(screen.queryByRole("checkbox", { name: /renaming the company/ })).toBeNull();
     apply();
     expect(second.state().draft.company.name).toBe(" Acme");
-    expect(second.state().draft.company.mission).toBe("Make more things.");
+    expect(second.state().log.ops).toHaveLength(0);
     cleanup();
 
     // Taking the space out IS a rename: the engine derives agent ids from the

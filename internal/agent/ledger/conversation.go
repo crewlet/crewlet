@@ -9,8 +9,8 @@ import "strings"
 // conversation_sessions row.
 //
 // Why a ledger and not a transcript. The engine can already round-trip a whole
-// LLM conversation: a parked sandbox run persists the full message list,
-// signed thinking blocks included, and splices it back into a running loop.
+// LLM conversation: a parked sandbox run persists the full message list and
+// splices it back into a running loop.
 // That is right for a PARKED turn, whose dangling tool call is waiting for one
 // answer. It is wrong here: a conversation's next turn arrives against a
 // thread that has MOVED, and replaying raw prior context invites acting on

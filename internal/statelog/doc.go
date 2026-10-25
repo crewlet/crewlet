@@ -191,7 +191,7 @@
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
 // halts, health goes false immediately, and the node takes its copy of THAT
-// DOMAIN out of service (ADR-0045) — that domain's operations go to another
+// DOMAIN out of service (ADR-0046) — that domain's operations go to another
 // data node that can decode it, and its seats stay. A deferred gate does not
 // postpone one record's effect on one node; it silently licenses every record
 // above it.
@@ -207,7 +207,7 @@
 // level, and a node whose copy of one of them is out of service routes its
 // seats through its peers. Whether a copy is judged is never declared, because
 // a domain allowed to opt out is a domain whose wrong copy is served for ever.
-// This is ADR-0045; the engine computes the verdict per domain and the
+// This is ADR-0046; the engine computes the verdict per domain and the
 // estate's router asks it of each operation's own domain.
 //
 // The consequence every reader of an ABSENCE inherits: the checkpoint moves
@@ -380,7 +380,7 @@
 // Below the floor an anchor names a record the log no longer holds, so all it
 // can do is send its subject's next write to be refused before the
 // discriminator takes the zero path — and kept, the table grows by every
-// subject the log ever carried. The trim removes them (ADR-0046): after each
+// subject the log ever carried. The trim removes them (ADR-0047): after each
 // tick's purge it appends a framework [TrimmedKind] record naming the log's
 // first surviving sequence ([PlanSweep], [SweepPlan.Sweep]), and every node's
 // applier removes that log's anchors below it in the transaction that applies
@@ -427,7 +427,7 @@
 // above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
 // domain's log would key it to a stream it never read. WHICH instant
-// identifies a stream is ADR-0049: the one its creator stamped into its
+// identifies a stream is ADR-0050: the one its creator stamped into its
 // configuration ([CreatedAtKey]), which a snapshot restore keeps and the
 // broker's own does not, read by every consumer through [StreamCreatedAt] and
 // by nothing else.

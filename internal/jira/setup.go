@@ -127,6 +127,7 @@ func Requirements(
 			ConfigPath: "integrations.jira.token",
 			SecretName: "JIRA_TOKEN",
 			Required:   true,
+			Checkable:  true,
 			// NO SENTENCE OF ITS OWN. This is ONE input shared by Jira
 			// and Confluence, and each named the product it was declared
 			// in, so which description rendered depended on which section
@@ -148,7 +149,10 @@ func Requirements(
 			// running the setup pass registers the hook with this value.
 			Mintable: true,
 			Help:     "Signs every delivery, on both deployments.",
-			Blocks:   integration.FindingIngressBlocked,
+			// PROVED BY THE FIRST DELIVERY: Jira never presents the
+			// secret, it signs with it.
+			CheckNote: "Jira proves it with the first delivery it signs.",
+			Blocks:    integration.FindingIngressBlocked,
 		},
 		{
 			Field:  "site_url",

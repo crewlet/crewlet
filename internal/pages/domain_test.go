@@ -198,7 +198,7 @@ func TestABarrierIntersectsNothing(t *testing.T) {
 // TestATrimmedRecordIntersectsNothing, for the barrier's reason: it writes no
 // row of this domain's anywhere, so a scope that intersected a page would make
 // every read and write of it wait behind a record that changed none of its
-// rows (ADR-0046).
+// rows (ADR-0047).
 func TestATrimmedRecordIntersectsNothing(t *testing.T) {
 	t.Parallel()
 	paths := pages.ScopeSet{Subject: true}.Resolve(pages.TrimmedSubject(statelog.Position{

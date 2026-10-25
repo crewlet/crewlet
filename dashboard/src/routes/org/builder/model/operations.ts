@@ -79,7 +79,7 @@ import {
   type Located,
   type Placement,
 } from "./draft.ts";
-import { CHARTER_FIELDS, DATADOG_ROUTE_TO, GITLAB_ACCESS_LEVELS } from "./document.ts";
+import { COMPANY_FIELDS, DATADOG_ROUTE_TO, GITLAB_ACCESS_LEVELS } from "./document.ts";
 import { handleProblem, unitKeyProblem } from "./identity.ts";
 
 // ---------------------------------------------------------------------------
@@ -92,9 +92,13 @@ import { handleProblem, unitKeyProblem } from "./identity.ts";
  * replaying an operation under a meaning it was not recorded with is exactly
  * the silent corruption preconditions exist to stop. Version 2 is the one
  * whose references name handles and unit keys; a version 1 log named seats
- * and units by their names.
+ * and units by their names. Version 3 is the one whose company edit writes the
+ * name alone and whose template carries no mission: a version 2 log could
+ * hold a change to the company's principles, which this builder no longer
+ * writes (Company › Principles does), and is discarded with the notice every
+ * unreadable kept draft gets rather than replayed without it.
  */
-export const OPERATIONS_VERSION = 2;
+export const OPERATIONS_VERSION = 3;
 
 /** Who holds a seat. An absent or unrecognised `kind` is an agent seat, as the engine reads it. */
 export type SeatKind = "agent" | "human";
@@ -135,7 +139,7 @@ export interface NodeSnapshot {
   readonly json: unknown;
 }
 
-/** The starting shapes `applyTemplate` can carry (see `templates.ts`). "empty" is the charter alone. */
+/** The starting shapes `applyTemplate` can carry (see `templates.ts`). "empty" is the company alone. */
 export type TemplateId = "empty" | "new_company" | "established_company";
 
 export interface AddUnit {
@@ -284,8 +288,8 @@ export interface UpdateCompany {
 export interface ApplyTemplate {
   readonly type: "applyTemplate";
   readonly template: TemplateId;
-  /** The charter the create form collected. */
-  readonly charter: { readonly name: string; readonly mission?: string };
+  /** The company's name, from the create form. */
+  readonly name: string;
   /** The seats and units the template produced, with the keys the handler minted. */
   readonly roles: readonly DraftSeat[];
   readonly units: readonly DraftUnit[];
@@ -444,7 +448,7 @@ type SingleIntent =
   | {
       readonly type: "applyTemplate";
       readonly template: TemplateId;
-      readonly charter: { readonly name: string; readonly mission?: string };
+      readonly name: string;
       readonly roles: readonly DraftSeat[];
       readonly units: readonly DraftUnit[];
     };
@@ -621,15 +625,15 @@ function unitFieldWritable(path: readonly string[], minted: boolean): boolean {
   return head !== "id" || minted;
 }
 
-/** Whether `updateCompany` may write a field: the charter, and nothing else. */
-function charterFieldWritable(path: readonly string[]): boolean {
-  return path.length === 1 && (CHARTER_FIELDS as readonly string[]).includes(path[0]!);
+/** Whether `updateCompany` may write a field: the company's name, and nothing else (see [COMPANY_FIELDS]). */
+function companyFieldWritable(path: readonly string[]): boolean {
+  return path.length === 1 && (COMPANY_FIELDS as readonly string[]).includes(path[0]!);
 }
 
 /**
  * Why an operation could never have been recorded, whatever the draft: a
  * field another operation owns, an existing seat's handle, anything outside
- * the charter in a company edit, or a created node without a minted key.
+ * the company's name in a company edit, or a created node without a minted key.
  * `null` when it is well formed.
  *
  * [record] refuses each of these as it builds an operation. A log read back
@@ -659,9 +663,9 @@ export function malformedReason(op: Operation): string | null {
         ? null
         : "a unit edit writes a field its own action owns";
     case "updateCompany":
-      return op.changes.every((c) => charterFieldWritable(c.path))
+      return op.changes.every((c) => companyFieldWritable(c.path))
         ? null
-        : "a company edit writes outside the charter";
+        : "a company edit writes more than its name";
     case "applyTemplate":
       if (!templateKeys(op.roles, op.units).every(isMintedKey)) {
         return "a template node has no minted key";
@@ -684,7 +688,7 @@ export function malformedReason(op: Operation): string | null {
   }
 }
 
-/** The node one part of an edit changes: its target, or the company for a charter edit. */
+/** The node one part of an edit changes: its target, or the company for a company edit. */
 function partTarget(part: { readonly type: string; readonly target?: NodeKey }): NodeKey {
   return part.type === "updateCompany" ? COMPANY_KEY : (part.target ?? COMPANY_KEY);
 }
@@ -1207,10 +1211,10 @@ export function record(
     case "updateCompany": {
       const changes: FieldChange[] = [];
       for (const set of intent.set) {
-        if (!charterFieldWritable(set.path)) {
+        if (!companyFieldWritable(set.path)) {
           return refuse(
             "forbidden_field",
-            `The builder edits the charter only, not ${fieldName(set.path)}.`,
+            `The builder edits the company's name only, not ${fieldName(set.path)}. Its principles are written on Company › Principles.`,
           );
         }
         const before = getPath(draft.company, set.path);
@@ -1234,7 +1238,7 @@ export function record(
       return recorded({
         type: "applyTemplate",
         template: intent.template,
-        charter: cloneJson(intent.charter),
+        name: intent.name,
         roles: cloneJson(intent.roles),
         units: cloneJson(intent.units),
       });
@@ -1874,8 +1878,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         draft: {
           company: {
             ...draft.company,
-            name: op.charter.name,
-            ...(op.charter.mission ? { mission: op.charter.mission } : {}),
+            name: op.name,
           },
           roles: cloneJson(op.roles),
           units: cloneJson(op.units),
@@ -2092,13 +2095,13 @@ export function describeOperation(op: Operation, before: Draft): string {
         ? "Cleared the Datadog fallback seat."
         : `Set the Datadog fallback seat to ${op.change.after}.`;
     case "updateCompany":
-      return `Edited the charter: ${op.changes.map((c) => fieldName(c.path)).join(", ")}.`;
+      return `Edited the company: ${op.changes.map((c) => fieldName(c.path)).join(", ")}.`;
     case "applyTemplate":
-      return `Started ${op.charter.name} from a template.`;
+      return `Started ${op.name} from a template.`;
     case "edit": {
       const parts = op.ops.flatMap(editPartPhrases).join(", ");
       return op.target === COMPANY_KEY
-        ? `Edited the charter: ${parts}.`
+        ? `Edited the company: ${parts}.`
         : `Edited ${nameOf(op.target)}: ${parts}.`;
     }
   }

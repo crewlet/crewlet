@@ -28,9 +28,7 @@ name: Acme
 providers:
   llm:
     gateway:
-      type: openai
-      model: gpt-4o
-      api_keys: ["${OPENAI_API_KEY}"]
+      model: sonnet
 learning:
 `+block+`
 roles:
@@ -192,14 +190,10 @@ func TestOneOutcomeOffStillWiresTheRefiner(t *testing.T) {
 // at a time.
 func TestTheRefinerTakesTheCompanysCaps(t *testing.T) {
 	t.Parallel()
-	c := refinementCompany(t, "    max_body_chars: 40\n"+
-		"    budget_tokens: 77\n    max_versions_kept: 3\n")
+	c := refinementCompany(t, "    max_body_chars: 40\n    max_versions_kept: 3\n")
 	opts := refinerOptions(c.Config.Learning.SkillRefinement)
 	if opts.MaxBodyChars != 40 {
 		t.Errorf("MaxBodyChars = %d, want the company's 40", opts.MaxBodyChars)
-	}
-	if opts.MaxTokens != 77 {
-		t.Errorf("MaxTokens = %d, want the company's budget_tokens", opts.MaxTokens)
 	}
 	if opts.KeepVersions != 3 {
 		t.Errorf("KeepVersions = %d, want the company's max_versions_kept", opts.KeepVersions)

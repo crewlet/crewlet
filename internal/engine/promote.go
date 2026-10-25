@@ -157,7 +157,6 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 		Units:            e.promotionUnits,
 		MinSiblings:      cfg.MinSiblingCount,
 		JaccardThreshold: cfg.JaccardThreshold,
-		MaxTokens:        cfg.BudgetTokens,
 	})
 	if err != nil {
 		log.Warn("skill_promotion_unavailable", "error", err,

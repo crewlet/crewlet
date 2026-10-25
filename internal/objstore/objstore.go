@@ -69,7 +69,7 @@
 // Which objects SHOULD exist is not a list this package keeps: every row that
 // refers to an object names it, and the declared tables
 // (internal/objstore/references) are the whole inventory. Each declared table
-// is Required or Retired (ADR-0047): both keep the objects their rows name
+// is Required or Retired (ADR-0048): both keep the objects their rows name
 // from collection, and only a Required table's are audited, and copied,
 // counted or asked after by a backup — a retired object's bytes ride a `nats`
 // backup's stream snapshot uncounted, like anything else the bucket holds. The
@@ -84,7 +84,7 @@
 // objects ([ReferenceTable.Records], the domain's own decoder): a backup
 // restores a copy of the rows and replays the log from the copy's position, so
 // what it owes is what the copy names AND what every record it replays names
-// (ADR-0048). The collector reads rows alone and never the log.
+// (ADR-0049). The collector reads rows alone and never the log.
 package objstore
 
 import (
@@ -376,13 +376,13 @@ type ReferenceTable struct {
 	// domain's applier keeps the records of it this node could not apply
 	// yet (statelog's DeferredTable).
 	//
-	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup, ADR-0048): a
+	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup, ADR-0049): a
 	// restore brings the copy back and replays that log from the copy's
 	// position — and a build that can read a deferred record applies it —
 	// so the objects the restored rows name include every object a record
 	// of either names. A Required table states both
 	// ([ReferenceTable.ValidateLog]); a retired one may leave them empty,
-	// since no backup carries a retired reference (ADR-0047).
+	// since no backup carries a retired reference (ADR-0048).
 	Log      string
 	Deferred string
 
@@ -441,7 +441,7 @@ var ErrRecordUnreadable = errors.New("objstore: a log record this build cannot r
 func JoinOwner(owner ...string) string { return strings.Join(owner, "/") }
 
 // Standing is what a declared table's rows are to the company: references it
-// is owed, or retired ones that keep their objects only for a grace — ADR-0047,
+// is owed, or retired ones that keep their objects only for a grace — ADR-0048,
 // whose rationale is internal/objstore/references' package doc.
 //
 // A NAMED TYPE WITH NO DEFAULT. Its zero value is refused

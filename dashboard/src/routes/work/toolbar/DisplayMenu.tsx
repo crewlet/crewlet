@@ -28,7 +28,7 @@ import type { ReactNode } from "react";
 import { Button, Popover, Select, Tag } from "@crewlethq/ui";
 import { Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { secondAxisOptions, type Shape } from "~/lib/work.ts";
-import { ColumnChooser } from "~/app/frame/DataGrid.tsx";
+import { ChooserList, ColumnChooser } from "@crewlethq/ui";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 import { CARD_FACTS, type CardFact } from "~/components/work.tsx";
 
@@ -157,26 +157,20 @@ function DisplayPanel({
           columns. Only the descriptive facts: the states a board is triaged
           by are not a reader's to hide (see [CARD_FACTS]). */}
       {board && (
-        <>
-          <div className="grid-cols-label">Card shows</div>
-          <div className="grid-cols-choices" data-card-facts="">
-            {CARD_FACTS.map((fact) => (
-              <label key={fact.key} className="grid-cols-choice">
-                <input
-                  type="checkbox"
-                  checked={!cardHidden.has(fact.key)}
-                  onChange={() => {
-                    const next = new Set(cardHidden);
-                    if (next.has(fact.key)) next.delete(fact.key);
-                    else next.add(fact.key);
-                    onCardHidden(next);
-                  }}
-                />
-                <span>{fact.label}</span>
-              </label>
-            ))}
-          </div>
-        </>
+        <ChooserList
+          label="Card shows"
+          items={CARD_FACTS.map((fact) => ({
+            key: fact.key,
+            label: fact.label,
+            checked: !cardHidden.has(fact.key),
+          }))}
+          onToggle={(key) => {
+            const next = new Set(cardHidden);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            onCardHidden(next);
+          }}
+        />
       )}
 
       {/* THE LANES PUT AWAY, named, each one press from coming back — a

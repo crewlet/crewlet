@@ -6,13 +6,16 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -84,7 +87,7 @@ func (p *Provider) loginLeftNothing() error {
 		return fmt.Errorf("cliagent: the %q profile names no place a login is kept — no "+
 			"credential_paths and no credential_store — so nothing its login command stores "+
 			"can reach a seat; declare where it keeps one under "+
-			"providers.llm.%s.cli.overrides", p.agent, p.key)
+			"providers.llm.%s.overrides", p.agent, p.key)
 	}
 	return fmt.Errorf("cliagent: the %q CLI exited without leaving a login where this "+
 		"entry reads one (%s), so nothing was written to %s — if the sign-in did not "+
@@ -201,7 +204,7 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 			"`crewlet llm login` (which brokers that flow), or "+
 			"`crewlet llm login -capture-token` where the vendor mints a headless "+
 			"token. If your build of this CLI does accept a credential, declare it "+
-			"under providers.llm.%s.cli.overrides.stdin_login",
+			"under providers.llm.%s.overrides.stdin_login",
 			ErrNoLoginCommand, p.agent, p.key)
 	}
 	args := make([]string, 0, len(login.Args))
@@ -484,28 +487,73 @@ func (p *Provider) hostStoreName(home string) string {
 // ONLY the credential files travel. Sessions, history and caches are never
 // in a bundle: they are per-seat conversation state, and shipping them across
 // hosts would restore one seat's transcripts onto another node's disk.
+//
+// And the bundle NAMES THE CLI it was exported from, in a manifest beside the
+// files ([cliprofile.BundleManifest]): a bundle is keyed by the entry, which
+// can move to another CLI, and the files' names cannot say whose they are —
+// six CLIs keep an `auth.json` — so the restore reads the CLI from the
+// manifest and refuses every other ([ErrForeignBundle]).
 func (p *Provider) ExportBundle() (string, error) {
-	files := p.ws.LoginFiles()
-	if len(files) == 0 {
+	paths := p.ws.LoginFiles()
+	if len(paths) == 0 {
 		return "", fmt.Errorf("cliagent: %q has no login to export — "+
 			"run `crewlet llm login %s` first", p.agent, p.key)
 	}
-	var raw bytes.Buffer
-	zw := gzip.NewWriter(&raw)
-	tw := tar.NewWriter(zw)
-	for _, path := range files {
+	files := make([]bundleFile, 0, len(paths))
+	for _, path := range paths {
 		data, err := os.ReadFile(path) //nolint:gosec // path came from the workspace
 		if err != nil {
 			return "", fmt.Errorf("cliagent: reading %q: %w", path, err)
 		}
+		files = append(files, bundleFile{name: filepath.Base(path), data: data})
+	}
+	return packBundle(p.agent, files)
+}
+
+// bundleManifest is what a bundle's [cliprofile.BundleManifest] entry holds.
+//
+// Decoded with unknown keys IGNORED, not refused: a bundle outlives the build
+// that exported it — it sits in the secret store while a fleet upgrades one
+// node at a time — so a later build may add a key, and a node still on this
+// one that refused it would run the entry signed out over a bundle that is
+// its CLI's.
+type bundleManifest struct {
+	// Agent is the CLI the bundle was exported from: the provider's agent,
+	// which is the directory its files are kept in under the state directory
+	// (`<state_dir>/<agent>`, [Shared]) — so an entry that leaves `agent`
+	// out, and drives claude-code, writes "claude-code".
+	Agent string `json:"agent"`
+}
+
+// bundleFile is one login file in a bundle, under its file name.
+type bundleFile struct {
+	name string
+	data []byte
+}
+
+// packBundle writes a bundle: the manifest naming agent, then each file, as
+// one base64 gzip tar. The format's ONE writer: [Provider.ExportBundle] writes
+// through it, and so does every bundle this package's suite builds as an
+// export would, so the suite cannot hold the restore to a format the export
+// does not write.
+func packBundle(agent string, files []bundleFile) (string, error) {
+	manifest, err := json.Marshal(bundleManifest{Agent: agent})
+	if err != nil {
+		return "", fmt.Errorf("cliagent: writing the bundle's manifest: %w", err)
+	}
+	var raw bytes.Buffer
+	zw := gzip.NewWriter(&raw)
+	tw := tar.NewWriter(zw)
+	entries := append([]bundleFile{{name: cliprofile.BundleManifest, data: manifest}}, files...)
+	for _, entry := range entries {
 		header := &tar.Header{
-			Name: filepath.Base(path), Mode: 0o600,
-			Size: int64(len(data)), Typeflag: tar.TypeReg,
+			Name: entry.name, Mode: 0o600,
+			Size: int64(len(entry.data)), Typeflag: tar.TypeReg,
 		}
 		if err := tw.WriteHeader(header); err != nil {
 			return "", fmt.Errorf("cliagent: writing the bundle header: %w", err)
 		}
-		if _, err := tw.Write(data); err != nil {
+		if _, err := tw.Write(entry.data); err != nil {
 			return "", fmt.Errorf("cliagent: writing the bundle: %w", err)
 		}
 	}
@@ -522,8 +570,15 @@ func (p *Provider) ExportBundle() (string, error) {
 //
 // Validated on the way in, because an archive is an execution surface if it
 // is unpacked on trust: only the profile's own credential file names, regular
-// files only, no paths, and a total size cap. A bundle naming
+// files only, no paths, each name once, and a total size cap. A bundle naming
 // "../../.ssh/authorized_keys" is the attack this refuses by construction.
+//
+// And only a bundle that NAMES THIS ENTRY'S CLI as the one it was exported
+// from ([ErrForeignBundle]). The file names alone cannot tell: a bundle is
+// keyed by the entry, and an entry moved from codex to pi kept a bundle whose
+// `auth.json` is a name pi keeps too — restored, it was written into pi's
+// empty login as a credential pi cannot read, and as a login already present
+// it turned away every later restore, the right bundle included.
 //
 // It refuses to overwrite an existing login: a node that has been running has
 // the fresher refresh token, and restoring a boot-time blob over it is how a
@@ -569,6 +624,13 @@ func (p *Provider) RestoreConfiguredBundle(ctx context.Context) error {
 // ErrLoginPresent is a bundle import that found the entry already signed in,
 // and so restored nothing.
 var ErrLoginPresent = errors.New("cliagent: the entry already has a login, so the bundle was not restored")
+
+// ErrForeignBundle is a bundle that does not name this entry's CLI as the one
+// it was exported from — another CLI's, or one naming none — and so restored
+// nothing. The error that wraps it names the CLI the bundle does name, and the
+// export that replaces it.
+var ErrForeignBundle = errors.New("cliagent: the credential bundle does not name this entry's CLI " +
+	"as the one it was exported from, so it was not restored")
 
 // ErrLoggedOut is an automatic restore that found the entry logged out by
 // `crewlet llm logout` since its last login, and so restored nothing: see
@@ -653,19 +715,19 @@ func (p *Provider) LogoutNotice() (string, error) {
 // bundleSource names where the entry's configured bundle came from.
 func (p *Provider) bundleSource() string {
 	if p.bundleConfigured {
-		return fmt.Sprintf("providers.llm.%s.cli.auth.credential_bundle", p.key)
+		return fmt.Sprintf("providers.llm.%s.auth.credential_bundle", p.key)
 	}
-	return BundleVarName(p.key)
+	return cliprofile.BundleVarName(p.key)
 }
 
 // retireBundle says what removes the entry's configured bundle, which is what
 // a fresh state volume restores.
 func (p *Provider) retireBundle() string {
 	if p.bundleConfigured {
-		return fmt.Sprintf("remove providers.llm.%s.cli.auth.credential_bundle from the company "+
+		return fmt.Sprintf("remove providers.llm.%s.auth.credential_bundle from the company "+
 			"document, or the secret it references", p.key)
 	}
-	name := BundleVarName(p.key)
+	name := cliprofile.BundleVarName(p.key)
 	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
 		"the engine's environment", name, name)
 }
@@ -734,7 +796,7 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 		return fmt.Errorf(
 			"cliagent: the credential bundle is larger than %d bytes decompressed, "+
 				"so it was not unpacked — a bundle this size is not a login; "+
-				"re-export it with `crewlet llm export %s`", maxBundle, p.agent)
+				"re-export it with `crewlet llm export %s`", maxBundle, p.key)
 	}
 
 	// VALIDATED WHOLE, THEN WRITTEN. Every entry is checked and held before
@@ -743,6 +805,18 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 	// earlier files behind, and HasLogin reads a directory with any
 	// credential in it as a login — so a refused restore could leave a
 	// half-populated home that the next boot declines to repair.
+	//
+	// The SHAPE of each entry is judged as it is read — a link, a path or an
+	// oversized file is refused there, whatever else the bundle says — and
+	// WHOSE it is once the whole archive is read: the manifest is an entry
+	// like any other, and a bundle from another CLI is refused as that,
+	// naming the move behind it, rather than as whichever of its files came
+	// first and is not a name this CLI keeps.
+	var (
+		manifest     []byte
+		haveManifest bool
+		order        []string
+	)
 	staged := make(map[string][]byte, len(allowed))
 	tr := tar.NewReader(bytes.NewReader(decompressed))
 	for {
@@ -758,7 +832,7 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 				"regular file", header.Name)
 		}
 		name := filepath.Base(header.Name)
-		if name != header.Name || !allowed[name] {
+		if name != header.Name {
 			return fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"%q credential file", header.Name, p.agent)
 		}
@@ -770,7 +844,43 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 			return fmt.Errorf("cliagent: %q in the credential bundle is larger than %d bytes",
 				name, maxBundle)
 		}
+		// ONCE EACH: a name held twice is two answers to one question, and
+		// the last of them winning is a choice nothing made — for the
+		// manifest, which CLI the bundle is.
+		if _, twice := staged[name]; twice || (name == cliprofile.BundleManifest && haveManifest) {
+			return fmt.Errorf("cliagent: the credential bundle holds %q twice, so it was not "+
+				"unpacked — re-export it with `crewlet llm export %s`", name, p.key)
+		}
+		if name == cliprofile.BundleManifest {
+			// NEVER WRITTEN: it says whose the files are, and is no file of
+			// the login. No profile may keep a login file under this name
+			// ([cliprofile.Profile.Validate]), so it is never one of them.
+			manifest, haveManifest = data, true
+			continue
+		}
 		staged[name] = data
+		order = append(order, name)
+	}
+	if err := p.checkBundleCLI(manifest, haveManifest); err != nil {
+		return err
+	}
+	for _, name := range order {
+		if !allowed[name] {
+			// The bundle is this CLI's, by its manifest, and still holds a
+			// file this entry does not keep: one exported while the entry's
+			// credential_paths said otherwise, or not by `crewlet llm export`.
+			return fmt.Errorf("cliagent: the credential bundle holds %q, which is not a %q "+
+				"credential file (it keeps %s) — re-export it with `crewlet llm export %s`",
+				name, p.agent, strings.Join(slices.Sorted(maps.Keys(allowed)), ", "), p.key)
+		}
+	}
+	if len(staged) == 0 {
+		// A bundle `crewlet llm export` writes always holds a login: it
+		// refuses an entry with none. One that holds none restored nothing,
+		// and `crewlet llm import` said "Restored" over an empty directory.
+		return fmt.Errorf("cliagent: the credential bundle holds no %q login file, so there is "+
+			"nothing to restore — export it again (`crewlet llm export %s`) where %q is signed in",
+			p.agent, p.key, p.agent)
 	}
 
 	// THE EMPTINESS ASKED AGAIN UNDER THE SHARED LOGIN'S LOCK, with the
@@ -802,6 +912,44 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 		return p.ws.bumpLoginEpoch()
 	}
 	return nil
+}
+
+// checkBundleCLI answers [ErrForeignBundle] unless a bundle's manifest names
+// this entry's CLI — the provider's agent, the same name its files are kept
+// under in the state directory — as the one the bundle was exported from.
+//
+// A bundle naming no CLI is refused as one naming another: nothing in it says
+// whose its files are, and a file name is the guess this replaces.
+func (p *Provider) checkBundleCLI(manifest []byte, found bool) error {
+	none := fmt.Sprintf("it holds no %s", cliprofile.BundleManifest)
+	if found {
+		var named bundleManifest
+		err := json.Unmarshal(manifest, &named)
+		switch {
+		case err != nil:
+			none = fmt.Sprintf("its %s does not parse: %v", cliprofile.BundleManifest, err)
+		case named.Agent == "":
+			none = fmt.Sprintf("its %s names no agent", cliprofile.BundleManifest)
+		case named.Agent == p.agent:
+			return nil
+		default:
+			// A BUNDLE IS KEYED BY THE ENTRY (CREWLET_LLM_CLI_<KEY>_CREDENTIALS,
+			// or the entry's own auth.credential_bundle), not by its CLI, so
+			// the bundle an entry was configured with before it moved to
+			// another CLI is still the one restored after the move — refused
+			// at every boot and apply until it is replaced, which is the
+			// remedy to name.
+			return fmt.Errorf("%w: it names %q, and %q runs %q — a bundle restores only into "+
+				"the CLI it was exported from, so one exported before %q moved to %q, or for "+
+				"another entry, is refused until it is replaced: sign %q in and export its "+
+				"bundle again (`crewlet llm export %s`)",
+				ErrForeignBundle, named.Agent, p.key, p.agent, p.key, p.agent, p.agent, p.key)
+		}
+	}
+	return fmt.Errorf("%w: it names none (%s), and a bundle restores only into the CLI it was "+
+		"exported from, so one that cannot say which is refused until it is replaced: sign %q "+
+		"in and export its bundle again (`crewlet llm export %s`)",
+		ErrForeignBundle, none, p.agent, p.key)
 }
 
 // declineAfterLogout answers [ErrLoggedOut] for an automatic restore while a

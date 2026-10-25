@@ -27,8 +27,7 @@ import (
 // refuses.
 const storedRevisionDoc = `{"name":"Nimbus",` +
 	`"a_setting_from_a_newer_build":{"depth":3},` +
-	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
-	`"api_keys":["${ANTHROPIC_API_KEY}"]}}},` +
+	`"providers":{"llm":{"main":{"model":"claude-sonnet-5"}}},` +
 	`"workers":{"researcher":{"description":"reads sources and reports findings",` +
 	`"system_prompt":"You research.","model":"nonexistent"}}}`
 
@@ -60,8 +59,7 @@ func activateStored(t *testing.T, cfg, payload string) string {
 
 // runnableRevisionDoc is a company document this build runs.
 const runnableRevisionDoc = `{"name":"Nimbus",` +
-	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
-	`"api_keys":["${ANTHROPIC_API_KEY}"]}}}}`
+	`"providers":{"llm":{"main":{"model":"claude-sonnet-5"}}}}`
 
 // activateStoredAt is [activateStored] at an activation instant the case
 // chooses, which the store records as the revision's activation.
@@ -363,8 +361,7 @@ func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 // name being prose. A peer whose build admits under rules this one does not
 // share may store it, and this build must still run it.
 const duplicateKeysRevision = `{"name":"Nimbus",` +
-	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
-	`"api_keys":["${ANTHROPIC_API_KEY}"]}}},` +
+	`"providers":{"llm":{"main":{"model":"claude-sonnet-5"}}},` +
 	`"units":[` +
 	`{"name":"Engineering","children":[{"name":"Platform",` +
 	`"roles":[{"name":"Engineer","handle":"platform-engineer","llm":"main"}]}]},` +
@@ -376,7 +373,7 @@ const duplicateKeysYAML = `
 name: Nimbus
 providers:
   llm:
-    main: {type: anthropic, model: claude-sonnet-5, api_keys: ["${ANTHROPIC_API_KEY}"]}
+    main: {model: claude-sonnet-5}
 units:
   - name: Engineering
     children:
@@ -500,7 +497,7 @@ func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testin
 	if err := flags.Parse([]string{"-company", file}); err != nil {
 		t.Fatal(err)
 	}
-	seed, err := cfg.resolveSeed(flags, "")
+	seed, err := cfg.resolveSeed(flags, "", nil)
 	if err != nil {
 		t.Fatalf("crewlet run refused a company file that breaks only an admission rule: %v", err)
 	}

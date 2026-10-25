@@ -2887,19 +2887,19 @@ func TestAWorkerThatTimedOutStillReportsHowLongItTook(t *testing.T) {
 	}
 }
 
-// A WORKER'S THINKING TRAVELS WITH THE ROUND IT THOUGHT IN.
+// A WORKER'S PROSE TRAVELS WITH THE ROUND IT SAID IT IN.
 //
 // The Result carries Executions and Narration keyed on the SAME round number,
 // which is the whole contract a consumer interleaves them on. Publishing the
 // executions alone would leave every delegated worker's card as bare tool rows
-// with nothing that asked for them, and the worker's reasoning nowhere on it.
+// with nothing that asked for them, and what the worker said nowhere on it.
 func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
 		if n == 1 {
 			call := callTool("read_file", map[string]any{"path": "/x"}, 60, 40)
-			call.ReasoningContent = "the answer is probably in that file"
+			call.Content = "the answer is probably in that file"
 			return call, nil
 		}
 		return answer("read it", 10, 5), nil
@@ -2911,13 +2911,13 @@ func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 		t.Fatalf("the worker did not finish: %+v", res)
 	}
 	if len(res.Narration) == 0 {
-		t.Fatal("the worker's rounds carry no narration, so its thinking reaches no consumer")
+		t.Fatal("the worker's rounds carry no narration, so what it said reaches no consumer")
 	}
 	byRound := make(map[int]string, len(res.Narration))
 	for _, n := range res.Narration {
-		byRound[n.Round] = n.Reasoning
+		byRound[n.Round] = n.Content
 	}
-	// The thinking and the call it asked for carry the SAME number, which is
+	// The prose and the call it came with carry the SAME number, which is
 	// the only thing that puts them in one block. A round that called a tool
 	// and said nothing narrates nothing — that is not a gap, it is the round
 	// having nothing to say.

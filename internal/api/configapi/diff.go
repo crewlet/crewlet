@@ -189,7 +189,7 @@ func compare(path string, before, after side, out *[]Change) {
 		}
 		// BY POSITION, which is the only correspondence a JSON list has.
 		// Matching by an identity field would be right for mcp_servers
-		// and wrong for api_keys, and guessing which is which per path is
+		// and wrong for llm_order, and guessing which is which per path is
 		// how a diff comes to describe a change nobody made.
 		for i := range max(len(left), len(right)) {
 			at := index(path, i)

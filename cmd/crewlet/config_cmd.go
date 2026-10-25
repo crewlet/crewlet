@@ -60,6 +60,10 @@ A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
 dropping a retired key from secrets.keys, or whatever is still sealed under it
 becomes unreadable.
+An import never refuses a company file for its charter (a mission or policy
+past its length, or on two lines): it prints each fault as a warning and
+imports, offline or through a running node, which it reaches as an admin's
+import (PUT /config?import=true) rather than as an edit.
 `
 
 // configSubcommands is every `crewlet config` subcommand. It is what the
@@ -719,21 +723,47 @@ type importTarget struct {
 // other failure — a missing keyring, an unreadable path — is a broken node,
 // and answering one of those with HTTP would replace an accurate message with
 // a connection refused.
+//
+// # A redacted read imports over the company it was read from
+//
+// `GET /config`, the dashboard's Copy as YAML and `crewlet config show` mask
+// every inline credential, and a file kept in sync from them is written back
+// with this command. Each route restores the masks from the revision the
+// import replaces, as `PUT /config` restores a document sent back to it: the
+// API route IS that PUT, and the offline route restores from this node's
+// active revision, the one it parents the new revision on
+// ([config.LoadCompany]). Both validate after the restore, because a mask is
+// judged as the credential it stands for — the import's own check before
+// either route used to refuse every redacted copy, on both, for carrying the
+// marker in a field nobody touched.
 func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error {
 	if t.path == "" {
 		return errors.New("config import needs a company document to read")
 	}
-	// VALIDATED HERE, WHICHEVER ROUTE IT TAKES. A revision that cannot be
-	// built is one every node in the fleet will refuse, one after another,
-	// each reporting its own failure — a fleet-wide incident from a typo
-	// that could have been caught before it left this machine.
-	company, err := config.LoadCompany(t.path)
-	if err != nil {
-		return err
-	}
 	summary := strings.TrimSpace(t.summary)
 	if summary == "" {
 		summary = "imported from " + t.path
+	}
+
+	// THE CHARTER'S FAULTS ARE SAID, NEVER REFUSED HERE. An import is how a
+	// company is restored and migrated, and a file that ran yesterday under a
+	// build without the charter's rules must import today; what an editor is
+	// refused is only a change that leaves a part at fault
+	// ([config.Company.ValidateCharterChange]). Said up front, whichever route
+	// the import takes, so the operator reads what every node will warn about.
+	// From the file as written, parsed and not yet validated: a redacted copy
+	// validates only once each route has restored its masks, and the charter
+	// holds no credential for a mask to stand in for.
+	data, err := os.ReadFile(t.path)
+	if err != nil {
+		return fmt.Errorf("company config %s: %w", t.path, err)
+	}
+	written, err := config.ParseCompanyDocument(data)
+	if err != nil {
+		return fmt.Errorf("company config %s: %w", t.path, err)
+	}
+	for _, w := range written.CharterWarnings() {
+		fmt.Fprintln(stdout, warningLine(w))
 	}
 
 	boot, err := loadBootstrapForStore(t.bootstrapPath)
@@ -756,13 +786,52 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 	defer closeStore()
 	// THE OFFLINE ROUTE PRESENTS NO CREDENTIAL, so on a managed document
 	// it is refused here; the API route is judged by the node it reaches.
-	if err := refuseManagedOffline(cs.boot, "an offline `crewlet config import`"); err != nil {
+	if err = refuseManagedOffline(cs.boot, "an offline `crewlet config import`"); err != nil {
+		return err
+	}
+	// VALIDATED HERE, before anything is stored. Offline nothing else ever
+	// checks the revision before every node in the fleet is handed it, and
+	// one that cannot be built is refused by each of them, one after
+	// another — a fleet-wide incident from a typo that could have been
+	// caught on this machine.
+	company, err := config.LoadCompany(t.path, activeRevision(ctx, cs))
+	if err != nil {
 		return err
 	}
 	return importConfig(ctx, cs, t.path, company, summary, stdout)
 }
 
+// activeRevision is the company this node's store holds active, as the
+// revision a redacted import is restored against: nil where none is active,
+// and read as the STORED form, because a newer peer may have written it.
+func activeRevision(ctx context.Context, cs *configStore) config.PriorRevision {
+	return func() (*config.Company, error) {
+		active, found, err := cs.configs.Active(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read the active revision: %w", err)
+		}
+		if !found {
+			return nil, nil
+		}
+		document, err := openStored(cs.cipher, active)
+		if err != nil {
+			return nil, err
+		}
+		company, err := config.DecodeCompany(document)
+		if err != nil {
+			return nil, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
+		}
+		return company, nil
+	}
+}
+
 // importThroughNode PUTs the document at a running node.
+//
+// THE NODE JUDGES IT, and nothing here does first. It restores what a
+// redacted read masked from the revision it is replacing and only then holds
+// the document to every rule, the same rules a local check would apply
+// before the restore and so refuse every redacted copy for its masks — and
+// what it refuses it refuses before storing anything, naming each field.
 func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarget,
 	summary string, stdout io.Writer,
 ) error {

@@ -1,23 +1,33 @@
 import { describe, expect, test } from "vitest";
 
 import {
-  benchParts,
-  benchWords,
+  authWords,
+  credentialField,
+  credentialOf,
   editSummary,
+  formChanged,
   formErrors,
   formOf,
-  keyBackWords,
-  keyMark,
-  keysKeepInlinePlaces,
-  keySlots,
+  modeWords,
   modelEntity,
+  modelEntries,
+  modelEntry,
   modelLine,
-  nextLift,
   problemsByField,
+  providerOrder,
+  signInSource,
   usesOf,
 } from "./models.ts";
 import type { Seat } from "./seats.ts";
-import type { CredentialKeyRow, CredentialPoolRow } from "~/contract/credentials.ts";
+import {
+  DEFAULT_CLI_AGENT,
+  DEFAULT_CLI_AUTH_MODE,
+  DEFAULT_CLI_MAX_CONCURRENT,
+  DEFAULT_CLI_MODE,
+  DEFAULT_CLI_TIMEOUT_SECONDS,
+} from "~/contract/models.ts";
+import { REDACTED } from "~/lib/format.ts";
+import type { CompanyDocument } from "~/protocol/types.ts";
 
 const seat = (name: string, llm?: Record<string, string[]>) =>
   ({
@@ -53,214 +63,271 @@ describe("which seats run on a model", () => {
   });
 });
 
+describe("an entry, read off the document", () => {
+  // WHAT AN UNSET FIELD MEANS IS THE ENGINE'S. An entry naming only its model
+  // still drives a CLI, in a mode, on a sign-in, under two caps — and each is
+  // said as the default the engine applies, marked as one.
+  test("an entry naming only its model runs on the engine's defaults, each marked", () => {
+    const entry = modelEntry("default", { model: "sonnet", auth: {} });
+    expect(entry).toMatchObject({
+      key: "default",
+      model: "sonnet",
+      agent: DEFAULT_CLI_AGENT,
+      agentDefault: true,
+      mode: DEFAULT_CLI_MODE,
+      runIn: "",
+      authMode: DEFAULT_CLI_AUTH_MODE,
+      authDefault: true,
+      timeoutSeconds: DEFAULT_CLI_TIMEOUT_SECONDS,
+      timeoutSet: false,
+      maxConcurrent: DEFAULT_CLI_MAX_CONCURRENT,
+      concurrencySet: false,
+      token: null,
+      apiKey: null,
+      bundle: null,
+      env: [],
+    });
+  });
+
+  test("an entry that names each field is read as written", () => {
+    const entry = modelEntry("coder", {
+      agent: "codex",
+      model: "gpt-5",
+      mode: "agent",
+      run_in: "e2b",
+      timeout_seconds: 900,
+      max_concurrent: 2,
+      state_dir: "/var/lib/crewlet/codex",
+      auth: { mode: "api-key", api_key: "${OPENAI_KEY}" },
+    });
+    expect(entry).toMatchObject({
+      agent: "codex",
+      agentDefault: false,
+      mode: "agent",
+      runIn: "e2b",
+      timeoutSeconds: 900,
+      timeoutSet: true,
+      maxConcurrent: 2,
+      concurrencySet: true,
+      stateDir: "/var/lib/crewlet/codex",
+      authMode: "api-key",
+      authDefault: false,
+      apiKey: { kind: "reference", name: "OPENAI_KEY" },
+    });
+  });
+
+  // NAMES, NEVER VALUES. A credential field shows one whole reference or that
+  // something is written inline: the mask, and a literal an engine let
+  // through unmasked, alike — `Bearer ${X}` is a literal around a reference.
+  test("a credential is the variable it names, or inline — never a value", () => {
+    expect(credentialOf("${CLAUDE_TOKEN}")).toEqual({ kind: "reference", name: "CLAUDE_TOKEN" });
+    expect(credentialOf(REDACTED)).toEqual({ kind: "inline" });
+    expect(credentialOf("sk-live-123")).toEqual({ kind: "inline" });
+    expect(credentialOf("Bearer ${X}")).toEqual({ kind: "inline" });
+    expect(credentialOf("")).toBeNull();
+    expect(credentialOf(undefined)).toBeNull();
+    const env = modelEntry("o", {
+      model: "anthropic/claude-sonnet-5",
+      env: { OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}", A_LITERAL: "sk-live-123" },
+    }).env;
+    // By name, sorted, each value a credential.
+    expect(env).toEqual([
+      { name: "A_LITERAL", value: { kind: "inline" } },
+      { name: "OPENROUTER_API_KEY", value: { kind: "reference", name: "OPENROUTER_API_KEY" } },
+    ]);
+    expect(JSON.stringify(env)).not.toContain("sk-live-123");
+  });
+
+  // THE DECLARATION ORDER IS WHAT A SEAT THAT NAMES NO MODEL FALLS BACK
+  // THROUGH, and a JSON object's keys come back sorted, so it rides in
+  // `llm_order` — reconciled against the map, as the engine reconciles it.
+  test("models come in the document's declared order, reconciled against the map", () => {
+    const llm = { alpha: {}, bravo: {}, charlie: {} };
+    expect(providerOrder(llm, ["charlie", "gone", "charlie", "alpha"])).toEqual([
+      "charlie",
+      "alpha",
+      "bravo",
+    ]);
+    // No order recorded: sorted, arbitrary and stable.
+    expect(providerOrder({ zulu: {}, alpha: {} }, undefined)).toEqual(["alpha", "zulu"]);
+    const doc: CompanyDocument = {
+      providers: {
+        llm: { opus: { model: "opus" }, sonnet: { model: "sonnet" } },
+        llm_order: ["sonnet", "opus"],
+      },
+    };
+    expect(modelEntries(doc).map((e) => e.key)).toEqual(["sonnet", "opus"]);
+    // No company configured is no model, not a failure.
+    expect(modelEntries(null)).toEqual([]);
+  });
+});
+
+describe("how a model signs in, in words", () => {
+  const entry = (raw: Record<string, unknown>) => modelEntry("m", { model: "sonnet", ...raw });
+
+  test("each sign-in says where its credential comes from, and only ever a name", () => {
+    expect(signInSource(entry({ auth: { token: "${CLAUDE_TOKEN}" } }))).toBe("CLAUDE_TOKEN");
+    expect(signInSource(entry({}))).toBe("CLI login");
+    expect(signInSource(entry({ auth: { credential_bundle: "${BUNDLE}" } }))).toBe(
+      "CLI login, from a bundle",
+    );
+    expect(signInSource(entry({ auth: { token: REDACTED } }))).toBe("token written inline");
+    expect(signInSource(entry({ auth: { mode: "api-key", api_key: "${KEY_A}" } }))).toBe("KEY_A");
+    expect(signInSource(entry({ auth: { mode: "api-key", api_key: "sk-live-123" } }))).toBe(
+      "key written inline",
+    );
+    expect(signInSource(entry({ auth: { mode: "api-key" } }))).toBe("the CLI’s own key variable");
+    expect(signInSource(entry({ auth: { mode: "inherit-env" } }))).toBe(
+      "the engine’s own variables",
+    );
+  });
+
+  // A value a newer engine sends that this build has no words for is drawn as
+  // itself, never as nothing and never as a mode it is not.
+  test("a mode this build does not know is said as itself", () => {
+    expect(modeWords("agent").label).toBe("Agent");
+    expect(modeWords("swarm").label).toBe("swarm");
+    expect(authWords("api-key").label).toBe("API key");
+    expect(authWords("passkey").label).toBe("passkey");
+  });
+
+  test("a row's second line is the CLI and the model it runs", () => {
+    expect(modelLine({ agent: "opencode", model: "anthropic/claude-sonnet-5" })).toBe(
+      "opencode · anthropic/claude-sonnet-5",
+    );
+    expect(modelLine({ agent: "claude-code", model: "" })).toBe("claude-code");
+  });
+});
+
 describe("the edit", () => {
   const entity = {
-    type: "anthropic",
-    model: "m1",
-    api_keys: ["${A}", "__redacted__"],
-    reasoning_effort: "high",
-    cooldowns: { rate_limit_seconds: 600 },
+    agent: "codex",
+    model: "gpt-5",
+    mode: "agent",
+    run_in: "e2b",
+    state_dir: "/var/lib/crewlet/codex",
+    env: { HTTPS_PROXY: "${PROXY}" },
+    overrides: { binary: "/opt/codex" },
+    timeout_seconds: 900,
+    auth: { mode: "api-key", api_key: "${OPENAI_KEY}", credential_bundle: "${BUNDLE}" },
   };
 
-  // EVERYTHING THE FORM DOES NOT SHOW GOES BACK AS READ, the mask included.
-  test("sends back what it did not show exactly as read", () => {
-    const form = formOf(entity);
-    expect(form.rateLimit).toBe("600");
-    expect(modelEntity(entity, form)).toEqual(entity);
-    const cleared = modelEntity(entity, { ...form, rateLimit: "", keys: [] });
-    expect(cleared).toEqual({ type: "anthropic", model: "m1", reasoning_effort: "high" });
-  });
-
-  // A SUMMARY NAMES VARIABLES, NEVER A VALUE, and never the mask.
-  test("summarises by name, and never mentions the mask", () => {
-    const before = formOf(entity);
-    const after = { ...before, keys: [{ id: "x", value: "${B}" }, before.keys[1]!] };
-    const summary = editSummary("smart", before, after);
-    expect(summary).toBe("Edit the model smart: keys added: ${B}; keys removed: ${A}");
-    expect(summary).not.toContain("__redacted__");
-  });
-
-  test("refuses a bench time outside what the engine accepts, and an empty key row", () => {
-    const form = formOf(entity);
-    expect(formErrors({ ...form, auth: "59" }, form).auth).toMatch(/from 60 to 86400/);
-    expect(formErrors({ ...form, auth: "86400" }, form).auth).toBeUndefined();
-    expect(
-      formErrors({ ...form, keys: [...form.keys, { id: "y", value: " " }] }, form).keys,
-    ).toBeDefined();
-  });
-
-  // AN INLINE KEY IS PUT BACK BY ITS PLACE, so a list holding one keeps its
-  // length and the mask its index. [${A}, <inline>], remove key 1 and add
-  // ${C}: the same length, the mask at index 0 — and the engine would restore
-  // it from ${A}, swapping the inline key for another with nothing refused.
-  test("refuses any list that moves an inline key off the place it was read at", () => {
+  // ONLY WHAT THE FORM SHOWS CHANGES. The CLI, the mode, where it runs, its
+  // home, its environment, its overrides and the bundle are the entry's
+  // identity, and go back exactly as read.
+  test("sends back the entity it read, with only the edited fields replaced", () => {
     const read = formOf(entity);
-    const [a, inline] = read.keys as [(typeof read.keys)[0], (typeof read.keys)[0]];
-    const c = { id: "c", value: "${C}" };
-    const swapped = { ...read, keys: [inline, c] };
-    expect(keysKeepInlinePlaces(read.keys, swapped.keys)).toBe(false);
-    expect(formErrors(swapped, read).keys).toMatch(
-      /Key 1 is inline\. Replace it with a secret before adding or removing keys\./,
-    );
-    // Grown or shrunk while the mask stands: refused.
-    expect(keysKeepInlinePlaces(read.keys, [a, inline, c])).toBe(false);
-    expect(keysKeepInlinePlaces(read.keys, [inline])).toBe(false);
-    // Kept in its place, the neighbour edited: fine.
-    expect(keysKeepInlinePlaces(read.keys, [c, inline])).toBe(true);
-    expect(formErrors({ ...read, keys: [c, inline] }, read).keys).toBeUndefined();
-    // Replaced in its place, the list may then change freely.
-    expect(keysKeepInlinePlaces(read.keys, [c])).toBe(true);
-    expect(keysKeepInlinePlaces(read.keys, [a, c, { id: "d", value: "${D}" }])).toBe(true);
+    expect(read).toEqual({
+      model: "gpt-5",
+      credential: "${OPENAI_KEY}",
+      timeout: "900",
+      concurrency: "",
+    });
+    const sent = modelEntity(entity, { ...read, model: "gpt-5-codex", concurrency: "2" });
+    expect(sent).toEqual({ ...entity, model: "gpt-5-codex", max_concurrent: 2 });
+    // An emptied cap is the default, so the field goes rather than a 0.
+    expect(modelEntity(entity, { ...read, timeout: "" })).not.toHaveProperty("timeout_seconds");
   });
 
-  // BY THE PROBLEM'S SEGMENTS, never its message; another model's problem is the rest.
-  test("places the engine's problems beside their fields by segment", () => {
+  // ONE CREDENTIAL, THE ONE THE SIGN-IN READS: the engine refuses one written
+  // under a mode that does not read it, so the form never edits it there.
+  test("edits the credential its sign-in reads, and no other", () => {
+    expect(credentialField(entity)).toBe("api_key");
+    const keyed = modelEntity(entity, { ...formOf(entity), credential: "${OPENAI_KEY_B}" });
+    expect(keyed.auth).toEqual({ ...entity.auth, api_key: "${OPENAI_KEY_B}" });
+
+    const subscription = { model: "sonnet", auth: { token: "${T}" } };
+    expect(credentialField(subscription)).toBe("token");
+    expect(formOf(subscription).credential).toBe("${T}");
+    const cleared = modelEntity(subscription, { ...formOf(subscription), credential: "" });
+    // EMPTIED, it is removed rather than sent as an empty value, which the
+    // engine would read as a credential that resolves to nothing.
+    expect(cleared.auth).toEqual({});
+
+    const inherited = { model: "sonnet", auth: { mode: "inherit-env" } };
+    expect(credentialField(inherited)).toBeNull();
+    expect(formOf(inherited).credential).toBe("");
+    expect(modelEntity(inherited, { ...formOf(inherited), credential: "${IGNORED}" }).auth).toEqual(
+      inherited.auth,
+    );
+  });
+
+  // AN INLINE CREDENTIAL'S VALUE NEVER REACHED THIS PAGE: it goes back as the
+  // mask, which the engine restores from the revision it was read from.
+  test("an inline credential goes back as the mask", () => {
+    const inline = { model: "sonnet", auth: { token: REDACTED } };
+    const read = formOf(inline);
+    expect(read.credential).toBe(REDACTED);
+    expect(modelEntity(inline, { ...read, model: "opus" }).auth).toEqual({ token: REDACTED });
+  });
+
+  test("a form the engine would refuse is stopped before asking, and an empty cap is the default", () => {
+    const ok = { model: "m", credential: "", timeout: "", concurrency: "" };
+    expect(formErrors(ok)).toEqual({});
+    expect(formErrors({ ...ok, model: " " })).toHaveProperty("model");
+    for (const timeout of ["0", "-5", "soon"]) {
+      expect(formErrors({ ...ok, timeout })).toHaveProperty("timeout");
+    }
+    expect(formErrors({ ...ok, timeout: "30.5" })).toEqual({});
+    for (const concurrency of ["0", "1.5", "many"]) {
+      expect(formErrors({ ...ok, concurrency })).toHaveProperty("concurrency");
+    }
+    expect(formErrors({ ...ok, concurrency: "2" })).toEqual({});
+  });
+
+  // THE AUDIT SUMMARY NAMES A CREDENTIAL BY ITS VARIABLE, never by a value: a
+  // literal typed into the field is "a value", and an inline one "inline".
+  test("the summary says what moved without carrying a credential", () => {
+    const before = formOf(entity);
+    const summary = editSummary("coder", entity, before, {
+      ...before,
+      model: "gpt-5-codex",
+      credential: "sk-live-123",
+      timeout: "",
+    });
+    expect(summary).toBe(
+      "Edit the model coder: model gpt-5 → gpt-5-codex; API key OPENAI_KEY → a value; timeout 900 s → default",
+    );
+    expect(summary).not.toContain("sk-live-123");
+    expect(
+      editSummary(
+        "x",
+        { model: "m", auth: { token: REDACTED } },
+        formOf({ model: "m", auth: { token: REDACTED } }),
+        { ...formOf({ model: "m", auth: { token: REDACTED } }), credential: "${T}" },
+      ),
+    ).toBe("Edit the model x: token inline → T");
+    expect(formChanged(before, { ...before, model: " gpt-5 " })).toBe(false);
+  });
+
+  // PLACED BY THE PROBLEM'S SEGMENTS, never its message — and only beside the
+  // field the form shows: a fault in another auth field is about something
+  // this form cannot change, so it is said above it.
+  test("the engine's problems sit beside the field they are about", () => {
+    const problem = (...seg: (string | number)[]) => ({
+      path: seg.join("."),
+      segments: seg,
+      kind: "conflict",
+      message: `about ${seg.slice(3).join(".")}`,
+    });
     const { fields, rest } = problemsByField(
       [
-        {
-          path: "",
-          segments: ["providers", "llm", "smart", "api_keys", 1],
-          kind: "invalid",
-          message: "k",
-        },
-        {
-          path: "",
-          segments: ["providers", "llm", "smart", "cooldowns", "auth_seconds"],
-          kind: "invalid",
-          message: "a",
-        },
-        {
-          path: "",
-          segments: ["providers", "llm", "fast", "model"],
-          kind: "invalid",
-          message: "other",
-        },
-      ] as never,
-      "smart",
-      { api_keys: ["${A}", "${B}"] },
+        problem("providers", "llm", "coder", "auth", "api_key"),
+        problem("providers", "llm", "coder", "auth", "token"),
+        problem("providers", "llm", "coder", "timeout_seconds"),
+        problem("providers", "llm", "coder", "max_concurrent"),
+        problem("providers", "llm", "coder", "model"),
+        problem("providers", "llm", "other", "model"),
+      ],
+      "coder",
+      entity,
     );
-    expect(fields).toEqual({ keys: "k", auth: "a" });
-    expect(rest).toEqual(["other"]);
-  });
-
-  // A PROBLEM ON A KEY THIS PAGE SENT AS THE MASK is this screen's sentence,
-  // not the engine's whole-document one about seats, units and MCP servers.
-  test("says a key it sent as the mask in its own words", () => {
-    const { fields } = problemsByField(
-      [
-        {
-          path: "",
-          segments: ["providers", "llm", "smart", "api_keys", 0],
-          kind: "unknown_value",
-          message: "still holds the redaction marker: a seat is matched by its handle",
-        },
-      ] as never,
-      "smart",
-      { api_keys: ["__redacted__", "${B}"] },
-    );
-    expect(fields.keys).toMatch(/^Key 1 is written inline/);
-    expect(fields.keys).not.toMatch(/seat|unit|MCP/);
-  });
-});
-
-test("the next key back is the earliest cooling deadline across every model", () => {
-  const row = (until: (string | null)[]) =>
-    ({
-      keys: until.map((u) => ({ state: u ? "cooling" : "ready", cooling_until: u })),
-    }) as unknown as CredentialPoolRow;
-  expect(nextLift([row([null, "2026-09-29T12:40:00Z"]), row(["2026-09-29T12:05:00Z"])])).toBe(
-    "2026-09-29T12:05:00Z",
-  );
-  expect(nextLift([row([null])])).toBeNull();
-});
-
-// ONE CLOCK: a bench is written in the unit letters every span on the
-// dashboard uses ("41m" on a cooling key), and named for what benches a key,
-// never by a status code a reader has to already know.
-test("a bench is named for its cause and written as every other span", () => {
-  expect(benchWords(3600)).toBe("1h");
-  expect(benchWords(300)).toBe("5m");
-  expect(benchWords(5400)).toBe("1h 30m");
-  expect(benchWords(90)).toBe("1m 30s");
-  const parts = benchParts({ rate_limit_seconds: 3600, auth_seconds: 300 });
-  expect(parts.map((p) => p.words)).toEqual(["rate limit 1h", "auth 5m"]);
-  expect(parts.map((p) => p.words).join(" ")).not.toMatch(/429|401/);
-});
-
-// A cli-agent entry names no model, and its line is its type alone.
-test("a model's line joins the id only when there is one", () => {
-  expect(modelLine({ type: "cli-agent", model: "" })).toBe("cli-agent");
-  expect(modelLine({ type: "anthropic", model: "m" })).toBe("anthropic · m");
-});
-
-describe("a key on the list", () => {
-  const key = (over: Partial<CredentialKeyRow>): CredentialKeyRow => ({
-    ref: "ACME_KEY",
-    source: "reference",
-    hint: "",
-    state: "ready",
-    cooling_until: null,
-    same_as: 0,
-    uses: 0,
-    in_flight: 0,
-    ...over,
-  });
-
-  // A KEY WITH NO NAME IS NAMED BY ITS PLACE AND WHERE IT LIVES, the way its
-  // page names it — a bare "#1" beside the named marks read as a cipher.
-  test("marks a named key by its variable and an inline one by its place", () => {
-    expect(keyMark(key({}), 1)).toBe("ACME_KEY");
-    expect(keyMark(key({ source: "default", ref: "OPENAI_API_KEY" }), 1)).toBe("OPENAI_API_KEY");
-    expect(keyMark(key({ source: "inline", ref: "" }), 2)).toBe("key 2 · inline");
-  });
-
-  // A DUPLICATE IS IN THE POOL ONCE, as the key it repeats; only a key that
-  // resolved to nothing, or is benched, is out of it.
-  test("says a duplicate comes back as the key it repeats", () => {
-    expect(keyBackWords(key({}))).toBe("Now");
-    expect(keyBackWords(key({ state: "duplicate", same_as: 1 }))).toBe("As key 1");
-    expect(keyBackWords(key({ state: "unresolved" }))).toBe("Not in the pool");
-  });
-});
-
-// A CLI-AGENT ENTRY IS NOT A KEY POOL. The engine reads its api_keys only
-// under cli.auth.mode api-key, and only the one value — so the form offers
-// exactly that, and a key it holds in any other mode is a fault to remove,
-// said before the engine is asked.
-describe("the keys a cli-agent entry may hold", () => {
-  const cli = (auth?: Record<string, unknown>) => ({
-    type: "cli-agent",
-    model: "sonnet",
-    cli: { agent: "claude-code", ...(auth ? { auth } : {}) },
-  });
-
-  test("an API entry rotates through as many keys as it is given", () => {
-    const slots = keySlots({ type: "anthropic", model: "m" });
-    expect(slots.max).toBe(Number.POSITIVE_INFINITY);
-    expect(slots.legend).toBe("Keys");
-  });
-
-  test("api-key mode holds one key, and a second is refused before asking", () => {
-    const slots = keySlots(cli({ mode: "api-key" }));
-    expect(slots.max).toBe(1);
-    const read = formOf({ ...cli({ mode: "api-key" }), api_keys: ["${A}"] });
-    expect(formErrors(read, read, slots).keys).toBeUndefined();
-    const two = { ...read, keys: [...read.keys, { id: "b", value: "${B}" }] };
-    expect(formErrors(two, read, slots).keys).toMatch(
-      /Holds one key\. Add more as separate entries\./,
-    );
-  });
-
-  test("any other mode holds none, and a held key is a fault", () => {
-    for (const auth of [undefined, { mode: "inherit-env" }] as const) {
-      const slots = keySlots(cli(auth));
-      expect(slots.max).toBe(0);
-      expect(slots.empty).toBe("None. Signs in through its CLI.");
-      const read = formOf({ ...cli(auth), api_keys: ["${A}"] });
-      expect(formErrors(read, read, slots).keys).toMatch(
-        /Keys only work in api-key mode\. Remove it\./,
-      );
-      expect(formErrors({ ...read, keys: [] }, read, slots).keys).toBeUndefined();
-    }
+    expect(fields).toEqual({
+      credential: "about auth.api_key",
+      timeout: "about timeout_seconds",
+      concurrency: "about max_concurrent",
+      model: "about model",
+    });
+    expect(rest).toEqual(["about auth.token", "about model"]);
   });
 });

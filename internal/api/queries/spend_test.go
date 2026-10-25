@@ -28,9 +28,7 @@ timezone: Asia/Tokyo
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["${K}"]
 roles:
   - name: Lead
     handle: lead

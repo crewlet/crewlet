@@ -283,34 +283,6 @@ func TestAFailedCallIsRecordedAndChargedWhatItReported(t *testing.T) {
 	}
 }
 
-// A REFUSED CALL IS CHARGED AND RECORDED. A refusal comes back as an error
-// with no completion, so nobody can act on its text — but the prompt was read
-// and billed, and the response the vendor charged for travels inside the
-// error ([llm.Billed]). A seam that charged only a non-nil completion counted
-// every refused reflection, compaction and prefetch call as free, and a
-// company whose transcripts the model kept declining spent tokens no gate saw.
-//
-// Mutation: read the bare completion instead of llm.Billed, and the refused
-// call charges nothing.
-func TestARefusedAuxiliaryCallIsChargedAndRecorded(t *testing.T) {
-	t.Parallel()
-	meter := &countingMeter{}
-	refusal := llm.Refused("anthropic", "test-model", &llm.Refusal{Category: "cyber",
-		Completion: &llm.Completion{Model: "test-model", InputTokens: 900, OutputTokens: 12,
-			StopReason: llm.StopRefusal}})
-	r := newSeamRig(&answeringProvider{err: refusal}, meter)
-	got, err := r.complete(t, dev, turnUse)
-	if llm.KindOf(err) != llm.KindRefusal || got != nil {
-		t.Fatalf("Complete = %+v, %v; want the provider's refusal returned as it came", got, err)
-	}
-	if meter.spent != 912 {
-		t.Errorf("charged %d tokens, want the refused response's 912", meter.spent)
-	}
-	if recs := r.flushed(t); len(recs) != 1 || recs[0].FailedCalls != 1 || recs[0].TotalTokens != 912 {
-		t.Fatalf("recorded %+v, want one failed call of the refused response's 912 tokens", recs)
-	}
-}
-
 // THE TURN'S TALLY HEARS ITS OWN CALLS. A call made with the turn's tally adds
 // what it cost there — which is what the turn's work item is charged from
 // (ADR-0022) — and a call made without one adds to nothing.

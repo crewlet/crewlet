@@ -21,10 +21,10 @@ import (
 // ObjectReferences is every object a retained version of an artifact names,
 // each distinct object once per artifact with its reference count.
 //
-// REQUIRED (ADR-0047): a retained version is something the company holds, so
+// REQUIRED (ADR-0048): a retained version is something the company holds, so
 // its objects are audited and every backup carries them — and so the
 // declaration names the log a restore replays and how one record of it names
-// the table's rows (ADR-0048).
+// the table's rows (ADR-0049).
 var ObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "artifact_objects",
 	Key: "object", Hash: "hash", Size: "size",

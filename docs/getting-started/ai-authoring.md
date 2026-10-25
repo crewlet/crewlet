@@ -44,7 +44,10 @@ for per-tool detail.
 
 It won't dump YAML at you first. It asks what the company does, who's on
 it, where *you* sit in the chart, which surfaces the work lives on, and
-what model and budget to use. Give rough answers — it proposes a
+what model and budget to use — whose models, and whether you pay with a plan
+or a key, since every model runs through that vendor's own coding CLI (Claude
+Code, Codex, or OpenCode for open models; see
+[LLM Backends](../concepts/llm-backends.md#picking-a-cli)). Give rough answers — it proposes a
 concrete org chart and you correct it. It should also, without being
 asked:
 
@@ -79,9 +82,21 @@ empty string and fails later, deep in a turn.
 # nothing to bring up: the engine embeds its stream and creates its store
 
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_API_KEY="sk-ant-..."             # a Claude Code entry on auth.mode api-key
 export OPENAI_API_KEY="sk-..."                    # embeddings
 export MATTERMOST_FOUNDER_USERNAME="you"          # your chat username
+```
+
+The model's own key is the one variable the config may *not* mention: an entry
+on `auth.mode: api-key` reads its CLI's key variable (`ANTHROPIC_API_KEY` for
+Claude Code, `OPENAI_API_KEY` for Codex) when it names none. An entry on a plan
+needs no variable at all, but a login on the engine host —
+`crewlet llm login <key> -from-host` adopts the one your own CLI already has.
+Then check the model end to end before the first turn; unlike `validate`, this
+reads the environment and makes real calls:
+
+```bash
+crewlet llm doctor
 ```
 
 ### 6. Run it
@@ -172,7 +187,7 @@ schema-only check catches:
 
 - unknown keys, at every level including roles, units, and MCP servers
 - wrong shapes — a list where a map belongs, text where a number belongs —
-  and bad enums (`kind: robot`, `type: openaii`)
+  and bad enums (`kind: robot`, `agent: claud-code`)
 - malformed handles and unit ids, and numbers out of range
 
 It also says where a credential goes: every field, list member or map
@@ -405,8 +420,9 @@ checkout, fetch it from
 ### What it can't do
 
 It writes config; it doesn't provision. Standing up the Mattermost server
-(or the Slack workspace), the Atlassian site, the GitLab group, and the
-API keys is still your job — [Choosing your stack](choosing-your-stack.md)
+(or the Slack workspace), the Atlassian site, the GitLab group, the
+API keys, and the coding CLI your model runs through
+([installed on the engine host](installation.md#a-coding-cli)) is still your job — [Choosing your stack](choosing-your-stack.md)
 lists what you must create by hand for each. Once those exist,
 [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision)
 and [`crewlet gitlab provision`](../reference/cli.md#crewlet-gitlab-provision)

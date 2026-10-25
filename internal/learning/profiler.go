@@ -40,7 +40,6 @@ type Profiler struct {
 	models       Models
 	counterparts *Counterparties
 	timeout      time.Duration
-	maxTokens    int
 	maxSubjects  int
 	now          func() time.Time
 }
@@ -50,21 +49,10 @@ type ProfilerOptions struct {
 	// CallTimeout bounds one auxiliary call; zero takes DefaultAuxTimeout.
 	CallTimeout time.Duration
 
-	// MaxTokens caps one patch; zero takes DefaultProfilerTokens.
-	MaxTokens int
-
 	Now func() time.Time
 }
 
 const (
-	// DefaultProfilerTokens caps one traits patch.
-	//
-	// FAR SMALLER than the classifier's, because the contract is a flat
-	// object of short scalar traits — "prefers bullet points", "works
-	// Sydney hours" — and a model that needs more than this is writing
-	// prose into a field the prefetch renders as a one-line bullet.
-	DefaultProfilerTokens = 700
-
 	// maxProfiledSubjects bounds how many parties one turn profiles.
 	//
 	// Each is its own auxiliary call, so an unbounded list makes a
@@ -111,15 +99,12 @@ func NewProfiler(models Models, c *Counterparties, opts ProfilerOptions) (*Profi
 	}
 	p := &Profiler{
 		models: models, counterparts: c,
-		timeout: opts.CallTimeout, maxTokens: opts.MaxTokens,
+		timeout:     opts.CallTimeout,
 		maxSubjects: maxProfiledSubjects,
 		now:         opts.Now,
 	}
 	if p.timeout <= 0 {
 		p.timeout = DefaultAuxTimeout
-	}
-	if p.maxTokens <= 0 {
-		p.maxTokens = DefaultProfilerTokens
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now().UTC() }
@@ -252,9 +237,6 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 			{Role: llm.RoleSystem, Content: ProfilerSystemPrompt},
 			{Role: llm.RoleUser, Content: p.prompt(s, existing)},
 		},
-		Temperature: llm.Temp(auxTemperature),
-		Effort:      auxEffort,
-		MaxTokens:   p.maxTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("learning: profiler on %s: %w", member.Key, err)

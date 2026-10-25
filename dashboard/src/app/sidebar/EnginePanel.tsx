@@ -1,31 +1,32 @@
 /**
- * The engine's own state, at the foot of the sidebar: one row, and the panel
- * it opens.
+ * The engine's own state, at the end of the sidebar head's line, beside the
+ * company's name: one compact status, and the panel it opens.
  *
- * # One row, one height
+ * # One status, one width
  *
- * The row is the kit's rail row (`AppShell.RailRow`), drawn in the rail's own
- * grammar under Settings: a dot, the state in words, and, while alarms stand,
- * how many. Its words are a few in every state, so it stays one 30px line and
- * the foot never moves when the engine's state does. Pressing it opens the
- * ENGINE PANEL above it (the kit's `Popover`): the state again with this
- * node's name, the fleet, the configuration and the uptime, the alarms by
- * name, and a way to each place that acts on them.
+ * The status is the kit's head status (`AppShell.RailStatus`): a dot, and,
+ * while alarms stand, how many. Its words ("Engine serving, 1 alarm") are its
+ * name and its title rather than a line of the rail, and it reserves its
+ * width, so the company's name never loses a character when the engine's
+ * state changes. Pressing it opens the ENGINE PANEL below it (the kit's
+ * `Popover`): the state again with this node's name, the fleet, the
+ * configuration and the uptime, the alarms by name, and a way to each place
+ * that acts on them.
  *
  * Two states are not about the engine at all but about THIS BROWSER, and the
  * engine serves it nothing to put in a panel. Nobody signed in is the one a
- * press can fix, so there the row is the button that goes to the sign-in and
+ * press can fix, so there the status is the button that goes to the sign-in and
  * opens no panel. A refusal of somebody the engine knows is fixed by an
- * admin: the row STATES it and is no control at all (the kit's static rail
- * row: no pointer, no chevron, never focused), and the panel drawn in place
+ * admin: the status STATES it and is no control at all (the kit's static
+ * head status: no pointer, never focused), and the panel drawn in place
  * of the screen carries the retry and the sign-out. A statement wearing a
  * control's marks reads as a control that does nothing.
  *
  * # One state, chosen by precedence
  *
  * A node can be several things at once (unreachable AND draining, configured
- * AND diverged), and a row that listed them all is a row nobody reads. So the
- * row says the ONE that decides what a reader should do, in this order:
+ * AND diverged), and a status that listed them all is one nobody reads. So the
+ * status says the ONE that decides what a reader should do, in this order:
  *
  *   1. nobody is signed in: the engine accepted no session from this
  *      browser, and nothing else on screen can be trusted;
@@ -57,7 +58,7 @@
  *
  * # Where each fact comes from
  *
- * Every word on the row comes off the ONE health push (`useEngineHealth`) and
+ * Every word the status says comes off the ONE health push (`useEngineHealth`) and
  * the connection; nothing there polls. The alarm COUNT is the push's, which
  * is the evaluation the engine's gauge and log lines come from. Their NAMES
  * are not on the push, which is public and carries only the one that has
@@ -100,7 +101,7 @@ import type { EngineHealth } from "~/contract/health.ts";
 /** The postures a node holds while serving the configuration the fleet agreed on. */
 const AGREED = new Set(["", "serve", "wait"]);
 
-/** Which of the engine's states the row says. */
+/** Which of the engine's states the status says. */
 export type EngineState =
   | "signed-out"
   | "refused"
@@ -118,7 +119,7 @@ export interface EngineReading {
   state: EngineState;
   /** The dot's tone, which is the posture's. */
   tone: "success" | "warning" | "danger" | "neutral";
-  /** The state in words: the row's, and the panel's head. A few, so the row is one line. */
+  /** The state in words: the status's name, and the panel's head. A few, so it reads as one. */
   title: string;
   /** What the panel says under its head, where the state needs it said. */
   lead?: string;
@@ -128,7 +129,7 @@ export interface EngineReading {
   lostAt: number | null;
 }
 
-/** What the row says, decided once and testable without a render. */
+/** What the status says, decided once and testable without a render. */
 export function engineReading(input: {
   connected: boolean;
   authRejected: boolean;
@@ -250,36 +251,42 @@ export function EnginePanel({
   readsReport: boolean;
   onSignIn: () => void;
 }) {
-  // NOBODY SIGNED IN IS THE ONE STATE A PRESS CAN FIX, so the row is that
+  // NOBODY SIGNED IN IS THE ONE STATE A PRESS CAN FIX, so the status is that
   // button, named for what pressing it does.
   if (reading.state === "signed-out") {
     return (
-      <AppShell.RailRow
+      <AppShell.RailStatus
         icon={<StatusDot tone="danger" />}
         trailing={<KeyGlyph size="xs" />}
         label={`${reading.title}. Sign in`}
         onClick={onSignIn}
       >
         {reading.title}
-      </AppShell.RailRow>
+      </AppShell.RailStatus>
     );
   }
   // A STATEMENT WEARS NOTHING A CONTROL WEARS. A refusal of somebody the
-  // engine knows is repaired by an admin: the row says so, and is the kit's
-  // static row, with no pointer, no chevron and no
+  // engine knows is repaired by an admin: the status says so, and is the
+  // kit's static status, with no pointer and no
   // place in the tab order. The panel in place of the screen says the rest.
   if (reading.state === "refused") {
     return (
-      <AppShell.RailRow icon={<StatusDot tone={reading.tone} />}>{reading.title}</AppShell.RailRow>
+      <AppShell.RailStatus icon={<StatusDot tone={reading.tone} />}>
+        {reading.title}
+      </AppShell.RailStatus>
     );
   }
   const count = reading.health?.alarms?.count ?? 0;
   return (
     <Popover
       label="Engine"
-      side="top"
+      side="bottom"
+      // INTO THE ROOM BESIDE THE RAIL: the status ends on the rail's inner
+      // edge, so a panel aligned to its start opens over the screen rather
+      // than back across the rail (and is clamped to the drawer on a phone).
+      align="start"
       trigger={(_open, toggle) => (
-        <AppShell.RailRow
+        <AppShell.RailStatus
           icon={<StatusDot tone={reading.tone} />}
           count={
             count > 0
@@ -294,7 +301,7 @@ export function EnginePanel({
           onClick={toggle}
         >
           {reading.title}
-        </AppShell.RailRow>
+        </AppShell.RailStatus>
       )}
     >
       {(close) => <PanelBody reading={reading} readsReport={readsReport} close={close} />}
@@ -302,7 +309,7 @@ export function EnginePanel({
   );
 }
 
-/** What the panel says. Mounted only while it is open, so nothing here runs for a closed row. */
+/** What the panel says. Mounted only while it is open, so nothing here runs for a closed panel. */
 function PanelBody({
   reading,
   readsReport,
@@ -382,7 +389,7 @@ function PanelBody({
             size="small"
             onClick={() => {
               // NOW, rather than at the end of the backoff, which reaches half
-              // a minute between tries. What follows is the row's to say.
+              // a minute between tries. What follows is the status's to say.
               socket.reconnect();
               close();
             }}

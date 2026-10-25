@@ -44,9 +44,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-spec-key"]
 mcp_servers:
   - name: github
     transport: http
@@ -125,9 +123,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-spec-key"]
 integrations:` + atlassian + `
   gitlab:
     enabled: true
@@ -259,9 +255,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-spec-key"]
 integrations:
   atlassian:
     org_id: "${ATLASSIAN_ORG_ID}"
@@ -423,9 +417,7 @@ name: Acme
 providers:
   llm:
     zulu:
-      type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-ant-fake-spec-key"]
 mcp_servers:
   - name: search
     command: "search-server"

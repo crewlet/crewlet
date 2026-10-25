@@ -450,13 +450,6 @@ type Sources struct {
 	// tempting shortcut, and it silently disables the memory and knowledge
 	// filters too.
 	SummarizeEpisodes bool
-
-	// SummarizeMaxTokens caps that summary. Zero takes
-	// [DefaultSummaryTokens], which is what a fetcher built without an
-	// operator's configuration gets — and what this block had hardcoded
-	// while the config field of the same name, with the same default,
-	// reached nothing at all.
-	SummarizeMaxTokens int
 }
 
 // Fetcher renders the blocks for a turn.
@@ -594,11 +587,11 @@ func recoverSkills(into *string, ids *[]string) {
 // auxCall runs one auxiliary completion for the request's seat, filed under
 // the request's attribution and the caller's purpose.
 //
-// ONE PLACE, so the timeout, the temperature and the "no tools" rule are the
-// same for all three callers. A tool on the surface invites a model to call
+// ONE PLACE, so the timeout and the "no tools" rule are the same for all
+// three callers. A tool on the surface invites a model to call
 // it and answer nothing, and there is no tool any of these passes could use.
 func (f *Fetcher) auxCall(ctx context.Context, r Request, purpose types.AuxPurpose,
-	system, user string, maxTokens int,
+	system, user string,
 ) (string, bool) {
 	if f.src.Models == nil {
 		return "", false
@@ -611,7 +604,7 @@ func (f *Fetcher) auxCall(ctx context.Context, r Request, purpose types.AuxPurpo
 	}
 	call, cancel := context.WithTimeout(ctx, AuxTimeout)
 	defer cancel()
-	completion, err := member.Provider.Complete(call, auxRequest(system, user, maxTokens))
+	completion, err := member.Provider.Complete(call, auxRequest(system, user))
 	if err != nil {
 		log.WarnContext(ctx, "prefetch_auxiliary_call_failed", "seat", seat.Handle(),
 			"model", member.Key, "error", err.Error())
@@ -628,13 +621,11 @@ func (f *Fetcher) auxCall(ctx context.Context, r Request, purpose types.AuxPurpo
 	}
 	text := strings.TrimSpace(completion.Content)
 	if text == "" {
-		// An empty answer from a THINKING model usually means the cap
-		// was spent reasoning: the call returns with output at the cap
-		// and nothing visible. Reported with both numbers, because the
-		// fix is a bigger cap and nothing else says so.
+		// An empty answer with output tokens billed is a model that spent
+		// its output reasoning and wrote nothing visible. Reported with
+		// the count, because nothing else says the model worked.
 		log.WarnContext(ctx, "prefetch_auxiliary_answered_nothing", "seat", seat.Handle(),
-			"model", member.Key, "output_tokens", completion.OutputTokens,
-			"max_tokens", maxTokens)
+			"model", member.Key, "output_tokens", completion.OutputTokens)
 		return "", false
 	}
 	return text, true

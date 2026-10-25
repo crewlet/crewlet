@@ -685,9 +685,10 @@ test("a new page leads with its opening, and no note repeats its title", async (
   expect(latest.querySelector(".knowledge-latest-notes")).toBeNull();
   expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
   expect(latest.textContent?.match(/Split modes/g)).toHaveLength(1);
-  // NOTHING ELSE was written, and the feed says so in one line.
-  const feed = screen.getByRole("region", { name: /Recently written/ });
-  expect(within(feed).getByText("Nothing else has been written yet.")).toBeTruthy();
+  // NOTHING ELSE was written: the big tile is the whole story, and no
+  // three-row Recently written tile beside it says "nothing else".
+  expect(screen.queryByRole("region", { name: /Recently written/ })).toBeNull();
+  expect(document.querySelector(".knowledge-tiles")?.getAttribute("data-written")).toBe("none");
 });
 
 // A PURGED PAGE keeps its changes and no title: the record that it existed,

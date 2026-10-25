@@ -286,16 +286,36 @@ func withinFactor(read func(string), short, long string, factor int) (bool, time
 // much for eight times the bytes on every measurement, and a linear one eight.
 // Mutation: report a pass after any round, or never measure again, and one of
 // the two cases here fails.
+//
+// EVERY READ SLEEPS WELL ABOVE THE TIMER'S SLACK. A sleep is a floor, never a
+// duration: on a loaded runner under the race detector a 320µs sleep measured
+// 1.09ms, which put the square case's short read at three times its cost and
+// let a 21ms long read pass a factor of 24 it should have failed by 2.7 times.
+// At this unit the square case's short read is 2ms, so even 2ms of slack on
+// every short read leaves the long one past the factor; the linear case's
+// short read is 25ms, which no slack moves eight times.
 func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
 	t.Parallel()
-	const unit = 20 * time.Microsecond
+	const unit = 125 * time.Microsecond
 	small, large := strings.Repeat("x", 4), strings.Repeat("x", 32)
-	square := func(text string) { time.Sleep(time.Duration(len(text)*len(text)) * unit) }
+	square := func(text string) { spin(time.Duration(len(text)*len(text)) * unit) }
 	if ok, s, l := withinFactor(square, small, large, 3*8); ok {
 		t.Errorf("a square cost passed: %v against %v", l, s)
 	}
-	linear := func(text string) { time.Sleep(time.Duration(len(text)) * 50 * unit) }
+	linear := func(text string) { spin(time.Duration(len(text)) * 50 * unit) }
 	if ok, s, l := withinFactor(linear, small, large, 3*8); !ok {
 		t.Errorf("a linear cost failed: %v against %v", l, s)
+	}
+}
+
+// spin holds the CPU for d, as a read whose cost is d does.
+//
+// NOT time.Sleep, whose floor is the timer's resolution rather than d: on a
+// virtual machine that is about a millisecond, so the square case's 320µs
+// short read measured 1.1ms, its ratio fell to nineteen against a factor of
+// twenty-four, and a quadratic cost passed on every run. A spin costs what it
+// is asked to, at any resolution, which is the property the case is about.
+func spin(d time.Duration) {
+	for start := time.Now(); time.Since(start) < d; {
 	}
 }

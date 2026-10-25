@@ -60,7 +60,7 @@ const (
 	KindBarrier ObjectKind = "barrier"
 
 	// KindTrimmed is the trim's record that removes the arbitration anchors
-	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0046 —
+	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0047 —
 	// on one subject per floor. The framework removes the anchors in the
 	// transaction that applies it; this domain writes nothing for it.
 	KindTrimmed ObjectKind = statelog.TrimmedKind
@@ -88,7 +88,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // FIVE OF SEVEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one; and a trimmed record REMOVES anchors, so an anchor of its own
-// would be the one row it exists not to leave behind (ADR-0046).
+// would be the one row it exists not to leave behind (ADR-0047).
 func (k ObjectKind) Arbitrated() bool {
 	return k != KindBarrier && k != KindTrimmed
 }

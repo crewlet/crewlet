@@ -162,9 +162,6 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 			{Role: llm.RoleSystem, Content: ClusterSystemPrompt},
 			{Role: llm.RoleUser, Content: buildClusterPrompt(cluster)},
 		},
-		Temperature: llm.Temp(auxTemperature),
-		Effort:      auxEffort,
-		MaxTokens:   s.maxTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("learning: drafting a clustered skill for %s: %w", handle, err)

@@ -183,6 +183,7 @@ func wireAPI(
 		WebhookBase:    boot.API.WebhookBase(),
 		WebhookBaseKey: boot.API.WebhookBaseKey(),
 		Passes:         e.SetupRunner(),
+		Probes:         engine.SetupProbes(),
 		Sink:           e.SetupSink,
 		Status:         status,
 		SlackApps:      e.SlackApps,

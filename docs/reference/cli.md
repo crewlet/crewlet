@@ -54,8 +54,8 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin`, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
-| `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and how it is signed in |
-| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
+| `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
+| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real completion returns with a tool call, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
@@ -75,7 +75,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. **Which store is read depends on whether the engine is running**, as it does for a write ([`crewlet secrets`](#crewlet-secrets)): a stopped node's own table is opened directly — and it holds only what was written while the engine was stopped, since the engine moves those rows onto the fleet at its next start, so the fleet's values are not read until it runs again: the run names each value it reads that neither that table nor the environment holds, which it resolves as unset and the fleet may hold, and says to start the engine or name a running node with `-api` — while a running engine holds that table and the company's values are the fleet's, so they are read through its API — the node `-api` names, which every one of these commands takes, and otherwise the `api.host:port` in `-config`. A named node is read whether or not a Tier A is at `-config`, so a command run from a machine that is not a node reads the fleet's values rather than the environment alone. A node that holds no data (`store.scratch`) has no table to open, and is refused unless `-api` names one that does. Through a node only the variables **that command** reads are fetched, each with a reveal (`GET /secrets/{name}?reveal=true`), which the node logs by name against the caller and which takes `admin` and a person present: `CREWLET_API_TOKEN` must hold one of Tier A's tokens, since a machine token is refused a reveal. `crewlet llm` reads the entries it works on (`login`, `status`, `logout`, `export`, `import` and `doctor KEY` the one named — and only it, whatever the other keys look like — `list` and a bare `doctor` every one); `gitlab provision` reads `integrations.gitlab.url` and `.signing_secret`; `mattermost provision` `integrations.mattermost.url`, and `mattermost doctor` that, `.team` and each agent seat's `mattermost.bot_token` that is one whole `${VAR}`; `github provision` `integrations.github.url`, `.token` and `.webhook_secret`, and the token spellings its identity scan tries in each agent seat's `mcp_env.github` (its own, or the one its unit gives it); `jira provision` `integrations.jira`'s address, account and `webhook_secret`, and the Jira token spellings and address keys in each agent seat's `mcp_env.jira` and `mcp_env.atlassian` — never a Confluence-only credential beside them; `confluence import` and `resync` `integrations.confluence`'s address and account, and `confluence provision` those, `.webhook_secret` and `.webhook_token`. With `-secret-store`, `gitlab provision` and `mattermost provision` also read back each planned seat's token through the sink, to check the credential the seat holds — a reveal through the node like the others. They are revealed **before the command does anything**, so a refused reveal stops it there: a stored value read as unset is what makes a provisioning run mint over a working secret. A value a command reads beyond that list is still read through the node, as it is read, and the run says so; one the node fails to answer stops the run where it is. The error names the token only when the node refused it (401 or 403): a node that is down or draining answers the same for any token. The run says on its first line which node it read and how many values it revealed. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -123,6 +123,13 @@ only when it is actually written as a new revision (`-company` into an empty
 store, `-import-company` over a different company): a file that is already the
 active revision, or a bootstrap the store's own company outranks, starts the
 node even when it carries a duplicate unit key stored before the rule existed.
+A file that is a **redacted read** — `crewlet config show`, `GET /config`, the
+dashboard's Copy as YAML, each of which masks an inline credential as
+`__redacted__` — has every mask restored from this node's active revision
+before it is judged, by the identity of what holds it (a seat by its handle, a
+unit by its key), as [`crewlet config import`](#crewlet-config-import) restores
+one; a mask nothing there answers, or a store holding no revision, refuses the
+start naming the field.
 To change a **running** fleet with no restart at all, use
 [`crewlet config import`](#crewlet-config-import), which goes through the
 node's API. The path comes from the
@@ -308,6 +315,17 @@ crewlet config import <company.yaml> [-config PATH] [-api URL] [-summary STR]
 Validates the Tier B YAML and writes it as a new active revision, recording the
 previously-active revision as its `parent_revision_id`.
 
+**A redacted read imports over the company it was read from.** `crewlet config
+show`, `GET /config` and the dashboard's Copy as YAML mask every inline
+credential as `__redacted__`, and a file kept in step from them is written back
+with this command: each mask is restored from the revision the import replaces,
+by the identity of what holds it (a seat by its handle, a unit by its key, an
+entry by its key), and only then is the document validated — by the node's
+`PUT /config` through a running node, and here, against this node's active
+revision, offline. A mask nothing there answers — a member that is new or was
+renamed, or a store holding no revision — is refused naming its field, and
+nothing is stored.
+
 **It reaches a running node.** The store is exclusive to one process, so
 against a live engine this cannot open the database — and it no longer needs
 to: it detects the held store and goes through that node's `PUT /config`
@@ -328,6 +346,18 @@ what is live and make it live (`GET /config/revisions/<UUID>/diff` and
 With the engine **stopped** it writes to this node's own store and marks the
 revision active there, which the node publishes to the fleet at its next start.
 The line it prints says which of the two happened.
+
+**It never refuses a file for its charter.** A company file whose mission or
+policy breaks the [charter's rules](../concepts/configuration.md#mission-vision-and-policies)
+(past its length, or on two lines) is a file that ran under an earlier build,
+and restoring or migrating it must work: the import prints each fault as a
+`warning (admission): …` line and imports it, both ways. Through a running
+node it sends `PUT /config?import=true`, which judges the charter warn-only
+where an edit would be judged on what it changes; that mode is `admin`'s, so
+the `CREWLET_API_TOKEN` it presents must be a Tier A token, or a machine token
+whose owner holds `admin`, and the revision records `source: file` and the
+credential in `operator_id`, as an offline import does. Every other rule holds
+as for any write.
 
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what
@@ -2317,10 +2347,11 @@ hold the two to the same verdict:
 
 Every position that holds a credential carries the annotation
 `"x-crewlet-secret": true` — on the field itself for a single value
-(`integrations.github.webhook_secret`), on `items` for each member of a
-list (`providers.llm.*.api_keys`), and on `additionalProperties` for each
-value of a map (`mcp_servers[].headers`, a seat's `sandbox.env`, and both
-levels down in `mcp_env`, whose values are per-server maps of variables).
+(`integrations.github.webhook_secret`, a `providers.llm` entry's
+`auth.api_key`), and on `additionalProperties` for each value of a map
+(`mcp_servers[].headers`, a `providers.llm` entry's `env`, a seat's
+`sandbox.env`, and both levels down in `mcp_env`, whose values are per-server
+maps of variables).
 A map's **keys** are never marked: they are names (`GITHUB_TOKEN`,
 `Authorization`), and only what they map to is a credential. A position
 without the keyword holds none, and the keyword's only value is `true`.
@@ -2483,16 +2514,17 @@ crewlet llm status <KEY>
 crewlet llm logout <KEY>
 crewlet llm export <KEY> [-secret-store]
 crewlet llm import <KEY>          # bundle on stdin
+
+# every command takes -company PATH, -config PATH and -api URL
 ```
 
-The operator side of a [subscription LLM backend](../concepts/subscription-llm-backends.md):
-a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
-the operator's Pro/Max plan instead of an API key, and the login that makes
-that work is established here rather than in the config document. `KEY` is the
-`providers.llm` key; commands that take one and are given none act on the only
-`cli-agent` provider when there is exactly one. `doctor` also examines every
-`type: anthropic` entry; the other subcommands are `cli-agent` only, since an
-API entry has no login to broker, list or export.
+The operator side of the [LLM backends](../concepts/llm-backends.md): every
+`providers.llm` entry drives a vendor's own coding CLI — on the operator's
+subscription plan, or on an API key under `auth.mode: api-key` — and the login
+that makes a subscription work is established here rather than in the config
+document. `KEY` is the `providers.llm` key; commands that take one and are
+given none act on the only entry when there is exactly one, and `doctor` given
+none examines every entry, in the order the document declares them.
 
 **`list`** is the inventory — provider key, CLI, model and how it is signed
 in. **`doctor`** is the one to run before a company's first turn: it
@@ -2510,57 +2542,51 @@ clock, read by the tool.
 Both commands answer "signed in" the same way, from the environment the CLI is
 actually given rather than from the configuration: credential files a login
 wrote (or, for OpenCode 2, which keeps its login in its own database, the
-document its export printed), a headless token, an `api_keys` value under `auth.mode: api-key`, a
+document its export printed), a headless token, the key `auth.mode: api-key`
+puts in the CLI's key variable (`auth.api_key`, or that variable itself —
+`ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex), a
 variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
-[credential-named](../concepts/subscription-llm-backends.md#5-a-provider-key-in-clienv-hermes-pi-opencode)
-variable in `cli.env`. `doctor`'s `sign-in` line names every one it found, and
-an entry with none is a `no sign-in` problem naming the route to take — unless
+[credential-named](../concepts/llm-backends.md#6-a-provider-key-in-env-opencode-hermes-pi)
+variable in the entry's `env`. `doctor`'s `sign-in` line names every one it found, and
+an entry with none is a `no sign-in` problem naming the routes its `auth.mode`
+reads ([how `doctor` judges a
+sign-in](../concepts/llm-backends.md#how-doctor-judges-a-sign-in)): a login or a
+headless token under `subscription`, only the key under `api-key`, and the
+variables it forwards or a login under `inherit-env` — unless
 the smoke test was answered, which proves the CLI authenticates some way the
 engine does not hand it (an endpoint that takes no key, a credential in its
 own configuration). A token `auth.mode: api-key` removes from the child is not
 counted. `${VAR}` references and the variables `inherit-env` forwards are
 resolved in the process running `crewlet llm` — the secret store first, then
 that shell's environment — so run it with the engine's environment to get the
-engine's answer.
+engine's answer. Beside a running engine the store's values are read through
+it, as every command that reads the company reads them
+([Commands](#commands)), so `crewlet llm` runs while the seats do —
+revealing only what the entries it works on read (the one entry a key names,
+or every entry for `list` and a bare `doctor`), with one of Tier A's tokens
+in `CREWLET_API_TOKEN` when one of those is stored. **On a `seats` node, which holds no data**, there is no store
+of the company's to read, and the logins of the seats it runs are made there:
+`-api URL` names a node that holds data, which the stored values are read
+through and a captured token or an exported bundle is stored in. Without it
+the command refuses, naming the flag.
 
 `llm list`'s `SIGN-IN` column is the first route `doctor` would name — both
 restore the entry's configured bundle first, as the engine does:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
-by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
+by `auth.mode: inherit-env`), `environment` (a key in the entry's `env`), or `none`.
 
-On an **`anthropic` entry** `doctor` checks the two things that make every
-call on it a 400 while the config validates clean. The request is
-[shaped from the model](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
-by a capability table compiled into this build, so `doctor` reads the model's
-record from the vendor's Models API (`GET /v1/models/{id}`, under the id the
-table reads — a Bedrock or dated spelling is the model it spells) and compares
-the thinking types, the effort levels and the output ceiling with what the
-entry sends. A disagreement that puts a field the model refuses on the wire is
-a **problem**, naming what to change: a `claude_model` for an alias the table
-does not know, the row a `claude_model` names, or — for a model the table reads
-itself — a Crewlet whose table matches the API. One where the table is merely
-more cautious than the model is a note. A gateway that does not serve
-`/v1/models` (a 404, 405 or 501, or a 200 that is not a model record) is
-reported as *not served* and is not a problem; any other failure of that read
-is. That read is made on one key and benches nothing, whatever it is answered:
-`/v1/models` is not the route a phase calls, and a gateway that refuses a key
-there (or rate-limits that route alone) while its messages route takes it
-would otherwise leave the round below with every key cooling. Then, unless you
-pass `-no-smoke`, it sends **one real round** in the shape
-a phase sends — a tool offered, no tool choice forced, the instruction naming
-it, the entry's own thinking, streamed, at effort `low` — and certifies that a
-call to that tool came back. The Models API read bills nothing, so it runs
-under `-no-smoke` too. `doctor` exits non-zero when any entry has a problem,
-and an entry that does not build at all (a `${VAR}` model that resolved to
-nothing, a dial its resolved model refuses) is reported as one beside the
-others. It also reads the URLs a box dials back to the engine
-(`CREWLET_MCP_BRIDGE_URL`, `CREWLET_SANDBOX_OTEL_RECEIVER_URL`) exactly as
-`crewlet run` reads them at boot: one the engine would refuse to boot on is
-reported first, as the node's, and fails the run whatever modes the entries
-run in, since a node that does not boot runs no seat. `openai` entries are not
-examined.
+`doctor` exits non-zero when any entry has a problem, and an entry that does
+not build at all (a `${VAR}` model that resolved to nothing, say) is reported
+as one beside the others rather than ending the run. A configured credential
+bundle that does not restore is a problem of its own, naming `crewlet llm
+export` as the fix, since the engine would run that entry signed out. It also
+reads the URLs a box dials back to the engine (`CREWLET_MCP_BRIDGE_URL`,
+`CREWLET_SANDBOX_OTEL_RECEIVER_URL`) exactly as `crewlet run` reads them at
+boot: one the engine would refuse to boot on is reported first, as the node's,
+and fails the run whatever modes the entries run in, since a node that does
+not boot runs no seat.
 
 **`login`** has four shapes because the vendors do:
 
@@ -2572,12 +2598,25 @@ examined.
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
 
+A headless token is read only under `auth.mode: subscription`, so `-capture-token`
+and `-token-stdin` are **refused before anything is minted, read or stored** for
+an entry whose mode would never read one, naming what that mode reads instead —
+the words `doctor` uses. Under `api-key` the CLI's token variable is removed from
+its environment, so the error names the key: `auth.api_key`, else the CLI's key
+variable, stored with `crewlet secrets set` or exported. Under `inherit-env` the
+token variable is forwarded from the engine's own environment and the secret
+store is never read, so storing a token is refused while `-capture-token
+-print-token` is not: export what it prints as that variable in the engine's
+environment, which is what the line it ends with says. `-from-host` recommends
+`-capture-token` after it runs only under `subscription`.
+
 The brokered and `-username` shapes **fail when the CLI left no login** where
 the entry reads one — exiting 0 having stored nothing, as backing out of the
 vendor's sign-in does — rather than printing that a login was written. `login`,
 `status` and a vendor's own `logout` run the CLI one at a time per state
-directory (entries sharing a `cli.state_dir` share one login home): a second
-started while the first is running is refused, saying so. Only the commands
+directory and CLI (entries sharing a `state_dir` and driving one CLI share one
+login home): a second started while the first is running is refused, saying
+so. Only the commands
 that make a login create the shared one; `status` and a seat's call write back
 only a refresh of the very login they started from, so neither reverts a newer
 login nor brings back one `logout` removed — and the bundle restore `status`
@@ -2585,15 +2624,16 @@ makes first declines after a `logout` (below). A login whose export failed
 after you signed in is kept and written by the next command — unless you replaced
 the login since with `-from-host`, `import` or `logout`; a `login` that cannot
 carry such a kept login out replaces it, saying so — see [token refresh across
-seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats). A
+seats](../concepts/llm-backends.md#token-refresh-across-seats). A
 `login` likewise replaces a shared login the CLI refuses to import (OpenCode's
 document from another build, say), saying so, where `status` keeps refusing it.
 
 **`export`** packs a login into one portable blob so another host can come up
-already authenticated. `-secret-store` writes it to the [secret
-store](../concepts/secret-store.md) instead of stdout; without it the blob goes
-to stdout in the clear, which is what you want when piping into your own
-secret manager and never what you want in a shell history.
+already authenticated: the entry's credential files, and a manifest naming the
+CLI they were exported from (`crewlet-bundle.json`). `-secret-store` writes it
+to the [secret store](../concepts/secret-store.md) instead of stdout; without
+it the blob goes to stdout in the clear, which is what you want when piping
+into your own secret manager and never what you want in a shell history.
 
 **`import`** is the other half, and it reads the bundle from **stdin** — a
 credential on argv is visible in `ps` and lands in shell history, and the
@@ -2606,11 +2646,12 @@ crewlet llm export claude | ssh other-host crewlet llm import claude
 It **refuses to overwrite an existing login**, loudly: a host that has been
 running holds the fresher refresh token, and restoring a boot-time blob over
 it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
-mean to replace it.
+mean to replace it. And it refuses a bundle that does not name the entry's CLI
+as the one it was exported from (below), writing nothing.
 
 **`logout`** removes the login (and revokes it with the vendor where the CLI
-has a logout of its own), and **records the logout** in the state directory,
-so the configured bundle below is not restored into the directory it emptied —
+has a logout of its own), and **records the logout** in the CLI's share of the
+state directory (`<state_dir>/<agent>/logged-out`), so the configured bundle below is not restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that
 directory again: `login` (brokered or `-username`), `-from-host` or `import`. A
@@ -2623,7 +2664,7 @@ recorded either way.
 
 The engine also restores a bundle **itself**, at boot and at every apply it
 publishes (never for a revision it refuses), from
-`cli.auth.credential_bundle` or the conventional
+`auth.credential_bundle` or the conventional
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
 credential directory, by the same rule, and never after a `logout` until a
 login is written again. `list`, `status`, `export` and `doctor` make
@@ -2632,6 +2673,16 @@ run with; `validate` never writes one. That path authenticates a fresh
 container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).
+
+A bundle **belongs to the CLI it was exported from**, and names it, though it
+is keyed by the entry: one exported before the entry moved to another CLI
+names the old CLI, so a restore into the new CLI's empty directory refuses it
+and writes nothing — even where the two CLIs keep a login file under one name,
+as six keep an `auth.json` — at boot and apply as
+`cli_agent_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
+and in `import`, until the new CLI is signed in and its own bundle exported in
+its place. A bundle that names no CLI is refused the same way: see [an entry
+moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).
 
 ---
 
@@ -2666,7 +2717,7 @@ A bot this run created is rolled back by revoking every token on it — nothing 
 
 ```
 crewlet mattermost doctor <company.yaml> [-browser-url URL] [-admin-token TOKEN]
-                                         [-config PATH]
+                                         [-config PATH] [-api URL]
 ```
 
 Checks a Mattermost install by exercising what actually breaks, in the order it breaks — and **no operator credential is required**: the seat tokens already in the config are what the engine authenticates with, so they are the honest thing to check with, and minting an admin token to find out whether a company works is a step that exists only to be skipped. Pass `-admin-token` (or export `MATTERMOST_ADMIN_TOKEN`) to run the shared checks as somebody else.
@@ -2677,6 +2728,8 @@ Checks a Mattermost install by exercising what actually breaks, in the order it 
 |------|-------------|
 | `-browser-url` | The address people type into their browser to reach Mattermost. Falls back to `$MATTERMOST_PUBLIC_URL`; must be an absolute `http` or `https` address. |
 | `-admin-token` | A Mattermost token to run the shared checks as. Falls back to `$MATTERMOST_ADMIN_TOKEN`, and failing that borrows a seat's own. |
+| `-config` | Tier A config naming this node's store and keyring, for resolving the company's `${VAR}`s. |
+| `-api URL` | The node to read the company's stored values through — a node that holds data, from a `seats` node or a machine that is not a node. Default: this node's store, or the running engine holding it ([Commands](#commands)). |
 
 | Check | What it catches |
 |---|---|
@@ -2839,7 +2892,7 @@ See [Slack Integration](../integrations/slack.md#automated-setup-crewlet-slack-p
 
 ```
 crewlet confluence import <company.yaml> <directory> [-space KEY] [-prune]
-    [-config PATH] [-dry-run]
+    [-config PATH] [-api URL] [-dry-run]
 ```
 
 Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `knowledge.skills_container` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
@@ -2862,6 +2915,7 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 | — | Frontmatter on a knowledge doc may declare `parent:` (the title of a page in the same space to nest under) and `labels:` (the author's own, lower-cased and de-duplicated because that is what Confluence stores). See below. |
 | `-prune` | After publishing, delete skill pages in the skills space that carry the `crewlet-skill` label and whose key no local file publishes any more. **Three conditions, all required**: in the skills space, labelled, and parsing as a skill whose key this run's tree does not publish — the label protects a hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison is what makes a renamed skill a delete-and-create rather than a silent duplicate. The orphan set is derived by subtraction, so **a prune that cannot enumerate the space deletes nothing** and fails the run: a partial read would make the orphan set larger and delete live pages. The set is taken from the *plan*, not from the writes that landed, so a page whose update happened to 403 is never deleted as an orphan of itself. A page that declares a trigger and does not parse has an unknown key and is reported rather than deleted. |
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
+| `-api URL` | The node to read the company's stored values through — a node that holds data, from a `seats` node or a machine that is not a node. Default: this node's store, or the running engine holding it ([Commands](#commands)). |
 | `-dry-run` | Print the plan and write or delete nothing. |
 
 A company that has turned tool skills off (`knowledge.skills_container: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
@@ -2911,7 +2965,7 @@ See [Confluence Integration — Webhooks](../integrations/confluence.md#webhooks
 ## `crewlet confluence resync`
 
 ```
-crewlet confluence resync <company.yaml> [-space KEY] [-config PATH]
+crewlet confluence resync <company.yaml> [-space KEY] [-config PATH] [-api URL]
 ```
 
 Runs the engine's **own** [tool-skill](../concepts/tool-skills.md) walk of the

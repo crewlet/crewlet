@@ -21,8 +21,14 @@ import (
 // a fake would answer whatever the test wanted and prove nothing about codex.
 func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 	t.Helper()
+	return creditedCompanyAuth(t, agent, cliagent.Auth{})
+}
+
+// creditedCompanyAuth is [creditedCompany] signed in under auth.
+func creditedCompanyAuth(t *testing.T, agent string, auth cliagent.Auth) (*Company, *org.Role) {
+	t.Helper()
 	provider, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: agent, StateDir: t.TempDir(), Timeout: time.Minute,
+		Key: "sub", Agent: agent, StateDir: t.TempDir(), Timeout: time.Minute, Auth: auth,
 	})
 	if err != nil {
 		t.Fatalf("cliagent.New(%s): %v", agent, err)
@@ -82,6 +88,132 @@ func TestTheRemedyNamesTheTokenWhereTheCLIMintsOne(t *testing.T) {
 	}
 }
 
+// THE REMEDY FOLLOWS THE ENTRY'S AUTH MODE, not only its CLI. Claude Code
+// mints a headless token, but an api-key entry never reads one — the mode
+// gives the token no fallback and removes its variable from the child — and an
+// inherit-env entry reads only the engine's own environment, never the secret
+// store `-capture-token` writes into. Told to mint one, the operator of either
+// stored a token nothing reads, and the next launch was refused with the same
+// advice. Each mode's refusal has to name what that mode reads.
+//
+// Not parallel: inherit-env reads the engine's process environment, which the
+// test empties of both variables so that a key exported on the machine running
+// the suite cannot sign the entry in.
+//
+// Mutation: choose the remedy by the profile alone, and the api-key and
+// inherit-env cases offer -capture-token and go red.
+func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	for _, tc := range []struct {
+		mode    cliagent.AuthMode
+		want    []string
+		notWant []string
+	}{
+		{
+			mode:    cliagent.AuthAPIKey,
+			want:    []string{"api-key", "providers.llm.sub.auth.api_key", "ANTHROPIC_API_KEY", "crewlet secrets set", "role.sandbox.env"},
+			notWant: []string{"capture-token", "subscription login", "CLAUDE_CODE_OAUTH_TOKEN"},
+		},
+		{
+			mode:    cliagent.AuthInheritEnv,
+			want:    []string{"inherit-env", "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "engine's", "never from the secret store", "role.sandbox.env", string(sandbox.Direct)},
+			notWant: []string{"capture-token", "subscription login", "crewlet secrets set"},
+		},
+		{
+			mode:    cliagent.AuthSubscription,
+			want:    []string{"subscription login", "crewlet llm login sub -capture-token", string(sandbox.Direct)},
+			notWant: []string{"auth.api_key", "inherit-env"},
+		},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			c, seat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: tc.mode})
+			err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+			var credErr *SandboxCredentialError
+			if !errors.As(err, &credErr) {
+				t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, which this mode never reads: %v", bad, err)
+				}
+			}
+		})
+	}
+}
+
+// AND WHAT EACH MODE'S REMEDY NAMES SIGNS THE RUN IN. An api-key entry whose
+// key the seat brings in role.sandbox.env passes, and so does an inherit-env
+// entry once the engine's environment holds a variable it forwards — the
+// refusal's advice has to be advice that works. Judged on the environment the
+// launch judges, the one [newCodingRun] lays: the seat's own, with the entry's
+// sign-in underneath.
+func TestEachModesRemedySignsTheRunIn(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	launch := func(c *Company, seat *org.Role, seatEnv map[string]string) error {
+		t.Helper()
+		run, err := newCodingRun(c, seat, phase.Sandbox, "claude-code", seatEnv)
+		if err != nil {
+			t.Fatalf("newCodingRun: %v", err)
+		}
+		return sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, run.env)
+	}
+
+	key, keySeat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: cliagent.AuthAPIKey})
+	if err := launch(key, keySeat, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-not-a-real-key"}); err != nil {
+		t.Errorf("an api-key entry whose seat brings the key was refused: %v", err)
+	}
+	if err := launch(key, keySeat, nil); err == nil {
+		t.Error("an api-key entry with no key anywhere was launched")
+	}
+	stored, storedSeat := creditedCompanyAuth(t, "claude-code",
+		cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-a-real-key"})
+	if err := launch(stored, storedSeat, nil); err != nil {
+		t.Errorf("an api-key entry whose key resolved was refused: %v", err)
+	}
+
+	inherit, inheritSeat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: cliagent.AuthInheritEnv})
+	if err := launch(inherit, inheritSeat, nil); err == nil {
+		t.Error("an inherit-env entry with nothing in the engine's environment was launched")
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+	if err := launch(inherit, inheritSeat, nil); err != nil {
+		t.Errorf("an inherit-env entry whose engine environment holds the key was refused: %v", err)
+	}
+}
+
+// A MODE WHOSE PROFILE NAMES NO VARIABLE FOR IT HANDS THE CLI NOTHING —
+// api-key on OpenCode, which reads each provider's key from that provider's own
+// variable and so names no api_key_env. Every write of the configuration
+// refuses the pairing, but an apply only warns, so a node can run it. Its
+// refusal names the mode as the remedy, and the local cell the login it then
+// signs in with needs; never a variable to set, since none would reach the CLI.
+func TestARemedyNamesNoVariableTheModeDoesNotHave(t *testing.T) {
+	t.Parallel()
+	c, seat := creditedCompanyAuth(t, "opencode", cliagent.Auth{Mode: cliagent.AuthAPIKey})
+	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	var credErr *SandboxCredentialError
+	if !errors.As(err, &credErr) {
+		t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
+	}
+	for _, want := range []string{"no api_key_env", "set auth.mode: subscription", string(sandbox.Direct)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+	for _, bad := range []string{"capture-token", "role.sandbox.env", "crewlet secrets set"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("the refusal names %q, which reaches nothing under this mode: %v", bad, err)
+		}
+	}
+}
+
 // A CREDENTIAL THE OPERATOR DECLARED THEMSELVES COUNTS, which is what lets
 // this be a refusal rather than a warning: the engine names no tool-specific
 // variable of its own, so it asks the profile which names authenticate and
@@ -100,6 +232,36 @@ func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 		"OPENAI_API_KEY": "  ",
 	}); err == nil {
 		t.Error("an empty credential variable was read as authentication")
+	}
+}
+
+// A SEAT SIGNED IN TO CLAUDE CODE BY ITS OWN CLOUD OR BEARER TOKEN IS SIGNED
+// IN. Such a seat is handed none of the entry's sign-in — Claude Code ranks a
+// cloud toggle and a bearer token above the entry's token, so the entry's
+// would only ride along unread — and a guard that knew only the profile's own
+// two variables then refused its remote run as signed in to nothing.
+//
+// Mutation: drop Claude Code's own list from the guard, and every case here
+// is refused.
+func TestASeatsOwnClaudeCodeSignInPassesTheRemoteGuard(t *testing.T) {
+	t.Parallel()
+	c, seat := creditedCompany(t, "claude-code")
+	for _, own := range []map[string]string{
+		{"CLAUDE_CODE_USE_BEDROCK": "1"},
+		{"CLAUDE_CODE_USE_VERTEX": "1"},
+		{"CLAUDE_CODE_USE_FOUNDRY": "1"},
+		{"ANTHROPIC_AUTH_TOKEN": "bearer-from-the-seat"},
+	} {
+		if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, own); err != nil {
+			t.Errorf("%v: a seat signed in by its own environment was refused: %v", own, err)
+		}
+	}
+	// And only Claude Code's: a codex run is not signed in by a Bedrock
+	// toggle it never reads.
+	codex, codexSeat := creditedCompany(t, "codex")
+	if err := sandboxCredentials(codex, codexSeat, phase.Sandbox, sandbox.E2B,
+		map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}); err == nil {
+		t.Error("a codex run was let through on Claude Code's cloud toggle")
 	}
 }
 
@@ -161,10 +323,10 @@ func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
 	}
 }
 
-// A CLI THAT SIGNS IN THROUGH cli.env TAKES THAT SIGN-IN INTO ITS BOX.
+// A CLI THAT SIGNS IN THROUGH env TAKES THAT SIGN-IN INTO ITS BOX.
 //
 // OpenCode reads its provider's key from its own environment, so an entry's
-// whole sign-in can be one variable in cli.env — which the doctor counts. The
+// whole sign-in can be one variable in env — which the doctor counts. The
 // run environment carried only the token and the api-key variable, so an
 // agent-mode or sandbox run on such an entry started its CLI signed in to
 // nothing, and a remote one was refused as having no credential at all.
@@ -183,7 +345,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 			t.Fatalf("NewRegistry: %v", err)
 		}
 		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
-			"sub": {Type: config.LLMCLIAgent, Model: "anthropic/claude-sonnet-4"},
+			"sub": {Agent: config.CLIOpenCode, Model: "anthropic/claude-sonnet-4", Env: env},
 		}}}
 		return &Company{Models: models, Config: cfg},
 			&org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}}
@@ -198,13 +360,13 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	}
 	env := run.env
 	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
-		t.Fatalf("the run environment does not carry the cli.env sign-in: %v", env)
+		t.Fatalf("the run environment does not carry the env sign-in: %v", env)
 	}
 	if _, leaked := env["HTTPS_PROXY"]; leaked {
-		t.Errorf("a cli.env variable that is no credential was offered as one: %v", env)
+		t.Errorf("an env variable that is no credential was offered as one: %v", env)
 	}
 	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, env); err != nil {
-		t.Errorf("a remote run carrying its cli.env key was refused: %v", err)
+		t.Errorf("a remote run carrying its env key was refused: %v", err)
 	}
 
 	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this
@@ -226,7 +388,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("a remote run with no sign-in was launched")
 	}
-	for _, route := range []string{"providers.llm.sub.cli.env", "role.sandbox.env"} {
+	for _, route := range []string{"providers.llm.sub.env", "role.sandbox.env"} {
 		if !strings.Contains(err.Error(), route) {
 			t.Errorf("the refusal does not name the %s route this CLI takes: %v", route, err)
 		}

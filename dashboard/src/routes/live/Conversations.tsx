@@ -41,6 +41,7 @@ import {
   TableNumberCell,
   TableDateCell,
   TableEntityCell,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
@@ -397,7 +398,7 @@ export function Conversations() {
   const { open: openPeek } = usePeekControls();
 
   const openChannel = useCallback(
-    (c: A2AChannel, e: React.MouseEvent | React.KeyboardEvent) => {
+    (c: A2AChannel, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "channel", id: c.id });
       // The grid hands this both events. `rowPeekHandler` is the frame's one
       // copy of "which clicks mean elsewhere" and reads a MOUSE event — every

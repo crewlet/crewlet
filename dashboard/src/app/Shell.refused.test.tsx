@@ -197,9 +197,9 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   );
   expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull();
   expect(row(/^Knowledge/).querySelector("[title='Needs Knowledge access']")).not.toBeNull();
-  expect(row(/^Home/).querySelector(".side-locked")).toBeNull();
-  expect(row(/^Overview/).querySelector(".side-locked")).toBeNull();
-  expect(row(/^Org chart/).querySelector(".side-locked")).toBeNull();
+  expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
+  expect(row(/^Principles/).querySelector(".crewlet-locked-label")).toBeNull();
+  expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.
   expect(screen.queryByText("You can’t use Crewlet right now")).toBeNull();
   expect(screen.queryByText(/Blocked|no access/i)).toBeNull();
@@ -212,10 +212,18 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
 test("a session holding no app finds Settings unlocked, and Spend open in it", async () => {
   location.hash = "#/settings/spend";
   await mount(null);
-  const foot = await screen.findByRole("navigation", { name: "Settings" });
-  const settings = within(foot).getByRole("link", { name: /^Settings/ });
-  expect(settings.querySelector(".side-locked")).toBeNull();
-  expect(settings.textContent).toBe("Settings");
+  // THE FOOT'S SETTINGS, its glyph beside the reader's own row, names no lock,
+  // and says the reader is in Settings.
+  const settings = await waitFor(() =>
+    within(document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!).getByRole(
+      "link",
+      {
+        name: "Settings",
+      },
+    ),
+  );
+  expect(settings.getAttribute("title")).toBe("Settings");
+  expect(settings.getAttribute("aria-current")).toBe("page");
   // AND IT OPENS WHERE THE READER MAY READ: Models & keys is Admin's, so the
   // row leads to Token spend rather than to a refusal ([landingPath]).
   await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/spend"));
@@ -244,7 +252,7 @@ test("Settings' column is locked where a grant is, and nowhere else", async () =
   for (const a of rows) {
     const at = a.getAttribute("href") ?? "";
     if (locked.includes(a)) {
-      expect(a.textContent, at).toMatch(/, needs (Admin|Tracker) access/);
+      expect(a.textContent, at).toMatch(/, Needs (Admin|Tracker) access/);
     } else {
       expect(a.textContent, at).not.toMatch(/needs/);
     }

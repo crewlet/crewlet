@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
@@ -51,7 +52,7 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * The work screen's own grid is the one surface walked here, because it is the
  * one whose bands render from plain props. That is now a `DataGrid` — the list
  * and the table collapsed into one renderer with two column sets — so the walk
- * covers `.grid-head` and `.grid-band-head`, the two rules this file used to
+ * covers `.crewlet-data-grid__head` and `.crewlet-data-grid__band-head`, the two rules this file used to
  * name as uncovered. One other takes `--sticky-top` and is not walked:
  * `.list-day` on Activity draws inside a screen that needs the store, so
  * standing it up would buy less than it would cost to keep honest. The
@@ -60,7 +61,7 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * by something else it is covered with no change to this file.
  *
  * (`.work-band` was a fourth, on My work's day. That day is the work grid
- * now, narrowed to one person, so the band it draws is `.grid-band-head` —
+ * now, narrowed to one person, so the band it draws is `.crewlet-data-grid__band-head` —
  * which this file does walk.)
  */
 
@@ -79,11 +80,29 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  */
 const STYLES = join(process.cwd(), "src", "styles");
 
+/**
+ * AND THE KIT'S SHEET, because the grid's heads stick by its rules now: a band
+ * the kit draws is captured by an engine box exactly as one of ours would be.
+ */
+const KIT_SHEET = createRequire(join(process.cwd(), "package.json")).resolve(
+  "@crewlethq/ui/styles.css",
+);
+
+/** Every sheet this walk reads: the dashboard's own, then the kit's. */
+function sheets(): string[] {
+  return [
+    ...readdirSync(STYLES)
+      .filter((f) => f.endsWith(".css"))
+      .map((f) => readFileSync(join(STYLES, f), "utf8")),
+    readFileSync(KIT_SHEET, "utf8"),
+  ];
+}
+
 /** Every rule in every sheet, as `[selector, declarations]`. */
 function rules(): [string, string][] {
   const out: [string, string][] = [];
-  for (const file of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
-    const bare = readFileSync(join(STYLES, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const sheet of sheets()) {
+    const bare = sheet.replace(/\/\*[\s\S]*?\*\//g, "");
     // SPLIT ON THE CLOSING BRACE, for the reason `sticky.test.ts` gives at the
     // same idiom: a regex that matches whole rules has to consume the `}` that
     // precedes one to anchor on it, which leaves the next rule without one and
@@ -144,12 +163,27 @@ function scrollportClasses(): Set<string> {
   return out;
 }
 
+/**
+ * The custom properties a sheet binds to the toolbar's offset, `--sticky-top`
+ * itself among them: the kit's grid sticks at `--crewlet-data-grid-sticky-top`,
+ * which the dashboard sets to `var(--sticky-top)` on its scroller.
+ */
+function stickyTops(): string[] {
+  const names = new Set(["--sticky-top"]);
+  for (const [, body] of rules()) {
+    for (const m of body.matchAll(/(--[\w-]+)\s*:\s*var\(--sticky-top\)/g)) names.add(m[1]!);
+  }
+  return [...names];
+}
+
 /** Classes that stick against the offset the toolbar publishes. */
 function stickyClasses(): Set<string> {
   const out = new Set<string>();
+  const tops = stickyTops();
   for (const [selector, body] of rules()) {
     if (!/position:\s*sticky/.test(body)) continue;
-    if (!/(?:^|;)\s*top:\s*[^;]*var\(--sticky-top\)/.test(body)) continue;
+    const top = /(?:^|;)\s*top:\s*([^;]*)/.exec(body)?.[1] ?? "";
+    if (!tops.some((name) => top.includes(`var(${name}`))) continue;
     for (const c of subjects(selector)) out.add(c);
   }
   return out;
@@ -234,8 +268,8 @@ test("the two rosters are read from the sheets at all", () => {
   // A GATE OVER AN EMPTY SET CERTIFIES NOTHING, and both sets come from a scan
   // that a change of idiom in the sheets could silently empty.
   expect(stickyClasses().has("list-day")).toBe(true);
-  expect(stickyClasses().has("grid-head")).toBe(true);
-  expect(stickyClasses().has("grid-band-head")).toBe(true);
+  expect(stickyClasses().has("crewlet-data-grid__head")).toBe(true);
+  expect(stickyClasses().has("crewlet-data-grid__band-head")).toBe(true);
   // The page column's own scroller is the kit's, so it is not in our sheets;
   // two of ours stand for the scan finding one at all, on either axis.
   expect(scrollportClasses().has("page-controls")).toBe(true);
@@ -243,15 +277,15 @@ test("the two rosters are read from the sheets at all", () => {
   // And the two values that are NOT scroll containers are not counted as one,
   // or the fix below would read as the bug.
   expect(scrollportClasses().has("work-list")).toBe(false);
-  expect(scrollportClasses().has("grid-wrap")).toBe(false);
+  expect(scrollportClasses().has("crewlet-data-grid")).toBe(false);
 });
 
 test("a grouped list's bands are held by the screen, not by the list", () => {
   const { container } = grouped();
-  const bands = container.querySelectorAll(".grid-band-head");
+  const bands = container.querySelectorAll(".crewlet-data-grid__band-head");
   // The rendering has to carry the thing being asserted about.
   expect(bands.length).toBe(2);
-  expect(container.querySelectorAll(".grid-head").length).toBe(1);
+  expect(container.querySelectorAll(".crewlet-data-grid__head").length).toBe(1);
   expect(captured(container)).toEqual([]);
 });
 
@@ -261,10 +295,10 @@ test("and the walk can tell — a scrolling ancestor is reported", () => {
   // Without this the two cases above would pass just as happily over a walk
   // that never looked at an ancestor.
   const { container } = grouped();
-  container.querySelector(".grid-wrap")!.classList.add("work-col-body");
+  container.querySelector(".crewlet-data-grid")!.classList.add("work-col-body");
   expect(captured(container)).toEqual([
-    ".grid-head inside .work-col-body",
-    ".grid-band-head inside .work-col-body",
-    ".grid-band-head inside .work-col-body",
+    ".crewlet-data-grid__head inside .work-col-body",
+    ".crewlet-data-grid__band-head inside .work-col-body",
+    ".crewlet-data-grid__band-head inside .work-col-body",
   ]);
 });

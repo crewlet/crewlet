@@ -160,7 +160,7 @@ node:
                                        #   N x this.  Omit for the default (32),
                                        #   which is above the seat count of a
                                        #   single-node company.  NOT the same
-                                       #   knob as the cli-agent provider's own
+                                       #   knob as the providers.llm entry's own
                                        #   max_concurrent in the company YAML,
                                        #   which caps that provider's
                                        #   subprocesses — and on this pair that

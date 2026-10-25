@@ -2944,7 +2944,7 @@ type applyResult struct {
 	// transaction's row budget is held to.
 	rows int
 
-	// swept is how many anchors a trimmed record removed (ADR-0046).
+	// swept is how many anchors a trimmed record removed (ADR-0047).
 	swept int
 
 	// gated is whether a gate dropped the record, and reason which.
@@ -2994,7 +2994,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 	}
 	out := applyResult{rows: n}
 	if rec.Subject.Kind == TrimmedKind {
-		// THE FRAMEWORK'S OWN EFFECT OF A TRIMMED RECORD — ADR-0046 — in
+		// THE FRAMEWORK'S OWN EFFECT OF A TRIMMED RECORD — ADR-0047 — in
 		// the record's own transaction, once the gates have said it
 		// applies: a record a gate drops removes nothing. AFTER the
 		// domain's own apply, which writes nothing for it but has a case
@@ -3268,7 +3268,7 @@ type results struct {
 	version int
 
 	// swept is how many anchors this transaction's trimmed records removed
-	// (ADR-0046).
+	// (ADR-0047).
 	swept int
 
 	// barriers is how many of the records this batch consumed for the

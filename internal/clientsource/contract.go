@@ -52,7 +52,10 @@ type Entry struct {
 	Reader Reader
 	// Gate is the test that owns the comparison, as the package's directory
 	// from the module root and the test's name:
-	// `internal/events.TestCategoryChipsAreTheEngines`.
+	// `internal/events.TestCategoryChipsAreTheEngines`. The directory is
+	// under internal/, or is cmd/crewlet for a declaration the CLI owns: the
+	// commands are the binary's own package, and its tests are the only
+	// place they run.
 	Gate string
 }
 
@@ -101,14 +104,6 @@ var contract = []Entry{
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
 
-	// credentials.ts
-	{"CredentialPoolAnswer", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialPoolRow", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialKeyRow", ReadInterface, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialKeyState", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialKeySource", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-	{"CredentialPoolState", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
-
 	// backups.ts
 	{"BackupsAnswer", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
 	{"BackupPointRow", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
@@ -139,11 +134,29 @@ var contract = []Entry{
 	{"AVATAR_CHARACTERS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
 	{"AVATAR_COLORS", ReadLiteral, "internal/config.TestTheAvatarSetsAreTheDashboards"},
 
+	// providersteps.ts
+	{"PROVIDER_STEPS", ReadScalar, "cmd/crewlet.TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds"},
+
+	// models.ts
+	{"CLIAuthMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"CLIMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_AGENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_AUTH_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"DEFAULT_CLI_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
 	{"SeatHeldHolder", ReadInterface,
 		"internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends"},
+	{"Charter", ReadInterface, "internal/api/configapi.TestTheDashboardReadsTheCharterTheEngineSends"},
+	{"CharterMoved", ReadInterface, "internal/api/configapi.TestTheDashboardReadsWhatACharterConflictSends"},
+	{"MISSION_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"VISION_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"POLICY_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"POLICIES_MAX", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,

@@ -129,7 +129,7 @@ type Domain interface {
 	//
 	// IT DOES NOT DECIDE WHETHER THE COPY IS JUDGED. Every domain's copy is
 	// judged ([Health.Healthy]) and a wrong one goes out of service for
-	// that domain's operations alone, whatever this answers — ADR-0045. The
+	// that domain's operations alone, whatever this answers — ADR-0046. The
 	// one declaration that used to answer both questions let a domain that
 	// did not gate seats escape the judgement too, so a wrong copy of it was
 	// served for ever.

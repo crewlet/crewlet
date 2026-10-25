@@ -9,7 +9,7 @@ import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { WidgetNote, destinationOf, widgetMissing } from "./kit.tsx";
+import { WidgetNote, destinationOf, pageOpens, widgetMissing } from "./kit.tsx";
 import { canUse, widgetDef } from "./registry.tsx";
 import { isExternal, type ContribWidget, type Leaf, type LinksWidget } from "./model.ts";
 
@@ -110,8 +110,11 @@ function Contributed({ widget }: { widget: ContribWidget }) {
   }
   if (viewer.loading) return null;
   if (!canUse(def, viewer.grants)) {
-    const page = destinationOf(def.from)?.label ?? def.label;
-    return <Unavailable>{`You no longer have access to ${page}.`}</Unavailable>;
+    // THE PAGE WHERE THE PAGE IS CLOSED, the widget where only what it reads
+    // is: Integrations opens for every reader while its widget is an Admin's.
+    const dest = destinationOf(def.from);
+    const closed = dest && !pageOpens(dest, viewer.grants) ? dest.label : def.label;
+    return <Unavailable>{`You no longer have access to ${closed}.`}</Unavailable>;
   }
   const { Component } = def;
   return (
