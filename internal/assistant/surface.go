@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -237,16 +236,8 @@ func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview propos
 	}
 	return proposal.New(proposal.Draft{Owner: t.person.ID, Conversation: t.conversation,
 		Turn: t.id, Tool: tool.Name, Act: tool.Act, Scope: scope, Preview: preview,
-		ChangesVisibility: visibilityVerbs[authz.Action(tool.Act)], PageRevision: pageRevision,
+		ChangesVisibility: tool.ChangesVisibility, PageRevision: pageRevision,
 		Taint: t.taint(), Now: t.svc.now(), TTL: ttl})
-}
-
-// visibilityVerbs are the verbs whose write changes who sees something, so its
-// proposal must name its audience (D09): sharing an artifact and withdrawing a
-// share. Read off the authority table's own verbs rather than tool names, so a
-// second tool executing as one of them is held to the same rule.
-var visibilityVerbs = map[authz.Action]bool{
-	authz.ActionArtifactShare: true, authz.ActionArtifactUnshare: true,
 }
 
 // navigate builds an open in app link, asking whether the person may open it
