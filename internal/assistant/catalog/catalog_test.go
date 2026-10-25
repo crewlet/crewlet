@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -310,11 +311,13 @@ func TestEveryStepIsASentence(t *testing.T) {
 	}
 }
 
-// A STEP SHOWS ITS METHOD ONCE: every read's step carries the method apart and
-// the route as a path pattern, so the drawer's "get_task · GET /worklet/{id}"
-// never doubles the method. Mutation: show the whole route pattern and every
-// read fails.
-func TestAStepShowsItsRouteWithoutTheMethod(t *testing.T) {
+// A STEP SHOWS THE REQUEST IT MADE, ITS METHOD ONCE: every read's step carries
+// the method apart and the path it was sent to, wildcards filled in and no
+// query, so the drawer's "search_knowledge · GET /query/knowledge" names the
+// question asked rather than the pattern "/query/{what}", and never doubles
+// the method. Mutation: show the matched route pattern and the two named cases
+// fail; show the whole request URL and the query check fails.
+func TestAStepShowsTheRequestItMade(t *testing.T) {
 	t.Parallel()
 	for _, tool := range catalog.Tools() {
 		if tool.Kind != catalog.KindRead {
@@ -326,15 +329,30 @@ func TestAStepShowsItsRouteWithoutTheMethod(t *testing.T) {
 			continue
 		}
 		shown, ok := tool.StepRequest(req)
-		if !ok || shown.Method != req.Method || !strings.HasPrefix(shown.Route, "/") {
+		if !ok || shown.Method != req.Method || shown.Route != req.Path ||
+			strings.ContainsAny(shown.Route, "?{") {
 			t.Errorf("%s's step shows %+v for %s %s", tool.Name, shown, req.Method, req.Path)
 		}
 	}
-	req, err := mustTool(t, "get_task").Request(map[string]any{"item": "ENG-1"})
-	if err != nil {
-		t.Fatal(err)
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{"get_task", map[string]any{"item": "ENG-1"}, "/worklet/ENG-1"},
+		{"search_knowledge", map[string]any{"q": "the mission"}, "/query/knowledge"},
+	} {
+		tool := mustTool(t, c.tool)
+		req, err := tool.Request(c.args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shown, _ := tool.StepRequest(req); shown == nil || shown.Route != c.want {
+			t.Errorf("%s's step shows %+v, want the route %s", c.tool, shown, c.want)
+		}
 	}
-	if shown, _ := mustTool(t, "get_task").StepRequest(req); shown.Route != "/worklet/{id}" {
-		t.Errorf("get_task's step shows the route %q, want /worklet/{id}", shown.Route)
+	if _, ok := mustTool(t, "get_task").StepRequest(exec.Request{Method: "GET",
+		Path: "/pages/x"}); ok {
+		t.Error("a request get_task could not have built is shown as one it made")
 	}
 }

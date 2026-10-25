@@ -337,17 +337,19 @@ func (t Tool) RouteOf(req exec.Request) (string, bool) {
 }
 
 // StepRequest is how a step shows the request req makes: its method, and the
-// path pattern of the tool's route it matches, without the method the route
-// pattern starts with, since the step carries the method apart. THE ONE RULE
-// for a step's request, so a step never reads "GET GET /worklet/{id}". False
-// where req matches none of the tool's routes.
+// path it was sent to with every wildcard filled in, never its query or its
+// body. THE ONE RULE for a step's request, so a step never reads "GET GET
+// /worklet/{id}", nor the pattern "GET /query/{what}" for a search that asked
+// /query/knowledge: the person reads the request that was made. The path
+// carries nothing the step's label does not already name (a task's key, a
+// seat's handle, a question's name), each segment escaped as it was sent.
+// False where req matches none of the tool's routes, so a request the tool
+// could not have built is never shown as one it made.
 func (t Tool) StepRequest(req exec.Request) (*wire.StepRequest, bool) {
-	route, ok := t.RouteOf(req)
-	if !ok {
+	if _, ok := t.RouteOf(req); !ok {
 		return nil, false
 	}
-	_, path, _ := strings.Cut(route, " ")
-	return &wire.StepRequest{Method: req.Method, Route: path}, true
+	return &wire.StepRequest{Method: req.Method, Route: req.Path}, true
 }
 
 // CardFor is the spec a call's answer is carded by.

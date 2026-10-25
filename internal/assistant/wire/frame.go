@@ -114,8 +114,9 @@ type StepEvent struct {
 	Refusal *Refusal `json:"refusal,omitempty"`
 }
 
-// StepRequest is a step's request: the method and the route pattern, never
-// the arguments or the query values.
+// StepRequest is a step's request: the method and the path it was sent to,
+// wildcards filled in (`/query/knowledge`, `/work/ENG-42`), never the query
+// values or the body.
 type StepRequest struct {
 	Method string `json:"method"`
 	Route  string `json:"route"`
