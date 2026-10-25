@@ -134,9 +134,10 @@ func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) e
 	}
 
 	// THE SINK IS OPENED FOR A REAL RUN ONLY. A dry run reads the instance
-	// and registers nothing, so it has nothing to record — and opening the
-	// secret store to write nothing would prompt for a passphrase on a
-	// command that promised to touch nothing.
+	// and registers nothing, so it has nothing to record, and so it needs
+	// no sink flag at all — and opening one is not free: an env file is
+	// created at open, before anything is in it, which would leave an
+	// empty file behind a command that promised to touch nothing.
 	opts := jira.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:           env.Value,
