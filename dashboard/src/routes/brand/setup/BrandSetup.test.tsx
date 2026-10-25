@@ -339,3 +339,16 @@ test("a change made on the way to Review is saved as a version of the draft, and
     version: 3,
   });
 });
+
+test("the rail says the current step is optional, or needs attention, as well as current", async () => {
+  engine(draft({ colors: { primary: "#00baba" } }));
+  mount(["admin"], [brandKitRow()]);
+  expect(await stepHeading("Typography")).toBeTruthy();
+  const rail = screen.getByRole("navigation", { name: "Brand setup steps" });
+  const current = within(rail).getByRole("button", { current: "step" });
+  expect(current.textContent).toMatch(/Typography/);
+  expect(current.textContent).toMatch(/Optional/);
+  expect(within(rail).getByRole("button", { name: /Colours/ }).textContent).toMatch(
+    /Needs attention/,
+  );
+});

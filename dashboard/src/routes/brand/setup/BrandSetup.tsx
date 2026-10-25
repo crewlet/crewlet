@@ -301,17 +301,20 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     void go(nextStep(step));
   };
 
+  // THE CURRENT STEP KEEPS ITS OWN WORD: the rail draws it as current, and
+  // says too that it is optional or needs attention.
   const steps = SETUP_STEPS.map((s) => {
-    const status: StepperStatus =
-      s.id === step
-        ? "current"
-        : stepAttention(s.id, edit, Object.keys(refused).length > 0)
-          ? "attention"
-          : stepDone(s.id, edit)
-            ? "done"
-            : s.optional
-              ? "optional"
-              : "upcoming";
+    const status: StepperStatus = stepAttention(s.id, edit, Object.keys(refused).length > 0)
+      ? "attention"
+      : s.id === step
+        ? s.optional
+          ? "optional"
+          : "current"
+        : stepDone(s.id, edit)
+          ? "done"
+          : s.optional
+            ? "optional"
+            : "upcoming";
     return { id: s.id, label: s.label, status };
   });
 
