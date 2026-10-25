@@ -1060,8 +1060,19 @@ const (
 	// textarea, the passage and compact registers) ride the one sheet by the
 	// same rule (1.4 KiB), and FormField's limit brought the character count
 	// into the entry's graph with it (1.1 KiB): 315.1 KiB. 316 KiB, still
+	// under two seconds on that link. Artifact folders and the company brand
+	// (uilet 0.49) took it to 320.3 KiB. The one sheet carries 4.3 KiB more:
+	// the brand scope's rules (1.3 KiB), which restyle a doc or a board in the
+	// adopted brand and are design-system rules by the same rule, and the
+	// folder tile, selection, logo, colour, contrast, type, inline list and
+	// phone sheet rules. The brand page's and the folder screens' own rules
+	// load with those screens (brand.css, folders.css), the brand's contract
+	// rows stay in the lazy brand code (contract/brand.ts), and the theme
+	// palettes a logo slot reads stay in its lazy chunk (uilet 0.49.1). What
+	// the frame gained is the folder keys (0.6 KiB) and the Brand row, the
+	// folder and brand routes and the kind's words (0.5 KiB). 321 KiB, still
 	// under two seconds on that link.
-	initialBudget = 316 << 10
+	initialBudget = 321 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1086,8 +1097,15 @@ const (
 	// chunk is about 270 KB raw, ProseMirror being 228 KB of it, and the
 	// notices of the ten packages it brings add 15 KB. That chunk is fetched
 	// only when somebody edits, so no reader's first paint pays for it, and it
-	// moved to 4 MiB then, which still refuses a doubled baseline.
-	treeBudget = 4 << 20
+	// moved to 4 MiB then, which still refuses a doubled baseline. Artifact
+	// folders and the company brand took it from about 3.99 MiB to about
+	// 4.14 MiB: the brand page, its adoption review and the brand kind's own
+	// view are about 65 KB, the folder screens, the Move dialog and the
+	// gallery's selection about 50 KB, and the design system's new rules in
+	// the one sheet about 41 KB raw. Each of those screens is fetched only
+	// when it is opened, and it moved to 4.25 MiB then, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 256<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
