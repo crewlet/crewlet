@@ -124,8 +124,10 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 
 		artifactsdomain.Domain{}.Name(): true,
 		artifactdata.Domain{}.Name():    true,
-		// NO BARRIER: nothing reads the assistant's log at linearizable.
-		assistantdomain.Domain{}.Name(): false,
+		// A BARRIER, as every identity-claiming log has: nothing in this
+		// release reads the assistant's log at linearizable, and the
+		// barrier is what the gate reserve is proved against there.
+		assistantdomain.Domain{}.Name(): true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
