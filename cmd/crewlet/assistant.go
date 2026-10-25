@@ -1,0 +1,134 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/assistantapi"
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/assistant"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tabular"
+)
+
+// mountAssistant builds the Dashboard Assistant over this node's engine and
+// hands its routes, its grants and their dispatcher to opts. It runs after
+// [api.HumanSurfaces.Mount], because the writes a person may propose are the
+// operator surface's verdict ([operator.Server.Acts]) and that surface is
+// handed over there.
+//
+// BUILT ON EVERY NODE THAT SERVES THE API, whether or not the company turns
+// the assistant on: the service reads the company per turn, so an apply that
+// turns it on is the next question's, and `/viewer` says why it is off.
+//
+// The service is returned so the caller closes it before its listeners shut
+// down: an open stream is a request a listener's grace would otherwise wait
+// out whole.
+func mountAssistant(boot *config.Bootstrap, e *engine.Engine, opts *api.Options) (*assistant.Service, error) {
+	delegations, err := auth.NewDelegations(boot.Secrets.TokenMaterial(), e, nil)
+	if err != nil {
+		return nil, fmt.Errorf("assistant: grants: %w", err)
+	}
+	dispatcher := auth.NewDispatcher(delegations)
+	acts := noActs
+	if opts.Operator != nil {
+		acts = opts.Operator.Acts
+	}
+	svc, err := assistant.New(assistant.Deps{
+		Node:        e.Node().ID(),
+		Company:     func() (*config.Company, *org.Organization) { return companyConfig(e) },
+		Acts:        acts,
+		Models:      engine.AssistantModels(e),
+		Budget:      engine.AssistantBudget(e),
+		Catalogue:   offeredCatalogue{},
+		Transcripts: e.AssistantReader(),
+		Records:     engine.AssistantRecords(e),
+		Dispatcher:  dispatcher,
+		Revoker:     delegations,
+		Audit:       e.Backends().Queue,
+		Metrics:     e.Recorder(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	grants, err := assistantapi.Grants(delegations)
+	if err != nil {
+		return nil, err
+	}
+	store, err := approval.Domain(e.AssistantWriter(), e.AssistantReader())
+	if err != nil {
+		return nil, err
+	}
+	approver, err := approval.New(approval.Deps{
+		Store: store, Grants: grants, Dispatcher: dispatcher, Turns: svc,
+		Revisions: catalog.Revision,
+		StepUp: func(act string) bool {
+			recency, ok := authz.RecencyOf(authz.Action(act))
+			return ok && recency == iam.RecencyStepUp
+		},
+		StepOp: statelog.StepOpID,
+		NewOp:  func() string { return statelog.NewOpID(time.Now().UTC(), "approval") },
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err = svc.BindDecliner(approver); err != nil {
+		return nil, err
+	}
+	audits, err := assistantapi.DomainAudits(e.AssistantWriter(), e.AssistantReader())
+	if err != nil {
+		return nil, err
+	}
+	decisions, err := assistantapi.NewDecisions(assistantapi.DecisionsDeps{
+		Approver: approver, Audits: audits, Render: svc.Render, Audit: e.Backends().Queue,
+	})
+	if err != nil {
+		return nil, err
+	}
+	surface, err := assistantapi.New(assistantapi.Options{
+		Service: svc, Grants: grants, Tables: tabular.Tables{},
+		Chart: engine.ChartAuthorityOf(e), Decisions: decisions,
+	})
+	if err != nil {
+		return nil, err
+	}
+	opts.Delegations, opts.Dispatcher, opts.Assistant = delegations, dispatcher, surface
+	return svc, nil
+}
+
+// noActs is the verdict on a node with no operator surface: no write is
+// offered, so every turn there reads.
+func noActs(context.Context, iam.Principal) ([]string, error) { return nil, nil }
+
+// offeredCatalogue is the catalogue a turn is offered: the tools the
+// person's apps and the operator surface's verdict admit (catalog.Offered).
+type offeredCatalogue struct{}
+
+func (offeredCatalogue) Offered(p iam.Principal, acts []string) []catalog.Tool {
+	return catalog.Offered(p, acts)
+}
+
+// closeAssistant stops every turn the service runs, within the API's shutdown
+// grace, saying so when one did not record its end in time. Nil-safe.
+func closeAssistant(ctx context.Context, svc *assistant.Service, log *slog.Logger) {
+	if svc == nil {
+		return
+	}
+	grace, cancel := context.WithTimeout(context.WithoutCancel(ctx), apiShutdownGrace)
+	defer cancel()
+	if err := svc.Close(grace); err != nil {
+		log.WarnContext(ctx, "assistant_close_incomplete", "error", err,
+			"hint", "a turn this node was running may not have recorded that it was "+
+				"interrupted before the shutdown grace ran out")
+	}
+}
