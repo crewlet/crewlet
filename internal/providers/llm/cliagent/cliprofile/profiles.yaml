@@ -1336,7 +1336,18 @@ muse-code:
   # writing `openai` because Meta's Model API also speaks chat-completions
   # would make the profile say something false about the model to buy nothing
   # — an unknown family already falls back to the same catalogue default.
-  written_for: "Muse Code 1.0.3 (`muse --version` prints `1.0.3-R2198.1`)"
+  #
+  # MEASURED ON 1.4.13, the newest release, AND ON 1.0.3, through the engine's
+  # own code path against a stub HTTP endpoint on 127.0.0.1 standing in for
+  # Meta's Model API: seat calls and a side pass, with the state directory
+  # inside a git checkout whose root, and a directory between it and the state
+  # directory, each held an AGENTS.md, a CLAUDE.md, .claude/ and .agents/
+  # rules and skills, .muse/rules, a .env and an .mcp.json, and with another
+  # CLI's personal rules and skills planted in the seat's home. None of them
+  # reached a request, the tools offered were the ones named below, the engine
+  # read each answer, and a 401 and a 429 were classified as the sentinels
+  # below say.
+  written_for: "Muse Code 1.4.x, measured on 1.4.13 (`muse --version` prints `Muse Code 1.4.13 (1.4.13-R6996.1)`)"
   version_args: ["--version"]
   # `muse exec`, the vendor's own headless surface: one prompt, run to
   # completion, the run's events on stdout. Its startup preamble goes to
@@ -1380,13 +1391,35 @@ muse-code:
   # below; these two are here so that a build whose settings file failed to
   # apply still refuses the call rather than running it.
   #
+  # --no-foreign-personal-context keeps OTHER CLIs' personal rules and skills
+  # out of the call. Measured on both builds: a ~/.claude/CLAUDE.md and a
+  # skill under ~/.claude/skills, planted in the seat's home, reached the
+  # developer message without the flag and did not with it. The binary also
+  # reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an entry's env could point
+  # at another CLI's real home.
+  #
+  # --disable-reminders turns off the CLI's REMINDER OBSERVERS: on 1.4.13 two
+  # (goal and verify), on 1.0.3 three (skill, goal and verify), each a model
+  # request of its own that re-sends the call's prompt — the engine's whole
+  # transcript — under instructions of its own, beside the main request.
+  # Measured, a 1.4.13 call then makes exactly one model request. They are
+  # billed, and the exec stream reports no counts for this backend to charge
+  # them against. 1.0.x HAS NO SUCH FLAG and refuses it ("unknown option
+  # --disable-reminders", exit 2, measured), which is why this profile is
+  # written for 1.4.x: an operator still on 1.0.x drops it in
+  # overrides.complete_args, and that build's observers then run.
+  #
   # NOT --sandbox-network: it governs the OS sandbox around SHELL commands,
   # and the seeded toolset leaves no shell to sandbox. Not --trust-workspace
-  # either — the per-call working directory is created empty, and trusting it
-  # is what would admit an AGENTS.md, a rule or a skill from a checkout the
-  # engine does not control. Not --max-model-steps: breaching it exits 1, so
-  # a cap would DISCARD a finished answer, and timeout_seconds already
-  # bounds the call from the outside without throwing the work away.
+  # either. Untrusted, the CLI admits no project rules, skills or hooks:
+  # measured, nothing from the checkout around the state directory reached a
+  # request on either build, and the engine's `.git` marker in the call's
+  # directory ends the CLI's walk for project files there besides. Trusted, it
+  # also adds six subagent tools past the toolset.
+  #
+  # Not --max-model-steps: breaching it exits 1, so a cap would DISCARD a
+  # finished answer, and timeout_seconds already bounds the call from the
+  # outside without throwing the work away.
   complete_args:
     - "exec"
     - "--json"
@@ -1394,6 +1427,8 @@ muse-code:
     - "--disable-approval"
     - "--disable-shell"
     - "--disable-write"
+    - "--no-foreign-personal-context"
+    - "--disable-reminders"
   # Denied by REPLACING THE TOOL SURFACE, which is the only thing on this CLI
   # that does: `run.toolset` is an allowlist of exact tool names, validated
   # against the real registry at startup, and it is what makes bash,
@@ -1401,35 +1436,66 @@ muse-code:
   # subagent families disappear from the model's view. There is no
   # --allowed-tools, no --deny-tool and no project-level settings file.
   #
-  # `web_search` is the one name kept, because web is the one local tool this
-  # backend never denies. (`web_fetch` is registered but gated off by a remote
-  # rollout in 1.0.3 — naming it admits nothing, so it is not named.) Three
-  # engine-owned tools survive any toolset and cannot be removed: read_skill,
-  # snooze_reminder and write_todos. None of them reaches the filesystem, the
-  # shell or the network.
+  # The two names are the CLI's own web tools, the one local surface this
+  # backend never denies. Measured on 1.4.13, they are the whole tool array:
+  # `web_search`, and `web_fetch` ("HTTP or HTTPS URL to fetch"). On 1.0.3
+  # `web_fetch` is gated off by a remote rollout, so naming it admits nothing
+  # there, and three engine-owned tools survive any toolset — read_skill,
+  # snooze_reminder and write_todos, which read the CLI's own skill catalogue,
+  # pause its reminders and keep its todo list; 1.4.13 offers none of them.
+  #
+  # provider_retry.max_retries is 3 because the CLI's own retries otherwise
+  # outlast the call. It retries a 429 with a delay that doubles from one
+  # second up to a minute (measured on 1.4.13: nine attempts, and still
+  # retrying when a four-minute wall-clock cap stopped the call), so a spent
+  # plan reached this backend as a TIMEOUT after the whole of timeout_seconds,
+  # which never sits the entry out, and the next call waited as long again.
+  # Three retries take seven seconds, which rides out a burst, and then the
+  # CLI reports the limit itself — "API error 429: … (rate_limit_error) (after
+  # 4 provider attempts)", measured on both builds — so the entry sits out for
+  # the engine's one minute and the seat's chain carries on. The wait beyond a
+  # burst is the engine's to decide, not the CLI's.
   #
   # "schema_version": 1 is MANDATORY: a settings file without it fails every
   # command at startup with `malformed settings file`.
   local_tools: denied
   seed_files:
     - path: .config/muse/settings.json
-      content: '{"schema_version":1,"run":{"toolset":["web_search"]}}'
+      content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3}}'
   model_args: ["--model", "{model}"]
-  # NO SYSTEM-PROMPT CHANNEL. The flags common to both surfaces are model,
-  # reasoning effort, the permission levers, workspace and session logging,
-  # and the headless-only three are --json, --prompt-file and
-  # --max-model-steps. Project instructions travel through AGENTS.md /
-  # CLAUDE.md, which load only after a workspace is TRUSTED — so on the
-  # untrusted per-call directory this backend hands it, nothing of the sort is
-  # admitted either. The seat's identity therefore rides the transcript, as it
-  # does for codex, opencode, copilot and cursor-agent.
+  # THE APPEND CHANNEL IS AN UNDOCUMENTED VARIABLE:
+  # TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE names a file whose text the CLI
+  # appends, after a blank line, at the very end of its own instructions —
+  # 48,043 characters on 1.4.13 and 37,518 on 1.0.3, opening "You are Muse
+  # Code, an agentic coding CLI (command line interface) that helps users with
+  # software engineering tasks." Measured through the engine on both builds:
+  # the vendor's instructions were kept whole, they were byte-identical from
+  # one call to the next, so nothing per-call stands before the engine's text,
+  # and the per-call workspace root travels in the developer message after
+  # them. The variable is in the binary's own list of what it reads at startup
+  # on both builds, and is no part of the vendor's documentation, so a release
+  # may drop it without notice — and the seat's text would then reach the
+  # model nowhere, with no error. An operator who would rather not depend on
+  # it sets `overrides: {append_system_prompt: {env: ""}}`, which returns the
+  # text to the transcript under the vendor's prompt; a build other than 1.4.x
+  # is the moment to check, which is what written_for and `crewlet llm
+  # doctor` are for.
   #
+  # NO REPLACE CHANNEL PER CALL, so a side pass takes the append channel too.
+  # `run.system_prompt` in the settings file replaces the instructions whole,
+  # but that file is the seat's, which every call it runs at once shares; and
+  # 1.4.x's `-c run.system_prompt=…` would put the text on argv.
+  #
+  # The vendor keys its prompt cache per session (`prompt_cache_key` is
+  # `tbh:main:<session>`), and every call here is a session of its own.
+  append_system_prompt:
+    env: "TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE"
   # --prompt-file IS the reason this profile is prompt_mode: file. The prompt
-  # a phase renders is the whole flattened transcript — the seat's identity,
-  # the tool catalogue, the conversation and every tool result in it — and on
-  # argv that is readable through /proc/<pid>/cmdline by every account on the
-  # machine and bounded by ARG_MAX (256 KB on macOS). This CLI is the first
-  # built-in profile whose vendor offers a path instead, so it takes it.
+  # a phase renders is the whole flattened transcript — the conversation and
+  # every tool result in it, and the tool catalogue — and on argv that is
+  # readable through /proc/<pid>/cmdline by every account on the machine and
+  # bounded by ARG_MAX (256 KB on macOS). This CLI is the first built-in
+  # profile whose vendor offers a path instead, so it takes it.
   prompt_mode: file
   prompt_args: ["--prompt-file", "{file}"]
   output: jsonl
@@ -1482,7 +1548,8 @@ muse-code:
   #
   # And two files inside the config directory, which is otherwise left alone
   # because the credential lives there: trust.json accumulates one workspace
-  # trust record per call directory, none of which will ever exist again, and
+  # trust record per trusted directory, which this profile never asks for but
+  # an operator's override could, and none of which will ever exist again; and
   # .auth.json.lock is what a killed CLI leaves held — the same half-prune the
   # claude-code profile's .claude.json.lock note records.
   volatile_paths:
@@ -1515,11 +1582,12 @@ muse-code:
   # slash command, which a headless run cannot reach.
   #
   # THE AUTH SENTINELS ARE THE CLI'S OWN SENTENCES, and they share a clause:
-  # four of the five auth failures this build reports — a rejected saved key,
+  # four of the five auth failures this CLI reports — a rejected saved key,
   # no login to refresh from, an unauthorised token refresh, a login that is
   # no longer saved — all end in "run `muse login`". The fifth is the
-  # environment key being rejected, which names META_API_KEY instead. Neither
-  # is a phrase a model writes by accident.
+  # environment key being rejected, "your API key from META_API_KEY was
+  # rejected — update or unset it" (measured on both builds, for a 401).
+  # Neither is a phrase a model writes by accident.
   #
   # THE LIMIT SENTINELS ARE THE MODEL API'S ERROR **TYPE**, which is the token
   # a muse failure reason actually carries: a real out-of-credits run surfaced
@@ -1527,12 +1595,14 @@ muse-code:
   # so the parenthesised type is the template. `billing_error` is that
   # captured case — an account that can no longer pay, which is a spent
   # credential and belongs on the fallback chain. `rate_limit_error` is the
-  # published type for 429; no 429 from this CLI has been captured, so if your
-  # plan's wording differs, put it in overrides.limit_markers rather than
-  # letting a spent plan pass as an unexplained SERVER failure, which moves
-  # the chain on but never sits the entry out. The error CODES
-  # (`rate_limit_exceeded`, `invalid_api_key`) are deliberately not used: the
-  # observed template carries the type, not the code.
+  # published type for 429, and a stub answering 429 with it produced "API
+  # error 429: … (rate_limit_error) (after 4 provider attempts)" on both
+  # builds; a real 429 from Meta's API has not been captured, so if your plan's
+  # wording differs, put it in overrides.limit_markers rather than letting a
+  # spent plan pass as an unexplained SERVER failure, which moves the chain on
+  # but never sits the entry out. The error CODES (`rate_limit_exceeded`,
+  # `invalid_api_key`) are deliberately not used: the observed template
+  # carries the type, not the code.
   limit_markers:
     - sentinel: "rate_limit_error"
     - sentinel: "billing_error"

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -233,9 +234,21 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	if strings.Contains(joined, "--yolo") || strings.Contains(joined, "--trust-workspace") {
 		t.Errorf("complete_args = %v trusts the workspace", p.CompleteArgs)
 	}
+	// --no-foreign-personal-context keeps other CLIs' personal rules and
+	// skills out of the call: measured on 1.0.3 and 1.4.13, a CLAUDE.md and
+	// a skill under the seat home's .claude reached the developer message
+	// without it. --disable-reminders keeps the CLI's reminder observers —
+	// each a model request of its own re-sending the call's prompt — from
+	// running beside every call.
+	for _, want := range []string{"--no-foreign-personal-context", "--disable-reminders"} {
+		if !slices.Contains(p.CompleteArgs, want) {
+			t.Errorf("complete_args = %v lacks %q", p.CompleteArgs, want)
+		}
+	}
 	// The flags are defence in depth; run.toolset is what actually removes
-	// the tools from the model's surface, and web_search is the one name
-	// kept because web is the tool this backend never denies.
+	// the tools from the model's surface, and it names the CLI's own web
+	// tools and nothing else, because web is the surface this backend never
+	// denies.
 	var settings *cliprofile.SeedFile
 	for i := range p.SeedFiles {
 		if p.SeedFiles[i].Path == ".config/muse/settings.json" {
@@ -251,6 +264,9 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 		Run           struct {
 			Toolset []string `json:"toolset"`
 		} `json:"run"`
+		ProviderRetry struct {
+			MaxRetries *int `json:"max_retries"`
+		} `json:"provider_retry"`
 	}
 	if err := json.Unmarshal([]byte(settings.Content), &doc); err != nil {
 		t.Fatalf("the seeded settings file is not JSON: %v", err)
@@ -260,19 +276,79 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	if doc.SchemaVersion != 1 {
 		t.Errorf("settings.json schema_version = %d, want 1", doc.SchemaVersion)
 	}
-	if !slices.Contains(doc.Run.Toolset, "web_search") {
-		t.Errorf("run.toolset = %v, want web_search: a subscription seat must not "+
-			"have less reach than the same CLI at a terminal", doc.Run.Toolset)
+	// An ALLOWLIST of the CLI's own web tools, exactly: on 1.4.13 these two
+	// are the whole tool array (web_fetch is gated off on 1.0.3, where
+	// naming it admits nothing), and a seat on a subscription must not have
+	// less reach than the same CLI at a terminal.
+	if want := []string{"web_search", "web_fetch"}; !slices.Equal(doc.Run.Toolset, want) {
+		t.Errorf("run.toolset = %v, want exactly %v", doc.Run.Toolset, want)
 	}
-	for _, denied := range []string{"bash", "bash_input", "shell", "read_file", "write_file", "edit_file"} {
-		if slices.Contains(doc.Run.Toolset, denied) {
-			t.Errorf("run.toolset admits %q", denied)
-		}
+	// THE CLI'S RETRIES END BEFORE THE ENGINE'S SIT-OUT WOULD. Unset, it
+	// retries a 429 with a delay doubling from a second to a minute until
+	// the call's wall-clock cap stops it (measured on 1.4.13), so a spent
+	// plan arrives as a timeout that never sits the entry out. With n
+	// retries the CLI waits 2^n - 1 seconds and then reports the limit
+	// itself; that wait must stay inside the one minute the engine then
+	// sits the entry out for, so the engine and not the CLI decides how
+	// long a limited entry waits.
+	switch n := doc.ProviderRetry.MaxRetries; {
+	case n == nil:
+		t.Error("settings.json sets no provider_retry.max_retries, so a 429 is retried " +
+			"until the call times out and a spent plan never sits the entry out")
+	case *n < 1 || time.Duration((1<<*n)-1)*time.Second >= limitBench:
+		t.Errorf("provider_retry.max_retries = %d: the CLI would wait %ds, want at least "+
+			"one retry and less than the engine's %s sit-out", *n, (1<<*n)-1, limitBench)
 	}
 	// No usage paths, and the profile must not claim otherwise: this
 	// stream carries no token counts under any key.
 	if p.ReadsUsage() {
 		t.Error("the profile claims to read usage from a stream that has none")
+	}
+}
+
+// MUSE KEEPS ITS OWN INSTRUCTIONS AND TAKES THE SEAT'S AFTER THEM, FROM A FILE,
+// AND AN OPERATOR CAN SAY NO.
+//
+// The channel is TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE, which names a file whose
+// text the CLI appends to the end of its instructions (measured through the
+// engine on 1.0.3 and 1.4.13) — a variable naming a path, so the text never
+// reaches argv. There is no replace channel per call, so a side pass takes it
+// too. And the variable is undocumented, so switching it off must be one
+// override away and must hand the text back to the transcript rather than
+// to nowhere.
+//
+// Mutation: declare the variable as system_prompt, put it on argv, or let an
+// empty env still count as a channel, and this is red.
+func TestTheMuseSeatTextIsAppendedFromAFileAnOperatorCanTurnOff(t *testing.T) {
+	t.Parallel()
+	p, ok := cliprofile.Builtin("muse-code")
+	if !ok {
+		t.Fatal("no built-in muse-code profile")
+	}
+	ch := p.AppendSystemPrompt
+	if ch.Env != "TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE" || len(ch.Args) > 0 || ch.File != nil {
+		t.Errorf("append_system_prompt = %+v, want only env TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE", ch)
+	}
+	if p.SystemPrompt.Declared() {
+		t.Errorf("system_prompt = %+v, but muse has no per-call channel that replaces "+
+			"its instructions", p.SystemPrompt)
+	}
+	for _, agent := range []bool{true, false} {
+		if r := p.RouteFor(agent); r.Field != "append_system_prompt" || !r.KeepsDefault {
+			t.Errorf("agent=%v routes to %q (keeps default %v), want the append channel",
+				agent, r.Field, r.KeepsDefault)
+		}
+	}
+
+	off, err := cliprofile.Load("muse-code", map[string]any{
+		"append_system_prompt": map[string]any{"env": ""},
+	})
+	if err != nil {
+		t.Fatalf("switching the undocumented channel off was refused: %v", err)
+	}
+	if r := off.RouteFor(true); r.Field != "" || !r.KeepsDefault {
+		t.Errorf("with the channel off a seat routes to %q (keeps default %v), want the "+
+			"transcript under the CLI's own instructions", r.Field, r.KeepsDefault)
 	}
 }
 

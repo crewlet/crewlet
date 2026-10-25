@@ -179,11 +179,12 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// append channel is the AGENTS.md of the same directory, which the
 		// default agent reads on every run.
 		"opencode": discoveredChannel,
-		// 1.0.3: the flag set is model, reasoning effort, the
-		// permission levers, workspace and session logging, plus --json,
-		// --prompt-file and --max-model-steps for `exec`. Instructions
-		// travel through AGENTS.md / CLAUDE.md, which load only once a
-		// workspace is TRUSTED — and the per-call directory never is.
+		// No per-call channel that REPLACES, on 1.0.3 or 1.4.13:
+		// run.system_prompt is in the seat's settings file, which its
+		// concurrent calls share, and 1.4's `-c` would put the text on
+		// argv. Its APPEND channel is a file an undocumented variable
+		// names (TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE), which a side pass
+		// takes too.
 		"muse-code": "",
 		// 0.42.0 and 2.3.1, MoonshotAI's OWN CLI from
 		// @moonshot-ai/kimi-code: --agent-file, a path — but an AGENT
