@@ -222,6 +222,20 @@ type Request struct {
 	// and returns the same Completion it always would; nothing above here
 	// may treat the absence of deltas as an error.
 	OnDelta func(Delta)
+
+	// StreamTokens asks a backend that streams only by running the call
+	// differently to do so: the cli-agent backend then runs a profile's
+	// streamed variant (Claude Code's stream-json) instead of the profile as
+	// written. Meaningless without OnDelta. Without it, OnDelta streams what
+	// the backend streams anyway and nothing about how the call runs changes.
+	//
+	// AN EXPLICIT OPT-IN rather than implied by OnDelta, because changing how
+	// a CLI is run changes what has to be read back, and a caller watching a
+	// round for a live view (every seat) must not have its whole runtime moved
+	// onto an output shape it never asked for. The Dashboard Assistant asks;
+	// seats do not, until a live streamed round has been proven against the
+	// installed CLI by `crewlet llm doctor`.
+	StreamTokens bool
 }
 
 // Delta is a fragment of a completion as it is being written.
