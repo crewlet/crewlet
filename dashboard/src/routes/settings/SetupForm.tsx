@@ -54,6 +54,8 @@ import type {
   SetupVerdict,
 } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -670,6 +672,25 @@ export function SetupForm({
     },
     [shownBy, answeredIn],
   );
+
+  // WHAT IS OPEN, for the assistant: every field the form shows, a
+  // credential never, and the text and choice fields set through the same
+  // `setValues` typing uses. Submitting stays the person's.
+  useAssistantDraft<Readonly<Record<string, string>>>({
+    kind: "client",
+    scope: `${title} settings (not saved)`,
+    help: SETUP_ASSISTANT_HELP,
+    value: values,
+    fields: setupDraftFields(
+      sections.flatMap((section) =>
+        (shownBy.get(sectionKey(section)) ?? [])
+          .filter((r) => editable(section, r))
+          .map((r) => ({ key: valueKey(section, r), r })),
+      ),
+    ),
+    apply: (next) => setValues({ ...next }),
+    blocked: () => (busy ? "Waiting for the engine to finish writing." : null),
+  });
 
   /**
    * What one section would send: only what DIFFERS from what the engine
