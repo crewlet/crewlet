@@ -7044,6 +7044,15 @@ a.work-cal-chip {
   white-space: normal;
   overflow-wrap: break-word;
 }
+
+/* A MODEL'S LINK, DRAWN INERT (`links: "inert"` in lib/markdown.ts): the
+   label in the text's own ink, then the place it names in the quiet link ink,
+   never underlined and never a control, so a reader can see where a link
+   would have gone without being able to follow one a model wrote. */
+.md-link-inert-host {
+  color: var(--color-text-link-quiet);
+  overflow-wrap: anywhere;
+}
 /* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
    siblings. The other way round — a `margin: 0` reset per element type after
    the sibling rule — is how the rhythm died: the shorthand resets margin-top
@@ -11663,4 +11672,18 @@ a.live-row:focus-visible {
     display: flex;
     flex-direction: column;
   }
+}
+
+/* ---- The Dashboard Assistant (app/assistant) -----------------------------
+   The panel is the kit's SidePanel in the frame's aside, and its body is the
+   kit's ChatThread: the thread is the one scroller and insets its own items,
+   so the panel's body gives up its inset rather than doubling it. */
+.assistant-panel {
+  --crewlet-side-panel-inset: 0px;
+}
+
+/* The one line under the composer, centred, on one line at every width. */
+.assistant-disclaimer {
+  margin: var(--spacing-2) 0 0;
+  text-align: center;
 }

@@ -14,7 +14,7 @@ import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import type { ReactNode } from "react";
 import { Home } from "./Home.tsx";
-import { greeting } from "./model.ts";
+import { greeting } from "~/lib/format.ts";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { NOBODY_SENTENCE } from "./Decisions.tsx";
 import { Router } from "~/app/router.tsx";
