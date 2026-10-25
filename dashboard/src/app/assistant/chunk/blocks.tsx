@@ -67,6 +67,7 @@ import { openInApp, type InAppTarget } from "./openInApp.ts";
 import { useCardOpen } from "./fold.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
+import { DraftFile } from "./DraftFile.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 
 type WireStepState = AssistantStepEvent["state"];
@@ -420,9 +421,13 @@ export function ActionReceipt({
 
 /** A screen's preview row in `ChangeList`'s grammar: what it sets, from what. */
 function previewRow(row: PageActionPreview["rows"][number]): ChangeListRow {
-  if (row.current === null) return { kind: "added", label: row.field, to: row.next, isNew: false };
-  if (row.current === row.next) return { kind: "fact", label: row.field, value: row.next };
-  return { kind: "changed", label: row.field, from: row.current, to: row.next };
+  // A PROPOSED FILE IS DRAWN, by its name, its type and a thumbnail.
+  const to = row.file ? <DraftFile file={row.file} /> : row.next;
+  if (row.current === null || (row.file && row.current === "(empty)")) {
+    return { kind: "added", label: row.field, to, isNew: false };
+  }
+  if (!row.file && row.current === row.next) return { kind: "fact", label: row.field, value: to };
+  return { kind: "changed", label: row.field, from: row.current, to };
 }
 
 /**

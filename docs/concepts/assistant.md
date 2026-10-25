@@ -100,9 +100,9 @@ from the draft in front of you rather than a search. Values are sent as you
 typed them, with any password, token or key left out, and only while the page
 chip is attached. A change the assistant proposes to that draft shows each
 field's value now beside the proposed one, applies to the draft once you
-approve it, and is saved when you save. The assistant works with text only: on
-the brand screens it proposes colours, typefaces and the voice, and does not
-make images.
+approve it, and is saved when you save. On the brand screens it proposes
+colours, typefaces and the voice; a logo can be proposed only from a file in
+your own conversation, shown on the card as a thumbnail before you approve.
 
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from

@@ -66,6 +66,9 @@ type RigOptions struct {
 	// counter; nil serves this node's own turns and counts them here.
 	Remote assistant.Remote
 	Rate   assistant.TurnRate
+	// Files is the assistant's file store a draft change's file is checked
+	// against; nil keeps none.
+	Files assistant.Files
 }
 
 // Assemble builds a rig over o. Its person is grace, holding Worklet, on
@@ -111,7 +114,7 @@ func Assemble(o RigOptions) (*Rig, error) {
 		offered = o.Catalogue
 	}
 	svc, err := assistant.New(assistant.Deps{
-		Node: node, Company: o.Company, Remote: o.Remote, Rate: o.Rate,
+		Node: node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: o.Files,
 		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
 		Models: models, Budget: o.Budget, Catalogue: offered,
 		Transcripts: r.Store, Records: r.Store, Dispatcher: dispatcher, Revoker: revoker,

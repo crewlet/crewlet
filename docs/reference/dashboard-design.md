@@ -4075,9 +4075,14 @@ draft still says what the change made of it. A gate
 editor, a form field) that neither declares a draft nor is listed as part of a
 screen that does, or as a modal or signed-out form with its reason. The brand
 setup and the Brand page share one field list (`lib/brand/assistantDraft.ts`):
-name, tagline, colours, typefaces and voice are settable, logos are read as
-metadata only, and the help tells the assistant it makes no images and offers
-an SVG starting point only when asked. The palette offers "Ask the
+name, tagline, colours, typefaces and voice are settable, and a logo is a
+`file` field, set only by a reference to one of the person's files in the
+conversation (the engine checks it is theirs before the card is drawn). The
+card draws a proposed image through the owner's route in `LogoSlot`'s
+thumbnail, an `<img>`, never inlined (`app/assistant/chunk/DraftFile.tsx`);
+once approved, the screen fetches the bytes and keeps them as a picked file
+for its own save. The help tells the assistant it makes no images there and
+offers an SVG starting point only when asked. The palette offers "Ask the
 assistant" for a typed question, which the panel asks as its own box would.
 
 **A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):

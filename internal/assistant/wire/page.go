@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // PageContext is what a screen tells a turn about itself: WHICH things are on
@@ -79,19 +82,63 @@ type DraftField struct {
 	Path string `json:"path"`
 	// Label is the field as the person reads it ("Primary colour").
 	Label string `json:"label"`
-	// Value is the current value as text; a list's items are one per line.
-	// Empty, and Redacted set, for a credential.
+	// Kind is the field's shape, and so of the value a change to it takes.
+	Kind DraftFieldKind `json:"kind"`
+	// Value is the current value as text: a list's items one per line, a
+	// file's name. Empty, and Redacted set, for a credential.
 	Value string `json:"value"`
 	// Hint says what a value must be ("a #RRGGBB colour").
 	Hint string `json:"hint,omitempty"`
-	// List marks a field whose value is a list, one item per line.
-	List bool `json:"list,omitempty"`
 	// Editable marks a field the screen's `draft.set` action takes.
 	Editable bool `json:"editable,omitempty"`
 	// Redacted marks a credential, whose value never leaves the page.
 	Redacted bool `json:"redacted,omitempty"`
 	// Truncated marks a value cut at [PageDraftValueMaxRunes].
 	Truncated bool `json:"truncated,omitempty"`
+}
+
+// DraftFileRef is the value a change to a file field takes: a file of the
+// person's own conversation, by id, which the screen fetches through the
+// owner's route and keeps through its own save. Never the file's bytes or its
+// markup, so nothing the model wrote is ever drawn or stored as a file.
+type DraftFileRef struct {
+	// Kind is always [DraftFieldFile], so a reference is told apart from a
+	// value by its shape alone.
+	Kind DraftFieldKind `json:"kind"`
+	// FileID names the file among the conversation's.
+	FileID uuid.UUID `json:"file_id"`
+	// ConversationID is the conversation the file belongs to: the turn's own,
+	// which is what the screen fetches it under.
+	ConversationID uuid.UUID `json:"conversation_id"`
+	// Name is the file's name, as the card and the screen show it.
+	Name string `json:"name"`
+	// MediaType is the file's type, from the store that holds it.
+	MediaType string `json:"media_type"`
+}
+
+// mediaTypePattern is a media type with no parameters: `image/svg+xml`.
+var mediaTypePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$`)
+
+// draftFileNameMaxBytes bounds a file reference's name: a file name, never a
+// path.
+const draftFileNameMaxBytes = 200
+
+// Validate reports what is wrong with a file reference: its kind, its ids,
+// a name that is a plain file name, and a media type in its grammar.
+func (r DraftFileRef) Validate() error {
+	switch {
+	case r.Kind != DraftFieldFile:
+		return fmt.Errorf("%w: a file reference has kind %q, not %q", ErrInvalid, r.Kind,
+			DraftFieldFile)
+	case r.FileID == uuid.Nil || r.ConversationID == uuid.Nil:
+		return fmt.Errorf("%w: a file reference names no file or no conversation", ErrInvalid)
+	case r.Name == "" || !plain(r.Name, draftFileNameMaxBytes) || strings.ContainsAny(r.Name, "/\\"):
+		return fmt.Errorf("%w: a file reference's name is not a file name of at most %d bytes",
+			ErrInvalid, draftFileNameMaxBytes)
+	case !mediaTypePattern.MatchString(r.MediaType):
+		return fmt.Errorf("%w: a file reference's media type %q is not one", ErrInvalid, r.MediaType)
+	}
+	return nil
 }
 
 // PageDraftSecretPath matches a draft field path that names a credential: a
@@ -260,6 +307,9 @@ func (d PageDraft) validate() error {
 			utf8.RuneCountInString(f.Hint) > draftHintMaxRunes:
 			return fmt.Errorf("%w: page context draft field %q hint is not plain text of at "+
 				"most %d characters", ErrInvalid, f.Path, draftHintMaxRunes)
+		case !f.Kind.Valid():
+			return fmt.Errorf("%w: page context draft field %q kind %q is not one of %v",
+				ErrInvalid, f.Path, f.Kind, DraftFieldKinds)
 		case f.Redacted && (f.Value != "" || f.Editable):
 			return fmt.Errorf("%w: page context draft field %q is redacted and carries a value "+
 				"or takes one", ErrInvalid, f.Path)

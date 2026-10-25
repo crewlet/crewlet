@@ -648,3 +648,25 @@ var DraftKinds = []DraftKind{DraftClient, DraftServer}
 
 // Valid reports whether k is a draft kind this build knows.
 func (k DraftKind) Valid() bool { return slices.Contains(DraftKinds, k) }
+
+// DraftFieldKind is the shape of an open draft's field, and so of the value a
+// change to it takes.
+type DraftFieldKind string
+
+const (
+	// DraftFieldText is one value of text.
+	DraftFieldText DraftFieldKind = "text"
+	// DraftFieldList is a list, its items one per line in the snapshot and
+	// a list of strings in a change.
+	DraftFieldList DraftFieldKind = "list"
+	// DraftFieldFile is a file the screen keeps (a logo): its snapshot value
+	// is the file's name, and a change to it is a [DraftFileRef] to a file
+	// of the person's own conversation, never the file's bytes or markup.
+	DraftFieldFile DraftFieldKind = "file"
+)
+
+// DraftFieldKinds are the three, in declaration order.
+var DraftFieldKinds = []DraftFieldKind{DraftFieldText, DraftFieldList, DraftFieldFile}
+
+// Valid reports whether k is a draft field kind this build knows.
+func (k DraftFieldKind) Valid() bool { return slices.Contains(DraftFieldKinds, k) }

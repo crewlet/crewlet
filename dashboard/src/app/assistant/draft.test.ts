@@ -87,10 +87,10 @@ describe("the draft a page sends", () => {
       step: "details",
       help: "Change the title and the tags.",
       fields: [
-        { path: "title", label: "Title", value: "Runbook", editable: true },
-        { path: "tags", label: "Tags", value: "ops", list: true, editable: true },
-        { path: "password", label: "Password", value: "", redacted: true },
-        { path: "api_key", label: "Key", value: "", redacted: true },
+        { path: "title", label: "Title", kind: "text", value: "Runbook", editable: true },
+        { path: "tags", label: "Tags", kind: "list", value: "ops", editable: true },
+        { path: "password", label: "Password", kind: "text", value: "", redacted: true },
+        { path: "api_key", label: "Key", kind: "text", value: "", redacted: true },
       ],
       more: 0,
     });
@@ -219,5 +219,82 @@ describe("draft.set", () => {
     const action = draftSetAction<Form>(() => null);
     expect(action.parse({ values: { title: "x" } }).ok).toBe(false);
     expect(action.blocked({} as never)).toMatch(/no longer open/);
+  });
+});
+
+describe("a file field", () => {
+  const FILE = "0b7f1c3e-8a4d-4e2b-9c1a-3f5e6d7a8b9c";
+  const CONVERSATION = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+  const ref = (over: Record<string, unknown> = {}) => ({
+    kind: "file",
+    file_id: FILE,
+    conversation_id: CONVERSATION,
+    name: "logo.svg",
+    media_type: "image/svg+xml",
+    ...over,
+  });
+  interface Kit {
+    logo: string;
+  }
+  const kit: AssistantDraftSpec<Kit> = {
+    kind: "client",
+    scope: "The kit (not saved)",
+    value: { logo: "" },
+    fields: [
+      {
+        path: "logo",
+        label: "Logo",
+        read: (k) => k.logo,
+        file: {
+          accepts: ["image/svg+xml", "image/png"],
+          write: (k, r) => (r.name.startsWith("x") ? refuse("Not that one.") : { logo: r.name }),
+        },
+      },
+    ],
+    apply: vi.fn(),
+  };
+
+  test("is sent as a file field, by its name, that the assistant may set", () => {
+    expect(draftSnapshot(kit).fields).toEqual([
+      {
+        path: "logo",
+        label: "Logo",
+        kind: "file",
+        value: "",
+        hint: "A file: image/svg+xml, image/png",
+        editable: true,
+      },
+    ]);
+  });
+
+  test("takes a reference to a file and shows it by name, type and the reference", () => {
+    expect(parseDraftChange(kit, { values: { logo: ref() } })).toEqual({
+      ok: true,
+      value: {
+        next: { logo: "logo.svg" },
+        rows: [
+          { field: "Logo", next: "logo.svg (image/svg+xml)", current: "(empty)", file: ref() },
+        ],
+      },
+    });
+  });
+
+  test("refuses markup, a path, another type, extra keys, a bad id and the screen's own no", () => {
+    for (const value of [
+      '<svg xmlns="http://www.w3.org/2000/svg" onload="x()"/>',
+      ref({ name: "../logo.svg" }),
+      ref({ media_type: "text/html" }),
+      ref({ bytes: "PHN2Zz4=" }),
+      ref({ file_id: "logo" }),
+      ref({ kind: "text" }),
+    ]) {
+      expect(parseDraftChange(kit, { values: { logo: value } }).ok, JSON.stringify(value)).toBe(
+        false,
+      );
+    }
+    expect(parseDraftChange(kit, { values: { logo: ref({ name: "x.svg" }) } })).toEqual({
+      ok: false,
+      reason: "Not that one.",
+    });
   });
 });

@@ -38,13 +38,20 @@ import {
   ASSISTANT_PAGE_DRAFT_SECRET_PATH,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
   type AssistantDraftField,
+  type AssistantDraftFieldKind,
+  type AssistantDraftFileRef,
   type AssistantDraftKind,
   type AssistantPageDraft,
 } from "~/contract/assistant.ts";
-import { hashOf, type PageActionParse, type PageActionSpec } from "./context.ts";
+import {
+  hashOf,
+  type PageActionParse,
+  type PageActionRow,
+  type PageActionSpec,
+} from "./context.ts";
 import { useAssistantContext } from "./useAssistantContext.ts";
 
-/** A field's value: text, or a list of items. */
+/** A field's value: text, or a list of items. A file field reads as its file's name. */
 export type DraftValue = string | readonly string[];
 
 /** Why a field will not take a proposed value, in a sentence the card shows. */
@@ -63,8 +70,19 @@ export interface DraftFieldSpec<D> {
   path: string;
   /** The field as the person reads it ("Primary colour"). */
   label: string;
-  /** Its value now, read from the draft. A list is a list. */
+  /** Its value now, read from the draft. A list is a list; a file is its name. */
   read(draft: D): DraftValue;
+  /**
+   * A file field (a logo): what it accepts, by media type. Its value now is
+   * the file's name, and a change to it is a reference to a file of the
+   * person's own conversation, which the screen fetches and keeps through its
+   * own save, never markup.
+   */
+  file?: {
+    accepts: readonly string[];
+    /** The draft with this file proposed for the field, or [refuse] with why not. */
+    write(draft: D, ref: AssistantDraftFileRef): D | DraftRefusal;
+  };
   /** What a value must be, in a few words ("a #RRGGBB colour"). */
   hint?: string;
   /** A credential: its value never leaves the page and the assistant never sets it. */
@@ -113,7 +131,7 @@ export interface AssistantDraftSpec<D> {
 /** What `draft.set` parses to: the draft it makes, and a row per field it sets. */
 export interface DraftChange<D> {
   readonly next: D;
-  readonly rows: readonly { field: string; next: string; current: string | null }[];
+  readonly rows: readonly PageActionRow[];
 }
 
 const KEY = /^[a-z][a-z0-9_.]{0,63}$/;
@@ -158,6 +176,21 @@ function shown(value: DraftValue): string {
   return text.trim() === "" ? "(empty)" : text;
 }
 
+/** Whether the screen lets the assistant set a field. */
+function settable<D>(field: DraftFieldSpec<D>): boolean {
+  return (
+    (field.write !== undefined || field.file !== undefined) &&
+    !field.secret &&
+    !isSecretDraftPath(field.path)
+  );
+}
+
+/** A field's kind: a file where the screen declares one, else by what it reads. */
+function kindOf<D>(field: DraftFieldSpec<D>, value: DraftValue): AssistantDraftFieldKind {
+  if (field.file) return "file";
+  return typeof value === "string" ? "text" : "list";
+}
+
 /** An id or a revision the engine takes: plain, bounded; undefined otherwise. */
 function plainId(value: string | number | null | undefined): string | undefined {
   if (value === null || value === undefined) return undefined;
@@ -188,10 +221,11 @@ export function draftSnapshot<D>(spec: AssistantDraftSpec<D>): AssistantPageDraf
     const field: AssistantDraftField = {
       path: f.path,
       label: line(f.label, LABEL_MAX_RUNES),
+      kind: kindOf(f, value),
       value: "",
     };
-    if (f.hint) field.hint = line(f.hint, HINT_MAX_RUNES);
-    if (typeof value !== "string") field.list = true;
+    const hint = f.file ? (f.hint ?? `A file: ${f.file.accepts.join(", ")}`) : f.hint;
+    if (hint) field.hint = line(hint, HINT_MAX_RUNES);
     if (f.secret || isSecretDraftPath(f.path)) {
       // A CREDENTIAL NEVER LEAVES THE PAGE, and is never the assistant's to set.
       field.redacted = true;
@@ -202,7 +236,7 @@ export function draftSnapshot<D>(spec: AssistantDraftSpec<D>): AssistantPageDraf
       );
       field.value = text.text;
       if (text.cut) field.truncated = true;
-      if (f.write) field.editable = true;
+      if (settable(f)) field.editable = true;
     }
     fields.push(field);
   }
@@ -226,7 +260,32 @@ export function draftSnapshot<D>(spec: AssistantDraftSpec<D>): AssistantPageDraf
   };
 }
 
-/** A proposed value off the wire, held to the field's shape: text, or a list for a list. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * A proposed file reference held to the wire's shape and to what the field
+ * accepts: ids, a plain file name (never a path) and an accepted media type.
+ * The engine checked before the card was drawn that the file is the person's,
+ * in this conversation; the payload is bound to that by its digest.
+ */
+function fileRef(raw: unknown, accepts: readonly string[]): AssistantDraftFileRef | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { kind, file_id, conversation_id, name, media_type, ...rest } = raw as Record<
+    string,
+    unknown
+  >;
+  if (Object.keys(rest).length > 0 || kind !== "file") return null;
+  if (typeof file_id !== "string" || !UUID.test(file_id)) return null;
+  if (typeof conversation_id !== "string" || !UUID.test(conversation_id)) return null;
+  if (typeof name !== "string" || name === "" || /[/\\\u0000-\u001f\u007f-\u009f]/.test(name)) {
+    return null;
+  }
+  if (encoder.encode(name).length > ID_MAX_BYTES) return null;
+  if (typeof media_type !== "string" || !accepts.includes(media_type)) return null;
+  return { kind: "file", file_id, conversation_id, name, media_type };
+}
+
+/** A proposed text or list off the wire, held to the field's shape. */
 function proposed(raw: unknown, list: boolean): DraftValue | null {
   if (typeof raw === "string") {
     if (CONTROL.test(raw) || [...raw].length > PROPOSED_MAX_RUNES) return null;
@@ -245,10 +304,44 @@ function proposed(raw: unknown, list: boolean): DraftValue | null {
   return raw.map((item) => item.trim()).filter((item) => item !== "");
 }
 
+/** One field's proposed value written into the draft, and its card row; or why not. */
+function written<D>(
+  field: DraftFieldSpec<D>,
+  draft: D,
+  now: D,
+  value: unknown,
+): { next: D; row: PageActionRow } | string {
+  const show = field.summary ?? shown;
+  const current = show(field.read(now));
+  if (field.file) {
+    const ref = fileRef(value, field.file.accepts);
+    if (ref === null) {
+      return `${field.label} takes one of your files: ${field.file.accepts.join(", ")}.`;
+    }
+    const next = field.file.write(draft, ref);
+    if (next instanceof DraftRefusal) return next.reason;
+    // A FILE IS SHOWN BY ITS NAME AND TYPE, and drawn by the card from the
+    // owner's route as an image, never inlined.
+    return {
+      next,
+      row: { field: field.label, next: `${ref.name} (${ref.media_type})`, current, file: ref },
+    };
+  }
+  const list = typeof field.read(now) !== "string";
+  const typed = proposed(value, list);
+  if (typed === null) {
+    return list ? `${field.label} is a list of short lines.` : `${field.label} is a line of text.`;
+  }
+  const next = field.write!(draft, typed);
+  if (next instanceof DraftRefusal) return next.reason;
+  return { next, row: { field: field.label, next: show(field.read(next)), current } };
+}
+
 /**
  * Parse a `draft.set` payload against the draft as it is now: every path a
- * field the screen lets the assistant set, every value in its field's shape
- * and taken by its `write`, or the whole change refused in a sentence.
+ * field the screen lets the assistant set (an unknown path is refused, never
+ * ignored), every value in its field's shape and taken by its `write`, or the
+ * whole change refused in a sentence.
  */
 export function parseDraftChange<D>(
   spec: AssistantDraftSpec<D>,
@@ -272,29 +365,16 @@ export function parseDraftChange<D>(
   if (entries.length > ASSISTANT_PAGE_DRAFT_MAX_FIELDS)
     return refused("That changes more fields than the draft has.");
   let next = spec.value;
-  const rows: { field: string; next: string; current: string | null }[] = [];
+  const rows: PageActionRow[] = [];
   for (const [path, value] of entries) {
     const field = spec.fields.find((f) => f.path === path);
     if (!field) return refused(`The draft has no field “${path}”.`);
-    if (!field.write || field.secret || isSecretDraftPath(field.path)) {
+    if (!settable(field))
       return refused(`${field.label} is not something the assistant can set here.`);
-    }
-    const list = typeof field.read(spec.value) !== "string";
-    const typed = proposed(value, list);
-    if (typed === null) {
-      return refused(
-        list ? `${field.label} is a list of short lines.` : `${field.label} is a line of text.`,
-      );
-    }
-    const written = field.write(next, typed);
-    if (written instanceof DraftRefusal) return refused(written.reason);
-    next = written;
-    const show = field.summary ?? shown;
-    rows.push({
-      field: field.label,
-      next: show(field.read(next)),
-      current: show(field.read(spec.value)),
-    });
+    const out = written(field, next, spec.value, value);
+    if (typeof out === "string") return refused(out);
+    next = out.next;
+    rows.push(out.row);
   }
   return { ok: true, value: { next, rows } };
 }

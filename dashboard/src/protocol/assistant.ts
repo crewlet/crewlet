@@ -133,6 +133,26 @@ export async function exportFile(path: string, signal?: AbortSignal): Promise<Bl
   return rest.blob(`/assistant/${path.slice(ASSISTANT_PREFIX.length)}`, signal);
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * A file of the person's own conversation, as its bytes, read through the
+ * owner's route (`GET /assistant/conversations/{conversation}/files/{file}`)
+ * under the same session: what a draft's file field fetches once its change
+ * is approved, and what the card draws a thumbnail of. Both ids are checked
+ * to be ids before any request; the bytes are typed by the caller from the
+ * reference, never from the response.
+ */
+export async function conversationFile(
+  ref: { conversation_id: string; file_id: string },
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (!UUID.test(ref.conversation_id) || !UUID.test(ref.file_id)) {
+    throw new RestError(0, { error: "invalid_body", detail: "the file reference is not one" });
+  }
+  return rest.blob(`/assistant/conversations/${ref.conversation_id}/files/${ref.file_id}`, signal);
+}
+
 /** Where a turn stream stands, as the drawer says it. */
 export type StreamState = "connecting" | "live" | "reconnecting" | "closed";
 

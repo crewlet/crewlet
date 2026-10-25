@@ -58,7 +58,12 @@ import {
 } from "~/lib/brand/setup.ts";
 import { adoptionProblem, partProblem } from "~/lib/brand/validate.ts";
 import { useBrandAssets } from "~/lib/brand/useBrand.ts";
-import { BRAND_ASSISTANT_HELP, brandDraftFields } from "~/lib/brand/assistantDraft.ts";
+import {
+  BRAND_ASSISTANT_HELP,
+  applyBrandDraft,
+  brandDraftFields,
+  type BrandDraft,
+} from "~/lib/brand/assistantDraft.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useBrandDraftSave } from "~/lib/brand/useBrandSave.ts";
 import { BRAND_PAGE } from "~/components/brand.tsx";
@@ -336,7 +341,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   // WHAT IS OPEN, for the assistant: the draft as it stands, at its step, and
   // its text and value fields set through the same `setEdit` typing uses;
   // Continue, Save as draft and the finish stay the person's.
-  useAssistantDraft<BrandEdit>({
+  useAssistantDraft<BrandDraft>({
     kind: "client",
     id: saved.kit,
     revision: saved.kit ? saved.version : null,
@@ -345,7 +350,11 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     scope: "The brand you are setting up (not saved)",
     value: edit,
     fields: SETUP_FIELDS,
-    apply: setEdit,
+    apply: (next) =>
+      applyBrandDraft(edit, next, setEdit, (sentence) => {
+        setSaid(sentence);
+        announce(sentence);
+      }),
     blocked: () => (busy ? "The brand is being saved." : null),
   });
   const spec = stepSpec(step);

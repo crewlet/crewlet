@@ -28,14 +28,20 @@ describe("the principles draft", () => {
     const snapshot = draftSnapshot(spec());
     expect(snapshot).toMatchObject({ kind: "client", step: "vision", more: 0 });
     expect(snapshot.fields).toEqual([
-      { path: "mission", label: expect.any(String), value: "Ship calm software." },
-      { path: "vision", label: expect.any(String), value: "Old vision", editable: true },
+      { path: "mission", label: expect.any(String), kind: "text", value: "Ship calm software." },
+      {
+        path: "vision",
+        label: expect.any(String),
+        kind: "text",
+        value: "Old vision",
+        editable: true,
+      },
       {
         path: "policies",
         label: expect.any(String),
         value: "Be kind",
         hint: expect.any(String),
-        list: true,
+        kind: "list",
       },
     ]);
   });

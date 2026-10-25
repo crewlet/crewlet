@@ -474,8 +474,10 @@ test("the open draft is the assistant's to read, and a change it proposes previe
   expect(field("logos.primary")).toEqual({
     path: "logos.primary",
     label: "Primary logo",
+    kind: "file",
     value: "logos/primary.svg",
-    hint: expect.any(String),
+    hint: expect.stringContaining("image/svg+xml"),
+    editable: true,
   });
   const payload = { values: { "colors.primary": "#5B21B6", "voice.summary": "Plain and warm." } };
   // THE CARD SHOWS EACH FIELD'S VALUE NOW beside the proposed one, in the
@@ -501,16 +503,13 @@ test("the open draft is the assistant's to read, and a change it proposes previe
   expect(field("voice.summary")?.value).toBe("Plain and warm.");
   // NOTHING IS SAVED: the change is the person's draft until they continue.
   expect(screen.getByRole("heading", { name: "Typography", level: 3 })).toBeTruthy();
-  // A LOGO IS NEVER THE ASSISTANT'S TO SET.
+  // A LOGO IS A FILE OF THE CONVERSATION, never markup or a name.
   expect(
     applyPageAction({
       correlation_id: "c2",
       action: "draft.set",
-      payload: { values: { "logos.primary": "logo.svg" } },
+      payload: { values: { "logos.primary": "<svg/>" } },
       source_revision: open().source_revision,
     }),
-  ).toMatchObject({
-    outcome: "invalid",
-    reason: "Primary logo is not something the assistant can set here.",
-  });
+  ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/takes one of your files/) });
 });

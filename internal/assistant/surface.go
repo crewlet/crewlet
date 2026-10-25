@@ -236,6 +236,9 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 			accepts, pageRevision = s.t.page.Accepts, s.t.page.SourceRevision
 		}
 		action, err := catalog.PageActionFor(args, accepts)
+		if err == nil && action.ID == catalog.DraftSet {
+			err = s.t.draftChange(ctx, args)
+		}
 		if err != nil {
 			return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 		}

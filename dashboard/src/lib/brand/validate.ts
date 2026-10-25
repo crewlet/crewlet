@@ -26,11 +26,11 @@ import { familyProblem, fontCountProblem, fontProblem, type BrandEdit } from "./
 export type BrandPart = "identity" | "logos" | "colours" | "type" | "voice";
 
 /** The edit with its document changed by `change`, the picked files as they were. */
-export function withDocument(
-  edit: BrandEdit,
+export function withDocument<E extends BrandEdit>(
+  edit: E,
   change: (doc: BrandDocument) => BrandDocument,
-): BrandEdit {
-  return { document: change(edit.document), files: edit.files };
+): E {
+  return { ...edit, document: change(edit.document) };
 }
 
 /** A text that names a place to go, which the format refuses in a brand's words. */

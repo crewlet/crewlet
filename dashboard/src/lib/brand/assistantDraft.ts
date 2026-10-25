@@ -8,10 +8,13 @@
  * The text and value fields: the name and tagline, the colours, the
  * typefaces from the kit's and the system's own, and the voice. Each value is
  * held to the rule its own field holds a typed one to (`validate.ts`), so a
- * change the assistant proposes is refused in the same sentence. The logos
- * and uploaded font families are files the person brings: they are read as
- * metadata and never set. The assistant runs on a text model and makes no
- * images, so what it says about "assets" is in the help this module gives
+ * change the assistant proposes is refused in the same sentence. A logo is a
+ * file field: a change names one of the person's files in this conversation
+ * by reference (the engine checked it is theirs before the card was drawn),
+ * and the screen fetches its bytes through the owner's route once the change
+ * is approved and keeps them as a picked file, saved with the rest. Uploaded
+ * font families are the person's to bring, read as metadata and never set.
+ * What the assistant says about "assets" is in the help this module gives
  * the screen, never a special case in its prompt.
  */
 
@@ -23,6 +26,8 @@ import {
   type DraftFieldSpec,
   type DraftValue,
 } from "~/app/assistant/draft.ts";
+import type { AssistantDraftFileRef } from "~/contract/assistant.ts";
+import { conversationFile } from "~/protocol/assistant.ts";
 import {
   BRAND_COLOR_ROLES,
   BRAND_FACE_ROLES,
@@ -31,7 +36,8 @@ import {
   faceDrawing,
   isBrandColor,
 } from "./brand.ts";
-import type { BrandEdit } from "./draft.ts";
+import { logoPath, logoProblem, type BrandEdit } from "./draft.ts";
+import type { BrandLogoSlot } from "./brand.ts";
 import {
   nameProblem,
   taglineProblem,
@@ -43,11 +49,68 @@ import {
 /** The screen's word to the assistant about a brand draft. */
 export const BRAND_ASSISTANT_HELP =
   "You can propose the name, tagline, colours, the heading and body typefaces from the " +
-  "choices listed, and the voice. Logos and uploaded font files are the person's to add: " +
-  "you cannot make, upload or change them, and you make no images. Asked for assets, say " +
-  "that you can propose colours, type and voice, and offer an SVG starting point for a " +
-  "logo only if they ask, as text they save and upload themselves. The page checks the " +
-  "colours' contrast. Saving and adopting stay the person's.";
+  "choices listed, and the voice. A logo can be proposed only as a reference to one of the " +
+  "person's files in this conversation, never as markup; uploaded font files are theirs to " +
+  "add. You make no images here: asked for assets, say that you can propose colours, type " +
+  "and voice, and offer an SVG starting point for a logo only if they ask. The page checks " +
+  "the colours' contrast. Saving and adopting stay the person's.";
+
+/** The logo types the brand format admits, as a file reference names them. */
+const LOGO_TYPES: readonly string[] = ["image/svg+xml", "image/png", "image/webp"];
+
+/**
+ * A brand edit as a change to it is written: the edit, and the logos an
+ * approved change names that are files of the person's conversation, by the
+ * path the document names each at. Only between a change and its applying:
+ * [applyBrandDraft] fetches each and keeps it as a picked file.
+ */
+export interface BrandDraft extends BrandEdit {
+  incoming?: ReadonlyMap<string, { slot: BrandLogoSlot; ref: AssistantDraftFileRef }>;
+}
+
+/**
+ * Apply an approved change to a brand edit: everything but its incoming
+ * logos at once, through the screen's own setter; then each logo's bytes,
+ * fetched as the person through the owner's route (`conversationFile`) and
+ * kept as the file a person would have picked, typed from the reference and
+ * never from the response. A logo whose bytes cannot be had puts its slot
+ * back as it was and says why; one the person changed since is left alone.
+ */
+export function applyBrandDraft(
+  before: BrandEdit,
+  next: BrandDraft,
+  setEdit: (change: (edit: BrandEdit) => BrandEdit) => void,
+  report: (sentence: string) => void,
+  fetchFile: (ref: AssistantDraftFileRef) => Promise<Blob> = (ref) => conversationFile(ref),
+): void {
+  const { incoming, ...edit } = next;
+  setEdit(() => edit);
+  for (const [path, { slot, ref }] of incoming ?? []) {
+    const named = (cur: BrandEdit) => cur.document.logos[slot] === path;
+    fetchFile(ref).then(
+      (blob) => {
+        const file = new File([blob], ref.name, { type: ref.media_type });
+        setEdit((cur) =>
+          named(cur) ? { ...cur, files: new Map(cur.files).set(path, file) } : cur,
+        );
+      },
+      () => {
+        setEdit((cur) =>
+          named(cur)
+            ? withDocument(cur, (doc) => {
+                const logos = { ...doc.logos };
+                const was = before.document.logos[slot];
+                if (was) logos[slot] = was;
+                else delete logos[slot];
+                return { ...doc, logos };
+              })
+            : cur,
+        );
+        report(`${ref.name} could not be read, so the logo was not changed. Try again.`);
+      },
+    );
+  }
+}
 
 /** Every face a value may name: the kit's own, then the system's. */
 const FACE_CHOICES: readonly string[] = [...BRAND_KIT_FACES, ...BRAND_SYSTEM_STACKS];
@@ -94,10 +157,13 @@ function withVoice(
  * Every field of a brand edit, in the order the setup draws them; a field of
  * a part in `settable` takes a change, and every other is read only.
  */
-export function brandDraftFields(settable: ReadonlySet<BrandPart>): DraftFieldSpec<BrandEdit>[] {
-  const fields: DraftFieldSpec<BrandEdit>[] = [];
-  const add = (part: BrandPart, field: DraftFieldSpec<BrandEdit>) => {
-    if (!settable.has(part)) delete field.write;
+export function brandDraftFields(settable: ReadonlySet<BrandPart>): DraftFieldSpec<BrandDraft>[] {
+  const fields: DraftFieldSpec<BrandDraft>[] = [];
+  const add = (part: BrandPart, field: DraftFieldSpec<BrandDraft>) => {
+    if (!settable.has(part)) {
+      delete field.write;
+      delete field.file;
+    }
     fields.push(field);
   };
 
@@ -131,8 +197,25 @@ export function brandDraftFields(settable: ReadonlySet<BrandPart>): DraftFieldSp
     add("logos", {
       path: `logos.${logo.slot}`,
       label: `${logo.label} logo`,
-      hint: "A file the person uploads; empty where none is chosen",
+      hint: `One of your files: ${LOGO_TYPES.join(", ")}; empty where none is chosen`,
       read: (e) => e.document.logos[logo.slot] ?? "",
+      file: {
+        accepts: LOGO_TYPES,
+        write: (e, ref) => {
+          // THE PATH THE FILE IS SAVED AT, from its type as the store holds
+          // it; the bytes follow once the change is approved ([applyBrandDraft]).
+          const stub = new File([], ref.name, { type: ref.media_type });
+          const problem = logoProblem(stub);
+          if (problem) return refuse(problem);
+          const path = logoPath(logo.slot, stub);
+          const incoming = new Map(e.incoming ?? []);
+          incoming.set(path, { slot: logo.slot, ref });
+          return {
+            ...withDocument(e, (doc) => ({ ...doc, logos: { ...doc.logos, [logo.slot]: path } })),
+            incoming,
+          };
+        },
+      },
     });
   }
   for (const colour of BRAND_COLOR_ROLES) {

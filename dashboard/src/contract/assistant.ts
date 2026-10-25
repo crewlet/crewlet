@@ -498,16 +498,31 @@ export interface AssistantPageDraft {
   more: number;
 }
 
-/** One value of an open draft; a list's items are one per line. */
+/** A draft field's shape, and so of the value a change to it takes. */
+export type AssistantDraftFieldKind = "text" | "list" | "file";
+
+/** One value of an open draft: a list's items one per line, a file's name. */
 export interface AssistantDraftField {
   path: string;
   label: string;
+  kind: AssistantDraftFieldKind;
   value: string;
   hint?: string;
-  list?: boolean;
   editable?: boolean;
   redacted?: boolean;
   truncated?: boolean;
+}
+
+/**
+ * The value a change to a file field takes: a file of the person's own
+ * conversation, by id, never its bytes or its markup.
+ */
+export interface AssistantDraftFileRef {
+  kind: AssistantDraftFieldKind;
+  file_id: string;
+  conversation_id: string;
+  name: string;
+  media_type: string;
 }
 
 /** One thing in view, by id. */

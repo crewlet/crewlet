@@ -301,11 +301,14 @@ func TestAnOpenDraftIsBoundedAndCarriesNoCredential(t *testing.T) {
 			Draft: &wire.PageDraft{Kind: wire.DraftClient, ID: "kit-1", Revision: "3",
 				Step: "type", Help: "Colours, type and voice can be proposed.",
 				Fields: []wire.DraftField{
-					{Path: "colors.primary", Label: "Primary", Value: "#5B21B6",
-						Hint: "a #RRGGBB colour", Editable: true},
-					{Path: "voice.avoid", Label: "Avoid", Value: "Jargon\nHype", List: true,
-						Editable: true},
-					{Path: "api_token", Label: "API token", Redacted: true},
+					{Path: "colors.primary", Label: "Primary", Kind: wire.DraftFieldText,
+						Value: "#5B21B6", Hint: "a #RRGGBB colour", Editable: true},
+					{Path: "voice.avoid", Label: "Avoid", Kind: wire.DraftFieldList,
+						Value: "Jargon\nHype", Editable: true},
+					{Path: "logos.primary", Label: "Primary logo", Kind: wire.DraftFieldFile,
+						Value: "logos/primary.svg", Editable: true},
+					{Path: "api_token", Label: "API token", Kind: wire.DraftFieldText,
+						Redacted: true},
 				}}}
 	}
 	if err := base().Validate(); err != nil {
@@ -327,15 +330,18 @@ func TestAnOpenDraftIsBoundedAndCarriesNoCredential(t *testing.T) {
 		"too many fields": func(d *wire.PageDraft) {
 			d.Fields = nil
 			for i := range wire.PageDraftMaxFields + 1 {
-				d.Fields = append(d.Fields, wire.DraftField{Path: "f" + strconv.Itoa(i), Label: "F"})
+				d.Fields = append(d.Fields, wire.DraftField{Path: "f" + strconv.Itoa(i), Label: "F",
+					Kind: wire.DraftFieldText})
 			}
 		},
 		"a negative count": func(d *wire.PageDraft) { d.More = -1 },
 		"a whole password": func(d *wire.PageDraft) {
-			d.Fields[2] = wire.DraftField{Path: "smtp.password", Label: "Password", Value: "hunter2"}
+			d.Fields[3] = wire.DraftField{Path: "smtp.password", Label: "Password",
+				Kind: wire.DraftFieldText, Value: "hunter2"}
 		},
-		"a redacted field with a value": func(d *wire.PageDraft) { d.Fields[2].Value = "x" },
-		"a redacted field it may set":   func(d *wire.PageDraft) { d.Fields[2].Editable = true },
+		"a redacted field with a value": func(d *wire.PageDraft) { d.Fields[3].Value = "x" },
+		"a redacted field it may set":   func(d *wire.PageDraft) { d.Fields[3].Editable = true },
+		"a field of no kind":            func(d *wire.PageDraft) { d.Fields[0].Kind = "" },
 	}
 	for what, mutate := range bad {
 		p := base()
@@ -351,6 +357,35 @@ func TestAnOpenDraftIsBoundedAndCarriesNoCredential(t *testing.T) {
 		"ceiling": false, "project.key": false, "type.heading": false, "voice.summary": false} {
 		if got := wire.IsSecretDraftPath(path); got != secret {
 			t.Errorf("IsSecretDraftPath(%q) = %v, want %v", path, got, secret)
+		}
+	}
+}
+
+// A FILE REFERENCE NAMES A FILE, NEVER CARRIES ONE.
+//
+// A change to a file field is a reference to a file of the person's own
+// conversation, so it is held to ids, a plain file name and a media type: a
+// name that is a path, or markup in place of a reference, is refused.
+// Mutation: drop the path-separator check and "../logo.svg" validates.
+func TestAFileReferenceNamesAFileAndCarriesNone(t *testing.T) {
+	t.Parallel()
+	good := wire.DraftFileRef{Kind: wire.DraftFieldFile, FileID: uuid.New(),
+		ConversationID: uuid.New(), Name: "logo.svg", MediaType: "image/svg+xml"}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("a file reference: %v", err)
+	}
+	for what, mutate := range map[string]func(*wire.DraftFileRef){
+		"another kind":     func(r *wire.DraftFileRef) { r.Kind = wire.DraftFieldText },
+		"no file":          func(r *wire.DraftFileRef) { r.FileID = uuid.Nil },
+		"no conversation":  func(r *wire.DraftFileRef) { r.ConversationID = uuid.Nil },
+		"a path":           func(r *wire.DraftFileRef) { r.Name = "../logo.svg" },
+		"markup as a name": func(r *wire.DraftFileRef) { r.Name = "<svg onload=x>\n</svg>" },
+		"no media type":    func(r *wire.DraftFileRef) { r.MediaType = "svg" },
+	} {
+		r := good
+		mutate(&r)
+		if err := r.Validate(); !errors.Is(err, wire.ErrInvalid) {
+			t.Errorf("a file reference with %s validated (%v)", what, err)
 		}
 	}
 }

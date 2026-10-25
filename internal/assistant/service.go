@@ -61,6 +61,10 @@ type Deps struct {
 	// Rate counts a person's turn starts across the fleet; nil counts them
 	// on this node alone.
 	Rate TurnRate
+	// Files answers whether an assistant file is the person's, in one
+	// conversation, for a draft change that names one; nil keeps no files,
+	// and every such change is refused.
+	Files Files
 
 	// Now is injectable so a test pins every instant.
 	Now func() time.Time
@@ -83,6 +87,7 @@ type Service struct {
 	metrics     Metrics
 	remote      Remote
 	rate        TurnRate
+	files       Files
 	now         func() time.Time
 	log         *slog.Logger
 
@@ -153,7 +158,7 @@ func New(d Deps) (*Service, error) {
 		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
-		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, now: now,
+		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files, now: now,
 		log: logging.Get("assistant"),
 		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL(),
 			tap),

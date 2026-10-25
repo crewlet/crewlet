@@ -6962,7 +6962,9 @@ context fenced as somebody else's words: it is a hint and never an authority.
 A screen with a draft or a form open adds `draft`: `{kind, id?, revision?,
 step?, help?, fields, more}`, where `kind` is `client` (the values live in the
 page until saved) or `server` (saved, at `id` and `revision`), and each field is
-`{path, label, value, hint?, list?, editable?, redacted?, truncated?}`. At most
+`{path, label, kind, value, hint?, editable?, redacted?, truncated?}`, `kind`
+being `text`, `list` (items one per line) or `file` (the value is the file's
+name). At most
 40 fields, each value at most 1000 characters (a longer one is cut and marked
 `truncated`), and `help` at most 600; fields past the count or the byte budget
 are counted in `more`. A field whose path names a credential (a `password`,
@@ -6971,6 +6973,13 @@ key) must arrive `redacted` with an empty value, and is refused `400` otherwise;
 every other value passes the engine's secret redaction before a model reads it.
 The page action `draft.set` (`{"values": {"<path>": "<value>"}}`) changes the
 editable fields through the screen's own setters, after the person approves.
+The engine holds it to the turn's draft before any card is drawn: a path the
+draft does not list as editable, or a value not of its field's kind, is
+refused. A `file` field takes a reference, never markup:
+`{"kind": "file", "file_id", "conversation_id", "name", "media_type"}`, a file
+of the person's own in this conversation, which the screen fetches through
+`GET /assistant/conversations/{conversation}/files/{file}` once approved and
+keeps through its own save.
 
 **Before anything is spent.** A question is refused, recording nothing, when the
 company's token budget, or the person's own `assistant.token_budget`, has no

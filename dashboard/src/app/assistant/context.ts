@@ -49,6 +49,7 @@ import {
   ASSISTANT_PAGE_ACTIONS,
   ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS,
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
+  type AssistantDraftFileRef,
   type AssistantPageContext,
   type AssistantPageDraft,
 } from "~/contract/assistant.ts";
@@ -100,6 +101,17 @@ export function resourceOf(ref: ObjectRef | null | undefined): PageResource | nu
   return ref && kind ? { kind, id: ref.id } : null;
 }
 
+/**
+ * One row of a page action's card: the field, its proposed value and its
+ * value now, and for a file the reference the card draws a thumbnail of.
+ */
+export interface PageActionRow {
+  field: string;
+  next: string;
+  current: string | null;
+  file?: AssistantDraftFileRef;
+}
+
 /** What a page action's parser answers: a typed value, or why it is refused. */
 export type PageActionParse<P> = { ok: true; value: P } | { ok: false; reason: string };
 
@@ -117,7 +129,7 @@ export interface PageActionSpec<P> {
   /** Turn what the model proposed into a typed value, or refuse it. */
   parse(raw: unknown): PageActionParse<P>;
   /** Each field the action changes: its name, the new value and the current one. */
-  preview(value: P): readonly { field: string; next: string; current: string | null }[];
+  preview(value: P): readonly PageActionRow[];
   /** The screen's own gate, as its control applies it: a sentence, or null where it may. */
   blocked(value: P): string | null;
   /** Apply it with the setters the screen already has. */
@@ -508,7 +520,7 @@ export function applyPageAction(
 /** What a screen says about a page action it was proposed, for the card the person approves. */
 export interface PageActionPreview {
   /** Each field it changes, in the screen's own words. */
-  readonly rows: readonly { field: string; next: string; current: string | null }[];
+  readonly rows: readonly PageActionRow[];
   /** Why the screen's own gate refuses it, or null where it may. */
   readonly blocked: string | null;
 }
