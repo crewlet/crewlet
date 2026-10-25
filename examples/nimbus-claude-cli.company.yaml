@@ -107,7 +107,7 @@ providers:
     # ── The one model: a coding CLI on YOUR subscription ──────────────
     #
     # Every providers.llm entry is a locally installed coding CLI the engine
-    # drives — here Claude Code as a headless text model, on the flat-rate
+    # drives — here Claude Code, headless, on the flat-rate
     # plan you already pay for, so this company needs no metered API key at
     # all.  Crewlet never sees a password: the CLI holds the vendor's own
     # OAuth login and `crewlet llm login` only decides WHERE that credential
@@ -143,11 +143,11 @@ providers:
     # `doctor` is the command that matters here.  An entry can be
     # configured perfectly and still not work — a missing binary, a
     # profile whose flags drifted from the installed version, an expired
-    # login, or the one nothing else catches: a model that answers PROSE
-    # instead of the tool-call envelope, which costs every phase
-    # corrective rounds and, when the model never manages the envelope,
-    # ends the phase without its submission.  Only a real completion with a real tool
-    # proves that, so `doctor` runs one.
+    # login, or the one nothing else catches: a CLI that never reaches the
+    # seat's tools — the `crewlet` MCP server it is handed — and answers
+    # in prose with nothing called, which ends the phase without its
+    # submission.  Only a real run calling a real tool proves that, so
+    # `doctor` runs one.
     #
     # See docs/concepts/llm-backends.md.
     default:
@@ -162,13 +162,14 @@ providers:
                                     #   model id.  Haiku is the cheapest
                                     #   against a plan window and the
                                     #   fastest to launch; it is also the
-                                    #   weakest at the tool-call envelope,
-                                    #   which is exactly what
-                                    #   `crewlet llm doctor` measures.
-      mode: text                    # the default: a model behind the
-                                    #   engine's own tool loop.  `agent`
-                                    #   hands the executor to the CLI's own
-                                    #   agentic loop — see `coding` below.
+                                    #   weakest at calling the seat's tools
+                                    #   when it should, which is what
+                                    #   `crewlet llm doctor` exercises.
+      mode: host                    # the default: the CLI runs on this
+                                    #   host, turn by turn, and calls the
+                                    #   seat's tools over MCP.  `box` runs
+                                    #   the executor detached in a box — see
+                                    #   `coding` below.
       # ONE LOGIN FOR BOTH ENTRIES.  state_dir defaults to a directory
       # derived PER PROVIDER KEY, so `default` and `coding` below would
       # otherwise land on ~/.crewlet/llm-cli/default and .../coding —
@@ -216,21 +217,22 @@ providers:
     # ── The engineers' executor: the CLI's OWN agentic loop ──────────
     #
     # Same CLI, same login, same model — one field different, and it
-    # changes who drives the turn.  In `mode: text` above, Crewlet runs
-    # the loop and the CLI is a model behind it, with its shell and editor
-    # denied.  In `mode: agent` the CLI runs the seat's EXECUTOR itself:
-    # its own agentic loop, its own shell, its own editor, in a box from
-    # the sandbox catalogue below (`run_in: direct` — this machine).  The
-    # seat's own tools reach it back over the MCP bridge, so a bridged
-    # call is the same frame a native loop would call — the same guards,
-    # the same recording, the same `submit_work` ending the turn.
+    # changes where the executor runs.  In `mode: host` above, the CLI is a
+    # subprocess of the turn on this host, with its shell and editor
+    # denied, calling the seat's tools over MCP.  In `mode: box` the CLI
+    # runs the seat's EXECUTOR detached: its own agentic loop, its own
+    # shell, its own editor, in a box from the sandbox catalogue below
+    # (`run_in: direct` — this machine).  The seat's own tools reach it
+    # back over the MCP bridge, so a bridged call is the same frame a
+    # host-mode run would call — the same guards, the same recording,
+    # the same `submit_work` ending the turn.
     #
     # ONLY THE EXECUTOR BRANCHES.  The reviewer, the delegated workers,
-    # the summariser and the round-cap judge are all still text calls on
-    # this same entry, which is what keeps the reviewer a genuinely
+    # the summariser and the round-cap judge all still run on this host,
+    # on this same entry, which is what keeps the reviewer a genuinely
     # separate judgement of what the run did.
     #
-    # An agent-mode run is DETACHED: the executor phase suspends, its
+    # A box-mode run is DETACHED: the executor phase suspends, its
     # state goes on a durable row, and the same turn resumes when the run
     # finishes — possibly in another process, much later.  That is the
     # trade for the shell, and it is why only the three engineering seats
@@ -241,7 +243,7 @@ providers:
     #   - providers.sandbox, below, configuring the cell `run_in` names.
     #   - CREWLET_MCP_BRIDGE_URL in the engine's environment, a URL a box
     #     can dial — `http://127.0.0.1:8000` for a `direct` box on this
-    #     machine, matching api.port in the Tier A file.  Without it agent
+    #     machine, matching api.port in the Tier A file.  Without it box
     #     mode is REFUSED at launch rather than started: a coding agent
     #     with none of the seat's tools cannot answer anybody, cannot
     #     reach a colleague and cannot submit its work.
@@ -256,7 +258,7 @@ providers:
                                     #   swap this one entry to `sonnet` if
                                     #   your runs thrash, and the login and
                                     #   every other seat stay as they are.
-      mode: agent                   # text (default) | agent
+      mode: box                     # host (default) | box
       run_in: direct                # a cell of providers.sandbox below.
                                     #   On the ENTRY rather than the seat,
                                     #   because it is a property of this
@@ -311,7 +313,7 @@ providers:
   #
   # A sandbox is a place for an agent to RUN CODE, and it is worth having
   # with or without a code host.  Here it is where the three engineering
-  # seats' EXECUTORS run: `providers.llm.coding` above is agent mode, so
+  # seats' EXECUTORS run: `providers.llm.coding` above is box mode, so
   # their whole Execute phase is the coding CLI's own agentic loop, with a
   # real shell, a real editor and a real working directory, in a box from
   # this catalogue.  With no code host wired up, what comes back is the
@@ -325,7 +327,7 @@ providers:
   # a durable row, and the SAME turn resumes when the run finishes —
   # minutes later, possibly in another process after a restart.  Nothing
   # parks a goroutine on a running job.  That is the trade for the shell,
-  # and it is why the other four seats stay in text mode: somebody waiting
+  # and it is why the other four seats stay in host mode: somebody waiting
   # in a chat channel wants an answer now, not a detached run.
   #
   # NO EXTRA CREDENTIAL.  The coding CLI those boxes run is the `coding`
@@ -343,7 +345,7 @@ providers:
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST.  In
     # general a seat picks one with `role.sandbox.run_in` — but not here:
-    # every sandbox seat in this company runs its executor in AGENT MODE,
+    # every sandbox seat in this company runs its executor in BOX MODE,
     # and such a seat's box is placed by its ENTRY, `run_in` on
     # providers.llm.coding above, while its own `run_in` stays `self` (any
     # other cell there is refused, naming that entry).  This company
@@ -352,7 +354,7 @@ providers:
     # no API key and nothing to provision.
     local:
       # The local backend serves two cells, chosen by the coding entry's
-      # `run_in` (or, on a seat not in agent mode, by the seat's own
+      # `run_in` (or, on a seat not in box mode, by the seat's own
       # `run_in`):
       #
       #   run_in: direct     state isolation only — each box gets its own
@@ -385,10 +387,10 @@ providers:
     default_run_in: direct                       # direct | container | e2b
     # THERE IS NO `default_coding_agent` HERE, deliberately.  It names the
     # CLI a `run_sandbox` launch runs, and every sandbox-enabled seat in
-    # this company is an AGENT-MODE seat whose CLI comes from its own
+    # this company is a BOX-MODE seat whose CLI comes from its own
     # providers.llm entry instead — so a value here would be read by
     # nothing.  Add one the day a seat runs code the other way (one whose
-    # executor is not in agent mode, with an enabled gate: an agent-mode
+    # executor is not in box mode, with an enabled gate: a box-mode
     # seat is never offered run_sandbox, whatever its gate says), and
     # `crewlet validate` will not remind you: it is optional, and its
     # absence is only visible at that seat's first coding run.
@@ -405,7 +407,7 @@ providers:
     # stopped making progress is caught inside an hour rather than at the
     # end of the window.  Raise it the day a real task hits it.
     #
-    # IT BOUNDS THE AGENT-MODE EXECUTOR RUNS TOO — those are the same
+    # IT BOUNDS THE BOX-MODE EXECUTOR RUNS TOO — those are the same
     # detached-run machinery, so this is the cap on a whole executor phase
     # for the three engineering seats, not just on delegated code work.
     # It matters more on `haiku` than it would on a stronger model: the
@@ -1056,7 +1058,7 @@ units:
             # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
             # on this machine — see providers.llm.coding above. Only the
             # executor: the reviewer, the workers and the auxiliary passes
-            # are still text calls on that same entry, so the reviewer
+            # still run on this host, on that same entry, so the reviewer
             # judges the run rather than being part of it.
             llm: coding
             # Control-plane work: nimbuscore's Go service and the nimbusk0s worker image.
@@ -1064,7 +1066,7 @@ units:
               enabled: true
               # `self` means this seat's code work rides its OWN executor
               # run rather than starting a second box beside it. That is
-              # the only honest answer for an agent-mode seat: it already
+              # the only honest answer for a box-mode seat: it already
               # holds a shell, an editor and a working directory, and a
               # second box would give it two filesystems with the work in
               # the one the turn cannot see. `run_sandbox` is not offered
@@ -1074,11 +1076,11 @@ units:
               # TTL and round cap of this seat's executor box would go — the
               # box reads them whether or not `enabled` is set. As written it
               # carries none of them and changes nothing: `enabled` offers
-              # an agent-mode seat no tool, and `run_in: self` only records
+              # a box-mode seat no tool, and `run_in: self` only records
               # that the seat's code work rides its executor's run, which
-              # agent mode does with or without it.
+              # box mode does with or without it.
               run_in: self
-              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. A box-mode
               # box gets the seat's own scoped servers PLUS the bridge, and
               # the bridge already advertises this seat's LIVE tool set —
               # its mattermost tools included, under the reserved `crewlet`
@@ -1134,7 +1136,7 @@ units:
             # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
             # on this machine — see providers.llm.coding above. Only the
             # executor: the reviewer, the workers and the auxiliary passes
-            # are still text calls on that same entry, so the reviewer
+            # still run on this host, on that same entry, so the reviewer
             # judges the run rather than being part of it.
             llm: coding
             # Console and website work: React + Vite + TypeScript.
@@ -1142,7 +1144,7 @@ units:
               enabled: true
               # `self` means this seat's code work rides its OWN executor
               # run rather than starting a second box beside it. That is
-              # the only honest answer for an agent-mode seat: it already
+              # the only honest answer for a box-mode seat: it already
               # holds a shell, an editor and a working directory, and a
               # second box would give it two filesystems with the work in
               # the one the turn cannot see. `run_sandbox` is not offered
@@ -1152,11 +1154,11 @@ units:
               # TTL and round cap of this seat's executor box would go — the
               # box reads them whether or not `enabled` is set. As written it
               # carries none of them and changes nothing: `enabled` offers
-              # an agent-mode seat no tool, and `run_in: self` only records
+              # a box-mode seat no tool, and `run_in: self` only records
               # that the seat's code work rides its executor's run, which
-              # agent mode does with or without it.
+              # box mode does with or without it.
               run_in: self
-              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. A box-mode
               # box gets the seat's own scoped servers PLUS the bridge, and
               # the bridge already advertises this seat's LIVE tool set —
               # its mattermost tools included, under the reserved `crewlet`
@@ -1216,7 +1218,7 @@ units:
             # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
             # on this machine — see providers.llm.coding above. Only the
             # executor: the reviewer, the workers and the auxiliary passes
-            # are still text calls on that same entry, so the reviewer
+            # still run on this host, on that same entry, so the reviewer
             # judges the run rather than being part of it.
             llm: coding
             # Phase-2 framework work: the Python SDK, runtime and CLI.
@@ -1224,7 +1226,7 @@ units:
               enabled: true
               # `self` means this seat's code work rides its OWN executor
               # run rather than starting a second box beside it. That is
-              # the only honest answer for an agent-mode seat: it already
+              # the only honest answer for a box-mode seat: it already
               # holds a shell, an editor and a working directory, and a
               # second box would give it two filesystems with the work in
               # the one the turn cannot see. `run_sandbox` is not offered
@@ -1234,11 +1236,11 @@ units:
               # TTL and round cap of this seat's executor box would go — the
               # box reads them whether or not `enabled` is set. As written it
               # carries none of them and changes nothing: `enabled` offers
-              # an agent-mode seat no tool, and `run_in: self` only records
+              # a box-mode seat no tool, and `run_in: self` only records
               # that the seat's code work rides its executor's run, which
-              # agent mode does with or without it.
+              # box mode does with or without it.
               run_in: self
-              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. A box-mode
               # box gets the seat's own scoped servers PLUS the bridge, and
               # the bridge already advertises this seat's LIVE tool set —
               # its mattermost tools included, under the reserved `crewlet`
