@@ -14,6 +14,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/svgsafe"
 )
 
 // ---- the stage and the bounds --------------------------------------------- //
@@ -306,7 +307,7 @@ func (p *parser) text(s string, line int) {
 	case f.node.Tag == "aside":
 		p.notes.WriteString(s)
 	case p.svg != nil:
-		if svgTextElements[f.node.Tag] {
+		if svgsafe.IsTextElement(f.node.Tag) {
 			f.node.Children = append(f.node.Children, Node{Text: s})
 		} else if !blank {
 			p.bad(RuleElement, line, "text in an svg's <%s>: text in a drawing sits in <text>", f.node.Tag)
@@ -360,8 +361,9 @@ func (p *parser) open(tok html.Token, selfClosing bool, line, start int) bool {
 	}
 	node := Node{Tag: tag}
 	if tag == "svg" {
-		p.svg = &svgDrawing{start: start, ids: map[string]bool{}}
+		p.svg = &svgDrawing{start: start, Drawing: svgsafe.NewDrawing()}
 		p.svgTop = len(p.stack)
+		p.svg.Open("svg", line)
 	}
 	p.attrs(&node, tok.Attr, line)
 	if tag != "section" && tag != "aside" {
@@ -576,7 +578,7 @@ func (p *parser) attr(node *Node, key, val string, bad func(string, ...any)) {
 		set()
 	default:
 		if node.Tag == "svg" {
-			if name, v, ok := p.svg.svgAttr("svg", key, val, 0, bad); ok {
+			if name, v, ok := p.svg.Attr("svg", key, val, 0, bad); ok {
 				if node.Attrs == nil {
 					node.Attrs = map[string]string{}
 				}
@@ -641,7 +643,7 @@ func (p *parser) imageSrc(src string, bad func(string, ...any)) {
 
 func (p *parser) close(tag string, line, end int) bool {
 	f := p.top()
-	if name, ok := svgElements[tag]; ok && p.svg != nil && (f == nil || !f.skip) {
+	if name, ok := svgsafe.Element(tag); ok && p.svg != nil && (f == nil || !f.skip) {
 		tag = name
 	}
 	if f == nil || f.node.Tag != tag {
@@ -661,12 +663,17 @@ func (p *parser) close(tag string, line, end int) bool {
 		return true
 	}
 	node := *f.node
+	if p.svg != nil && len(p.stack) > p.svgTop {
+		// AN ELEMENT INSIDE THE DRAWING CLOSES its place in the drawing's tree.
+		p.svg.Close()
+	}
 	if p.svg != nil && len(p.stack) == p.svgTop {
 		if end-p.svg.start > MaxSVGBytes {
 			p.bad(RuleBound, f.line, "the drawing is %d bytes and an inline svg may be at most "+
 				"%d: make it an image file", end-p.svg.start, MaxSVGBytes)
 		}
-		p.svg.resolve(func(l int, format string, args ...any) { p.bad(RuleReference, l, format, args...) })
+		p.svg.Close()
+		p.svg.Resolve(func(l int, format string, args ...any) { p.bad(RuleReference, l, format, args...) })
 		p.svg = nil
 	}
 	switch tag {
@@ -769,27 +776,23 @@ func clip(s string, n int) string {
 
 func (p *parser) openSVG(tok html.Token, selfClosing bool, line int) bool {
 	parent := p.top()
-	name, ok := svgElements[tok.Data]
+	name, ok := svgsafe.Element(tok.Data)
 	if !ok {
-		hint := "a drawing holds shapes, paths, text, gradients, clips, masks, markers and filters"
-		if tok.Data == "script" || tok.Data == "style" || tok.Data == "foreignobject" {
-			hint = "a drawing runs no code, carries no stylesheet and holds no HTML"
-		}
-		p.bad(RuleElement, line, "<%s> in an svg: %s", tok.Data, hint)
+		p.bad(RuleElement, line, "<%s> in an svg: %s", tok.Data, svgsafe.ElementHint(tok.Data))
 		return false
 	}
-	if svgTextElements[parent.node.Tag] && parent.node.Tag != "text" {
-		p.bad(RuleElement, line, "<%s> in <%s>: a title or description is text alone", name,
-			parent.node.Tag)
+	if hint, refused := svgsafe.NestHint(parent.node.Tag, name); refused {
+		p.bad(RuleElement, line, "%s", hint)
 		return false
 	}
 	node := Node{Tag: name}
+	p.svg.Open(name, line)
 	for _, a := range tok.Attr {
 		key := a.Key
 		if a.Namespace != "" {
 			key = a.Namespace + ":" + a.Key
 		}
-		if n, v, ok := p.svg.svgAttr(name, key, a.Val, line, func(format string, args ...any) {
+		if n, v, ok := p.svg.Attr(name, key, a.Val, line, func(format string, args ...any) {
 			p.bad(RuleAttribute, line, format, args...)
 		}); ok {
 			if node.Attrs == nil {
@@ -799,6 +802,7 @@ func (p *parser) openSVG(tok html.Token, selfClosing bool, line int) bool {
 		}
 	}
 	if selfClosing {
+		p.svg.Close()
 		p.attach(node)
 		return true
 	}
@@ -834,24 +838,8 @@ func StyleProperties() []string {
 
 // SVGElements are every element an inline drawing may hold, as SVG spells
 // them, sorted.
-func SVGElements() []string {
-	out := make([]string, 0, len(svgElements))
-	for _, name := range svgElements {
-		out = append(out, name)
-	}
-	slices.Sort(out)
-	return out
-}
+func SVGElements() []string { return svgsafe.Elements() }
 
 // SVGAttributes are every attribute an inline drawing may carry, as SVG
 // spells them, sorted.
-func SVGAttributes() []string {
-	var out []string
-	for _, name := range svgAttrs {
-		if !slices.Contains(out, name) {
-			out = append(out, name)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
+func SVGAttributes() []string { return svgsafe.Attributes() }

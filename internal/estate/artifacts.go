@@ -45,6 +45,18 @@ type ArtifactsReader interface {
 	Usage(ctx context.Context) (artifactsdomain.Usage, error)
 	Trail(ctx context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error)
 	TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]artifacts.ID, error)
+
+	// The folder tree.
+	Folders(ctx context.Context, v artifactsdomain.Viewer, fresh statelog.Freshness) (
+		artifactsdomain.FolderTree, error)
+	Folder(ctx context.Context, id string, fresh statelog.Freshness) (
+		artifactsdomain.Folder, statelog.Position, error)
+	ResolveFolder(ctx context.Context, ref string, within []artifactsdomain.Viewer,
+		fresh statelog.Freshness) (artifactsdomain.Folder, error)
+
+	// The adopted brand.
+	Brand(ctx context.Context, fresh statelog.Freshness) (artifactsdomain.Adoption, bool, error)
+	BrandFile(ctx context.Context, hash objstore.Hash) (artifactsdomain.BrandFile, error)
 }
 
 // ArtifactsWriter is the artifacts write side: exactly the domain writer's
@@ -76,6 +88,20 @@ type ArtifactsWriter interface {
 	Opened(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
 	ReadElevated(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, version int) (
 		artifactsdomain.Written, error)
+
+	// The folder tree.
+	CreateFolders(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.FolderCreateInput) (
+		artifactsdomain.FolderCreated, error)
+	RenameFolder(ctx context.Context, c artifactsdomain.Call, id, name string) (artifactsdomain.Written, error)
+	MoveFolder(ctx context.Context, c artifactsdomain.Call, id, parent string) (artifactsdomain.Written, error)
+	RemoveFolder(ctx context.Context, c artifactsdomain.Call, id string) (artifactsdomain.Written, error)
+	Move(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, folder string) (
+		artifactsdomain.Written, error)
+
+	// The adopted brand.
+	AdoptBrand(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.BrandAdoptInput) (
+		artifactsdomain.Written, error)
+	ClearBrand(ctx context.Context, c artifactsdomain.Call) (artifactsdomain.Written, error)
 }
 
 // ArtifactsHalf is the artifacts estate a data node serves: its reader and its
@@ -253,6 +279,189 @@ var opArtifactTrashedBefore = define("artifacts.trashed_before", opRead, artifac
 		}
 		return r.TrashedBefore(ctx, a.Cutoff, a.Limit)
 	})
+
+// ---- the folder tree and the brand: reads ----------------------------------- //
+
+type foldersArgs struct {
+	Viewer artifactsdomain.Viewer
+	Fresh  statelog.Freshness
+}
+
+var opArtifactFolders = define("artifacts.folders", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a foldersArgs) (artifactsdomain.FolderTree, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return artifactsdomain.FolderTree{}, err
+		}
+		return r.Folders(ctx, a.Viewer, a.Fresh)
+	})
+
+type folderArgs struct {
+	ID    string
+	Fresh statelog.Freshness
+}
+
+// aFolder is [ArtifactsReader.Folder]'s two answers, named.
+type aFolder struct {
+	Folder   artifactsdomain.Folder
+	Position statelog.Position
+}
+
+var opArtifactFolder = define("artifacts.folder", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a folderArgs) (aFolder, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return aFolder{}, err
+		}
+		f, at, err := r.Folder(ctx, a.ID, a.Fresh)
+		return aFolder{Folder: f, Position: at}, err
+	})
+
+type resolveFolderArgs struct {
+	Ref    string
+	Within []artifactsdomain.Viewer
+	Fresh  statelog.Freshness
+}
+
+var opArtifactResolveFolder = define("artifacts.resolve_folder", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a resolveFolderArgs) (artifactsdomain.Folder, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return artifactsdomain.Folder{}, err
+		}
+		return r.ResolveFolder(ctx, a.Ref, a.Within, a.Fresh)
+	})
+
+type brandArgs struct {
+	Fresh statelog.Freshness
+}
+
+// anAdoption is [ArtifactsReader.Brand]'s two answers, named.
+type anAdoption struct {
+	Adoption artifactsdomain.Adoption
+	Adopted  bool
+}
+
+var opArtifactBrand = define("artifacts.brand", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a brandArgs) (anAdoption, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return anAdoption{}, err
+		}
+		adoption, adopted, err := r.Brand(ctx, a.Fresh)
+		return anAdoption{Adoption: adoption, Adopted: adopted}, err
+	})
+
+type brandFileArgs struct {
+	Hash objstore.Hash
+}
+
+var opArtifactBrandFile = define("artifacts.brand_file", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a brandFileArgs) (artifactsdomain.BrandFile, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return artifactsdomain.BrandFile{}, err
+		}
+		return r.BrandFile(ctx, a.Hash)
+	})
+
+// ---- the folder tree and the brand: writes ---------------------------------- //
+
+type folderCreateArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.FolderCreateInput
+}
+
+var opArtifactCreateFolders = define("artifacts.create_folders", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a folderCreateArgs) (artifactsdomain.FolderCreated, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.FolderCreated{}, err
+		}
+		return w.CreateFolders(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a folderCreateArgs) bool { return keyedCall(a.Call) })
+
+// folderNameArgs is a folder write that names its folder and one value: a
+// rename's name, a move's parent.
+type folderNameArgs struct {
+	Call  artifactsdomain.Call
+	ID    string
+	Value string
+}
+
+var opArtifactRenameFolder = define("artifacts.rename_folder", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a folderNameArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.RenameFolder(ctx, a.Call, a.ID, a.Value)
+	}).repeatableWhen(func(a folderNameArgs) bool { return keyedCall(a.Call) })
+
+var opArtifactMoveFolder = define("artifacts.move_folder", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a folderNameArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.MoveFolder(ctx, a.Call, a.ID, a.Value)
+	}).repeatableWhen(func(a folderNameArgs) bool { return keyedCall(a.Call) })
+
+type folderCallArgs struct {
+	Call artifactsdomain.Call
+	ID   string
+}
+
+var opArtifactRemoveFolder = define("artifacts.remove_folder", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a folderCallArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.RemoveFolder(ctx, a.Call, a.ID)
+	}).repeatableWhen(func(a folderCallArgs) bool { return keyedCall(a.Call) })
+
+type artifactMoveArgs struct {
+	Call   artifactsdomain.Call
+	ID     artifacts.ID
+	Folder string
+}
+
+var opArtifactMove = define("artifacts.move", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a artifactMoveArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.Move(ctx, a.Call, a.ID, a.Folder)
+	}).repeatableWhen(func(a artifactMoveArgs) bool { return keyedCall(a.Call) })
+
+type brandAdoptArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.BrandAdoptInput
+}
+
+var opArtifactAdoptBrand = define("artifacts.adopt_brand", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a brandAdoptArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.AdoptBrand(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a brandAdoptArgs) bool { return keyedCall(a.Call) })
+
+type brandClearArgs struct {
+	Call artifactsdomain.Call
+}
+
+var opArtifactClearBrand = define("artifacts.clear_brand", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a brandClearArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.ClearBrand(ctx, a.Call)
+	}).repeatableWhen(func(a brandClearArgs) bool { return keyedCall(a.Call) })
 
 // ---- the writes ----------------------------------------------------------- //
 
@@ -649,6 +858,81 @@ func (a Artifacts) ReadElevated(ctx context.Context, c artifactsdomain.Call, id 
 	version int) (artifactsdomain.Written, error) {
 	return a.written(call(ctx, a.r, opArtifactReadElevated, nil,
 		artifactReadElevatedArgs{Call: c, ID: id, Version: version}))
+}
+
+// Folders answers every folder a viewer can see, with what is directly in each.
+func (a Artifacts) Folders(ctx context.Context, v artifactsdomain.Viewer, fresh statelog.Freshness) (
+	artifactsdomain.FolderTree, error) {
+	return call(ctx, a.r, opArtifactFolders, nil, foldersArgs{Viewer: v, Fresh: fresh})
+}
+
+// Folder answers one folder, and the position it was read at.
+func (a Artifacts) Folder(ctx context.Context, id string, fresh statelog.Freshness) (
+	artifactsdomain.Folder, statelog.Position, error) {
+	out, err := call(ctx, a.r, opArtifactFolder, nil, folderArgs{ID: id, Fresh: fresh})
+	return out.Folder, out.Position, err
+}
+
+// ResolveFolder resolves a folder id or path among the folders every viewer
+// in within can see.
+func (a Artifacts) ResolveFolder(ctx context.Context, ref string, within []artifactsdomain.Viewer,
+	fresh statelog.Freshness) (artifactsdomain.Folder, error) {
+	return call(ctx, a.r, opArtifactResolveFolder, nil,
+		resolveFolderArgs{Ref: ref, Within: within, Fresh: fresh})
+}
+
+// Brand answers the adopted brand, and false when none is adopted.
+func (a Artifacts) Brand(ctx context.Context, fresh statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	out, err := call(ctx, a.r, opArtifactBrand, nil, brandArgs{Fresh: fresh})
+	return out.Adoption, out.Adopted, err
+}
+
+// BrandFile answers one file an adoption serves, by its hash.
+func (a Artifacts) BrandFile(ctx context.Context, hash objstore.Hash) (artifactsdomain.BrandFile, error) {
+	return call(ctx, a.r, opArtifactBrandFile, nil, brandFileArgs{Hash: hash})
+}
+
+// CreateFolders creates one folder, or a chain of them.
+func (a Artifacts) CreateFolders(ctx context.Context, c artifactsdomain.Call,
+	in artifactsdomain.FolderCreateInput) (artifactsdomain.FolderCreated, error) {
+	out, err := call(ctx, a.r, opArtifactCreateFolders, nil, folderCreateArgs{Call: c, Input: in})
+	a.r.Observe(out.Result.Position)
+	return out, err
+}
+
+// RenameFolder renames one folder.
+func (a Artifacts) RenameFolder(ctx context.Context, c artifactsdomain.Call, id, name string) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactRenameFolder, nil, folderNameArgs{Call: c, ID: id, Value: name}))
+}
+
+// MoveFolder moves one folder under parent.
+func (a Artifacts) MoveFolder(ctx context.Context, c artifactsdomain.Call, id, parent string) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactMoveFolder, nil, folderNameArgs{Call: c, ID: id, Value: parent}))
+}
+
+// RemoveFolder removes one folder, moving what it holds up a level.
+func (a Artifacts) RemoveFolder(ctx context.Context, c artifactsdomain.Call, id string) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactRemoveFolder, nil, folderCallArgs{Call: c, ID: id}))
+}
+
+// Move files one artifact in a folder.
+func (a Artifacts) Move(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, folder string) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactMove, nil, artifactMoveArgs{Call: c, ID: id, Folder: folder}))
+}
+
+// AdoptBrand adopts one version of a kit as the company's brand.
+func (a Artifacts) AdoptBrand(ctx context.Context, c artifactsdomain.Call,
+	in artifactsdomain.BrandAdoptInput) (artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactAdoptBrand, nil, brandAdoptArgs{Call: c, Input: in}))
+}
+
+// ClearBrand withdraws the company's adopted brand.
+func (a Artifacts) ClearBrand(ctx context.Context, c artifactsdomain.Call) (artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactClearBrand, nil, brandClearArgs{Call: c}))
 }
 
 // written observes a write's position for the next read's floor and answers it.

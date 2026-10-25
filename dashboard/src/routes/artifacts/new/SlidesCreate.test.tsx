@@ -17,7 +17,8 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { readSlidesStarters } from "~/lib/artifacts/api.ts";
 import type { SlidesStartersAnswer } from "~/protocol/index.ts";
-import { SlidesCreate } from "./SlidesCreate.tsx";
+import { previewImages, SlidesCreate } from "./SlidesCreate.tsx";
+import { NO_BRAND_ASSETS } from "~/lib/brand/useBrand.ts";
 
 const starters = JSON.parse(
   readFileSync(
@@ -153,6 +154,31 @@ test("it opens on the title, in Nightshade, with the engine's four starting slid
   );
 });
 
+// THE COMPANY'S BRAND IS THE FIRST THEME, CHOSEN, AND SAYS SO ON ITS TILE: its
+// tag is drawn there, where the product's themes keep theirs in the name read
+// to a screen reader alone.
+test("the company's brand tile comes first, chosen, and shows its tag", async () => {
+  const brand = {
+    ...starters.themes[0]!,
+    id: "brand",
+    name: "FairSplit",
+    tag: "Your company brand",
+  };
+  vi.mocked(readSlidesStarters).mockResolvedValue({
+    ...starters,
+    themes: [brand, ...starters.themes],
+  });
+  mount();
+  await title();
+  const tile = screen.getByRole("radio", { name: /Your company brand/ });
+  expect(tile.getAttribute("aria-checked")).toBe("true");
+  expect(within(tile).getByText("Your company brand")).toBeTruthy();
+  const other = screen.getByRole("radio", { name: /^Nightshade,/ });
+  expect(
+    within(other).queryByText(starters.themes.find((t) => t.name === "Nightshade")!.tag),
+  ).toBeNull();
+});
+
 test("Create deck sends the title, the theme and every slide as one plan, then opens the deck", async () => {
   mount();
   fireEvent.change(await title(), { target: { value: "Board review" } });
@@ -282,4 +308,24 @@ test("asking an agent makes the deck shared with it, files its task linked to th
     work_item: "OPS-7",
     after: "CREWLET_TRACKER_LOG@1:9",
   });
+});
+
+// THE BRAND THEME'S PREVIEW DRAWS THE LOGO ITS DECK WILL: its sample names the
+// cover logo by the path the starter copies it to, holding no bytes, and the
+// preview draws it from the adopted brand's own file for that slot. Every
+// other image, and every other theme, draws nothing.
+test("the brand theme's preview draws its cover logo from the adopted brand", () => {
+  const brand = {
+    ...starters.themes[0]!,
+    id: "brand",
+    logo: { path: "brand/logo-on-dark.svg", slot: "logo.on_dark" },
+  };
+  const assets = {
+    ...NO_BRAND_ASSETS,
+    logo: (slot: string) => (slot === "on_dark" ? "blob:logo-on-dark" : null),
+  };
+  const image = previewImages(brand, assets);
+  expect(image("brand/logo-on-dark.svg")).toBe("blob:logo-on-dark");
+  expect(image("images/team.png")).toBeNull();
+  expect(previewImages(starters.themes[0]!, assets)("brand/logo-on-dark.svg")).toBeNull();
 });

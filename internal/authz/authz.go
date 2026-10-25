@@ -278,12 +278,18 @@ const (
 	// may touch an artifact is its owner and whoever it is shared with
 	// ([ClassShared]), so no app admits a reader to it ([AppFor], [Visible]).
 	KindArtifact ObjectKind = "artifact"
+	// KindArtifactFolder is one folder of the company's artifact tree,
+	// decided PER OBJECT exactly as an artifact is: its owner and its
+	// top-level folder's shares ([ClassShared]). A folder grants nothing on
+	// the artifacts filed in it, so no decision about an artifact ever
+	// reads one (ADR-0047).
+	KindArtifactFolder ObjectKind = "artifact_folder"
 )
 
 // ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
-	KindView, KindCompany, KindArtifact,
+	KindView, KindCompany, KindArtifact, KindArtifactFolder,
 }
 
 // Valid reports whether a kind is one this build knows.

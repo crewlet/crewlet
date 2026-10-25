@@ -9,6 +9,7 @@
  * anything.
  */
 
+import type { ReactNode } from "react";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
@@ -23,6 +24,11 @@ import type {
   LiveSocket,
 } from "~/protocol/index.ts";
 
+// THE BOARD'S BRAND REGION reads the company's brand over the socket, which
+// these tests, mounted with no client, do not serve: the board is drawn bare.
+vi.mock("~/components/brand.tsx", () => ({
+  AdoptedBrandScope: ({ children }: { children: ReactNode }) => children,
+}));
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");

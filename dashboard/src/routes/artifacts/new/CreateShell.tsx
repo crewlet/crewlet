@@ -17,6 +17,14 @@
  * its short word (`short`), so "Create and ask SRE Lead" reads "Create" on a
  * phone.
  *
+ * # Where it will be filed, said before it is made
+ *
+ * The bar's first control is Save in: the folder the new artifact is filed in
+ * (the folder page New was pressed on, `?folder=`), or "Save in a folder" for
+ * the top level, which opens Move to… to choose one and writes nothing until
+ * the artifact is made. The way back leads to that folder, so a reader who
+ * started in it returns to it.
+ *
  * # Asking an agent sits beside the page
  *
  * A kind that can be handed to an agent passes `handoff`: the bar's "Ask an
@@ -44,20 +52,28 @@
  */
 
 import "~/styles/create.css";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ArtifactBar, ArtifactWorkspace, type ArtifactBarTool } from "@crewlethq/ui";
-import { XGlyph } from "@crewlethq/icons/glyphs";
+import { FolderGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import { FrameNavToggle, OwnPageHeader } from "~/app/frame/OwnHeader.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
 import { href, useNavigator } from "~/app/router.tsx";
-import { artifactSectionPath } from "~/app/routes.ts";
+import { artifactFolderPath, artifactSectionPath } from "~/app/routes.ts";
 import { useServicesRun } from "~/lib/services.ts";
-import { KIND_WORDS, NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
-import type { ArtifactKind } from "~/protocol/index.ts";
+import { KIND_WORDS, NEW_KIND_TITLES, type MakeKind } from "~/lib/artifacts/words.ts";
+import { MoveDialog } from "../MoveDialog.tsx";
+import { useSaveIn, type SaveIn } from "./create.ts";
 
-/** Where a create page leads back to: the gallery it was started from. */
+/** Where a create page leads back to when it files at the top level: the gallery. */
 const GALLERY = artifactSectionPath("all");
+
+/** Where a create page leads back to: the folder it files in, or the gallery. */
+function wayBack(saveIn: SaveIn): { path: string[]; label: string } {
+  return saveIn.folder && saveIn.name
+    ? { path: artifactFolderPath(saveIn.folder), label: `Back to ${saveIn.name}` }
+    : { path: GALLERY, label: "Back to artifacts" };
+}
 
 /** The kind's primary action, drawn as the bar's last control: "Start the doc". */
 export interface CreateAction extends Omit<
@@ -69,7 +85,7 @@ export interface CreateAction extends Omit<
 }
 
 export interface CreateShellProps {
-  kind: ArtifactKind;
+  kind: MakeKind;
   /** The kind's one primary action. Left out while the page offers none. */
   action?: CreateAction | undefined;
   /** What the page is doing now, before the controls: "Draft saved", "Starting…". */
@@ -97,10 +113,14 @@ export interface CreateHandoff {
   open: () => void;
 }
 
-/** Leave a create page for the gallery, replacing it: Back should not land on a half-made artifact. */
+/**
+ * Leave a create page for where it was started (the folder it files in, or
+ * the gallery), replacing it: Back should not land on a half-made artifact.
+ */
 export function useLeaveCreate(): () => void {
   const nav = useNavigator();
-  return () => nav.replace(GALLERY);
+  const saveIn = useSaveIn();
+  return () => nav.replace(wayBack(saveIn).path);
 }
 
 export function CreateShell({
@@ -119,6 +139,9 @@ export function CreateShell({
   const handoff = runs.tracker ? offered : undefined;
   useFillScreen(true);
   const leave = useLeaveCreate();
+  const saveIn = useSaveIn();
+  const back = wayBack(saveIn);
+  const [choosing, setChoosing] = useState(false);
   useKeymap({
     "create.start": {
       run: (e) => {
@@ -134,6 +157,20 @@ export function CreateShell({
   // when pressed would leave the pointer on Cancel.
   const last = handoff !== undefined && action === undefined;
   const bar: ArtifactBarTool[] = [
+    {
+      key: "save-in",
+      // WHILE THE TREE IS READ the folder has no name yet, and "Save in a
+      // folder" would say the artifact is going nowhere.
+      label: saveIn.path
+        ? `Save in ${saveIn.path}`
+        : saveIn.reading
+          ? "Save in…"
+          : "Save in a folder",
+      shortLabel: saveIn.name || "Folder",
+      icon: <FolderGlyph size="sm" />,
+      onSelect: () => setChoosing(true),
+      labelled: true,
+    },
     ...tools,
     ...(handoff && !last ? [handoff.tool] : []),
     {
@@ -154,7 +191,7 @@ export function CreateShell({
           kind={kind}
           kindLabel={KIND_WORDS[kind]}
           start={<FrameNavToggle />}
-          back={{ href: href(GALLERY), label: "Back to artifacts" }}
+          back={{ href: href(back.path), label: back.label }}
           headingLevel={1}
           status={status}
           kindTools={bar}
@@ -171,6 +208,16 @@ export function CreateShell({
           {children}
         </ArtifactWorkspace>
       </div>
+      {choosing && (
+        <MoveDialog
+          subject={{ kind: "place", current: saveIn.folder }}
+          onClose={() => setChoosing(false)}
+          onMoved={(target) => {
+            setChoosing(false);
+            saveIn.set(target.id);
+          }}
+        />
+      )}
     </div>
   );
 }

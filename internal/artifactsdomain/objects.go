@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TWO TABLES WHOSE ROWS KEEP OBJECTS ALIVE, declared beside the schema that
+// THE THREE TABLES WHOSE ROWS KEEP OBJECTS ALIVE, declared beside the schema that
 // holds them and collected in internal/objstore/references, which the
 // collector, its audit and the backup build their statements from. A table that
 // names objects and is missing from that list is the one mistake that destroys
@@ -30,6 +30,17 @@ var AssetReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "artifact_assets",
 	Key: "object", Hash: "hash", Size: "size",
 	Owner: []string{"artifact_id", "asset_id"},
+}
+
+// BrandFileReferences is every file an adoption of the company's brand serves:
+// the generated stylesheet, each logo and each face, copied out of the kit's
+// version at adoption so the adopted brand outlives the kit's retention, trash
+// and purge. A row goes only when its adoption is no longer current and no
+// retained version names its stylesheet.
+var BrandFileReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "artifact_brand_files",
+	Key: "object", Hash: "hash", Size: "size",
+	Owner: []string{"css_sha", "slot"},
 }
 
 // ObjectEstate is this domain as the object store's passes read it: a barrier on

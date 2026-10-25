@@ -28,6 +28,7 @@ import { linkWorkItem } from "~/lib/artifacts/api.ts";
 import { KIND_ARTICLES, KIND_WORDS } from "~/lib/artifacts/words.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
+import { briefFolder, useSaveIn } from "./create.ts";
 
 /** What a create page asks an agent for. */
 export interface ArtifactTaskRequest {
@@ -63,11 +64,25 @@ export interface FiledArtifactTask {
  * knows which artifact to publish, and, for an artifact already made, which one
  * to change.
  */
-export function artifactTaskBody(kind: ArtifactKind, brief: string, artifact?: string): string {
+export function artifactTaskBody(
+  kind: ArtifactKind,
+  brief: string,
+  artifact?: string,
+  folder?: string,
+): string {
   const word = KIND_WORDS[kind];
+  // WHERE A NEW ONE IS FILED, by the folder's id alone, which
+  // `create_artifact`'s `folder` takes and which a rename cannot change. Never
+  // by its path: a task is read by people the folder may not be shown to (an
+  // "Only you" folder), and its path would tell them the names in it. An
+  // artifact already made was filed when it was made.
+  const filed =
+    folder && !artifact
+      ? ` File it in the folder whose id is ${folder} (\`folder\` on \`create_artifact\`).`
+      : "";
   const ask = artifact
     ? `Build it in the ${word} artifact already linked to this task (artifact ${artifact}), and publish your work as new versions of it.`
-    : `Publish it as ${KIND_ARTICLES[kind]} ${word} artifact (kind \`${kind}\`) for this task.`;
+    : `Publish it as ${KIND_ARTICLES[kind]} ${word} artifact (kind \`${kind}\`) for this task.${filed}`;
   return `${brief.trim()}\n\n${ask}`;
 }
 
@@ -98,6 +113,7 @@ export function useFileArtifactTask(): FileArtifactTask {
   const viewer = useViewer();
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const saveIn = useSaveIn();
   const [linking, setLinking] = useState(false);
 
   const fileArtifactTask = useCallback(
@@ -109,7 +125,12 @@ export function useFileArtifactTask(): FileArtifactTask {
           title,
           project,
           assignee: request.seat,
-          body: artifactTaskBody(request.kind, request.brief, request.artifact),
+          body: artifactTaskBody(
+            request.kind,
+            request.brief,
+            request.artifact,
+            briefFolder(saveIn),
+          ),
         },
         { done: `Asked ${index.byHandle.get(request.seat)?.name ?? request.seat} for “${title}”` },
       );
@@ -133,7 +154,7 @@ export function useFileArtifactTask(): FileArtifactTask {
         setLinking(false);
       }
     },
-    [create, viewer.project, index],
+    [create, viewer.project, index, saveIn.folder, saveIn.path],
   );
 
   return {

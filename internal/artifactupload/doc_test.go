@@ -52,8 +52,8 @@ func TestATabbedDocPublishesAsWritten(t *testing.T) {
 	for _, q := range []string{"Welcome", "escalation lead"} {
 		page, err := h.domain.reader.List(t.Context(), artifactsdomain.Viewer{Admin: true},
 			artifactsdomain.ListQuery{Q: q})
-		if err != nil || len(page.Items) != 1 {
-			t.Errorf("a search for %q found %d (%v)", q, len(page.Items), err)
+		if err != nil || len(page.Contents) != 1 {
+			t.Errorf("a search for %q found %d (%v)", q, len(page.Contents), err)
 		}
 	}
 }

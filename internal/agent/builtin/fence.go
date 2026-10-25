@@ -156,6 +156,23 @@ func (r *foreignRead) fence(path fieldPath, src provenance.Source,
 	r.fences[path.id()] = provenance.Fence(r.boundary, src, r.trustOf(writers, partial), writers, text)
 }
 
+// fenceAt registers the string at path in the answer as text by writers, read
+// from src, at a trust its caller decided rather than one the writers earn:
+// [provenance.TrustCompany] for what an administrator adopted for everybody,
+// which no set of authors is ever inferred to be. Empty text is not fenced.
+func (r *foreignRead) fenceAt(path fieldPath, src provenance.Source, trust provenance.Trust,
+	writers []provenance.Author, text string) {
+
+	if text == "" {
+		return
+	}
+	r.trusts = append(r.trusts, trust)
+	for _, w := range writers {
+		r.name(w)
+	}
+	r.fences[path.id()] = provenance.Fence(r.boundary, src, trust, writers, text)
+}
+
 // envelope labels the whole answer, or is false when it fenced nothing.
 func (r *foreignRead) envelope() (provenance.Envelope, bool) {
 	if len(r.trusts) == 0 {

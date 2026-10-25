@@ -43,6 +43,7 @@ import { useVersionImages } from "~/lib/artifacts/versionImages.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import type { PresenceReport } from "./presence.ts";
 import { useKindControls, useRegionNames } from "~/lib/artifacts/kindControls.ts";
+import { AdoptedBrandScope } from "~/components/brand.tsx";
 
 export function DocView({
   detail,
@@ -172,7 +173,9 @@ function Doc({
           reading={(path) => {
             const t = doc.tabs.find((x) => x.path === path);
             return t ? (
-              <Document>{renderMarkdown(t.text, { image: tabImages(t, loaded) })}</Document>
+              <AdoptedBrandScope>
+                <Document>{renderMarkdown(t.text, { image: tabImages(t, loaded) })}</Document>
+              </AdoptedBrandScope>
             ) : null;
           }}
           onDraft={setDrafting}
@@ -218,13 +221,17 @@ function Doc({
           </div>
         )}
         <div className="doc-read-page">
-          {many ? (
-            <TabPanel id={panel} value={tab.path}>
-              {body}
-            </TabPanel>
-          ) : (
-            body
-          )}
+          {/* THE DOCUMENT IN THE COMPANY'S BRAND, live; its tabs, outline
+              and bar stay the dashboard's. */}
+          <AdoptedBrandScope>
+            {many ? (
+              <TabPanel id={panel} value={tab.path}>
+                {body}
+              </TabPanel>
+            ) : (
+              body
+            )}
+          </AdoptedBrandScope>
         </div>
       </div>
       {primary && <DocPrint doc={doc} loaded={loaded} />}
@@ -273,12 +280,14 @@ function ReadingControls({ editable, onEdit }: { editable: boolean; onEdit: () =
 function DocPrint({ doc, loaded }: { doc: ArtifactDoc; loaded: (path: string) => string | null }) {
   return (
     <PrintOnly>
-      {doc.tabs.map((t) => (
-        <section className="doc-print-tab" key={t.path}>
-          {doc.tabs.length > 1 && <h1 className="doc-print-title">{t.title}</h1>}
-          <Document>{renderMarkdown(t.text, { image: tabImages(t, loaded) })}</Document>
-        </section>
-      ))}
+      <AdoptedBrandScope>
+        {doc.tabs.map((t) => (
+          <section className="doc-print-tab" key={t.path}>
+            {doc.tabs.length > 1 && <h1 className="doc-print-title">{t.title}</h1>}
+            <Document>{renderMarkdown(t.text, { image: tabImages(t, loaded) })}</Document>
+          </section>
+        ))}
+      </AdoptedBrandScope>
     </PrintOnly>
   );
 }

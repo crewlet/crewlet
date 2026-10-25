@@ -19,9 +19,18 @@
 /**
  * Every kind of artifact (`artifacts.Kinds`): a page that runs code, a
  * doc, a deck, a dashboard of figures, a native sheet, a design's canvas of
- * framed artboards.
+ * framed artboards, and a brand kit (the company's logos, colours, type and
+ * voice, which an administrator adopts).
  */
-export const ARTIFACT_KINDS = ["html", "doc", "slides", "dashboard", "sheet", "design"] as const;
+export const ARTIFACT_KINDS = [
+  "html",
+  "doc",
+  "slides",
+  "dashboard",
+  "sheet",
+  "design",
+  "brand",
+] as const;
 
 /**
  * What the engine decides by kind (`artifacts.KindSpecs`), the half a screen
@@ -37,6 +46,7 @@ export const ARTIFACT_KIND_SPECS = {
   dashboard: { render: "native", store: "implied" },
   sheet: { render: "native", store: "content" },
   design: { render: "framed", store: "declared" },
+  brand: { render: "native", store: "none" },
 } as const;
 
 /** Every runtime capability a version may declare (`artifacts.Capabilities`). */
@@ -68,7 +78,8 @@ export const ARTIFACT_LIST_SORTS = ["updated", "created", "title", "opened"] as 
  * in the engine's order: what a history row and the company trail are worded
  * by. Not every op the log carries: a purge takes the history with it, and a
  * pin, an unpin and an opened mark are one person's browsing, so none of them
- * is ever a row; an asset's records are filed under the asset's own op.
+ * is ever a row; an asset's records are filed under the asset's own op. A
+ * move names the folders by id only, never by name.
  */
 export const ARTIFACT_HISTORY_OPS = [
   "create",
@@ -85,6 +96,7 @@ export const ARTIFACT_HISTORY_OPS = [
   "asset_remove",
   "link_work_item",
   "read_elevated",
+  "move",
 ] as const;
 
 /** The longest title, in UTF-8 bytes (`artifacts.MaxTitleBytes`): a tab title and a card line. */
@@ -121,6 +133,26 @@ export const DECK_SLIDE_TITLE_MAX_BYTES = 200;
  * (`artifacts.TrashRetention`): the date every trash sentence names.
  */
 export const ARTIFACT_TRASH_RETENTION_DAYS = 30;
+
+/**
+ * The visibility a new top-level folder may be given
+ * (`artifactsdomain.FolderVisibilities`): everyone at the company, or only its
+ * owner. A subfolder takes its top-level folder's. A folder grants nothing on
+ * what it holds.
+ */
+export const ARTIFACT_FOLDER_VISIBILITIES = ["company", "private"] as const;
+
+/** The longest folder name, in UTF-8 bytes (`artifacts.MaxFolderNameBytes`). */
+export const ARTIFACT_FOLDER_NAME_MAX_BYTES = 80;
+
+/** How deep a folder may sit, a top-level folder at depth one (`artifacts.MaxFolderDepth`). */
+export const ARTIFACT_FOLDER_MAX_DEPTH = 4;
+
+/** The most artifacts one move files (`artifacts.MaxMovesPerCall`): the bulk Move dialog's batch. */
+export const ARTIFACT_MOVE_MAX_ITEMS = 25;
+
+/** The one delimiter a listing takes (`artifactsdomain.ListDelimiter`), as S3's ListObjectsV2 names it. */
+export const ARTIFACT_LIST_DELIMITER = "/";
 
 /** Every column type a datastore validates (`artifacts.ColumnTypes`). */
 export const COLUMN_TYPES = [

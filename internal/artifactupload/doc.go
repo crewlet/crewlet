@@ -18,7 +18,8 @@
 // the bytes the store holds that nothing names never exceed the holds, where
 // they used to be bounded only by the collector's day. The objects the pipeline
 // writes itself (a linted page, an edit's result, a copied CDN file, a tool's
-// inline content) are reserved the same way before they are stored.
+// inline content, a copy of the adopted brand's logo or face) are reserved the
+// same way before they are stored.
 //
 // # Two transports, one key
 //

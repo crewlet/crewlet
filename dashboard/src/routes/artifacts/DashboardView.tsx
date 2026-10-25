@@ -51,6 +51,7 @@ import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useWidth } from "~/lib/useWidth.ts";
 import { DashboardWidget, RowsTable, nothingSaid } from "./DashboardWidget.tsx";
 import type { PresenceReport } from "./presence.ts";
+import { AdoptedBrandScope } from "~/components/brand.tsx";
 
 /** The height of one board row, in pixels: the Home board's. */
 const ROW = 16;
@@ -160,51 +161,55 @@ export function DashboardView({
         </Button>
       </div>
       <div className="dashboard-body">
-        <div className="dashboard-board" ref={boardRef}>
-          <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS}>
-            <ArrangeGrid>
-              {spec.widgets.map((w) =>
-                w.type === "group" ? (
-                  <ArrangeFrame
-                    key={w.id}
-                    name={w.title ?? w.id}
-                    editing={false}
-                    container
-                    columns={spanOf(w)}
-                    rows={null}
-                    rowHeight={ROW}
-                    className="dashboard-cell"
-                  >
-                    <ArrangeGroup
-                      // A SECTION OF THE BOARD, read rather than arranged: a
-                      // quiet header over a hairline, its widgets on the
-                      // board's own columns.
-                      variant="section"
-                      title={w.title ?? ""}
-                      tone={(w.tone ?? "none") as SurfaceTone}
-                      collapsed={collapsed.has(w.id)}
-                      onCollapsedChange={(c) =>
-                        setCollapsed((prev) => {
-                          const next = new Set(prev);
-                          if (c) next.add(w.id);
-                          else next.delete(w.id);
-                          return next;
-                        })
-                      }
-                      count={w.children?.length ?? 0}
-                      columns={DASHBOARD_COLUMNS}
-                      empty="This group holds no widgets."
+        {/* THE BOARD IN THE COMPANY'S BRAND, live; its filters, Refresh and
+            the Sources rail stay the dashboard's. */}
+        <AdoptedBrandScope className="dashboard-brand">
+          <div className="dashboard-board" ref={boardRef}>
+            <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS}>
+              <ArrangeGrid>
+                {spec.widgets.map((w) =>
+                  w.type === "group" ? (
+                    <ArrangeFrame
+                      key={w.id}
+                      name={w.title ?? w.id}
+                      editing={false}
+                      container
+                      columns={spanOf(w)}
+                      rows={null}
+                      rowHeight={ROW}
+                      className="dashboard-cell"
                     >
-                      {(w.children ?? []).map(renderLeaf)}
-                    </ArrangeGroup>
-                  </ArrangeFrame>
-                ) : (
-                  renderLeaf(w)
-                ),
-              )}
-            </ArrangeGrid>
-          </ArrangeBoard>
-        </div>
+                      <ArrangeGroup
+                        // A SECTION OF THE BOARD, read rather than arranged: a
+                        // quiet header over a hairline, its widgets on the
+                        // board's own columns.
+                        variant="section"
+                        title={w.title ?? ""}
+                        tone={(w.tone ?? "none") as SurfaceTone}
+                        collapsed={collapsed.has(w.id)}
+                        onCollapsedChange={(c) =>
+                          setCollapsed((prev) => {
+                            const next = new Set(prev);
+                            if (c) next.add(w.id);
+                            else next.delete(w.id);
+                            return next;
+                          })
+                        }
+                        count={w.children?.length ?? 0}
+                        columns={DASHBOARD_COLUMNS}
+                        empty="This group holds no widgets."
+                      >
+                        {(w.children ?? []).map(renderLeaf)}
+                      </ArrangeGroup>
+                    </ArrangeFrame>
+                  ) : (
+                    renderLeaf(w)
+                  ),
+                )}
+              </ArrangeGrid>
+            </ArrangeBoard>
+          </div>
+        </AdoptedBrandScope>
         {/* ONE CARD, as every panel beside a board is: the rail's heading is
             the card's, and the entries are rows of it rather than loose
             blocks on the page, its top level with the board's first row. */}

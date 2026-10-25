@@ -71,6 +71,8 @@ export interface PageRun {
   fingerprint: string;
   /** The task the page is made for. */
   workItem?: string;
+  /** The folder it is filed in (an id). */
+  folder?: string;
 }
 
 /** Files as an upload brings them: text as text, a picture as its bytes. */
@@ -118,6 +120,7 @@ export function useDraft() {
                 entry: page.entry,
                 capabilities: page.capabilities,
                 ...(page.workItem ? { workItem: page.workItem } : {}),
+                ...(page.folder ? { folder: page.folder } : {}),
               })),
           key: newActOpID(),
         });

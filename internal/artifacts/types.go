@@ -84,6 +84,15 @@ const (
 	// and one HTML page per artboard, each framed on the artifact origin
 	// under a ticket of its own (internal/artifacts/canvasformat).
 	KindDesign Kind = "design"
+
+	// KindBrand is a brand kit: a closed `brand.json` (the company's name,
+	// logos, colour roles, two typefaces and its voice) and the logo and
+	// font files it names, all files of the version, in the format of
+	// internal/artifacts/brandformat. It carries no author code. Many kits
+	// may exist; the company's brand is the one version an administrator
+	// ADOPTED (internal/artifactsdomain's `brand` subject), never whichever
+	// kit was published last.
+	KindBrand Kind = "brand"
 )
 
 // Capability is a runtime capability a version declares and a viewer's ticket

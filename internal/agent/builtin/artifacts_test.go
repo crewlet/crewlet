@@ -683,12 +683,12 @@ func TestAListingShowsOnlyWhatReadingAdmits(t *testing.T) {
 
 	got := r.call(t, asked(t), builtin.ListArtifactsTool, map[string]any{})
 	out := decode(t, got)
-	rows, _ := out["artifacts"].([]any)
+	rows, _ := out["contents"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["artifact"] != both.ID.String() {
 		t.Fatalf("listing for the founder's request = %v, want only the shared one", rows)
 	}
 	got = r.call(t, turnFor(t, "agent-cto"), builtin.ListArtifactsTool, map[string]any{})
-	if rows, _ := decode(t, got)["artifacts"].([]any); len(rows) != 2 {
+	if rows, _ := decode(t, got)["contents"].([]any); len(rows) != 2 {
 		t.Fatalf("the agent's own listing = %v, want its two", rows)
 	}
 	if v := r.f.listed[len(r.f.listed)-1]; v.Record != "agent-cto" || v.Admin {
@@ -710,8 +710,8 @@ func TestAnArtifactWriteWhoseOutcomeIsUnknownIsNotReportedDone(t *testing.T) {
 	}
 }
 
-// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the three reads are
-// reads, so a worker reads artifacts and writes none.
+// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the four reads are
+// reads, so a worker reads artifacts (and the company's brand) and writes none.
 func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
@@ -721,7 +721,7 @@ func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 			t.Fatalf("%s is not registered", name)
 		}
 		read := name == builtin.ListArtifactsTool || name == builtin.GetArtifactTool ||
-			name == builtin.DashboardSourcesTool
+			name == builtin.DashboardSourcesTool || name == builtin.CompanyBrandTool
 		if mcp.WritesToSharedSurface(entry.Annotations) == read {
 			t.Errorf("%s: WritesToSharedSurface = %v", name, !read)
 		}
@@ -755,7 +755,7 @@ func TestAnAdministratorsListingShowsNoOverride(t *testing.T) {
 	if err != nil || got.Failed {
 		t.Fatalf("list: %v %s", err, got.Output)
 	}
-	rows, _ := decode(t, got)["artifacts"].([]any)
+	rows, _ := decode(t, got)["contents"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["artifact"] != mine.ID.String() {
 		t.Fatalf("an administrator's listing = %v, want only their own", rows)
 	}

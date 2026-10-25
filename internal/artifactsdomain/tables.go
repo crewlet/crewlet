@@ -27,6 +27,16 @@ var ReproducibleTables = []string{
 	// against.
 	"artifact_history", "artifact_usage",
 
+	// The folder tree: the folders, the shares their top-level folders
+	// hold, and what happened to the tree (an artifact's own place is its
+	// `folder_id` column).
+	"artifact_folders", "artifact_folder_shares", "artifact_folder_history",
+
+	// The adopted brand: the adoption's snapshot, the files it serves (the
+	// third table that NAMES OBJECTS, declared in
+	// internal/objstore/references), and every adoption and clear.
+	"artifact_brand", "artifact_brand_files", "artifact_brand_history",
+
 	// The gate tables, which outlive the records that wrote them, and the
 	// reanchor's audit row.
 	"artifacts_deletions", "artifacts_evictions", "artifacts_log_generations",
