@@ -42,6 +42,8 @@ type RigOptions struct {
 	// Company replaces the rig's company, for a suite about one the
 	// assistant cannot run on.
 	Company assistant.Company
+	// Acts are the writes the rig's person may propose.
+	Acts []string
 }
 
 // NewRig builds a rig and closes its service when the suite ends. Its person is
@@ -65,6 +67,7 @@ func NewRig(t testing.TB, o RigOptions) *Rig {
 	}
 	svc, err := assistant.New(assistant.Deps{
 		Node: "node-a", Company: company,
+		Acts: func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
 		Models: models, Budget: o.Budget, Catalogue: Catalogue(o.Tools),
 		Cards:       Cards{Title: "People", Columns: []string{"name"}},
 		Transcripts: r.Store, Records: r.Store, Dispatcher: r.Dispatcher, Revoker: r.Revoker,
