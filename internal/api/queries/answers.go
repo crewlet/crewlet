@@ -146,7 +146,7 @@ type Sources struct {
 	// which is the whole set of questions a principal acting through an
 	// assistant grant may ask: an Everybody or a Requires posture never
 	// reaches the authority table, so its assistant column cannot see those
-	// questions, and this is where they are gated instead (ADR-0048). Nil
+	// questions, and this is where they are gated instead (ADR-0051). Nil
 	// admits no assisted principal to any question, which fails closed.
 	AssistReads func(question string) bool
 

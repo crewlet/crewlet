@@ -51,7 +51,7 @@
 // # The registry is gated by the same table
 //
 // [ReadsQuestion] and [ReadsRoute] are what an assisted principal may ask the
-// question registry and the overview routes (ADR-0048): an Everybody or a
+// question registry and the overview routes (ADR-0051): an Everybody or a
 // Requires question never reaches the authority table, so its assistant
 // column cannot keep the assistant from one, and internal/api wires these as
 // the gate instead.

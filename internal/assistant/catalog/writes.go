@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// The write tools. Every call is a PROPOSAL and never an effect (ADR-0047):
+// The write tools. Every call is a PROPOSAL and never an effect (ADR-0050):
 // the turn builds the one request the write would send, the person sees a
 // preview of it and approves, and only the approval sends it, as them. Each
 // executes as one operator-catalogue tool through the act route, or (the two
