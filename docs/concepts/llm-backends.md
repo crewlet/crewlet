@@ -2959,7 +2959,7 @@ system prompt : seats: added to the CLI's own (append_system_prompt)
               : side passes: replaces the CLI's own (system_prompt)
 smoke test    : ok: 812 in / 34 out
 stream smoke  : ok: 812 in / 34 out
-local tools   : denied by profile — probe: refused
+local tools   : denied by profile; probe: refused
 web           : allowed; ok: fetched https://www.cloudflare.com/cdn-cgi/trace
 problems      : none
 ```
