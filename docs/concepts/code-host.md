@@ -932,10 +932,10 @@ repository whose bitmap the node's memory cannot hold
 
 A person reaches a repository with git's own smart HTTP at
 `https://<the API's address>/git/<name>.git`, on the node's `api.port`, and
-with a token the engine already knows: their own machine token (minted with
+with a token the engine already knows — their own machine token, minted with
 [`crewlet iam token -login`](../reference/cli.md#crewlet-iam) or from the
-dashboard's Account page, and acting as them), or a Tier A token the identity
-directory binds to their seat, given to git as the **password** (git asks for
+dashboard's Account page and acting as them — given to git as the
+**password** (git asks for
 it, or a credential helper answers —
 [`crewlet code credential`](../reference/cli.md#crewlet-code-credential) is the
 engine's own, reading the token from the environment; the user name is
@@ -946,10 +946,12 @@ audit ([ADR-0055](https://github.com/crewlet/crewlet/blob/main/adr/0055-a-person
 
 - **A credential acting as a human seat pushes as that person** — every
   person holds one ([humans in the org](humans-in-the-org.md)), so a person's
-  own machine token pushes as them, and so does a Tier A token the identity
-  directory binds to their seat. That is the same principal the dashboard's
-  writes and an assistant's operator tools act as, and git is the third way a
-  person acts beside them.
+  own machine token pushes as them. That is the same principal the
+  dashboard's writes and an assistant's operator tools act as, and git is the
+  third way a person acts beside them. A pipeline that pushes does it with a
+  Tier A token or a service account the identity directory binds to a human
+  seat **nobody holds** — a person's seat is theirs alone, so a bind to it is
+  refused — and its pushes are that seat's.
 - **A credential bound to no seat fetches only** — a Tier A token or a service
   account the directory binds to none: a push is refused at its first request,
   before anything is sent, saying the token is not bound to a person.

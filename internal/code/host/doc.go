@@ -225,9 +225,10 @@
 //
 // # Who pushes
 //
-// A person, with their own token as the Basic password — a machine token they
-// minted, or a Tier A token the identity directory binds to their human seat —
-// pushes as that person; a credential bound to no seat fetches only; and every
+// A person, with their own machine token as the Basic password, pushes as that
+// person, and a Tier A token or service account the identity directory binds
+// to a human seat nobody else holds pushes as that seat's one holder; a
+// credential bound to no seat fetches only; and every
 // push is one operator_acted record on the receiving node, transport git — the
 // third person transport. WHO is asking is the API guard's answer, read off
 // the request (iam.From): the seat is the principal's own, which the guard

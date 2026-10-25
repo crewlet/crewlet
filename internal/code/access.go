@@ -412,9 +412,15 @@ func reservedSeatRef(ref string) bool {
 // UnboundDetail is the sentence a push by a token bound to nobody is refused
 // with — the ONE spelling, which the code host prints at the advertisement and
 // on every ref of a push that skipped it.
-const UnboundDetail = "this token is not bound to a person: a person pushes with their own token " +
-	"(a machine token they minted, or a Tier A token the identity directory binds to their human " +
-	"seat); a token bound to nobody fetches only"
+//
+// ITS REMEDIES ARE THE TWO A DIRECTORY ADMITS: a person's own machine token,
+// which acts as the seat they hold, and a binding on a human seat NOBODY
+// holds — never a Tier A token bound to the person's own seat, which the
+// directory refuses, since a bind is a claim on the seat and a person's seat
+// is theirs alone.
+const UnboundDetail = "this token is not bound to a person: a person pushes with their own machine " +
+	"token, and a pipeline with a Tier A token or service account the identity directory binds to a " +
+	"human seat nobody holds; a credential bound to no seat fetches only"
 
 // RefRule judges one command against the grant: "" and "" where the grant
 // permits it, else [RefusalNotPermitted] and one sentence naming what the
