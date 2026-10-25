@@ -1117,7 +1117,11 @@ func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
 }
 
 // fail wraps an error as a classified provider failure.
-func (p *Provider) fail(kind llm.ErrorKind, err error) error {
+func (p *Provider) fail(kind llm.ErrorKind, err error) error { return p.failure(kind, err) }
+
+// failure is [Provider.fail] as its concrete type, for a caller that adds to
+// it.
+func (p *Provider) failure(kind llm.ErrorKind, err error) *llm.Error {
 	return &llm.Error{Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model,
 		Key: p.key, Err: err}
 }

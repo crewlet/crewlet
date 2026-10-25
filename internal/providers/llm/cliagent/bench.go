@@ -113,7 +113,7 @@ func (p *Provider) benched() error {
 // so a caller telling a person to wait can name the instant without reading
 // it out of the vendor's sentence.
 func (p *Provider) limited(err error, until time.Time) error {
-	failure := p.fail(llm.KindRateLimit, err).(*llm.Error)
+	failure := p.failure(llm.KindRateLimit, err)
 	failure.RetryAt = until
 	return failure
 }
