@@ -418,7 +418,7 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 				// THE ENGINE'S OWN ANSWERS, not the provider's guess at
 				// them: which runners this build registers and what a
 				// sandbox can dial are facts about the process, and both
-				// decide whether an agent-mode entry works at all.
+				// decide whether a box-mode entry works at all.
 				AgentRunners: codingagent.Names(),
 				BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
 			})
