@@ -2011,6 +2011,9 @@ it makes no further request it would be billed for.
 - **A call is the phase's, not the connection's.** It runs under the phase's
   context, so a CLI that gives up on it, or dies, cancels nothing a tool is
   half-way through writing; its result is recorded either way.
+- **A run that is over takes no call.** Each run's session hands its calls to
+  that run alone, so a call that still reaches one once its CLI was released is
+  refused and never runs — for that run, or for whichever run is out by then.
 
 Every refusal is a failed result the model reads, and carries its class on the
 record, as any tool's failure does.
