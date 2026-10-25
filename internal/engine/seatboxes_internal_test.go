@@ -16,7 +16,7 @@ import (
 // runs and what its box is given, made before anything is built so that
 // validation can refuse a setup file a box would refuse. Its own test holds it
 // to a table; this one holds it to the engine, seat by seat: whether the seat's
-// executor is an agent-mode launcher, which is what keeps run_sandbox off its
+// executor is a box-mode launcher, which is what keeps run_sandbox off its
 // surface; the cell that launcher carries, or the run_sandbox gate's, each
 // resolved through the manager's own default, as BuildSpec resolves it at
 // launch; and the steps the engine's runEnvironment hands the box. A change to
@@ -24,7 +24,7 @@ import (
 // judging cells and steps no box runs.
 //
 // The company covers every shape a seat's boxes take: a gate naming its cell,
-// a gate falling to the catalogue's default, a gate that is off, an agent-mode
+// a gate falling to the catalogue's default, a gate that is off, a box-mode
 // seat with no gate, one whose gate says `self`, one whose gate names a cell of
 // its own (which a write refuses and a stored revision may still carry, so it
 // is read without validation), and a person, who runs no turn.
@@ -41,8 +41,8 @@ providers:
   llm:
     main:
       model: claude-golden
-    sub: {agent: claude-code, model: sonnet, mode: agent, run_in: e2b, state_dir: %[1]q}
-    deflt: {agent: claude-code, model: sonnet, mode: agent, state_dir: %[1]q}
+    sub: {agent: claude-code, model: sonnet, mode: box, run_in: e2b, state_dir: %[1]q}
+    deflt: {agent: claude-code, model: sonnet, mode: box, state_dir: %[1]q}
 roles:
   - name: Founder
     handle: founder

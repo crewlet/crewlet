@@ -219,7 +219,7 @@ roles:
 // AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
 //
 // The run used to be handed a FAMILY instead — the profile's vendor — from
-// which OpenCode rebuilt `anthropic/<model>`. So an agent-mode OpenCode entry
+// which OpenCode rebuilt `anthropic/<model>`. So a box-mode OpenCode entry
 // ran its box on a model its text calls never named, and no value of `model`
 // worked for both. The model is resolved (a `${VAR}` reaches the CLI as its
 // value) and passed as written.
@@ -235,7 +235,7 @@ providers:
     oc:
       agent: opencode
       model: ${OC_MODEL}
-      mode: agent
+      mode: box
 roles:
   - name: Engineer
     handle: eng
@@ -278,7 +278,7 @@ providers:
     oc:
       agent: opencode
       model: anthropic/claude-sonnet-5
-      mode: agent
+      mode: box
 roles:
   - name: Engineer
     handle: eng
@@ -462,7 +462,7 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	t.Parallel()
 	// EXACTLY ONE CELL IS EXEMPT, and it is exempt because it is not a
-	// backend: `self` is the executor's own agent-mode run, so nothing
+	// backend: `self` is the executor's own box-mode run, so nothing
 	// builds a provider for it. Asserted rather than assumed, so a fifth
 	// cell added tomorrow cannot quietly join the exemption.
 	for _, p := range config.Placements {

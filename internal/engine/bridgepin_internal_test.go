@@ -46,7 +46,7 @@ func (h *heldTool) Call(ctx context.Context, _ map[string]any) (tools.Result, er
 	return tools.Result{Output: h.name + " done"}, nil
 }
 
-// bridgedRun is an agent-mode run launched through the real launcher onto a
+// bridgedRun is a box-mode run launched through the real launcher onto a
 // bridge a test can dial: the engine, the run's row store, and the client
 // session its box would hold.
 type bridgedRun struct {
@@ -54,7 +54,7 @@ type bridgedRun struct {
 	session *mcp.ClientSession
 }
 
-// launchBridged launches turnID's executor as an agent-mode run over a surface
+// launchBridged launches turnID's executor as a box-mode run over a surface
 // offering the given tools, and dials its bridge the way the box's own coding
 // agent would.
 func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {

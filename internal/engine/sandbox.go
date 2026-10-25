@@ -95,7 +95,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 // sandboxRunners is every coding agent this build can drive.
 //
 // A FUNCTION rather than a literal at the one call site, because a second
-// reader needs the same list: `crewlet llm doctor` refuses an agent-mode entry
+// reader needs the same list: `crewlet llm doctor` refuses a box-mode entry
 // whose CLI has no runner, and it checks against codingagent.Names(). A test
 // holds the two together — a drift would have the doctor pass an entry the
 // engine then refuses at the seat's first turn.
@@ -306,9 +306,9 @@ type runEnv struct {
 // runEnvironment is one coding run's environment and provisioning: the
 // provider-wide setup steps, then the seat's own, and the run environment
 // they, the seat's sandbox block and the engine assemble. ONE PLACE FOR BOTH
-// LAUNCH PATHS — the run_sandbox tool and an agent-mode executor — because a
+// LAUNCH PATHS — the run_sandbox tool and a box-mode executor — because a
 // box is provisioned the same way whichever of them opens it. Nil-safe on the
-// gate, since an agent-mode executor runs in a box whether or not the seat
+// gate, since a box-mode executor runs in a box whether or not the seat
 // has a sandbox block of its own, and on c, a box launched with no company to
 // read a provisioning plan from — every variable is then the operator's.
 //
@@ -973,8 +973,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 					DeliveredRefs: in.DeliveredRefs,
 					RefsElided:    in.RefsElided,
 				},
-				// THE RUN'S OWN TOOL CALLS, off its durable row. An
-				// agent-mode executor called them over the bridge, possibly
+				// THE RUN'S OWN TOOL CALLS, off its durable row. A
+				// box-mode executor called them over the bridge, possibly
 				// in another process, so this list is the only record of
 				// what the phase did — its submission included.
 				Bridged: bridgedCalls(in.Run.BridgeCalls),
@@ -1344,7 +1344,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	}
 	if config.Placement(gate.RunIn) == config.PlacementSelf {
 		// `self` means this seat's code work rides its own executor run,
-		// which is a coding CLI in agent mode and already holds a shell,
+		// which is a coding CLI in box mode and already holds a shell,
 		// an editor and a checkout. A second box beside it would give the
 		// seat two filesystems with the work in the one the turn cannot
 		// see — so the tool refuses and says which shell to use, rather
@@ -1684,7 +1684,7 @@ func (e *Engine) boxServers(
 // input carry a pointer rather than a sentinel number. A negative value never
 // reaches here: role validation refuses it.
 //
-// NIL-SAFE, like [maxTurnsFor] and for the same seat: an agent-mode executor
+// NIL-SAFE, like [maxTurnsFor] and for the same seat: a box-mode executor
 // is placed by its own providers.llm entry and runs in a box whether or not
 // role.sandbox was ever written, and reading the override off a block that
 // does not exist panicked that seat's first launch — after the bridge session
@@ -1778,7 +1778,7 @@ func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
 // the second of those that had no path at all — the coordinator was built at
 // boot or never, so a node started unconfigured (the quickstart's own route)
 // or on a company with no providers.sandbox served every later revision's
-// code-enabled seats with no run_sandbox, no agent-mode executor and no way to
+// code-enabled seats with no run_sandbox, no box-mode executor and no way to
 // finish a run a peer had left on one of its seats, until the process
 // restarted. Once up, a revision only swaps the manager ([Engine.Apply]'s
 // `sandbox` stage), because the busy set and the poll loop are this process's.
@@ -2665,7 +2665,7 @@ type codingRun struct {
 // TWO CALLERS, TWO PHASES, and the difference is load-bearing. A run_sandbox
 // call is CODE WORK the executor delegated, so it runs on llm_sandbox — a seat
 // legitimately points that at a cheaper or more code-shaped model than the one
-// it thinks with. An AGENT-MODE run is the executor ITSELF, so it runs on the
+// it thinks with. A BOX-MODE run is the executor ITSELF, so it runs on the
 // executor's own entry: sending it to llm_sandbox would run a seat's whole turn
 // on the model it chose for a subordinate job, silently, on any seat that set
 // both.
@@ -2677,7 +2677,7 @@ type codingRun struct {
 // CLI's runner cannot work: Claude Code was handed an OpenCode entry's
 // `openrouter/anthropic/claude-sonnet-5`, and OpenCode a Claude Code entry's
 // `sonnet` with a login it never reads, each starting a box that failed inside
-// it. An agent-mode run never meets this while its turn's epoch holds: its
+// it. A box-mode run never meets this while its turn's epoch holds: its
 // runner is its entry's own CLI. Config refuses the same pairing on a write
 // ([config.Company.validateSandboxCodingAgents]) and both say one sentence
 // ([config.CodingAgentMismatch]).
@@ -2815,8 +2815,8 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 //
 // THE PHASE IS THE CALLER'S, and it is the same phase the caller resolved the
 // run's model with — see [runLLM]. A run_sandbox launch runs on llm_sandbox
-// and an agent-mode run on the executor's own entry, and a guard that always
-// asked llm_sandbox inspected the wrong provider for every agent-mode seat
+// and a box-mode run on the executor's own entry, and a guard that always
+// asked llm_sandbox inspected the wrong provider for every box-mode seat
 // that set both: it waved through a remote run whose CLI had no token, and
 // refused one whose executor entry would have minted one.
 func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sandbox.Placement, env map[string]string) error {

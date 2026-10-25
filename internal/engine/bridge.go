@@ -24,7 +24,7 @@ import (
 // bridgedCalls turns a run's durable bridged-call log into the ledger shape
 // the resumed phase reads.
 //
-// THE ONLY RECORD AN AGENT-MODE RESUME HAS. The process collecting a run may
+// THE ONLY RECORD A BOX-MODE RESUME HAS. The process collecting a run may
 // not be the one that launched it, so its tool surface is fresh and has
 // executed nothing: the delivery check, the submission's citations and the
 // iteration ledger all read this list. A call whose arguments cannot be

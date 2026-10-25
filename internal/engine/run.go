@@ -419,7 +419,7 @@ type Engine struct {
 
 	// bridge serves a running seat's tool surface to a coding agent over
 	// MCP. Nil where no bridge URL is configured, which is every
-	// deployment that runs no agent mode.
+	// deployment that runs no box mode.
 	bridge *mcpbridge.Bridge
 
 	// reflector is the learning write side: one dispatcher for the life of

@@ -15,12 +15,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Agent mode's engine half: turning a seat's executor into a detached run of
+// Box mode's engine half: turning a seat's executor into a detached run of
 // the coding CLI its provider names.
 //
 // EVERY MOVING PART HERE ALREADY EXISTED, which is the point of the shape.
 // The detachment, the durable row, the completion poll, the claim and the
-// re-entry are the sandbox layer's, unchanged — an agent-mode executor is a
+// re-entry are the sandbox layer's, unchanged — a box-mode executor is a
 // coding run whose brief is the turn's ask rather than a code task, with the
 // seat's system prompt as its standing instructions. The tool surface is the
 // bridge's, unchanged. What this file adds is the wiring and the refusals that
@@ -59,8 +59,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		coordinator, manager, pending = rt.coordinator, rt.coordinator.Manager(), rt.pending
 	}
 	if coordinator == nil || manager == nil || pending == nil {
-		return fmt.Errorf("this seat's executor is a coding CLI in agent mode, which "+
-			"runs in a box: configure providers.sandbox, or set `mode: text` on "+
+		return fmt.Errorf("this seat's executor is a coding CLI in box mode, which "+
+			"runs in a box: configure providers.sandbox, or set `mode: host` on "+
 			"providers.llm.%s", l.codingAgent)
 	}
 	// A BRIDGE NOTHING SERVES IS REFUSED BY NAME, before Open, because the
@@ -70,7 +70,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// Open refuses the same case on its own; asking here is what lets the
 	// error say which.
 	if e.bridge != nil && !e.bridge.Mounted() {
-		return fmt.Errorf("agent mode needs this node to serve its tool bridge, and "+
+		return fmt.Errorf("box mode needs this node to serve its tool bridge, and "+
 			"it serves none: %s is set but this node binds no HTTP listener; set "+
 			"api.port on this node and point %s at that listener as a sandbox "+
 			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
@@ -81,7 +81,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// nothing — and its empty answer would otherwise be reported below as a
 	// missing bridge URL, sending an operator to a variable that is set.
 	if req.Surface == nil || req.Surface.Turn().Handle() == "" {
-		return fmt.Errorf("the agent-mode executor's tool surface is bound to no " +
+		return fmt.Errorf("the box-mode executor's tool surface is bound to no " +
 			"seat, so a bridged call would have nobody to act as; this is an " +
 			"assembly fault in the runner, not a setting")
 	}
@@ -102,7 +102,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// touch a ticket and cannot submit its work — it would burn a
 		// subscription producing prose nothing collects, and the turn
 		// would be rescued as incomplete with no sign of why.
-		return fmt.Errorf("agent mode needs a tool bridge the box can dial, and this "+
+		return fmt.Errorf("box mode needs a tool bridge the box can dial, and this "+
 			"engine has none: set %s to a URL a sandbox can reach", mcpbridge.BaseURLVar)
 	}
 
@@ -174,12 +174,12 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	return nil
 }
 
-// executorRun is the [codingRun] an agent-mode run works under.
+// executorRun is the [codingRun] a box-mode run works under.
 //
 // THE EXECUTOR'S OWN ENTRY, not llm_sandbox — this run IS the executor. A
 // method rather than an inline call so the choice has a name a test can hold:
-// see [newCodingRun] for what the two phases mean, and why sending an
-// agent-mode run to llm_sandbox would silently run a seat's whole turn on the
+// see [newCodingRun] for what the two phases mean, and why sending a
+// box-mode run to llm_sandbox would silently run a seat's whole turn on the
 // model it chose for a subordinate job. Its runner is the one the turn
 // resolved from that same entry, so the run is refused only when an apply
 // since moved the executor onto another CLI.
@@ -235,7 +235,7 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn) r
 // an apply landed in between — and a turn whose executor changes runtime
 // halfway is one whose prompt was built for a loop that is not running.
 //
-// A nil launcher is the native tool loop, which is what every text-mode entry
+// A nil launcher is the native tool loop, which is what every host-mode entry
 // has.
 func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *agentLauncher {
 	if c.Models == nil {
@@ -258,7 +258,7 @@ func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *a
 	}
 }
 
-// agentPlacement is the cell an agent-mode entry runs in: its own `run_in`,
+// agentPlacement is the cell a box-mode entry runs in: its own `run_in`,
 // then the catalogue's default.
 //
 // Empty is a real answer and reaches the manager as one, where it resolves to
@@ -273,7 +273,7 @@ func agentPlacement(c *Company, key string) config.Placement {
 }
 
 // maxTurnsFor is a seat's coding-round cap, nil-safe on a seat with no
-// sandbox block at all — which an agent-mode seat legitimately is: its
+// sandbox block at all — which a box-mode seat legitimately is: its
 // executor runs in a box whether or not it was ever offered run_sandbox.
 func maxTurnsFor(gate *org.RoleSandbox) *int {
 	if gate == nil {

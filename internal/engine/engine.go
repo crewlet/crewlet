@@ -308,7 +308,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		},
 		Resume: in.Resume,
 		// The executor's RUNTIME: nil for the native tool loop, non-nil
-		// for a coding CLI in agent mode. Supplied by the caller rather
+		// for a coding CLI in box mode. Supplied by the caller rather
 		// than resolved here, because building it needs the engine and
 		// the turn — and there is one helper behind both call sites, so
 		// a turn cannot change runtime by being resumed.
