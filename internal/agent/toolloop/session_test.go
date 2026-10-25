@@ -176,7 +176,8 @@ func run(t *testing.T, cfg toolloop.Config) (*toolloop.Result, error) {
 
 // A PHASE ENDS AT ITS TERMINATOR, and the CLI makes no request after it: the
 // submission's answer is withheld until the run is stopped, so the model never
-// reads it and asks again.
+// reads it and asks again — and a second submission, which is what a model that
+// read it would make, never runs.
 //
 // Mutation: answer the terminator's call instead of withholding it, and the
 // script's response after it is played — a third round on the record.
@@ -186,7 +187,7 @@ func TestThePhaseEndsAtItsTerminatorWithNoFurtherRequest(t *testing.T) {
 	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
 		{Text: "posting", Calls: []llmtest.Call{{Name: "post", Args: `{"text":"hi"}`}}},
 		{Text: "submitting", Calls: []llmtest.Call{{Name: "submit_work", Args: `{}`}}},
-		{Text: "a response made after the phase was decided"},
+		{Text: "a response made after the phase was decided", Calls: []llmtest.Call{{Name: "submit_work"}}},
 	}}}}
 	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, TerminateAfter: []string{"submit_work"}})
 	if err != nil {
@@ -224,12 +225,15 @@ func TestThePhaseEndsAtItsTerminatorWithNoFurtherRequest(t *testing.T) {
 
 // A RUN THAT ENDS IN PROSE WITH ITS TERMINATOR OWED IS ASKED AGAIN, in a new
 // run carrying the conversation so far — and the corrective names the call
-// that finishes it.
+// that finishes it, by a message, never by forcing one. The measured case is a
+// submission's ARGUMENTS typed out as a fenced JSON block, which a model
+// reasonably takes for a structured answer: the corrective says JSON is not a
+// submission either, and the round is marked declined on the record.
 func TestARunEndingInProseIsCorrectedInTheNextRun(t *testing.T) {
 	t.Parallel()
-	surf := newSurface("submit_work")
+	surf := newSurface("comment_on_work_item", "submit_work")
 	prov := &llmtest.Script{Runs: []llmtest.Run{
-		{Responses: []llmtest.Response{{Text: "here is my report: all done"}}},
+		{Responses: []llmtest.Response{{Text: writtenSubmission}}},
 		{Responses: []llmtest.Response{{Text: "submitting", Calls: []llmtest.Call{{Name: "submit_work"}}}}},
 	}}
 	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, TerminateAfter: []string{"submit_work"}})
@@ -244,16 +248,25 @@ func TestARunEndingInProseIsCorrectedInTheNextRun(t *testing.T) {
 		t.Fatalf("%d runs, want the declined one and the corrected one", len(seen))
 	}
 	lastMsg := seen[1].Messages[len(seen[1].Messages)-1]
-	if lastMsg.Role != llm.RoleUser || !strings.Contains(lastMsg.Content, "`submit_work`") {
+	if lastMsg.Role != llm.RoleUser || !strings.Contains(lastMsg.Content, "`submit_work`") ||
+		!strings.Contains(lastMsg.Content, "JSON included") {
 		t.Errorf("the second run opened with %+v, want the corrective naming submit_work", lastMsg)
 	}
-	if len(res.Narration) == 0 || !res.Narration[0].Declined {
+	if res.RoundsUsed != 2 {
+		t.Errorf("rounds = %d, want 2 — the written submission ended the phase", res.RoundsUsed)
+	}
+	if len(res.Narration) == 0 || res.Narration[0].Round != 1 || !res.Narration[0].Declined {
 		t.Errorf("the declined response is not marked: %+v", res.Narration)
+	}
+	if res.EmptyAnswers != 0 {
+		t.Errorf("EmptyAnswers = %d, want 0 — the response said something", res.EmptyAnswers)
 	}
 }
 
 // A DETACHED TOOL PARKS THE PHASE WITH ITS CALL UNANSWERED: exactly one
-// dangling call in the conversation, which is what a resume checks.
+// dangling call in the conversation, which is what a resume checks — zero is
+// nothing to resume into, two a model that answers one and strands the other —
+// and it is the call the CLI named, under the id the resume answers.
 func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("run_sandbox", "submit_work")
@@ -261,7 +274,7 @@ func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	surf.results["run_sandbox"] = toolloop.ToolResult{Output: "started", Suspend: true,
 		SuspendPayload: map[string]any{"job": "j1"}}
 	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
-		{Text: "coding it", Calls: []llmtest.Call{{Name: "run_sandbox", Args: `{"task":"x"}`}}},
+		{Text: "coding it", Calls: []llmtest.Call{{ID: "call-1", Name: "run_sandbox", Args: `{"task":"x"}`}}},
 		{Text: "never reached"},
 	}}}}
 	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, AllowSuspend: true,
@@ -269,8 +282,9 @@ func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.Suspended || res.PendingToolName != "run_sandbox" || res.SuspendPayload["job"] != "j1" {
-		t.Fatalf("result %+v, want parked on run_sandbox with its payload", res)
+	if !res.Suspended || res.PendingToolName != "run_sandbox" || res.PendingToolCallID != "call-1" ||
+		res.SuspendPayload["job"] != "j1" {
+		t.Fatalf("result %+v, want parked on run_sandbox call-1 with its payload", res)
 	}
 	answered := map[string]bool{}
 	var calls []string
@@ -297,39 +311,80 @@ func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 }
 
 // THE FENCE STOPS THE NEXT CALL: a node whose lease moved runs nothing more,
-// and the loop returns the fence's own error.
+// and the loop returns the fence's own error. A response is ONE model request
+// and MANY calls, and the calls are what reach outside the engine, so the
+// fence closing between two calls of one response stops the rest of it too —
+// the chat post, the tracker write and the sandbox launch the node would
+// otherwise run on a seat a peer now holds.
 func TestAClosedFenceStopsTheNextCall(t *testing.T) {
 	t.Parallel()
-	moved := errors.New("the seat moved")
-	surf := newSurface("first", "second")
-	var closed sync.Once
-	fenced := false
-	var mu sync.Mutex
-	prov := &llmtest.Script{
-		Runs: []llmtest.Run{{Responses: []llmtest.Response{
+	for _, tc := range []struct {
+		name      string
+		responses []llmtest.Response
+	}{
+		{"between responses", []llmtest.Response{
 			{Calls: []llmtest.Call{{Name: "first"}}},
 			{Calls: []llmtest.Call{{Name: "second"}}},
-		}}},
-		Before: func(name string) {
-			if name == "second" {
-				closed.Do(func() { mu.Lock(); fenced = true; mu.Unlock() })
+		}},
+		{"between one response's calls", []llmtest.Response{
+			{Calls: []llmtest.Call{{Name: "first"}, {Name: "second"}, {Name: "second", Args: `{"n":2}`}}},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			moved := errors.New("the seat moved")
+			surf := newSurface("first", "second")
+			var mu sync.Mutex
+			fenced := false
+			// The lease moves while the first call runs.
+			surf.hook = func(_ context.Context, call llm.ToolCall) {
+				if call.Name == "first" {
+					mu.Lock()
+					fenced = true
+					mu.Unlock()
+				}
 			}
-		},
+			fence := func() error {
+				mu.Lock()
+				defer mu.Unlock()
+				if fenced {
+					return moved
+				}
+				return nil
+			}
+			prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: tc.responses}}}
+			_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, Fence: fence})
+			if !errors.Is(err, moved) {
+				t.Fatalf("Run returned %v, want the fence's error unwrapped", err)
+			}
+			if got := surf.calls(); !slices.Equal(got, []string{"first"}) {
+				t.Errorf("the surface ran %v after the fence closed", got)
+			}
+			if late := prov.Late(); late != 0 {
+				t.Errorf("the CLI asked its model %d time(s) after the fence closed", late)
+			}
+		})
 	}
-	fence := func() error {
-		mu.Lock()
-		defer mu.Unlock()
-		if fenced {
-			return moved
-		}
-		return nil
+}
+
+// THE FENCE RUNS BEFORE ANYTHING IS SPENT: a node whose lease moved stops before
+// it starts a CLI — no tokens, no tools.
+func TestTheFenceRunsBeforeAnythingIsSpent(t *testing.T) {
+	t.Parallel()
+	lost := errors.New("seat lost")
+	m := &refusingMeter{refuseOver: 1 << 30}
+	prov := &llmtest.Script{}
+	surf := newSurface("read")
+	_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, Budget: m,
+		Fence: func() error { return lost }})
+	if !errors.Is(err, lost) {
+		t.Fatalf("err = %v, want the caller's own sentinel unwrapped", err)
 	}
-	_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, Fence: fence})
-	if !errors.Is(err, moved) {
-		t.Fatalf("Run returned %v, want the fence's error", err)
+	if n := len(prov.Seen()); n != 0 {
+		t.Errorf("the CLI was started %d times past a closed fence", n)
 	}
-	if got := surf.calls(); !slices.Equal(got, []string{"first"}) {
-		t.Errorf("the surface ran %v after the fence closed", got)
+	if m.spent != 0 || len(surf.calls()) != 0 {
+		t.Errorf("%d tokens spent and %v run past a closed fence", m.spent, surf.calls())
 	}
 }
 
@@ -412,27 +467,36 @@ func TestTheRoundBudgetEndsTheRunAfterItsLastRoundsCalls(t *testing.T) {
 }
 
 // ARGUMENTS THAT DO NOT PARSE ARE ANSWERED, NOT RUN: running the call on an
-// empty object is a write the model never asked for.
+// empty object is a write the model never asked for. The model reads why, as a
+// FAILED result — the flag rides the tool message, which a backend renders as a
+// failure — and its corrected call runs; the response's other call runs as
+// normal.
 func TestArgumentsThatDoNotParseAreAnsweredNotRun(t *testing.T) {
 	t.Parallel()
-	surf := newSurface("post")
+	surf := newSurface("post", "read")
 	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
-		{Calls: []llmtest.Call{{Name: "post", Args: `["not", "an object"]`}}},
-		{Text: "I will stop"},
+		{Calls: []llmtest.Call{{ID: "bad", Name: "post", Args: `["not", "an object"]`}, {Name: "read"}}},
+		{Calls: []llmtest.Call{{Name: "post", Args: `{"body":"x"}`}}},
+		{Text: "done"},
 	}}}}
 	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := surf.calls(); len(got) != 0 {
-		t.Fatalf("the surface ran %v on arguments that did not parse", got)
+	if got := surf.calls(); !slices.Equal(got, []string{"read", "post"}) {
+		t.Fatalf("the surface ran %v, want the unparsed call skipped and its retry run", got)
 	}
 	got := prov.Results()
-	if len(got) != 1 || !got[0].Failed || !strings.Contains(got[0].Output, "was NOT run") {
+	if len(got) != 3 || !got[0].Failed || !strings.Contains(got[0].Output, "was NOT run") {
 		t.Errorf("the CLI was answered %+v, want the refusal saying why", got)
 	}
-	if len(res.Executions) != 1 || !res.Executions[0].Failed {
-		t.Errorf("executions %+v, want the refused call recorded as failed", res.Executions)
+	if first := res.Executions[0]; first.Name != "post" || !first.Failed ||
+		!strings.Contains(first.Output, "not a JSON object") || !first.StartedAt.IsZero() {
+		t.Errorf("first execution %+v, want a failed, untimed row naming why", first)
+	}
+	answer := toolResults(res.Messages)["bad"]
+	if !answer.Failed || !strings.Contains(answer.Content, "NOT run") {
+		t.Errorf("the conversation answers the call %+v, want a failed result saying it did not run", answer)
 	}
 }
 
