@@ -342,10 +342,11 @@ func TestTheSmokeTestAsksTheWayAPhaseAsks(t *testing.T) {
 	if len(req.Tools) != 1 || req.Tools[0].Name != "crewlet_smoke" {
 		t.Errorf("tools = %+v, want crewlet_smoke offered", req.Tools)
 	}
-	// Streamed, as a phase's round is, so the smoke test runs the argv
-	// and the stream reading a seat runs.
-	if !req.Streaming() {
-		t.Error("the smoke request is not streamed, so it proves an argv no phase runs")
+	// Watched for the live view as a phase's round is, and NOT asking for
+	// the token stream, so the smoke test runs the argv a seat runs.
+	if !req.Streaming() || req.StreamTokens {
+		t.Errorf("streaming %v, token stream %v: the smoke request is not a seat's round",
+			req.Streaming(), req.StreamTokens)
 	}
 }
 
@@ -359,13 +360,13 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
 		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
 		TokenUsage: "reported by CLI",
-		Smoke:      "ok — 812 in / 34 out",
+		Smoke:      "ok — 812 in / 34 out", StreamSmoke: "ok, 812 in / 34 out",
 	}
 	var out strings.Builder
 	d.Render(&out)
 	for _, want := range []string{
 		"provider", "cli agent", "binary", "version", "written for",
-		"state dir", "credentials", "token env", "sign-in", "token usage", "smoke test", "problems",
+		"state dir", "credentials", "token env", "sign-in", "token usage", "smoke test", "stream smoke", "problems",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report is missing the %q line:\n%s", want, out.String())

@@ -1235,11 +1235,12 @@ type Profile struct {
 // tokens instead: the arguments that switch it to an event stream, and how
 // that stream is read.
 //
-// CHOSEN PER CALL, NEVER PER ENTRY. Streaming is a property of one request
-// ([llm.Request.OnDelta]): the backend runs [Profile.Streamed] for a call
-// that asked to be streamed and the profile as written for every other, so
-// no entry, document or operator resource has a setting for it, and a call
-// nobody is watching never pays for the larger output.
+// CHOSEN PER CALL, NEVER PER ENTRY, and only on an explicit ask: the backend
+// runs [Profile.Streamed] for a call that is watched and asks for the token
+// stream ([llm.Request.StreamTokens]), and the profile as written for every
+// other, so no entry, document or operator resource has a setting for it, a
+// call nobody is watching never pays for the larger output, and a caller that
+// watches without asking (a seat's live view) keeps the argv it always ran.
 //
 // THE ARGUMENTS ARE APPENDED to complete_args (after a web denial has
 // replaced them), so every isolation and denial flag the call runs with is

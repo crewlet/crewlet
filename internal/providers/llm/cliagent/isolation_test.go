@@ -577,7 +577,7 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 				t.Errorf("web %q, local %q: an assistant profile denies both", p.EffectiveWebTools(), p.LocalTools)
 			}
 			// EVERY ARGV A CALL CAN RUN: the profile as written, and the
-			// streamed variant a call that asked to be streamed runs, which
+			// streamed variant a call asking for the token stream runs, which
 			// must keep every argument the denial states, in place, and
 			// only add to them.
 			streamed := p.Streamed()

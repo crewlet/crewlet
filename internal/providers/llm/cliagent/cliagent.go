@@ -115,7 +115,7 @@ type Provider struct {
 	agent     string
 	agentMode bool
 	profile   cliprofile.Profile
-	// streamed is the profile a call that asked to be streamed runs
+	// streamed is the profile a call asking for the token stream runs
 	// ([cliprofile.Profile.Streamed]): the profile itself where it has no
 	// streamed variant.
 	streamed cliprofile.Profile
@@ -396,8 +396,8 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer: the profile as written for Codex and the other
-	// stream CLIs, the streamed variant for a call that asked to be streamed
-	// on one that has it (see [Provider.profileFor]). The other two output
+	// stream CLIs, the streamed variant for a call that asked for the token
+	// stream on one that has it (see [Provider.profileFor]). The other two output
 	// modes are extracted from the WHOLE of stdout (a fenced block, one JSON
 	// document), so there is no faithful incremental view of them, and
 	// forwarding raw lines would stream a banner and a half-written fence as
@@ -564,14 +564,15 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 }
 
 // profileFor is the profile one call runs: the streamed variant for a call
-// that asked to be streamed, the profile as written for every other.
+// that is watched AND asked for the token stream ([llm.Request.StreamTokens]),
+// the profile as written for every other.
 //
-// PER CALL, as [llm.Request.OnDelta] makes streaming a property of one call:
-// a seat's round on the live view and a Dashboard Assistant answer stream,
-// and the summariser, the judges and the doctor's probes that watch nothing
-// keep the smaller output of the profile as written.
+// PER CALL, and only on the explicit ask: a Dashboard Assistant answer runs
+// the variant, while a seat's round, watched for its live view but not
+// asking, keeps the argv and the output shape it has always run, as do the
+// summariser and the judges that watch nothing.
 func (p *Provider) profileFor(req llm.Request) *cliprofile.Profile {
-	if req.Streaming() {
+	if req.Streaming() && req.StreamTokens {
 		return &p.streamed
 	}
 	return &p.profile
