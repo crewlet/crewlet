@@ -1,13 +1,13 @@
 // Replay captured server frames through the dashboard's OWN client.
 //
 // Not a test of the dashboard — its own Vitest suites in dashboard/ are that.
-// This is the last link of the server's end-to-end gate: the Go suite runs a
-// real company, captures every frame its WebSocket actually pushed, and hands
-// the file here. What runs against those bytes is the dashboard's OWN protocol
-// module — the same source its bundle contains, emitted once more as plain ESM
-// — through the real message dispatch, so the question it answers is the only
-// one that matters at that seam: NOT "did the server send something" but "does
-// the client understand what the server sent".
+// This is the last link of the server's end-to-end gate: golden_test.go, beside
+// it, runs a real company, captures every frame its WebSocket actually pushed,
+// and hands the file here. What runs against those bytes is the dashboard's OWN
+// protocol module — the same source its bundle contains, emitted once more as
+// plain ESM — through the real message dispatch, so the question it answers is
+// the only one that matters at that seam: NOT "did the server send something"
+// but "does the client understand what the server sent".
 //
 // The distinction is not academic. It was written because a full turn's worth
 // of `agents` pushes were being sent as an object keyed by role, while the
@@ -15,6 +15,11 @@
 // them: the server's own tests passed, the client's own tests passed, the
 // socket carried the frames, and the seat rendered idle from the first phase
 // to the last.
+//
+// It lives beside golden_test.go rather than under dashboard/ because it is
+// half of that test and not a test of the dashboard: the two change together —
+// what the Go half captures is what this half asserts — and nothing else runs
+// it.
 //
 // Usage: node replay.mjs <frames.json> <act.json> [--print]
 //
@@ -27,8 +32,77 @@
 // Exits non-zero with a diagnosis on stderr when the frames do not drive the
 // client to a coherent state.
 
-import { readFileSync } from "node:fs";
-import { PROTOCOL_URL } from "./dashboardRoot.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+// THE DASHBOARD UNDER TEST. CREWLET_DASHBOARD_ROOT names the tree; unset, it is
+// `static/dashboard`, the tree the binary embeds — the one that matters, since
+// this replay is the compatibility reference for the client's half of the wire
+// protocol and has to run against the bytes a browser is actually served.
+// golden_test.go always names it, so the gate never rests on the default.
+//
+// A relative value is read against the REPOSITORY. Read against the working
+// directory, `node internal/e2e/replay.mjs` at the root and `node replay.mjs`
+// here would test different trees; read against this file's own directory, as
+// it once was while its comment said the repository, `static/dashboard` named
+// a tree nobody has. The repository is the nearest directory above this file
+// holding a go.mod — the rule internal/sourcetree finds the module root by for
+// the Go half — never a counted `../..`, which every move would have to get
+// right again.
+//
+// Resolution is CHECKED rather than assumed. A wrong root would otherwise
+// surface as ERR_MODULE_NOT_FOUND on the protocol's import, which reads as a
+// missing dashboard file rather than as a missing dashboard.
+function dashboardDir(named) {
+  if (named && isAbsolute(named)) return resolve(named);
+  return resolve(repositoryRoot(), named || "static/dashboard");
+}
+
+function repositoryRoot() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (let dir = here; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, "go.mod"))) return dir;
+    if (dirname(dir) === dir) {
+      console.error(
+        `replay: no go.mod in any directory above ${here}, so there is no ` +
+          "repository to read CREWLET_DASHBOARD_ROOT against: name the tree " +
+          "to test by an absolute path",
+      );
+      process.exit(2);
+    }
+  }
+}
+
+const DASHBOARD_DIR = dashboardDir(process.env.CREWLET_DASHBOARD_ROOT);
+
+if (!existsSync(join(DASHBOARD_DIR, "index.html"))) {
+  console.error(
+    `replay: no dashboard at ${DASHBOARD_DIR} (no index.html there).\n` +
+      `Set CREWLET_DASHBOARD_ROOT to the tree to test, or leave it unset to ` +
+      `use the one in this checkout. If it is missing entirely, the built ` +
+      `dashboard has not been committed — run \`make dashboard\`.`,
+  );
+  process.exit(2);
+}
+
+// The wire protocol, as plain ESM.
+//
+// A SEPARATE build target from the application bundle (dashboard/
+// vite.protocol.config.ts): the app bundle is minified, code-split and boots
+// React against a DOM, none of which a Node process has. This one is the same
+// source, emitted once more unminified, so the replay runs the client's REAL
+// dispatch table rather than a re-implementation of it that could agree with a
+// server the dashboard does not.
+const PROTOCOL = join(DASHBOARD_DIR, "protocol.js");
+
+if (!existsSync(PROTOCOL)) {
+  console.error(
+    `replay: no protocol.js in ${DASHBOARD_DIR}. It is a second Vite build ` +
+      "target and easy to lose: `make dashboard` emits it beside the app bundle.",
+  );
+  process.exit(2);
+}
 
 // The browser bits the socket reaches for. This socket is never dialled — the
 // frames are fed straight to the message handler — but the module builds one
@@ -56,7 +130,7 @@ globalThis.fetch = async () => {
 // replay lets through is answered by the captured exchange below.
 globalThis.location = { origin: "http://replay.invalid" };
 
-const { Store, LiveSocket, act, SessionFloors, domainOf } = await import(PROTOCOL_URL.href);
+const { Store, LiveSocket, act, SessionFloors, domainOf } = await import(pathToFileURL(PROTOCOL).href);
 
 const [file, actFile, ...flags] = process.argv.slice(2);
 if (!file || !actFile || actFile.startsWith("--")) {

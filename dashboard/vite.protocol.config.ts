@@ -2,7 +2,7 @@
 //
 // internal/e2e/golden_test.go runs a real company, captures every frame its
 // WebSocket pushed, and replays those exact bytes through THE DASHBOARD'S OWN
-// client (tests/dashboard/js/replay.mjs). That gate is what caught a server
+// client (internal/e2e/replay.mjs). That gate is what caught a server
 // sending `agents` as an object while the client guarded on Array.isArray:
 // both sides' own suites passed and the seat rendered idle for a whole turn.
 //
