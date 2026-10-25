@@ -87,10 +87,10 @@ func (w *Writer) sealPage(page *wire.PageChip, aad string) (title, screen string
 	if page == nil {
 		return "", "", nil
 	}
-	if err := checkText("the page chip's title", page.Title, TitleMaxBytes); err != nil {
+	if err = checkText("the page chip's title", page.Title, TitleMaxBytes); err != nil {
 		return "", "", err
 	}
-	if err := checkText("the page chip's screen", page.Screen, TitleMaxBytes); err != nil {
+	if err = checkText("the page chip's screen", page.Screen, TitleMaxBytes); err != nil {
 		return "", "", err
 	}
 	title, err = w.sealer.sealString(page.Title, aad)
@@ -132,9 +132,9 @@ func (w *Writer) OpenTurn(ctx context.Context, c Call, t NewTurn) (int, statelog
 	subject, scope := ConversationSubject(t.Conversation), ScopeSet{Subject: true}
 	res, err := w.publish(ctx, request(subject, scope, c.OpID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			row, err := owned(ctx, tx, c.Owner, t.Conversation.String())
-			if err != nil {
-				return statelog.Decision{}, err
+			row, ownedErr := owned(ctx, tx, c.Owner, t.Conversation.String())
+			if ownedErr != nil {
+				return statelog.Decision{}, ownedErr
 			}
 			switch row.openTurn {
 			case t.Turn.String():

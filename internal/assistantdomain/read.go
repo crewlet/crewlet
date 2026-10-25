@@ -280,7 +280,7 @@ func (r *Reader) Conversations(ctx context.Context, owner uuid.UUID, cursor stri
 		return wire.ConversationList{}, err
 	}
 	list := wire.ConversationList{Conversations: []wire.ConversationSummary{}}
-	err = r.read(ctx, DomainScope(), true, func(tx *sql.Tx) error {
+	err = r.read(ctx, DomainScope(), true, func(tx *sql.Tx) (err error) {
 		args := []any{owner.String()}
 		where := `c.owner_id = ?`
 		if after != nil {
@@ -825,7 +825,7 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 		return Card{}, err
 	}
 	c.Type = wire.CardKind(kind)
-	if err := json.Unmarshal([]byte(apps), &c.Apps); err != nil {
+	if err = json.Unmarshal([]byte(apps), &c.Apps); err != nil {
 		return Card{}, fmt.Errorf("assistantdomain: card %s's apps: %w", id, err)
 	}
 	body, err := r.sealer.Open(sealed, AAD(c.Conversation, RecordCard, c.ID, ColumnBody))
@@ -868,9 +868,9 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 		return Proposal{}, err
 	}
 	open := func(sealed, column string) ([]byte, error) {
-		plain, err := r.sealer.Open(sealed, AAD(p.Conversation, RecordProposal, p.ID, column))
-		if err != nil {
-			return nil, fmt.Errorf("proposal %s's %s: %w", id, column, err)
+		plain, openErr := r.sealer.Open(sealed, AAD(p.Conversation, RecordProposal, p.ID, column))
+		if openErr != nil {
+			return nil, fmt.Errorf("proposal %s's %s: %w", id, column, openErr)
 		}
 		return plain, nil
 	}
@@ -888,7 +888,7 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
-	if err := json.Unmarshal(rawCard, &p.Card); err != nil {
+	if err = json.Unmarshal(rawCard, &p.Card); err != nil {
 		return Proposal{}, fmt.Errorf("assistantdomain: proposal %s's card: %w", id, err)
 	}
 	rawReceipt, err := open(receipt, ColumnReceipt)

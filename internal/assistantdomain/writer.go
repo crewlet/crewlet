@@ -426,8 +426,8 @@ func (w *Writer) RecordAuditRead(ctx context.Context, c Call, conversation uuid.
 	subject, scope := ConversationSubject(conversation), ScopeSet{Subject: true}
 	res, err := w.publish(ctx, request(subject, scope, c.OpID, statelog.PatternAdditive,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if _, found, err := readConversation(ctx, tx, conversation.String()); err != nil {
-				return statelog.Decision{}, err
+			if _, found, readErr := readConversation(ctx, tx, conversation.String()); readErr != nil {
+				return statelog.Decision{}, readErr
 			} else if !found {
 				return statelog.Decision{}, fmt.Errorf("%w: conversation %s",
 					ErrNotFound, conversation)

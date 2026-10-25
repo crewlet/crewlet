@@ -342,7 +342,7 @@ func removeConversation(ctx context.Context, tx *sql.Tx, c applyContext, convers
 	}
 	written := affected(res)
 	for _, table := range conversationTables {
-		res, err := tx.ExecContext(ctx,
+		res, err = tx.ExecContext(ctx,
 			`DELETE FROM `+table+` WHERE conversation_id = ?`, conversation)
 		if err != nil {
 			return written, fmt.Errorf("assistantdomain: purge conversation %s's "+
