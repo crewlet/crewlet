@@ -79,7 +79,7 @@ func principlesRead() Tool {
 			Facts: []cards.Fact{fact("Mission", "mission", tText),
 				fact("Vision", "vision", tText)},
 			Items: &cards.Items{Path: "policies", Kind: wire.ResourceUnit, Plain: true,
-				Prose: true},
+				Prose: true, Noun: wire.Noun{One: "policy", Many: "policies"}},
 			Open: &cards.Open{Screen: "principles"}}}),
 		Label: func(map[string]any) string { return "Reading the company's principles" },
 	}

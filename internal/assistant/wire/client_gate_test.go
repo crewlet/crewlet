@@ -129,6 +129,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantEntityCard":          reflect.TypeFor[wire.EntityCard](),
 		"AssistantFact":                reflect.TypeFor[wire.Fact](),
 		"AssistantEntityItem":          reflect.TypeFor[wire.EntityItem](),
+		"AssistantNoun":                reflect.TypeFor[wire.Noun](),
 		"AssistantProposalCard":        reflect.TypeFor[wire.ProposalCard](),
 		"AssistantChange":              reflect.TypeFor[wire.Change](),
 		"AssistantWord":                reflect.TypeFor[wire.Word](),

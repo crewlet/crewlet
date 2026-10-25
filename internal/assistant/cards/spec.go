@@ -112,7 +112,10 @@ type Items struct {
 	Plain bool
 	// Prose marks an item list a person or an agent wrote.
 	Prose bool
-	Open  *Open
+	// Noun is what one item and several are called ("policy", "policies"),
+	// which the drawer counts a folded card's list with.
+	Noun wire.Noun
+	Open *Open
 }
 
 // Open is the link a card, a row or an item opens: a screen of the link table
@@ -240,6 +243,10 @@ func (s Spec) Validate() error {
 			if it.Path == "" || (it.Label == "") != it.Plain || !it.Kind.Valid() {
 				return errors.New("cards: an entity's items need a path, a kind and a label " +
 					"path, or are plain values with none")
+			}
+			if it.Noun.One == "" || it.Noun.Many == "" {
+				return fmt.Errorf("cards: the items at %q need a noun for one and for many",
+					it.Path)
 			}
 			links = append(links, it.Open)
 		}
@@ -379,8 +386,8 @@ func buildTable(t *Table, doc any, now time.Time) (Built, error) {
 
 func buildEntity(e *Entity, doc any) (Built, error) {
 	record := lookup(doc, e.Root)
-	card := &wire.EntityCard{Kind: e.Kind, ID: text(lookup(record, e.ID)),
-		Title: text(lookup(record, e.Title)), Subtitle: text(lookup(record, e.Subtitle))}
+	card := &wire.EntityCard{Kind: e.Kind, ID: text(field(record, e.ID)),
+		Title: text(field(record, e.Title)), Subtitle: text(field(record, e.Subtitle))}
 	if card.Title == "" {
 		card.Title = card.ID
 	}
@@ -400,7 +407,7 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 		}
 	}
 	if e.Text != "" {
-		card.Text = text(lookup(record, e.Text))
+		card.Text = text(field(record, e.Text))
 	}
 	if e.Open != nil {
 		if link, err := linkFrom(e.Open, record); err == nil {
@@ -408,17 +415,22 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 		}
 	}
 	if it := e.Items; it != nil {
+		noun := it.Noun
+		card.ItemsNoun = &noun
 		list, _ := lookup(doc, it.Path).([]any)
 		for at, raw := range list {
-			item := wire.EntityItem{Kind: it.Kind, ID: text(lookup(raw, it.ID)),
-				Label: text(lookup(raw, it.Label)), Fact: text(lookup(raw, it.Fact))}
+			// AN ITEM'S PATHS NAME ITS FIELDS, and one left unnamed reads
+			// nothing: read with lookup, an empty path is the item itself, and
+			// a plain policy came out as its own label and again as its fact.
+			item := wire.EntityItem{Kind: it.Kind, ID: text(field(raw, it.ID)),
+				Label: text(field(raw, it.Label)), Fact: text(field(raw, it.Fact))}
 			if it.Plain {
 				// A PLAIN VALUE HAS NO ID OF ITS OWN: its place in the list
 				// is what tells two apart, from 1 as the page numbers them.
 				item.ID, item.Label = strconv.Itoa(at+1), text(raw)
 			}
 			if it.Depth != "" {
-				if n, err := strconv.Atoi(text(lookup(raw, it.Depth))); err == nil && n > 0 {
+				if n, err := strconv.Atoi(text(field(raw, it.Depth))); err == nil && n > 0 {
 					item.Depth = n
 				}
 			}
@@ -538,6 +550,16 @@ func lookup(v any, path string) any {
 		}
 	}
 	return v
+}
+
+// field is the value at a path that names a field, nil where the path names
+// none. Unlike [lookup], whose empty path is the value itself (an answer that
+// is its own record or list), an unnamed field is no value.
+func field(v any, path string) any {
+	if path == "" {
+		return nil
+	}
+	return lookup(v, path)
 }
 
 // cell is one value as a column of typ carries it: text for a text column,

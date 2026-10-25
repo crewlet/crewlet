@@ -89,7 +89,18 @@ type EntityCard struct {
 	// Markdown subset: no images, no raw HTML, no autolinks.
 	Text  string       `json:"text,omitempty"`
 	Items []EntityItem `json:"items,omitempty"`
-	Open  *Link        `json:"open,omitempty"`
+	// ItemsNoun is what one item and several are called ("policy",
+	// "policies"), so the drawer can say how many a folded card holds. Absent
+	// on a card with no list, and on one stored before it was carried.
+	ItemsNoun *Noun `json:"items_noun,omitempty"`
+	Open      *Link `json:"open,omitempty"`
+}
+
+// Noun is what one thing and several are called, in the lower case a count
+// is said with: "1 policy", "6 policies".
+type Noun struct {
+	One  string `json:"one"`
+	Many string `json:"many"`
 }
 
 // Fact is one labelled value on an entity card.
@@ -274,6 +285,9 @@ func (c Card) Validate() error {
 				return fmt.Errorf("%w: fact %q type %q is not one of %v", ErrInvalid,
 					f.Label, f.Type, ColumnTypes)
 			}
+		}
+		if n := c.Entity.ItemsNoun; n != nil && (n.One == "" || n.Many == "") {
+			return fmt.Errorf("%w: an entity's items noun names both one and many", ErrInvalid)
 		}
 		for _, item := range c.Entity.Items {
 			if !item.Kind.Valid() {

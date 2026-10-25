@@ -340,7 +340,15 @@ export interface AssistantEntityCard {
   facts?: AssistantFact[];
   text?: string;
   items?: AssistantEntityItem[];
+  /** What one item and several are called ("policy", "policies"), where the card has a list. */
+  items_noun?: AssistantNoun;
   open?: AssistantLink;
+}
+
+/** What one thing and several are called, in the lower case a count is said with. */
+interface AssistantNoun {
+  one: string;
+  many: string;
 }
 
 /** One labelled value on an entity card. */

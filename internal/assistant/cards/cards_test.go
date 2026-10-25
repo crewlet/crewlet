@@ -147,7 +147,8 @@ func TestAnEntityIsOneRecordFromItsAnswer(t *testing.T) {
 			{Label: "Took", Path: "took_ms", Type: wire.ColumnDuration},
 			{Label: "Status", Path: "status", Type: wire.ColumnLabel},
 			{Label: "Author", Path: "author", Type: wire.ColumnText}},
-		Items: &cards.Items{Path: "comments", Kind: wire.ResourcePage, ID: "id", Label: "body"},
+		Items: &cards.Items{Path: "comments", Kind: wire.ResourcePage, ID: "id", Label: "body",
+			Noun: wire.Noun{One: "comment", Many: "comments"}},
 		Open: &cards.Open{Screen: "page", Params: map[string]string{"id": "id"},
 			LabelFrom: "title"}}}
 	id := "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
@@ -176,6 +177,45 @@ func TestAnEntityIsOneRecordFromItsAnswer(t *testing.T) {
 	}
 	if e.Open == nil || e.Open.Href != "#/doclet/pages/"+id || e.Open.Label != "Runbook" {
 		t.Errorf("the entity opens %+v", e.Open)
+	}
+	if e.ItemsNoun == nil || *e.ItemsNoun != (wire.Noun{One: "comment", Many: "comments"}) {
+		t.Errorf("the items are called %+v", e.ItemsNoun)
+	}
+}
+
+// A PLAIN LIST IS ITS VALUES, each said once: an item path the spec leaves
+// unnamed reads nothing, where it used to read the item itself, so every
+// standing policy came out as its label and again as its fact. And a record
+// path left unnamed is no value either, so a card named by its spec takes no
+// id from the record's own name. Mutation: read item paths with lookup and
+// the fact is the policy again.
+func TestAPlainListSaysEachValueOnce(t *testing.T) {
+	t.Parallel()
+	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceUnit, Name: "Company principles",
+		Prose: true, Facts: []cards.Fact{{Label: "Mission", Path: "mission", Type: wire.ColumnText}},
+		Items: &cards.Items{Path: "policies", Kind: wire.ResourceUnit, Plain: true, Prose: true,
+			Noun: wire.Noun{One: "policy", Many: "policies"}}}}
+	if err := spec.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	answer, _ := json.Marshal(map[string]any{"name": "Acme", "mission": "Build trust.",
+		"policies": []any{"Reply within a day.", "Never share a secret."}})
+	built, err := cards.Build(spec, answer, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := built.Card.Entity
+	want := []wire.EntityItem{{Kind: wire.ResourceUnit, ID: "1", Label: "Reply within a day."},
+		{Kind: wire.ResourceUnit, ID: "2", Label: "Never share a secret."}}
+	if !reflect.DeepEqual(e.Items, want) {
+		t.Errorf("the policies are %+v, want each once as its label: %+v", e.Items, want)
+	}
+	if e.ID != "" || e.Title != "Company principles" {
+		t.Errorf("the card is %q named %q, want no id and the spec's name", e.ID, e.Title)
+	}
+	spec.Entity.Items.Noun = wire.Noun{}
+	if spec.Validate() == nil {
+		t.Error("a list with no noun to count it by validated")
 	}
 }
 
