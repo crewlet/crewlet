@@ -8,7 +8,7 @@ import { useMemo } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { Card, EmptyState, EmptyValue, Tag, InlineCode, TableTextCell } from "@crewlethq/ui";
 import { CalendarGlyph } from "@crewlethq/icons/glyphs";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { describe as describeCron } from "~/lib/cron.ts";

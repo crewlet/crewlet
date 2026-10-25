@@ -357,7 +357,6 @@ img {
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
 .working-now,
-.peek-grip,
 .list-row.clickable,
 .work-row,
 .turn-row,

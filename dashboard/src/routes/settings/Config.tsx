@@ -36,6 +36,7 @@ import {
   Tag,
   PageNote,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   FileTextGlyph,
@@ -51,7 +52,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
@@ -602,7 +603,7 @@ export function ConfigScreen({
    * revisions. The lens itself is not changed: a reader who is reading the
    * history asked for the history.
    *
-   * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy
+   * THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one copy
    * of which clicks mean elsewhere and reads a mouse event; the `enter` chord
    * carries no button at all and is never "open elsewhere".
    */
@@ -626,7 +627,7 @@ export function ConfigScreen({
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek, setRevision, setAgainst, lens],
   );

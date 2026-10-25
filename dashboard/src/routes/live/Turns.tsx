@@ -64,10 +64,11 @@ import {
   TableEntityCell,
   TableNumberCell,
   Tag,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -383,14 +384,14 @@ export function Turns() {
           rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
           onRowActivate={(t, e) => {
             const go = () => openPeek({ kind: "turn", id: t.turn_id });
-            // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's
+            // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's
             // one copy of "which clicks mean elsewhere" and reads a mouse
             // event; the `enter` chord carries no button at all.
             if (!("button" in e)) {
               go();
               return;
             }
-            rowPeekHandler(go)?.(e);
+            peekClickHandler(go)?.(e);
           }}
           columns={[
             {

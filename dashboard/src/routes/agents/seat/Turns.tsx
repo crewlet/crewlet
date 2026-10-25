@@ -45,7 +45,7 @@ import {
 } from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TurnWhatCell, UnsettledCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";

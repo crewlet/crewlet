@@ -61,7 +61,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildHash, href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
-import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {

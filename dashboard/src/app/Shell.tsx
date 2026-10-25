@@ -23,11 +23,11 @@
  *
  * # The peek is a column of the sheet
  *
- * It is the kit's `footer` slot, the one place inside the sheet and outside
- * `main`, and `frame.css` makes the sheet a grid while one is open at a width
- * that can hold it. Below that width the peek is a drawer over the screen. It
- * is not a child of the screen, because a peek mounted per screen is a peek
- * only the screens that remembered to mount one have.
+ * It is the kit's `peek` slot, beside `main` inside the sheet and under the
+ * bar, and the kit lays it out as a column while one is open at a width that
+ * can hold it. Below that width the peek is a drawer over the screen. It is
+ * not a child of the screen, because a peek mounted per screen is a peek only
+ * the screens that remembered to mount one have.
  *
  * THIS FILE DECIDES WHICH, because the width depends on two things only the
  * frame knows: whether the screen draws Settings' section column beside its
@@ -46,7 +46,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { AppShell, SectionFrame, useMediaMatch } from "@crewlethq/ui";
@@ -72,7 +71,7 @@ import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHead
 import { ProjectSwitcherProvider } from "./header/ProjectSwitcher.tsx";
 import { scopeAt } from "./scope.ts";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
-import { usePeek } from "./frame/DetailRail.tsx";
+import { usePeek } from "./frame/peekAddress.ts";
 import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
@@ -598,17 +597,19 @@ function Frame({ children }: { children: ReactNode }) {
       <PeekNeighbours>
         <AppShell
           className="app"
-          // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN — an
+          // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN (an
           // empty column would take its width from every screen that never
-          // opens one — and only where the frame has room for it; see
-          // `.app[data-peek]` in frame.css. The reserve is what the column's
-          // track leaves the list, so a dragged width cannot take it back.
-          data-peek={peekShape}
-          style={
-            peekShape === "column"
-              ? ({ "--peek-reserve": `${listReserve(frame)}px` } as CSSProperties)
-              : undefined
+          // opens one), and only where the frame has room for it. The kit
+          // publishes the shape as `data-peek`; the reserve is what the
+          // column leaves the list, so a dragged width cannot take it back.
+          peek={
+            peekShape && (
+              <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
+                <PeekHost reserve={peekShape === "column" ? listReserve(frame) : undefined} />
+              </PeekRestingWidth.Provider>
+            )
           }
+          peekShape={peekShape}
           mainId={SCREEN_SCROLL_ID}
           fill={filling}
           navigationKey={route.hash}
@@ -636,11 +637,6 @@ function Frame({ children }: { children: ReactNode }) {
                 <StateBar degraded={degraded} coverage={coverage} />
               </PageHeader>
             )
-          }
-          footer={
-            <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
-              <PeekHost />
-            </PeekRestingWidth.Provider>
           }
         >
           {row && sectionColumn > 0 ? (

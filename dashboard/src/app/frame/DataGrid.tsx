@@ -44,7 +44,7 @@ import {
 } from "@crewlethq/ui";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { useParam } from "../router.tsx";
-import { peekHref, usePeek } from "./DetailRail.tsx";
+import { peekHref, usePeek } from "./peekAddress.ts";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { useKeymap } from "../keymap.ts";
 
