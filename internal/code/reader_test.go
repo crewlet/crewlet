@@ -679,6 +679,53 @@ func TestPushesPageAcrossOneRecordWithoutLosingAny(t *testing.T) {
 	}
 }
 
+// A PUSH LISTING IS NEWEST IN LOG ORDER: the history pages by the position a
+// push landed at, newest first, its cursor `<position>/<push id>` — never by
+// the record's instant, which is the broker's and steps back across a stream
+// leader's change. Here every record is stamped a minute EARLIER than the one
+// before it, so an order by instant reads the history backwards.
+//
+// Mutation: order the listing by `at` again — the pushes come oldest first
+// (and the plan gate finds it sorting every push of the repository).
+func TestAPushListingIsNewestInLogOrder(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	n.storedAt = func(seq uint64, _ time.Time) time.Time {
+		return harnessAt.Add(-time.Duration(seq) * time.Minute)
+	}
+	var landed []string
+	var positions []statelog.Position
+	for i := range 4 {
+		push := fmt.Sprintf("push-%d", i)
+		positions = append(positions, n.push(id, entry(push,
+			set(fmt.Sprintf("refs/heads/b%d", i), code.ZeroOID, oidOf(push)))).Position)
+		landed = append([]string{push}, landed...)
+	}
+	var got, cursors []string
+	q := code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app", Limit: 1}
+	for range 10 {
+		answer, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("Read(pushes): %v", err)
+		}
+		for _, p := range answer.Pushes {
+			got = append(got, p.PushID)
+		}
+		if answer.Next == "" {
+			break
+		}
+		cursors = append(cursors, answer.Next)
+		q.Cursor = answer.Next
+	}
+	if fmt.Sprint(got) != fmt.Sprint(landed) {
+		t.Fatalf("the history reads %v, want %v: newest first by the position each landed at", got, landed)
+	}
+	if want := fmt.Sprintf("%d/push-3", positions[3].Packed()); len(cursors) == 0 || cursors[0] != want {
+		t.Fatalf("the first page's cursor is %v, want %q: <packed position>/<push id>", cursors, want)
+	}
+}
+
 // A CODE READ STATES ITS FRESHNESS: a point read and a snapshot's first page
 // name their level, a session read names the position it waits for, and a
 // person's listing is never a session read.
@@ -862,22 +909,12 @@ func TestPushOutcomeIsFinalOnlyAtItsPosition(t *testing.T) {
 	}
 }
 
-// A `VISIBILITY: UNIT` REPOSITORY IS READ ONLY BY ITS READERS: a seat lists,
-// details and pages the history of exactly the repositories its grant reads,
-// each listed with its access; a seat the visibility shuts out is refused the
-// detail and the history by a sentence naming why and who does read it, while
-// a repository that does not exist is still not found; a person, bound or
-// not, reads every repository whatever its visibility; and a listing page of
-// repositories the asker may not read is an empty page with a cursor, never
-// the listing's end.
-//
-// Mutations: the listing not filtering → vp-sales lists plat-private; the
-// detail or the history not judging the grant → vp-sales reads them; the
-// cursor taken from the kept rows → vp-sales's one-row listing ends at its
-// first, empty, page; the visibility read for a person → the bound person
-// and the unbound token list two.
-func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
-	t.Parallel()
+// unitRepos is a node judging seats by [testChart], holding three
+// repositories — plat-private (`visibility: unit`, Platform's, its main at
+// "secret"), platform (`visibility: company`, Platform's) and sales-private
+// (`visibility: unit`, Sales') — and plat-private's id.
+func unitRepos(t *testing.T) (*node, string) {
+	t.Helper()
 	n := newNode(t)
 	n.chart = testChart()
 	declare := func(name, unit string, v code.Visibility) string {
@@ -890,6 +927,23 @@ func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
 	declare("platform", "Platform", code.VisibilityCompany)
 	declare("sales-private", "Sales", code.VisibilityUnit)
 	n.push(private, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("secret"))))
+	return n, private
+}
+
+// A `VISIBILITY: UNIT` REPOSITORY IS READ ONLY BY ITS READERS: a seat lists,
+// details and pages the history of exactly the repositories its grant reads,
+// each listed with its access; a person, bound or not, reads every repository
+// whatever its visibility; and a listing page of repositories the asker may
+// not read is an empty page with a cursor, never the listing's end. (An
+// outsider's read of one is TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted.)
+//
+// Mutations: the listing not filtering → vp-sales lists plat-private; the
+// cursor taken from the kept rows → vp-sales's one-row listing ends at its
+// first, empty, page; the visibility read for a person → the bound person
+// and the unbound token list two.
+func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
+	t.Parallel()
+	n, _ := unitRepos(t)
 
 	// listing is every repository who lists, by name, at its access, paged
 	// limit rows at a time; and how many pages that took.
@@ -944,18 +998,6 @@ func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
 			"in four", got, pages)
 	}
 
-	for _, kind := range []code.ReadKind{code.ReadRepo, code.ReadPushes} {
-		_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("vp-sales"), Kind: kind, Repo: "plat-private"})
-		if !errors.Is(err, code.ErrNotPermitted) || !strings.Contains(err.Error(), "visibility: unit") ||
-			!strings.Contains(err.Error(), `unit "Platform"`) {
-			t.Errorf("vp-sales's %s of plat-private = %v, want ErrNotPermitted naming the visibility "+
-				"and who reads it", kind, err)
-		}
-		_, err = n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("vp-sales"), Kind: kind, Repo: "nope"})
-		if !errors.Is(err, code.ErrRepoNotFound) {
-			t.Errorf("vp-sales's %s of a repository nobody declared = %v, want ErrRepoNotFound", kind, err)
-		}
-	}
 	for who, want := range map[string]string{"dev": "write", "cto": "read"} {
 		detail, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent(who), Kind: code.ReadRepo, Repo: "plat-private"})
 		if err != nil || detail.Repo == nil || detail.Repo.Access != want || detail.Repo.Head != oidOf("secret") {
@@ -965,16 +1007,10 @@ func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
 		if err != nil || len(pushes.Pushes) != 1 {
 			t.Errorf("%s's history of plat-private = %+v, %v; want its one push", who, pushes.Pushes, err)
 		}
-	}
-
-	// NO CHART, NO SEAT READS: a reader with no roster holds every agent to
-	// nothing, and a person still to everything.
-	n.chart = nil
-	if got, _ := listing(agent("dev"), 0); len(got) != 0 {
-		t.Errorf("with no chart dev lists %v, want nothing", got)
-	}
-	if got, _ := listing(asker, 0); len(got) != 3 {
-		t.Errorf("with no chart the person lists %v, want all three", got)
+		refs, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent(who), Kind: code.ReadRefs, Repo: "plat-private"})
+		if err != nil || len(refs.Refs) != 1 || refs.Repo == nil || refs.Repo.Access != want {
+			t.Errorf("%s's refs of plat-private = %+v, %v; want main, with the detail at %s", who, refs, err, want)
+		}
 	}
 
 	for name, who := range map[string]code.Principal{
@@ -986,5 +1022,113 @@ func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
 		if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "asker") {
 			t.Errorf("%s: Read = %v, want ErrInvalid naming the asker", name, err)
 		}
+	}
+}
+
+// A READ OF A UNIT REPOSITORY BY AN OUTSIDER IS NOT PERMITTED: its detail, its
+// history, its refs and any one ref resolved are refused a seat the
+// visibility shuts out — after the row is read, by a sentence naming why and
+// who does read it — while a repository nobody declared is still not found,
+// and a person resolves the same ref.
+//
+// Mutation: any of the four not judging the grant → vp-sales reads it.
+func TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted(t *testing.T) {
+	t.Parallel()
+	n, _ := unitRepos(t)
+	reads := map[string]func(repo string) error{}
+	for _, kind := range []code.ReadKind{code.ReadRepo, code.ReadPushes, code.ReadRefs} {
+		reads[string(kind)] = func(repo string) error {
+			_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("vp-sales"), Kind: kind, Repo: repo})
+			return err
+		}
+	}
+	reads["ResolveRef"] = func(repo string) error {
+		_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: agent("vp-sales"), Repo: repo,
+			Ref: "main", Fresh: stale})
+		return err
+	}
+	for name, read := range reads {
+		err := read("plat-private")
+		if !errors.Is(err, code.ErrNotPermitted) || !strings.Contains(err.Error(), "visibility: unit") ||
+			!strings.Contains(err.Error(), `unit "Platform"`) {
+			t.Errorf("vp-sales's %s of plat-private = %v, want ErrNotPermitted naming the visibility "+
+				"and who reads it", name, err)
+		}
+		if err := read("nope"); !errors.Is(err, code.ErrRepoNotFound) {
+			t.Errorf("vp-sales's %s of a repository nobody declared = %v, want ErrRepoNotFound", name, err)
+		}
+	}
+	got, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: asker, Repo: "plat-private", Ref: "main",
+		Fresh: stale})
+	if err != nil || got.OID != oidOf("secret") {
+		t.Fatalf("the person's resolve of plat-private's main = %+v, %v", got, err)
+	}
+}
+
+// A READER WITH NO CHART REFUSES ABOUT ITSELF (M3-O82). Between the start of a
+// node's code reader and the install of its first epoch — every boot, and a
+// first apply that reconciles code.repos before it installs the epoch — the
+// node holds no chart, and a seat's read there is refused ErrNotServing: a
+// refusal about the READER, which the estate reads as a node that ran
+// nothing and asks a peer, never a definite "not permitted" or a listing with
+// every repository left out, which every peer holding a chart contradicts. A
+// roster that answers nil and no roster at all are the same; a person's read
+// asks no chart and is answered; and once the chart is there, the seat is
+// judged by it — a chart that denies is the answer again.
+//
+// Mutation: answer AccessNone again with no chart → the seat's listing is
+// served empty and every other read refused not_permitted.
+func TestAReaderWithNoChartRefusesAboutItself(t *testing.T) {
+	t.Parallel()
+	n, private := unitRepos(t)
+	unrostered, err := code.NewReader(code.ReaderOptions{Log: n.authority})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	reads := func(r *code.Reader, who code.Principal) map[string]func() error {
+		read := func(q code.ReadQuery) func() error {
+			return func() error {
+				q.Asker = who
+				_, err := r.Read(t.Context(), q)
+				return err
+			}
+		}
+		return map[string]func() error{
+			"repos":  read(code.ReadQuery{Kind: code.ReadRepos}),
+			"repo":   read(code.ReadQuery{Kind: code.ReadRepo, Repo: "platform"}),
+			"pushes": read(code.ReadQuery{Kind: code.ReadPushes, Repo: "plat-private"}),
+			"refs":   read(code.ReadQuery{Kind: code.ReadRefs, Repo: "plat-private"}),
+			"resolve ref": func() error {
+				_, err := r.ResolveRef(t.Context(), code.RefQuery{Asker: who, Repo: "plat-private", Ref: "main",
+					Fresh: stale})
+				return err
+			},
+		}
+	}
+	n.chart = nil
+	for reader, r := range map[string]*code.Reader{"a roster answering none": n.reader, "no roster": unrostered} {
+		for name, read := range reads(r, agent("dev")) {
+			err := read()
+			if !errors.Is(err, code.ErrNotServing) || errors.Is(err, code.ErrNotPermitted) ||
+				!strings.Contains(err.Error(), "holds no chart") {
+				t.Errorf("%s: a seat's %s = %v, want ErrNotServing saying this node holds no chart", reader,
+					name, err)
+			}
+		}
+		for name, read := range reads(r, asker) {
+			if err := read(); err != nil {
+				t.Errorf("%s: a person's %s = %v, want it answered: no chart decides a person", reader, name, err)
+			}
+		}
+	}
+
+	n.chart = testChart()
+	for name, read := range reads(n.reader, agent("dev")) {
+		if err := read(); err != nil {
+			t.Errorf("with the chart, dev's %s = %v, want it answered", name, err)
+		}
+	}
+	if err := reads(n.reader, agent("vp-sales"))["refs"](); !errors.Is(err, code.ErrNotPermitted) {
+		t.Errorf("with the chart, vp-sales's refs of %s = %v, want the chart's own refusal", private, err)
 	}
 }

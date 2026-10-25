@@ -54,13 +54,22 @@ type StateQuery struct {
 	Fresh statelog.Freshness `json:"fresh"`
 	// Cursor is nil for the first page, and the Next a page answered after.
 	Cursor *StateCursor `json:"cursor,omitempty"`
+	// Pushes asks a DELTA for its pushes phase: every push of the repository
+	// applied in (Since, the snapshot's position], in log order — what a git
+	// node's cache folds into its index of which push introduced each commit
+	// before the round answers, so the index is level with the copy. Ignored
+	// by a full answer, whose pushes that index reads with the `introduced`
+	// read instead. READ ON THE FIRST PAGE ONLY, as Since is: a later page
+	// carries it in its cursor.
+	Pushes bool `json:"pushes,omitempty"`
 }
 
 // The snapshot's phases, in the order a snapshot serves them.
 const (
-	phasePacks = "packs"
-	phaseRefs  = "refs"
-	phaseTail  = "tail"
+	phasePacks  = "packs"
+	phaseRefs   = "refs"
+	phasePushes = "pushes"
+	phaseTail   = "tail"
 )
 
 // StateCursor is where a snapshot resumes. OPAQUE to its caller, which hands
@@ -68,9 +77,13 @@ const (
 // on ([ErrBadCursor] otherwise).
 type StateCursor struct {
 	Full bool `json:"full"`
-	// Phase is "packs", then "refs", then — on a snapshot of more than one
-	// page — "tail".
+	// Phase is "packs", then "refs", then — on a delta whose first page
+	// asked for it — "pushes", then — on a snapshot of more than one page —
+	// "tail".
 	Phase string `json:"phase"`
+	// Pushes is page 1's StateQuery.Pushes on a delta, carried to every
+	// later page; false on a full answer, which serves no pushes phase.
+	Pushes bool `json:"pushes,omitempty"`
 	// From is page 1's checkpoint: the position the WHOLE snapshot answers
 	// as of.
 	From statelog.Position `json:"from"`
@@ -96,11 +109,16 @@ type RepoSnapshot struct {
 	// every page.
 	Position statelog.Position `json:"position"`
 	// StreamCreated is page 1's checkpoint's stream identity, on every page.
-	StreamCreated time.Time    `json:"stream_created"`
-	Full          bool         `json:"full"`
-	Packs         []PackRow    `json:"packs,omitempty"`
-	Refs          []RefRow     `json:"refs,omitempty"`
-	Next          *StateCursor `json:"next,omitempty"`
+	StreamCreated time.Time `json:"stream_created"`
+	Full          bool      `json:"full"`
+	Packs         []PackRow `json:"packs,omitempty"`
+	Refs          []RefRow  `json:"refs,omitempty"`
+	// Pushes is the pushes phase's rows on a delta that asked for them:
+	// every push applied in (Since, Position], in log order, each once
+	// across the snapshot's pages — none above Position, which the next
+	// delta serves.
+	Pushes []IntroducedRow `json:"pushes,omitempty"`
+	Next   *StateCursor    `json:"next,omitempty"`
 }
 
 // PackRow is one pack bundle a repository's rows name.
@@ -169,6 +187,105 @@ type PushRow struct {
 	ReceivedAt      time.Time         `json:"received_at"`
 }
 
+// PushVia is how a push's pack was built. Every push this build lands is
+// received by git, so it is [ViaGit] for every row — DERIVED, never stored:
+// no column records it, and no record carries it.
+type PushVia string
+
+// ViaGit is a push a client's git sent and receive-pack received.
+const ViaGit PushVia = "git"
+
+// PushVias is the closed set.
+func PushVias() []PushVia { return []PushVia{ViaGit} }
+
+// Valid reports a way this build knows.
+func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
+
+// PushedBy is the push that INTRODUCED a commit, as a git node's index of
+// which push introduced each commit holds it: which push, where it landed on
+// the log, when, by whom and how.
+type PushedBy struct {
+	PushID    string            `json:"push_id"`
+	Position  statelog.Position `json:"position"`
+	At        time.Time         `json:"at"`
+	Principal Principal         `json:"principal"`
+	Via       PushVia           `json:"via"`
+}
+
+// RefMove is one ref update a push LANDED — an ok command, as its row records
+// it.
+type RefMove struct {
+	Ref    string `json:"ref"`
+	Old    string `json:"old"`
+	New    string `json:"new"`
+	Forced bool   `json:"forced,omitempty"`
+}
+
+// IntroducedRow is one push as that index is built from it: who made it, the
+// refs it moved, and the commits it introduced — at most [MaxIntroduced] of
+// them listed, Count the whole.
+type IntroducedRow struct {
+	PushedBy
+	Moves      []RefMove `json:"moves,omitempty"`
+	Introduced []string  `json:"introduced,omitempty"`
+	Count      int       `json:"count,omitempty"`
+}
+
+// introducedOf is a push row as the index is built from it: its principal
+// from the row's actor columns, and its ok commands as the refs it moved.
+func introducedOf(row PushRow) IntroducedRow {
+	in := IntroducedRow{
+		PushedBy: PushedBy{PushID: row.PushID, Position: row.Position, At: row.At,
+			Principal: Principal{Kind: PrincipalKind(row.ActorKind), OperatorID: row.Actor, Seat: row.ActorSeat},
+			Via:       ViaGit},
+		Introduced: row.Introduced, Count: row.IntroducedCount,
+	}
+	for _, c := range row.Commands {
+		if c.Result == ResultOK {
+			in.Moves = append(in.Moves, RefMove{Ref: c.Ref, Old: c.Old, New: c.New, Forced: c.Forced})
+		}
+	}
+	return in
+}
+
+// IntroducedQuery is one page of a repository's pushes in LOG ORDER: (After,
+// Through] ascending — Through zero meaning the read's own checkpoint — or,
+// Descending, everything below Before, newest first, down to the start of the
+// push history the rows keep.
+type IntroducedQuery struct {
+	RepoID     string            `json:"repo_id"`
+	After      statelog.Position `json:"after,omitzero"`
+	Through    statelog.Position `json:"through,omitzero"`
+	Before     statelog.Position `json:"before,omitzero"`
+	Descending bool              `json:"descending,omitempty"`
+}
+
+// RefQuery resolves one ref of one repository.
+type RefQuery struct {
+	// Repo is the repository's NAME.
+	Repo string `json:"repo"`
+	// Ref is a whole ref (refs/heads/main), or a branch or a tag by its
+	// short name — a branch first, then a tag.
+	Ref string `json:"ref"`
+	// Fresh is REQUIRED, as on every code point read: whoever names a ref
+	// names the level it must be read at.
+	Fresh statelog.Freshness `json:"fresh"`
+	// Asker is who resolves it, REQUIRED and held to its grant on the
+	// repository by the node that answers, as a [ReadQuery]'s is.
+	Asker Principal `json:"asker"`
+}
+
+// RefAnswer is the ref a [RefQuery] resolved to.
+type RefAnswer struct {
+	Repo RepoRef `json:"repo"`
+	// Ref is the whole ref it resolved to.
+	Ref string `json:"ref"`
+	OID string `json:"oid"`
+	// Position is the checkpoint the ref was read at, read in the read's
+	// own transaction.
+	Position statelog.Position `json:"position"`
+}
+
 // ReadKind is what a [ReadQuery] lists.
 type ReadKind string
 
@@ -177,44 +294,66 @@ const (
 	ReadRepos ReadKind = "repos"
 	// ReadRepo is one repository in detail.
 	ReadRepo ReadKind = "repo"
-	// ReadPushes is one repository's push history, newest first.
+	// ReadPushes is one repository's push history, newest first in log
+	// order.
 	ReadPushes ReadKind = "pushes"
+	// ReadRefs is one repository's live refs under a prefix, by name; its
+	// first page carries the repository in detail too.
+	ReadRefs ReadKind = "refs"
+	// ReadIntroduced is one repository's pushes in log order, as a git
+	// node's index of which push introduced each commit reads them: the
+	// engine's own read, which no principal makes.
+	ReadIntroduced ReadKind = "introduced"
 )
 
 // ReadKinds is the closed set.
-func ReadKinds() []ReadKind { return []ReadKind{ReadRepos, ReadRepo, ReadPushes} }
+func ReadKinds() []ReadKind {
+	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadIntroduced}
+}
 
 // Valid reports a kind this build knows.
 func (k ReadKind) Valid() bool { return slices.Contains(ReadKinds(), k) }
 
-// ReadQuery is a person's or a surface's read of the code host.
+// ReadQuery is a person's, a seat's or a surface's read of the code host.
 type ReadQuery struct {
 	Kind ReadKind `json:"kind"`
-	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
-	// and the answer is held to its grant on the node that serves it: a
-	// listing leaves out every repository the asker may not read, and a read
-	// of one answers [ErrNotPermitted]. Required rather than defaulted,
-	// because a default would be a reader nobody named, and an optional asker
-	// is a hole any caller that forgot it opens.
+	// Asker is who reads, REQUIRED for every kind a principal reads — a
+	// zero or invalid one is [ErrInvalid] — and the answer is held to its
+	// grant on the node that serves it: a listing leaves out every
+	// repository the asker may not read, and a read of one answers
+	// [ErrNotPermitted]. Required rather than defaulted, because a default
+	// would be a reader nobody named, and an optional asker is a hole any
+	// caller that forgot it opens. REFUSED on `introduced`, which no
+	// principal makes: an asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
-	// Repo is the repository's NAME, for repo and pushes.
+	// Repo is the repository's NAME, for repo, pushes and refs.
 	Repo string `json:"repo,omitempty"`
 	// Status filters a repos listing; empty is active and archived.
 	Status []RepoStatus `json:"status,omitempty"`
-	Cursor string       `json:"cursor,omitempty"`
-	// Limit is repos 1..500 (0 = 100) and pushes 1..200 (0 = 50).
+	// Prefix narrows a refs listing to the refs under it: "refs/heads/"
+	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
+	// seat's own namespace.
+	Prefix string `json:"prefix,omitempty"`
+	// Introduced is an `introduced` read's range: REQUIRED for that kind,
+	// refused on every other.
+	Introduced *IntroducedQuery `json:"introduced,omitempty"`
+	Cursor     string           `json:"cursor,omitempty"`
+	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
+	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most).
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
 
 // ReadAnswer is a [ReadQuery]'s answer.
 type ReadAnswer struct {
-	Repos    []RepoSummary      `json:"repos,omitempty"`
-	Repo     *RepoDetail        `json:"repo,omitempty"`
-	Pushes   []PushRow          `json:"pushes,omitempty"`
-	Next     string             `json:"next,omitempty"`
-	Position statelog.Position  `json:"position"`
-	Level    statelog.ReadLevel `json:"level"`
+	Repos      []RepoSummary      `json:"repos,omitempty"`
+	Repo       *RepoDetail        `json:"repo,omitempty"`
+	Pushes     []PushRow          `json:"pushes,omitempty"`
+	Refs       []RefRow           `json:"refs,omitempty"`
+	Introduced []IntroducedRow    `json:"introduced,omitempty"`
+	Next       string             `json:"next,omitempty"`
+	Position   statelog.Position  `json:"position"`
+	Level      statelog.ReadLevel `json:"level"`
 }
 
 // RepoSummary is a repository as a listing renders it.

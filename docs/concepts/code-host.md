@@ -381,7 +381,13 @@ repository, never by a sweep:
   longer than 255 bytes, or for not being UTF-8, is kept as much of it as
   fits in 255 bytes beside its length and a digest of the whole
   (`refs/heads/x… [60013 bytes, sha256 <32 hex>]`), so a ref nothing can ever
-  name costs every node's history no more than one that could.
+  name costs every node's history no more than one that could. The history
+  is kept, listed and forgotten in the order the pushes LANDED on the code
+  log, newest first in its listing and oldest first as it ages out — never
+  by the instant on each record, which is the stream leader's clock and can
+  step back when the leader changes — so a push stamped earlier than the one
+  before it waits for that one, at most the brokers' clock skew past its own
+  181 days, and every node forgets the same pushes.
 - **Ref tombstones** — a deleted ref is kept as a tombstone for **48 hours**,
   so a node bringing a repository up to date learns of the deletion — or
   sooner, oldest first, once the repository holds **100 000** of them. Each
@@ -1057,7 +1063,11 @@ A person's standing reads no chart at all. A seat's is judged from the chart of
 the node that answers or decides — the data node serving a listing or a read
 holds the asker to its own epoch's chart — so two nodes on different
 activations may decide one command differently while one of them has not yet
-applied the other's; in this release no seat pushes or reads a repository yet
+applied the other's. A node that holds no chart yet, from its start until it
+installs its first company configuration, judges no seat: it refuses a seat's
+read as a node that cannot answer it, and the read is asked of another data
+node — never answered that the seat may read nothing. In this release no seat
+pushes or reads a repository yet
 ([What it does not do yet](#what-it-does-not-do-yet)), so every read is a
 person's.
 

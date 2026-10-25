@@ -1,6 +1,7 @@
 package code
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -58,9 +60,12 @@ type ReaderOptions struct {
 
 	// Roster is the SERVING node's current epoch's chart (the engine's
 	// codeRoster), read once a read: an agent asker is judged by it
-	// ([GrantOf]). Nil holds every agent to [AccessNone] — what a reader built
-	// with no chart has, never "every seat reads" — and asks nothing of it
-	// for a person, whose standing no chart decides.
+	// ([GrantOf]). Nil — or a roster that answers nil, a node with no epoch
+	// installed yet — refuses every agent's read [ErrNotServing], a refusal
+	// about THIS reader, so the estate asks a node that holds a chart: never
+	// "every seat reads", and never "this seat reads nothing" either, which
+	// only a chart may answer. A person's read asks nothing of it, since no
+	// chart decides a person's standing.
 	Roster func() Roster
 }
 
@@ -81,11 +86,29 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 // chartFor is the roster an asker is judged by: the serving node's current
 // chart for a seat, read ONCE a read so every row of a listing is judged by
 // one chart, and none for anybody else.
-func (r *Reader) chartFor(asker Principal) Roster {
-	if asker.Kind != PrincipalAgent || r.roster == nil {
-		return nil
+//
+// A SEAT ASKING A READER THAT HOLDS NO CHART IS REFUSED ABOUT THE READER —
+// [ErrNotServing], before any row is read — and never judged. A node holds no
+// chart between the start of its code reader and the install of its first
+// epoch: at every boot, and at a first apply whose reconcile of code.repos
+// runs before the epoch is installed. Judged there, every seat stood nowhere
+// ([GrantOf] with no roster): a definite "not permitted", or a listing with
+// every repository left out — an ANSWER, which ends the estate's walk with
+// what every peer holding a chart would contradict. Refused about itself,
+// the reader is a node that ran nothing (estate's ranNothing), and the walk
+// asks the next data node. A chart that DENIES the seat is still the answer.
+func (r *Reader) chartFor(asker Principal) (Roster, error) {
+	if asker.Kind != PrincipalAgent {
+		return nil, nil
 	}
-	return r.roster()
+	var chart Roster
+	if r.roster != nil {
+		chart = r.roster()
+	}
+	if chart == nil {
+		return nil, fmt.Errorf("%w: this node holds no chart to judge a seat's read by", ErrNotServing)
+	}
+	return chart, nil
 }
 
 // inTx is one open transaction as a statelog.ReadEstate, so the checkpoint is
@@ -349,7 +372,7 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 			}
 			cur = StateCursor{Full: full, Phase: phasePacks, From: cp.At, Seen: cp.At, Stream: cp.KeyedTo}
 			if !full {
-				cur.Since = q.Since
+				cur.Since, cur.Pushes = q.Since, q.Pushes
 			}
 		} else {
 			cur = *q.Cursor
@@ -452,6 +475,8 @@ func (r *Reader) fill(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 			}
 		case phaseRefs:
 			done, err = r.refs(ctx, tx, repoID, out, &cur, &pg)
+		case phasePushes:
+			done, err = r.pushesPhase(ctx, tx, repoID, out, &cur, &pg)
 		case phaseTail:
 			done, err = r.packsAfter(ctx, tx, repoID, cur.From.Packed(), out, &cur, &pg)
 		default:
@@ -469,7 +494,9 @@ func (r *Reader) fill(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 		switch {
 		case cur.Phase == phasePacks:
 			cur.Phase, cur.After = phaseRefs, ""
-		case cur.Phase == phaseRefs && !first:
+		case cur.Phase == phaseRefs && cur.Pushes:
+			cur.Phase, cur.After = phasePushes, ""
+		case (cur.Phase == phaseRefs || cur.Phase == phasePushes) && !first:
 			cur.Phase, cur.After = phaseTail, ""
 		default:
 			// THE LAST PHASE COMPLETED — and on page 1 there is no tail,
@@ -630,11 +657,60 @@ func (r *Reader) refs(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 	return served < asked, nil
 }
 
+// pushesPhase serves a delta's pushes phase: every push of the repository
+// applied in (Since, From] — above the cache's synced position and at or below
+// page 1's checkpoint — in log order, keyset after the last one served.
+//
+// BOUNDED ABOVE BY PAGE 1'S CHECKPOINT, never by the page's own: the snapshot
+// is complete as of From, which the cache records as its position, so a push
+// applied after it is the NEXT delta's — served here too, it would be folded
+// into the cache's index twice, once by each round. And bounded BELOW
+// exclusively, for the same reason: a push at Since is the round before's.
+func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
+	cur *StateCursor, pg *page) (bool, error) {
+
+	var rows *sql.Rows
+	var err error
+	if cur.After == "" {
+		rows, err = tx.QueryContext(ctx, pushesAboveSQL, repoID, cur.Since.Packed(), cur.From.Packed(),
+			pg.left())
+	} else {
+		position, pushID, ok := cutPushCursor(cur.After)
+		if !ok {
+			return false, fmt.Errorf("%w: after %q", ErrBadCursor, cur.After)
+		}
+		rows, err = tx.QueryContext(ctx, pushesAboveAfterSQL, repoID, position, cur.From.Packed(), position,
+			pushID, pg.left())
+	}
+	if err != nil {
+		return false, fmt.Errorf("code: read %s's pushes since %s: %w", repoID, cur.Since, err)
+	}
+	defer func() { _ = rows.Close() }()
+	asked, served := pg.left(), 0
+	for rows.Next() {
+		row, _, err := scanPush(rows)
+		if err != nil {
+			return false, fmt.Errorf("code: read %s's pushes since %s: %w", repoID, cur.Since, err)
+		}
+		in := introducedOf(row)
+		out.Pushes = append(out.Pushes, in)
+		served++
+		cur.After = pushCursor(row.Position, row.PushID)
+		if pg.add(in.encodedBytes()) {
+			return false, rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("code: read %s's pushes since %s: %w", repoID, cur.Since, err)
+	}
+	return served < asked, nil
+}
+
 // checkCursor refuses a cursor this reader did not issue.
 func checkCursor(c *StateCursor) error {
 	bad := func(why string) error { return fmt.Errorf("%w: %s", ErrBadCursor, why) }
 	switch {
-	case c.Phase != phasePacks && c.Phase != phaseRefs && c.Phase != phaseTail:
+	case c.Phase != phasePacks && c.Phase != phaseRefs && c.Phase != phasePushes && c.Phase != phaseTail:
 		return bad(fmt.Sprintf("phase %q", c.Phase))
 	case c.From.Stream != topics.CodeLogStream || c.From.IsZero():
 		return bad("it names no position on the code log")
@@ -646,6 +722,10 @@ func checkCursor(c *StateCursor) error {
 		return bad("a full snapshot has no delta floor, and a delta has one")
 	case !c.Full && c.Since.Stream != topics.CodeLogStream:
 		return bad("its delta floor is on another log")
+	case c.Full && c.Pushes:
+		return bad("a full snapshot serves no pushes phase")
+	case c.Phase == phasePushes && !c.Pushes:
+		return bad("its first page asked for no pushes phase")
 	}
 	if c.After == "" {
 		return nil
@@ -662,6 +742,10 @@ func checkCursor(c *StateCursor) error {
 	case c.Phase == phaseRefs && !c.Full:
 		at, _, ok := strings.Cut(c.After, "/")
 		if _, err := strconv.ParseInt(at, 10, 64); !ok || err != nil {
+			return bad("after " + c.After)
+		}
+	case c.Phase == phasePushes:
+		if _, _, ok := cutPushCursor(c.After); !ok {
 			return bad("after " + c.After)
 		}
 	}
@@ -763,20 +847,29 @@ func scanPush(s scanner) (PushRow, int, error) {
 //     ends at the byte budget after its tenth (about 460 KB each:
 //     MaxCommandsPerPush commands at the longest ref and MaxIntroduced ids)
 //     — after its third where every byte of every ref is one JSON writes as
-//     six (`<`, `>`, `&`, which a ref may hold: 1.7 MB a row).
+//     six (`<`, `>`, `&`, which a ref may hold: 1.7 MB a row);
+//   - a refs listing: 200 by default, a screen of branches, and 1 000 at
+//     most, which at the longest ref (MaxRefNameBytes) and its oid is about
+//     385 KB, under a megabyte for names JSON writes as themselves — and
+//     ends at the byte budget like every page where it spells them longer.
 //
-// The two maxima are exported for a client that pages: the most a page may
-// ask for of each, which a page past them is refused naming.
+// The maxima are exported for a client that pages: the most a page may ask
+// for of each, which a page past them is refused naming.
 const (
 	defaultRepoLimit = 100
 	MaxReposPerPage  = 500
 	defaultPushLimit = 50
 	MaxPushesPerPage = 200
+	defaultRefLimit  = 200
+	MaxRefsPerPage   = 1_000
 )
 
-// ReadLevels are the levels [Reader.Read] serves: every level but session,
-// which it refuses because a surface reading the code host holds no position
-// of its own on its log to wait for.
+// ReadLevels are the levels [Reader.Read] serves a principal's read at: every
+// level but session, which it refuses because a surface reading the code host
+// holds no position of its own on its log to wait for. The engine's own
+// `introduced` read is the one kind served at session too, with the position
+// it names: a git node's index reads the pushes of a round it synced, whose
+// position it holds.
 //
 // ONE LIST, read by the rule and spelled by its refusal, because the refusal
 // is a public answer — a REST read's 400 carries it to a person — and a
@@ -798,29 +891,31 @@ func levelList(levels []statelog.ReadLevel) string {
 	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
-// Read answers a person's or a surface's read: a listing of repositories, one
-// repository in detail, or one repository's push history, at one of
-// [ReadLevels] — stale unless asked.
+// Read answers a person's, a seat's or a surface's read — a listing of
+// repositories, one repository in detail, one repository's push history or
+// its refs — at one of [ReadLevels], stale unless asked; and the engine's own
+// `introduced` read at the level it names.
 func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if err := q.validate(); err != nil {
 		return ReadAnswer{}, err
 	}
-	fresh := q.Fresh
-	switch {
-	case fresh.Level == "":
-		fresh.Level = statelog.ReadStale
-	case !slices.Contains(ReadLevels, fresh.Level):
-		return ReadAnswer{}, fmt.Errorf("%w: %q is not a level a code read serves: it serves %s", ErrBadLevel,
-			fresh.Level, levelList(ReadLevels))
+	fresh, levelErr := q.freshness()
+	if levelErr != nil {
+		return ReadAnswer{}, levelErr
+	}
+	// THE ONE CHART every row of this answer is judged by, read before the
+	// transaction: a listing judged row by row against a chart an apply
+	// swapped mid-page would answer a page no epoch ever held. And read
+	// before any row: a seat asking a reader that holds none is refused
+	// about the reader ([Reader.chartFor]).
+	chart, chartErr := r.chartFor(q.Asker)
+	if chartErr != nil {
+		return ReadAnswer{}, chartErr
 	}
 	var (
 		out   ReadAnswer
 		query statelog.Query
 		serve func(*sql.Tx, statelog.Position) error
-		// THE ONE CHART every row of this answer is judged by, read before
-		// the transaction: a listing judged row by row against a chart an
-		// apply swapped mid-page would answer a page no epoch ever held.
-		chart = r.chartFor(q.Asker)
 	)
 	switch q.Kind {
 	case ReadRepos:
@@ -834,6 +929,20 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	case ReadPushes:
 		query = fresh.Resolved(resolver(q.Repo), true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.pushes(ctx, tx, q, chart, &out) }
+	case ReadRefs:
+		// A FIRST PAGE IS READ AS THE DETAIL IT CARRIES: a point read, which
+		// a record this node deferred on the repository refuses, as kind
+		// repo is refused, rather than detail a repository around it; every
+		// later page is the listing's, a set.
+		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "")
+		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.refsListing(ctx, tx, q, chart, cp, &out) }
+	case ReadIntroduced:
+		// A POINT READ OF THE REPOSITORY, as a snapshot is: an index built
+		// past a record this node deferred on the repository would miss the
+		// pushes it carried and say nothing, so such a read refuses and the
+		// backfill asks again.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.Introduced.RepoID)}}, false)
+		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.introduced(ctx, tx, q, cp, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -853,16 +962,30 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 
 // validate refuses a query naming no kind this build reads, no asker or one no
 // principal can be, a repository that cannot be one, a limit past its bound —
-// refused naming it, never clamped — or a status filter outside a listing.
+// refused naming it, never clamped — or a field outside the kind that reads
+// it: a status filter outside a listing of repositories, a prefix outside a
+// refs listing, a range outside an `introduced` read.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, ReadKinds())
+	}
+	if q.Kind == ReadIntroduced {
+		return q.validateIntroduced()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
 	// named.
 	if why := q.Asker.invalid(); why != "" {
 		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+	}
+	switch {
+	case q.Introduced != nil:
+		return fmt.Errorf("%w: introduced: only an introduced read names a range of pushes", ErrInvalid)
+	case q.Prefix != "" && q.Kind != ReadRefs:
+		return fmt.Errorf("%w: prefix: only a refs listing names a prefix", ErrInvalid)
+	case q.Prefix != "" && !validRefPrefix(q.Prefix):
+		return fmt.Errorf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
+			"either, ending in /", ErrInvalid, q.Prefix)
 	}
 	if q.Kind != ReadRepos {
 		if !ValidName(q.Repo) {
@@ -877,7 +1000,8 @@ func (q ReadQuery) validate() error {
 			return fmt.Errorf("%w: status: %q is not one of %v", ErrInvalid, s, RepoStatuses())
 		}
 	}
-	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage}[q.Kind]
+	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
+		ReadRefs: MaxRefsPerPage}[q.Kind]
 	switch {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)
@@ -888,6 +1012,71 @@ func (q ReadQuery) validate() error {
 			q.Limit, bound, q.Kind)
 	}
 	return nil
+}
+
+// validateIntroduced is [ReadQuery.validate] for an `introduced` read: the
+// engine's own, so it names NO asker — one there would be judged by nothing,
+// and a read that looked held to a grant while it was not is worse than one
+// that says it is nobody's — and its repository by id in its range, which
+// runs one way: (After, Through] ascending, or below Before descending.
+func (q ReadQuery) validateIntroduced() error {
+	in := q.Introduced
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	onLog := func(p statelog.Position) bool { return p.IsZero() || p.Stream == topics.CodeLogStream }
+	switch {
+	case q.Asker != (Principal{}):
+		return refused("asker", "an introduced read is the engine's own, which no principal makes")
+	case in == nil:
+		return refused("introduced", "an introduced read names its repository and its range")
+	case in.RepoID == "":
+		return refused("introduced.repo_id", "an introduced read names its repository by id")
+	case q.Repo != "" || len(q.Status) > 0 || q.Prefix != "":
+		return refused("repo", "an introduced read names its repository in its range and filters nothing")
+	case !onLog(in.After) || !onLog(in.Through) || !onLog(in.Before):
+		return refused("introduced", "every position it names is on the code log")
+	case in.Descending && in.Before.IsZero():
+		return refused("introduced.before", "a descending read names the position it reads below")
+	case in.Descending && (!in.After.IsZero() || !in.Through.IsZero()):
+		return refused("introduced", "a descending read names Before alone")
+	case !in.Descending && !in.Before.IsZero():
+		return refused("introduced.before", "an ascending read names After and Through")
+	case !in.Through.IsZero() && in.Through.Packed() < in.After.Packed():
+		return refused("introduced.through", "the range ends below where it begins")
+	case q.Limit < 0:
+		return refused("limit", strconv.Itoa(q.Limit))
+	case q.Limit > MaxSnapshotItems:
+		return refused("limit", fmt.Sprintf("%d is past the %d one page of %s carries", q.Limit,
+			MaxSnapshotItems, q.Kind))
+	}
+	return nil
+}
+
+// freshness is the level a read is served at: for every kind a principal
+// reads, one of [ReadLevels], stale unless asked; for the engine's own
+// `introduced`, any level a point read serves ([pointLevel]) — named, since
+// whoever builds an index names the level its pages must be read at, and a
+// session read with the position it must include.
+func (q ReadQuery) freshness() (statelog.Freshness, error) {
+	fresh := q.Fresh
+	switch {
+	case q.Kind == ReadIntroduced:
+		return fresh, pointLevel(fresh)
+	case fresh.Level == "":
+		fresh.Level = statelog.ReadStale
+	case !slices.Contains(ReadLevels, fresh.Level):
+		return statelog.Freshness{}, fmt.Errorf("%w: %q is not a level a code read serves: it serves %s",
+			ErrBadLevel, fresh.Level, levelList(ReadLevels))
+	}
+	return fresh, nil
+}
+
+// validRefPrefix reports a prefix a refs listing may name: refs/heads/ or
+// refs/tags/, or a directory of refs under either — a seat's own namespace —
+// ending in "/". A prefix that no ref could begin with is refused rather than
+// answered empty.
+func validRefPrefix(prefix string) bool {
+	return (strings.HasPrefix(prefix, branchPrefix) || strings.HasPrefix(prefix, tagPrefix)) &&
+		strings.HasSuffix(prefix, "/") && ValidRef(prefix+"x")
 }
 
 // limitOr is a limit, or its kind's default.
@@ -1048,7 +1237,7 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, asker Princi
 		return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
 	}
 	var head sql.NullString
-	err = tx.QueryRowContext(ctx, headSQL, id, branchPrefix+v.ref.DefaultBranch).Scan(&head)
+	err = tx.QueryRowContext(ctx, liveRefSQL, id, branchPrefix+v.ref.DefaultBranch).Scan(&head)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("code: read %s's head: %w", name, err)
 	}
@@ -1063,12 +1252,15 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, asker Princi
 	return nil
 }
 
-// pushes serves one repository's push history, newest first, keyset-paged by
-// (at, position, push_id) — the push id because group commit puts up to 64
-// pushes in one record, sharing its position and its instant, so a cursor
-// without it skips or repeats the pushes of a record a page boundary splits.
-// The history is the repository's contents, so an asker that may not read the
-// repository is answered [ErrNotPermitted], as [Reader.repo] answers it.
+// pushes serves one repository's push history, newest first IN LOG ORDER —
+// the order the pushes landed in — keyset-paged by (position, push_id): the
+// push id because group commit puts up to 64 pushes in one record, sharing its
+// position and its instant, so a cursor without it skips or repeats the
+// pushes of a record a page boundary splits. Never by the record's instant,
+// which is the broker's and steps back across a stream leader's change, so it
+// only approximates the order (replicated 0056). The history is the
+// repository's contents, so an asker that may not read the repository is
+// answered [ErrNotPermitted], as [Reader.repo] answers it.
 func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	id, found, err := claimIn(ctx, tx, q.Repo)
 	if err != nil {
@@ -1085,11 +1277,11 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if q.Cursor == "" {
 		rows, err = tx.QueryContext(ctx, pushesFirstSQL, id, limit)
 	} else {
-		at, position, pushID, ok := cutPushCursor(q.Cursor)
+		position, pushID, ok := cutPushCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
-		rows, err = tx.QueryContext(ctx, pushesAfterSQL, id, at, at, position, position, pushID, limit)
+		rows, err = tx.QueryContext(ctx, pushesAfterSQL, id, position, position, pushID, limit)
 	}
 	if err != nil {
 		return fmt.Errorf("code: read %s's pushes: %w", q.Repo, err)
@@ -1103,11 +1295,238 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		}
 		out.Pushes = append(out.Pushes, row)
 		if pg.add(row.encodedBytes(commands)) {
-			out.Next = pushCursor(row)
+			out.Next = pushCursor(row.Position, row.PushID)
 			break
 		}
 	}
 	return rows.Err()
+}
+
+// refsListing serves one page of a repository's LIVE refs under a prefix, by
+// name, keyset after the last ref served, to an asker that may read the
+// repository — and on the first page the repository in detail too, read as
+// kind repo reads it in the same transaction, so what a seat asks first of a
+// repository — what it is, and its branches — is one read and one barrier.
+//
+// OVER THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0054, its
+// predicate repeated verbatim), never code_refs' key: a range of the key
+// holds every tombstone under the prefix as well, kept RefTombstoneHorizon
+// so a delta learns of a deletion — up to MaxTombstonesPerRepo of them, each
+// a row the page steps over, with a lookup apiece, before it fills — where
+// the partial index holds the live refs alone. The names under a directory
+// are, in byte order, every name between dir + "/" and dir + "0", the range
+// the push decide asks of the same index.
+//
+// The detail rides beside the page's rows in the half of the estate reply
+// MaxPageBytes leaves free, as a snapshot page's repository row does.
+func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
+	cp statelog.Position, out *ReadAnswer) error {
+
+	prefix := cmp.Or(q.Prefix, branchPrefix)
+	after := prefix
+	var id string
+	if q.Cursor == "" {
+		if err := r.repo(ctx, tx, q.Repo, q.Asker, chart, cp, out); err != nil {
+			return err
+		}
+		id = out.Repo.ID
+	} else {
+		if !strings.HasPrefix(q.Cursor, prefix) {
+			return fmt.Errorf("%w: %q is not a ref under %s", ErrBadCursor, q.Cursor, prefix)
+		}
+		var found bool
+		var err error
+		if id, found, err = claimIn(ctx, tx, q.Repo); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
+		}
+		if err = mayReadIn(ctx, tx, id, q.Asker, chart); err != nil {
+			return err
+		}
+		after = q.Cursor
+	}
+	limit := min(limitOr(q.Limit, defaultRefLimit), r.pageRows)
+	rows, err := tx.QueryContext(ctx, refsUnderSQL, id, after,
+		strings.TrimSuffix(prefix, "/")+"0", limit)
+	if err != nil {
+		return fmt.Errorf("code: read %s's refs under %s: %w", q.Repo, prefix, err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for rows.Next() {
+		var ref RefRow
+		var position int64
+		if err := rows.Scan(&ref.Ref, &ref.OID, &position); err != nil {
+			return fmt.Errorf("code: read %s's refs under %s: %w", q.Repo, prefix, err)
+		}
+		ref.Position = unpacked(position)
+		out.Refs = append(out.Refs, ref)
+		if pg.add(ref.encodedBytes()) {
+			out.Next = ref.Ref
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// introduced serves one page of a repository's pushes in LOG ORDER for a git
+// node's index of which push introduced each commit: (After, Through]
+// ascending — Through zero meaning this read's own checkpoint — or below
+// Before descending, newest first, down to the oldest push the rows keep;
+// keyset after the last push served, `<packed position>/<push id>`, since
+// group commit puts up to 64 pushes at one position. A page ends at its row
+// limit or at MaxPageBytes of rows, whichever first, and always serves one.
+// A repository with no row — purged — is [ErrRepoNotFound], which drops the
+// index that asked.
+func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp statelog.Position,
+	out *ReadAnswer) error {
+
+	in := q.Introduced
+	var name string
+	switch err := tx.QueryRowContext(ctx, repoNameSQL, in.RepoID).Scan(&name); {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: %s", ErrRepoNotFound, in.RepoID)
+	case err != nil:
+		return fmt.Errorf("code: read repository %s: %w", in.RepoID, err)
+	}
+	through := in.Through.Packed()
+	if in.Through.IsZero() {
+		through = cp.Packed()
+	}
+	limit := min(limitOr(q.Limit, r.pageRows), r.pageRows)
+	var rows *sql.Rows
+	var err error
+	switch position, pushID, keyed := cutPushCursor(q.Cursor); {
+	case q.Cursor != "" && (!keyed || (in.Descending && position >= in.Before.Packed()) ||
+		(!in.Descending && position <= in.After.Packed())):
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	case in.Descending && q.Cursor == "":
+		rows, err = tx.QueryContext(ctx, pushesBelowSQL, in.RepoID, in.Before.Packed(), limit)
+	case in.Descending:
+		rows, err = tx.QueryContext(ctx, pushesAfterSQL, in.RepoID, position, position, pushID, limit)
+	case q.Cursor == "":
+		rows, err = tx.QueryContext(ctx, pushesAboveSQL, in.RepoID, in.After.Packed(), through, limit)
+	default:
+		rows, err = tx.QueryContext(ctx, pushesAboveAfterSQL, in.RepoID, position, through, position, pushID,
+			limit)
+	}
+	if err != nil {
+		return fmt.Errorf("code: read %s's pushes in log order: %w", name, err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for rows.Next() {
+		pushed, _, err := scanPush(rows)
+		if err != nil {
+			return fmt.Errorf("code: read %s's pushes in log order: %w", name, err)
+		}
+		row := introducedOf(pushed)
+		out.Introduced = append(out.Introduced, row)
+		if pg.add(row.encodedBytes()) {
+			out.Next = pushCursor(row.Position, row.PushID)
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// ResolveRef answers one ref of one repository at the level the query names,
+// to an asker that may read the repository — in ONE transaction: the name's
+// claim; the repository, a deleted or purging one answered [ErrRepoNotFound]
+// in [RepoGone]'s sentence for its state, which the code host's admission
+// says too; the asker's grant ([ErrNotPermitted]); then the ref — the whole
+// ref the query names, or a short name as a branch and then as a tag. A
+// deleted ref is absent, and none found is [ErrRefNotFound] naming every
+// name tried. Its scope is the name's, as [Reader.Resolve]'s is.
+func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
+	if err := pointLevel(q.Fresh); err != nil {
+		return RefAnswer{}, err
+	}
+	if !ValidName(q.Repo) {
+		return RefAnswer{}, fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
+	}
+	if why := q.Asker.invalid(); why != "" {
+		return RefAnswer{}, fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+	}
+	names, nameErr := refNames(q.Ref)
+	if nameErr != nil {
+		return RefAnswer{}, nameErr
+	}
+	chart, chartErr := r.chartFor(q.Asker)
+	if chartErr != nil {
+		return RefAnswer{}, chartErr
+	}
+	var out RefAnswer
+	_, err := r.log.Read(ctx, q.Fresh.Resolved(resolver(q.Repo), false), func(tx *sql.Tx) error {
+		out = RefAnswer{}
+		cp, err := checkpointIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		id, found, err := claimIn(ctx, tx, q.Repo)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
+		}
+		v, found, err := repoViewIn(ctx, tx, id, cp.At)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
+		}
+		if v.ref.Status == RepoStatusDeleted || v.ref.Status == RepoStatusPurging {
+			return fmt.Errorf("%w: %s", ErrRepoNotFound, RepoGone{ID: id, Name: v.ref.Name,
+				Status: v.ref.Status, DeletedAt: v.ref.DeletedAt}.Detail())
+		}
+		if g := GrantOf(q.Asker, v.ref, chart); !g.MayRead() {
+			return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
+		}
+		for _, name := range names {
+			var oid string
+			switch err := tx.QueryRowContext(ctx, liveRefSQL, id, name).Scan(&oid); {
+			case errors.Is(err, sql.ErrNoRows):
+				continue
+			case err != nil:
+				return fmt.Errorf("code: read %s of %s: %w", name, q.Repo, err)
+			}
+			out = RefAnswer{Repo: v.ref, Ref: name, OID: oid, Position: cp.At}
+			return nil
+		}
+		return fmt.Errorf("%w: repository %s holds no live %s", ErrRefNotFound, q.Repo,
+			strings.Join(names, " or "))
+	})
+	if err != nil {
+		return RefAnswer{}, err
+	}
+	return out, nil
+}
+
+// refNames is every ref a [RefQuery]'s Ref may name, in the order they are
+// tried: a whole ref as itself; a short name as a branch, then as a tag —
+// each only where git could hold it. A name that can be none is
+// [ErrInvalid], refused before any read.
+func refNames(ref string) ([]string, error) {
+	if strings.HasPrefix(ref, "refs/") {
+		if !ValidRef(ref) {
+			return nil, fmt.Errorf("%w: ref: %q is not a ref", ErrInvalid, ref)
+		}
+		return []string{ref}, nil
+	}
+	var names []string
+	if gitref.ValidBranch(ref) {
+		names = append(names, branchPrefix+ref)
+	}
+	if ValidRef(tagPrefix + ref) {
+		names = append(names, tagPrefix+ref)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%w: ref: %q is no ref, branch or tag name", ErrInvalid, ref)
+	}
+	return names, nil
 }
 
 // mayReadIn refuses an asker that may not read repository id, judged from
@@ -1132,24 +1551,23 @@ func mayReadIn(ctx context.Context, tx *sql.Tx, id string, asker Principal, char
 	return nil
 }
 
-// pushCursor is "<at micros>/<packed position>/<push_id>".
-func pushCursor(row PushRow) string {
-	return strconv.FormatInt(store.EncodeTime(row.At), 10) + "/" +
-		strconv.FormatInt(row.Position.Packed(), 10) + "/" + row.PushID
+// pushCursor is "<packed position>/<push_id>": a push's place in log order,
+// the keyset of the push listing and of the `introduced` read alike.
+func pushCursor(position statelog.Position, pushID string) string {
+	return strconv.FormatInt(position.Packed(), 10) + "/" + pushID
 }
 
 // cutPushCursor reads a [pushCursor].
-func cutPushCursor(s string) (int64, int64, string, bool) {
-	parts := strings.SplitN(s, "/", 3)
-	if len(parts) != 3 || parts[2] == "" {
-		return 0, 0, "", false
+func cutPushCursor(s string) (int64, string, bool) {
+	at, pushID, ok := strings.Cut(s, "/")
+	if !ok || pushID == "" {
+		return 0, "", false
 	}
-	at, err1 := strconv.ParseInt(parts[0], 10, 64)
-	position, err2 := strconv.ParseInt(parts[1], 10, 64)
-	if err1 != nil || err2 != nil {
-		return 0, 0, "", false
+	position, err := strconv.ParseInt(at, 10, 64)
+	if err != nil {
+		return 0, "", false
 	}
-	return at, position, parts[2], true
+	return position, pushID, true
 }
 
 // RepoLife is one repository as a reconcile of code.repos reads it: its id and
@@ -1390,10 +1808,10 @@ const (
 		commands, pack_id, pack_bytes, introduced, introduced_count, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`
 	pushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
-		ORDER BY at DESC, position DESC, push_id DESC LIMIT ?`
+		ORDER BY position DESC, push_id DESC LIMIT ?`
 	pushesAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
-		AND at <= ? AND (at < ? OR position < ? OR (position = ? AND push_id < ?))
-		ORDER BY at DESC, position DESC, push_id DESC LIMIT ?`
+		AND position <= ? AND (position < ? OR push_id < ?)
+		ORDER BY position DESC, push_id DESC LIMIT ?`
 	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.owner_kind, r.owner, r.visibility,
 		r.default_branch, r.description, r.deleted_at, r.refs, r.live_packs, r.live_bytes,
 		r.live_objects, r.pushes, r.last_push_at, h.target
@@ -1406,8 +1824,27 @@ const (
 		ORDER BY repo_id, pattern`
 	// repoGrantSQL is what a grant reads of one repository's row.
 	repoGrantSQL = `SELECT name, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
-	headSQL      = `SELECT target FROM code_refs INDEXED BY ` + refsKey + `
+	// liveRefSQL is one live ref's target by its whole name: a repository's
+	// head, and a ref a RefQuery names.
+	liveRefSQL = `SELECT target FROM code_refs INDEXED BY ` + refsKey + `
 		WHERE repo_id = ? AND ref = ? AND target != ''`
+	// refsUnderSQL is a page of the live refs between two names, by name —
+	// over the live refs' partial index, its predicate verbatim
+	// (refsListing).
+	refsUnderSQL = `SELECT ref, target, position FROM code_refs INDEXED BY ` + liveRefsKey + `
+		WHERE repo_id = ? AND ref > ? AND ref < ? AND target != '' ORDER BY ref LIMIT ?`
+	// THE PUSHES IN LOG ORDER, over code_pushes_repo_idx as replicated 0056
+	// orders it: those in (?2, ?3] oldest first — an `introduced` read
+	// ascending and a delta's pushes phase — first and after a cursor
+	// (?3 the upper bound, ?4 and ?5 the cursor), and those below ?2 newest
+	// first, whose keyset page is the history listing's own pushesAfterSQL.
+	pushesAboveSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
+		AND position > ? AND position <= ? ORDER BY position, push_id LIMIT ?`
+	pushesAboveAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
+		AND position >= ? AND position <= ? AND (position > ? OR push_id > ?)
+		ORDER BY position, push_id LIMIT ?`
+	pushesBelowSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
+		AND position < ? ORDER BY position DESC, push_id DESC LIMIT ?`
 	// THE RETENTION PASS'S TWO PHASES, each on its own partial index, the
 	// predicate repeated verbatim, and keyset on (deleted_at, id): the >=
 	// beside the OR is what keeps the index's range seek, which a bare OR of

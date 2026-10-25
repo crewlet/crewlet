@@ -57,12 +57,20 @@ func (s Served) PushOutcome(ctx context.Context, q OutcomeQuery) (PushOutcome, e
 	return s.Reader.PushOutcome(ctx, q)
 }
 
-// Read answers a person's or a surface's read — see [Reader.Read].
+// Read answers a person's, a seat's or a surface's read — see [Reader.Read].
 func (s Served) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if s.Reader == nil {
 		return ReadAnswer{}, errNoReader
 	}
 	return s.Reader.Read(ctx, q)
+}
+
+// ResolveRef answers one ref of one repository — see [Reader.ResolveRef].
+func (s Served) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
+	if s.Reader == nil {
+		return RefAnswer{}, errNoReader
+	}
+	return s.Reader.ResolveRef(ctx, q)
 }
 
 // errNoReader is a read of a code half that holds no reader of the code log.

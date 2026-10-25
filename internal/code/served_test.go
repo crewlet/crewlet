@@ -47,6 +47,10 @@ func TestAServedHalfWithNoReaderRunsNothing(t *testing.T) {
 			return err
 		},
 		"read": func() error { _, err := half.Read(ctx, code.ReadQuery{}); return err },
+		"resolve ref": func() error {
+			_, err := half.ResolveRef(ctx, code.RefQuery{})
+			return err
+		},
 	} {
 		if err := call(); !errors.Is(err, code.ErrNotServing) {
 			t.Errorf("%s on a zero served half = %v, want ErrNotServing", name, err)

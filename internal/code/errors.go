@@ -12,6 +12,10 @@ var (
 	// ErrRepoNotFound is a repository nobody holds under that name or id.
 	ErrRepoNotFound = errors.New("code: no such repository")
 
+	// ErrRefNotFound is a ref a repository does not hold live — never set,
+	// or deleted — under any name a [RefQuery] tried, which it names.
+	ErrRefNotFound = errors.New("code: no such ref")
+
 	// ErrPurging is a repository being removed part by part: its name
 	// returns when the purge completes.
 	ErrPurging = errors.New("code: the repository is being purged; its name returns when the purge completes")

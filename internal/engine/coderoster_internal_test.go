@@ -205,9 +205,10 @@ func agent(handle string) code.Principal {
 // the unit lets it read with no restart, because the roster is the current
 // epoch's and not the one the runtime was built under.
 //
-// Mutations: the reader built with no Roster → swe is refused too; the epoch
-// installed without its roster → the same; the roster captured once, at its
-// first read, rather than read per call → rep is still refused after the move.
+// Mutations: the reader built with no Roster → swe's read is unserved, the one
+// data node refusing it as a node that holds no chart; the epoch installed
+// without its roster → the same; the roster captured once, at its first read,
+// rather than read per call → rep is still refused after the move.
 func TestTheEnginesCodeReaderJudgesASeatByTheCurrentChart(t *testing.T) {
 	t.Parallel()
 	web := "    - name: web\n      owner: {unit: Engineering}\n      visibility: unit\n" +

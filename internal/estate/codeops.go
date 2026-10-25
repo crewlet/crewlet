@@ -115,9 +115,12 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 		return out, ranNothing(err)
 	})
 
-// opCodeRead is a person's or a surface's read of the code host: the REST
+// opCodeRead is a read of the code host by its kind (code.ReadKinds): the REST
 // routes' repository listing, one repository's detail and its push history,
-// which the operator's CLI reads too.
+// which the operator's CLI reads too; a repository's refs; and its pushes in
+// log order, which a git node's index of which push introduced each commit
+// is built from. A seat's read on a node that holds no chart is that node's
+// code.ErrNotServing — it ran nothing — so the walk asks the next.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

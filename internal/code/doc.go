@@ -287,8 +287,39 @@
 // repository the asker may not read is [ErrNotPermitted], judged after the
 // row is read, while one that does not exist is still [ErrRepoNotFound] — a
 // unit repository's name is in the company document, and its contents are
-// what the grant guards. A reader with no roster holds every seat to none,
-// never "every seat reads".
+// what the grant guards. A reader that holds NO CHART — a node between its
+// code reader's start and its first epoch's install, at every boot — refuses
+// a seat's read [ErrNotServing], a refusal about ITSELF, before any row is
+// read: never "every seat reads", and never "this seat reads nothing", a
+// definite answer that would end the estate's walk with what every peer
+// holding a chart contradicts. Refused about itself, it is a node that ran
+// nothing, and the walk asks the next data node. A person's read asks no
+// chart and is answered there.
+//
+// # What a seat and a git node read
+//
+// A repository's REFS are listed by name under a prefix — its branches, its
+// tags, or a seat's own namespace — a page at a time ([MaxRefsPerPage]),
+// over the LIVE refs' partial index (replicated 0054) and never the key,
+// whose range holds every tombstone under the prefix too; the first page
+// carries the repository in detail, so what a seat asks first of a
+// repository is one read. [Reader.ResolveRef] names one ref — a whole ref, or
+// a short name as a branch and then as a tag — in one transaction with the
+// repository's grant, at the level its caller states.
+//
+// A repository's PUSHES are read in LOG ORDER: code_pushes_repo_idx is keyed
+// (repo_id, position, push_id) (replicated 0056), because a record's
+// instant is the broker's and steps back across a stream leader's change, so
+// "every push above this position" — what a git node's index of which push
+// introduced each commit is built from — could not be read by it. The
+// history listing pages newest first by position; the `introduced` read,
+// the engine's own, which names no asker and is the one kind served at
+// session, pages ascending over a range or descending below a position; and
+// a delta snapshot asked for its PUSHES PHASE serves every push applied in
+// (Since, its position], each once across its pages, so the index a git node
+// folds them into is level with its copy at every round. Every reader of the
+// index's first shape — the listing, the history horizon, a purge part and
+// its count — reads the reordered one, so it is one index, not two.
 //
 // # What this package does not do
 //
@@ -310,7 +341,10 @@
 //     [HorizonBytesPerRecord] — the most a record can add, so removal keeps
 //     pace, and no more, because a push row is the estate's one wide row and
 //     its delete frees its overflow pages — so "what happened over the last
-//     half year" has one answer across the engine;
+//     half year" has one answer across the engine. It reads them oldest
+//     POSITION first and stops at the first inside the horizon, so a row
+//     stamped earlier than the one before it (a leader change) waits for
+//     that one, at most the members' clock skew past its own horizon;
 //   - REF TOMBSTONES, [RefTombstoneHorizon] (48 hours), or sooner — oldest
 //     first — past [MaxTombstonesPerRepo] (100 000): a deleted ref is kept
 //     as a tombstone so a cache syncing a delta learns of the deletion, and a
@@ -388,6 +422,19 @@
 // a repository already holding [MaxTombstonesPerRepo] fresh tombstones, a
 // record no committer of this build forms, whose cost the applier bounds all
 // the same.
+//
+// THE PUSH INDEX IN LOG ORDER (code_pushes_repo_idx reordered by replicated
+// 0056) moved none of it past the noise: interleaved with the build before
+// it on four vCPUs of a 2.1 GHz Xeon under a load average of 20–40 — six runs
+// of thirty — a group of [MaxPushesPerRecord] pushes is 18.8–32.4 ms against
+// 18.1–29.4, 0.29–0.51 ms a push, and one push alone 6.7–14.2 ms against
+// 8.1–12.4; in four runs of five of every shape, each arm's figures
+// overlapped the build before's. And a push row's bytes are unchanged to the
+// byte
+// (BenchmarkPushHistoryBytes, both builds): 395.3 a push of one commit,
+// 752.6 with its pack row, 420 045 and 420 454 at the widest — a reorder
+// moves the columns of the one entry a row has, where a second index would
+// have added about a quarter to the 395.3.
 //
 // THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0054, which the push
 // decide's [RefusalRefConflict] probe reads — the decide below) is an entry

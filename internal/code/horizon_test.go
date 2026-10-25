@@ -1,6 +1,7 @@
 package code
 
 import (
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -33,6 +34,64 @@ func TestPushRowsExpireOnlyWithinTheirRepository(t *testing.T) {
 	}
 	if left := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = 'repo-b'`); left != 70 {
 		t.Fatalf("a push to repo-a removed %d of repo-b's pushes", 70-left)
+	}
+}
+
+// THE HORIZON STOPS AT THE FIRST PUSH INSIDE IT, IN LOG ORDER. A record's
+// instant is its broker's, and a stream leader's change can stamp a later
+// record earlier than the one before it: here three pushes land at positions
+// p1 < p2 < p3 stamped t1, t3, t2. A push past the horizon between t2 and t3
+// removes p1 and stops at p2, inside it — keeping p3, older by its stamp,
+// until p2 ages out — and every applier, reading the same rows in the same
+// order, removes the same ones and never one inside the horizon.
+//
+// Mutation: filter the expiry's statement by `at < ?` rather than stop at the
+// first push inside the horizon — p3 is removed past p2, which the horizon
+// keeps (and the read walks every push the repository holds to find it).
+func TestTheHorizonStopsAtTheFirstPushInsideIt(t *testing.T) {
+	t.Parallel()
+	t1 := applyClock
+	t2, t3 := t1.Add(2*time.Hour), t1.Add(3*time.Hour)
+	records := []built{
+		create(t, "repo-a", "a"),
+		pushOf(t, "repo-a", pushEntry("p1", move("refs/heads/one", ZeroOID, oid("1")))).at(t1),
+		pushOf(t, "repo-a", pushEntry("p2", move("refs/heads/two", ZeroOID, oid("2")))).at(t3),
+		pushOf(t, "repo-a", pushEntry("p3", move("refs/heads/three", ZeroOID, oid("3")))).at(t2),
+		// THE HORIZON half an hour after t2 and half an hour before t3.
+		pushOf(t, "repo-a", pushEntry("p4", move("refs/heads/four", ZeroOID, oid("4")))).
+			at(t2.Add(PushHistory + 30*time.Minute)),
+	}
+	var kept []string
+	for i := range 2 {
+		e := openApplyEstate(t)
+		e.apply(records...)
+		var left []string
+		if err := e.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(t.Context(),
+				`SELECT push_id FROM code_pushes WHERE repo_id = 'repo-a' ORDER BY position, push_id`)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					return err
+				}
+				left = append(left, id)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("read the pushes left: %v", err)
+		}
+		if fmt.Sprint(left) != "[p2 p3 p4]" {
+			t.Fatalf("applier %d keeps %v, want [p2 p3 p4]: p1 past the horizon removed, and the read "+
+				"stopped at p2 inside it, keeping p3 behind it", i, left)
+		}
+		if i > 0 && fmt.Sprint(left) != fmt.Sprint(kept) {
+			t.Fatalf("two appliers of the same records keep %v and %v", kept, left)
+		}
+		kept = left
 	}
 }
 

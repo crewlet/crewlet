@@ -60,6 +60,24 @@ func TestEveryCodeReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 			_, err := reader.Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app", Fresh: f})
 			return err
 		}},
+		{"Read(refs)", func(f statelog.Freshness) error {
+			_, err := reader.Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadRefs, Repo: "app", Fresh: f})
+			return err
+		}},
+		{"Read(introduced)", func(f statelog.Freshness) error {
+			_, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadIntroduced,
+				Introduced: &code.IntroducedQuery{RepoID: id}, Fresh: f})
+			return err
+		}},
+		{"ResolveRef", func(f statelog.Freshness) error {
+			_, err := reader.ResolveRef(ctx, code.RefQuery{Asker: asker, Repo: "app", Ref: "main", Fresh: f})
+			if errors.Is(err, code.ErrRefNotFound) {
+				// ANSWERED: the repository holds no main, which only a read
+				// that was served can say.
+				return nil
+			}
+			return err
+		}},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			for unit, ask := range map[string]statelog.Freshness{
@@ -106,6 +124,17 @@ func TestACodeReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 		},
 		"Resolve": func() error {
 			_, err := n.reader.Resolve(t.Context(), code.ResolveQuery{Name: "app", Fresh: ask})
+			return err
+		},
+		"ResolveRef": func() error {
+			_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: asker, Repo: "app", Ref: "main",
+				Fresh: ask})
+			return err
+		},
+		"Read(introduced) at session": func() error {
+			_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadIntroduced,
+				Introduced: &code.IntroducedQuery{RepoID: id},
+				Fresh:      statelog.Freshness{Level: statelog.ReadSession, MinPosition: res.Position}})
 			return err
 		},
 	} {

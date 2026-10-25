@@ -135,6 +135,11 @@ type fakeNode struct {
 	codeSeq   uint64
 	codeErr   error
 
+	// codeHalf, where it is set, is this node's code half in place of the
+	// fake's own answers: a REAL reader, for a case about what the code
+	// domain itself answers on one node and the walk makes of it.
+	codeHalf CodeServer
+
 	// holdProposals, when set, is a committer whose batch is held: every
 	// proposal waits inside it until the channel is closed, counted in
 	// proposing as it arrives — a push queued behind its repository's
@@ -331,8 +336,14 @@ func (f fakeUsage) ReadsElided(context.Context, string, string) (int64, error) {
 
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
+	var half CodeServer = f
+	f.mu.Lock()
+	if f.codeHalf != nil {
+		half = f.codeHalf
+	}
+	f.mu.Unlock()
 	return Backend{
-		Tracker: f, PageWriter: f, Knowledge: f, Backlinks: f, Usage: fakeUsage{f}, Code: f,
+		Tracker: f, PageWriter: f, Knowledge: f, Backlinks: f, Usage: fakeUsage{f}, Code: half,
 		Identity: f.directory,
 		Writer: func(a Actor) TrackerWriter {
 			f.mu.Lock()

@@ -111,6 +111,7 @@ var sentinels = []sentinel{
 	{"code.ErrNotYet", code.ErrNotYet},
 	{"code.ErrPurging", code.ErrPurging},
 	{"code.ErrRecordCap", code.ErrRecordCap},
+	{"code.ErrRefNotFound", code.ErrRefNotFound},
 	{"code.ErrRepoNotFound", code.ErrRepoNotFound},
 	{"code.ErrSnapshotMoved", code.ErrSnapshotMoved},
 	{"code.ErrSuperseded", code.ErrSuperseded},

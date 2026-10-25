@@ -314,6 +314,20 @@ func recordedCommands(cmds []Command) (string, error) {
 // PushHistory by the record's broker instant — at most HorizonDeletesPerRecord
 // of them, and no more once their bytes reach HorizonBytesPerRecord — and
 // answers how many it removed.
+//
+// OLDEST BY POSITION, STOPPING AT THE FIRST INSIDE THE HORIZON. The rows are
+// read in log order (code_pushes_repo_idx, replicated 0056) and taken while
+// their instant is before the horizon, and the first row that is not ends the
+// read. NEVER A FILTER ON THE INSTANT: the index orders by position, so `at <
+// ?` seeks nothing there, and over position order it would walk the
+// repository's whole history — 181 days of pushes — on every push record
+// that found fewer than its LIMIT expired, to find the few that were.
+// Stopped, the read costs the rows it removes and one more. A record's
+// instant is the broker's, and a stream leader's change can stamp a later
+// record earlier; such a row waits for the one before it, at most the
+// members' clock skew past its own horizon — and every node, holding the
+// same rows in the same order, removes the same ones, never one inside the
+// horizon.
 func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	budget int) (int, error) {
 
@@ -321,8 +335,9 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 	if limit <= 0 {
 		return 0, nil
 	}
-	expired, _, err := pushesWithin(ctx, tx, HorizonBytesPerRecord, expiredPushesSQL, repoID,
-		store.EncodeTime(at.brokerAt.Add(-PushHistory)), limit)
+	horizon := store.EncodeTime(at.brokerAt.Add(-PushHistory))
+	expired, _, err := pushesWithin(ctx, tx, HorizonBytesPerRecord,
+		func(instant int64) bool { return instant >= horizon }, expiredPushesSQL, repoID, limit)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's expired pushes: %w", repoID, err)
 	}
@@ -454,7 +469,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	budget := PurgePartRows
 	deleted := 0
 
-	pushIDs, cut, err := pushesWithin(ctx, tx, PurgePartBytes, purgePushesSQL, p.RepoID, budget)
+	pushIDs, cut, err := pushesWithin(ctx, tx, PurgePartBytes, nil, purgePushesSQL, p.RepoID, budget)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's pushes to purge: %w", p.RepoID, err)
 	}
@@ -645,7 +660,15 @@ func keySet(ctx context.Context, tx *sql.Tx, query string, keys []string) (map[s
 // were bounded by what they weigh rather than by the query's LIMIT. Every
 // node holds the same rows with the same widths, so every node keeps the
 // same ids.
-func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, query string,
+//
+// stop, where it is given, ends the read at the first row it holds for: the
+// query then selects a THIRD column, which stop is asked of, and the row it
+// holds for is not kept — how the push-history horizon ends at the first push
+// inside it, in the one order every node reads (expirePushes), where a filter
+// in the statement would walk every push the repository keeps. A read ended by
+// stop is not cut: what bounded it is the rows' age, not their weight. The
+// purge passes none and keeps its two-column statement.
+func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, stop func(int64) bool, query string,
 	args ...any) (ids []string, cut bool, err error) {
 
 	rows, err := tx.QueryContext(ctx, query, args...)
@@ -659,9 +682,16 @@ func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, query string,
 			return ids, true, nil
 		}
 		var id string
-		var width int64
-		if err := rows.Scan(&id, &width); err != nil {
+		var width, third int64
+		dest := []any{&id, &width}
+		if stop != nil {
+			dest = append(dest, &third)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, false, err
+		}
+		if stop != nil && stop(third) {
+			return ids, false, nil
 		}
 		ids = append(ids, id)
 		weighed += width
@@ -710,8 +740,10 @@ const (
 		live_bytes = live_bytes + ?, live_objects = live_objects + ?, pushes = pushes + ?,
 		last_push_at = ?, version = ?, tombstones_through = MAX(tombstones_through, ?) WHERE id = ?`
 	tombstonesHeldSQL = `SELECT tombstones FROM code_repos WHERE id = ?`
-	expiredPushesSQL  = `SELECT push_id, row_bytes FROM code_pushes WHERE repo_id = ? AND at < ?
-		ORDER BY at, position, push_id LIMIT ?`
+	// expiredPushesSQL reads a repository's oldest pushes in log order with
+	// the instant expirePushes stops at — no filter on it: see there.
+	expiredPushesSQL = `SELECT push_id, row_bytes, at FROM code_pushes WHERE repo_id = ?
+		ORDER BY position, push_id LIMIT ?`
 	deletePushesSQL = `DELETE FROM code_pushes
 		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 	tombstonesOldestSQL = `SELECT ref, position, at FROM code_refs WHERE repo_id = ? AND target = ''
@@ -723,7 +755,7 @@ const (
 		tombstones = tombstones - ? WHERE id = ?`
 	purgePartsSQL  = `SELECT purge_parts FROM code_repos WHERE id = ?`
 	purgePushesSQL = `SELECT push_id, row_bytes FROM code_pushes WHERE repo_id = ?
-		ORDER BY at, position, push_id LIMIT ?`
+		ORDER BY position, push_id LIMIT ?`
 	purgeRefsSQL  = `SELECT ref, target FROM code_refs WHERE repo_id = ? ORDER BY ref LIMIT ?`
 	purgePacksSQL = `SELECT pack_id, size, objects, state FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`

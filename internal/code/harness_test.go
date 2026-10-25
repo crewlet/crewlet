@@ -78,6 +78,9 @@ type node struct {
 	store   *code.Store
 	reader  *code.Reader
 	waiter  *testWaiter
+	// authority is the code log's read authority the reader reads through:
+	// a case builds a reader of its own over it.
+	authority *statelog.Reader
 
 	// chart is the roster the reader judges a seat by — set by a case about
 	// grants before it reads, and nil otherwise: no chart, as a reader built
@@ -225,7 +228,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	}
 	n := &node{
 		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(), pub: pub,
-		store: lifecycle, waiter: waiter,
+		store: lifecycle, waiter: waiter, authority: authority,
 	}
 	reader, err := code.NewReader(code.ReaderOptions{Log: authority,
 		Roster: func() code.Roster { return n.chart }})

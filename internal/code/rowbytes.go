@@ -97,13 +97,9 @@ func timeBytes(t time.Time) int {
 	return len(t.AppendFormat(buf[:0], time.RFC3339Nano)) + 2
 }
 
-// boolBytes is the length of a JSON boolean.
-func boolBytes(b bool) int {
-	if b {
-		return len("true")
-	}
-	return len("false")
-}
+// trueBytes is the length of a JSON true: every boolean a row carries is
+// omitempty, so the one value one is ever written with.
+const trueBytes = len("true")
 
 // field is the length of one member `"key":` plus its value of length v,
 // with the comma that separates it from the member before when it is not the
@@ -144,6 +140,53 @@ func (r RefRow) encodedBytes() int {
 	return n + field("position", positionBytes(r.Position), false)
 }
 
+// encodedBytes is the length of the principal's JSON encoding.
+func (p Principal) encodedBytes() int {
+	n := 2 + field("kind", stringBytes(string(p.Kind)), true)
+	if p.OperatorID != "" {
+		n += field("operator_id", stringBytes(p.OperatorID), false)
+	}
+	if p.Seat != "" {
+		n += field("seat", stringBytes(p.Seat), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the move's JSON encoding.
+func (m RefMove) encodedBytes() int {
+	n := 2 + field("ref", stringBytes(m.Ref), true) + field("old", stringBytes(m.Old), false) +
+		field("new", stringBytes(m.New), false)
+	if m.Forced {
+		n += field("forced", trueBytes, false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the introducing push's JSON encoding: its
+// PushedBy's members flattened beside its own, as encoding/json writes an
+// embedded struct.
+func (row IntroducedRow) encodedBytes() int {
+	n := 2 + field("push_id", stringBytes(row.PushID), true) +
+		field("position", positionBytes(row.Position), false) +
+		field("at", timeBytes(row.At), false) +
+		field("principal", row.Principal.encodedBytes(), false) +
+		field("via", stringBytes(string(row.Via)), false)
+	if len(row.Moves) > 0 {
+		list := 2 + len(row.Moves) - 1
+		for _, m := range row.Moves {
+			list += m.encodedBytes()
+		}
+		n += field("moves", list, false)
+	}
+	if len(row.Introduced) > 0 {
+		n += field("introduced", stringsBytes(row.Introduced), false)
+	}
+	if row.Count != 0 {
+		n += field("count", intBytes(int64(row.Count)), false)
+	}
+	return n
+}
+
 // encodedBytes is the length of the pack's JSON encoding. The object is a
 // key's canonical spelling, thirty-six bytes, quoted.
 func (r PackRow) encodedBytes() int {
@@ -165,10 +208,10 @@ func (r PackRow) encodedBytes() int {
 func (p Protection) encodedBytes() int {
 	n := 2 + field("pattern", stringBytes(p.Pattern), true)
 	if p.AllowForce {
-		n += field("allow_force", boolBytes(true), false)
+		n += field("allow_force", trueBytes, false)
 	}
 	if p.AllowDelete {
-		n += field("allow_delete", boolBytes(true), false)
+		n += field("allow_delete", trueBytes, false)
 	}
 	return n + field("direct_push", stringBytes(string(p.DirectPush)), false)
 }
@@ -239,7 +282,7 @@ func (row PushRow) encodedBytes(commands int) int {
 		n += field("node", stringBytes(row.Node), false)
 	}
 	if row.Atomic {
-		n += field("atomic", boolBytes(true), false)
+		n += field("atomic", trueBytes, false)
 	}
 	n += field("commands", commands, false)
 	if row.PackID != "" {

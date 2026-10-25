@@ -34,14 +34,19 @@ import (
 //
 // The reads bounded by what a push row WEIGHS are held to a COVERING seek:
 // they read the widths code_pushes_repo_idx carries, so weighing a wide row
-// never reads its overflow pages.
+// never reads its overflow pages. And every statement reads in the order of
+// the index it seeks — a plan that sorts what it found reads all of it before
+// its LIMIT takes a row — but those [sortingStatements] names, over a set
+// something else bounds.
 //
-// Mutation: drop `INDEXED BY` from headSQL and the head seeks
+// Mutation: drop `INDEXED BY` from liveRefSQL and the head seeks
 // code_refs_changed_idx on repo_id alone; test `ref IN (SELECT value FROM
 // json_each(?))` in refsNamedSQL and it seeks repo_id alone; drop `position >=
 // ?` from refsDeltaAfterSQL and the page seeks repo_id alone; drop row_bytes
 // from code_pushes_repo_idx and the purge's and the horizon's reads stop
-// covering.
+// covering; order the push listing by `at` again, which replicated 0056 moved
+// out of code_pushes_repo_idx's key, and it sorts every push of the
+// repository.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -66,6 +71,26 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 				if !slices.ContainsFunc(plan, func(line string) bool { return strings.Contains(line, seek) }) {
 					t.Errorf("%s does not seek %q:\n%s", name, seek, strings.Join(plan, "\n"))
 				}
+			}
+			// AND THE ORDER IS THE SEEK'S: a statement whose ORDER BY
+			// the index it seeks does not serve SORTS every row the seek
+			// finds before its LIMIT takes one — a push listing still
+			// ordered by the instant replicated 0056 moved out of
+			// code_pushes_repo_idx's key would read every push of the
+			// repository, its 181 days, on every page. Two-sided: a
+			// statement declared to sort that no longer does loses the
+			// declaration.
+			sorts := slices.ContainsFunc(plan, func(line string) bool {
+				return strings.Contains(line, "USE SORTER") || strings.Contains(line, "TEMP B-TREE")
+			})
+			why, declared := sortingStatements[name]
+			switch {
+			case sorts && !declared:
+				t.Errorf("%s sorts what it seeks rather than reading it in its index's order:\n%s",
+					name, strings.Join(plan, "\n"))
+			case !sorts && declared:
+				t.Errorf("%s is declared to sort (%s) and its plan reads in its index's order: "+
+					"drop the declaration:\n%s", name, why, strings.Join(plan, "\n"))
 			}
 		})
 	}
@@ -139,6 +164,15 @@ type statement struct {
 	seeks []string
 }
 
+// sortingStatements is every registered statement whose plan may SORT what it
+// seeks, by name, and why: a sort is allowed only over a set something other
+// than a repository's size bounds. Every other statement reads in the order
+// of the index it seeks.
+var sortingStatements = map[string]string{
+	"protections of": "one listing page's rules, at most MaxReposPerPage of MaxProtectionsPerRepo " +
+		"each: a seek a repository of the page, whose union no one index orders",
+}
+
 // The PRIMARY KEY indexes the plans name, as the driver names them.
 const (
 	repoKey       = "sqlite_autoindex_code_repos_1"
@@ -174,7 +208,7 @@ func registeredStatements() map[string]statement {
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
 		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"tombstones held":     {tombstonesHeldSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"expired pushes":      {expiredPushesSQL, []any{"repo-1", 100, HorizonDeletesPerRecord}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND at<?)"}},
+		"expired pushes":      {expiredPushesSQL, []any{"repo-1", HorizonDeletesPerRecord}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)"}},
 		"delete pushes":       {deletePushesSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"oldest tombstones":   {tombstonesOldestSQL, []any{"repo-1", MaxRecordRows}, []string{"code_refs_tombstones_idx (repo_id=?)"}},
 		"delete refs":         {deleteRefsSQL, []any{"repo-1", sweep}, []string{refsKey + " (repo_id=? AND ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
@@ -211,10 +245,14 @@ func registeredStatements() map[string]statement {
 		"delta rows":          {deltaRowsSQL, []any{"repo-1", 400, 551}, []string{"COVERING INDEX code_refs_changed_idx (repo_id=? AND position>?)", "COVERING INDEX code_packs_added_idx (repo_id=? AND added_position>?)"}},
 		"push":                {pushSQL, []any{"repo-1-push-000001"}, []string{pushKey + " (push_id=?)"}},
 		"pushes first":        {pushesFirstSQL, []any{"repo-1", 50}, []string{"code_pushes_repo_idx (repo_id=?)"}},
-		"pushes after":        {pushesAfterSQL, []any{"repo-1", 100, 100, 100, 100, "p", 50}, []string{"code_pushes_repo_idx (repo_id=? AND at<=?)"}},
+		"pushes after":        {pushesAfterSQL, []any{"repo-1", 100, 100, "p", 50}, []string{"code_pushes_repo_idx (repo_id=? AND position<=?)"}},
+		"pushes above":        {pushesAboveSQL, []any{"repo-1", 10, 100, 100}, []string{"code_pushes_repo_idx (repo_id=? AND position>? AND position<=?)"}},
+		"pushes above after":  {pushesAboveAfterSQL, []any{"repo-1", 10, 100, 10, "p", 100}, []string{"code_pushes_repo_idx (repo_id=? AND position>=? AND position<=?)"}},
+		"pushes below":        {pushesBelowSQL, []any{"repo-1", 100, 100}, []string{"code_pushes_repo_idx (repo_id=? AND position<?)"}},
 		"repos":               {reposSQL, []any{`["active","archived"]`, "", 100}, []string{"code_repos_name_idx (name>?)", refsKey + " (repo_id=? AND ref=?)"}},
 		"protections of":      {protectionsOfSQL, []any{`["repo-1","repo-2"]`}, []string{protectionKey + " (repo_id=?)"}},
-		"head":                {headSQL, []any{"repo-1", "refs/heads/main"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
+		"live ref":            {liveRefSQL, []any{"repo-1", "refs/heads/main"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
+		"refs under":          {refsUnderSQL, []any{"repo-1", "refs/heads/", "refs/heads0", 200}, []string{"INDEX " + liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
 		"lives":               {livesSQL, []any{"", 1000}, []string{"code_repos_name_idx (name>?)"}},
 		"due purging":         {duePurgingSQL, []any{-1, -1, "", 100}, []string{"code_repos_purging_idx (deleted_at>=?)"}},
 		"due deleted":         {dueDeletedSQL, []any{100, -1, -1, "", 100}, []string{"code_repos_deleted_idx (deleted_at>=? AND deleted_at<=?)"}},

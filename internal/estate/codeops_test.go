@@ -2,8 +2,10 @@ package estate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -14,6 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // ---- a fake node's code half ------------------------------------------------ //
@@ -284,11 +289,13 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 }
 
 // EVERY CODE OPERATION CROSSES WHOLE: a push's proposal, the admission's
-// resolve, a cache's snapshot page, the receiver's pending wait and the REST
-// routes' listing reach a data node from a node that holds no data with their
-// arguments as they were sent, their answers come back as they were given —
-// a snapshot's packs, refs and cursor, a repository's detail and its limits —
-// and a refusal keeps the identity the host and the cache branch on.
+// resolve, a cache's snapshot page, the receiver's pending wait, the REST
+// routes' listing, a seat's refs listing and a git node's introduced pages
+// reach a data node from a node that holds no data with their arguments as
+// they were sent, their answers come back as they were given — a snapshot's
+// packs, refs, pushes and cursor, a repository's detail and its limits, the
+// refs and the introducing pushes — and a refusal keeps the identity the host
+// and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -306,8 +313,15 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		Size: 100, IndexBytes: 40, ReverseBytes: 20, GitChecksum: "5555555555555555555555555555555555555555",
 		Objects: 2, Kind: "push", State: "live", Added: at,
 	}
-	cursor := &code.StateCursor{Full: true, Phase: "refs", From: at, Seen: at, Stream: created,
-		After: "refs/heads/a"}
+	cursor := &code.StateCursor{Phase: "pushes", Pushes: true, From: at, Since: at, Seen: at, Stream: created,
+		After: "1000041/push-1"}
+	introduced := code.IntroducedRow{
+		PushedBy: code.PushedBy{PushID: "push-1", Position: at, At: created, Via: code.ViaGit,
+			Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}},
+		Moves: []code.RefMove{{Ref: "refs/heads/main", Old: code.ZeroOID,
+			New: "6666666666666666666666666666666666666666", Forced: true}},
+		Introduced: []string{"6666666666666666666666666666666666666666"}, Count: 2,
+	}
 	d := &codeDesk{codeAnswers: codeAnswers{
 		pos: at, ref: ref, out: code.PushOutcome{Found: true, Position: at,
 			Push: code.PushRow{PushID: "push-1", RepoID: ref.ID, Position: at, At: created,
@@ -315,17 +329,20 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 					Ref: "refs/heads/main", Old: code.ZeroOID,
 					New: "6666666666666666666666666666666666666666", Result: code.ResultOK}},
 				ReceivedAt: created}},
-		snap: code.RepoSnapshot{Repo: ref, Position: at, StreamCreated: created, Full: true,
+		snap: code.RepoSnapshot{Repo: ref, Position: at, StreamCreated: created,
 			Packs: []code.PackRow{pack},
 			Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 				Position: at}},
-			Next: cursor},
+			Pushes: []code.IntroducedRow{introduced},
+			Next:   cursor},
 		read: code.ReadAnswer{Repo: &code.RepoDetail{
 			RepoSummary: code.RepoSummary{RepoRef: ref, Head: "6666666666666666666666666666666666666666",
 				Pushes: 7, LastPushAt: created},
 			Branches: 2, Tags: 1, Tombstones: 4, CreatedAt: created,
 			Limits: code.Limits{MaxPushBytes: 1 << 20, MaxBlobBytes: 1 << 10, RepoMaxBytes: 1 << 30},
-		}, Next: "c-2", Position: at, Level: statelog.ReadSession},
+		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
+			Position: at}}, Introduced: []code.IntroducedRow{introduced},
+			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
 	serveDesk(t, f, d)
 	ctx, seam := t.Context(), f.client.Code()
@@ -351,7 +368,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("resolve asked %+v, want %+v", got, resolveQ)
 	}
 
-	stateQ := code.StateQuery{RepoID: ref.ID, Since: at, Cursor: cursor,
+	stateQ := code.StateQuery{RepoID: ref.ID, Since: at, Cursor: cursor, Pushes: true,
 		Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}}
 	if got, err := seam.RepoState(ctx, stateQ); err != nil || !reflect.DeepEqual(got, d.snap) {
 		t.Errorf("repo state = (%+v, %v), want %+v", got, err, d.snap)
@@ -375,6 +392,23 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 	if got := d.last(); !reflect.DeepEqual(got, readQ) {
 		t.Errorf("read asked %+v, want %+v", got, readQ)
+	}
+	for _, q := range []code.ReadQuery{
+		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadRefs, Repo: "app",
+			Prefix: "refs/heads/seats/dev/", Cursor: "refs/heads/seats/dev/a", Limit: 7,
+			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
+		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, After: at,
+			Through: statelog.Position{Stream: codeStream, Generation: 2, Seq: 90}}, Cursor: "1000041/push-1",
+			Limit: 1, Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}},
+		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, Descending: true,
+			Before: at}, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+	} {
+		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {
+			t.Errorf("read %s = (%+v, %v), want %+v", q.Kind, got, err, d.read)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, q) {
+			t.Errorf("read %s asked %+v, want %+v", q.Kind, got, q)
+		}
 	}
 
 	// A REFUSAL KEEPS ITS IDENTITY: the admission answers a missing
@@ -557,6 +591,94 @@ func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 		if err := build(write); err != nil {
 			t.Errorf("a router whose write attempt is %v, over the %v a routed push needs, "+
 				"answered %v", write, bound, err)
+		}
+	}
+}
+
+// platform is a chart of one unit, Platform, with one full_access seat, dev,
+// in it: as the code domain's grant rules read a chart.
+type platform struct{}
+
+func (platform) Seat(handle string) (code.RosterSeat, bool) {
+	return code.RosterSeat{Handle: "dev", Tier: code.TierFullAccess, Unit: "Platform"}, handle == "dev"
+}
+func (platform) Lead(string) string                { return "" }
+func (platform) Leads(string) []string             { return nil }
+func (platform) Within(unit, ancestor string) bool { return unit == ancestor }
+
+// codeRows is a replicated estate whose code rows hold one repository, web —
+// Platform's, `visibility: unit` — applied through the code log's position at,
+// as a reader of it finds it.
+func codeRows(t *testing.T, at statelog.Position) store.ReplicatedHandle {
+	t.Helper()
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = node.Close() })
+	for _, row := range []struct {
+		statement string
+		args      []any
+	}{
+		{`INSERT INTO code_repos (id, name, status, managed_by, owner_kind, owner, visibility, default_branch,
+			created_at) VALUES ('repo-web', 'web', 'active', 'config', 'unit', 'Platform', 'unit', 'main', 0)`, nil},
+		{`INSERT INTO code_names (token, name, repo_id) VALUES (?, 'web', 'repo-web')`,
+			[]any{code.NameToken("web")}},
+		{`INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, ?, ?, 1, 0, 0)`, []any{at.Stream, int64(at.Generation), int64(at.Seq)}},
+	} {
+		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), row.statement, row.args...)
+			return err
+		}); err != nil {
+			t.Fatalf("seed the code rows: %v", err)
+		}
+	}
+	return db
+}
+
+// A SEAT'S READ ON A NODE WITH NO CHART IS ANSWERED BY A PEER (M3-O82). The
+// node the walk asks first holds no chart — between its code reader's start
+// and its first epoch's install — and its reader refuses the seat's read
+// ABOUT ITSELF, code.ErrNotServing, which the walk reads as a node that ran
+// nothing; the next node, holding a chart, answers it. Both read the same
+// rows with REAL readers: what differs is the chart alone.
+//
+// Mutation: a reader with no chart answering AccessNone again → the first node
+// answers not_permitted, a definite answer, and the walk ends there.
+func TestASeatsReadOnANodeWithNoChartIsAnsweredByAPeer(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-1", "data-2")
+	at := statelog.Position{Stream: codeStream, Generation: 1, Seq: 4}
+	authority, err := statelogtest.LocalReader(code.Domain{}, codeRows(t, at).Reader(), at)
+	if err != nil {
+		t.Fatalf("the code log's read authority: %v", err)
+	}
+	half := func(chart code.Roster) CodeServer {
+		r, err := code.NewReader(code.ReaderOptions{Log: authority,
+			Roster: func() code.Roster { return chart }})
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		return code.Served{Reader: r}
+	}
+	nodes, _ := f.placement.Holders()
+	order := f.client.order(opCodeRead.spec, nodes)
+	chartless, charted := f.nodes[order[0]], f.nodes[order[1]]
+	chartless.set(func(n *fakeNode) { n.codeHalf = half(nil) })
+	charted.set(func(n *fakeNode) { n.codeHalf = half(platform{}) })
+
+	answer, err := f.client.Code().Read(t.Context(), code.ReadQuery{
+		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadRepo, Repo: "web",
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+	if err != nil || answer.Repo == nil || answer.Repo.Access != code.AccessWrite.String() {
+		t.Fatalf("dev's read of web through the walk = %+v, %v; want web at write, answered by "+
+			"the node holding a chart", answer.Repo, err)
+	}
+	for _, n := range []*fakeNode{chartless, charted} {
+		n.mu.Lock()
+		asked := n.requests
+		n.mu.Unlock()
+		if asked != 1 {
+			t.Errorf("%s was asked %d times, want once: the node with no chart first, then its peer",
+				n.name, asked)
 		}
 	}
 }
