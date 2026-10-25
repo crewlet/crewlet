@@ -3,7 +3,6 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -162,18 +161,26 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	}
 }
 
-// A NODE THAT HOLDS NO DATA, IN A MAINTENANCE MODE, SERVES A FILE'S BYTES AND
-// TAKES NONE. The mode is the node's promise that it starts nothing that
-// writes, and a write it routes to a data node is one it starts — so its
-// upload and removal routes and its purge are absent, as on a data node in the
-// mode, while a download is a read and is served as on any node.
+// A NODE THAT HOLDS NO DATA, IN A MAINTENANCE MODE, READS A FILE AND HANDS OUT
+// NO WRITER. The mode is the node's promise that it starts nothing that
+// writes, and a write it routes to a data node is one it starts — so it hands
+// no tracker writer to any surface, as a data node in the mode does not, while
+// a read is served as on any node: the file's row through a data node, its
+// bytes from the store the fleet shares.
 //
 // Such a node used to be handed the router's writer all the same, the data
 // node's mode taken to be that node's to answer for. In a capacity window, with
-// every data node in the mode too, its upload streamed up to a gibibyte into
-// the object store before a data node refused the row, as `unavailable` a
-// client retries; beside a data node in normal mode, as here, it simply
-// landed.
+// every data node in the mode too, a write streamed up to a gibibyte into the
+// object store before a data node refused the row, as `unavailable` a client
+// retries; beside a data node in normal mode, as here, it simply landed.
+//
+// ASKED OF THE ENGINE, NOT OVER HTTP, because a node without `data` serves no
+// API: `ingress` needs `data`, so `crewlet run` builds none of the routes there
+// (no config surface either — no identity directory to ask who holds a seat),
+// and what the mode decides is what the engine hands every surface built per
+// request. Where those surfaces ARE built, on a data node in the mode, the
+// halves it hands the human write surface are internal/api's
+// TestAMaintenanceNodeServesAFilesBytesAndWritesNone.
 func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 	t.Parallel()
 	logs.attribute(t)
@@ -196,36 +203,45 @@ func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 		t.Fatalf("the premise: the data node takes the upload; it answered %d %v", status, answer)
 	}
 
-	// SERVING THE FIXTURE'S CREDENTIAL, which [download] and [upload]
-	// present: the routes this case asks about are guarded like every other.
 	agentBoot := statelessBootstrap(t.TempDir(), dataBoot, ring)
-	withCredential(t, &agentBoot)
+	if agentBoot.ServesAPI() {
+		t.Fatal("the premise: a node without data serves no API, so the engine is what is asked")
+	}
 	agent := bootNodeWith(t, engine.Options{
 		Bootstrap: &agentBoot, Company: cfg, ActivatedAt: harnessActivation,
 		Mode: statelog.ModeMaintenance, Environment: nodeEnvironment(nil),
 	}, model)
-	agent.app, agent.server = serveAPI(t, agent.engine, &agentBoot, nil)
 
-	waitFor(t, "the stateless node to serve the file", func() bool {
-		status, got := download(t, agent, "ENG", "reports/q3.csv")
-		return status == http.StatusOK && string(got) == content
+	var read []byte
+	waitFor(t, "the stateless node to read the file", func() bool {
+		reads := engine.OperatorNative(agent.engine)
+		if !reads.Tracker {
+			return false
+		}
+		detail, err := reads.Work.File(t.Context(), "ENG", "reports/q3.csv",
+			statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			return false
+		}
+		object, named := detail.File.Content()
+		if !named {
+			return false
+		}
+		rc, err := agent.engine.Objects().Open(t.Context(), object)
+		if err != nil {
+			return false
+		}
+		defer rc.Close()
+		if read, err = io.ReadAll(rc); err != nil {
+			return false
+		}
+		return true
 	})
-	status, answer := upload(t, agent, "ENG", "reports/q4.csv", []byte(content))
-	if status != http.StatusNotFound || answer["error"] != "no_route" {
-		t.Errorf("an upload to a stateless node in a maintenance mode answered %d %v, "+
-			"want the mux's own 404 no_route", status, answer)
+	if string(read) != content {
+		t.Errorf("the stateless node read %q, want %q", read, content)
 	}
-	// THE PURGE IS A WRITE TOO, and is absent for the upload's reason: the
-	// node hands out no tracker writer, so the route answers as one it does
-	// not serve before anything is read — the item named need not exist.
-	if status, answer := operatorCall(t, agent, http.MethodPost,
-		"/work/items/ENG-1/purge"); status != http.StatusNotFound || answer["error"] != "no_route" {
-		t.Errorf("a purge on a stateless node in a maintenance mode answered %d %v, "+
-			"want the mux's own 404 no_route", status, answer)
-	}
-	if _, err := data.engine.Tracker().File(t.Context(), "ENG", "reports/q4.csv",
-		statelog.Freshness{Level: statelog.ReadStale}); !errors.Is(err, tracker.ErrNoFile) {
-		t.Errorf("the data node holds the refused upload's row (%v)", err)
+	if _, ok := engine.OperatorWorkWriter(agent.engine); ok {
+		t.Error("a stateless node in a maintenance mode hands out a tracker writer")
 	}
 }
 
