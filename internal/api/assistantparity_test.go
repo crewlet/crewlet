@@ -1,0 +1,543 @@
+package api_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/assistant"
+	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
+	"github.com/crewlet/crewlet/internal/tracker"
+)
+
+// TestPermissionParityAcrossFivePrincipals: THE ASSISTANT SEES WHAT ITS PERSON
+// SEES, AND NOTHING ELSE (ADR-0049), for every read tool in the catalogue.
+//
+// Four people sign in to one company through the guard's real session arm:
+// an administrator, a person holding only the tracker, one holding only the
+// knowledge base, and one holding nothing but the overview everybody reads.
+// For each of them, every catalogue read is made twice: once as the person,
+// with their own cookie, and once through the assistant, as a scripted model
+// calling the tool in a real turn of the real orchestrator, whose request the
+// App's own dispatcher carries on a grant derived from that cookie through
+// the App's own guard. The answers must be the SAME BYTES with the same status:
+// an answer stays that answer, and a refusal stays that refusal. The
+// company's sources are real enough that the split is real: every tool's
+// question is registered, so a refusal is the authority's and never a route
+// this fixture forgot to mount, and the walk fails when any principal sees
+// neither an answer nor a refusal anywhere.
+//
+// The catalogue's offering is a filter and never authority, so the grant is
+// also sent every read the person was NOT offered, straight through the
+// dispatcher, and must be refused exactly as the cookie is.
+//
+// And two principals may not use the assistant at all, a session exchanged
+// from a Tier A token and a machine token: the same requests made with their
+// own credential are answered, while no grant can be derived from either and
+// no turn is started for either, so through the assistant every tool is a
+// refusal.
+//
+// Zero tolerance: any difference fails the suite, the one exception being an
+// instant an answer reads off the wall clock while it is asked ([sameAnswer]).
+// Mutation: give the principal an assistant grant resolves to one more
+// permission (internal/api/auth's assist arm), and the overview-only person's
+// assistant reads the tracker; let iam.Assistable admit everybody, and a
+// token's session derives a grant and a machine token is started a turn.
+func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
+	t.Parallel()
+	sources := parityWorld(t)
+	reads := readTools()
+	people := []struct {
+		name   string
+		grants []iam.Grant
+	}{
+		{"an administrator", []iam.Grant{iam.GrantAdmin}},
+		{"a tracker-only person", []iam.Grant{iam.GrantTracker}},
+		{"a knowledge-only person", []iam.Grant{iam.GrantKnowledge}},
+		{"an overview-only person", []iam.Grant{}},
+	}
+	for _, who := range people {
+		t.Run(who.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newAssistAppWith(t, who.grants, sources.mount)
+			person := fx.principal(t)
+			offered := catalog.Offered(person, nil)
+
+			// THROUGH THE ASSISTANT: a turn per offered read, the
+			// scripted model calling it once and answering.
+			sent := &recordingDispatcher{inner: fx.disp}
+			var rounds []assistanttest.Round
+			var asked []catalog.Tool
+			for _, tool := range offered {
+				if tool.Kind != catalog.KindRead {
+					continue
+				}
+				asked = append(asked, tool)
+				rounds = append(rounds, assistanttest.Call("c-"+tool.Name, tool.Name,
+					assistanttest.ExampleArgs(t, tool.Parameters)), assistanttest.Say("Done."))
+			}
+			rig := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: rounds,
+				Person: &person, Catalogue: catalog.Curated{}, Dispatcher: sent,
+				Revoker: fx.d})
+			onAppClock(rig)
+			answered, refused := 0, 0
+			for _, tool := range asked {
+				began := time.Now()
+				frames := askOne(t, rig, fx, tool.Name, nil)
+				got := sent.take(t, tool.Name)
+				status, body := fx.asPerson(t, got.request)
+				if got.response.Status != status ||
+					!sameAnswer(t, got.response.Body, body, time.Since(began)) {
+					t.Errorf("%s through the assistant answered %d %s, and the person %d %s",
+						tool.Name, got.response.Status, got.response.Body, status, body)
+				}
+				step := lastStep(t, frames, tool.Name)
+				switch {
+				case status == http.StatusUnauthorized || status == http.StatusForbidden:
+					refused++
+					if step.State != wire.StepRefused {
+						t.Errorf("%s was refused to the person (%d) and the assistant's step "+
+							"reads %s", tool.Name, status, step.State)
+					}
+				case status < 300:
+					answered++
+					if step.State != wire.StepDone {
+						t.Errorf("%s answered the person and the assistant's step reads %s",
+							tool.Name, step.State)
+					}
+				}
+			}
+
+			// THE OFFERING IS NEVER AUTHORITY: every read this person was
+			// not offered, sent on a grant of theirs straight through the
+			// dispatcher, is refused as their cookie is.
+			grant, _ := fx.deriveWith(t, fx.withCookie, readTurn())
+			for _, tool := range reads {
+				if slices.ContainsFunc(asked, func(o catalog.Tool) bool { return o.Name == tool.Name }) {
+					continue
+				}
+				req, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
+				if err != nil {
+					t.Fatalf("%s: %v", tool.Name, err)
+				}
+				began := time.Now()
+				resp, err := fx.disp.Do(t.Context(), grant, req)
+				if err != nil {
+					t.Fatalf("Do %s: %v", tool.Name, err)
+				}
+				status, body := fx.asPerson(t, req)
+				if resp.Status != status || !sameAnswer(t, resp.Body, body, time.Since(began)) {
+					t.Errorf("%s (not offered) on the grant answered %d %s, and the person %d %s",
+						tool.Name, resp.Status, resp.Body, status, body)
+				}
+				if status == http.StatusUnauthorized || status == http.StatusForbidden {
+					refused++
+				}
+			}
+			// THE SPLIT IS REAL: everybody reads something, and everybody but
+			// an administrator is refused something, or the fixture is not
+			// testing what this principal may read.
+			admin := slices.Contains(who.grants, iam.GrantAdmin)
+			if answered == 0 || (!admin && refused == 0) {
+				t.Errorf("%s was answered %d and refused %d reads: the fixture does not "+
+					"split what this principal may read", who.name, answered, refused)
+			}
+		})
+	}
+
+	// THE TWO PRINCIPALS THE ASSISTANT REFUSES: each reads the company with
+	// its own credential, and gets no grant and no turn.
+	tierA := func(fx *assistApp) func(*http.Request) {
+		bearer := fx.tokenSession(t)
+		return func(r *http.Request) { r.AddCookie(bearer) }
+	}
+	machine := func(*assistApp) func(*http.Request) {
+		return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+fixtureToken) }
+	}
+	for _, refusedTo := range []struct {
+		name       string
+		credential func(*assistApp) func(*http.Request)
+	}{
+		{"a Tier A token's session", tierA},
+		{"a machine token", machine},
+	} {
+		t.Run(refusedTo.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newAssistAppWith(t, []iam.Grant{iam.GrantAdmin}, sources.mount)
+			present := refusedTo.credential(fx)
+			answered := 0
+			for _, tool := range reads {
+				req, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if status, _ := fx.serve(t, req, present); status < 300 {
+					answered++
+				}
+			}
+			if answered == 0 {
+				t.Fatalf("%s reads nothing with its own credential, so its refusal below "+
+					"proves nothing about the assistant", refusedTo.name)
+			}
+			grant, principal := fx.deriveWith(t, present, readTurn())
+			if grant != nil {
+				t.Fatalf("%s derived an assistant grant", refusedTo.name)
+			}
+			rig := assistanttest.NewRig(t, assistanttest.RigOptions{Person: &principal,
+				Catalogue: catalog.Curated{}, Dispatcher: fx.disp, Revoker: fx.d})
+			_, err := rig.AskWith("refused", "What is on my plate?", nil,
+				assistanttest.Grant{GrantID: uuid.Must(uuid.NewV7()),
+					ExpiresAt: time.Now().Add(time.Minute)})
+			if !errors.Is(err, assistant.ErrNotAvailable) {
+				t.Errorf("%s was started a turn: %v", refusedTo.name, err)
+			}
+		})
+	}
+}
+
+// askOne asks one question in a conversation of its own (titled, so no title
+// round is asked of the model), on a grant derived from the fixture person's
+// cookie, and reads the turn to its end.
+func askOne(t *testing.T, rig *assistanttest.Rig, fx *assistApp, name string,
+	page *wire.PageContext) []wire.Frame {
+
+	t.Helper()
+	// ONE QUESTION EVERY THREE SECONDS, a person's sustained turn rate, so
+	// the walk is never refused as a burst.
+	rig.Clock.Advance(3 * time.Second)
+	rig.Conversation = assistanttest.ID("conversation/" + name)
+	rig.Store.Seed(rig.Person.ID, rig.Conversation, "Asked about "+name)
+	grant, _ := fx.deriveWith(t, fx.withCookie, readTurn())
+	if grant == nil {
+		t.Fatal("the fixture's person derived no grant")
+	}
+	accepted, err := rig.AskWith(name, "Use "+name+".", page, grant)
+	if err != nil {
+		t.Fatalf("ask %s: %v", name, err)
+	}
+	return rig.Follow(accepted.TurnID, 0)
+}
+
+// onAppClock sets the rig's clock to the App's, so a grant the App's
+// delegations mint is judged live by the turn that carries it.
+func onAppClock(rig *assistanttest.Rig) { rig.Clock.Advance(clock.Sub(rig.Clock.Now())) }
+
+// sameAnswer reports whether two answers to one request are the same answer:
+// the same bytes, or the same JSON in which the only difference is an instant
+// the answer read off the wall clock while it was asked (an event store's
+// window is "the last thirty days" from the moment it is read). Such an
+// instant may differ by no more than elapsed, the time both requests took
+// between them; every other member must be equal exactly.
+func sameAnswer(t *testing.T, a, b []byte, elapsed time.Duration) bool {
+	t.Helper()
+	if bytes.Equal(a, b) {
+		return true
+	}
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return sameValue(x, y, elapsed)
+}
+
+func sameValue(x, y any, elapsed time.Duration) bool {
+	switch xv := x.(type) {
+	case map[string]any:
+		yv, ok := y.(map[string]any)
+		if !ok || len(xv) != len(yv) {
+			return false
+		}
+		for k, v := range xv {
+			w, held := yv[k]
+			if !held || !sameValue(v, w, elapsed) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		yv, ok := y.([]any)
+		if !ok || len(xv) != len(yv) {
+			return false
+		}
+		for i := range xv {
+			if !sameValue(xv[i], yv[i], elapsed) {
+				return false
+			}
+		}
+		return true
+	case string:
+		yv, ok := y.(string)
+		if !ok {
+			return false
+		}
+		if xv == yv {
+			return true
+		}
+		xt, errX := time.Parse(time.RFC3339Nano, xv)
+		yt, errY := time.Parse(time.RFC3339Nano, yv)
+		return errX == nil && errY == nil && yt.Sub(xt).Abs() <= elapsed
+	}
+	return reflectEqual(x, y)
+}
+
+// reflectEqual compares two decoded JSON scalars.
+func reflectEqual(x, y any) bool { return x == y }
+
+// readTools are the catalogue's read tools.
+func readTools() []catalog.Tool {
+	var out []catalog.Tool
+	for _, tool := range catalog.Tools() {
+		if tool.Kind == catalog.KindRead {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+// paritySources are one company's sources every parity App shares: a live
+// projection, an event store and a usage estate, a company, a coordination
+// store, a tracker, a knowledge base, a work index, the coding runs, the
+// artifacts and the configuration history, so EVERY catalogue read's
+// question is registered and its answer is the authority's to give.
+type paritySources struct {
+	queries.Sources
+	state  *livestate.LiveState
+	config *configapi.Service
+}
+
+// parityWorld builds the sources over one estate on a temporary path.
+func parityWorld(t *testing.T) paritySources {
+	t.Helper()
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "parity.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	company, err := config.ParseCompany([]byte(rosterCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": []byte("assistant-parity-key-of-32-bytes")}})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	configs, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet(),
+		Cipher: cipher, Holders: func(context.Context, []string, time.Time) (
+			map[string]configapi.SeatHolder, error) {
+			return nil, nil
+		}})
+	if err != nil {
+		t.Fatalf("configapi.New: %v", err)
+	}
+	state := livestate.New(livestate.WithClock(func() time.Time { return clock }))
+	estate := apiArtifacts{}
+	return paritySources{state: state, config: configs, Sources: queries.Sources{
+		State: state, Events: eventfan.Solo("node-a", db.Events()), Usage: db.Replicated(),
+		Company: companySource(t, company), Coord: coordmemory.New(),
+		Work: stubWorkReader{}, Pages: posturePages{}, WorkSearch: noWorkHits{},
+		Sandbox: noCodingRuns{}, Config: configs,
+		Artifacts: &queries.ArtifactsSource{Gate: artifactsGate(estate), Reads: estate},
+	}}
+}
+
+// mount hands an App the shared sources.
+func (s paritySources) mount(opts *api.Options) {
+	opts.State, opts.Sources = s.state, s.Sources
+}
+
+// noWorkHits is a work index that finds nothing.
+type noWorkHits struct{}
+
+func (noWorkHits) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
+	return tracker.SearchAnswer{Hits: []tracker.Ranked{}}, nil
+}
+
+// noCodingRuns is a node running no coding run.
+type noCodingRuns struct{}
+
+func (noCodingRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
+	return []sandbox.PendingRun{}, nil
+}
+
+func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, nil
+}
+
+// withCookie presents the fixture person's session cookie.
+func (a *assistApp) withCookie(r *http.Request) { r.AddCookie(a.cookie) }
+
+// tokenSession is a session cookie exchanged from the fixture's Tier A token:
+// the shape `crewlet` hands a browser that signed in with an operator's
+// bootstrap token, which acts as that token and never as a person.
+func (a *assistApp) tokenSession(t *testing.T) *http.Cookie {
+	t.Helper()
+	signer, err := session.New(session.Options{Material: a.keys,
+		Now: func() time.Time { return clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := iam.TokenLogin("fixture")
+	bearer, err := signer.Mint(session.Mint{Lineage: uuid.Must(uuid.NewV7()),
+		Person: login, Epoch: 1, Generation: 1, StartPosition: 1,
+		AbsoluteExpiresAt: clock.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// THE SESSION'S OWN ROW, as `POST /auth/token` writes one; who it acts
+	// as is composed from the Tier A entry by the guard, never from a row.
+	a.rows[login] = session.Identity{Applied: cookieApplied, Generation: 1,
+		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
+		Person:  session.PersonRow{Found: true, Epoch: 1, Stage: iam.StageActive, Login: login}}
+	return &http.Cookie{Name: a.cookie.Name, Value: bearer}
+}
+
+// deriveWith derives a grant through the App's own guard from the credential
+// present sets, as the assistant's turn route does, and answers the principal
+// the guard resolved beside it: nil and that principal when Derive refuses.
+func (a *assistApp) deriveWith(t *testing.T, present func(*http.Request),
+	req auth.AssistRequest) (exec.Grant, iam.Principal) {
+
+	t.Helper()
+	var g exec.Grant
+	var p iam.Principal
+	var err error
+	reached := false
+	h := a.app.Guard().Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		reached = true
+		p, _ = iam.From(r.Context())
+		g, err = a.d.Derive(r.Context(), req)
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/assistant/conversations", nil)
+	present(r)
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	switch {
+	case !reached:
+		t.Fatal("the guard refused the credential before Derive was asked")
+	case err != nil && !errors.Is(err, auth.ErrAssistRefused):
+		t.Fatalf("Derive: %v", err)
+	}
+	return g, p
+}
+
+// principal is the person the fixture's cookie resolves to.
+func (a *assistApp) principal(t *testing.T) iam.Principal {
+	t.Helper()
+	_, p := a.deriveWith(t, a.withCookie, readTurn())
+	if p.Kind != iam.KindPerson {
+		t.Fatalf("the fixture's cookie resolved %+v", p)
+	}
+	return p
+}
+
+// serve makes req as present's caller over the App's own handler.
+func (a *assistApp) serve(t *testing.T, req exec.Request, present func(*http.Request)) (
+	int, []byte) {
+
+	t.Helper()
+	target := req.Path
+	if len(req.Query) > 0 {
+		target += "?" + req.Query.Encode()
+	}
+	r := httptest.NewRequest(req.Method, target, bytes.NewReader(req.Body))
+	present(r)
+	rec := httptest.NewRecorder()
+	a.app.ServeHTTP(rec, r)
+	return rec.Code, rec.Body.Bytes()
+}
+
+// asPerson makes req as the fixture's person, with their cookie.
+func (a *assistApp) asPerson(t *testing.T, req exec.Request) (int, []byte) {
+	t.Helper()
+	return a.serve(t, req, a.withCookie)
+}
+
+// recordingDispatcher is the App's dispatcher with every exchange the
+// assistant made through it kept, so a suite compares the answer the turn
+// received with the one the person gets.
+type recordingDispatcher struct {
+	inner exec.Dispatcher
+
+	mu   sync.Mutex
+	sent []exchange
+}
+
+// exchange is one request a turn sent and what it was answered.
+type exchange struct {
+	request  exec.Request
+	response exec.Response
+}
+
+func (d *recordingDispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (
+	exec.Response, error) {
+
+	resp, err := d.inner.Do(ctx, g, r)
+	if err == nil {
+		d.mu.Lock()
+		d.sent = append(d.sent, exchange{request: r, response: resp})
+		d.mu.Unlock()
+	}
+	return resp, err
+}
+
+// take is the one exchange a turn calling tool made, removed from the record.
+func (d *recordingDispatcher) take(t *testing.T, tool string) exchange {
+	t.Helper()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.sent) != 1 {
+		t.Fatalf("a turn calling %s sent %d requests, want 1", tool, len(d.sent))
+	}
+	out := d.sent[0]
+	d.sent = nil
+	return out
+}
+
+// writes are the exchanges whose method is not a read.
+func (d *recordingDispatcher) writes() []exec.Request {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []exec.Request
+	for _, e := range d.sent {
+		if e.request.Method != http.MethodGet && e.request.Method != http.MethodHead {
+			out = append(out, e.request)
+		}
+	}
+	return out
+}
+
+// lastStep is the last step frame of tool's in frames.
+func lastStep(t *testing.T, frames []wire.Frame, tool string) wire.StepEvent {
+	t.Helper()
+	for i := len(frames) - 1; i >= 0; i-- {
+		if frames[i].Kind == wire.EventStep && frames[i].Step.Tool == tool {
+			return *frames[i].Step
+		}
+	}
+	t.Fatalf("no step of %s in the turn", tool)
+	return wire.StepEvent{}
+}
