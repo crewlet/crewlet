@@ -22,6 +22,10 @@ type TurnRequest struct {
 	Input           TurnInput `json:"input"`
 	// PageContext is null when the person removed the page chip.
 	PageContext *PageContext `json:"page_context"`
+	// --- deep work (im-deep) ---
+	// Attachments are files the person uploaded to the conversation for
+	// this question, at most [AttachmentsPerTurn].
+	Attachments []uuid.UUID `json:"attachments,omitempty"`
 }
 
 // TurnInput is the person's question.
@@ -162,6 +166,9 @@ type Message struct {
 	// Page is the chip a user message was sent with, absent when the
 	// person sent it without the page.
 	Page *PageChip `json:"page,omitempty"`
+	// --- deep work (im-deep) ---
+	// Attachments are the files a user message was sent with.
+	Attachments []FileRef `json:"attachments,omitempty"`
 }
 
 // OpenTurn is a turn a client re-attaches to after a reload.

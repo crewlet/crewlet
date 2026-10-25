@@ -41,6 +41,9 @@ func closedSets() map[string][]string {
 		"AssistantOpenReason":     strs(wire.OpenReasons),
 		"AssistantDraftKind":      strs(wire.DraftKinds),
 		"AssistantDraftFieldKind": strs(wire.DraftFieldKinds),
+		// --- deep work (im-deep) ---
+		"AssistantDeepState":           strs(wire.DeepStates),
+		"AssistantAttachmentMediaType": wire.AttachmentMediaTypes,
 	}
 }
 
@@ -98,6 +101,11 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_KEEPALIVE_SECONDS":          strconv.Itoa(wire.KeepaliveSeconds),
 		"ASSISTANT_ACTION_CONTEXT_INVALIDATE":  wire.ActionContextInvalidate,
 		"ASSISTANT_DIGEST_PREFIX":              wire.DigestPrefix,
+		// --- deep work (im-deep) ---
+		"ASSISTANT_DEEP_ACTIVITY_LINES":     strconv.Itoa(wire.DeepActivityLines),
+		"ASSISTANT_FILE_MAX_BYTES":          strconv.Itoa(wire.FileMaxBytes),
+		"ASSISTANT_ATTACHMENTS_PER_TURN":    strconv.Itoa(wire.AttachmentsPerTurn),
+		"ASSISTANT_DELIVERED_FILES_PER_RUN": strconv.Itoa(wire.DeliveredFilesPerRun),
 	} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil {
@@ -173,6 +181,11 @@ func shapes() map[string]reflect.Type {
 		"AssistantTurnOutcome":         reflect.TypeFor[wire.TurnOutcome](),
 		"AssistantViewerAssistant":     reflect.TypeFor[wire.ViewerAssistant](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
+		// --- deep work (im-deep) ---
+		"AssistantDeepProgress": reflect.TypeFor[wire.DeepProgress](),
+		"AssistantFileRef":      reflect.TypeFor[wire.FileRef](),
+		"AssistantFileCard":     reflect.TypeFor[wire.FileCard](),
+		"AssistantFileStored":   reflect.TypeFor[wire.FileStored](),
 	}
 }
 

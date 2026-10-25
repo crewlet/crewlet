@@ -49,6 +49,17 @@ export const ASSISTANT_ACTION_CONTEXT_INVALIDATE = "context.invalidate";
 /** What opens a proposal's digest on the wire. */
 export const ASSISTANT_DIGEST_PREFIX = "sha256:";
 
+// --- deep work (im-deep) ---
+/** The most lines of a deep run's own account its step carries. */
+export const ASSISTANT_DEEP_ACTIVITY_LINES = 8;
+/** The largest file a person attaches or a run delivers. */
+export const ASSISTANT_FILE_MAX_BYTES = 5242880;
+/** The most files one question carries. */
+export const ASSISTANT_ATTACHMENTS_PER_TURN = 4;
+/** The most files one deep run hands back. */
+export const ASSISTANT_DELIVERED_FILES_PER_RUN = 10;
+
+
 /** A frame's kind on the live stream. */
 export type AssistantEventKind =
   | "conversation"
@@ -82,7 +93,7 @@ type AssistantStepState = "running" | "done" | "failed" | "refused" | "stopped" 
 
 /** An engine-built card's kind. */
 export type AssistantCardKind =
-  "table" | "entity" | "proposal" | "open_in_app" | "error" | "notice";
+  "table" | "entity" | "proposal" | "open_in_app" | "error" | "notice" | "file";
 
 /** Where a proposal stands. */
 type AssistantProposalState =
@@ -231,6 +242,11 @@ export interface AssistantStepEvent {
   duration_ms?: number;
   summary?: string;
   refusal?: AssistantRefusal;
+  // --- deep work (im-deep) ---
+  /** The deep-work step this step was made from. */
+  parent?: number;
+  /** The run a deep-work step is, re-sent as it progresses. */
+  deep?: AssistantDeepProgress;
 }
 
 /** The ordinary request a step made: its method and route pattern. */
@@ -305,6 +321,8 @@ export interface AssistantCard {
   open_in_app?: AssistantOpenInAppCard;
   error?: AssistantErrorCard;
   notice?: AssistantNoticeCard;
+  // --- deep work (im-deep) ---
+  file?: AssistantFileCard;
 }
 
 /** Rows from a read. */
@@ -548,6 +566,9 @@ export interface AssistantTurnRequest {
   protocol_version: number;
   input: AssistantTurnInput;
   page_context: AssistantPageContext | null;
+  // --- deep work (im-deep) ---
+  /** Files uploaded to the conversation for this question. */
+  attachments?: string[];
 }
 
 /** The person's question. */
@@ -662,6 +683,9 @@ interface AssistantMessage {
   text: string;
   created_at: string;
   page?: AssistantPageChip;
+  // --- deep work (im-deep) ---
+  /** The files a user message was sent with. */
+  attachments?: AssistantFileRef[];
 }
 
 /** A turn still running or parked, and where to read it. */
@@ -728,3 +752,45 @@ export const ASSISTANT_PAGE_ACTIONS = {
   "org.draft.apply_ops": { confirm: "approve" },
   "budgets.ceiling.prefill": { confirm: "approve" },
 } as const satisfies Record<string, { confirm: AssistantActionConfirm }>;
+
+// --- deep work (im-deep) ---
+
+/** What a person may attach: images, sniffed from their bytes by the engine. */
+type AssistantAttachmentMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+
+/** Where a deep run stands. */
+type AssistantDeepState = "starting" | "running" | "waiting" | "finished" | "stopped" | "failed";
+
+/** A deep run as its step shows it. */
+interface AssistantDeepProgress {
+  state: AssistantDeepState;
+  goal: string;
+  started_at: string;
+  deadline_at: string;
+  steps: number;
+  max_steps: number;
+  /** The share of the run's token cap it has used, 0..100. */
+  budget_percent: number;
+  activity?: string[];
+  reason?: string;
+}
+
+/** One stored file as a message or a card names it. */
+interface AssistantFileRef {
+  file_id: string;
+  name: string;
+  media_type: string;
+  size: number;
+  /** The owner's route for its bytes, served as an attachment. */
+  download: string;
+}
+
+/** The files a deep run delivered. */
+interface AssistantFileCard {
+  files: AssistantFileRef[];
+}
+
+/** An attachment's upload answer: `POST /assistant/conversations/{id}/files`. */
+interface AssistantFileStored {
+  file: AssistantFileRef;
+}

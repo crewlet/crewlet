@@ -226,11 +226,14 @@ const (
 	// CardNotice is a line the engine adds: a truncation, a withheld
 	// result.
 	CardNotice CardKind = "notice"
+	// --- deep work (im-deep) ---
+	// CardFile is the files a deep run delivered (ADR-0053).
+	CardFile CardKind = "file"
 )
 
-// CardKinds are the six, in declaration order.
+// CardKinds are the seven, in declaration order.
 var CardKinds = []CardKind{
-	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice,
+	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice, CardFile,
 }
 
 // Valid reports whether k is a kind this build knows.

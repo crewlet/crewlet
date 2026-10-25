@@ -112,6 +112,12 @@ type StepEvent struct {
 	// Summary is the outcome in a few words ("6 rows", "Not permitted").
 	Summary string   `json:"summary,omitempty"`
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// --- deep work (im-deep) ---
+	// Parent is the index of the deep-work step this step was made from,
+	// absent for a step of the turn's own loop.
+	Parent int `json:"parent,omitempty"`
+	// Deep is the run a deep-work step is, re-sent as it progresses.
+	Deep *DeepProgress `json:"deep,omitempty"`
 }
 
 // StepRequest is a step's request: the method and the path it was sent to,
@@ -307,6 +313,11 @@ func (s StepEvent) Validate() error {
 		return fmt.Errorf("%w: step state %q is not one of %v", ErrInvalid, s.State, StepStates)
 	case s.State == StepRefused && s.Refusal == nil:
 		return fmt.Errorf("%w: a refused step carries no refusal", ErrInvalid)
+	case s.Parent < 0 || s.Parent >= s.Index && s.Parent != 0:
+		return fmt.Errorf("%w: step %d nests under step %d, which is not before it", ErrInvalid,
+			s.Index, s.Parent)
+	case s.Deep != nil:
+		return s.Deep.validate()
 	}
 	return nil
 }

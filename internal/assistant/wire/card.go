@@ -21,6 +21,8 @@ type Card struct {
 	OpenInApp *OpenInAppCard `json:"open_in_app,omitempty"`
 	Error     *ErrorCard     `json:"error,omitempty"`
 	Notice    *NoticeCard    `json:"notice,omitempty"`
+	// --- deep work (im-deep) ---
+	File *FileCard `json:"file,omitempty"`
 }
 
 // TableCard is rows from a read.
@@ -258,6 +260,7 @@ func (c Card) bodies() map[CardKind]bool {
 		CardOpenInApp: c.OpenInApp != nil,
 		CardError:     c.Error != nil,
 		CardNotice:    c.Notice != nil,
+		CardFile:      c.File != nil,
 	}
 }
 
@@ -309,6 +312,8 @@ func (c Card) Validate() error {
 			return fmt.Errorf("%w: an open in app card is permitted exactly when it names "+
 				"no reason", ErrInvalid)
 		}
+	case CardFile:
+		return c.File.validate()
 	case CardNotice:
 		if !c.Notice.Tone.Valid() {
 			return fmt.Errorf("%w: notice tone %q is not one of %v", ErrInvalid,

@@ -74,8 +74,35 @@ func vocabularyFrames() []wire.Frame {
 			Error: &wire.ErrorCard{Refusal: wire.Refusal{Code: "unauthorized",
 				Message: "You do not have access to this.", Grants: []string{"admin"}},
 				Phrase: "read the fleet"}})),
+		// --- deep work (im-deep) ---
 		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
-			StepID: id("step:create"), Index: 2, Tool: "create_task",
+			StepID: id("step:deep"), Index: 2, Tool: "start_deep_work",
+			Label: "Deep work: redesign the brand assets", State: wire.StepRunning, StartedAt: at,
+			Deep: &wire.DeepProgress{State: wire.DeepRunning, Goal: "Redesign the brand assets",
+				StartedAt: at, DeadlineAt: at.Add(20 * time.Minute), Steps: 1, MaxSteps: 150,
+				BudgetPercent: 12, Activity: []string{"Reading the brand draft",
+					"[tool] Bash: rsvg-convert logo.svg -o logo.png"}}}}),
+		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
+			StepID: id("step:deep-read"), Index: 3, Tool: "api_request",
+			Label:   "Read GET /brand",
+			Request: &wire.StepRequest{Method: "GET", Route: "/brand"},
+			State:   wire.StepDone, StartedAt: at, DurationMS: 140, Summary: "1 record", Parent: 2}}),
+		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
+			StepID: id("step:deep"), Index: 2, Tool: "start_deep_work",
+			Label: "Deep work: redesign the brand assets", State: wire.StepDone, StartedAt: at,
+			DurationMS: 412000, Summary: "2 files",
+			Deep: &wire.DeepProgress{State: wire.DeepFinished, Goal: "Redesign the brand assets",
+				StartedAt: at, DeadlineAt: at.Add(20 * time.Minute), Steps: 1, MaxSteps: 150,
+				BudgetPercent: 40}}}),
+		read.Frame(cardFrame(answer, "card:file", wire.Card{Type: wire.CardFile,
+			File: &wire.FileCard{Files: []wire.FileRef{
+				{FileID: id("file:logo"), Name: "logo.svg", MediaType: "image/svg+xml", Size: 4096,
+					Download: wire.FilePath(id("conversation"), id("file:logo"))},
+				{FileID: id("file:palette"), Name: "palette.csv", MediaType: "text/csv", Size: 210,
+					Download: wire.FilePath(id("conversation"), id("file:palette"))},
+			}}})),
+		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
+			StepID: id("step:create"), Index: 4, Tool: "create_task",
 			Label: "Prepare a new task", State: wire.StepWaiting, StartedAt: at}}),
 		read.Frame(cardFrame(answer, "card:proposal", wire.Card{Type: wire.CardProposal,
 			Proposal: &wire.ProposalCard{ProposalID: proposal, Scope: wire.ScopeServer,
@@ -115,9 +142,9 @@ func vocabularyFrames() []wire.Frame {
 			ActionID: id("action:invalidate"), Name: wire.ActionContextInvalidate,
 			Invalidate: &wire.Invalidate{Domain: "tracker", Position: "CREWLET_TRACKER_LOG:1:4812"}}}),
 		read.Frame(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
-			State: wire.StatusWaitingForApproval, StepsDone: 2}}),
+			State: wire.StatusWaitingForApproval, StepsDone: 4}}),
 		read.Frame(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{
-			State: wire.TurnWaitingForApproval, DurationMS: 5120, Steps: 2, MessageID: &answer,
+			State: wire.TurnWaitingForApproval, DurationMS: 5120, Steps: 4, MessageID: &answer,
 			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"}}),
 	}
 	resumed := assistanttest.NewTurn("conversation", "turn:resumed")
