@@ -31,7 +31,7 @@ func status() wire.Frame {
 // and the subscriber sees a gap and stays open.
 func TestASlowClientIsDisconnectedNotDroppedFrom(t *testing.T) {
 	t.Parallel()
-	l := newLog(conversation, turn, 1, func() time.Time { return epoch })
+	l := newLog(uuid.Nil, conversation, turn, 1, func() time.Time { return epoch }, nil)
 	_, sub, _ := l.Subscribe(0)
 	for range SubscriberFrames + 10 {
 		if _, err := l.Append(status()); err != nil {
@@ -65,7 +65,7 @@ func TestASlowClientIsDisconnectedNotDroppedFrom(t *testing.T) {
 // never has a hole for a frame that was never sent.
 func TestARefusedFrameTakesNoSeq(t *testing.T) {
 	t.Parallel()
-	l := newLog(conversation, turn, 1, func() time.Time { return epoch })
+	l := newLog(uuid.Nil, conversation, turn, 1, func() time.Time { return epoch }, nil)
 	if _, err := l.Append(wire.Frame{Kind: wire.EventStatus}); err == nil {
 		t.Fatal("a status frame with no payload was appended")
 	}
@@ -80,8 +80,8 @@ func TestARefusedFrameTakesNoSeq(t *testing.T) {
 func TestAResumedSegmentContinuesTheNumbering(t *testing.T) {
 	t.Parallel()
 	now := epoch
-	h := NewHub(func() time.Time { return now }, time.Hour)
-	l := h.Open(conversation, turn)
+	h := NewHub(func() time.Time { return now }, time.Hour, nil)
+	l := h.Open(uuid.Nil, conversation, turn)
 	for range 3 {
 		if _, err := l.Append(status()); err != nil {
 			t.Fatal(err)
@@ -99,7 +99,7 @@ func TestAResumedSegmentContinuesTheNumbering(t *testing.T) {
 	if _, ok := h.Get(turn); ok {
 		t.Fatal("an ended log outlived its retention")
 	}
-	next := h.Open(conversation, turn)
+	next := h.Open(uuid.Nil, conversation, turn)
 	f, err := next.Append(status())
 	if err != nil || f.Seq != 4 {
 		t.Errorf("the resumed segment's first frame is seq %d (%v), want 4", f.Seq, err)
@@ -109,7 +109,7 @@ func TestAResumedSegmentContinuesTheNumbering(t *testing.T) {
 // THE LOG KEEPS WITHIN ITS BOUNDS, oldest first, and says so as a gap.
 func TestTheLogKeepsWithinItsBounds(t *testing.T) {
 	t.Parallel()
-	l := newLog(conversation, turn, 1, func() time.Time { return epoch })
+	l := newLog(uuid.Nil, conversation, turn, 1, func() time.Time { return epoch }, nil)
 	for range FrameLogFrames + 5 {
 		if _, err := l.Append(status()); err != nil {
 			t.Fatal(err)

@@ -42,8 +42,9 @@ var ErrEnded = errors.New("live: the turn's frame log has ended")
 // [FrameLogFrames] and [FrameLogBytes], and fanned out to every stream
 // following it.
 type Log struct {
-	conversation, turn uuid.UUID
-	now                func() time.Time
+	owner, conversation, turn uuid.UUID
+	now                       func() time.Time
+	tap                       Tap
 
 	mu     sync.Mutex
 	next   uint64
@@ -60,11 +61,15 @@ type retained struct {
 	size  int
 }
 
-// newLog starts a log whose first frame takes seq first.
-func newLog(conversation, turn uuid.UUID, first uint64, now func() time.Time) *Log {
-	return &Log{conversation: conversation, turn: turn, now: now, next: max(first, 1),
-		subs: map[*Subscription]struct{}{}}
+// newLog starts one of owner's logs whose first frame takes seq first.
+func newLog(owner, conversation, turn uuid.UUID, first uint64, now func() time.Time, tap Tap) *Log {
+	return &Log{owner: owner, conversation: conversation, turn: turn, now: now, tap: tap,
+		next: max(first, 1), subs: map[*Subscription]struct{}{}}
 }
+
+// Owner is the person whose turn the log numbers: a peer asking for its
+// frames on somebody else's behalf is refused on it.
+func (l *Log) Owner() uuid.UUID { return l.owner }
 
 // Conversation and Turn name the log's turn.
 func (l *Log) Conversation() uuid.UUID { return l.conversation }
@@ -108,6 +113,9 @@ func (l *Log) Append(f wire.Frame) (wire.Frame, error) {
 	for sub := range l.subs {
 		sub.offer(f)
 	}
+	if l.tap != nil {
+		l.tap(f)
+	}
 	return f, nil
 }
 
@@ -127,16 +135,7 @@ func (l *Log) Last() uint64 {
 func (l *Log) Subscribe(after uint64) (replay []wire.Frame, sub *Subscription, gap bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.frames) > 0 {
-		gap = after+1 < l.frames[0].frame.Seq
-	} else {
-		gap = after+1 < l.next
-	}
-	for _, r := range l.frames {
-		if r.frame.Seq > after {
-			replay = append(replay, r.frame)
-		}
-	}
+	replay, gap = l.sinceLocked(after)
 	sub = &Subscription{ch: make(chan wire.Frame, SubscriberFrames), log: l}
 	if l.ended {
 		sub.closeLocked()
@@ -144,6 +143,31 @@ func (l *Log) Subscribe(after uint64) (replay []wire.Frame, sub *Subscription, g
 	}
 	l.subs[sub] = struct{}{}
 	return replay, sub, gap
+}
+
+// Since is every retained frame after seq after, whether frames after it are
+// no longer retained (gap), and whether the segment has ended, read in one
+// step: what a peer is answered when it asks for the frames its client missed.
+func (l *Log) Since(after uint64) (frames []wire.Frame, gap, ended bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	frames, gap = l.sinceLocked(after)
+	return frames, gap, l.ended
+}
+
+// sinceLocked is [Log.Since]'s frames and gap, under l.mu.
+func (l *Log) sinceLocked(after uint64) (frames []wire.Frame, gap bool) {
+	if len(l.frames) > 0 {
+		gap = after+1 < l.frames[0].frame.Seq
+	} else {
+		gap = after+1 < l.next
+	}
+	for _, r := range l.frames {
+		if r.frame.Seq > after {
+			frames = append(frames, r.frame)
+		}
+	}
+	return frames, gap
 }
 
 // End closes the segment: no frame is appended after it, and every

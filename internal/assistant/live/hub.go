@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
 // Hub is every frame log this node keeps: one per turn running here, and for
@@ -18,6 +20,9 @@ import (
 // segment's log starts after it.
 type Hub struct {
 	now func() time.Time
+	// tap is handed every frame any log appends, in the order each log
+	// numbers them ([Tap]); nil on a node that tells no fleet.
+	tap Tap
 	// remember is how long a turn's last seq is kept after its log is
 	// dropped: the longest a parked turn may wait on an approval.
 	remember time.Duration
@@ -33,20 +38,27 @@ type lastSeq struct {
 	at  time.Time
 }
 
+// Tap is told every frame a log appends, once it is numbered and retained:
+// the fleet's broadcast ([Fleet.Publish]). It runs under the log's lock, so it
+// sees one turn's frames in their order, and it MUST NOT BLOCK: a turn never
+// waits on the broker to show the person its next word.
+type Tap func(wire.Frame)
+
 // NewHub builds the node's hub. remember is how long a parked turn may wait
 // (the company's longest proposal lifetime): its numbering is kept that long.
-func NewHub(now func() time.Time, remember time.Duration) *Hub {
+// tap, when set, is handed every frame this node's logs append.
+func NewHub(now func() time.Time, remember time.Duration, tap Tap) *Hub {
 	if now == nil {
 		now = time.Now
 	}
-	return &Hub{now: now, remember: remember, logs: map[uuid.UUID]*Log{},
+	return &Hub{now: now, remember: remember, tap: tap, logs: map[uuid.UUID]*Log{},
 		last: map[uuid.UUID]lastSeq{}}
 }
 
-// Open starts the log of a turn segment: a new turn's from seq 1, and a
-// resumed turn's after the last seq this node numbered for it. A log still
-// open for the turn is returned as it is.
-func (h *Hub) Open(conversation, turn uuid.UUID) *Log {
+// Open starts the log of one of owner's turn segments: a new turn's from seq
+// 1, and a resumed turn's after the last seq this node numbered for it. A log
+// still open for the turn is returned as it is.
+func (h *Hub) Open(owner, conversation, turn uuid.UUID) *Log {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.sweepLocked()
@@ -61,7 +73,7 @@ func (h *Hub) Open(conversation, turn uuid.UUID) *Log {
 	if prior, ok := h.last[turn]; ok {
 		first = prior.seq + 1
 	}
-	l := newLog(conversation, turn, first, h.now)
+	l := newLog(owner, conversation, turn, first, h.now, h.tap)
 	h.logs[turn] = l
 	return l
 }

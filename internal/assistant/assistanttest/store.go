@@ -30,6 +30,9 @@ type Store struct {
 	proposals     map[uuid.UUID]assistantdomain.Proposal
 	records       []string
 	ops           map[string]bool
+	// closes counts the closes that ended each turn: one, or the store let
+	// a turn end twice.
+	closes map[uuid.UUID]int
 }
 
 type storedConversation struct {
@@ -52,7 +55,7 @@ func NewStore(now func() time.Time) *Store {
 	return &Store{now: now, conversations: map[uuid.UUID]*storedConversation{},
 		turns: map[uuid.UUID]*storedTurn{}, parked: map[uuid.UUID][]byte{},
 		proposals: map[uuid.UUID]assistantdomain.Proposal{},
-		ops:       map[string]bool{}}
+		ops:       map[string]bool{}, closes: map[uuid.UUID]int{}}
 }
 
 // Records is every record the store was handed, each as JSON.
@@ -391,7 +394,15 @@ func (s *Store) CloseTurn(_ context.Context, w assistant.Write, turn uuid.UUID, 
 	t.Steps, t.ErrorCode, t.EndedAt = end.Steps, end.ErrorCode, s.now().UTC()
 	c.OpenTurn = uuid.Nil
 	delete(s.parked, turn)
+	s.closes[turn]++
 	return nil
+}
+
+// Closes is how many closes ended turn: the arbitrated end lets exactly one.
+func (s *Store) Closes(turn uuid.UUID) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closes[turn]
 }
 
 // CreateProposal keeps a proposal a turn of the owner's made.
