@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
