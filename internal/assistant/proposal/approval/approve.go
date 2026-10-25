@@ -120,7 +120,7 @@ func (a *Approver) Approve(ctx context.Context, ap Approval) (wire.ProposalAnswe
 	case state != wire.ProposalProposed:
 		return a.repeat(ctx, d, p, state)
 	}
-	if err := proposal.Verify(p, ap.Digest); err != nil {
+	if err = proposal.Verify(p, ap.Digest); err != nil {
 		return wire.ProposalAnswer{}, err
 	}
 	// THE STEP-UP IS ASKED OF THIS REQUEST, BEFORE ANYTHING IS RECORDED, so
@@ -135,10 +135,10 @@ func (a *Approver) Approve(ctx context.Context, ap Approval) (wire.ProposalAnswe
 		return wire.ProposalAnswer{}, fmt.Errorf("%w: %w", ErrNotAPerson, err)
 	}
 	if p.Scope == wire.ScopeServer && p.SourceRevision != "" {
-		moved, err := a.moved(ctx, read, p)
-		if err != nil {
+		moved, movedErr := a.moved(ctx, read, p)
+		if movedErr != nil {
 			a.d.Grants.Revoke(read.ID())
-			return wire.ProposalAnswer{}, &Unconfirmed{OpID: ap.Key, Cause: err}
+			return wire.ProposalAnswer{}, &Unconfirmed{OpID: ap.Key, Cause: movedErr}
 		}
 		if moved {
 			return a.stale(ctx, d, p, read)
