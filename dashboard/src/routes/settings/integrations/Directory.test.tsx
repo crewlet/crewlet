@@ -159,6 +159,8 @@ function mount(
   /** What the company runs, or null for a node running no company. */
   services: OrgServices | null = BUILT_IN,
   setup: { status: number; body: unknown } = { status: 200, body: listing },
+  /** The company document the `config` question answers, or none at all. */
+  config?: unknown,
 ): Mounted {
   const fetched: string[] = [];
   vi.stubGlobal(
@@ -181,6 +183,7 @@ function mount(
     asked.push(what);
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "integrations") return Promise.resolve(answer);
+    if (what === "config" && config !== undefined) return Promise.resolve(config);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
     }
@@ -493,6 +496,18 @@ test("a reader nobody signed in is offered the sign-in", async () => {
 });
 
 // --- Crewlet's own services -------------------------------------------------------- //
+
+// THE INBOX HORIZON IS WORKLET'S OWN POLICY, read where the company document
+// keeps it (`tracker.worklet`), and an unset one is the engine's default.
+// Mutation: read it off the tracker block itself and the 90 days are never
+// said.
+test("Worklet's settings read the inbox horizon from its own policy", async () => {
+  mount(ADMIN, "worklet", BUILT_IN, undefined, {
+    tracker: { backend: "worklet", worklet: { inbox_retention_days: 90 } },
+  });
+  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+  expect(await screen.findByText("90 days")).toBeTruthy();
+});
 
 test("a service the company runs is in use, with its way in", async () => {
   mount(MEMBER, "worklet");

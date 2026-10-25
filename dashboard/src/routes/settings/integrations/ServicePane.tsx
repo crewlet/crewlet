@@ -101,7 +101,11 @@ function block(
   doc: CompanyDocument | null | undefined,
   key: "tracker" | "knowledge",
 ): Record<string, unknown> {
-  const value = (doc as Record<string, unknown> | null | undefined)?.[key];
+  return asRecord((doc as Record<string, unknown> | null | undefined)?.[key]);
+}
+
+/** A value of the company document as an object, or an empty one where it is none. */
+function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
@@ -284,13 +288,12 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
   const keys = feed.data?.keys ?? {};
   const nameOf = (handle: string | undefined) =>
     agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
-  const tracker = block(config.data, "tracker");
+  // THE INBOX HORIZON IS WORKLET'S OWN POLICY, kept in the tracker block's
+  // `worklet` section (`config.Tracker.Worklet`), never on the block itself.
   // AN UNSET KEY IS THE ENGINE'S DEFAULT, said as such: a copy of the
   // engine's constant here would be a second answer that drifts.
-  const retention =
-    typeof tracker.inbox_retention_days === "number" && tracker.inbox_retention_days > 0
-      ? `${tracker.inbox_retention_days} days`
-      : DEFAULT;
+  const days = asRecord(block(config.data, "tracker").worklet).inbox_retention_days;
+  const retention = typeof days === "number" && days > 0 ? `${days} days` : DEFAULT;
 
   if (!enabled) {
     return (
