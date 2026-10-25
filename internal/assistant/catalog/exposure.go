@@ -61,6 +61,10 @@ const (
 	whyWriteSurface = "the human write surface for scripts and the CLI; the assistant's " +
 		"writes execute through the act route the dashboard's controls send"
 	whySelfOnly = "covered: the assistant opens the screen and the screen reads it"
+	whyFolders  = "filing artifacts into folders is the gallery's gesture; the assistant " +
+		"neither writes nor files artifacts"
+	whyBrand = "the adopted brand guides an agent writing an artifact, which the assistant " +
+		"never does; a person reads it on the brand screen"
 )
 
 // questionExposures are the registry questions'.
@@ -140,6 +144,9 @@ var questionExposures = []Exposure{
 	refused("config_entities", "configuration entities carry model endpoints, tool commands "+
 		"and their credential references"),
 	asked("artifacts", "list_artifacts"),
+	linked("artifact_folders", "the gallery draws its folders; list_artifacts answers what "+
+		"is in them"),
+	linked("brand", whyBrand),
 	asked("artifact", "get_artifact"),
 	linked("artifact_versions", whySelfOnly),
 	linked("artifact_version", whySelfOnly),
@@ -226,6 +233,9 @@ var toolExposures = []Exposure{
 	toolNever("query_artifact_data", whyActRead),
 	toolNever("write_artifact_data", whyLater),
 	toolNever("set_artifact_schema", "a schema change rewrites every row of a store"),
+	toolNever("create_artifact_folder", whyFolders),
+	toolNever("move_artifact", whyFolders),
+	toolNever("get_company_brand", whyActRead),
 }
 
 // Exposures are every exposure decision, questions first, then tools, then
