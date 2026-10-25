@@ -54,11 +54,19 @@
  */
 
 import { useMemo, type CSSProperties } from "react";
-import { Callout, Card, EmptyValue, Meter, Skeleton, TableEntityCell } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyValue,
+  Meter,
+  Skeleton,
+  TableEntityCell,
+  peekClickHandler,
+} from "@crewlethq/ui";
 import { BuildingComplexGlyph, DatabaseGlyph, KeyGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { CeilingEditor } from "~/components/budgetWrite.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -369,7 +377,7 @@ export function Budgets() {
                   go();
                   return;
                 }
-                rowPeekHandler(go)?.(e);
+                peekClickHandler(go)?.(e);
               }}
               empty={{ title: "No agent seats to count" }}
               columns={[

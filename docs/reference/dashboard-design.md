@@ -1951,8 +1951,8 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
-| `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
-| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
+| `peekAddress` | the peek's address: `peek=` in the URL, opened by a push and moved by a replace, and the page a row links to (`peekHref`); which clicks peek is the kit's (`peekClickHandler`, `peekRowActivation`) |
+| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's `peek` slot and drawn by the kit's `PeekRail` (resizable from the keyboard as well as the pointer, a column of the sheet where the frame leaves the list beside it its floor, 1160 px on most screens and 1396 beside Settings' column, and a drawer under that): the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | the kit's `DataGrid`, bound to the URL (its sort and columns), the peek and the keymap; bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each: the kit's `PropertyList`, given routes and turns |
 | `Histogram` + `FacetRail` | a log's time axis (the kit's `Histogram`, given the engine's buckets and the reader's zone), and one dimension of it as chips |
@@ -2000,11 +2000,12 @@ It is **the shell, not a media query**, that applies it, because two of those
 terms are not the window's: the section column belongs to the screen, and the
 inset and padding scale with the reader's density — a media query can see
 neither. `app/layout.ts` (`peekColumnMin`) does the arithmetic, the shell asks
-`matchMedia` for the one width right for the frame on screen, and it writes one
-attribute, `data-peek="column"` or `"drawer"`, so there is no width with both
-or neither. And the column's track is the reader's dragged width CAPPED at what
-the sheet can give with the list at its floor (`--peek-reserve`, from
-`listReserve`), because a width dragged to 640 on a wide window outlives it.
+`matchMedia` for the one width right for the frame on screen, and it hands the
+kit's `AppShell` one `peekShape`, which the kit publishes as `data-peek="column"`
+or `"drawer"`, so there is no width with both or neither. And the column is the
+reader's dragged width CAPPED at what the sheet can give with the list at its
+floor (the rail's `reserve`, from `listReserve`), because a width dragged to 640
+on a wide window outlives it.
 
 **Beside a canvas the peek rests at 330.** A list beside a peek keeps its floor
 and reflows; a chart is SHRUNK into whatever width the peek leaves it, so every

@@ -25,12 +25,19 @@
  */
 
 import { BotGlyph } from "@crewlethq/icons/glyphs";
-import { Card, EmptyValue, Meter, TableEntityCell, TableNumberCell } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyValue,
+  Meter,
+  TableEntityCell,
+  TableNumberCell,
+  peekRowActivation,
+} from "@crewlethq/ui";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { href } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
 import { activityOf, statusOf, useSeatBadgeOf } from "~/lib/seats.ts";
@@ -115,7 +122,7 @@ export function ByAgent({
         phoneRows="compact"
         flush
         rowHref={(l) => peekHref({ kind: "seat", id: l.row.handle || l.row.role })}
-        onRowActivate={peekRow<AgentLine>((l) =>
+        onRowActivate={peekRowActivation<AgentLine>((l) =>
           open({ kind: "seat", id: l.row.handle || l.row.role }),
         )}
         empty={

@@ -20,7 +20,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { Projects } from "./Projects.tsx";
 import { Router } from "~/app/router.tsx";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkProjectRow } from "~/protocol/index.ts";
 import { targetLabel } from "~/lib/work.ts";

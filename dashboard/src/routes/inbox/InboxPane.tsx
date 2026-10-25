@@ -39,6 +39,7 @@ import {
   Stack,
   Text,
   safeHref,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   ActivityGlyph,
@@ -50,7 +51,7 @@ import {
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
 import type { SeatCondition } from "~/lib/decisions.ts";
@@ -442,7 +443,7 @@ function TaskEvidence({ id, label }: { id: string; label?: string }) {
       size="small"
       href={peekHref(ref)}
       leadingIcon={<SquareKanbanGlyph size="sm" />}
-      onClick={rowPeekHandler(() => peek.open(ref))}
+      onClick={peekClickHandler(() => peek.open(ref))}
     >
       {task ? `${task.key} ${label || task.title}` : label || "Task"}
     </ButtonLink>

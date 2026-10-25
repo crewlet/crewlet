@@ -26,6 +26,7 @@ import {
   Skeleton,
   TableNumberCell,
   TableDateCell,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   ClockGlyph,
@@ -36,7 +37,7 @@ import {
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
@@ -88,7 +89,7 @@ function PageLink({ page }: { page: Pick<PageSummary, "id" | "title"> }) {
   const { open } = usePeekControls();
   const ref = { kind: "page" as const, id: page.id };
   return (
-    <a className="t-link truncate" href={peekHref(ref)} onClick={rowPeekHandler(() => open(ref))}>
+    <a className="t-link truncate" href={peekHref(ref)} onClick={peekClickHandler(() => open(ref))}>
       {page.title}
     </a>
   );

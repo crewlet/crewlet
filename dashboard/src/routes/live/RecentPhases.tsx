@@ -42,6 +42,7 @@ import {
   TableDateCell,
   TableEntityCell,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -49,7 +50,7 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { DataGridColumn } from "@crewlethq/ui";
 import { plainSeat } from "~/app/frame/cells.tsx";
-import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
@@ -185,7 +186,7 @@ export function RecentPhases({
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek, nav],
   );

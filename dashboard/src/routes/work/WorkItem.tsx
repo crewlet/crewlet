@@ -80,7 +80,7 @@ import { useNow } from "~/lib/clock.ts";
 import { typeIcon, type LabelContext, detailItem, itemAddress, projectPath } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
-import { usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { refToken } from "~/app/frame/objects.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
@@ -407,7 +407,7 @@ export function WorkItem({ id }: { id: string }) {
  * IT KEEPS THE READER WHERE THEY ARE — a board is scanned, and sending somebody
  * to a page and back to read one description is the navigation every tracker
  * learned not to make. The chrome (the panel, its grip, the way out to the page
- * and the close control) is the frame's, `app/frame/DetailRail.tsx`.
+ * and the close control) is the frame's, `app/frame/PeekHost.tsx`.
  *
  * IT RESOLVES ITS OWN PEOPLE: the frame mounts it from a `peek=` token knowing
  * nothing about an org chart, and the chart is a store read.

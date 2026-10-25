@@ -17,7 +17,7 @@
  * # The reader's width still wins
  *
  * A width the reader DRAGGED is their preference and is kept on every screen
- * (`DetailRail`); a screen's request is the width the rail rests at until they
+ * (`PeekHost`); a screen's request is the width the rail rests at until they
  * do. Withdrawn when the screen unmounts, so the next screen's rail rests at
  * the frame's own width rather than at the last screen's.
  */

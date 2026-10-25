@@ -97,7 +97,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { href } from "~/app/router.tsx";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 import { ADMIN, holds } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";

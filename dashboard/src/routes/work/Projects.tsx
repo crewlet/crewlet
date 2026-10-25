@@ -52,9 +52,14 @@ import { fmtCount } from "~/lib/format.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { ColumnChooser, columnChoicesOf, type DataGridColumn } from "@crewlethq/ui";
+import {
+  ColumnChooser,
+  columnChoicesOf,
+  type DataGridColumn,
+  peekRowActivation,
+} from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { NewProjectButton } from "~/components/NewProjectButton.tsx";
@@ -580,7 +585,7 @@ export function Projects() {
             // answers without leaving the list — and the peek's own `Open ↗`
             // is the way to the page.
             //
-            // THROUGH `peekRow`, which is the one thing that calls
+            // THROUGH `peekRowActivation`, which is the one thing that calls
             // `preventDefault`. A bare handler beside a `rowHref` opened the
             // peek and then let the browser follow the anchor, so the rail was
             // pushed and destroyed by one click and the reader landed on the
@@ -590,7 +595,7 @@ export function Projects() {
             // rather than a second copy of the route, so a row and the panel it
             // opens can never name different pages.
             rowHref={(row) => peekHref({ kind: "project", id: row.key })}
-            onRowActivate={peekRow<WorkProjectRow>((row) =>
+            onRowActivate={peekRowActivation<WorkProjectRow>((row) =>
               openPeek({ kind: "project", id: row.key }),
             )}
             defaultSort={DEFAULT_SORT}

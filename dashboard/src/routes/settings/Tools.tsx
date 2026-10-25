@@ -27,6 +27,7 @@ import {
   TableTextCell,
   TableNumberCell,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   WrenchGlyph,
@@ -42,7 +43,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -615,7 +616,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   /**
    * A row's click.
    *
-   * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy
+   * THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one copy
    * of which clicks mean elsewhere and reads a mouse event; the `enter` chord
    * carries no button at all and is never "open elsewhere".
    */
@@ -626,7 +627,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek],
   );
