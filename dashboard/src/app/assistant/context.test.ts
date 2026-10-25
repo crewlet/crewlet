@@ -125,6 +125,46 @@ describe("the registry", () => {
   });
 });
 
+describe("a page of several components", () => {
+  const noop: PageActionSpec<unknown> = {
+    scope: "x",
+    parse: (raw) => ({ ok: true, value: raw }),
+    preview: () => [],
+    blocked: () => null,
+    apply: () => {},
+  };
+
+  test("offers every mounted component's actions and resources, and loses one only when it goes", () => {
+    setFramePage(PAGE);
+    const project = registerPage({
+      resources: [{ kind: "project", id: "ENG" }],
+      actions: { "project.lens.set": noop },
+    });
+    const list = registerPage({
+      resources: [{ kind: "project", id: "ENG" }],
+      actions: { "work.filter.apply": noop, "work.arrange.set": noop },
+    });
+    expect(pageSnapshot()?.context.accepts.sort()).toEqual([
+      "project.lens.set",
+      "work.arrange.set",
+      "work.filter.apply",
+    ]);
+    expect(pageSnapshot()?.context.resources).toEqual([{ kind: "project", id: "ENG" }]);
+    list();
+    expect(pageSnapshot()?.context.accepts).toEqual(["project.lens.set"]);
+    project();
+    expect(pageSnapshot()?.context.accepts).toEqual([]);
+  });
+
+  test("a move in any component's data is a move of the page", () => {
+    setFramePage(PAGE);
+    registerPage({ dataVersion: "a" });
+    const before = pageSnapshot()!.context.source_revision;
+    registerPage({ dataVersion: "b" });
+    expect(pageSnapshot()!.context.source_revision).not.toBe(before);
+  });
+});
+
 describe("applying a page action", () => {
   const applied: string[] = [];
   const spec: PageActionSpec<string> = {
