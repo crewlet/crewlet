@@ -1375,7 +1375,7 @@ func (p *iamPrinter) seats(asked url.Values, answer map[string]any,
 			return nil
 		}
 		fmt.Fprintln(p.w, "the company has no human seats. Add a `kind: "+
-			"human` seat for each person first (Agents › Edit org, or "+
+			"human` seat for each person first (Org chart › Edit org, or "+
 			"`crewlet config import FILE`)")
 		return nil
 	}
