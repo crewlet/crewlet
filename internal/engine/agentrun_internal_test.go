@@ -137,32 +137,56 @@ func TestBoxModeIsRefusedWithNoBridge(t *testing.T) {
 	}
 }
 
-// THE BRIDGE ENTRY IS ADDED TO A COPY, never to the seat's own server map.
+// EACH RUN'S BOX IS GIVEN ITS OWN JOB'S ENDPOINT, never another's.
 //
-// The rendered map's values come from config the epoch owns, and an endpoint
-// written into it would follow the seat into its NEXT run — where the token is
-// dead and every tool call fails for a reason nothing in the config explains.
-func TestTheBridgeEntryDoesNotFollowTheSeatToItsNextRun(t *testing.T) {
+// The endpoint names the job the store opened for the run — which is what lets
+// a node that takes the run over serve the same session under the token the
+// box holds — so it is minted inside the launch, once the job has a name, and
+// added to a server list of the job's own. A run handed another's endpoint, or
+// one minted before its job existed, calls a session that is not its own or
+// none at all.
+//
+// Mutation: mint the endpoint before the launch names the job, or for a job
+// other than the row's, and the token here names no job the row holds.
+func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	t.Parallel()
-	seatServers := map[string]sandbox.MCPServer{
-		"jira": {Name: "jira", Transport: sandbox.TransportStdio, Command: "jira-mcp"},
+	c, seat := splitLoginCompany(t, "api", "codex")
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	for _, runID := range []string{"t1", "t2"} {
+		launcher := &agentLauncher{
+			engine: e, turn: &turnctx.Turn{RunID: runID, Seat: seat, Task: "fix it"}, seat: seat,
+			codingAgent: "claude-code", placement: sandbox.E2B,
+		}
+		if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+			Brief: "fix the failing test", Round: 1,
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+				ForTurn(launcher.turn),
+		}); err != nil {
+			t.Fatalf("LaunchExecutor(%s): %v", runID, err)
+		}
 	}
-	first := withBridge(seatServers, "https://engine.example.com/mcp/tok-1")
-	if _, leaked := seatServers["crewlet"]; leaked {
-		t.Fatal("the bridge entry was written into the seat's own map")
+	started := jobs.Started()
+	if len(started) != 2 {
+		t.Fatalf("%d jobs started, want 2", len(started))
 	}
-	if first["crewlet"].URL != "https://engine.example.com/mcp/tok-1" {
-		t.Errorf("the copy does not carry the endpoint: %v", first["crewlet"])
-	}
-	second := withBridge(seatServers, "https://engine.example.com/mcp/tok-2")
-	if second["crewlet"].URL == first["crewlet"].URL {
-		t.Error("a second run reused the first run's dead endpoint")
-	}
-	// The seat's own servers survive into both, because a bridged run
-	// still needs the credentials only its own MCP children hold.
-	for _, out := range []map[string]sandbox.MCPServer{first, second} {
-		if out["jira"].Command != "jira-mcp" {
-			t.Errorf("the seat's own servers were dropped: %v", out)
+	prefix := "https://engine.example.com" + mcpbridge.PathPrefix
+	for i, runID := range []string{"t1", "t2"} {
+		url := started[i].MCPServers[config.BridgeServerName].URL
+		token, ok := strings.CutPrefix(url, prefix)
+		if !ok {
+			t.Fatalf("run %s's box was given %q, not this node's bridge", runID, url)
+		}
+		run, found, err := e.sandbox.Load().pending.Get(t.Context(), runID)
+		if err != nil || !found {
+			t.Fatalf("run %s has no row (found %v, err %v)", runID, found, err)
+		}
+		if !strings.Contains(token, run.LaunchID+"~"+runID) {
+			t.Errorf("run %s's endpoint does not name its own job %s", runID, run.LaunchID)
+		}
+		if got, reason := e.bridge.Miss(token); got != runID || reason != "" {
+			t.Errorf("run %s's endpoint resolves to run %q (%s)", runID, got, reason)
 		}
 	}
 }

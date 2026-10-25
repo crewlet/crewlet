@@ -53,7 +53,7 @@
 //     process stays up, and a defect does not run again on the next call.
 //   - A RUN THAT IS OVER REFUSES. A call that reaches a session after its run
 //     ended, or after a relaunch replaced it, is answered and not run.
-//   - A CREDENTIAL A BOX MAY HOLD. The endpoint is per-run, its token expires
+//   - A CREDENTIAL A BOX MAY HOLD. The endpoint is per-job, its token expires
 //     with the run, and nothing secret enters the box — see internal/runtoken.
 //   - A DURABLE LEDGER. A run outlives its launching turn and can outlive the
 //     process, so every call is appended where a resume can read it back,
@@ -67,12 +67,35 @@
 // budget's per-request refusal, a person's notes. A box-mode run's loop is its
 // CLI's own, the engine's phase is suspended while it runs, and those are
 // settled when the run is collected and its turn resumes.
+//
+// # A run outlives the process that opened its session
+//
+// The box goes on calling for as long as its CLI runs, and the process that
+// launched it can restart in the meantime, or its seat move to a peer. So
+// nothing the box holds names THAT PROCESS. Its token is signed under the
+// fleet's keyring (internal/runtoken over the keys every node holds), and it
+// names the run and the JOB — the launch id the run's durable row carries,
+// [Session.Launch] — never an id only one process knows. Whichever node takes
+// the run over re-opens its session under that same job, with a surface
+// rebuilt from the run's own state (internal/engine, as it recovers the seat),
+// and the box's token, unchanged, resolves there: a node restarted at the
+// address the box dials serves the run again before its seat's mailbox opens.
+//
+// NOTHING SECRET IS KEPT FOR IT. A job's id is no credential — a token is
+// worth something only with the fleet's signature over it — so the row a
+// recovery reads holds nothing a reader could present, and the bearer exists
+// only in the box and in the URL it dials. Sealing the token into the
+// coordination store for the next node to compare against would keep a second
+// copy of a working bearer for a check the signature already makes.
+//
+// WHAT THE TOKEN DOES NOT CARRY IS AN ADDRESS. The box dials the URL it was
+// launched with, on the launching node's [BaseURLVar]; a run a PEER takes over
+// is served on the peer while the box still dials the node it was given — see
+// [Bridge.resolve] for what that node answers.
 package mcpbridge
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -124,6 +147,23 @@ type Session struct {
 	// RunID identifies the run. Its token names it, the ledger is keyed by
 	// it, and it is in every log line here.
 	RunID string
+
+	// Launch is the JOB the session serves: the launch id the run's durable
+	// row names (internal/sandbox), minted by the store when the job opened.
+	// A token names it beside the run, so a token is good for one job only —
+	// a relaunch of the run is a new job, whose session the old job's token
+	// does not reach — and a recovery of the SAME job, in this process or a
+	// fresh one, opens the same session again, which it does. Required, and
+	// never a value with "~" or "." in it, which delimit a token's parts.
+	Launch string
+
+	// LastSeq is the place, in its job's admission order, of the last call
+	// an EARLIER opening of the job admitted — zero for a job's first
+	// opening, and the highest [Call.Seq] the run's row records for a job
+	// opened again after a recovery. This opening numbers its calls after
+	// it, so the order a resume reads the run's calls in runs on across the
+	// recovery rather than starting again at one beside the calls before it.
+	LastSeq int
 
 	// Handle and Role name the seat, for the logs and the handshake.
 	Handle string
@@ -280,6 +320,13 @@ func New(opts Options) (*Bridge, error) {
 // started and its context ends with it; the run's calls go on for as long as
 // the run does.
 //
+// OPENING A JOB'S SESSION AGAIN IS HOW A RECOVERED RUN IS SERVED. A node that
+// takes a running job over — this process after a restart, or a peer — opens
+// its session under the same [Session.Launch], and the token the box already
+// holds resolves to it: the subject a token names is the run and the job, and
+// both are the run's own. The URL that second opening returns names this
+// node; the box never sees it.
+//
 // The URL is EMPTY when no base is configured, and that is a real answer
 // rather than an error: a deployment whose API is not reachable from a box
 // cannot bridge, and the caller's move is to refuse box mode for that seat
@@ -307,9 +354,15 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// was never bound to a turn would answer the box's handshake and then
 	// refuse every gated builtin as undecidable — a run that burns its
 	// budget finding out that nothing it holds can be called.
-	if s.RunID == "" || s.Surface == nil || s.Surface.Turn().Handle() == "" {
+	//
+	// AND A SESSION NAMING NO JOB, or one a token cannot carry: the job is
+	// half of what a token names, and the half that tells a relaunch's box
+	// from its predecessor's.
+	if s.RunID == "" || !validLaunch(s.Launch) || s.Surface == nil ||
+		s.Surface.Turn().Handle() == "" {
 		log.Error("mcp_bridge_session_incomplete",
-			"run_id", s.RunID, "seat", s.Handle, "has_surface", s.Surface != nil,
+			"run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,
+			"has_surface", s.Surface != nil,
 			"has_seat", s.Surface != nil && s.Surface.Turn().Handle() != "")
 		return ""
 	}
@@ -335,7 +388,8 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// step the new one is filed: a relaunch hands in a fresh Session for a
 	// run id that already has one, or the same Session again. Either way
 	// the earlier box must not keep a working key to the surface the new
-	// run now owns.
+	// run now owns. A recovery re-opening the same job replaces it too, and
+	// the same token then reaches the new opening's surface.
 	b.mu.Lock()
 	previous := b.runs[s.RunID]
 	if previous != nil {
@@ -346,41 +400,37 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	b.mu.Unlock()
 
 	if previous != nil {
-		// A relaunch: a resumed executor back in a box under the turn id
-		// it already had. The coordinator deliberately does not end a run
-		// its own turn relaunched, so nothing else closes the earlier
-		// opening. Its TOKEN stops resolving too, because the subject names
-		// the opening and not the run: closing the transport only ends a
-		// connection the box would reopen, and it holds a signed token that
-		// has not expired.
-		log.Info("mcp_bridge_session_replaced", "run_id", s.RunID, "seat", s.Handle)
+		// A relaunch — a resumed executor back in a box under the turn id
+		// it already had — or a recovery of the same job. The coordinator
+		// deliberately does not end a run its own turn relaunched, so
+		// nothing else closes the earlier opening. A relaunch's earlier
+		// TOKEN stops resolving too, because the subject names the job and
+		// not only the run: closing the transport only ends a connection
+		// the box would reopen, and it holds a signed token that has not
+		// expired.
+		log.Info("mcp_bridge_session_replaced", "run_id", s.RunID, "launch_id", s.Launch,
+			"seat", s.Handle, "recovered", previous.id == opened.id)
 		previous.end()
 	}
 	return b.base + PathPrefix + b.signer.Mint(opened.subject(), b.ttl)
 }
 
-// subjectSep joins an opening's id to its run id in a token's subject.
+// subjectSep joins an opening's job to its run id in a token's subject.
 //
-// "~", and the id FIRST, so the parse is a cut at the first one whatever a run
+// "~", and the job FIRST, so the parse is a cut at the first one whatever a run
 // id contains. Two characters are unavailable for it: "." delimits
 // [runtoken.Signer.Mint]'s own payload, and the whole token is a URL PATH
 // SEGMENT, so anything reserved there is worse than wrong — "#" opens the
 // fragment, and a client sends the engine everything before it and keeps the
 // rest, which authenticates as a truncated token rather than failing as a
-// malformed one. "~" is unreserved (RFC 3986 §2.3) and appears in neither a
-// hex id nor a UUID.
+// malformed one. "~" is unreserved (RFC 3986 §2.3) and appears in no UUID,
+// which is what a job's id is.
 const subjectSep = "~"
 
-// newSessionID is an opening's id: half its token's subject.
-//
-// Sixteen bytes of crypto/rand: it is not a secret on its own — the token's
-// HMAC is what makes it unforgeable — but it must not be GUESSABLE either, or
-// a superseded box could mint nothing while still naming the opening that
-// replaced it. rand.Read never returns an error.
-func newSessionID() string {
-	var raw [16]byte
-	_, _ = rand.Read(raw[:])
-	return hex.EncodeToString(raw[:])
+// validLaunch reports whether a job id can be half of a token's subject: set,
+// and free of the two characters that delimit a token's parts.
+func validLaunch(launch string) bool {
+	return launch != "" && !strings.ContainsAny(launch, subjectSep+".")
 }
 
 // Close ends a run's session. A token for a closed run resolves to nothing,
@@ -444,42 +494,56 @@ func (b *Bridge) Live() int {
 // (ordinary, self-limiting) or the deployment error below — and producing one
 // takes the signing key, so warning about it cannot be abused.
 //
-// # The session is not fleet state, and cannot be
+// # The session is the seat holder's, and only the token is the fleet's
 //
 // A session holds a live [tools.Surface]: the seat's MCP children, its skill
-// guard, its per-turn recording. Those are objects in the process that claimed
-// the seat, so THE NODE THAT OPENED A SESSION IS THE ONLY ONE THAT CAN SERVE
-// IT. Signing shares authentication across a fleet; it does not and could not
-// share the surface. Each node mints its endpoint from its OWN
-// CREWLET_MCP_BRIDGE_URL, which makes a per-node-addressable value correct and
-// a shared load-balancer address wrong: behind a balancer, calls land on peers
-// that never held the session and answer 401 forever.
+// guard, its per-turn recording. Those are objects in the process that holds
+// the seat, so ONLY THE NODE HOLDING THE RUN'S SEAT CAN SERVE ITS SESSION —
+// the node that launched it, or the one that took the run over and opened its
+// job's session again ([Bridge.Open]). Signing shares authentication across a
+// fleet, which is what lets that second node accept the token the first one
+// minted; it does not and could not share the surface. So a call has to reach
+// the holder, and the box dials the address it was launched with: the
+// launching node's own [BaseURLVar], which makes a per-node-addressable value
+// correct and a shared load-balancer address wrong — behind a balancer, calls
+// land on peers that do not hold the session and answer 401.
+//
+// A RUN A PEER TOOK OVER is the case that leaves: its session is served on
+// the peer, and its box still dials this node. While this node is up and has
+// not restarted, it still holds its own opening of the job, fenced off the
+// moment the seat left, and every call is answered that the run's tools are
+// closed and its CLI should end its turn — the run then ends and the seat's
+// new holder collects it. A node that restarted since holds nothing for it
+// and answers 401, and a node that is gone answers nothing; either way the
+// rest of the run's calls fail until it ends.
 func (b *Bridge) resolve(token string) (opened *binding, runID, reason string) {
 	subject := b.signer.Validate(token)
 	if subject == "" {
 		return nil, "", "the token is forged, malformed or expired"
 	}
-	id, runID, ok := strings.Cut(subject, subjectSep)
+	launch, runID, ok := strings.Cut(subject, subjectSep)
 	if !ok {
 		return nil, "", "the token is forged, malformed or expired"
 	}
 	b.mu.RLock()
-	held, current := b.sessions[id], b.runs[runID]
+	held, current := b.sessions[launch], b.runs[runID]
 	b.mu.RUnlock()
 	if held != nil && held.session.RunID == runID {
 		return held, runID, ""
 	}
 	if current != nil {
-		return nil, runID, "this node holds a DIFFERENT session for that run — " +
-			"the run was relaunched and this token names the superseded one, " +
+		return nil, runID, "this node holds a DIFFERENT job's session for that run — " +
+			"the run was relaunched and this token names the superseded job, " +
 			"which is a box that outlived the run it was started for"
 	}
 	return nil, runID, "this fleet signed the token, but this node holds no session " +
-		"for that run: the run has ended, this node restarted since it opened " +
-		"the run's session, or " + BaseURLVar + " resolves to a node other than " +
-		"the one that owns the seat (a load balancer in front of several). It must " +
-		"address the node that opened the session, because a session is a live " +
-		"tool surface rather than fleet state"
+		"for that run's job: the run has ended; this node restarted and has not yet " +
+		"taken the run's seat back (it re-opens the session as it recovers the seat, " +
+		"before the seat's mailbox opens); the seat is now held by another node, " +
+		"which serves the session while the box still dials this one; or " +
+		BaseURLVar + " resolves to a node other than the one holding the seat (a " +
+		"load balancer in front of several). It must address the node holding the " +
+		"seat, because a session is a live tool surface rather than fleet state"
 }
 
 // Miss says WHY a token did not resolve, for the log only. Exported for the
@@ -575,14 +639,17 @@ func (s *Session) Connections() int {
 
 // --- one opening: the dispatcher a box's calls go through ------------------
 
-// binding is one opening of a session: the MCP server a token minted at that
-// opening reaches, and the gates every call on it passes.
+// binding is one opening of a session: the MCP server a token minted for its
+// job reaches, and the gates every call on it passes.
 //
 // ITS OWN VALUE, apart from the [Session] the engine fills in, so that a
-// session opened twice — a relaunch handing the same value in again — is two
-// openings: the first ends, its token stops resolving and its calls are
-// refused, while the second serves.
+// session opened twice is two openings: the first ends and its calls are
+// refused, while the second serves. A relaunch's token stops resolving with
+// its opening, because the relaunch is a new job; a recovery's does not,
+// because it is the same one.
 type binding struct {
+	// id is the job the opening serves — [Session.Launch] as it was opened,
+	// held here because the Session value can be opened again for another.
 	id      string
 	session *Session
 	server  *toolsession.Server
@@ -601,22 +668,28 @@ type binding struct {
 	// stopped is why the opening's calls are refused from here on: the
 	// seat's fence closed, or a tool panicked. Nil while it serves.
 	stopped error
-	// admitted counts the calls admitted, the next one's [Call.Seq].
+	// admitted is the place of the last call admitted in the job's order —
+	// from [Session.LastSeq] — and so the one before the next [Call.Seq].
 	admitted int
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
 
 func newBinding(ctx context.Context, s *Session) *binding {
-	opened := &binding{id: newSessionID(), session: s, ctx: context.WithoutCancel(ctx)}
+	opened := &binding{id: s.Launch, session: s, ctx: context.WithoutCancel(ctx), admitted: s.LastSeq}
 	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
 	return opened
 }
 
-// subject is what a token minted for this opening names: the opening, and its
-// run. The run id alone was the subject once, and a relaunch reuses the turn
-// id — so the superseded box's token went on resolving, to the new session,
-// whose surface and durable call log it could then drive.
+// subject is what a token minted for this opening names: the job, and its run.
+//
+// The run id alone was the subject once, and a relaunch reuses the turn id —
+// so the superseded box's token went on resolving, to the new session, whose
+// surface and durable call log it could then drive. A random id per opening
+// came next, and it was one only the process that drew it knew: a restart lost
+// it, and the box's every call was refused for the rest of its run. The job's
+// id is neither: a relaunch mints a new one, and the run's durable row carries
+// it to whichever node opens the job's session again.
 func (o *binding) subject() string { return o.id + subjectSep + o.session.RunID }
 
 // end refuses every later call on the opening and closes every MCP session a
