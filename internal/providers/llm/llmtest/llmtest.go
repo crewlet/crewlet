@@ -117,8 +117,9 @@ type Script struct {
 	// ToolTimeout is the CLI's own per-call timeout, told to the host.
 	ToolTimeout time.Duration
 
-	// Before, when set, is called before each call with its name; a case
-	// uses it to act between a response and its calls.
+	// Before, when set, is called before each call with its name — a call
+	// to one of the CLI's own tools included, which then takes as long as
+	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
 
 	// NoCallIDs makes the CLI one that sends no id of its own with a call,
@@ -377,13 +378,14 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 	var exitMu sync.Mutex
 	var exited error
 	one := func(c Call) {
-		if c.Native {
-			// The CLI's own tool: it runs it itself, and the host never
-			// hears of it beyond the record.
-			return
-		}
 		if s.Before != nil {
 			s.Before(c.Name)
+		}
+		if c.Native {
+			// The CLI's own tool: it runs it itself — for as long as
+			// Before takes — and the host never hears of it beyond the
+			// record.
+			return
 		}
 		raw := c.Args
 		if raw == "" {
