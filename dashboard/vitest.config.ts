@@ -27,7 +27,7 @@ export default defineConfig({
     //
     // Berlin rather than a fixed offset: it has both halves of the hazard, a
     // non-zero offset all year and two transitions, and it is the zone
-    // `internal/tracker`'s own date suite already resolves against.
+    // `internal/worklet`'s own date suite already resolves against.
     env: { TZ: "Europe/Berlin" },
     // THE DESIGN SYSTEM IS TRANSFORMED RATHER THAN EXTERNALISED, because its
     // components import their own stylesheets as a side effect and Node has no
