@@ -709,7 +709,7 @@ func (o *binding) Call(_ context.Context, in toolsession.Call) toolsession.Resul
 		// object in place of what the model wrote is a call it never made.
 		// Not admitted to the run's call log, since nothing ran.
 		o.mu.Unlock()
-		out := unparsedArguments(in.Name, in.ArgumentsError)
+		out := toolloop.UnparsedArguments(in.Name, in.ArgumentsError)
 		o.record(Call{Call: tools.Call{Name: in.Name, Output: out, Failed: true,
 			Cause: tools.RefusalInvalid}, Seq: seq})
 		return refused(out)
@@ -872,14 +872,6 @@ func (o *binding) record(call Call) {
 		log.WarnContext(o.ctx, "mcp_bridge_ledger_append_failed",
 			"run_id", s.RunID, "seat", s.Handle, "tool", call.Name, "error", err)
 	}
-}
-
-// unparsedArguments is the answer to a call whose arguments did not parse: the
-// tool loop's own wording, so a model reads the same fix whichever way its CLI
-// reached the seat's tools.
-func unparsedArguments(name, why string) string {
-	return fmt.Sprintf("%s was NOT run: its arguments could not be read (%s). "+
-		"Call it again with its arguments as one complete JSON object.", name, why)
 }
 
 // refused is a call answered without the tool's own output.

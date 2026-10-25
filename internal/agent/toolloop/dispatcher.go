@@ -791,7 +791,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if c.argsErr != "" {
 		// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN: running the
 		// call on an empty object is a write the model never asked for.
-		return refuse(mcp.RefusalInvalid, unparsedArguments(c.name, c.argsErr))
+		return refuse(mcp.RefusalInvalid, UnparsedArguments(c.name, c.argsErr))
 	}
 	c.admitted = true
 	d.awaitedLocked(c, true)
@@ -1290,10 +1290,15 @@ func (d *dispatcher) frame() {
 	}
 }
 
-// unparsedArguments is the result a call whose arguments did not parse is
+// UnparsedArguments is the result a call whose arguments did not parse is
 // answered with: what went wrong, and what to do about it, in words a model
 // acts on.
-func unparsedArguments(name, why string) string {
+//
+// EXPORTED FOR THE BRIDGE, which answers a box-mode run's calls with it: the
+// rule — such a call is answered, never run on an empty object — is this
+// loop's, and a second copy of its wording is the one a model would learn to
+// fix differently depending on where its CLI ran.
+func UnparsedArguments(name, why string) string {
 	return fmt.Sprintf("%s was NOT run: its arguments could not be read (%s). "+
 		"Call it again with its arguments as one complete JSON object.", name, why)
 }
