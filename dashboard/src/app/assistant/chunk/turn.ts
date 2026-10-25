@@ -368,7 +368,7 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
   // A STEP NAMES ITS TURN where the engine says so; one that does not is not
   // placed under a turn it may not belong to.
   for (const step of transcript.steps) {
-    const id = (step as AssistantStepEvent & { turn_id?: string }).turn_id;
+    const id = step.turn_id;
     const turn = id === undefined ? undefined : turns.get(id);
     if (turn) {
       turns.set(turn.id, {

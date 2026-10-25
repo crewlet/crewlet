@@ -87,6 +87,13 @@ type DeltaEvent struct {
 // under one StepID.
 type StepEvent struct {
 	StepID uuid.UUID `json:"step_id"`
+	// TurnID names the turn the step belongs to. It is set on every step a
+	// Transcript and a SnapshotEvent carry, because a stored step is read
+	// apart from the frame that brought it and the client groups a reloaded
+	// conversation's steps under their turns by it; a live step frame may
+	// leave it out, its head already naming the turn. Where it is set it is
+	// the frame's own turn.
+	TurnID uuid.UUID `json:"turn_id,omitzero"`
 	// Index is the step's place in the turn, from 1.
 	Index int `json:"index"`
 	// Tool is the catalogue tool's model-facing name.
@@ -242,7 +249,10 @@ func (f Frame) validatePayload() error {
 			return fmt.Errorf("%w: delta names no message_id", ErrInvalid)
 		}
 	case EventStep:
-		return f.Step.Validate()
+		if err := f.Step.Validate(); err != nil {
+			return err
+		}
+		return f.Step.inTurn(f.TurnID)
 	case EventCard:
 		return f.Card.Validate()
 	case EventAction:
@@ -259,6 +269,9 @@ func (f Frame) validatePayload() error {
 	case EventSnapshot:
 		for _, s := range f.Snapshot.Steps {
 			if err := s.Validate(); err != nil {
+				return err
+			}
+			if err := s.inTurn(f.TurnID); err != nil {
 				return err
 			}
 		}
@@ -290,6 +303,15 @@ func (s StepEvent) Validate() error {
 		return fmt.Errorf("%w: step state %q is not one of %v", ErrInvalid, s.State, StepStates)
 	case s.State == StepRefused && s.Refusal == nil:
 		return fmt.Errorf("%w: a refused step carries no refusal", ErrInvalid)
+	}
+	return nil
+}
+
+// inTurn reports a step that names a turn other than the frame carrying it.
+func (s StepEvent) inTurn(turn uuid.UUID) error {
+	if s.TurnID != uuid.Nil && s.TurnID != turn {
+		return fmt.Errorf("%w: step %d names turn %s inside a frame of turn %s", ErrInvalid,
+			s.Index, s.TurnID, turn)
 	}
 	return nil
 }

@@ -76,7 +76,7 @@ data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":
 
 id: 75099765-5fa3-5aa4-b185-7d8dd69869bd.2
 event: snapshot
-data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","seq":2,"at":"2026-10-24T09:41:00.2Z","kind":"snapshot","snapshot":{"messages":[{"id":"0bf89d0f-2f00-54e6-9075-c932911602dd","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","role":"user","text":"What is running right now?","created_at":"2026-10-24T09:41:00Z","page":{"title":"Work › Tasks","screen":"work-tasks"}}],"steps":[],"cards":[]}}
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","seq":2,"at":"2026-10-24T09:41:00.2Z","kind":"snapshot","snapshot":{"messages":[{"id":"0bf89d0f-2f00-54e6-9075-c932911602dd","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","role":"user","text":"What is running right now?","created_at":"2026-10-24T09:41:00Z","page":{"title":"Work › Tasks","screen":"work-tasks"}}],"steps":[{"step_id":"c47c2347-7a71-54a6-ad8a-0411130beeaa","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","index":1,"tool":"list_agents","label":"Read what the agents are doing","request":{"method":"GET","route":"/agents"},"state":"done","started_at":"2026-10-24T09:41:00Z","duration_ms":240,"summary":"6 agents"}],"cards":[]}}
 
 id: 75099765-5fa3-5aa4-b185-7d8dd69869bd.3
 event: error

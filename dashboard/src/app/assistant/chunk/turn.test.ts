@@ -524,3 +524,55 @@ describe("a reloaded transcript", () => {
     expect(view.turns[1]!.seq).toBe(7);
   });
 });
+
+describe("a reloaded transcript's steps", () => {
+  const step = (id: string, turn: string | undefined, index: number) => ({
+    step_id: id,
+    ...(turn === undefined ? {} : { turn_id: turn }),
+    index,
+    tool: "list_agents",
+    label: "Read the agents",
+    state: "done" as const,
+    started_at: "2026-10-24T09:00:00Z",
+  });
+
+  test("are drawn under the turn each names, and one naming none under no turn", () => {
+    const view = after({
+      type: "transcript",
+      transcript: {
+        conversation: {
+          id: CONV,
+          title: "",
+          created_at: "2026-10-24T09:00:00Z",
+          updated_at: "2026-10-24T09:05:00Z",
+        },
+        messages: [
+          {
+            id: "q1",
+            turn_id: "t1",
+            role: "user",
+            text: "One?",
+            created_at: "2026-10-24T09:00:00Z",
+          },
+          {
+            id: "q2",
+            turn_id: "t2",
+            role: "user",
+            text: "Two?",
+            created_at: "2026-10-24T09:05:00Z",
+          },
+        ],
+        steps: [
+          step("s1", "t1", 1),
+          step("s2", "t2", 1),
+          step("s3", "t2", 2),
+          step("s4", undefined, 1),
+        ],
+        cards: [],
+        open_turn: null,
+        audit_reads: [],
+      },
+    });
+    expect(view.turns.map((t) => t.steps.map((s) => s.step_id))).toEqual([["s1"], ["s2", "s3"]]);
+  });
+});

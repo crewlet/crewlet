@@ -197,6 +197,8 @@ export interface AssistantDeltaEvent {
 /** One tool step, at its start and at its end. */
 export interface AssistantStepEvent {
   step_id: string;
+  /** The step's turn: set on every transcript and snapshot step; a live frame's head names it. */
+  turn_id?: string;
   index: number;
   tool: string;
   label: string;

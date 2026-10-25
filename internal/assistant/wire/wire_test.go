@@ -278,3 +278,40 @@ func TestAPageContextIsBoundedPlainAndNamedByID(t *testing.T) {
 		}
 	}
 }
+
+// A STEP NAMES ITS OWN TURN, OR NONE.
+//
+// A stored step is read apart from the frame that brought it, and the client
+// groups a reloaded conversation's steps under their turns by the turn they
+// name. A step naming another turn inside a frame of this one would be drawn
+// under the wrong question. Mutation: drop the inTurn check from either arm
+// and its case validates.
+func TestAStepNamesOnlyItsOwnTurn(t *testing.T) {
+	t.Parallel()
+	turn := assistanttest.NewTurn("conversation", "turn")
+	step := wire.StepEvent{StepID: uuid.New(), Index: 1, Tool: "list_agents",
+		Label: "Read the agents", State: wire.StepDone, StartedAt: assistanttest.Epoch}
+	own, none, other := step, step, step
+	own.TurnID = turn.ID
+	other.TurnID = assistanttest.ID("another turn")
+	for what, s := range map[string]wire.StepEvent{"its own turn": own, "no turn": none} {
+		live := turn.Frame(wire.Frame{Kind: wire.EventStep, Step: &s})
+		if err := live.Validate(); err != nil {
+			t.Errorf("a live step naming %s: %v", what, err)
+		}
+		snap := turn.Frame(wire.Frame{Kind: wire.EventSnapshot, Snapshot: &wire.SnapshotEvent{
+			Messages: []wire.Message{}, Steps: []wire.StepEvent{s}, Cards: []wire.CardEvent{}}})
+		if err := snap.Validate(); err != nil {
+			t.Errorf("a snapshot step naming %s: %v", what, err)
+		}
+	}
+	live := turn.Frame(wire.Frame{Kind: wire.EventStep, Step: &other})
+	if err := live.Validate(); !errors.Is(err, wire.ErrInvalid) {
+		t.Errorf("a live step naming another turn validated (%v)", err)
+	}
+	snap := turn.Frame(wire.Frame{Kind: wire.EventSnapshot, Snapshot: &wire.SnapshotEvent{
+		Messages: []wire.Message{}, Steps: []wire.StepEvent{other}, Cards: []wire.CardEvent{}}})
+	if err := snap.Validate(); !errors.Is(err, wire.ErrInvalid) {
+		t.Errorf("a snapshot step naming another turn validated (%v)", err)
+	}
+}
