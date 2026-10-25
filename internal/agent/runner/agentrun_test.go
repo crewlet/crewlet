@@ -68,14 +68,14 @@ func TestAnAgentModeExecutorLaunchesAndSuspends(t *testing.T) {
 	if launcher.req.Surface == nil {
 		t.Fatal("the run was launched with no tool surface, so the bridge has nothing to dispatch against")
 	}
-	// The SEAT'S OWN PROMPT, not a second one written for the CLI: the
-	// brief has to carry the identity and the ask, or the box gets a task
-	// with no idea whose it is.
+	// The SEAT'S OWN PROMPT, not a second one written for the CLI: the run
+	// has to carry the identity and the ask, or the box gets a task with no
+	// idea whose it is.
 	if !strings.Contains(launcher.req.Brief, "post the weekly summary") {
 		t.Errorf("the brief does not carry the turn's ask: %q", launcher.req.Brief)
 	}
-	if !strings.Contains(launcher.req.Brief, "CTO") {
-		t.Errorf("the brief does not carry the seat's identity: %q", launcher.req.Brief)
+	if !strings.Contains(launcher.req.System, "CTO") {
+		t.Errorf("the system prompt does not carry the seat's identity: %q", launcher.req.System)
 	}
 	// The SUBMISSION is on the surface, because that is how the CLI ends
 	// its run — over the bridge, exactly as a native loop ends locally.
@@ -90,6 +90,56 @@ func TestAnAgentModeExecutorLaunchesAndSuspends(t *testing.T) {
 	}
 	if !published {
 		t.Error("the bridged surface does not publish submit_work, so the run cannot say what it did")
+	}
+}
+
+// AN AGENT-MODE EXECUTOR'S PROMPT TRAVELS IN THE TWO HALVES A NATIVE PASS
+// SENDS: the seat's standing instructions as system text, the turn's ask as
+// the prompt.
+//
+// The coding CLI appends the first to its own system prompt and runs the
+// second. Joined into one brief, as they once were, the seat's identity,
+// policies and memory reached the model as the opening of the user's request,
+// and the CLI's system prompt said nothing of whose work it was doing. Held to
+// the native pass on the same seat, byte for byte, so a half that drifted from
+// the other runtime's fails as surely as one that moved.
+func TestAnAgentModeExecutorsPromptTravelsInTheHalvesANativePassSends(t *testing.T) {
+	t.Parallel()
+	launcher := &recordingLauncher{}
+	agent := agentFixture(t, launcher, nil)
+	if _, _, err := agent.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute (agent mode): %v", err)
+	}
+
+	prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+		`{"outcome":"delivered","summary":"done","deliveries":["slack_post"]}`)}}
+	native, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{})
+	if _, _, err := native.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute (native): %v", err)
+	}
+	requests := prov.requestsFor("execute")
+	if len(requests) == 0 {
+		t.Fatal("the native pass made no call")
+	}
+	var system, user string
+	for _, m := range requests[0].Messages {
+		switch {
+		case m.Role == llm.RoleSystem && system == "":
+			system = m.Content
+		case m.Role == llm.RoleUser && user == "":
+			user = m.Content
+		}
+	}
+	if launcher.req.System == "" || launcher.req.System != system {
+		t.Errorf("the agent-mode system text is not the native system message:\n%q\nwant\n%q",
+			launcher.req.System, system)
+	}
+	if launcher.req.Brief != user {
+		t.Errorf("the agent-mode brief is not the native user message:\n%q\nwant\n%q",
+			launcher.req.Brief, user)
+	}
+	if strings.Contains(launcher.req.Brief, "CTO") {
+		t.Errorf("the seat's identity rides the prompt the CLI runs:\n%s", launcher.req.Brief)
 	}
 }
 
@@ -120,8 +170,8 @@ func TestAnAgentModeExecutorIsNotTaughtRunSandbox(t *testing.T) {
 		t.Fatalf("launched %d runs", launcher.runs)
 	}
 	for _, taught := range []string{"Sandbox code work", "run_sandbox"} {
-		if strings.Contains(launcher.req.Brief, taught) {
-			t.Errorf("the agent-mode brief teaches %q, a tool its surface never offers:\n%s", taught, launcher.req.Brief)
+		if prompt := launcher.req.System + "\n" + launcher.req.Brief; strings.Contains(prompt, taught) {
+			t.Errorf("the agent-mode prompt teaches %q, a tool its surface never offers:\n%s", taught, prompt)
 		}
 	}
 

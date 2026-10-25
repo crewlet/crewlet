@@ -562,7 +562,7 @@ func (e emitter) workItem() *types.WorkItem {
 // to clone the active name list and has released it before it looks a tool up,
 // and neither caller of started holds that lock.
 //
-// AGENT MODE COUNTS THE ARRAY TOO, although the launcher's Brief is the system
+// AGENT MODE COUNTS THE ARRAY TOO, although the launcher is handed the system
 // and user text alone. Those definitions reach the coding CLI over the MCP
 // bridge and that CLI's own model is billed for every one of them, so leaving
 // them out would report the engine's cheapest-looking phase as its slimmest.

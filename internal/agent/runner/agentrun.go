@@ -68,10 +68,24 @@ type AgentLauncher interface {
 }
 
 // AgentRunRequest is one executor handed to an outside agent loop.
+//
+// THE PROMPT ARRIVES IN THE TWO HALVES a native pass sends it in, because
+// the CLIs that run agent mode take it in two: Claude Code appends a file to
+// its own system prompt, OpenCode adds an instruction file to its default
+// agent's. Both keep the vendor's harness prompt — the part that teaches its
+// shell, editor and loop, which agent mode is FOR — and put the seat's
+// standing instructions on the system side of the conversation beneath it.
+// Joined into one document, as they once were, the seat's identity, policies
+// and memory reached the model as the first user message, which a model weighs
+// as a request rather than as who it is.
 type AgentRunRequest struct {
-	// Brief is the whole executor prompt — the system message and the
-	// turn's own ask, rendered as one document, because a CLI takes one
-	// prompt and has no system-message channel of its own.
+	// System is the executor's system prompt: the seat's standing
+	// instructions, exactly as a native pass sends them as its system
+	// message.
+	System string
+
+	// Brief is the turn's own ask — the user message a native pass sends
+	// beside System — and the whole of what the CLI is prompted with.
 	Brief string
 
 	// Surface is what the run may call, bridged. The SAME object a native
@@ -140,7 +154,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// and no sign of what it was asked.
 	//
 	// NO SEED — this opens a phase rather than re-entering one — and the
-	// surface, whose definitions are NOT in the Brief below: they reach the
+	// surface, whose definitions are NOT in the prompt below: they reach the
 	// CLI over the MCP bridge, where the CLI's own model is billed for
 	// every one of them. See [emitter.promptSize].
 	//
@@ -149,7 +163,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	r.emitter().started(ctx, phase.Execute, round, system, user, nil, surface, roundCaps{})
 
 	if err := r.cfg.AgentRun.LaunchExecutor(ctx, AgentRunRequest{
-		Brief:   system.Text + "\n\n" + user.Text,
+		System:  system.Text,
+		Brief:   user.Text,
 		Surface: surface,
 		Spend:   bridged,
 		Round:   round,

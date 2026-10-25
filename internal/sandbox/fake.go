@@ -435,7 +435,7 @@ func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
 	return nil
 }
 
-// Start records the brief and hands back a handle that stays unfinished
+// Start records the request and hands back a handle that stays unfinished
 // until a test calls [FakeRunner.Finish].
 func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (RunHandle, error) {
 	r.mu.Lock()

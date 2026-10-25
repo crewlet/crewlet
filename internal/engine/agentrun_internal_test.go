@@ -617,6 +617,43 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	}
 }
 
+// THE SEAT'S SYSTEM PROMPT REACHES THE RUN AS ITS STANDING INSTRUCTIONS, and
+// the turn's ask as its task, each on its own field all the way to the runner —
+// which hands the first to the CLI on the channel that adds to its own system
+// prompt and runs the second. Dropped here, the run went out with the box's
+// framing alone and a seat that did not know whose work it was doing.
+func TestAnAgentModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
+	t.Parallel()
+	c, seat := splitLoginCompany(t, "api", "codex")
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	launcher := &agentLauncher{
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
+		codingAgent: "claude-code", placement: sandbox.E2B,
+	}
+	const system = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
+	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+		System: system, Brief: "## Task\nfix the failing test", Round: 1,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(launcher.turn),
+	}); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	started := jobs.Started()
+	if len(started) != 1 {
+		t.Fatalf("%d jobs started, want the executor's", len(started))
+	}
+	if !strings.HasPrefix(started[0].System, system+"\n\n## Your environment") {
+		t.Errorf("the run's standing instructions do not open with the seat's system prompt:\n%s",
+			started[0].System)
+	}
+	if !strings.HasPrefix(started[0].Brief, "## Task\nfix the failing test") ||
+		strings.Contains(started[0].Brief, "SEAT-IDENTITY-MARKER") {
+		t.Errorf("the run's prompt is not the turn's ask alone:\n%s", started[0].Brief)
+	}
+}
+
 // A RUN RECORDS THE AGENT ID OF THE TURN THAT LAUNCHED IT. The id is derived
 // from the company's name and the seat's handle, so an apply that renames the
 // company mid-turn changes it; the run's durable row must carry the id of the

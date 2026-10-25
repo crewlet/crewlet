@@ -893,6 +893,18 @@ it, and the *same turn* resumes — possibly in another process on another
 node, days later. Nothing about that is new for agent mode; see
 [Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
 
+**The run is prompted in the two halves a native pass sends.** The seat's
+system prompt — its identity, policies, roster and memory — is **appended
+to the CLI's own system prompt**, which stays whole: that prompt is the
+harness agent mode exists to use, its shell, its editor and how it works
+through a task. The turn's ask is the prompt the CLI runs, and nothing
+else is. The run's other standing instructions — what the box provides,
+and the report it writes before it stops — follow the seat's prompt on the
+system side. Claude Code takes the text with `--append-system-prompt-file`
+and OpenCode as an `instructions` entry in the configuration the run
+writes, each from a private file in the box, never from argv: see
+[What a coding agent is told](code-sandbox.md#what-a-coding-agent-is-told).
+
 **The engine's correctives do not reach an agent-mode run.** The rounds
 are the CLI's own, so the engine's tool loop never sees one end in prose
 and cannot ask the model again: a run whose model writes its report as
@@ -900,8 +912,8 @@ text instead of calling `submit_work` over the bridge comes back with no
 submission, and the phase is rescued as `incomplete` straight away. In
 text mode the same reply is a round the engine's loop re-prompts, naming
 `submit_work`, up to twice (see [Turn Engine](turn-engine.md#round-cap-extension-judge)).
-What an agent-mode run has instead is its brief, which tells it the run
-ends with that call.
+What an agent-mode run has instead is the seat's system prompt, which tells
+it the run ends with that call.
 
 #### The tool bridge
 

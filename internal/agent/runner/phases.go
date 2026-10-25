@@ -413,10 +413,10 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // own ask.
 //
 // ONE BUILDER FOR BOTH RUNTIMES. A native pass sends these as two messages and
-// an agent-mode run sends them as one document, because a coding CLI takes a
-// single prompt — but they are the same seat with the same catalogue, memory,
-// skills and workers, and a second builder would drift on whichever half
-// nobody re-reads. The `round` is unused today and taken anyway, so a prompt
+// an agent-mode run hands them to its coding CLI as an appended system prompt
+// and the prompt it runs ([AgentRunRequest]) — the same seat with the same
+// catalogue, memory, skills and workers either way, and a second builder would
+// drift on whichever half nobody re-reads. The `round` is unused today and taken anyway, so a prompt
 // that ever needs to know which iteration it is does not change this
 // signature at two call sites.
 //

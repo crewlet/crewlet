@@ -67,11 +67,23 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // the same object json printed alone. In print mode the CLI refuses
 // stream-json without --verbose ("When using --print,
 // --output-format=stream-json requires --verbose").
-func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) string {
+//
+// THE SYSTEM TEXT IS APPENDED, NOT SUBSTITUTED: `--append-system-prompt-file`
+// adds the run's standing instructions after Claude Code's own system prompt,
+// which stays whole (measured on 2.1.310, off the request the CLI sent). That
+// prompt is the harness this run exists to use — how to drive its shell and
+// editor and work through a task — which a text call, denying every one of
+// those tools, has no use for. The FILE variant, written by [ClaudeCode.WriteConfig]:
+// see [Paths.System] for why never argv. Passed only for a run that has system
+// text, so a run with none runs on the vendor's prompt alone.
+func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string) string {
 	parts := []string{
 		"claude", "-p", shellQuote(req.Brief),
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
+	}
+	if req.System != "" {
+		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))
 	}
 	// VERBATIM, because the only entry that reaches this runner is a
 	// claude-code one, which already names the model in Claude Code's own
@@ -96,8 +108,14 @@ func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) st
 	return strings.Join(parts, " ")
 }
 
-// WriteConfig renders the scoped MCP surface, or nothing when there is none.
+// WriteConfig writes the run's system text where [ClaudeCode.Command] names
+// it, and renders the scoped MCP surface — each only when there is one.
 func (ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+	if req.System != "" {
+		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
+			return "", fmt.Errorf("codingagent: writing the system prompt: %w", err)
+		}
+	}
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}

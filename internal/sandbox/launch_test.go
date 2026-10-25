@@ -204,7 +204,7 @@ func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	}
 }
 
-// The full brief lives on the row; the wire carries its first line as the
+// The full brief goes to the run; the wire carries its first line as the
 // run's label — WHOLE, because a row too narrow for it is the renderer's to
 // elide, and a label cut to a width put half a sentence on the run's page as
 // its title.
@@ -225,9 +225,10 @@ func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 	}
 }
 
-// The agent is told the concrete task, the wider goal it serves, and what its
-// box already provides — the last so it does not spend rounds rediscovering
-// it.
+// The agent is asked the concrete task and the wider goal it serves, and told
+// as a standing instruction what its box already provides — so it does not
+// spend rounds rediscovering it — on the channel its CLI adds to its own
+// system prompt. Each text carries its own half and nothing of the other's.
 //
 // There is no success-criteria section: it came from the planner's declared
 // criteria, and with one loop there is no separate plan to declare them. What
@@ -247,26 +248,86 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 	if len(started) != 1 {
 		t.Fatalf("started %d runs, want 1", len(started))
 	}
-	brief := started[0].Brief
+	brief, system := started[0].Brief, started[0].System
 	for _, want := range []string{
 		"fix the failing test", // the executor's own ask
 		"get CI green",         // the wider task
-		"git is already authenticated.",
-		"linear",
 	} {
 		if !strings.Contains(brief, want) {
-			t.Fatalf("the brief does not mention %q:\n%s", want, brief)
+			t.Errorf("the brief does not mention %q:\n%s", want, brief)
+		}
+		if strings.Contains(system, want) {
+			t.Errorf("the system text repeats the task's %q:\n%s", want, system)
 		}
 	}
-	if strings.Contains(brief, "Success criteria") {
-		t.Errorf("the retired criteria section is still rendered:\n%s", brief)
+	for _, want := range []string{"## Your environment", "git is already authenticated.", "linear"} {
+		if !strings.Contains(system, want) {
+			t.Errorf("the system text does not mention %q:\n%s", want, system)
+		}
+		if strings.Contains(brief, want) {
+			t.Errorf("the brief carries the standing %q:\n%s", want, brief)
+		}
+	}
+	if strings.Contains(brief+system, "Success criteria") {
+		t.Errorf("the retired criteria section is still rendered:\n%s\n%s", brief, system)
+	}
+}
+
+// A RUN'S OWN SYSTEM TEXT LEADS ITS STANDING INSTRUCTIONS, and the task leads
+// its brief.
+//
+// An agent-mode executor launches with the seat's system prompt: it reaches
+// the runner ahead of the environment and the ask, whole, and none of it in
+// the brief — whose first line, the task's, is still what labels the run. A
+// run with no system text of its own (a run_sandbox job) gets the standing
+// instructions alone, opening on the first of them rather than on an empty
+// section.
+func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
+	t.Parallel()
+	const seat = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
+	const ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
+	for name, tc := range map[string]struct{ system, opens string }{
+		"agent mode":  {system: seat, opens: seat + "\n\n## Your environment\n"},
+		"run_sandbox": {system: "", opens: "## Your environment\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newWaiterRig(t)
+			req := launchReq("t1")
+			req.System, req.Ask = tc.system, ask
+			if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			started := rig.runner.Started()
+			if len(started) != 1 {
+				t.Fatalf("started %d runs, want 1", len(started))
+			}
+			got := started[0]
+			if !strings.HasPrefix(got.System, tc.opens) {
+				t.Errorf("the system text opens\n%q\nwant\n%q", got.System, tc.opens)
+			}
+			if !strings.HasSuffix(got.System, "\n\n"+ask) {
+				t.Errorf("the ask is not the last standing instruction the launch adds:\n%s", got.System)
+			}
+			if !strings.HasPrefix(got.Brief, req.Brief+"\n\n## The wider task\n") {
+				t.Errorf("the brief does not open with the task:\n%s", got.Brief)
+			}
+			if strings.Contains(got.Brief, "SEAT-IDENTITY-MARKER") || strings.Contains(got.Brief, "crewlet-ask") {
+				t.Errorf("standing instructions reached the brief:\n%s", got.Brief)
+			}
+			rig.queue.mu.Lock()
+			defer rig.queue.mu.Unlock()
+			if label := rig.queue.published[0].event.Data.(*types.SandboxRunStarted).Task; label != req.Brief {
+				t.Errorf("the run is labelled %q, want the task's first line", label)
+			}
+		})
 	}
 }
 
 // THE CODING AGENT IS TOLD IT MAY ASK, and whom — the addendum the engine
-// composes rides the brief the box is started with. Without it the ask shim was
-// installed and never mentioned, so a run blocked on a decision could not park
-// on a question at all.
+// composes rides the standing instructions the box is started with. Without it
+// the ask shim was installed and never mentioned, so a run blocked on a
+// decision could not park on a question at all.
 //
 // And the row records WHO ASKED, which is what the park resolves a question to
 // "the requester" against days later.
@@ -280,8 +341,8 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 	started := rig.runner.Started()
-	if len(started) != 1 || !strings.Contains(started[0].Brief, "crewlet-ask --to founder") {
-		t.Fatalf("the coding agent's brief does not carry how to ask:\n%v", started)
+	if len(started) != 1 || !strings.Contains(started[0].System, "crewlet-ask --to founder") {
+		t.Fatalf("the coding agent's standing instructions do not carry how to ask:\n%v", started)
 	}
 	if got := rig.get("t1").Requester; got != "ada" {
 		t.Errorf("the row records requester %q, want the seat whose wake started the turn", got)
