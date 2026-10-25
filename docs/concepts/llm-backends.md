@@ -1685,7 +1685,8 @@ directory would close that too, and was measured and not adopted: codex then
 reads even the call's `AGENTS.md` through its bubblewrap helper, and on a host
 where no user namespace can be created every call failed. That residual is why
 `local_tools: denied` is a claim `crewlet llm doctor` **measures** rather than
-one you take on trust.
+one you take on trust, and why the Dashboard Assistant, which needs a CLI left
+with no tool at all, refuses codex.
 
 **An allowlist is safe on its own where a stale name costs one tool.**
 `kimi-code` is that case: an entry the CLI does not recognise "is reported with
@@ -1759,6 +1760,23 @@ measured and added (an operator may supply their own `web_denial` in
 doctor` runs its web probe on a denied entry and reports a fetch that
 succeeded as a problem, exactly as it reports a shell that ran on a profile
 denying local tools; run it before the assistant goes live.
+
+**The Dashboard Assistant needs more than a denial: no tool at all, by
+construction.** A deny list names the tools a release had; measured on Claude
+Code 2.1.310 with no login (so no model was reached), the seats' deny list
+still left thirteen tools on offer, Workflow, SendMessage and EnterWorktree
+among them. So a profile the assistant runs on declares `tools_off`: the
+argument runs that leave the CLI with no tool of its own, and the flags that
+would bring one back. The assistant's chain admits an entry only when every
+argv its calls run (web denied, as written and streamed) carries each run once
+and none of those flags, which an override cannot quietly undo:
+
+| Profile | No tool by construction | Assistant |
+|---|---|---|
+| `claude-code` | `--tools ""` (an empty allow list) in the denied argv, `--strict-mcp-config` with no server | eligible, measured on 2.1.310 |
+| `pi` | `--no-tools` sends no tool, `--no-extensions` loads none | eligible, measured on 0.85.1 |
+| `codex` | none: its shell is switched off, but `apply_patch` has no switch, and its patch check answers whether a file outside the call holds given lines | refused |
+| `opencode` | none measured: the deny-all policy refuses a call when made rather than removing the tool | refused until measured |
 
 **`pi` is the one profile that denies every tool outright** (`--no-tools`),
 and it is honest there for a reason no other vendor gives it: measured off
@@ -2890,6 +2908,7 @@ it runs on.
 | `local_tools_note` | Why a `vendor-default` stance is one. |
 | `web_tools` | The entry's stance on the CLI's own web tools: `allowed` (the default, and every seat's) or `denied`. `denied` runs the CLI through `web_denial`, and is refused on a profile that has none. |
 | `web_tools_note` | How the profile's web denial was measured, or why it has none. |
+| `tools_off` | `{args, refuses, note}`: how the CLI's run is left with no tool of its own, by construction. `args` are argument runs (`[["--tools", ""], ["--strict-mcp-config"]]`), each of which must appear adjacent and once in the argv; `refuses` are flags that bring a tool back wherever they appear. Requires `local_tools: denied` and a `note` saying how it was measured. The Dashboard Assistant admits only an entry whose every argv passes it. |
 | `web_denial` | `{complete_args, seed_files}`: what the run uses instead when `web_tools` is `denied`. Each field set replaces the profile field of that name whole; a field left unset keeps it. Overriding `complete_args` (or `seed_files`) beside `web_tools: denied` is refused where the denial replaces it: override `web_denial.complete_args` instead. |
 | `stream` | `{args, event_type_path, text_events, delta_paths, delta_events}`: how a `json` profile streams a call that is watched and asks for the token stream (the Dashboard Assistant's). `args` is appended to the argv the call already runs (after `web_denial`, so every isolation and denial flag stays in place), output becomes `jsonl`, and the other four fields replace the profile's for that call. Chosen per call, never per entry, and only on that explicit ask; refused on a profile whose output is already `jsonl`, and the profile it makes is validated like any other. |
 | `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
