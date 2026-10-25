@@ -24,7 +24,15 @@
  * clock, or now by raising the ceiling — which is what these write.
  */
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   Button,
   Callout,
@@ -48,6 +56,23 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+
+/**
+ * A ceiling the assistant prepared, for the editor of its scope and window to
+ * OPEN WITH: the field filled in, nothing saved. Each request carries a fresh
+ * `nonce`, so the editor opens once per request however often it renders.
+ */
+export interface CeilingPrefill {
+  /** `company`, or a seat's handle. */
+  readonly scope: string;
+  readonly period: Period;
+  /** The ceiling as the field takes it: a number of tokens, `40M`, or empty for none. */
+  readonly text: string;
+  readonly nonce: number;
+}
+
+/** The screen's last prepared ceiling, read by every [CeilingEditor] under it. */
+export const CeilingPrefillContext = createContext<CeilingPrefill | null>(null);
 
 /** What changing a scope's ceilings is a change to: one seat, or the company. */
 function targetOf(scope: CeilingScope): OrgTarget {
@@ -156,6 +181,23 @@ export function CeilingEditor({
   const [expected, setExpected] = useState<number | null | undefined>(undefined);
   const pencil = useRef<HTMLButtonElement>(null);
   const id = useId();
+
+  // A CEILING THE ASSISTANT PREPARED FOR THIS EDITOR opens it with the value
+  // in the field, as the pencil opens it with the current one: the warning,
+  // the save and its step-up stay the person's.
+  const prefill = useContext(CeilingPrefillContext);
+  const scopeId = scope.kind === "company" ? "company" : scope.handle;
+  const prefilled = useRef(0);
+  const { reset: resetWrite } = write;
+  useEffect(() => {
+    if (!prefill || prefill.nonce === prefilled.current) return;
+    if (prefill.scope !== scopeId || prefill.period !== period) return;
+    prefilled.current = prefill.nonce;
+    resetWrite();
+    setText(prefill.text);
+    setError(undefined);
+    setEditing(true);
+  }, [prefill, scopeId, period, resetWrite]);
 
   const whose = whoseCeiling(scope);
   const adjective = PERIOD_ADJECTIVE[period];
