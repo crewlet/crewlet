@@ -87,7 +87,14 @@
  */
 
 import { useMemo } from "react";
-import { EmptyValue, Tag, TableKeyCell, TableDateCell, TableEntityCell } from "@crewlethq/ui";
+import {
+  EmptyValue,
+  Tag,
+  TableKeyCell,
+  TableDateCell,
+  TableEntityCell,
+  peekRowActivation,
+} from "@crewlethq/ui";
 
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
@@ -97,7 +104,6 @@ import {
   type DataGridColumn,
 } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
-import { peekRow } from "~/app/frame/DetailRail.tsx";
 import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
 import { type Shape, itemAddress } from "~/lib/work.ts";
@@ -747,7 +753,7 @@ export function WorkGrid({
       columns={columns}
       rowKey={(row) => row.id}
       rowHref={hrefOf}
-      // THROUGH `peekRow`, which is the one thing that calls `preventDefault`.
+      // THROUGH `peekRowActivation`, which is the one thing that calls `preventDefault`.
       // A bare handler beside a `rowHref` opened the peek and then let the
       // browser follow the anchor, so one plain click pushed the rail and
       // navigated away from it — the reader landed on the item page every
@@ -755,7 +761,7 @@ export function WorkGrid({
       // unreachable by the gesture that opens it everywhere else. The board
       // card, the embedded compact row and the Projects directory all go
       // through it; the collapsed grid was the one that did not.
-      onRowActivate={peekRow<WorkSummary>((row) => onOpen(row))}
+      onRowActivate={peekRowActivation<WorkSummary>((row) => onOpen(row))}
       isSelected={(row) => itemAddress(row) === selected}
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.

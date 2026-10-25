@@ -1291,6 +1291,13 @@ describe("where the peek is a column", () => {
     setDensity("normal");
   });
 
+  /** What the rail keeps for the list beside a column, as the shell handed it. */
+  function reserve(): string {
+    const rail = document.querySelector<HTMLElement>(".crewlet-peek-rail");
+    expect(rail, "the peek drew no rail").not.toBeNull();
+    return rail!.style.getPropertyValue("--crewlet-peek-rail-reserve");
+  }
+
   test("beside a screen, from the width that leaves its list the floor", async () => {
     const { win, app } = await peekAt("#/work?peek=seat:ceo", 1159);
     try {
@@ -1298,8 +1305,8 @@ describe("where the peek is a column", () => {
       expect(app.getAttribute("data-peek")).toBe("drawer");
       win.set(1160);
       expect(app.getAttribute("data-peek")).toBe("column");
-      // The track's cap: the gutter, the padding and the list's floor.
-      expect(app.style.getPropertyValue("--peek-reserve")).toBe("494px");
+      // The column's cap: the gutter, the padding and the list's floor.
+      expect(reserve()).toBe("494px");
     } finally {
       win.restore();
     }
@@ -1314,7 +1321,7 @@ describe("where the peek is a column", () => {
       expect(app.getAttribute("data-peek")).toBe("drawer");
       win.set(1396);
       expect(app.getAttribute("data-peek")).toBe("column");
-      expect(app.style.getPropertyValue("--peek-reserve")).toBe("730px");
+      expect(reserve()).toBe("730px");
     } finally {
       win.restore();
     }
@@ -1356,7 +1363,7 @@ describe("where the peek is a column", () => {
     const { win, app } = await peekAt("#/work", 1600);
     try {
       expect(app.hasAttribute("data-peek")).toBe(false);
-      expect(app.style.getPropertyValue("--peek-reserve")).toBe("");
+      expect(document.querySelector(".crewlet-peek-rail")).toBeNull();
     } finally {
       win.restore();
     }

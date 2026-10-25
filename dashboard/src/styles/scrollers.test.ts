@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
 import { sheetRules } from "../test/sheets.ts";
 import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/source.ts";
@@ -251,8 +253,16 @@ describe("a box that scrolls inside the page", () => {
     // it falls back to the small viewport, which is the `dvh` guess again.
     const main = rules().get("frame.css .app .crewlet-app-shell__main");
     expect(main).toMatch(/container:\s*scroller\s*\/\s*size/);
-    // And the peek's, for a record in a peek, which is not inside `main`.
-    expect(rules().get("frame.css .peek-body")).toMatch(/container:\s*peek\s*\/\s*size/);
+    // And the peek's, for a record in a peek, which is not inside `main`: the
+    // kit's rail body is the size container there, and the frame's ceiling
+    // rule names that body beside `main`.
+    const kit = readFileSync(
+      createRequire(import.meta.url).resolve("@crewlethq/ui/styles.css"),
+      "utf8",
+    );
+    expect(kit).toMatch(
+      /\.crewlet-peek-rail__body\s*\{[^}]*container:\s*crewlet-peek-rail\s*\/\s*size/,
+    );
   });
 });
 
@@ -264,7 +274,7 @@ describe("a box that scrolls inside the page", () => {
  * inline custom property, which the sheet half of this gate cannot see.
  */
 describe("the record ceiling", () => {
-  const SCROLLERS = "frame.css .app .crewlet-app-shell__main, .app .peek-body";
+  const SCROLLERS = "frame.css .app .crewlet-app-shell__main, .app .crewlet-peek-rail__body";
 
   test("is the view, capped and floored, on both scrollers a record can sit in", () => {
     const body = rules().get(SCROLLERS);

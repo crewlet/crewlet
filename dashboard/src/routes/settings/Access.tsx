@@ -126,6 +126,7 @@ import {
   TableEntityCell,
   TableTextCell,
   PageNote,
+  peekRowActivation,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
@@ -158,7 +159,7 @@ import {
 } from "~/components/people.tsx";
 import { FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -887,7 +888,7 @@ export function People() {
               // A ROW IS A REAL LINK AND A PLAIN CLICK PEEKS (the frame's one
               // rule), and the grid marks the row the peek is open on.
               rowHref={(p) => peekHref(personRef(p.id))}
-              onRowActivate={peekRow(openPeek)}
+              onRowActivate={peekRowActivation(openPeek)}
               // THE HINT ADDS WHAT THE PAGE NOTE DOES NOT: it repeated the note
               // word for word 530px below it.
               empty={
@@ -1125,7 +1126,7 @@ export function ServiceAccounts() {
               rowKey={(p) => p.id}
               defaultSort="account"
               rowHref={(p) => peekHref(personRef(p.id))}
-              onRowActivate={peekRow(openPeek)}
+              onRowActivate={peekRowActivation(openPeek)}
               empty={{
                 title: "No service accounts yet",
                 hint: manages

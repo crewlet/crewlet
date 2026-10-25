@@ -4,7 +4,7 @@
  *
  * A REAL LINK EITHER WAY: its `href` is the task's own page, so a middle click
  * or a modified one opens a tab, and a plain click opens the task in the side
- * panel instead (`rowPeekHandler`), because the inbox is where the reader is
+ * panel instead (`peekClickHandler`), because the inbox is where the reader is
  * and sending them away to read one task is the navigation every tracker
  * learned not to make.
  *
@@ -16,8 +16,8 @@
  * would open the claimant's page and thread from a duplicate's notice.
  */
 
-import { Link } from "@crewlethq/ui";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { Link, peekClickHandler } from "@crewlethq/ui";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { itemAddress, type ItemRef } from "~/lib/work.ts";
 
@@ -39,7 +39,7 @@ export function TaskLink({
       href={peekHref(ref)}
       variant="quiet"
       size="inherit"
-      onClick={rowPeekHandler(() => peek.open(ref))}
+      onClick={peekClickHandler(() => peek.open(ref))}
     >
       <span className="mono">{label || "Task"}</span>
       {title ? ` ${title}` : ""}

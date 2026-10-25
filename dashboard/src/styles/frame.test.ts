@@ -191,54 +191,35 @@ function mentioning(css: string, selector: string): { sel: string; body: string 
 }
 
 describe("the frame's layout", () => {
-  // THE PEEK'S SHAPE IS ONE ATTRIBUTE WITH TWO VALUES, AND NO WIDTH HERE.
+  // THE PEEK'S SHAPE IS THE SHELL'S DECISION AND THE KIT'S DRAWING, AND NO
+  // STYLESHEET HERE TAKES EITHER BACK.
   //
-  // It was two media queries on one literal — a column at `width >= 1112px`,
-  // a drawer at `width < 1112px` — and the literal was wrong twice over: it
-  // left out the screen's padding and scroller gutter, so the list beside a
-  // peek was 396px at the threshold that promised it 444, and it could not
-  // know that Settings draws a 236px column INSIDE the screen, so a peek at
-  // 1280 left Settings' nodes grid 328px and cut its columns off. A media
-  // query cannot see which screen is on or the reader's density, so the shell
-  // decides (`app/layout.ts`) and writes `data-peek`. What this holds is that
-  // nothing in a stylesheet decides it a second time.
-  test("the peek is a column or a drawer by attribute, and no stylesheet gives it a width", () => {
-    const css = sheet("frame.css");
-    // EVERY VALUE THE SHEET ANSWERS is one of the shell's two. `true` was the
-    // last spelling; a rule still keyed on it would match nothing and say so
-    // to nobody.
-    const values = [...css.matchAll(/\[data-peek(?:="([^"]*)")?\]/g)].map((m) => m[1] ?? "");
-    expect(new Set(values)).toEqual(new Set(["column", "drawer"]));
-    // AND NONE OF IT IS BEHIND A WIDTH, in any sheet: a peek rule inside a
-    // media query is a second opinion about where the column fits.
+  // It was two media queries on one literal, a column at `width >= 1112px`
+  // and a drawer below it, and the literal was wrong twice over: it left out
+  // the screen's padding and scroller gutter, so the list beside a peek was
+  // 396px at the threshold that promised it 444, and it could not know that
+  // Settings draws a 236px column INSIDE the screen. A media query cannot see
+  // which screen is on or the reader's density, so the shell decides
+  // (`app/layout.ts`) and hands the kit `peekShape`; the kit's `PeekRail`
+  // draws the column, the drawer, the veil and the grip. What this holds is
+  // that nothing in a stylesheet of ours decides the shape a second time or
+  // lays the rail out over the kit: a rule keyed on `data-peek` or giving the
+  // rail a width, a position or a grid track is a second opinion that drifts.
+  test("no stylesheet here decides the peek's shape or lays out its rail", () => {
     for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
-      for (const { prelude, body } of mediaBodies(sheet(name))) {
-        expect(body, `${name}: ${prelude} decides the peek's shape`).not.toMatch(
-          /data-peek|\.peek-(?:rail|veil|grip)\b/,
+      const css = sheet(name).replace(/\/\*[\s\S]*?\*\//g, "");
+      expect(css, `${name} keys a rule on the peek's shape`).not.toMatch(/data-peek/);
+      // The retired rail's own classes, which nothing renders any more.
+      expect(css, `${name} styles the retired rail`).not.toMatch(
+        /\.peek-(?:rail|veil|grip|bar|body)\b/,
+      );
+      for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        if (!/\.crewlet-peek-rail(?![\w-])(?!__body)/.test(m[1]!)) continue;
+        expect(m[2], `${name}: ${m[1]!.trim()} lays out the kit's rail`).not.toMatch(
+          /(?:^|;|\s)(?:width|position|grid-[a-z-]+|inset|right|left)\s*:/,
         );
       }
     }
-    // The column side: the sheet becomes a grid whose second track is the
-    // reader's width, CAPPED at what the sheet can give with the list at its
-    // floor — and whose fallback is the resting width the threshold assumes.
-    const grid = block(css, '.app[data-peek="column"] .crewlet-app-shell__sheet');
-    expect(grid).toMatch(/display:\s*grid/);
-    const track =
-      /grid-template-columns:\s*minmax\(0, 1fr\)\s+min\(var\(--peek-w, (\d+)px\), 100% - var\(--peek-reserve\)\)/.exec(
-        grid,
-      );
-    expect(
-      track,
-      "the peek's track is not the reader's width capped by the reserve",
-    ).not.toBeNull();
-    expect(Number(track![1])).toBe(PEEK_WIDTH);
-    for (const part of [".page-head", ".crewlet-app-shell__main", ".peek-rail"]) {
-      expect(block(css, `.app[data-peek="column"] ${part}`), part).toMatch(/grid-row:\s*\d/);
-    }
-    // The drawer side: fixed, over a veil, with no grip to drag.
-    expect(block(css, '.app[data-peek="drawer"] .peek-rail')).toMatch(/position:\s*fixed/);
-    expect(block(css, '.app[data-peek="drawer"] .peek-veil')).toMatch(/display:\s*block/);
-    expect(block(css, '.app[data-peek="drawer"] .peek-grip')).toMatch(/display:\s*none/);
   });
 
   // EVERY TERM OF THE THRESHOLD IS HELD AGAINST THE RULE THAT DRAWS IT.

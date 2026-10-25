@@ -53,6 +53,7 @@ import {
   FilterChipGroup,
   Select,
   Skeleton,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   BrainGlyph,
@@ -67,7 +68,7 @@ import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DecisionRow } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { mergeRuns, RunStatus, runTitle } from "./Runs.tsx";
 import { RecentPhases } from "./RecentPhases.tsx";
@@ -556,11 +557,11 @@ function InBoxRow({
 }) {
   return (
     // A REAL LINK to the run's page, peeking on a plain click — the rule
-    // every row in the product follows, written once in `rowPeekHandler`.
+    // every row in the product follows, written once in `peekClickHandler`.
     <a
       className="list-row clickable"
       href={peekHref({ kind: "run", id: run.turn_id })}
-      onClick={rowPeekHandler(onOpen)}
+      onClick={peekClickHandler(onOpen)}
     >
       <RunStatus status={run.status} />
       <span className="col live-box-body">

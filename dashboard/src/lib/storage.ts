@@ -70,7 +70,7 @@ export const STORAGE_KEYS = {
    * the tab holds (`lib/reader.ts`).
    */
   reader: "crewlet_reader",
-  /** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
+  /** The width the reader dragged the detail rail to (`app/frame/PeekHost.tsx`). */
   peekWidth: "crewlet.peek.width",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
