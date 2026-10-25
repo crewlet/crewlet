@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/trashreap"
@@ -59,13 +60,13 @@ func TestTheAssistantsReaperSourceErasesTheRemovedFirst(t *testing.T) {
 	fake := &fakeAssistant{owners: []uuid.UUID{here, gone}, inactive: []uuid.UUID{idle, busy},
 		notDue: map[uuid.UUID]bool{busy: true}}
 	src := assistantTrash{reader: fake, writer: fake,
-		term: func() time.Duration { return assistantdomain.DefaultRetention },
+		term: func() time.Duration { return 30 * 24 * time.Hour },
 		removed: func(_ context.Context, ids []string) ([]string, error) {
 			return slices.DeleteFunc(slices.Clone(ids), func(id string) bool {
 				return id != gone.String()
 			}), nil
 		}}
-	if src.Term() != assistantdomain.DefaultRetention {
+	if src.Term() != 30*24*time.Hour {
 		t.Errorf("the source's term is %v", src.Term())
 	}
 	got, err := src.TrashedBefore(t.Context(), time.Now(), 10)
@@ -94,5 +95,32 @@ func TestTheAssistantsReaperSourceErasesTheRemovedFirst(t *testing.T) {
 	if err := src.PurgeTrashed(t.Context(), "owner:not-a-person", time.Now(), "op"); !errors.Is(err,
 		trashreap.ErrNotEligible) {
 		t.Errorf("an unreadable item answers %v", err)
+	}
+}
+
+// THE RETENTION IS THE RUNNING COMPANY'S, as its block states it: unset (or no
+// company at all) is the block's thirty days, a set value is kept, and a value
+// past the bounds is clamped into them by the same accessor validation reads.
+// Mutation: answer a constant and the set and clamped cases go red.
+func TestTheAssistantsRetentionIsTheRunningCompanys(t *testing.T) {
+	t.Parallel()
+	day := 24 * time.Hour
+	company := func(days int) *Company {
+		return &Company{Config: &config.Company{Assistant: config.Assistant{RetentionDays: days}}}
+	}
+	for _, c := range []struct {
+		name    string
+		company *Company
+		want    time.Duration
+	}{
+		{"a node running no company", nil, 30 * day},
+		{"a company with no config", &Company{}, 30 * day},
+		{"a company that sets nothing", company(0), 30 * day},
+		{"a company that keeps a week", company(7), 7 * day},
+		{"a company past the bound", company(900), 365 * day},
+	} {
+		if got := assistantRetentionOf(c.company); got != c.want {
+			t.Errorf("%s keeps conversations %v, want %v", c.name, got, c.want)
+		}
 	}
 }

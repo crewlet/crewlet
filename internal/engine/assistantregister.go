@@ -143,10 +143,23 @@ func (e *Engine) AssistantWriter() *assistantdomain.Writer {
 }
 
 // assistantRetention is how long a conversation is kept after it was last
-// used: `assistant.retention_days` in the company document (internal/config's
-// Tier B assistant block), or the domain's default where none is set.
+// used, read from the company this node runs NOW, at every reaper pass: the
+// company document's `assistant.retention_days`, with its default and its
+// bounds applied by the block itself ([config.Assistant.Retention]), so an
+// apply that changes it reaches the next pass without a restart.
 func (e *Engine) assistantRetention() time.Duration {
-	return assistantdomain.DefaultRetention
+	return assistantRetentionOf(e.Company())
+}
+
+// assistantRetentionOf is the retention a running company keeps, and the
+// block's own default on a node running none yet: a node that boots with no
+// company still reaps what an earlier company left, at the term an unset
+// setting means.
+func assistantRetentionOf(c *Company) time.Duration {
+	if c == nil || c.Config == nil {
+		return config.Assistant{}.Retention()
+	}
+	return c.Config.Assistant.Retention()
 }
 
 // assistantActor is the author of every assistant record the engine writes on
