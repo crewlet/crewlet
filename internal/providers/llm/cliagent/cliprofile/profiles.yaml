@@ -869,6 +869,19 @@ gemini-cli:
   # every api-key call on the login instead of its key.
   subscription_env:
     GOOGLE_GENAI_USE_GCA: "true"
+  # THE KEY IS CHOSEN BY THE SETTINGS, under a key sign-in. Naming no sign-in
+  # in its settings, the CLI takes one from its environment, and
+  # GOOGLE_GEMINI_BASE_URL — an operator's gateway in front of the API, in the
+  # entry's env — outranks GEMINI_API_KEY there: it selects the CLI's gateway
+  # sign-in, which 0.65.0 then refuses, exit 41 "Invalid auth method selected",
+  # before any request (read from the bundle; measured through the engine with
+  # the base URL at a local stand-in). Settings outrank the environment, so a
+  # key home's own settings name the key sign-in: the call then goes to the
+  # base URL with its key. Not in seed_files, where it would put every
+  # subscription call on a key it does not have.
+  key_seed_files:
+    - path: .gemini/settings.json
+      content: '{"privacy":{"usageStatisticsEnabled":false},"security":{"auth":{"selectedType":"gemini-api-key"}}}'
   model_args: ["--model", "{model}"]
   # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
   # the request's whole systemInstruction — no identity line of the vendor's
@@ -1490,7 +1503,7 @@ opencode:
       discovered: selected
       template: |
         ---
-        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
         mode: primary
         ---
         {system}
@@ -1760,12 +1773,24 @@ cursor-agent:
   # the per-call scratch directory IS the project, so the file is seeded there
   # on every call. Its user-level file, cli-config.json, is synced back with
   # the login, so the policy is kept out of it. Deny takes precedence over
-  # allow, and the user-level default allows Shell(ls).
+  # allow, and the user-level default allows Shell(ls). `Mcp(crewlet:*)`
+  # lets the seat's server's tools run without asking — a call to a tool no
+  # entry allows needs an approval a headless run cannot give (read from the
+  # 2026.10.22 bundle's permission check, `Mcp(<server>:<tool>)`); a call
+  # with no such server, as a text function's, matches nothing.
+  #
+  # THE HOME'S mcp.json, ~/.cursor/mcp.json — the os home, which is the
+  # seat's — names servers the CLI starts with no approval asked: measured on
+  # 2026.10.22 with `cursor-agent mcp list`, which resolves what a run loads,
+  # a server planted there was started; with this file in its place, none was
+  # listed. Rewritten every generation, for text functions too.
   local_tools: denied
   seed_files:
     - path: .cursor/cli.json
       in: work
-      content: '{"permissions":{"allow":["WebFetch(*)"],"deny":["Shell(*)","Write(*)","Read(*)"]}}'
+      content: '{"permissions":{"allow":["WebFetch(*)","Mcp(crewlet:*)"],"deny":["Shell(*)","Write(*)","Read(*)"]}}'
+    - path: .cursor/mcp.json
+      content: '{"mcpServers":{}}'
   model_args: ["--model", "{model}"]
   # NO SYSTEM-PROMPT CHANNEL. The system prompt is assembled by Cursor's
   # service: the run request carries the user message and no system prompt
@@ -1777,9 +1802,18 @@ cursor-agent:
   prompt_mode: stdin
   output: json
   text_paths: [["result"], ["response"]]
+  # THE COUNTS ARE THE RESULT EVENT'S `usage`, in camelCase: inputTokens,
+  # outputTokens, cacheReadTokens and cacheWriteTokens, the input with the
+  # cached parts taken out (max(input - cacheRead - cacheWrite, 0)) — read
+  # from the 2026.10.22 bundle, where the run's turnEnded update sets them,
+  # and NOT measured: no call through a stand-in gets an answer. Read under
+  # snake_case names, as these paths were, no count ever resolved and every
+  # call was estimated.
   usage:
-    input: [["usage", "input_tokens"]]
-    output: [["usage", "output_tokens"]]
+    input: [["usage", "inputTokens"]]
+    output: [["usage", "outputTokens"]]
+    cache_read: [["usage", "cacheReadTokens"]]
+    cache_write: [["usage", "cacheWriteTokens"]]
   config_env:
     CURSOR_CONFIG_DIR: ".cursor"
   # THE LOGIN IS KEPT PER PLATFORM, and CURSOR_CONFIG_DIR does not move it:
@@ -1815,6 +1849,80 @@ cursor-agent:
   # route is the same: auth.api_key under auth.mode api-key, never forwarded
   # otherwise.
   api_key_env: "CURSOR_API_KEY"
+  # THE SEAT'S TOOLS, PER CURSOR'S OWN DOCUMENTATION AND ITS 2026.10.22 BUNDLE,
+  # AND MOSTLY NOT MEASURED. A run's model streams from Cursor's own service,
+  # which no stand-in answers, and print mode starts no MCP server before it
+  # has reached that service (measured: offline, it exits 1 on "Failed to
+  # reach the Cursor API" and starts none). What `cursor-agent mcp list` and
+  # `mcp list-tools` — which resolve the same files a run loads — measured on
+  # 2026.10.22, with a checkout above the call holding a .cursor/mcp.json and
+  # an .mcp.json at every level:
+  #
+  #   - the call's own .cursor/mcp.json is its project's, read because the
+  #     engine's .git file makes the call's directory the project root; none
+  #     of the checkout's files above it was listed;
+  #   - a project's server needs an approval, kept per directory under the
+  #     home's .cursor/projects (pruned): "not loaded (needs approval)" until
+  #     given, then the stand-in started, was listed and listed its tools.
+  #     --approve-mcps gives it for the run ("Automatically approve all MCP
+  #     servers"); with the home's file empty (seed_files) and the project's
+  #     the profile's, all is the seat's server.
+  #
+  # NOT measured, and what the doctor's smoke test (`crewlet llm doctor`, on a
+  # real sign-in) is for: the calls themselves, the record below, the counts,
+  # how a response's calls run, whether the list is re-read. Nor what a team
+  # account brings: the service hands an account its team's required plugins,
+  # which may name MCP servers (and hooks) of their own, beside these files —
+  # the bundle reads an EffectivePlugin list, and --approve-mcps approves every
+  # server — so a seat signed in to a team runs what that team configures.
+  # The doctor's smoke line says what the call reached; this profile cannot
+  # keep a team's plugins out.
+  #
+  # The tool timeout is the MCP SDK's 60 s, with no knob in print mode: the
+  # bundle's --mcp-tool-timeout belongs to `cursor-agent worker`, and nothing
+  # a run reads sets one — so the host answers a call still running near 60 s
+  # itself and hands the next run its result. Concurrency is declared at once
+  # and relisting off: unmeasured, these are the values whose cost is bounded
+  # if wrong (a call that ends a phase waits for siblings that come only once
+  # it is answered for the host's two seconds; a tool activated mid-run ends
+  # the run and the next starts with it).
+  mcp:
+    complete_args: ["-p", "--output-format", "stream-json", "--trust", "--exclude-workspace-context"]
+    output: jsonl
+    args: ["--approve-mcps"]
+    seed:
+      - path: .cursor/mcp.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json}}}}'
+    tool_timeout_seconds: 60
+    relists: false
+    concurrency: at_once
+  # EACH REQUEST, FROM THE stream-json STDOUT, as the bundle writes it: the
+  # prose a model call wrote before its first tool call, flushed under that
+  # call's model_call_id when the call starts; each tool_call `started` event
+  # under the same model_call_id, an MCP call as tool_call.mcpToolCall.args
+  # {toolCallId, providerIdentifier (the mcp.json key), toolName, args}; its
+  # `completed` event once it has run, which ends the request; and the last
+  # response's prose flushed with no id before the result event, which
+  # begins the request after the last one. The counts are the result's, for
+  # the run (usage, above). No id is known to reach the server with a call:
+  # calls are joined by name and arguments.
+  requests:
+    source: stdout
+    host_namespace: "crewlet"
+    events:
+      - match: [{path: ["type"], equals: "assistant"}]
+        id: ["model_call_id"]
+        text: ["message", "content", "0", "text"]
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "started"}]
+        id: ["model_call_id"]
+        call:
+          id: ["call_id"]
+          name: ["tool_call", "mcpToolCall", "args", "toolName"]
+          namespace: ["tool_call", "mcpToolCall", "args", "providerIdentifier"]
+          args: ["tool_call", "mcpToolCall", "args", "args"]
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
+        closes: true
   login_args: ["login"]
   logout_args: ["logout"]
   status_args: ["status"]
@@ -2133,6 +2241,19 @@ grok:
   #                       the two lists fail closed in either direction: a
   #                       renamed web tool leaves the deny list in force, and
   #                       a new tool is outside the allowlist.
+  #   --allow WebFetch    web_fetch has to be ALLOWED as well as offered: it
+  #                       asks first, a headless run cannot ask, and 1.0.70
+  #                       then CANCELS THE WHOLE RUN — the fetch "was not run,
+  #                       as a headless run cannot ask for approval" on stderr,
+  #                       an `end` of stopReason `cancelled`, exit 0 and nothing
+  #                       on stdout, so a text function that fetched a page
+  #                       failed with "printed nothing at all" (measured through
+  #                       the engine; with the rule the fetch ran and the call
+  #                       answered). web_search runs unasked. A fetch is a
+  #                       read, which never gates delivery, and a seat that is
+  #                       told it can fetch must be able to. --permission-mode
+  #                       dontAsk does not take its place: under it the run was
+  #                       cancelled the same way (measured).
   #
   # --sandbox is deliberately not used: it restricts the network along with
   # the filesystem, which would cut the web tools.
@@ -2141,6 +2262,8 @@ grok:
     - "web_search,web_fetch"
     - "--disallowed-tools"
     - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+    - "--allow"
+    - "WebFetch"
   local_tools: denied
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS, and both on argv: each flag takes the text itself, and a
@@ -2190,6 +2313,167 @@ grok:
   # One side request remains and no documented switch removes it on 1.0.70:
   # a session-title request to the session-summary model (grok-4.6 on the
   # Responses API) carrying the prompt, before the answer.
+  # THE HOME'S OWN MCP SERVERS, AND EVERY OTHER VENDOR'S, NEVER START. 1.0.70
+  # starts the servers ~/.grok/config.toml names, ~/.claude.json's and
+  # ~/.cursor/mcp.json's beside them (its "compatibility" sources), and a
+  # project's .grok/config.toml, .cursor/mcp.json and .mcp.json from the
+  # working directory to the repository root. Measured through the engine,
+  # with each of those planted in the seat's home and at every level of a
+  # checkout above the call: with the two files below, none started, a run
+  # with tools listed the seat's server alone and a text function none;
+  # without them, the three in the home started on every call (the project
+  # ones never did — the engine's `.git` file ends the walk at the call's
+  # directory, and the CLI loads no project configuration it has not been
+  # told to trust).
+  #
+  #   config.toml        the home's settings, rewritten every generation, so
+  #                      no server written there survives into a call, and
+  #                      the Claude and Cursor sources (servers and hooks)
+  #                      are not scanned at all.
+  #   requirements.toml  the CLI's own MCP allowlist ("allowed_mcp_servers"),
+  #                      which binds EVERY source — the home, a project, the
+  #                      compatibility files, a plugin: one naming any other
+  #                      server is dropped from the session. It only ever
+  #                      tightens, unsigned too (measured: it alone kept all
+  #                      three planted servers out). A deployment that syncs
+  #                      a signed one replaces it with the organisation's.
+  seed_files:
+    - path: .grok/config.toml
+      content: |
+        # Written by Crewlet every generation: no MCP server of the home's own,
+        # and no other vendor's servers or hooks.
+        [compat.claude]
+        mcps = false
+        hooks = false
+
+        [compat.cursor]
+        mcps = false
+        hooks = false
+    - path: .grok/requirements.toml
+      content: |
+        # Written by Crewlet: the seat's own server is the one MCP server a call may start.
+        [[allowed_mcp_servers]]
+        server_name = "crewlet"
+  # THE SEAT'S TOOLS: one stdio server, declared by an AGENT FILE in the call's
+  # own directory (--agent), whose `mcpServers` the CLI starts beside its
+  # default agent's prompt and tools — an agent file with no body adds nothing
+  # to the system prompt, and --rules still lands the seat's text at its end.
+  # Measured on 1.0.70 through the engine's own code path against a local
+  # stand-in for the API.
+  #
+  # THE MODEL REACHES THEM THROUGH TWO META-TOOLS, never by name: the request
+  # offers search_tool (find a tool, get its schema) and use_tool (call it by
+  # its qualified name, `crewlet__<name>`), and tells the model only that the
+  # crewlet server is connected with so many tools. So the route's own
+  # complete_args drop both from the deny list a text function keeps.
+  #
+  #   --deny Read(**)       use_tool also takes its arguments, or the whole
+  #                         call, from a FILE the model names — any path on
+  #                         the host, read before the call is checked
+  #                         (tool_input_file, file). Denied by a Read rule on
+  #                         every path: an absolute one, ~/…, ../…, and one
+  #                         in the call's directory were each refused ("MCP
+  #                         source Read denied"), inline calls went through.
+  #                         A bare `--deny Read` denies search_tool too — it
+  #                         is a read — and leaves the model no tool names.
+  #   --allow MCPTool(*)    the server's tools run unasked. Every MCP tool
+  #                         rather than `crewlet__*`, because a call the model
+  #                         names without the server's prefix (`echo`) is
+  #                         asked about BEFORE it is resolved, and a headless
+  #                         run that asks is cancelled whole (exit 0, nothing
+  #                         on stdout); allowed, it is refused for not being
+  #                         qualified and the model told so, and the run goes
+  #                         on (measured, for a listed and an unlisted name).
+  #                         The allowlist above leaves the crewlet server the
+  #                         only one whose tools it can match.
+  #   --output-format streaming-json  the record (requests, below); a text
+  #                         function keeps the plain answer (mcp.output).
+  #
+  # THE CLI'S OWN TIMEOUT, 6000 seconds, has no knob for a server an agent
+  # file declares: tool_timeout_sec, toolTimeoutMs and tool_timeout_ms in the
+  # frontmatter, and a `[mcp_servers.crewlet]` timeout in the home's
+  # config.toml, all left it at 6000 (its event log names the timeout each
+  # call runs under; a 10 s call ran out with a 4 s setting). The server's
+  # list is read once: a tool activated mid-run was "not found" for the rest
+  # of the run. One response's calls run at once (two 1.5 s calls
+  # overlapped).
+  mcp:
+    output: jsonl
+    complete_args:
+      - "--tools"
+      - "web_search,web_fetch"
+      - "--disallowed-tools"
+      - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+      - "--allow"
+      - "WebFetch"
+    seed:
+      - path: crewlet-agent.md
+        in: work
+        content: |
+          ---
+          name: crewlet-seat
+          description: The Crewlet seat this run serves.
+          mcpServers:
+            - crewlet:
+                command: {relay_command_json}
+                args: {relay_args_json}
+          ---
+    args: ["--agent", "{work}/crewlet-agent.md", "--output-format", "streaming-json", "--deny", "Read(**)"]
+    allow_args: ["--allow", "MCPTool(*)"]
+    tool_timeout_seconds: 6000
+    concurrency: at_once
+  # EACH REQUEST, FROM THE STREAM. A response is its prose (`text`), then its
+  # counts (`usage`), then a `tool_call` per call; the results of its calls
+  # (`tool_call_update` with a final status) end it, and the next prose or
+  # counts begin the next — every call of a response is printed before any of
+  # them is answered. The CLI hands the server no id of its own, so a call is
+  # joined by name and arguments: the record's name is the one the model gave
+  # use_tool, `crewlet__<name>`, and a name without the prefix is one the CLI
+  # refused. The counts are the request's own: `input_tokens` WITHOUT the cached
+  # part, and `output_tokens` with the reasoning in it (measured with a stand-in
+  # reporting 40 cached and 7 reasoning tokens: 65 + 40 of a 105-token prompt,
+  # 12 out). The run's `end` event repeats their sum, and is not read. The
+  # session-title request the CLI makes first is in neither, and is not
+  # charged.
+  requests:
+    source: stdout
+    host_prefix: "crewlet__"
+    events:
+      - match: [{path: ["type"], equals: "available_commands"}]
+        tools: ["tools"]
+      - match: [{path: ["type"], equals: "text"}]
+        text: ["data"]
+      - match: [{path: ["type"], equals: "usage"}]
+        usage:
+          input: [["usage", "input_tokens"]]
+          output: [["usage", "output_tokens"]]
+          cache_read: [["usage", "cache_read_input_tokens"]]
+          cache_write: [["usage", "cache_creation_input_tokens"]]
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "use_tool"}]
+        call: {id: ["toolCallId"], name: ["rawInput", "tool_name"], args: ["rawInput", "tool_input"]}
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "search_tool"}]
+        call: {id: ["toolCallId"], name: ["toolName"], args: ["rawInput"]}
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "web_fetch"}]
+        call: {id: ["toolCallId"], name: ["toolName"], args: ["rawInput"]}
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "web_search"}]
+        call: {id: ["toolCallId"], name: ["toolName"], args: ["rawInput"]}
+      - match: [{path: ["type"], equals: "tool_call_update"}, {path: ["status"], equals: "completed"}]
+        closes: true
+      - match: [{path: ["type"], equals: "tool_call_update"}, {path: ["status"], equals: "failed"}]
+        closes: true
+  # --max-turns, where an operator adds it: a `max_turns_reached` event, then
+  # exit 1 with "Error: max turns reached" on stderr (measured).
+  cap:
+    exit_code: 1
+    match: [{path: ["type"], equals: "max_turns_reached"}]
+  # A RUN THAT WOULD ASK IS CANCELLED WHOLE: 1.0.70 cannot ask for an approval
+  # headless, so it gives up the run — exit 0, an `end` of stopReason
+  # cancelled, and nothing of the answer — and says so on stderr. Every tool
+  # either kind of call is offered is allowed or refused by the flags above,
+  # so a run that asks is one those flags no longer cover: it is stopped at
+  # that line and fails, rather than passing off what it had written as an
+  # answer.
+  failure_markers: ["a headless run cannot ask for approval"]
   credential_paths: [".grok/auth.json"]
   # What a call leaves in the seat's home, measured on 1.0.70: a session
   # directory per working directory holding the conversation, the rendered
@@ -2294,8 +2578,8 @@ muse-code:
   # request of its own that re-sends the call's prompt — the engine's whole
   # transcript — under instructions of its own, beside the main request.
   # Measured, a 1.4.13 call then makes exactly one model request. They are
-  # billed, and the exec stream reports no counts for this backend to charge
-  # them against. 1.0.x HAS NO SUCH FLAG and refuses it ("unknown option
+  # billed like any request, and each is one the engine never asked for.
+  # 1.0.x HAS NO SUCH FLAG and refuses it ("unknown option
   # --disable-reminders", exit 2, measured), which is why this profile is
   # written for 1.4.x: an operator still on 1.0.x drops it in
   # overrides.complete_args, and that build's observers then run.
@@ -2406,12 +2690,19 @@ muse-code:
   event_type_path: ["payload_type"]
   text_events: ["run.terminal.completed"]
   text_paths: [["payload", "text"]]
-  # NO USAGE PATHS, because the exec stream carries no token counts at all —
-  # not under any key, on any event. The counts are estimated here and
-  # `crewlet llm doctor` says so. They do exist on the session log this
-  # profile deliberately switches off, and on `muse serve`'s MSP protocol,
-  # which is a different transport this backend does not speak.
-  #
+  # THE RUN'S COUNTS ARE ITS `run.usage` EVENT, printed once, before the
+  # terminal one, by every run: per model, `input_tokens` WITH the cached part
+  # in it (`cached_tokens`) and `output_tokens` with the reasoning in it
+  # (`reasoning_tokens`, which is therefore not read as well). Measured on
+  # 1.4.13 against a stand-in reporting 40 cached and 7 reasoning tokens on
+  # each of three requests of 102 to 104 tokens: 309 in, 120 of them cached,
+  # 36 out, 21 of them reasoning; and a text function's own. Summed over every
+  # model the run used.
+  usage:
+    input: [["payload", "models", "*", "input_tokens"]]
+    output: [["payload", "models", "*", "output_tokens"]]
+    cache_read: [["payload", "models", "*", "cached_tokens"]]
+    input_includes_cache: true
   # The `muse` on PATH is the LAUNCHER, and left alone it checks for a new
   # release every hour and forks a background download that outlives the call.
   # Three reasons that is wrong under an engine: it swaps the binary under a
@@ -2422,6 +2713,79 @@ muse-code:
   # operator's, on their schedule.
   env:
     MUSE_NO_AUTO_UPDATE: "1"
+  # THE SEAT'S TOOLS: one stdio server, declared for the one run by `-c`, the
+  # CLI's per-run setting, which takes a JSON value — the only per-run channel
+  # this CLI has for a server. Its settings file names servers too, but it is
+  # the seat's, which every call shares; its project files are read only from
+  # a trusted workspace, and nothing here trusts one (measured outside the
+  # engine, which a run from inside a checkout cannot be — the CLI refuses a
+  # TMPDIR inside the repository: --trust-workspace started a checkout's
+  # .mcp.json server, and without it none); and a plugin's server
+  # needs an approval in that same settings file. Measured on 1.4.13 through the
+  # engine's own code path against a local stand-in, with servers planted in
+  # the home's settings file, in ~/.claude.json and ~/.codex/config.toml, and
+  # in an .mcp.json and a .muse/settings.json at every level of a checkout
+  # above the call: the model was offered the seat's tools and the two web
+  # tools, and no other server started. The seed_files settings file is what
+  # keeps the home's out — without it the planted server started on every
+  # call, text functions included — and, naming no approval, what keeps an
+  # installed plugin's server from starting (measured outside the engine: an
+  # installed, approved plugin's server started on a text function, and with
+  # the seeded file in place of the settings it did not); plugins live under
+  # the volatile .local/share/muse besides.
+  #
+  # run.toolset, set for the run, adds `mcp__crewlet__*` to the two web
+  # tools; the model sees the tools as `mcp__crewlet__<name>`.
+  #
+  # NO TIMEOUT KNOB FOR A SERVER DECLARED THIS WAY: `-c` refuses any key past
+  # transport, command and args (`tool_timeout_sec` among them: "unknown key"),
+  # and the settings file that takes one is the seat's. The CLI's own is 300 s
+  # — a 700 s call ended at 300 s as "tool timed out" — and the engine answers
+  # a call still running near it itself. The CLI makes a response's calls one
+  # after another ("tool action serialized"), whatever --parallel-tool-calls
+  # or a read-only hint says; does not re-read the list when told it changed;
+  # refuses a name without the server's prefix itself; and on arguments that
+  # are not JSON asks its model again, with a growing pause, rather than
+  # calling — eight times in 55 s in the measurement, each a request of its
+  # own. It has no turn cap of
+  # its own: a run's rounds are bounded by the phase's (a stand-in that
+  # always called a tool drew 1,128 requests in 90 s).
+  #
+  # A failed run's cause is its run.terminal.failed event's reason; stderr
+  # says only "run ended with Failed".
+  mcp:
+    args:
+      - "-c"
+      - 'mcpServers.crewlet={"transport":"stdio","command":{relay_command_json},"args":{relay_args_json}}'
+      - "-c"
+      - 'run.toolset=["web_search","web_fetch","mcp__crewlet__*"]'
+    tool_timeout_seconds: 300
+    relists: false
+    concurrency: in_turn
+    failure_events:
+      - match: [{path: ["payload_type"], equals: "run.terminal.failed"}]
+        fields: [["payload", "reason"]]
+  # EACH REQUEST, FROM THE STREAM: a model request is a task the CLI proposes
+  # with the kind model.meta.response, its prose the run.output.delta
+  # fragments after it — which no event repeats whole per request, so they
+  # are its prose run together — and each call a tool task's side effect,
+  # filed under the operation `tool:<name>` with the key `tool:<the model's
+  # call id>`. The CLI sends that key with the call, in `_meta`
+  # (`idempotencyKey`, beside `callId`, the bare id), so a call is joined by
+  # it; the record names no arguments. It carries no counts per request: the
+  # run's are its run.usage event (see usage).
+  requests:
+    source: stdout
+    call_id_meta: idempotencyKey
+    host_prefix: "tool:mcp__crewlet__"
+    events:
+      - match: [{path: ["payload_type"], equals: "task.lifecycle.proposed"}, {path: ["payload", "event", "task_kind"], equals: "model.meta.response"}]
+        opens: true
+        id: ["payload", "task_id"]
+      - match: [{path: ["payload_type"], equals: "run.output.delta"}]
+        delta: ["payload", "text"]
+      - match: [{path: ["payload_type"], equals: "task.lifecycle.side_effect_intent"}, {path: ["payload", "event", "operation"], prefix: "tool:"}]
+        call: {id: ["payload", "event", "idempotency_key"], name: ["payload", "event", "operation"]}
   # No config_env: this CLI is XDG-native and has no relocation variable of
   # its own. buildEnv already points XDG_CONFIG_HOME and XDG_DATA_HOME inside
   # the seat's home, and the binary honours both. (MUSE_AUTH_PATH looks like
@@ -2524,8 +2888,9 @@ kimi-code:
   # the one tool offered, and the engine read each answer. Both builds read
   # every variable below. The retry cap and the failure classifications are
   # off real 401 and 429 responses to 0.42.0. What is NOT measured is a spent
-  # Kimi subscription, which no profile here can produce on demand.
-  written_for: "Kimi Code CLI 2.3.x, measured on 0.42.0 and 2.3.1 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
+  # Kimi subscription, which no profile here can produce on demand. The tool
+  # route (mcp, requests) is measured on 2.3.2 — see there.
+  written_for: "Kimi Code CLI 2.3.x, measured on 0.42.0, 2.3.1 and 2.3.2 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
   version_args: ["--version"]
   # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
   # ANSWER rather than the failure classification (the opposite of muse-code's
@@ -2557,7 +2922,10 @@ kimi-code:
   #
   # MEASURED on both builds, by reading the tool array the CLI actually put on
   # the wire: TWENTY-FIVE tools by default, ONE with this agent file, on either
-  # channel. What goes is `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the
+  # channel — and on the tool route that one and the crewlet server's, which
+  # the CLI offers as `mcp__crewlet__<name>` only where the allowlist names
+  # them (`mcp__crewlet__*`; with no such server, as on a text function, the
+  # entry matches nothing). What goes is `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the
   # plan-mode pair, `TodoList`, `Skill`, `AskUserQuestion`, `WaitFor`, the
   # `Task*` background family, the `Cron*` family, an undocumented GOAL family
   # (`CreateGoal`, `GetGoal`, `UpdateGoal`, `SetGoalBudget`) — and
@@ -2677,10 +3045,11 @@ kimi-code:
       template: |
         ---
         name: crewlet-seat
-        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
         tools:
           - WebSearch
           - FetchURL
+          - mcp__crewlet__*
         ---
         {system}
   append_system_prompt:
@@ -2690,10 +3059,11 @@ kimi-code:
       template: |
         ---
         name: crewlet-seat
-        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
         tools:
           - WebSearch
           - FetchURL
+          - mcp__crewlet__*
         ---
         {system}
 
@@ -2711,9 +3081,11 @@ kimi-code:
   # not written to the stream at all, and the "resuming session" notices and
   # tool progress go to stderr.
   #
-  # With the agent file's allowlist in force there is no tool call and
-  # therefore exactly one assistant message, which matters because this
-  # package joins a stream's text hits with a newline.
+  # A text function's allowlist leaves it no tool to call, so its stream holds
+  # exactly one assistant message, which matters because this package joins a
+  # stream's text hits with a newline. A run with tools prints one per step
+  # and is answered from its record instead — the last step's prose (see
+  # requests).
   #
   # The second path is the array form, for the same reason cursor-agent
   # declares two: `content` is a string on this build, and a chat message's
@@ -2772,6 +3144,105 @@ kimi-code:
     KIMI_DISABLE_TELEMETRY: "1"
   config_env:
     KIMI_CODE_HOME: ".kimi-code"
+  # THE HOME STARTS NO MCP SERVER OF ITS OWN. The CLI starts every server its
+  # home's mcp.json names, and every server an installed plugin's manifest
+  # names — on every call, a text function's included, whatever the agent
+  # file allows the model — so both are rewritten every generation: the
+  # mcp.json naming none, and the plugin list empty, which also keeps a
+  # plugin's hooks, skills and prompt additions out. Measured on 2.3.2: a
+  # server planted in each started on a run with tools and on a text function
+  # without these seeds, and neither with them.
+  seed_files:
+    - path: .kimi-code/mcp.json
+      content: '{"mcpServers":{}}'
+    - path: .kimi-code/plugins/installed.json
+      content: '{"version":1,"plugins":[]}'
+  # THE SEAT'S TOOLS: one stdio server, in the call's own .kimi-code/mcp.json
+  # — the project file of the directory the CLI runs in — which the CLI reads
+  # only in a TRUSTED workspace; KIMI_CODE_TRUST_WORKSPACE trusts this one
+  # call's directory, and trust gates nothing on this build but a project's MCP
+  # files. The CLI takes no MCP file by flag and an agent file declares no
+  # server. Trust also reads the `.mcp.json` at the project root, which is the
+  # call's directory itself: the engine's .git file ends the walk there, as it
+  # does the AGENTS.md chain. Measured on 2.3.2 through the engine's own code
+  # path against a local stand-in, with a checkout above the state directory
+  # holding an .mcp.json and a .kimi-code/mcp.json at every level: none
+  # started; a control run from the state directory, with no .git file in
+  # between, started the checkout's root .mcp.json.
+  #
+  # `deferred: false`, so the tools are offered to the model by name rather
+  # than behind the CLI's tool search, whatever a login's config.toml
+  # defaults to. `toolTimeoutMs` is the CLI's per-call timeout (60 s when
+  # unset; 4 s gave a 10 s call up at 4.0 s). The CLI makes a response's
+  # calls one after another and does not re-read the list when told it
+  # changed (a tool activated mid-run was never offered). A call it cannot
+  # parse the arguments of reaches the server with {} — a tool validates its
+  # own — and one whose arguments are not an object, or whose name lacks the
+  # server's prefix, it refuses itself. It has no turn cap of its own unless
+  # KIMI_LOOP_MAX_STEPS_PER_TURN is set: a run's rounds are bounded by the
+  # phase's.
+  mcp:
+    seed:
+      - path: .kimi-code/mcp.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"toolTimeoutMs":{tool_timeout_ms},"deferred":false}}}'
+    env:
+      KIMI_CODE_TRUST_WORKSPACE: "1"
+    tool_timeout_seconds: 600
+    relists: false
+    concurrency: in_turn
+  # EACH REQUEST, FROM THE WIRE LOG the CLI keeps for the run in the seat's
+  # home — sessions/wd_<directory>_<digest>/session_<id>/agents/main/wire.jsonl,
+  # named after the call's working directory and a session id it mints, so the
+  # run's own is told from every other call's of the seat by its profile.bind
+  # event, which names the directory a few lines in, after the tools the run
+  # was offered. A step is a request: step.begin opens it, the llm.request
+  # names the model, usage.record gives its counts as soon as the response is
+  # in — `inputOther` WITHOUT the cached part and `output` with the reasoning
+  # in it (measured with a stand-in reporting 40 cached and 7 reasoning tokens
+  # of a 101-token prompt: 61 + 40, 12 out) — its prose and calls follow under
+  # its id, the calls' results, and step.end with why it stopped and the same
+  # counts again. The CLI sends no id with a call, so a call is joined by name
+  # and arguments; each was in the log within 0.15 s of reaching the server.
+  # Its stdout is the assistant's messages, and a failure is on stderr alone.
+  requests:
+    source: file
+    in: home
+    file: ".kimi-code/sessions/*/session_*/agents/main/wire.jsonl"
+    owner:
+      match: [{path: ["type"], equals: "profile.bind"}]
+      path: ["environmentDisclosure", "cwd"]
+      equals: "{work}"
+    host_prefix: "mcp__crewlet__"
+    stops: {tool_use: tool_use, end_turn: end}
+    events:
+      - match: [{path: ["type"], equals: "llm.tools_snapshot"}]
+        tools: ["tools"]
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "step.begin"}]
+        opens: true
+        id: ["event", "uuid"]
+      - match: [{path: ["type"], equals: "llm.request"}, {path: ["kind"], equals: "loop"}]
+        model: ["model"]
+      - match: [{path: ["type"], equals: "usage.record"}, {path: ["usageScope"], equals: "turn"}]
+        usage:
+          input: [["usage", "inputOther"]]
+          output: [["usage", "output"]]
+          cache_read: [["usage", "inputCacheRead"]]
+          cache_write: [["usage", "inputCacheCreation"]]
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "content.part"}, {path: ["event", "part", "type"], equals: "text"}]
+        id: ["event", "stepUuid"]
+        text: ["event", "part", "text"]
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "tool.call"}]
+        id: ["event", "stepUuid"]
+        call: {id: ["event", "toolCallId"], name: ["event", "name"], args: ["event", "args"]}
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "step.end"}]
+        id: ["event", "uuid"]
+        stop: ["event", "finishReason"]
+        usage:
+          input: [["event", "usage", "inputOther"]]
+          output: [["event", "usage", "output"]]
+          cache_read: [["event", "usage", "inputCacheRead"]]
+          cache_write: [["event", "usage", "inputCacheCreation"]]
   # TWO FILES, because this CLI splits its login across them: `kimi login`
   # writes the OAuth token to credentials/oauth/kimi-code.json AND injects the
   # provider's `[providers.<name>.oauth]` reference into config.toml, which
@@ -2951,6 +3422,29 @@ hermes:
   #     share a generation and the prune runs only between generations, so the
   #     setting is what keeps memory out of every call.
   #
+  # AND THE TOOL ROUTE'S HALF OF IT (see mcp and requests below), here because
+  # this file is the only place the CLI reads either from:
+  #
+  #   - mcp_servers.crewlet, the seat's server: its relay command and socket
+  #     are `${…}`, which the CLI fills from its environment — a run with
+  #     tools sets both — and its timeout is the CLI's per-call one, in
+  #     seconds (300 unset; 4 gave a 10 s call up at 4.0 s). A literal, since
+  #     the file is every call's: tool_timeout_seconds below is the same
+  #     number. Only a run whose -t list names it starts it; a text function's
+  #     names `web` alone.
+  #   - tools.tool_search.enabled "off". On, the CLI put the server's tools
+  #     behind three tools of its own (tool_search, tool_describe,
+  #     tool_call) rather than offering them by name; off, the model was
+  #     offered mcp__crewlet__<name> and the two web tools, on both kinds of
+  #     call, and nothing else.
+  #   - hooks.post_api_request, with hooks_auto_accept: every response the
+  #     CLI receives is handed to the hook on stdin, as JSON on one line,
+  #     before the CLI acts on it, and the hook appends it to a file in the
+  #     call's directory — the run's record (requests, below). Auto-accepted
+  #     because the file is the profile's own and a headless run cannot be
+  #     asked; a text function's record is written beside its own call and
+  #     removed with it.
+  #
   # NO `model` SECTION, so the file chooses no provider. A login keeps its
   # choice in auth.json (`hermes auth add` sets `active_provider` there) and
   # its keys in .env, both credential files that travel to every seat; a
@@ -2970,6 +3464,19 @@ hermes:
         memory:
           memory_enabled: false
           user_profile_enabled: false
+        tools:
+          tool_search:
+            enabled: "off"
+        hooks_auto_accept: true
+        hooks:
+          post_api_request:
+            - command: 'sh -c "cat >> .crewlet-hermes-requests.jsonl && echo >> .crewlet-hermes-requests.jsonl"'
+              timeout: 10
+        mcp_servers:
+          crewlet:
+            command: "${CREWLET_RELAY_COMMAND}"
+            args: ["mcp-relay", "${CREWLET_RELAY_SOCKET}"]
+            timeout: 600
   # NO SYSTEM-PROMPT CHANNEL, so the seat's text rides the transcript under
   # the vendor's own prompt, which stays in force (about 5.5K characters on
   # 0.21.5 with the settings above, opening "You are Hermes Agent, built by
@@ -3049,6 +3556,86 @@ hermes:
   # API keys and bot tokens, auth.json holds the OAuth credential pool that
   # `hermes auth add --type oauth` writes, and the provider a login chose. An
   # entry may use either or both.
+  # THE SEAT'S TOOLS: the server the seeded config.yaml declares, started by
+  # naming it in the -t list beside `web` — the CLI starts only the servers
+  # that list names, and a run without one starts every server its config and
+  # its enabled plugins name (measured: a server planted in config.yaml started
+  # on a text function without -t, and on neither kind of call with it). The
+  # file is rewritten every generation, a plugin runs only where that file
+  # enables it, and the CLI reads no project's config; measured on 0.21.5
+  # through the engine's own code path against a local stand-in, with a
+  # checkout above the call holding a .hermes/config.yaml and every other
+  # CLI's files at each level, nothing of it reached a request and no other
+  # server started. The relay command and socket reach the config through
+  # the environment, and HERMES_PLUGIN_PAYLOAD_MAX_CHARS lets the hook's
+  # payload carry a response whole up to 8 MiB (50,000 characters unset, past
+  # which it is cut to a preview the record cannot read); the payload repeats
+  # it once, which stays inside the 32 MiB a record line may take.
+  #
+  # The CLI makes a response's calls one after another (whatever the server's
+  # supports_parallel_tool_calls says, measured in -z), does not re-read the
+  # list when told it changed, and refuses a name it cannot place — but one
+  # close to a listed name (difflib, a ratio of 0.7 or more) it REWRITES to
+  # that tool and runs it with the model's arguments: a model asking for
+  # mcp__crewlet__echoo had echo called. The record names what the model
+  # asked (below), so the tool loop's host refuses the rewritten call rather
+  # than run a tool the model never asked for. On arguments that are not JSON
+  # it asks its model again, unrecorded — five requests in all — and then
+  # exits 2.
+  #
+  # `-z` HAS NO TURN CAP: a stand-in that always called a tool drew 948
+  # requests in two minutes. The record shows every request as it is made,
+  # so the phase's round budget counts them and the host ends the run when it
+  # is spent (measured: ended after five requests, the CLI was stopped).
+  #
+  # A failure is on stdout, as the vendor's sentence, in place of the answer,
+  # and exits non-zero — 2 for a request the provider refused: the run's
+  # limit and sign-in markers read it there; its error names the exit
+  # status, since a run's stdout is never quoted.
+  mcp:
+    complete_args: ["--toolsets", "web,crewlet"]
+    env:
+      CREWLET_RELAY_COMMAND: "{relay_command}"
+      CREWLET_RELAY_SOCKET: "{socket}"
+      HERMES_PLUGIN_PAYLOAD_MAX_CHARS: "8388608"
+    tool_timeout_seconds: 600
+    relists: false
+    concurrency: in_turn
+  # EACH REQUEST, FROM THE RECORD THE post_api_request HOOK WRITES (see the
+  # seeded config.yaml): one line per response, as the CLI normalised it —
+  # its prose, its calls as {id, name, arguments} with the names the MODEL
+  # wrote, why it stopped, and its counts, `input_tokens` WITHOUT the cached
+  # part and `output_tokens` with the reasoning in it (measured with a
+  # stand-in reporting 40 cached and 7 reasoning tokens of a 107-token
+  # prompt: 67 + 40, 12 out). The hook runs before the CLI repairs a name or
+  # makes a call, so each request was on file within 0.1 s of its first call
+  # reaching the server. Neither of the CLI's own records will do: its
+  # stream-json events and its session store (state.db) both name a call as
+  # repaired, and the store is SQLite. The CLI sends no id with a call; calls
+  # are joined by name and arguments. The --usage-file report settles the
+  # run's total.
+  requests:
+    source: file
+    in: work
+    file: ".crewlet-hermes-requests.jsonl"
+    host_prefix: "mcp__crewlet__"
+    stops: {tool_calls: tool_use, stop: end}
+    events:
+      - match: [{path: ["hook_event_name"], equals: "post_api_request"}]
+        opens: true
+        id: ["extra", "api_request_id"]
+        model: ["extra", "response", "model"]
+        stop: ["extra", "finish_reason"]
+        text: ["extra", "response", "assistant_message", "content"]
+        blocks:
+          path: ["extra", "response", "assistant_message", "tool_calls"]
+          each:
+            - call: {id: ["id"], name: ["name"], args: ["arguments"]}
+        usage:
+          input: [["extra", "usage", "input_tokens"]]
+          output: [["extra", "usage", "output_tokens"]]
+          cache_read: [["extra", "usage", "cache_read_tokens"]]
+          cache_write: [["extra", "usage", "cache_write_tokens"]]
   credential_paths:
     - ".hermes/.env"
     - ".hermes/auth.json"
@@ -3284,6 +3871,102 @@ pi:
     # config root is ~/.pi/agent rather than ~/.pi, so the seat home's copy is
     # .pi/agent and every path below is relative to that.
     PI_CODING_AGENT_DIR: ".pi/agent"
+  # THE HOME'S OWN MCP SERVERS NEVER START. 1.4.0 starts every server the
+  # agent directory's mcp.json names whenever its MCP support is on, which a
+  # run with tools turns on; the file is the profile's own, empty, rewritten
+  # every generation (measured: a server planted there started on a run with
+  # tools without it, and not with it). A text function, with --no-extensions,
+  # starts none either way.
+  seed_files:
+    - path: .pi/agent/mcp.json
+      content: '{"mcpServers":{}}'
+  # THE SEAT'S TOOLS: one stdio server, REGISTERED BY AN EXTENSION written into
+  # the call's own directory and loaded by its path (-e), beside the CLI's own
+  # MCP support (-e builtin:mcp) — --no-extensions turns built-in extensions
+  # off with every discovered one, and an explicit -e path still loads. The
+  # vendor's two configuration files cannot carry a per-run server: the agent
+  # directory's mcp.json is the seat's, shared by every call of it at once,
+  # and a project's .pi/mcp.json is read only from a TRUSTED working
+  # directory — which would trust its other project files too (measured: with
+  # --approve, a server in .pi/mcp.json of the directory pi ran in started;
+  # with the profile's --no-approve, none). The registration's `exposure:
+  # direct` declares the tools to the model by name (`mcp__crewlet__<name>`);
+  # --tools keeps those and nothing else. Measured on 1.4.0 through the
+  # engine's own code path against a local stand-in.
+  #
+  # The registration's `timeout` is the CLI's per-call timeout, in seconds
+  # (60 by default; 4 gave a 10 s call up at 4.0 s). It re-reads the server's
+  # list when told it changed — a tool activated mid-run was offered from the
+  # request after the one the activation's result went back in — and makes
+  # one response's calls at once. A call with malformed arguments is refused
+  # by the CLI itself, as is a name without the server's prefix.
+  #
+  # THE SESSION IS THE RECORD: in place of --no-session, the run keeps its
+  # session in its own directory (--session-dir), which goes with it, and
+  # prints the plain answer as a text function does — `--mode json` prints the
+  # record on stdout, but a failed request there exits 0 with nothing on
+  # stderr, where a failure, and a spent plan's words, are read.
+  mcp:
+    complete_args:
+      - "-p"
+      - "--no-tools"
+      - "--no-context-files"
+      - "--no-extensions"
+      - "--no-skills"
+      - "--no-prompt-templates"
+      - "--no-themes"
+      - "--no-approve"
+      - "--session-dir"
+      - "{work}/.crewlet-pi-session"
+    seed:
+      - path: crewlet-mcp.mjs
+        in: work
+        content: |
+          // Written by Crewlet: the seat's tools, served as the crewlet MCP server for this run alone.
+          export default function (pi) {
+            pi.registerMcpServer("crewlet", {
+              command: {relay_command_json},
+              args: {relay_args_json},
+              timeout: {tool_timeout_seconds},
+              exposure: "direct",
+            });
+          }
+    args: ["-e", "builtin:mcp", "-e", "{work}/crewlet-mcp.mjs", "--tools", "mcp__crewlet__*"]
+    tool_timeout_seconds: 600
+    relists: true
+    concurrency: at_once
+  # EACH REQUEST, FROM THE SESSION FILE, which the CLI appends an entry to as
+  # each message completes: an assistant message is a response — its id, its
+  # model, its prose and calls as content blocks, why it stopped, and its
+  # counts, `input` WITHOUT the cached part and `output` with the reasoning in
+  # it (measured with a stand-in reporting 40 cached and 7 reasoning tokens:
+  # 61 + 40 of a 101-token prompt, 12 out). The CLI sends no id with a call, so
+  # a call is joined by name and arguments; each was in the file within 0.1 s
+  # of reaching the server. The CLI has no turn cap of its own: a run's rounds
+  # are bounded by the phase's.
+  requests:
+    source: file
+    in: work
+    file: ".crewlet-pi-session/*.jsonl"
+    host_prefix: "mcp__crewlet__"
+    stops: {toolUse: tool_use, stop: end}
+    events:
+      - match: [{path: ["type"], equals: "message"}, {path: ["message", "role"], equals: "assistant"}]
+        id: ["id"]
+        model: ["message", "model"]
+        stop: ["message", "stopReason"]
+        blocks:
+          path: ["message", "content"]
+          each:
+            - match: [{path: ["type"], equals: "text"}]
+              text: ["text"]
+            - match: [{path: ["type"], equals: "toolCall"}]
+              call: {id: ["id"], name: ["name"], args: ["arguments"]}
+        usage:
+          input: [["message", "usage", "input"]]
+          output: [["message", "usage", "output"]]
+          cache_read: [["message", "usage", "cacheRead"]]
+          cache_write: [["message", "usage", "cacheWrite"]]
   # OAuth tokens and API keys both land here, 0600, and the file auto-refreshes
   # an expired token in place.
   credential_paths: [".pi/agent/auth.json"]

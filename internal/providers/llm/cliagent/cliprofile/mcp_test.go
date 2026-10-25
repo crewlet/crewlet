@@ -118,11 +118,16 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 		}}, "mcp.env names HOME"},
 		"failure events in no stream": {map[string]any{
 			"output": "json", "event_type_path": []any{}, "text_events": []any{}, "requests": nil, "cap": nil,
-		}, "mcp.failure_events is set but output is \"json\""},
+		}, "mcp.failure_events is set but a run with tools prints \"json\""},
 		"a record on stdout that is not a stream": {map[string]any{
 			"output": "json", "event_type_path": []any{}, "text_events": []any{}, "cap": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
-		}, "requests.source is stdout but output is \"json\""},
+		}, "requests.source is stdout but a run with tools prints \"json\""},
+		"a record on stdout a run with tools does not print": {map[string]any{
+			"mcp": map[string]any{"output": "text", "failure_events": []any{}}, "cap": nil,
+		}, "requests.source is stdout but a run with tools prints \"text\""},
+		"a route output with no name": {map[string]any{"mcp": map[string]any{"output": "yaml"}},
+			`mcp.output "yaml"`},
 		"a record under the home naming no session": {map[string]any{"requests": map[string]any{
 			"source": "file", "file": ".cli/record.jsonl", "in": "home",
 		}}, "does not name the run's own file through {session}"},
@@ -158,6 +163,16 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 		"an owner of a stdout record": {map[string]any{"requests": map[string]any{
 			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}"},
 		}}, `requests.owner is set but requests.source is "stdout"`},
+		"an owner line with nothing to compare": {map[string]any{"requests": map[string]any{
+			"source": "file", "file": ".cli/*.jsonl", "in": "home",
+			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}",
+				"match": []any{map[string]any{"path": []any{"type"}}}},
+		}}, "requests.owner.match[0].equals"},
+		"a condition that is both a value and a prefix": {map[string]any{"requests": map[string]any{
+			"source": "file", "file": ".cli/*.jsonl", "in": "home",
+			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}",
+				"match": []any{map[string]any{"path": []any{"type"}, "equals": "bind", "prefix": "bi"}}},
+		}}, "requests.owner.match[0] sets both equals and prefix"},
 		"an owner the run cannot know": {map[string]any{"requests": map[string]any{
 			"source": "file", "file": ".cli/*.jsonl", "in": "home",
 			"owner": map[string]any{"path": []any{"thread"}, "equals": "{thread}"},

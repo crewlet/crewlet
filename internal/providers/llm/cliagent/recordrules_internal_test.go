@@ -198,6 +198,64 @@ func TestACallInTheHostsNamespaceIsTheHosts(t *testing.T) {
 	}
 }
 
+// A RESPONSE'S PROSE IS WHAT ITS DELTAS SPELLED WHERE NOTHING WRITES IT WHOLE,
+// and a condition can hold of a value's beginning. Muse Code streams a
+// response's prose in fragments that no later event repeats whole, and files a
+// tool's side effect under `tool:<name>` beside the model's
+// `model.meta.response`: the fragments run together are the request's prose —
+// and its answer — and a call is read from the side effects of tools alone.
+//
+// The request is told as soon as its call is read, and told again as its prose
+// grows past what it was told.
+//
+// Mutation: read each fragment as a line of text as well, and the first
+// request is told as "Look"; leave the prose to text rules alone, and the
+// answer is empty; leave a fragment unmarked as news, and the first request
+// stays "Look"; match a
+// prefix as a whole value, and the call is never read; ignore the prefix
+// condition, and the model's own side effect is read as a call.
+func TestAResponsesProseIsWhatItsDeltasSpelled(t *testing.T) {
+	t.Parallel()
+	r, host, deltas := readerOver(t, map[string]any{"host_prefix": "tool:mcp__crewlet__", "events": []any{
+		map[string]any{"match": []any{is([]any{"type"}, "proposed"), is([]any{"kind"}, "model")}, "opens": true,
+			"id": []any{"task"}},
+		map[string]any{"match": []any{is([]any{"type"}, "delta")}, "delta": []any{"text"}},
+		map[string]any{"match": []any{is([]any{"type"}, "intent"),
+			map[string]any{"path": []any{"operation"}, "prefix": "tool:"}},
+			"call": map[string]any{"id": []any{"key"}, "name": []any{"operation"}}},
+	}}, nil)
+	feed(t, r,
+		map[string]any{"type": "proposed", "kind": "model", "task": "m1"},
+		map[string]any{"type": "intent", "operation": "model.meta.response", "key": "model:m1"},
+		map[string]any{"type": "delta", "text": "Look"},
+		map[string]any{"type": "intent", "operation": "tool:mcp__crewlet__search", "key": "tool:call_1"},
+		map[string]any{"type": "delta", "text": "ing it up."},
+		map[string]any{"type": "proposed", "kind": "model", "task": "m2"},
+		map[string]any{"type": "delta", "text": "Done: "},
+		map[string]any{"type": "delta", "text": "the notes are in."},
+	)
+	r.finish()
+	turns := host.latestTurns()
+	if len(turns) != 2 {
+		t.Fatalf("the host was told of %d requests, want 2: %+v", len(turns), turns)
+	}
+	if turns[0].Text != "Looking it up." || len(turns[0].Calls) != 1 {
+		t.Fatalf("first request = %+v, want its streamed prose and the one tool call", turns[0])
+	}
+	if c := turns[0].Calls[0]; c.Name != "search" || !c.Host || c.ID != "tool:call_1" {
+		t.Errorf("the call read as %+v, want the host's search under the CLI's key", c)
+	}
+	if turns[1].Text != "Done: the notes are in." {
+		t.Errorf("second request = %+v, want its streamed prose", turns[1])
+	}
+	if last, _, _ := r.last(); last != "Done: the notes are in." {
+		t.Errorf("the answer is %q, want the last response's prose", last)
+	}
+	if got := strings.Join(*deltas, "|"); got != "Look|ing it up.|Done: |the notes are in." {
+		t.Errorf("streamed %q, want each fragment once", got)
+	}
+}
+
 // A RECORD'S COUNTS ARE IN THE ARITHMETIC OF THE RULE THAT READ THEM, not of
 // the CLI's final report: Gemini CLI's chat records each request's WHOLE prompt
 // with its cached part inside it, where its final report gives the prompt less
@@ -264,6 +322,61 @@ func TestAFileRecordIsTakenByAFirstLineNamingTheRun(t *testing.T) {
 		t.Errorf("the tail read %q, want our record and none of the other's", got)
 	}
 	if !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, `"cwd"`) }) {
+		t.Errorf("the tail did not read our record from its first line: %q", got)
+	}
+}
+
+// A FILE RECORD THAT NAMES ITS RUN ONLY IN A LATER EVENT IS TAKEN BY THAT EVENT.
+// Kimi Code's wire log opens with its protocol version, which every run's has,
+// and names the call's working directory in the profile.bind event a few lines
+// on: the owner's match picks that line, a file whose line names another run is
+// passed over, and one that has not written it yet is looked at again rather
+// than judged on its header.
+//
+// Mutation: judge a file by its first line whatever the owner's match, and no
+// file is ever this run's.
+func TestAFileRecordIsTakenByTheEventThatNamesTheRun(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	owner := recordOwner(&cliprofile.RecordOwner{
+		Match: []cliprofile.Match{{Path: cliprofile.Path{"type"}, Equals: "profile.bind"}},
+		Path:  cliprofile.Path{"environmentDisclosure", "cwd"}, Equals: "{work}",
+	}, "", work)
+	var mu sync.Mutex
+	var lines []string
+	stop := make(chan struct{})
+	wait := tailRecord(filepath.Join(dir, "*.jsonl"), owner, func(l string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, l)
+	}, stop)
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const header = `{"type":"metadata","protocol_version":"1.5"}` + "\n" + `{"type":"runtime.set_binding"}` + "\n"
+	bind := func(cwd string) string {
+		return `{"type":"profile.bind","environmentDisclosure":{"cwd":` + jsonString(cwd) + `}}` + "\n"
+	}
+	write("a-other.jsonl", header+bind("/elsewhere")+`{"line":"OTHER"}`+"\n")
+	write("b-ours.jsonl", header)
+	time.Sleep(3 * recordPoll)
+	write("b-ours.jsonl", header+bind(work)+`{"line":"OURS"}`+"\n")
+	time.Sleep(3 * recordPoll)
+	close(stop)
+	wait()
+	mu.Lock()
+	defer mu.Unlock()
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "OTHER") || !strings.Contains(got, "OURS") {
+		t.Errorf("the tail read %q, want our record and none of the other's", got)
+	}
+	if !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "protocol_version") }) {
 		t.Errorf("the tail did not read our record from its first line: %q", got)
 	}
 }

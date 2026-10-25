@@ -466,15 +466,18 @@ func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_
 // openKeyGeneration is the first call into a key home taking its generation
 // lock and emptying the home of every credential file and volatile path —
 // whatever an earlier generation's CLI wrote down, a process that ended
-// mid-call included — before the home's own settings are seeded. On success
-// the lock is the seat's to hold until its last call is out.
+// mid-call included — before the home's own settings are seeded: the
+// profile's, then a key home's own over them
+// ([cliprofile.Profile.KeySeedFiles]). On success the lock is the seat's to
+// hold until its last call is out.
 func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *seatState) error {
 	release, err := w.lockSeat(ctx, dir)
 	if err != nil {
 		return err
 	}
 	home := filepath.Join(dir, "home")
-	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome)); err != nil {
+	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome),
+		writeSeeds(home, w.profile.KeySeedFiles)); err != nil {
 		release()
 		return err
 	}
@@ -901,10 +904,19 @@ func acquireFailureKind(err error) llm.ErrorKind {
 // changed under a seat is the hole these files exist to close. Verbatim at
 // 0600, parents created, rooted the same way prune's targets are.
 func (w *Workspace) seedFiles(root string, scope cliprofile.SeedScope) error {
+	var files []cliprofile.SeedFile
 	for _, f := range w.profile.SeedFiles {
-		if f.Scope() != scope {
-			continue
+		if f.Scope() == scope {
+			files = append(files, f)
 		}
+	}
+	return writeSeeds(root, files)
+}
+
+// writeSeeds writes settings files into root, in order — so a later one at a
+// path replaces an earlier one's content there.
+func writeSeeds(root string, files []cliprofile.SeedFile) error {
+	for _, f := range files {
 		dst, err := cliprofile.UnderRoot(root, f.Path)
 		if err != nil {
 			return err

@@ -77,8 +77,10 @@ func (p *Provider) serveTools(
 ) (*toolRun, error) {
 	m := p.profile.MCP
 	t := &toolRun{
-		host:   req.Tools,
-		reader: newRecordReader(p.profile, req, sent),
+		host: req.Tools,
+		// AS A RUN WITH TOOLS PRINTS: its output may be the route's own
+		// ([cliprofile.MCP.Output]).
+		reader: newRecordReader(p.profile.Routed(), req, sent),
 		clock:  newStretch(p.timeout),
 		carry:  startCarrier(ctx, p, checkout),
 	}
@@ -160,13 +162,16 @@ func (p *Provider) serveTools(
 	return t, nil
 }
 
-// recordOwner is the test a file record's first line must pass to be this
-// run's ([cliprofile.RecordOwner]), or nil where the glob alone names it.
+// recordOwner is the test a file record's head must pass to be this run's
+// ([cliprofile.RecordOwner]), or nil where the glob alone names it: handed the
+// file's lines from its first, it says whether the line decides — the first
+// line, or the first matching the owner's Match — and whether the file is this
+// run's.
 //
 // The working directory is compared as the CLI reports it, which is the path
 // the kernel resolved — so the call's directory is accepted as written and with
 // its links resolved, as a state_dir under a symlinked /tmp reads either way.
-func recordOwner(o *cliprofile.RecordOwner, session, work string) func(string) bool {
+func recordOwner(o *cliprofile.RecordOwner, session, work string) func(line string) (decided, owned bool) {
 	if o == nil {
 		return nil
 	}
@@ -180,19 +185,23 @@ func recordOwner(o *cliprofile.RecordOwner, session, work string) func(string) b
 			want = append(want, real)
 		}
 	}
-	return func(first string) bool {
-		doc, ok := decodeRecordLine(first)
+	return func(line string) (bool, bool) {
+		doc, ok := decodeRecordLine(line)
+		if len(o.Match) > 0 && (!ok || !matches(doc, o.Match)) {
+			// Not the line that names the run: the next one may be.
+			return false, false
+		}
 		if !ok {
-			return false
+			return true, false
 		}
 		got, ok := stringAt(doc, o.Path)
 		if !ok || got == "" {
-			return false
+			return true, false
 		}
 		if o.Equals == "{work}" {
 			got = filepath.Clean(got)
 		}
-		return slices.Contains(want, got)
+		return true, slices.Contains(want, got)
 	}
 }
 

@@ -119,6 +119,15 @@ type MCP struct {
 	// environment, mcp.env included.
 	UsageArgs []string `yaml:"usage_args,omitempty"`
 
+	// Output, where set, is what a run with tools prints in place of the
+	// profile's output — for a CLI whose text function is read best as the
+	// plain answer it prints, while the record of a run with tools is the
+	// JSON stream another flag of its prints instead (Grok's
+	// --output-format streaming-json, Pi's --mode json), which mcp.args or
+	// mcp.complete_args then pass. A run with tools reads its answer from
+	// that record ([Requests]), never from the profile's text_paths.
+	Output OutputMode `yaml:"output,omitempty"`
+
 	// Lifecycle is how a run with tools is shaped: run, the default — the
 	// CLI is one process that starts the crewlet server itself — or serve.
 	Lifecycle Lifecycle `yaml:"lifecycle,omitempty"`
@@ -153,6 +162,22 @@ func (c Concurrency) Valid() bool { return slices.Contains(ConcurrencyValues, c)
 // Serves reports whether a run with tools on this route runs against a server
 // of the CLI's own ([LifecycleServe]).
 func (m *MCP) Serves() bool { return m != nil && m.Lifecycle == LifecycleServe }
+
+// RouteOutput is what a run with tools prints: the route's [MCP.Output]
+// where it sets one, the profile's own output otherwise.
+func (p *Profile) RouteOutput() OutputMode {
+	if p.MCP != nil && p.MCP.Output != "" {
+		return p.MCP.Output
+	}
+	return p.EffectiveOutput()
+}
+
+// Routed is the profile as a run with tools reads what its CLI printed: its
+// output the route's ([Profile.RouteOutput]).
+func (p Profile) Routed() Profile {
+	p.Output = p.RouteOutput()
+	return p
+}
 
 // Lifecycle is how a run with tools is shaped.
 type Lifecycle string
@@ -273,10 +298,16 @@ type FailureEvent struct {
 
 // Match is one condition an event must meet: the value at Path equals Equals,
 // compared as JSON values — a string with a string, a boolean with a boolean, a
-// number with a number.
+// number with a number — or, where Prefix is set in its place, is a string
+// that begins with Prefix.
 type Match struct {
 	Path   Path `yaml:"path,omitempty"`
 	Equals any  `yaml:"equals,omitempty"`
+	// Prefix is for a discriminator a CLI writes with what it names
+	// appended to it: Muse Code files a side effect under an operation of
+	// `tool:<the tool's name>` beside the `model.meta.response` of a model
+	// request, and no one value tells every tool's from the model's.
+	Prefix string `yaml:"prefix,omitempty"`
 }
 
 // ToolTimeout is [MCP.ToolTimeoutSeconds] as a duration.
@@ -400,7 +431,7 @@ func cloneMatches(in []Match) []Match {
 	}
 	out := make([]Match, len(in))
 	for i, m := range in {
-		out[i] = Match{Path: slices.Clone(m.Path), Equals: m.Equals}
+		out[i] = Match{Path: slices.Clone(m.Path), Equals: m.Equals, Prefix: m.Prefix}
 	}
 	return out
 }
@@ -525,9 +556,12 @@ func (p *Profile) validateMCP(add func(string, ...any)) {
 			validatePath(add, fmt.Sprintf("%s.fields[%d]", label, j), f)
 		}
 	}
-	if len(m.FailureEvents) > 0 && p.EffectiveOutput() != OutputJSONL {
-		add("mcp.failure_events is set but output is %q — a failure event exists only in a "+
-			"jsonl stream", p.EffectiveOutput())
+	if m.Output != "" && !m.Output.Valid() {
+		add("mcp.output %q (want json, jsonl or text)", m.Output)
+	}
+	if len(m.FailureEvents) > 0 && p.RouteOutput() != OutputJSONL {
+		add("mcp.failure_events is set but a run with tools prints %q — a failure event exists "+
+			"only in a jsonl stream (mcp.output, or output)", p.RouteOutput())
 	}
 }
 
@@ -659,10 +693,17 @@ func validateMatches(add func(string, ...any), label string, matches []Match) {
 	}
 	for i, m := range matches {
 		validatePath(add, fmt.Sprintf("%s[%d].path", label, i), m.Path)
+		if m.Prefix != "" {
+			if m.Equals != nil {
+				add("%s[%d] sets both equals and prefix — a condition is one or the other", label, i)
+			}
+			continue
+		}
 		switch m.Equals.(type) {
 		case string, bool, int, int64, uint64, float64:
 		default:
-			add("%s[%d].equals is %v — compare with a string, a boolean or a number", label, i, m.Equals)
+			add("%s[%d].equals is %v — compare with a string, a boolean or a number, or "+
+				"set prefix", label, i, m.Equals)
 		}
 	}
 }
@@ -721,9 +762,9 @@ func (p *Profile) validateCap(add func(string, ...any)) {
 	}
 	if len(c.Match) > 0 {
 		validateMatches(add, "cap.match", c.Match)
-		if p.EffectiveOutput() == OutputText {
-			add("cap.match is set but output is text — there is no document to match; use " +
-				"cap.exit_code")
+		if p.RouteOutput() == OutputText {
+			add("cap.match is set but a run with tools prints text — there is no document to " +
+				"match; use cap.exit_code")
 		}
 	}
 }
@@ -846,8 +887,9 @@ type Requests struct {
 }
 
 // RecordOwner is how a file record says whose it is: the value at Path in the
-// file's FIRST line. A file the glob finds whose first line holds anything else
-// there is another run's, and is passed over.
+// file's FIRST line — or, where Match is set, in the first line that matches
+// it. A file the glob finds whose line holds anything else there is another
+// run's, and is passed over.
 //
 // For a CLI that keeps every run's record side by side in the seat's home —
 // which every concurrent call of the seat shares — under a name the engine does
@@ -855,7 +897,13 @@ type Requests struct {
 // Gemini CLI names its chat after the first eight characters of the session
 // id, which no glob can spell.
 type RecordOwner struct {
-	// Path is the value's place in the first line.
+	// Match picks the line the value is read from: the first line of the
+	// file that matches every condition — for a CLI whose record names its
+	// run only in a later event (Kimi Code's wire log opens with its
+	// protocol version and names the call's working directory in the
+	// profile.bind event after it). Empty: the file's first line.
+	Match []Match `yaml:"match,omitempty"`
+	// Path is the value's place in that line.
 	Path Path `yaml:"path,omitempty"`
 	// Equals is what it holds in this run's file: {session}, the id
 	// session_args handed the run, or {work}, the call's working directory.
@@ -926,7 +974,7 @@ func (r *Requests) clone() *Requests {
 	out := *r
 	out.Stops = cloneMap(r.Stops)
 	if r.Owner != nil {
-		owner := RecordOwner{Path: slices.Clone(r.Owner.Path), Equals: r.Owner.Equals}
+		owner := RecordOwner{Match: cloneMatches(r.Owner.Match), Path: slices.Clone(r.Owner.Path), Equals: r.Owner.Equals}
 		out.Owner = &owner
 	}
 	if r.Events != nil {
@@ -1004,9 +1052,9 @@ func (p *Profile) validateRequests(add func(string, ...any)) {
 			add("requests.file or requests.in is set but requests.source is stdout — they say " +
 				"where a file source is found")
 		}
-		if p.EffectiveOutput() != OutputJSONL {
-			add("requests.source is stdout but output is %q — a record of requests is a jsonl "+
-				"stream", p.EffectiveOutput())
+		if p.RouteOutput() != OutputJSONL {
+			add("requests.source is stdout but a run with tools prints %q — a record of requests "+
+				"is a jsonl stream (mcp.output, or output)", p.RouteOutput())
 		}
 	case r.Source == SourceFile:
 		switch {
@@ -1129,6 +1177,9 @@ func (p *Profile) validateOwner(add func(string, ...any)) {
 	if p.Requests.Source != SourceFile {
 		add("requests.owner is set but requests.source is %q — it says which file is the "+
 			"run's, and a stdout record is the run's own", p.Requests.Source)
+	}
+	if len(o.Match) > 0 {
+		validateMatches(add, "requests.owner.match", o.Match)
 	}
 	validatePath(add, "requests.owner.path", o.Path)
 	switch o.Equals {

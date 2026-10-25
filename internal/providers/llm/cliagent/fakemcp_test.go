@@ -147,6 +147,10 @@ type fakeCall struct {
 	// Own marks a call to one of the CLI's own tools, which never reaches
 	// the server.
 	Own bool `json:"own,omitempty"`
+	// Asked is the name the model wrote, where the CLI repaired it to Name
+	// before making the call — Hermes Agent's fuzzy repair of an unknown
+	// name. A recorder that shows what the model asked writes it.
+	Asked string `json:"asked,omitempty"`
 }
 
 type fakeUsage struct {

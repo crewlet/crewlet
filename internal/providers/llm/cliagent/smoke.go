@@ -132,6 +132,20 @@ func (h *smokeHost) verdict(offered []string, comp *llm.Completion, observes boo
 	if !called {
 		return "", false
 	}
+	// THE RECORD HAS TO SHOW THE CALL TOO, where the profile reads one: a
+	// profile whose requests rules no longer match what its CLI writes
+	// still reaches the tools, and nothing else would say that a phase's
+	// rounds and spend are not being read as the run goes. Asked on a real
+	// sign-in, this is the one check of a record no stand-in can produce
+	// (cursor-agent's).
+	if observes && !slices.ContainsFunc(h.turns, func(t llm.Turn) bool {
+		return slices.ContainsFunc(t.Calls, func(c llm.TurnCall) bool { return c.Host && c.Name == smokeTool })
+	}) {
+		return fmt.Sprintf("failed — the CLI called %s through the crewlet server, but its record "+
+			"never showed the request that asked for it (%d requests read), so the profile's "+
+			"requests rules no longer match what the CLI writes: a phase's rounds and spend are "+
+			"not read as it runs — set overrides.requests", smokeTool, len(h.turns)), true
+	}
 	var parts []string
 	parts = append(parts, "called "+smokeTool+" through the crewlet server")
 	parts = append(parts, h.joinLocked(observes))

@@ -1132,6 +1132,26 @@ type Profile struct {
 	// flag. See [SeedFile].
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 
+	// KeySeedFiles are settings files written into a seat's KEY home alone —
+	// the home its calls run in when they sign in with a key (auth.mode
+	// api-key, or inherit-env handing it the engine's own) — after
+	// seed_files, each over a seed_files entry at the same path.
+	//
+	// The counterpart of [Profile.SubscriptionEnv], for a CLI that picks
+	// its sign-in from SETTINGS before its environment, so no variable can
+	// tell it to use the key. Gemini CLI takes a GOOGLE_GEMINI_BASE_URL — an
+	// operator's gateway in front of the API — as its gateway sign-in, which
+	// it then refuses ("Invalid auth method selected", exit 41), unless its
+	// settings name the key sign-in; and the same settings in a login home
+	// would send every subscription call to a key it does not have (read
+	// from the 0.65.0 bundle, and measured). A key home and a login home are
+	// two directories ([Workspace.AcquireForKey] in the backend), so each
+	// keeps its own.
+	//
+	// The seat's home only (`in` is home, its default): a call's working
+	// directory is written per call and knows nothing of how it signs in.
+	KeySeedFiles []SeedFile `yaml:"key_seed_files,omitempty"`
+
 	// MCP is how the CLI is handed a phase's tools as an MCP server — see
 	// [MCP]. Nil: the CLI cannot be handed any, and a seat's phase on it is
 	// refused.
@@ -1408,6 +1428,11 @@ func (p *Profile) kept(scope SeedScope) []keptPath {
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope {
 			add("seed_files", fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if scope == SeedHome {
+		for i, f := range p.KeySeedFiles {
+			add("key_seed_files", fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {
@@ -1690,6 +1715,26 @@ func (p *Profile) problems() []string {
 				"configures nothing", i)
 		}
 	}
+	for i, f := range p.KeySeedFiles {
+		label := fmt.Sprintf("key_seed_files[%d]", i)
+		switch {
+		case f.Scope() != SeedHome:
+			add("%s.in is %q — a key home's own settings are written into the seat's home "+
+				"(in: home, the default); a call's working directory is written per call "+
+				"and knows nothing of how the call signs in", label, f.In)
+		case strings.TrimSpace(f.Path) == "":
+			add("%s.path is empty", label)
+		case !staysInside(f.Path):
+			add("%s.path %q must be relative and stay inside the home directory", label, f.Path)
+		case !namesAFile(f.Path):
+			add("%s.path %q must name a FILE inside the home directory — not the directory "+
+				"itself, not a path ending in a separator, and not one whose last element is "+
+				". or .. — e.g. .vendor/settings.json", label, f.Path)
+		}
+		if f.Content == "" {
+			add("%s.content is empty — a settings file with nothing in it configures nothing", label)
+		}
+	}
 	p.validateMCP(add)
 	p.validateRequests(add)
 	p.validateCap(add)
@@ -1753,9 +1798,30 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		// label that says the engine owns it.
 		file("the call's project-root marker", ProjectRootMarker)
 	}
+	seeded := map[string]bool{}
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
 			file(fmt.Sprintf("seed_files[%d].path", i), f.Path)
+			seeded[filepath.Clean(f.Path)] = true
+		}
+	}
+	if scope == SeedHome {
+		// A key home's own: one at a seed_files path is that file's key-home
+		// content, written in its place, so it is the same claim rather than
+		// a second write — and one anywhere else is held to every rule a
+		// seed is.
+		for i, f := range p.KeySeedFiles {
+			if !staysInside(f.Path) || !namesAFile(f.Path) {
+				continue
+			}
+			clean := filepath.Clean(f.Path)
+			if seeded[clean] {
+				// Replacing it, once: a second key seed at the path is a
+				// second write, which the claim below is refused as.
+				seeded[clean] = false
+				continue
+			}
+			file(fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {

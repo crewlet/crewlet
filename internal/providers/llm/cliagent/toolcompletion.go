@@ -33,7 +33,7 @@ func (p *Provider) toolCompletion(
 ) (*llm.Completion, error) {
 	out, read := t.reader.stdoutResult()
 	if !read {
-		out = extract(p.profile, res.stdout)
+		out = extract(p.profile.Routed(), res.stdout)
 	}
 	failed := res.exitCode != 0 || out.failed
 	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
@@ -102,6 +102,7 @@ func (p *Provider) toolCompletion(
 	// stderr — never the whole of stdout, which is the tools' words too.
 	if hit, ok := classifyMarkers(p.profile, cliOutput{
 		said: out.text, stdout: res.stdout, stderr: res.stderr, failed: failed,
+		events: t.reader.failureLines(),
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(out.text, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
@@ -173,7 +174,7 @@ func (p *Provider) capped(res *rawResult, reader *recordReader) bool {
 	if len(c.Match) == 0 {
 		return true
 	}
-	if p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
+	if p.profile.RouteOutput() == cliprofile.OutputJSONL {
 		return reader.hitCap()
 	}
 	doc, ok := decodeObject(strings.TrimSpace(res.stdout))
