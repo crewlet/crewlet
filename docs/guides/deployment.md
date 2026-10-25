@@ -89,7 +89,8 @@ that volume's free space.
 
 The node sizes the ceilings together to fit half of that limit. A log derived
 from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
-and a log whose own default is smaller than that is held at what it asked
+the Dashboard Assistant's log gives way down to its own 64 MiB floor, and any
+other log whose own default is smaller than a gibibyte is held at what it asked
 for, so a fresh node has a floor it cannot go below.
 
 #### The minimum room for a fresh node
@@ -105,15 +106,15 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The artifact datastore's log | 1 GiB | `stream.artifact_data_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
-| The Dashboard Assistant's log (a fixed default) | 512 MiB | `stream.assistant_log_max_bytes` |
-| **The eight logs together** | **7.00 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.33 GiB at the minimum | `store.objects.nats_max_bytes` |
+| The Dashboard Assistant's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
+| **The eight logs together** | **6.56 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.19 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **9.33 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **12.44 GiB
-free** on the volume holding `stream.store_dir` (about 13.4 GB). With the
+So the broker needs a limit of at least **8.75 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **11.67 GiB
+free** on the volume holding `stream.store_dir` (about 12.5 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 7.00 GiB alone needs 9.33 GiB free. These are the least that **boots**:
+logs' 6.56 GiB alone needs 8.75 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -126,7 +127,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **8.00 GiB**, which three quarters of **10.67 GiB free** reaches.
+  limit of **7.56 GiB**, which three quarters of **10.08 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three

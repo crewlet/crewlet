@@ -1077,9 +1077,11 @@ stream:
                                     #   the Dashboard Assistant's log, where
                                     #   every person's conversations, turns
                                     #   and proposals are recorded (64 MiB..
-                                    #   64 GiB). UNSET TAKES a flat 512 MiB,
-                                    #   sized by how many people ask the
-                                    #   assistant rather than by the disk:
+                                    #   64 GiB). UNSET TAKES 512 MiB, sized
+                                    #   by how many people ask the
+                                    #   assistant rather than by the disk,
+                                    #   and scaled down as far as 64 MiB
+                                    #   where the broker is short:
                                     #   about two weeks of a completely
                                     #   blocked trim at the reference
                                     #   company's rate. Crossing it refuses

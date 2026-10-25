@@ -85,11 +85,20 @@ func assistantRegistrations() []registration {
 		// usage log's: the log grows with how many people ask the
 		// assistant, and a larger volume buys none of them
 		// ([config.DefaultAssistantLogMaxBytes]).
+		//
+		// BUT SCALED DOWN TO ITS FIELD'S FLOOR where the broker is short,
+		// which the identity estate's and the usage log's are not: the
+		// assistant is a feature a company may never turn on, and a fixed
+		// 512 MiB counted in full on every fresh node raised the least a
+		// node boots in past the 9 GiB a stated broker limit commonly
+		// gives, so a deployment sized for everything else stopped
+		// booting. Scaled, it reserves its 64 MiB floor there (a month at
+		// ten people) and its default wherever the broker has the room.
 		Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 			bytes, derived := stream.AssistantMaxBytes()
 			return domainCeiling{Bytes: bytes,
 				Field: "stream.assistant_log_max_bytes", Explicit: !derived,
-				Floor: config.AssistantLogMaxBytesFloor}
+				Floor: config.AssistantLogMaxBytesFloor, ScalesTo: config.AssistantLogMaxBytesFloor}
 		},
 	}}
 }

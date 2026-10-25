@@ -232,6 +232,8 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 	t.Parallel()
 	derived := func(bytes int64) domainCeiling { return domainCeiling{Bytes: bytes} }
 	explicit := func(bytes int64) domainCeiling { return domainCeiling{Bytes: bytes, Explicit: true} }
+	// A log that declares where its scaling stops, as the assistant's does.
+	scales := func(bytes, to int64) domainCeiling { return domainCeiling{Bytes: bytes, ScalesTo: to} }
 	for name, tc := range map[string]struct {
 		asked map[string]domainCeiling
 		held  map[string]int64
@@ -241,6 +243,16 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 		// its fit on an empty broker, with that fit.
 		short map[string]int64
 	}{
+		"a log that declares its own scaling floor gives way with the rest": {
+			asked: map[string]domainCeiling{"a": derived(7 * 512 << 20), "b": scales(512<<20, 64<<20)},
+			pool:  2 * gib,
+			want:  map[string]int64{"a": 7 * 256 << 20, "b": 256 << 20},
+		},
+		"and is held at that floor, not at a gibibyte, when its share is smaller": {
+			asked: map[string]domainCeiling{"a": derived(7 * 512 << 20), "b": scales(512<<20, 64<<20)},
+			pool:  gib,
+			want:  map[string]int64{"a": gib, "b": 64 << 20},
+		},
 		"everything fits as asked": {
 			asked: map[string]domainCeiling{"a": derived(4 * gib), "b": derived(2 * gib)},
 			pool:  8 * gib,

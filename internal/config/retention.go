@@ -219,10 +219,16 @@ const (
 	// alarm. The conversations themselves go after their retention whatever
 	// the log holds: the rows are purged by their own records.
 	//
-	// NOT A GIBIBYTE, because a fixed default at or above [MinDomainCeiling]
-	// in internal/engine is never scaled: it is reserved in full on every
-	// fresh node, so a gibibyte here raised the least a node boots in by a
-	// whole gibibyte. Two weeks of a blocked trim is still far past the
+	// SCALED DOWN TO ITS FLOOR WHERE THE BROKER IS SHORT. The engine scales an
+	// unset ceiling no lower than [MinDomainCeiling] in internal/engine, and
+	// holds a log that asked for less at what it asked, so a fixed 512 MiB
+	// was reserved in full on every fresh node: it raised the least a node
+	// boots in past the 9 GiB a stated broker limit commonly gives, and a
+	// deployment sized for everything else stopped booting for a feature it
+	// may never turn on. The assistant's register entry therefore lets
+	// scaling take it down to this field's 64 MiB floor, which is all a fresh
+	// node has to find for it; the default is what it gets wherever the
+	// broker has the room. Two weeks of a blocked trim is still far past the
 	// alarm, and the identity estate's log, which also grows with headcount,
 	// takes the same 512 MiB.
 	//

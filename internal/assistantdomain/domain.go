@@ -28,8 +28,8 @@ func (Domain) Name() string { return "assistant" }
 // 512 MiB, the Tier A default, and a node does not create the stream at it:
 // every state log's ceiling is a reservation the broker grants in full, so
 // the engine sizes them together from Tier A (`stream.assistant_log_max_bytes`,
-// unset taking config.DefaultAssistantLogMaxBytes, which states the
-// arithmetic).
+// unset taking config.DefaultAssistantLogMaxBytes, scaled down as far as its
+// 64 MiB floor where the broker is short, which states the arithmetic).
 const AssistantLogMaxBytes = 512 << 20
 
 // AssistantMaxRecordBytes is the largest record this domain publishes.
