@@ -248,6 +248,11 @@ var typedKinds = []typedKind{
 
 	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
 
+	// THE CODE HOST'S, every one of them — BadBundle included, though it is
+	// never answered across the wire today (a bundle its seal refused is
+	// answered by the landing on the node that stored it) — for the reason
+	// the list is complete at all.
+	{"code.BadBundle", reflect.TypeFor[*code.BadBundle]()},
 	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
 	{"code.TooWideError", reflect.TypeFor[*code.TooWideError]()},
 
