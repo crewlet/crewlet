@@ -123,14 +123,17 @@ type PromptSection struct {
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON
-// string), result and success, the round that asked for it, and — where the
-// call was timed — `started_at` (RFC 3339, UTC), `duration_ms`, and `origin`
-// (`builtin` or `mcp:<server>`) with `server` (the bare MCP server name) for
-// the tool that answered. The last four are ABSENT on a row nothing timed — a
-// call whose arguments did not parse, an agent-mode run's bridged call — and
-// `origin`/`server` are absent on a call no tool answered (an unknown name, one
-// not offered, one a guard refused): absent means "not recorded", never
-// "instant" or "the engine's own".
+// string), result and success, the round that asked for it, `call_id` — the
+// call's own id, which tells two calls of one response apart and is what a
+// [RunningCall] is matched to once the call has answered, absent where nothing
+// named the call — and, where the call was timed, `started_at` (RFC 3339,
+// UTC), `duration_ms`, and `origin` (`builtin` or `mcp:<server>`) with
+// `server` (the bare MCP server name) for the tool that answered. The last
+// four are ABSENT on a row nothing timed — a call whose arguments did not
+// parse, a box-mode run's bridged call — and `origin`/`server` are absent on a
+// call no tool answered (an unknown name, one not offered, one a guard
+// refused): absent means "not recorded", never "instant" or "the engine's
+// own".
 //
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
@@ -198,22 +201,28 @@ type PhaseRound struct {
 	// ToolCalls is how many calls the model asked for this round.
 	ToolCalls int `json:"tool_calls"`
 	// StopReason is why the model stopped writing this round's response:
-	// `end` or `tool_use`. Absent where the backend reported none — absent
-	// is "not reported", never "ended normally" as a fact.
+	// `end`, `tool_use`, or `cap` — the CLI's own turn cap ended its run at
+	// this request with the model still working. Absent where the backend
+	// reported none — absent is "not reported", never "ended normally" as
+	// a fact.
 	StopReason string `json:"stop_reason,omitempty"`
 }
 
-// RunningCall is the tool call a phase is running RIGHT NOW, on the live
-// progress frame only: published immediately before the call is handed to the
-// tool and cleared by the frame after it returns.
+// RunningCall is one tool call a phase is running RIGHT NOW, on the live
+// progress frame only: listed by the frame published immediately before the
+// call is handed to its tool, and gone from the frame after it returns. A
+// coding CLI may run a response's calls at once, so a frame lists every call
+// in flight, in the order the calls arrived.
 //
-// Its own field rather than a row in `tool_executions`, for the reason
+// Its own list rather than rows in `tool_executions`, for the reason
 // PartialRound is not merged into `round_narration`: a row there is a call that
 // has answered, and a reader must be able to tell a call in flight from one
 // that returned nothing.
 type RunningCall struct {
 	// ID is the call's id, on the `tool_executions[].call_id` rule — what
-	// tells two calls of one response running side by side apart.
+	// tells two calls of one response running side by side apart, and what
+	// the call's row in `tool_executions` carries once it has answered.
+	// Absent where nothing named the call.
 	ID string `json:"id,omitempty"`
 	// Round is the round the call belongs to, on the `tool_executions`
 	// scale.
@@ -232,6 +241,14 @@ type RunningCall struct {
 // The unit the engine observes for EVERY CLI. A [PhaseRound] is one model
 // request, which a CLI's own record shows for most CLIs and not for all; a run
 // is what the engine starts and ends itself.
+//
+// A RUN NAMES ITS ROUNDS (FirstRound, LastRound) rather than leaving a reader
+// to place them by time. A round no record showed — an unobserved run's one
+// round — has no instant at all, and an observed round's instant is when the
+// engine saw its model begin, which is not a statement about which process
+// was running. The round number is the key `rounds[]`, `tool_executions[]`
+// and `round_narration[]` already join on, and a phase's runs are
+// sequential, so a run's rounds are one contiguous stretch of that scale.
 type PhaseInvocation struct {
 	StartedAt  time.Time `json:"started_at"`
 	DurationMS int       `json:"duration_ms"`
@@ -243,8 +260,15 @@ type PhaseInvocation struct {
 	// finished, parked, paused, ran out of rounds or was stopped) or
 	// `failed`.
 	Outcome string `json:"outcome"`
+	// FirstRound and LastRound are the rounds the run made, both inclusive,
+	// on the `rounds[].round` scale. Both 0 on a run that made no model
+	// request — one that failed before its first, or one the engine ended
+	// before it asked.
+	FirstRound int `json:"first_round"`
+	LastRound  int `json:"last_round"`
 	// RequestsObserved is false for a run whose CLI's record showed no
-	// model requests: the whole run is then one round.
+	// model requests: the whole run is then ONE round, which nothing timed
+	// on its own — its span is the run's.
 	RequestsObserved bool `json:"requests_observed"`
 	InputTokens      int  `json:"input_tokens"`
 	OutputTokens     int  `json:"output_tokens"`
@@ -973,7 +997,9 @@ type AgentTurnProgress struct {
 	// — see [RunningCall]. A LIST because a coding CLI may run a
 	// response's calls at once. Absent whenever no call is running.
 	RunningCalls []RunningCall `json:"running_calls,omitempty"`
-	// Invocations are the phase's CLI runs so far — see [PhaseInvocation].
+	// Invocations are the phase's CLI runs that have ENDED so far — see
+	// [PhaseInvocation]. The run in flight is not on it until it ends, so
+	// the rounds past every entry's LastRound are that run's.
 	Invocations []PhaseInvocation `json:"invocations,omitempty"`
 	// WorkItem is the item the turn is charged to, as the turn knows it
 	// now — see [AgentTurnStarted.WorkItem].
