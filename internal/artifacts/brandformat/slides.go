@@ -27,12 +27,18 @@ var slideFamily = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,39}$`)
 // maxSlideFamilies is how many names a slide's font-family list holds.
 const maxSlideFamilies = 8
 
+// SlideHeadingWeight is the weight the brand's slide theme sets a heading in:
+// what a deck copies the heading face's file for, the regular file nearest it.
+const SlideHeadingWeight = 600
+
 // SlideTheme is the theme a deck begun in the company's brand is drawn in:
 // covers and section slides on the dark ground with an ink that reads on it,
 // every other slide on the light ground in the brand's text, the accent the
 // brand's primary, cards and hairlines mixed from the ground and the text, and
-// the heading and body faces the brand's.
-func SlideTheme(b Brand) slideformat.Theme {
+// the heading and body faces the brand's (an unset face drawn in the kit's
+// own, Geist).
+func SlideTheme(a Adoptable) slideformat.Theme {
+	b := a.brand
 	c := Effective(b)
 	featureInk := Fallbacks.DarkText
 	// THE TEXT FLOOR the adoption holds body text to, held here by the ink
@@ -51,12 +57,16 @@ func SlideTheme(b Brand) slideformat.Theme {
 
 		Display: slideStack(b.Type.Heading), Body: slideStack(b.Type.Body),
 
-		DisplayWeight: 600, Tracking: -1,
+		DisplayWeight: SlideHeadingWeight, Tracking: -1,
 	}
 }
 
-// slideStack is a face's list read through the slide format's family grammar.
+// slideStack is a face's list read through the slide format's family grammar,
+// an unset face read as the kit's own.
 func slideStack(f Face) string {
+	if FontStack(f) == "" {
+		f = Face{Kit: KitFaces[0]}
+	}
 	var out []string
 	for _, name := range strings.Split(FontStack(f), ",") {
 		name = strings.Trim(strings.TrimSpace(name), `"`)

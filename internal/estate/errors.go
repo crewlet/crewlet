@@ -147,6 +147,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
 	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
 	{"artifactsdomain.ErrBrandContrast", artifactsdomain.ErrBrandContrast},
+	{"artifactsdomain.ErrBrandIncomplete", artifactsdomain.ErrBrandIncomplete},
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
 	{"artifactsdomain.ErrFolderCycle", artifactsdomain.ErrFolderCycle},
@@ -230,6 +231,7 @@ var typedKinds = []typedKind{
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
 
 	{"artifactsdomain.BrandContrast", reflect.TypeFor[*artifactsdomain.BrandContrast]()},
+	{"artifactsdomain.BrandIncomplete", reflect.TypeFor[*artifactsdomain.BrandIncomplete]()},
 	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
 	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
 	{"artifactsdomain.FolderAmbiguous", reflect.TypeFor[*artifactsdomain.FolderAmbiguous]()},

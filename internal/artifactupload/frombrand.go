@@ -137,10 +137,11 @@ func (r *run) brandFile(ctx context.Context, f *pending, slot brandformat.Slot) 
 			"to every page and no version carries; copy a logo or a face instead", ErrInvalid, f.path)
 	}
 	if slot == brandformat.SlotFontHeading || slot == brandformat.SlotFontBody {
-		b, err := brandformat.Decode(a.BrandJSON) //nolint:govet // shadow: scoped to this block; see .golangci.yml
+		adopted, err := brandformat.DecodeAdopted(a.BrandJSON) //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err != nil {
 			return fmt.Errorf("artifactupload: the adopted brand's snapshot does not read: %w", err)
 		}
+		b := adopted.Brand()
 		file, ok := FaceFile(b, slot)
 		if !ok {
 			return fmt.Errorf("%w: %q copies the brand's %s, which is a face every page already "+
@@ -212,12 +213,13 @@ func (s *Service) brandLook(ctx context.Context) (slideformat.Look, []FileSpec, 
 		return slideformat.Look{}, nil, nil, fmt.Errorf("%w (a deck in %q begins from it); pick one of "+
 			"the engine's themes instead", err, slideformat.BrandTheme)
 	}
-	b, err := brandformat.Decode(a.BrandJSON)
+	adopted, err := brandformat.DecodeAdopted(a.BrandJSON)
 	if err != nil {
 		return slideformat.Look{}, nil, nil, fmt.Errorf("artifactupload: the adopted brand's "+
 			"snapshot does not read: %w", err)
 	}
-	theme := brandformat.SlideTheme(b)
+	b := adopted.Brand()
+	theme := brandformat.SlideTheme(adopted)
 	look := slideformat.Look{Theme: theme, LogoAlt: b.Name}
 	held := map[string]artifactsdomain.BrandFile{}
 	for _, f := range a.Files {
@@ -312,7 +314,7 @@ func FaceFile(b brandformat.Brand, face brandformat.Slot) (brandformat.Slot, boo
 	}
 	weight := regularWeight
 	if face == brandformat.SlotFontHeading {
-		weight = brandformat.SlideTheme(b).DisplayWeight
+		weight = brandformat.SlideHeadingWeight
 	}
 	return brandformat.FontFileSlot(face, nearestRegular(f.Files, weight)), true
 }

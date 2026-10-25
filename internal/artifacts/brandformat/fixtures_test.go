@@ -200,3 +200,13 @@ func names(findings []brandformat.Finding, rule brandformat.Rule, want string) b
 	}
 	return false
 }
+
+// adoptable is b as an adoptable brand, failing a brand that is not.
+func adoptable(t testing.TB, b brandformat.Brand) brandformat.Adoptable {
+	t.Helper()
+	a, ok := brandformat.AsAdoptable(b)
+	if !ok {
+		t.Fatalf("the fixture brand leaves out %v, which an adopted brand holds", brandformat.MissingToAdopt(b))
+	}
+	return a
+}

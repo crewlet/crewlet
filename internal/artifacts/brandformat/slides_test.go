@@ -27,15 +27,19 @@ func TestTheBrandsSlideThemeIsInsideTheSlideFormat(t *testing.T) {
 			}
 			return b
 		}(),
-		"defaults": {Name: "Plain", Colors: brandformat.Colors{Primary: "#ffd400"},
+		"defaults": {Name: "Plain", Logos: brandformat.Logos{Primary: "l.svg"},
+			Colors: brandformat.Colors{Primary: "#ffd400"},
 			Type: brandformat.Type{Heading: brandformat.Face{Stack: "system-serif"},
 				Body: brandformat.Face{Stack: "system-mono"}}},
-		"pale dark ground": {Name: "Pale", Colors: brandformat.Colors{Primary: "#2450e6", DarkGround: "#dddddd"},
-			Type: brandformat.Type{Heading: brandformat.Face{Kit: "geist-mono"}, Body: brandformat.Face{Kit: "geist"}}},
+		"unset faces": {Name: "Unset", Logos: brandformat.Logos{Primary: "l.svg"},
+			Colors: brandformat.Colors{Primary: "#2450e6"}},
+		"pale dark ground": {Name: "Pale", Logos: brandformat.Logos{Primary: "l.svg"},
+			Colors: brandformat.Colors{Primary: "#2450e6", DarkGround: "#dddddd"},
+			Type:   brandformat.Type{Heading: brandformat.Face{Kit: "geist-mono"}, Body: brandformat.Face{Kit: "geist"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			th := brandformat.SlideTheme(b)
+			th := brandformat.SlideTheme(adoptable(t, b))
 			if th.ID != slideformat.BrandTheme || th.Name != b.Name || th.Tag == "" {
 				t.Errorf("the theme is named %q %q %q", th.ID, th.Name, th.Tag)
 			}

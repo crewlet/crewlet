@@ -49,11 +49,13 @@ type ServedFile struct {
 // an artifact's origin: `/_crewlet/brand/<sha256>.<ext>`.
 const BrandRoute = "/_crewlet/brand/"
 
-// CSS is the stylesheet a brand generates, its files named by slot (the logos
-// by [SlotLogoPrimary], [SlotLogoOnDark] and [SlotLogoMark], each file of a
-// face by [FontFileSlot]). An adoption passes every file the kit serves; a
-// slot missing from files writes no declaration for that file.
-func CSS(b Brand, files map[Slot]ServedFile) []byte {
+// CSS is the stylesheet an adoptable brand generates, its files named by slot
+// (the logos by [SlotLogoPrimary], [SlotLogoOnDark] and [SlotLogoMark], each
+// file of a face by [FontFileSlot]). An adoption passes every file the kit
+// serves; a slot missing from files writes no declaration for that file. An
+// unset face writes no family, and the kit's own face is drawn.
+func CSS(a Adoptable, files map[Slot]ServedFile) []byte {
+	b := a.brand
 	var root []string
 	decl := func(name, value string) { root = append(root, "  "+name+": "+value+";") }
 	for _, c := range []struct{ name, value string }{

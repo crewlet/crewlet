@@ -97,6 +97,12 @@ var (
 	// that refuses rather than warns.
 	ErrBrandContrast = errors.New("artifactsdomain: the brand's text colour " +
 		"does not contrast enough with its light ground to be read")
+
+	// ErrBrandIncomplete reports an adoption of a brand that leaves out a
+	// field an adopted brand holds (brandformat.AdoptionFields), which a
+	// draft may.
+	ErrBrandIncomplete = errors.New("artifactsdomain: the brand leaves out a field an " +
+		"adopted brand holds")
 )
 
 // FolderAmbiguous is a folder path that names more than one folder the caller

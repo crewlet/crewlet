@@ -138,24 +138,50 @@ func (e *BrandContrast) Error() string {
 // Unwrap is the sentinel the estate and the API branch on.
 func (e *BrandContrast) Unwrap() error { return ErrBrandContrast }
 
-// CheckBrandContrast is the adoption's contrast rule, the one implementation
-// the upload pipeline asks before it stores a byte and the writer asks again
-// before it appends: the first pair [brandformat.ContrastPairs] marks as
-// refusing that does not reach its floor.
-func CheckBrandContrast(b brandformat.Brand) error {
+// BrandIncomplete is an adoption refused because the brand leaves out a field
+// an adopted brand holds (brandformat.AdoptionFields): a draft saved step by
+// step publishes with its name alone, and is adopted only once it holds a
+// logo and a colour. 422 `policy_refused`, a finding naming each missing
+// field. It is [ErrBrandIncomplete].
+type BrandIncomplete struct {
+	// Missing are the fields left out, in brandformat.AdoptionFields' order.
+	Missing []string `json:"missing"`
+}
+
+func (e *BrandIncomplete) Error() string {
+	return fmt.Sprintf("artifactsdomain: the brand leaves out %s, which an adopted brand holds: "+
+		"add them to the kit and adopt the version that holds them", strings.Join(e.Missing, " and "))
+}
+
+// Unwrap is the sentinel the estate and the API branch on.
+func (e *BrandIncomplete) Unwrap() error { return ErrBrandIncomplete }
+
+// CheckBrandAdoptable is the adoption's rule, the one implementation the
+// upload pipeline asks before it stores a byte and the writer asks again
+// before it appends: every field an adopted brand holds is present
+// (*[BrandIncomplete] naming the rest), then the first pair
+// brandformat.ContrastPairs marks as refusing reaches its floor
+// (*[BrandContrast]). It answers the brand as the adoptable brand the
+// stylesheet is generated from.
+func CheckBrandAdoptable(b brandformat.Brand) (brandformat.Adoptable, error) {
+	a, ok := brandformat.AsAdoptable(b)
+	if !ok {
+		return brandformat.Adoptable{}, &BrandIncomplete{Missing: brandformat.MissingToAdopt(b)}
+	}
 	for _, r := range brandformat.Contrast(b) {
 		if r.Refuses && !r.Passes() {
-			return &BrandContrast{Pair: r}
+			return brandformat.Adoptable{}, &BrandContrast{Pair: r}
 		}
 	}
-	return nil
+	return a, nil
 }
 
 // ---- the writer's brand operations ---------------------------------------- //
 
 // AdoptBrand adopts one version of a kit as the company's brand. An adoption
-// whose text colour does not reach brandformat.MinTextContrast on its light
-// ground is a *[BrandContrast]; a kit or version the log no longer holds is
+// of a brand that leaves out its logo or its colour is a *[BrandIncomplete],
+// one whose text colour does not reach brandformat.MinTextContrast on its
+// light ground a *[BrandContrast]; a kit or version the log no longer holds is
 // ErrNotFound (ErrPurged for a purged kit), a kit in the trash ErrTrashed.
 //
 // THE KIT'S VERSION IS NAMED IN THE SCOPE (its artifact's term), so the apply
@@ -237,7 +263,7 @@ func checkAdoption(in BrandAdoptInput, at time.Time) error {
 		return fmt.Errorf("%w: the kit's brand.json is not in its canonical form "+
 			"(brandformat.Canonical), which is what an adoption snapshots", ErrInvalid)
 	}
-	if err := CheckBrandContrast(b); err != nil {
+	if _, err := CheckBrandAdoptable(b); err != nil {
 		return err
 	}
 	want := brandSlots(b)

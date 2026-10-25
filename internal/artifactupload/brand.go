@@ -149,7 +149,8 @@ func (s *Service) AdoptBrand(ctx context.Context, c artifactsdomain.Call, kit ar
 	if err != nil {
 		return artifactsdomain.Written{}, err
 	}
-	if refusal := artifactsdomain.CheckBrandContrast(k.Brand); refusal != nil {
+	adoptable, refusal := artifactsdomain.CheckBrandAdoptable(k.Brand)
+	if refusal != nil {
 		return artifactsdomain.Written{}, refusal
 	}
 	canonical, err := brandformat.Canonical(k.Brand)
@@ -168,7 +169,7 @@ func (s *Service) AdoptBrand(ctx context.Context, c artifactsdomain.Call, kit ar
 	if done, ok := r.answered(); ok {
 		return artifactsdomain.Written{Result: done.Published.Result}, nil
 	}
-	paths, err := r.copyBrand(k)
+	paths, err := r.copyBrand(k, adoptable)
 	if err != nil {
 		return artifactsdomain.Written{}, r.fail(ctx, err)
 	}
@@ -204,7 +205,7 @@ func (s *Service) AdoptBrand(ctx context.Context, c artifactsdomain.Call, kit ar
 // THE COPY IS THE STORED FORM THE KIT WAS READ WITH (brandformat.KitFile's
 // Stored): sanitised by this build's rules in the one read brandformat.ReadKit
 // made, never read and sanitised a second time.
-func (r *run) copyBrand(k brandformat.Kit) ([]string, error) {
+func (r *run) copyBrand(k brandformat.Kit, a brandformat.Adoptable) ([]string, error) {
 	served := make(map[brandformat.Slot]brandformat.ServedFile, len(k.Files))
 	paths := []string{brandStylesheet}
 	for _, kf := range k.Files {
@@ -222,7 +223,7 @@ func (r *run) copyBrand(k brandformat.Kit) ([]string, error) {
 		served[kf.Slot] = brandformat.ServedFile{Hash: objstore.HashOf(out), Essence: kf.Essence,
 			Ratio: kf.Ratio}
 	}
-	css := brandformat.CSS(k.Brand, served)
+	css := brandformat.CSS(a, served)
 	if len(css) == 0 || len(css) > artifactsdomain.MaxBrandCSSBytes {
 		return nil, fmt.Errorf("artifactupload: the brand stylesheet generated for the kit is %d "+
 			"bytes, outside 1 to %d", len(css), artifactsdomain.MaxBrandCSSBytes)
