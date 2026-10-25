@@ -13,15 +13,49 @@ import (
 
 const module = "github.com/crewlet/crewlet"
 
-// neverImported are the packages no file under internal/assistant may import
-// itself: the database, every domain's state and writer but the assistant's
-// own, and every surface that decides or reaches product data some other way
-// than a request through the handler chain.
+// neverImported are the package trees no file under internal/assistant may
+// import itself, each root and every package below it: the database, every
+// domain's state and writer but the assistant's own, and the fleet's sealed
+// credentials. DIRECT imports only, because the assistant's own domain
+// (internal/assistantdomain) is the one sanctioned way to its conversations
+// and imports the database itself.
 var neverImported = []string{
 	"internal/store",
 	"internal/statelog",
 	"internal/fleetsecrets",
 }
+
+// importedAnyway are the packages under a [neverImported] root the assistant
+// may import, each with why it is no way into the database. Every one is held
+// to reaching nothing in the module at all, so the reason stays true.
+var importedAnyway = map[string]string{
+	"internal/statelog/metrics": "the engine's instrument catalogue and its one " +
+		"recorder: names, units and an atomic add, which open no database, read " +
+		"no record and write nothing",
+}
+
+// within reports whether pkg is root or a package below it.
+func within(pkg, root string) bool {
+	return pkg == root || strings.HasPrefix(pkg, root+"/")
+}
+
+// underAny is the first of roots pkg is within, or "".
+func underAny(pkg string, roots []string) string {
+	for _, root := range roots {
+		if within(pkg, root) {
+			return root
+		}
+	}
+	return ""
+}
+
+// allFiles reads a package's imports from every file, whatever GOOS or tag it
+// is built for, so a file built for another platform is walked too.
+var allFiles = func() build.Context {
+	c := build.Default
+	c.UseAllFiles = true
+	return c
+}()
 
 // neverReached are the packages no package under internal/assistant may reach
 // at any depth: each is a way into the company that skips the guard, the
@@ -63,9 +97,10 @@ var neverReached = []string{
 // is structural only while no package on the assistant's side can reach
 // product data, a seat's authority or the grant's token any other way, so this
 // walks every package under internal/assistant and everything it imports, to
-// any depth, and fails on the first path into one. Mutation: import
-// internal/api/auth (or anything that does) from any assistant package and
-// this names the path.
+// any depth, and fails on the first path into one, a package below a banned
+// root included. Mutation: import internal/api/auth (or anything that does)
+// from any assistant package, or internal/store/storetest from one, and this
+// names the path.
 func TestTheAssistantImportsNoWriterAndNoSeat(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -75,7 +110,7 @@ func TestTheAssistantImportsNoWriterAndNoSeat(t *testing.T) {
 			if err != nil || !d.IsDir() || d.Name() == "testdata" {
 				return err
 			}
-			if pkg, err := build.ImportDir(path, 0); err == nil && len(pkg.GoFiles) > 0 {
+			if pkg, err := allFiles.ImportDir(path, 0); err == nil && len(pkg.GoFiles) > 0 {
 				rel, _ := filepath.Rel(root, path)
 				packages = append(packages, filepath.ToSlash(rel))
 			}
@@ -93,12 +128,21 @@ func TestTheAssistantImportsNoWriterAndNoSeat(t *testing.T) {
 	}
 
 	imports := importer{root: root, seen: map[string][]string{}}
+	for allowed := range importedAnyway {
+		if direct := imports.of(t, allowed); len(direct) > 0 {
+			t.Errorf("%s is imported by the assistant because it reaches nothing in "+
+				"the module, and it now imports %v", allowed, direct)
+		}
+	}
 	for _, pkg := range packages {
-		direct := imports.of(t, pkg)
-		for _, banned := range neverImported {
-			if slices.Contains(direct, banned) {
-				t.Errorf("%s imports %s: the assistant reaches its own conversations "+
-					"through internal/assistantdomain and nothing else", pkg, banned)
+		for _, imported := range imports.of(t, pkg) {
+			if _, allowed := importedAnyway[imported]; allowed {
+				continue
+			}
+			if root := underAny(imported, neverImported); root != "" {
+				t.Errorf("%s imports %s, under %s: the assistant reaches its own "+
+					"conversations through internal/assistantdomain and nothing else",
+					pkg, imported, root)
 			}
 		}
 		if path := imports.reaches(t, pkg, neverReached, nil); path != nil {
@@ -110,7 +154,7 @@ func TestTheAssistantImportsNoWriterAndNoSeat(t *testing.T) {
 
 // hasGo reports whether dir holds a non-test Go file of its own.
 func hasGo(dir string) bool {
-	pkg, err := build.ImportDir(dir, 0)
+	pkg, err := allFiles.ImportDir(dir, 0)
 	return err == nil && len(pkg.GoFiles) > 0
 }
 
@@ -126,7 +170,7 @@ func (im importer) of(t *testing.T, pkg string) []string {
 	if got, ok := im.seen[pkg]; ok {
 		return got
 	}
-	p, err := build.ImportDir(filepath.Join(im.root, filepath.FromSlash(pkg)), 0)
+	p, err := allFiles.ImportDir(filepath.Join(im.root, filepath.FromSlash(pkg)), 0)
 	if err != nil {
 		t.Fatalf("read %s: %v", pkg, err)
 	}
@@ -140,12 +184,12 @@ func (im importer) of(t *testing.T, pkg string) []string {
 	return out
 }
 
-// reaches is the import path from pkg to the first of targets it reaches, or
-// nil.
+// reaches is the import path from pkg to the first package within one of
+// targets' trees it reaches, at any depth inside the module, or nil.
 func (im importer) reaches(t *testing.T, pkg string, targets []string, path []string) []string {
 	t.Helper()
 	path = append(slices.Clone(path), pkg)
-	if slices.Contains(targets, pkg) && len(path) > 1 {
+	if underAny(pkg, targets) != "" && len(path) > 1 {
 		return path
 	}
 	if slices.Contains(path[:len(path)-1], pkg) {
