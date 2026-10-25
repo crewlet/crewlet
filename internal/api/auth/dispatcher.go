@@ -136,6 +136,14 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 		}
 		req.Header.Set("If-Match", r.IfMatch)
 	}
+	if r.IfNoneMatch != "" {
+		if r.IfNoneMatch != exec.AnyRepresentation || r.IfMatch != "" {
+			return exec.Response{}, fmt.Errorf("auth: an assistant call's If-None-Match %q "+
+				"is not the create-only %q, or rides beside an If-Match", r.IfNoneMatch,
+				exec.AnyRepresentation)
+		}
+		req.Header.Set("If-None-Match", r.IfNoneMatch)
+	}
 
 	out := newCapture()
 	if err := serve(reqCtx, h, out, req); err != nil {

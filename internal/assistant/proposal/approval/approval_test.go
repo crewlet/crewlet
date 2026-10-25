@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -666,5 +667,77 @@ func TestASettlementIsBounded(t *testing.T) {
 			t.Errorf("%s ran with deadline %v, want one within %v of the approval",
 				name, bound, approval.SettleTimeout)
 		}
+	}
+}
+
+// A CREATE THAT RACED AN EXISTING RESOURCE IS SHOWN AS WHAT IT LOST TO.
+//
+// The approved create is sent under the `If-None-Match: *` its revision names,
+// and somebody filled the path between the approval's re-read and the write:
+// the route answers `412 entity_exists`, about a header the person never saw.
+// The proposal fails in the proposal's own terms (something was created there
+// since; nothing changed) under the stale code, and the turn is told. An edit
+// under an If-Match that the route answers 412 reads the same way, and a 412
+// to a write that carried no precondition stays the route's own words.
+// Mutation: hand the route's refusal over as it came, or send the create with
+// no If-None-Match, and a case here fails.
+func TestARacedCreateIsRefusedAsStale(t *testing.T) {
+	t.Parallel()
+	exists, _ := json.Marshal(map[string]any{"error": "entity_exists",
+		"message": "An entity by that name already exists.",
+		"hint":    "If-None-Match: * asked for mcp-servers/linear to be added"})
+	for name, c := range map[string]struct {
+		revision   string
+		code, hint string
+	}{
+		"a create": {revision: proposal.Revision{Kind: proposal.RevisionCreate,
+			ID: "/config/mcp-servers/linear", Version: proposal.VersionAbsent}.String(),
+			code: approval.CodeStale},
+		"an edit": {revision: proposal.Revision{Kind: proposal.RevisionEntity,
+			ID: "/config/mcp-servers/linear", Version: "rev-3"}.String(),
+			code: approval.CodeStale},
+		"an unconditional write": {revision: "", code: "entity_exists",
+			hint: "If-None-Match: * asked for mcp-servers/linear to be added"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := approvaltest.NewFleet()
+			f.API.AnswerNext(exec.Response{Status: http.StatusPreconditionFailed, Body: exists})
+			ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+			p := f.Propose(t, ada, func(d *proposal.Draft) {
+				d.Tool, d.Act = "propose_api_change", "config.org.write"
+				d.Preview.SourceRevision = c.revision
+				d.Preview.Request = exec.Request{Method: http.MethodPut,
+					Path: "/config/mcp-servers/linear", Body: []byte(`{"name":"linear"}`)}
+			})
+			got, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada), approvaltest.Approve(p))
+			if err != nil || got.Proposal.State != wire.ProposalFailed {
+				t.Fatalf("the raced write answered %v, %v", got.Proposal.State, err)
+			}
+			sent := f.API.Sent()
+			want := proposal.RequestOf(p)
+			if len(sent) != 1 || sent[0].IfMatch != want.IfMatch ||
+				sent[0].IfNoneMatch != want.IfNoneMatch || sent[0].Path != want.Path {
+				t.Fatalf("sent %+v, want the proposal's own request %+v", sent, want)
+			}
+			if c.revision != "" && sent[0].IfMatch == "" && sent[0].IfNoneMatch == "" {
+				t.Errorf("the conditional write was sent with no precondition: %+v", sent[0])
+			}
+			r := f.Turns.Resumed()
+			if len(r) != 1 || r[0].Failure == nil || r[0].Failure.Refusal.Code != c.code ||
+				r[0].Failure.Refusal.Message == "" {
+				t.Fatalf("the turn was handed %+v, want code %s", r, c.code)
+			}
+			refusal := r[0].Failure.Refusal
+			if c.hint != refusal.Hint && c.hint != "" {
+				t.Errorf("the unconditional refusal's hint is %q, want the route's", refusal.Hint)
+			}
+			if c.code == approval.CodeStale && (strings.Contains(refusal.Message, "If-") ||
+				strings.Contains(refusal.Hint, "If-") || !strings.Contains(refusal.Message,
+				"Nothing changed")) {
+				t.Errorf("the stale write reads %q / %q, not in the proposal's terms",
+					refusal.Message, refusal.Hint)
+			}
+		})
 	}
 }

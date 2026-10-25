@@ -368,3 +368,70 @@ func TestAHumanOnlyGestureIsRefusedInThePersonsWords(t *testing.T) {
 		t.Errorf("a body past the cap was built: %v", err)
 	}
 }
+
+// A GENERIC CHANGE TO NOTHING IS A CREATE OR NO CARD AT ALL.
+//
+// The preview's own read decides the precondition. A PUT whose read answers
+// 404 is a create: bound to that absence, every field drawn as added, and sent
+// under `If-None-Match: *`, the API's one spelling of "add this", never under
+// an If-Match. Its approval re-reads the path, and a path somebody filled since
+// has moved. A PATCH of nothing, and a change whose read is refused, cannot
+// apply: no preview is made, and the refusal is the route's own, for the step
+// and the model. Mutation: draw the 404 as an edit with no precondition (the
+// shape that sent a role's create as a plain PUT, refused 404 after the person
+// approved it), or preview a PATCH of nothing, and a case here fails.
+func TestAGenericChangeToNothingIsACreateOrNoCard(t *testing.T) {
+	t.Parallel()
+	_, _, change := generic(t, admin)
+	nothing := resource("/elsewhere", "", nil)
+	unit := map[string]any{"id": "research", "name": "Research"}
+	p, err := change.Preview(t.Context(), nothing, wednesday, map[string]any{
+		"route": "PUT /config/units/{id}", "path": map[string]any{"id": "research"},
+		"body": unit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := proposal.Revision{Kind: proposal.RevisionCreate, ID: "/config/units/research",
+		Version: proposal.VersionAbsent}.String()
+	if p.SourceRevision != want || p.Title != "Create through the API" {
+		t.Errorf("the create is %q bound to %q, want a create bound to %q", p.Title,
+			p.SourceRevision, want)
+	}
+	got := rows(p)
+	for _, field := range []string{"id", "name"} {
+		if got[field].Kind != wire.ChangeAdded || got[field].From != "" {
+			t.Errorf("row %s is %+v, want it added", field, got[field])
+		}
+	}
+	req := proposal.RequestOf(proposalOf(p))
+	if req.IfNoneMatch != exec.AnyRepresentation || req.IfMatch != "" {
+		t.Errorf("the create would be sent under If-Match %q and If-None-Match %q",
+			req.IfMatch, req.IfNoneMatch)
+	}
+	if now, err := catalog.Revision(t.Context(), nothing, p.SourceRevision); err != nil ||
+		now != p.SourceRevision {
+		t.Errorf("a path still empty re-read as %q (%v), want the create's own", now, err)
+	}
+	filled := resource("/config/units/research", `"rev-9"`, unit)
+	if now, err := catalog.Revision(t.Context(), filled, p.SourceRevision); err != nil ||
+		now == p.SourceRevision {
+		t.Errorf("a path filled since re-read as %q (%v), the create's own", now, err)
+	}
+
+	// A PATCH OF NOTHING, and a read the route refuses: no card.
+	for name, read := range map[string]proposal.Read{
+		"nothing to patch": nothing,
+		"refused": func(context.Context, exec.Request) (exec.Response, error) {
+			return exec.Response{Status: http.StatusForbidden,
+				Body: []byte(`{"error":"forbidden","message":"Not yours."}`)}, nil
+		},
+	} {
+		_, err := change.Preview(t.Context(), read, wednesday, map[string]any{
+			"route": "PATCH /config", "body": map[string]any{"name": "Acme"}})
+		var refused *catalog.PreviewRefusal
+		if !errors.As(err, &refused) || !errors.Is(err, catalog.ErrPreviewRead) ||
+			refused.Refusal.Code == "" {
+			t.Errorf("%s: the preview answered %v, want the route's refusal", name, err)
+		}
+	}
+}

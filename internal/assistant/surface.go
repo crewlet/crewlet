@@ -242,10 +242,37 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		return toolloop.ToolResult{Output: "Proposed; the person decides whether to " +
 			"approve it. Nothing has changed yet.", Suspend: true}, nil
 	}
+	return s.unprepared(ctx, step, tool, err)
+}
+
+// unprepared ends a write's step whose change could not be prepared: NO CARD,
+// because nothing was proposed, and the reason on the step and in the model's
+// result, so the model can read why and prepare a change that can apply. A
+// card drawn for it would read as a proposal the engine rejected, when the
+// change never reached the person at all.
+//
+// The route's own refusal of the preview's read ([catalog.PreviewRefusal]: a
+// 403, a 404 under a PATCH or a DELETE) is the step's refusal in the route's
+// words; a call refused as written is the step's refusal as
+// `invalid_input`; a read that could not be had (a body over a step's read,
+// no JSON) is a failed step naming why. Only a failure of the engine's own
+// (the proposal's record) is logged and told to the person as a failure.
+func (s *surface) unprepared(ctx context.Context, step stepClock, tool catalog.Tool,
+	err error) (toolloop.ToolResult, error) {
+
+	var refused *catalog.PreviewRefusal
 	switch {
 	case ctx.Err() != nil:
 		s.t.stepEnd(ctx, step, wire.StepStopped, "Stopped", nil, 0, 0)
 		return toolloop.ToolResult{}, context.Cause(ctx)
+	case errors.As(err, &refused):
+		refusal := refused.Refusal
+		refusal.Message = redact.Secrets(refusal.Message)
+		refusal.Hint = redact.Secrets(refusal.Hint)
+		s.t.stepEnd(ctx, step, wire.StepRefused, "Not proposed", &refusal, refused.Status, 0)
+		return failed(routeClass(refused.Status, refusal.Code),
+			"The change could not be prepared, so nothing was proposed: "+
+				refusalSentence(refusal)), nil
 	case errors.Is(err, proposal.ErrInvalid), errors.Is(err, proposal.ErrTooLarge),
 		errors.Is(err, catalog.ErrInvalidArguments):
 		message := redact.Secrets(err.Error())
@@ -253,12 +280,32 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 			Code: codeInvalidInput, Message: message}, 0, 0)
 		return failed(mcp.Classify(mcp.RefusalInvalid, err),
 			"The change could not be prepared: "+message), nil
+	case errors.Is(err, catalog.ErrPreviewRead):
+		message := redact.Secrets(err.Error())
+		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be prepared", &wire.Refusal{
+			Code: codePreviewUnreadable, Message: message}, 0, 0)
+		return failed(mcp.Classify(mcp.RefusalUnavailable, err),
+			"The change could not be prepared, so nothing was proposed: "+message), nil
 	}
 	s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be prepared", nil, 0, 0)
 	s.t.svc.log.ErrorContext(ctx, "assistant_proposal_failed", "turn", s.t.id,
 		"tool", tool.Name, "error", redact.Secrets(err.Error()))
 	return failed(mcp.Classify(mcp.RefusalInternalError, err),
 		"The change could not be prepared. Tell the person it failed."), nil
+}
+
+// codePreviewUnreadable is the refusal a step shows for a change whose
+// preview could not read the object it changes.
+const codePreviewUnreadable = "preview_unreadable"
+
+// refusalSentence is a route's refusal as the model reads it: its words, its
+// code and the hint that says what to do instead.
+func refusalSentence(r wire.Refusal) string {
+	out := r.Message + " (" + r.Code + ")."
+	if r.Hint != "" {
+		out += " " + r.Hint
+	}
+	return out
 }
 
 // applyAtOnce hands a `confirm: none` page action (a pure view change, D11)

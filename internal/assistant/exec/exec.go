@@ -71,7 +71,17 @@ type Request struct {
 	// proposal's source revision, which the proposal's digest binds, so the
 	// precondition the route judges is the version the person was shown.
 	IfMatch string
+	// IfNoneMatch is [AnyRepresentation] for a write that creates what its
+	// path names (the `If-None-Match: *` header, RFC 9110 §13.1.2: "only if
+	// there is no current representation"), and empty otherwise. Derived
+	// the way IfMatch is, from the proposal's source revision, and never
+	// beside it: the two describe two different resources.
+	IfNoneMatch string
 }
+
+// AnyRepresentation is the one If-None-Match value a write here carries: `*`,
+// the create-only precondition.
+const AnyRepresentation = "*"
 
 // ValidEntityTag reports whether tag is one strong entity tag as RFC 9110
 // spells it: a quoted string of visible characters with no quote inside, the

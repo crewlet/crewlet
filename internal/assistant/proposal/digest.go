@@ -124,18 +124,20 @@ func FieldsOf(p assistantdomain.Proposal) Fields {
 }
 
 // RequestOf is the request a stored proposal sends, under its own operation key
-// and, for a proposal bound to an entity-tagged revision, under that revision
-// as its If-Match ([Revision.EntityTag]).
+// and the precondition its source revision names ([Revision.Precondition]):
+// an entity-tagged revision's tag as its If-Match, a create's
+// `If-None-Match: *`.
 //
 // THE PRECONDITION IS DERIVED, NEVER STORED BESIDE IT: the source revision is
-// a field the proposal's digest binds, so the If-Match an approval sends is
-// the version the person was shown, and a row whose revision was changed
-// fails [Verify] before anything is sent.
+// a field the proposal's digest binds, so the precondition an approval sends
+// is the one the person was shown (an edit of the version they saw, or a
+// create of what they saw absent), and a row whose revision was changed fails
+// [Verify] before anything is sent.
 func RequestOf(p assistantdomain.Proposal) exec.Request {
 	req := exec.Request{Method: p.Method, Path: p.Path, Query: p.Query, Body: p.Body,
 		IdempotencyKey: p.OpKey}
 	if r, err := ParseRevision(p.SourceRevision); err == nil {
-		req.IfMatch, _ = r.EntityTag()
+		req.IfMatch, req.IfNoneMatch = r.Precondition()
 	}
 	return req
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 )
 
 // RevisionKind is what a source revision is a revision of.
@@ -35,11 +37,27 @@ const (
 	// a top-level field: by its path, at `<field>=<value>`. The approval
 	// reads the field again, and a moved value is a stale proposal.
 	RevisionResource RevisionKind = "resource"
+	// RevisionCreate is a resource a generic API change creates: by the path
+	// its preview read answered 404 at, at [VersionAbsent]. The approved
+	// write is sent under `If-None-Match: *`, so the route refuses it once
+	// something holds the path, and the approval's re-read answers
+	// [VersionPresent] for a path somebody filled since the preview.
+	RevisionCreate RevisionKind = "create"
 )
 
-// RevisionKinds are the seven, in declaration order.
+// The two versions a [RevisionCreate] is at.
+const (
+	// VersionAbsent is nothing at the path: what the preview read, and what
+	// the approval's re-read must still find.
+	VersionAbsent = "absent"
+	// VersionPresent is something at the path, which a create bound to its
+	// absence has lost to.
+	VersionPresent = "present"
+)
+
+// RevisionKinds are the eight, in declaration order.
 var RevisionKinds = []RevisionKind{RevisionTask, RevisionPage, RevisionArtifact, RevisionPerson,
-	RevisionCharter, RevisionEntity, RevisionResource}
+	RevisionCharter, RevisionEntity, RevisionResource, RevisionCreate}
 
 // CharterID is the one charter's id in a revision: a company has one.
 const CharterID = "company"
@@ -60,18 +78,33 @@ type Revision struct {
 // String is the revision's spelling.
 func (r Revision) String() string { return string(r.Kind) + ":" + r.ID + "@" + r.Version }
 
-// EntityTag is the If-Match a write bound to r is sent under, quoted, and
-// whether r carries one: a charter's and an entity's version is the entity tag
-// its route judges a write against, so the route refuses a change made in the
-// moments between the approval's re-read and the write, which the re-read
-// alone cannot. Every other kind's precondition travels in the write's own
-// arguments (a task's if_match, a page's base_version), or is the re-read's
-// alone (a resource's version field).
-func (r Revision) EntityTag() (string, bool) {
-	if (r.Kind != RevisionCharter && r.Kind != RevisionEntity) || r.Version == "" {
-		return "", false
+// Precondition is the conditional request a write bound to r is sent under:
+// THE ONE RULE from what a preview read to the headers the route judges.
+//
+//   - A charter's and an entity's version is the strong entity tag their read
+//     answered, so the write carries it as If-Match, quoted, and the route
+//     refuses a change made in the moments between the approval's re-read and
+//     the write, which the re-read alone cannot.
+//   - A create's is the absence its read found, so the write carries
+//     `If-None-Match: *` ([exec.AnyRepresentation]), and the route refuses it
+//     once something holds the path (`412 entity_exists` at a `/config`
+//     entity), rather than replacing what another write put there.
+//   - Every other kind's precondition travels in the write's own arguments (a
+//     task's if_match, a page's base_version), or is the re-read's alone (a
+//     resource's version field), and the request carries none.
+//
+// Never both: at an address with no representation the two describe two
+// different resources (the API's `conflicting_preconditions`).
+func (r Revision) Precondition() (ifMatch, ifNoneMatch string) {
+	switch {
+	case r.Version == "":
+		return "", ""
+	case r.Kind == RevisionCharter || r.Kind == RevisionEntity:
+		return `"` + r.Version + `"`, ""
+	case r.Kind == RevisionCreate && r.Version == VersionAbsent:
+		return "", exec.AnyRepresentation
 	}
-	return `"` + r.Version + `"`, true
+	return "", ""
 }
 
 // ParseRevision reads a revision back, refusing a spelling [Revision.String]

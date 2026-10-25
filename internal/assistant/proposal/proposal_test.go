@@ -468,3 +468,58 @@ func TestACharterWriteIsSentUnderTheRevisionItWasShown(t *testing.T) {
 		}
 	}
 }
+
+// THE PRECONDITION IS THE REVISION'S, BY ONE RULE, AND THE DIGEST BINDS IT.
+//
+// An entity's or the charter's revision is its If-Match; a create's is
+// `If-None-Match: *`, never beside an If-Match; every other kind's request
+// carries none, its precondition travelling in its arguments or its re-read.
+// A row whose revision was changed after the person was shown it (the create
+// turned into an unconditional write) fails Verify, so the precondition cannot
+// be stripped from an approved write. Mutation: derive the create's header
+// anywhere but [proposal.Revision.Precondition], or drop the source revision
+// from the digest, and a case here fails.
+func TestAWritesPreconditionIsItsRevisions(t *testing.T) {
+	t.Parallel()
+	for revision, want := range map[proposal.Revision][2]string{
+		{Kind: proposal.RevisionEntity, ID: "/config/units/a", Version: "rev-3"}: {`"rev-3"`, ""},
+		{Kind: proposal.RevisionCharter, ID: proposal.CharterID, Version: "c-1"}: {`"c-1"`, ""},
+		{Kind: proposal.RevisionCreate, ID: "/config/mcp-servers/linear",
+			Version: proposal.VersionAbsent}: {"", exec.AnyRepresentation},
+		{Kind: proposal.RevisionCreate, ID: "/config/mcp-servers/linear",
+			Version: proposal.VersionPresent}: {"", ""},
+		{Kind: proposal.RevisionResource, ID: "/worklet/projects/ENG", Version: "version=4"}: {"", ""},
+		{Kind: proposal.RevisionTask, ID: "ENG-1", Version: "3"}:                             {"", ""},
+	} {
+		parsed, err := proposal.ParseRevision(revision.String())
+		if err != nil {
+			t.Fatalf("%s: %v", revision, err)
+		}
+		req := proposal.RequestOf(assistantdomain.Proposal{Method: "PUT", Path: "/x",
+			SourceRevision: parsed.String()})
+		if req.IfMatch != want[0] || req.IfNoneMatch != want[1] {
+			t.Errorf("%s is sent under If-Match %q and If-None-Match %q, want %q and %q",
+				revision, req.IfMatch, req.IfNoneMatch, want[0], want[1])
+		}
+	}
+
+	d := draft()
+	d.Preview.SourceRevision = proposal.Revision{Kind: proposal.RevisionCreate,
+		ID: d.Preview.Request.Path, Version: proposal.VersionAbsent}.String()
+	p, err := proposal.New(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := stored(d, p)
+	if err := proposal.Verify(row, p.Digest); err != nil {
+		t.Fatalf("the create as recorded does not verify: %v", err)
+	}
+	row.SourceRevision = ""
+	if err := proposal.Verify(row, p.Digest); !errors.Is(err, proposal.ErrDigestMismatch) {
+		t.Errorf("a create whose precondition was stripped verified: %v", err)
+	}
+	d.Preview.Request.IfNoneMatch = exec.AnyRepresentation
+	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrInvalid) {
+		t.Errorf("a preview that set its own If-None-Match was proposed: %v", err)
+	}
+}

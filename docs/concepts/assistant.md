@@ -107,7 +107,14 @@ model's description of it.
   sets otherwise). Ask again to get a fresh one.
 - If the record **changed since the preview** (someone else edited it), the
   approval is refused as stale and nothing is sent. The assistant can prepare
-  a new proposal against the current version.
+  a new proposal against the current version. A change that creates something
+  is held to the same rule: if something by that name appears before the
+  change lands, the change is refused rather than replacing it, and nothing
+  changes.
+- A change the engine can already tell will not apply (the record it edits
+  does not exist, or you may not read it) is never shown as a card. The step
+  says why, and the assistant is told the same reason, so it can prepare a
+  change that can apply.
 - Some changes ask you to **confirm your identity** first (a step-up), the
   same as making the change on its own screen would. Sharing an artifact with
   the whole company always does.

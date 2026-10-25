@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func (a *Approver) execute(ctx context.Context, d decider, p assistantdomain.Pro
 		resp, sendErr := a.d.Dispatcher.Do(sendCtx, grant, request)
 		cancel()
 		a.d.Grants.Revoke(grant.ID())
-		out = outcomeOf(p.Tool, resp, sendErr)
+		out = outcomeOf(p.Tool, request, resp, sendErr)
 	}
 	settleCtx, cancel := context.WithTimeout(ctx, SettleTimeout)
 	defer cancel()
@@ -145,12 +146,12 @@ type actAnswer struct {
 // be sent, a 5xx, or an answer cut short is UNKNOWN, offered a Retry under the
 // same operation key, because whether the write landed is exactly what nobody
 // can say.
-func outcomeOf(tool string, resp exec.Response, err error) outcome {
+func outcomeOf(tool string, request exec.Request, resp exec.Response, err error) outcome {
 	switch {
 	case err != nil, resp.Truncated, resp.Status >= 500, resp.Status == 0:
 		return outcome{state: wire.ProposalUnknown}
 	case resp.Status >= 400:
-		return refused(exec.RefusalOf(resp))
+		return refused(refusalOf(request, resp))
 	}
 	out := outcome{state: wire.ProposalApplied, outcome: "applied"}
 	summary := "Applied"
@@ -176,6 +177,34 @@ func outcomeOf(tool string, resp exec.Response, err error) outcome {
 		out.invalidate = &wire.Invalidate{Domain: stream, Position: out.position}
 	}
 	return out
+}
+
+// refusalOf is a refused write as the person and the model read it: the route's
+// own refusal, except where the route judged the precondition the proposal
+// itself carried ([proposal.Revision.Precondition]) and found it no longer
+// holds. That `412` is about the moments between the approval's re-read and
+// the write, so it says what happened in the proposal's terms (the record
+// changed, or what the change would have created now exists) rather than in
+// headers the person never saw, under [CodeStale], the code a proposal found
+// stale before it was sent carries. A `428` is a route that takes the change
+// only with the version it was based on, which the preview's read did not
+// answer.
+func refusalOf(request exec.Request, resp exec.Response) wire.Refusal {
+	route := exec.RefusalOf(resp)
+	switch {
+	case resp.Status == http.StatusPreconditionFailed && request.IfNoneMatch != "":
+		return wire.Refusal{Code: CodeStale, Message: "Something was created at " +
+			request.Path + " after this change was proposed, so it was not applied. " +
+			"Nothing changed.", Hint: "Read it again to see what is there now."}
+	case resp.Status == http.StatusPreconditionFailed && request.IfMatch != "":
+		return wire.Refusal{Code: CodeStale, Message: "The record changed after this " +
+			"change was proposed, so it was not applied. Nothing changed.",
+			Hint: "Read it again to see it as it is now."}
+	case resp.Status == http.StatusPreconditionRequired:
+		route.Message = "This change is taken only with the version it was based on, " +
+			"and the record's read answered none, so it was not applied. Nothing changed."
+	}
+	return route
 }
 
 // receiptSummary is an applied write's receipt in a line, naming the task it

@@ -34,6 +34,32 @@ var ErrStale = errors.New("catalog: the object changed since it was read")
 // the refusal is the route's own.
 var ErrPreviewRead = errors.New("catalog: the preview could not read the object")
 
+// PreviewRefusal is a preview whose change the route itself rules out: its read
+// refused (a 403, a 404 on an object the change edits or deletes), in the
+// route's own code and words. It is [ErrPreviewRead], and it is what the turn
+// shows on the step and hands the model as the step's refusal, so the model
+// can read why and prepare a change that can apply. No proposal is drawn for
+// it: a card the person approves only to watch fail is a change the server
+// already knew it could not make.
+type PreviewRefusal struct {
+	// Status is the read's answer.
+	Status int
+	// Refusal is the route's own, as [exec.RefusalOf] reads it.
+	Refusal wire.Refusal
+}
+
+func (e *PreviewRefusal) Error() string {
+	return fmt.Sprintf("%v: %s (%s)", ErrPreviewRead, e.Refusal.Message, e.Refusal.Code)
+}
+
+// Is makes a refusal [ErrPreviewRead].
+func (e *PreviewRefusal) Is(target error) bool { return target == ErrPreviewRead }
+
+// refusedRead is a read the route refused, as a [PreviewRefusal].
+func refusedRead(resp exec.Response) error {
+	return &PreviewRefusal{Status: resp.Status, Refusal: exec.RefusalOf(resp)}
+}
+
 // previews are each write tool's and the page action's preview, by tool.
 var previews = map[string]func(t Tool) proposal.Previewer{
 	"create_task":               createTaskPreview,
@@ -72,8 +98,7 @@ func readOne(ctx context.Context, read proposal.Read, req exec.Request) (any, er
 		return nil, fmt.Errorf("%w: %w", ErrPreviewRead, err)
 	}
 	if !cards.Permitted(resp.Status) {
-		r := exec.RefusalOf(resp)
-		return nil, fmt.Errorf("%w: %s (%s)", ErrPreviewRead, r.Message, r.Code)
+		return nil, refusedRead(resp)
 	}
 	if resp.Truncated {
 		return nil, fmt.Errorf("%w: the answer is larger than one step reads", ErrPreviewRead)
@@ -805,7 +830,7 @@ var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, 
 	case proposal.RevisionCharter:
 		// THE TAG IS A HEADER, not a field of the answer's body.
 		return principlesRevision(ctx, read)
-	case proposal.RevisionEntity, proposal.RevisionResource:
+	case proposal.RevisionEntity, proposal.RevisionResource, proposal.RevisionCreate:
 		// A GENERIC CHANGE'S RESOURCE, re-read at the path it was read at.
 		return apiRevision(ctx, read, r)
 	}

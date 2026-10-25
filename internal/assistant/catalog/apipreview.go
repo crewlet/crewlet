@@ -40,6 +40,12 @@ import (
 //     entity tag becomes the write's If-Match ([proposal.RevisionEntity]),
 //     and a representation stating its own version field is re-read by the
 //     approval ([proposal.RevisionResource]), so a stale proposal is refused.
+//     A PUT whose read found nothing is a create, bound to that absence
+//     ([proposal.RevisionCreate]) and sent under `If-None-Match: *`, every
+//     field drawn as added; a PATCH or a DELETE of nothing is refused before
+//     any card, in the read's own words ([PreviewRefusal]).
+//     [proposal.Revision.Precondition] is the one rule from the revision to
+//     the headers.
 //  6. The verb's own step-up is asked of the approver, shown on the card.
 
 // diffRows bounds how many field rows one card carries: past it, the rest is
@@ -76,12 +82,29 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	}
 
 	var before any
-	revision := ""
+	revision, creates := "", false
 	if req.Method != http.MethodPost {
 		if reader, ok := g.table.readerOf(req.Path); ok {
-			before, revision, err = readRepresentation(ctx, read, reader, req.Path)
-			if err != nil {
+			rep, err := readRepresentation(ctx, read, reader, req.Path)
+			switch {
+			case err != nil:
 				return proposal.Preview{}, err
+			case rep.absent != nil && req.Method == http.MethodPut:
+				// NOTHING IS THERE, SO THE PUT IS A CREATE, and says so:
+				// sent under `If-None-Match: *` ([proposal.RevisionCreate]),
+				// the API's one spelling of "add this", which a route that
+				// adds by address requires (a plain PUT never creates under
+				// `/config`) and which refuses the write once something holds
+				// the path rather than replacing it.
+				revision = proposal.Revision{Kind: proposal.RevisionCreate, ID: req.Path,
+					Version: proposal.VersionAbsent}.String()
+				creates = true
+			case rep.absent != nil:
+				// A PATCH OR A DELETE OF NOTHING cannot apply, so it is never
+				// a card: the read's own 404 is the step's refusal.
+				return proposal.Preview{}, rep.absent
+			default:
+				before, revision = rep.doc, rep.revision
 			}
 		}
 	}
@@ -122,7 +145,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	}
 	recency, _ := authz.RecencyOf(authz.Action(act))
 	return proposal.Preview{
-		Title:        titleOf(req.Method),
+		Title:        titleOf(req.Method, creates),
 		Target:       req.Path,
 		Note:         "This is sent to the engine's API exactly as shown, as you.",
 		ApproveLabel: "Approve and send",
@@ -140,12 +163,13 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 // ActPrefix is the act route's path ahead of the tool's name.
 const ActPrefix = "/operator/act/"
 
-// titleOf is a change's title, by its method.
-func titleOf(method string) string {
-	switch method {
-	case http.MethodPost:
+// titleOf is a change's title, by its method and whether it creates what its
+// path names.
+func titleOf(method string, creates bool) string {
+	switch {
+	case method == http.MethodPost || creates:
 		return "Create through the API"
-	case http.MethodDelete:
+	case method == http.MethodDelete:
 		return "Delete through the API"
 	}
 	return "Change through the API"
@@ -159,33 +183,43 @@ func shownPath(req exec.Request) string {
 	return req.Path + "?" + req.Query.Encode()
 }
 
-// readRepresentation reads path through the grant, and the revision the
-// proposal is bound to: the strong entity tag the read answered, or the
-// version the representation states, or none. A path the person cannot read
-// is refused in the route's own words; a path nothing holds yet is no
-// representation, which a PUT then creates.
+// representation is what a preview's read of the path it changes found.
+type representation struct {
+	// doc and revision are the representation and the revision the proposal
+	// is bound to ([revisionOf]), for a path that holds one.
+	doc      any
+	revision string
+	// absent is the read's 404, in the route's words, for a path nothing
+	// holds: what a PUT creates, and what a PATCH or a DELETE cannot apply to.
+	absent *PreviewRefusal
+}
+
+// readRepresentation reads path through the grant: the representation and the
+// revision the proposal is bound to (the strong entity tag the read answered,
+// or the version the representation states, or none), or its absence. A path
+// the person cannot read is refused in the route's own words ([PreviewRefusal]).
 func readRepresentation(ctx context.Context, read proposal.Read, reader Route,
-	path string) (any, string, error) {
+	path string) (representation, error) {
 
 	resp, err := read(ctx, exec.Request{Method: http.MethodGet, Path: path})
 	switch {
 	case err != nil:
-		return nil, "", fmt.Errorf("%w: %w", ErrPreviewRead, err)
+		return representation{}, fmt.Errorf("%w: %w", ErrPreviewRead, err)
 	case resp.Status == http.StatusNotFound:
-		return nil, "", nil
+		return representation{absent: &PreviewRefusal{Status: resp.Status,
+			Refusal: exec.RefusalOf(resp)}}, nil
 	case !cards.Permitted(resp.Status):
-		r := exec.RefusalOf(resp)
-		return nil, "", fmt.Errorf("%w: %s (%s)", ErrPreviewRead, r.Message, r.Code)
+		return representation{}, refusedRead(resp)
 	case resp.Truncated:
-		return nil, "", fmt.Errorf("%w: %s is larger than one step reads, so the change "+
-			"could not be shown against it", ErrPreviewRead, reader.Pattern)
+		return representation{}, fmt.Errorf("%w: %s is larger than one step reads, so the "+
+			"change could not be shown against it", ErrPreviewRead, reader.Pattern)
 	}
 	doc, err := cards.Decode(resp.Body)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %s answered no JSON: %w", ErrPreviewRead,
+		return representation{}, fmt.Errorf("%w: %s answered no JSON: %w", ErrPreviewRead,
 			reader.Pattern, err)
 	}
-	return doc, revisionOf(path, resp.Header.Get("ETag"), doc), nil
+	return representation{doc: doc, revision: revisionOf(path, resp.Header.Get("ETag"), doc)}, nil
 }
 
 // revisionOf is the revision a representation of path is at: its strong
@@ -208,17 +242,22 @@ func revisionOf(path, etag string, doc any) string {
 	return ""
 }
 
-// apiRevision re-reads a generic revision now, for [Revision].
+// apiRevision re-reads a generic revision now, for [Revision]. A create's is
+// still absent while nothing holds its path, and present once something does,
+// which is a create that lost.
 func apiRevision(ctx context.Context, read proposal.Read, r proposal.Revision) (string, error) {
 	resp, err := read(ctx, exec.Request{Method: http.MethodGet, Path: r.ID})
 	switch {
 	case err != nil:
 		return "", err
+	case r.Kind == proposal.RevisionCreate && resp.Status == http.StatusNotFound:
+		return r.String(), nil
 	case resp.Status == http.StatusNotFound:
 		return "", proposal.ErrGone
 	case !cards.Permitted(resp.Status):
-		ref := exec.RefusalOf(resp)
-		return "", fmt.Errorf("%w: %s (%s)", ErrPreviewRead, ref.Message, ref.Code)
+		return "", refusedRead(resp)
+	case r.Kind == proposal.RevisionCreate:
+		return proposal.Revision{Kind: r.Kind, ID: r.ID, Version: proposal.VersionPresent}.String(), nil
 	}
 	doc, err := cards.Decode(resp.Body)
 	if err != nil && r.Kind == proposal.RevisionResource {
