@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -131,6 +132,12 @@ type core struct {
 	artifactDataReader *artifactdata.Reader
 	artifactDataWriter *artifactdata.Writer
 
+	// assistantReader and assistantWriter are the Dashboard Assistant's
+	// two sides, built on every data node for the same reason
+	// ([core.openAssistant]).
+	assistantReader *assistantdomain.Reader
+	assistantWriter *assistantdomain.Writer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -187,6 +194,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	// THE FOOTPRINT SAMPLER'S SIGNAL, made before any applier exists to
 	// send on it ([Engine.sampleDataFootprint]).
 	e.dataFootprint = make(chan struct{}, 1)
+	e.assistantErasure = make(chan struct{}, 1)
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down once the runtime is the
 	// engine's. The state log's apply loops, its position heartbeat and its
@@ -223,6 +231,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	if err = c.openArtifactData(e, sl); err != nil {
 		return err
 	}
+	if err = c.openAssistant(e, sl); err != nil {
+		return err
+	}
 
 	// PUBLISHED, whole: every field above is written before the store, which
 	// is what lets every reader load it without a lock.
@@ -251,6 +262,13 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	go func() {
 		defer c.done.Done()
 		vouch.run(runCtx)
+	}()
+	// AND THE ASSISTANT'S ERASURE OF A REMOVED PERSON, signalled by the
+	// identity applier and run off its loop ([Engine.runAssistantErasure]).
+	c.done.Add(1)
+	go func() {
+		defer c.done.Done()
+		e.runAssistantErasure(runCtx)
 	}()
 	// AND THE DATASTORE'S FOOTPRINT GAUGE, sampled off the apply loop each
 	// time a committed batch signals.

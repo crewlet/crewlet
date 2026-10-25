@@ -151,6 +151,11 @@ func (e *Engine) trashSources() []trashreap.Source {
 		c.artifactsReader != nil && c.artifactsWriter != nil {
 		out = append(out, artifactsTrash{reader: c.artifactsReader, writer: c.artifactsWriter})
 	}
+	// AND THE ASSISTANT'S CONVERSATIONS, on their own retention, with the
+	// erasure of anybody the identity estate removed.
+	if src, ok := e.assistantSource(); ok {
+		out = append(out, src)
+	}
 	return out
 }
 

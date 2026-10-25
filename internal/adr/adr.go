@@ -103,15 +103,6 @@ var Unenforced = []Exemption{
 			"opposite of the decision: a field is explicitly not a bump.",
 	},
 	{
-		ID: "ADR-0049",
-		Why: "The gates read the assistant's state-log domain, its applier and " +
-			"its owner-keyed reads, which do not exist until the domain lands " +
-			"on the feat/assistant integration branch. This entry is removed in " +
-			"the commit that adds them and names their tests in the record, " +
-			"which the two-sided check in this package's tests forces, and no " +
-			"assistant record may reach main while it is listed here.",
-	},
-	{
 		ID: "ADR-0010",
 		Why: "The engine's exporter and the sandbox forwarder agree because " +
 			"they read the same standard environment variables directly, " +
