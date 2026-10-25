@@ -79,7 +79,7 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 	}
 	built, err := chain.New(members, chain.Options{OnFallback: func(f chain.Fallback) {
 		log.Warn("assistant_model_fallback", "from", f.From, "to", f.To,
-			"kind", string(f.Kind), "error", f.Err)
+			"kind", f.Kind.String(), "error", f.Err)
 	}})
 	if err != nil {
 		return nil, "", fmt.Errorf("engine: assistant chain: %w", err)
