@@ -82,7 +82,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
 	// is the same run in a fresh process, so a count it derives must see
 	// every call made before it parked — the rounds that closed, the parked
-	// round's own calls and whatever an agent-mode run called over the
+	// round's own calls and whatever a box-mode run called over the
 	// bridge — or a call made again after a different one would take its
 	// first copy's operation id. See [turnctx.CallLog].
 	seedCalls(r.cfg.Turn.Context.CallLog(), history, parkedCalls(state),

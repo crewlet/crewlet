@@ -14,42 +14,49 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The executor, run by somebody else's agent loop.
+// The executor, run detached in a sandbox box.
 //
-// # What agent mode changes, and what it deliberately does not
+// # What box mode changes, and what it deliberately does not
 //
-// In text mode the engine's tool loop is the agency: it prompts, the model
-// answers with tool calls, the engine runs them, and everything a reader knows
-// about the turn comes from that loop. In agent mode a coding CLI runs the
-// executor itself — its own loop, its own shell — and the seat's tools reach
-// it over the MCP bridge, which dispatches through the SAME tools.Surface a
-// native loop would call.
+// In both modes a coding CLI runs the executor's loop — it asks its model,
+// calls the seat's tools, asks again — and every call is dispatched through the
+// SAME tools.Surface. What differs is where the loop runs and who governs it.
+// In host mode the CLI runs on this host, its tools served over the phase's
+// tool session by the engine's own tool loop, which holds every call to the
+// fence, the budget, the round cap and the person steering the turn, run by
+// run (internal/agent/toolloop). In box mode the CLI runs in a sandbox box —
+// with its own shell, editor and checkout — reaching the seat's tools over the
+// MCP bridge, and the engine launches it, lets it go, and collects what it did.
 //
-// So what changes here is only how the executor's rounds happen. Everything
-// around them is untouched, and each of those is a deliberate refusal to fork:
+// So what changes here is only where the executor's rounds happen and what the
+// engine sees of them. Everything around them is untouched, and each of those
+// is a deliberate refusal to fork:
 //
-//   - The PROMPT is the same one. An agent-mode executor is the same seat with
+//   - The PROMPT is the same one. A box-mode executor is the same seat with
 //     the same catalogue, memory, skills and workers; a second prompt builder
 //     would drift on the half nobody re-reads.
 //   - The SURFACE is the same one, built the same way, with the same skill
-//     guard. The bridge executes against it, so a tool denied natively is
+//     guard. The bridge executes against it, so a tool denied on the host is
 //     denied there.
 //   - The SUBMISSION is the same tool. The CLI ends its run by calling
-//     submit_work over the bridge, exactly as a native loop ends by calling it
-//     locally, so the outcome vocabulary and the rescue path are shared.
-//   - The REVIEWER is unchanged and still native. The point of a reviewer is
-//     that it is not the thing being reviewed.
+//     submit_work over the bridge, exactly as a host-mode run ends by calling
+//     it over its session, so the outcome vocabulary and the rescue path are
+//     shared.
+//   - The REVIEWER is unchanged and runs on the host. The point of a reviewer
+//     is that it is not the thing being reviewed.
 //
 // # Why it suspends
 //
-// An agentic run outlives its turn — that is what makes it worth doing — so it
+// A box run outlives its turn — that is what makes it worth doing — so it
 // takes the detached shape the sandbox layer already has: the phase returns
 // suspended, the row carries what a resume needs, and a completion re-enters
 // the same turn, possibly in another process on another node. What it does NOT
-// carry is a conversation: there is no engine loop to re-enter, which is what
-// [execstate.State.AgentRun] marks and what [Runner.resumeAgentRun] reads.
+// carry is a conversation: the engine's loop never drove this one, so there is
+// nothing to re-enter, which is what [execstate.State.AgentRun] marks and what
+// [Runner.resumeAgentRun] reads.
 
-// AgentLauncher starts the executor as somebody else's agentic run.
+// AgentLauncher starts the executor as a box-mode run: its coding CLI's own
+// loop, detached in a sandbox box.
 //
 // Declared by the consumer, and narrow on purpose: the runner knows what the
 // executor should be asked to do and which tools it may use; the engine knows
@@ -60,36 +67,36 @@ type AgentLauncher interface {
 	// NOT wait for it: the phase suspends and a completion re-enters the
 	// turn later.
 	//
-	// An error fails the phase rather than falling back to a native loop.
-	// A seat configured for agent mode whose run cannot start has a
+	// An error fails the phase rather than falling back to a run on the
+	// host. A seat configured for box mode whose run cannot start has a
 	// configuration problem, and quietly running the executor a different
 	// way would hide it behind a turn that merely looks expensive.
 	LaunchExecutor(ctx context.Context, req AgentRunRequest) error
 }
 
-// AgentRunRequest is one executor handed to an outside agent loop.
+// AgentRunRequest is one executor handed to a box-mode run.
 //
-// THE PROMPT ARRIVES IN THE TWO HALVES a native pass sends it in, because
-// the CLIs that run agent mode take it in two: Claude Code appends a file to
+// THE PROMPT ARRIVES IN THE TWO HALVES a host-mode pass sends it in, because
+// the CLIs that run in a box take it in two: Claude Code appends a file to
 // its own system prompt, OpenCode adds an instruction file to its default
 // agent's. Both keep the vendor's harness prompt — the part that teaches its
-// shell, editor and loop, which agent mode is FOR — and put the seat's
-// standing instructions on the system side of the conversation beneath it.
+// shell, editor and loop, which a box is FOR — and put the seat's standing
+// instructions on the system side of the conversation beneath it.
 // Joined into one document, as they once were, the seat's identity, policies
 // and memory reached the model as the first user message, which a model weighs
 // as a request rather than as who it is.
 type AgentRunRequest struct {
 	// System is the executor's system prompt: the seat's standing
-	// instructions, exactly as a native pass sends them as its system
+	// instructions, exactly as a host-mode pass sends them as its system
 	// message.
 	System string
 
-	// Brief is the turn's own ask — the user message a native pass sends
+	// Brief is the turn's own ask — the user message a host-mode pass sends
 	// beside System — and the whole of what the CLI is prompted with.
 	Brief string
 
-	// Surface is what the run may call, bridged. The SAME object a native
-	// loop would execute against; see the package rule above.
+	// Surface is what the run may call, bridged. The SAME object a host-mode
+	// run's session would execute against; see the package rule above.
 	Surface *tools.Surface
 
 	// Spend is what the calls Surface serves cost the engine, counted
@@ -103,9 +110,9 @@ type AgentRunRequest struct {
 	Round int
 }
 
-// executeAsAgentRun runs the executor as a detached agentic run.
+// executeAsAgentRun runs the executor as a detached box-mode run.
 //
-// It builds the same surface and the same prompt a native pass would, hands
+// It builds the same surface and the same prompt a host-mode pass would, hands
 // them to the launcher, and suspends. The suspension it records carries no
 // conversation — see [execstate.State.AgentRun] — but everything else a resume
 // needs: the round, the ledger, the surface it may still use, and the skills
@@ -116,10 +123,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
 
 	// The submission tool is on the surface for the same reason it is in a
-	// native pass: it is how the executor says what it did. The CLI calls
-	// it over the bridge, and the value it captures here is read only when
-	// the resume happens in THIS process — otherwise the resume rebuilds it
-	// from the run's durable bridged-call log.
+	// host-mode pass: it is how the executor says what it did. The CLI calls
+	// it over the bridge, which records the call in the run's durable log —
+	// and the resume reads it from there, through a fresh submission tool,
+	// in whatever process collects the run: the value this one captures is
+	// never read, since this surface is gone by then.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
@@ -147,11 +155,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 	}
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
-	// will: a native pass publishes it from inside runPhase, which agent
+	// will: a host-mode pass publishes it from inside runPhase, which box
 	// mode does not enter, and the resume's own record deliberately carries
 	// no prompt (it re-entered a phase rather than opening one). Without
-	// this an operator reading an agent-mode turn sees a run that finished
-	// and no sign of what it was asked.
+	// this an operator reading a box-mode turn sees a run that finished and
+	// no sign of what it was asked.
 	//
 	// NO SEED — this opens a phase rather than re-entering one — and the
 	// surface, whose definitions are NOT in the prompt below: they reach the
@@ -169,14 +177,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		Spend:   bridged,
 		Round:   round,
 	}); err != nil {
-		return turn.Work{}, turn.Surface{}, fmt.Errorf("launching the agent-mode executor: %w", err)
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("launching the box-mode executor: %w", err)
 	}
 
 	r.recordAgentSuspension(round, surface, history)
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
-// recordAgentSuspension captures what a resumed agent run needs.
+// recordAgentSuspension captures what a resumed box run needs.
 //
 // The mirror of [Runner.recordSuspension], and separate rather than a branch
 // inside it because the two states are shaped differently: that one is a
@@ -205,7 +213,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 	r.suspension = &Suspension{State: state}
 }
 
-// resumeAgentRun turns a finished agentic run into the turn's Work.
+// resumeAgentRun turns a finished box run into the turn's Work.
 //
 // THE RUN'S OWN TOOL CALLS ARE THE RECORD, replayed from the durable log the
 // bridge wrote rather than from the surface: the process that resumes may not
@@ -214,7 +222,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // calling submit_work over the bridge, and replaying that call through a fresh
 // submission tool is what recovers the outcome it declared.
 //
-// An absent submission is NOT a value — the same rule a native pass follows.
+// An absent submission is NOT a value — the same rule a host-mode pass follows.
 // A run that stopped without saying what it did is rescued as incomplete and
 // judged on its record, rather than having a delivery inferred from the prose
 // the CLI happened to end with.
@@ -267,12 +275,14 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // saw a decision word and a blank card for a run that made real tool calls.
 //
 // ONE ROUND, and that is not a stand-in for a number the engine failed to
-// count — it is the honest one. A round is an iteration of the ENGINE's tool
-// loop: one request, one answer. In agent mode the engine made a single
-// request — the launch — and got a single answer back, however many turns the
-// CLI took inside its own loop to produce it. The bridge's call log carries no
-// round of its own and inventing one per call would claim a structure nobody
-// observed, splitting one run into thirty rounds of one call each.
+// count — it is the honest one. A round is a model request the engine
+// observed: a host-mode run's CLI reports each one as it makes it, and one
+// that reports none is counted a round per run. A box run is the second kind,
+// seen from further off still: the engine launched it and got a single answer
+// back, however many requests the CLI made inside its box to produce it. The
+// bridge's call log carries no round of its own and inventing one per call
+// would claim a structure nobody observed, splitting one run into thirty
+// rounds of one call each.
 func agentRunResult(answer string, bridged []ledger.Call) phaseResult {
 	res := toolloop.Result{Text: answer, RoundsUsed: 1}
 	for _, call := range bridged {

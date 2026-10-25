@@ -16,7 +16,7 @@ import (
 // EVERY SURFACE THE RUNNER BUILDS NAMES ONE, because which segment pays for a
 // tool call is decided where the surface is built and nowhere later. Nearly
 // every surface is the runner's own ([Runner.ownMeter]): its calls run inside
-// this segment, which charges what they cost when it ends. An agent-mode
+// this segment, which charges what they cost when it ends. A box-mode
 // executor's is not — see [BridgedSpend].
 type meter struct {
 	turn    *turnctx.Turn
@@ -30,7 +30,7 @@ func (r *Runner) ownMeter() meter {
 	return meter{turn: r.cfg.Turn.Context, compact: r.cfg.Compact, spend: &r.spend, mu: &r.mu}
 }
 
-// BridgedSpend is what an agent-mode executor's BRIDGED calls cost the
+// BridgedSpend is what a box-mode executor's BRIDGED calls cost the
 // engine: the auxiliary calls the seat's tools made for the coding agent and
 // the workers it delegated to.
 //

@@ -54,10 +54,12 @@ type listMCPTools struct{ surface func() *tools.Surface }
 
 func (t *listMCPTools) Name() string { return ListMCPToolsTool }
 
-// Description says what the call answers and what follows it, in the words a
-// text-mode CLI and an agent-mode one both read truly: "callable from your
-// next round", never "its schema arrives on the next message", which
-// described a vendor's tool channel this engine no longer has.
+// Description says what the call answers and what follows it, in words every
+// CLI reads truly: "callable from your next round" — a CLI that re-lists the
+// server's tools mid-run offers an activated tool at its model's next request,
+// and one that does not is ended after the activation and starts its next run
+// with it — never "its schema arrives on the next message", which described a
+// vendor's tool channel this engine no longer has.
 func (t *listMCPTools) Description() string {
 	return "List the tools one MCP server offers. Your system prompt names " +
 		"your MCP servers, not their tools; use this when you need one and do " +

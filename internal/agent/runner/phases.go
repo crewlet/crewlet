@@ -190,9 +190,11 @@ type Config struct {
 	// conversation rather than starting one. See [Runner.Resume].
 	Resume *Resume
 
-	// AgentRun runs the executor as somebody else's agentic loop instead
-	// of the engine's own. Nil is the native tool loop, which is what a
-	// seat on an entry in text mode has. See agentrun.go.
+	// AgentRun runs the executor in box mode: its coding CLI's loop,
+	// detached in a sandbox box, its calls over the MCP bridge. Nil is host
+	// mode — the CLI's loop on this host, its calls through the engine's
+	// tool loop — which is what a seat on an entry in host mode has. See
+	// agentrun.go.
 	AgentRun AgentLauncher
 
 	// Steer is the turn's box of notes from a person (internal/agent/steer),
@@ -221,13 +223,14 @@ type Resume struct {
 	// coding agent's findings, or a person's reply to its question.
 	Answer string
 
-	// Bridged is what an AGENT-MODE run called over the MCP bridge, read
-	// from the run's own durable row.
+	// Bridged is what a BOX-MODE run called over the MCP bridge, read from
+	// the run's own durable row.
 	//
 	// It is the whole record for that shape, and it has to come from the
 	// row rather than from memory: the process resuming may not be the one
 	// that launched, so its surface is fresh and has executed nothing.
-	// Ignored by a native resume, which replays the conversation instead.
+	// Ignored by a host-mode resume, which re-enters the conversation
+	// instead.
 	Bridged []ledger.Call
 
 	// Run describes the detached run this resume is collecting.
@@ -352,17 +355,17 @@ func New(cfg Config) (*Runner, error) {
 // reconciling those guesses with reality.
 func (r *Runner) Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if r.cfg.AgentRun != nil {
-		// AGENT MODE. The executor is somebody else's loop, detached; see
-		// agentrun.go for what that does and does not change. The branch
-		// is here, at the top of the phase, because everything below it
-		// is the native loop's own assembly.
+		// BOX MODE. The executor is its CLI's loop, detached in a sandbox
+		// box; see agentrun.go for what that does and does not change. The
+		// branch is here, at the top of the phase, because everything below
+		// it is the host-mode loop's own assembly.
 		//
-		// A REFUSAL ALREADY CERTAIN launches nothing. A native pass is
-		// stopped by its own loop before its first call; this one makes
-		// its calls in a box, post-charged when the run is collected, so
-		// it is asked here — or a run would be paid for whole on a window
-		// already past its ceiling — and again once its brief is built,
-		// since building it can be what fills the window
+		// A REFUSAL ALREADY CERTAIN launches nothing. A host-mode pass is
+		// stopped by its own loop before its first run; this one makes its
+		// calls in a box, post-charged when the run is collected, so it is
+		// asked here — or a run would be paid for whole on a window already
+		// past its ceiling — and again once its brief is built, since
+		// building it can be what fills the window
 		// ([Runner.executeAsAgentRun]).
 		if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
 			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
@@ -429,13 +432,13 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // executorPrompt is the executor's opening: its system message and the turn's
 // own ask.
 //
-// ONE BUILDER FOR BOTH RUNTIMES. A native pass sends these as two messages and
-// an agent-mode run hands them to its coding CLI as an appended system prompt
+// ONE BUILDER FOR BOTH RUNTIMES. A host-mode pass sends these as two messages
+// and a box-mode run hands them to its coding CLI as an appended system prompt
 // and the prompt it runs ([AgentRunRequest]) — the same seat with the same
 // catalogue, memory, skills and workers either way, and a second builder would
-// drift on whichever half nobody re-reads. The `round` is unused today and taken anyway, so a prompt
-// that ever needs to know which iteration it is does not change this
-// signature at two call sites.
+// drift on whichever half nobody re-reads. The `round` is unused today and
+// taken anyway, so a prompt that ever needs to know which iteration it is does
+// not change this signature at two call sites.
 //
 // It also RECORDS what the prompt's tool-skill catalogue offered, as a
 // `knowledge_read` with `via: skill_injected` (see [emitter.skillsInjected]):
@@ -481,7 +484,7 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 		Skills: offer.Catalogue(),
 		// Read off the universe the surface was built from, so the section
 		// teaching run_sandbox is rendered exactly where the tool is —
-		// never for an agent-mode executor, which is not offered it.
+		// never for a box-mode executor, which is not offered it.
 		OffersSandbox: offersSandbox,
 	})
 	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
@@ -966,9 +969,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	//
 	// THE SEED AND THE SURFACE TRAVEL WITH THE TEXT because the prompt is
 	// all three: a resumed loop opens with the saved messages instead of
-	// the strings, and every round of either carries the tool-definition
-	// array, which the CLI backend writes into the prompt literally and the
-	// vendor bills as input.
+	// the strings, and every request of either carries the tool
+	// definitions, which the CLI lists from the phase's session and hands
+	// its model, and the vendor bills as input.
 	emit.started(ctx, ph, iteration, system, user, in.seed, surface,
 		capsOf(policy, out.Rounds+in.rounds))
 
@@ -1412,7 +1415,7 @@ type phaseResult struct {
 // tool mid-turn is not representable.
 //
 // m is where the surface's own calls are charged — the runner's own segment
-// for every surface but an agent-mode executor's ([meter]).
+// for every surface but a box-mode executor's ([meter]).
 func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, submit tools.Callable, active []string, loaded ...string,
 ) (*tools.Surface, error) {
@@ -1589,8 +1592,8 @@ func catalogueSurface(surface *tools.Surface) prompts.Surface {
 // executorUniverse is the snapshot an executor's surface is built from: the
 // registry, less what this executor must never reach — the phase-scoped tools,
 // and run_sandbox where it is offered no box ([Runner.offersSandbox]).
-// agentRun is whether the executor runs as somebody else's agentic loop, which
-// a fresh pass reads off the config and a resume off its parked state.
+// agentRun is whether the executor runs in box mode, which a fresh pass reads
+// off the config and a resume off its parked state.
 //
 // THE UNIVERSE, NOT ONLY THE ACTIVE LIST. A surface activates anything in its
 // snapshot by name (`activate_tool`), and the tools to discover the prompt
@@ -1642,16 +1645,16 @@ func executorActive(universe tools.Snapshot) []string {
 //   - A seat with no enabled role.sandbox gate. The launcher refuses with
 //     "this seat's sandbox is not enabled", and the gate is the only thing
 //     that ever said the seat does code work.
-//   - A seat whose executor IS a coding agent in agent mode. It already holds
-//     a shell, an editor and a checkout; a second box beside it would give the
-//     seat two filesystems with the work in the one the turn cannot see. The
-//     launcher refuses that too (role.sandbox.run_in: self), and this is the
-//     surface that must not offer it in the first place.
+//   - A seat whose executor runs in box mode. It already holds a shell, an
+//     editor and a checkout; a second box beside it would give the seat two
+//     filesystems with the work in the one the turn cannot see. The launcher
+//     refuses that too (role.sandbox.run_in: self), and this is the surface
+//     that must not offer it in the first place.
 //
 // agentRun is never re-derived from the seat's provider entry: a fresh pass
 // reads cfg.AgentRun — the launcher being present IS the fact that this
-// executor runs as somebody else's agentic loop — and a resume reads the state
-// it parked, which decides how it is collected whatever the config says now.
+// executor runs in a box — and a resume reads the state it parked, which
+// decides how it is collected whatever the config says now.
 func (r *Runner) offersSandbox(agentRun bool) bool {
 	if agentRun {
 		return false
