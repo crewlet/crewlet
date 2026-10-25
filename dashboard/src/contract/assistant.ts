@@ -220,6 +220,7 @@ interface AssistantStepRequest {
 interface AssistantRefusal {
   code: string;
   message: string;
+  hint?: string;
   grants?: string[];
 }
 

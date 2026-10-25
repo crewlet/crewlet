@@ -10,8 +10,9 @@ import (
 
 // RefusalOf is a refused answer as a step, a card or a proposal shows it: the
 // API's own code, the sentence it said (the route's `detail` where it gave one,
-// which says what happened to this request, else the code's own sentence), and
-// the permissions that would have admitted the person.
+// which says what happened to this request, else the code's own sentence), the
+// route's `hint` where it gave one, and the permissions that would have
+// admitted the person.
 //
 // READ THROUGH internal/api/httpjson's decoder, the one reader of the envelope,
 // so the keys are spelled where they are written. An answer that is not the
@@ -27,5 +28,6 @@ func RefusalOf(resp Response) wire.Refusal {
 	if refused.Detail != "" {
 		message = refused.Detail
 	}
-	return wire.Refusal{Code: string(refused.Code), Message: message, Grants: refused.Grants}
+	return wire.Refusal{Code: string(refused.Code), Message: message, Hint: refused.Hint,
+		Grants: refused.Grants}
 }
