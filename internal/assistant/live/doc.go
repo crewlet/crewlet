@@ -10,6 +10,15 @@
 // after a reload is the transcript internal/assistantdomain records, not this
 // log. That is the presence rule (ADR-0038) applied to a stream.
 //
+// # Numbered without a hole, across segments
+//
+// A frame takes its seq only once it validates, so a client never reads a gap
+// for a frame that was never sent. A turn that parks on a proposal ends its
+// segment's log, and the approval that resumes it may come minutes later; the
+// [Hub] keeps an ended log's frames for [EndedRetention] (a reconnect) and the
+// turn's last seq for as long as a turn may wait, so the resumed segment's
+// frames continue the numbering its client already drew.
+//
 // # A slow client is disconnected, never dropped from
 //
 // A transcript rebuilt from deltas cannot tolerate a silently dropped frame,
