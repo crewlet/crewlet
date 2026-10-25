@@ -85,6 +85,35 @@ type ServeOptions struct {
 	// stop the clock that bounds the model's own working time while the
 	// engine's tools run, and look at the CLI's login while it waits.
 	OnCall func(busy bool)
+
+	// Concurrency is which of one response's calls the CLI makes without
+	// waiting for the one before it to be answered.
+	Concurrency CallConcurrency
+}
+
+// CallConcurrency is which of one response's calls a CLI makes without waiting
+// for the one before it to be answered.
+type CallConcurrency string
+
+const (
+	// CallsAtOnce: any call may be made beside another (zero value: the safe
+	// assumption).
+	CallsAtOnce CallConcurrency = ""
+	// CallsReadOnlyAtOnce: only calls to read-only-annotated tools run beside
+	// each other; any other call is made alone (Claude Code, Qwen Code).
+	CallsReadOnlyAtOnce CallConcurrency = "read_only"
+	// CallsInTurn: one call at a time, each once the last is answered (Muse,
+	// Kimi, Hermes).
+	CallsInTurn CallConcurrency = "in_turn"
+)
+
+// Valid reports whether c is one of the three.
+func (c CallConcurrency) Valid() bool {
+	switch c {
+	case CallsAtOnce, CallsReadOnlyAtOnce, CallsInTurn:
+		return true
+	}
+	return false
 }
 
 // Served is one CLI run's connection to the host.
