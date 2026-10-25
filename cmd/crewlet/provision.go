@@ -234,11 +234,15 @@ func companyResolver(ctx context.Context, environ config.Source, reads []string,
 			bootstrapPath)
 		return config.EnvOnly(), nil, func() {}, nil
 	}
-	// A NODE THAT HOLDS NO DATA HAS NO STORE TO READ. Its file is scratch —
-	// the previous run's, deleted at every boot — and the company's values
-	// are a data node's, which nothing in its Tier A addresses. So the run
-	// is told to name one, rather than resolve every stored value as unset:
-	// it is a seats node, where the logins `crewlet llm` makes are made.
+	// A NODE THAT HOLDS NO DATA IS SENT TO ONE THAT DOES. Its own file is
+	// scratch — the previous run's, deleted at every boot — and the fleet it
+	// serves runs elsewhere: on the embedded topology it is a leaf of the
+	// members', with no store of its own to start, and on an external broker
+	// the nodes holding the company's data are the ones running it. So the
+	// way to the company's values is a running node that holds data, whose
+	// API authenticates and logs each read, and the run is told to name one
+	// rather than resolve every stored value as unset: it is a seats node,
+	// where the logins `crewlet llm` makes are made.
 	if boot.Store.Scratch {
 		return nil, nil, nil, fmt.Errorf("%s is a node that holds no data "+
 			"(store.scratch), so the company's stored values are read through "+
@@ -328,9 +332,10 @@ func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
 	// nothing were holding the store. Stopping the engine would let this
 	// command reach the store itself, but it is not offered as the way
 	// round: a node taken down to read a value is an outage to save a token.
-	return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
-		"database, so the company's stored values are read through its API — "+
-		"and they cannot be: %w%s", err, bootstrapPath, cerr, revealRemedy(cerr))
+	return nil, fmt.Errorf("%w\n\n%s's database is held by the process named "+
+		"above. While that is its engine, the company's stored values are read "+
+		"through its API — and they cannot be: %w%s%s", err, bootstrapPath, cerr,
+		revealRemedy(cerr), heldByACommand)
 }
 
 // storedThrough reads, through a running node, the stored values a command

@@ -335,11 +335,12 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 // offlinePublish is what an OFFLINE write that marks a revision active can
 // and cannot do, and every such note opens with it.
 //
-// The fleet's activation pointer lives in the coordination store, and on the
-// default embedded topology that store is inside the engine's own process —
-// so a command run while the engine is stopped genuinely cannot move it.
-// What it CAN do is mark the revision active in this node's database, which
-// the node publishes at its next boot (see startReconciler).
+// The fleet's activation pointer lives in the coordination store, which a
+// command run while the engine is stopped does not open for it: a revision is
+// this node's to hold, in its own database, and the node publishes the one it
+// marks active at its next boot (see startReconciler) — so the import starts
+// no broker, and needs none. (`crewlet secrets` is different: a secret has
+// no home on the node, so that command reaches the fleet's store itself.)
 //
 // Said out loud rather than left to be discovered: an operator who imported a
 // revision and saw nothing change would reasonably conclude the import

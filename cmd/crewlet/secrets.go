@@ -290,8 +290,8 @@ func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, 
 			where: client.Describe()}, func() {}, nil
 	}
 	if err = refuseScratchStore(boot, "crewlet secrets",
-		"Use the API of a node that holds data: /secrets writes the company's "+
-			"credential store, which every node reads."); err != nil {
+		"Name a running node that holds data with -api: its /secrets reaches "+
+			"the company's credential store, which every node reads."); err != nil {
 		return nil, nil, err
 	}
 
@@ -316,8 +316,9 @@ func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, 
 // that is holding it.
 //
 // [store.ErrLocked] is the ONLY error routed this way, and the distinction
-// matters: a locked file means the engine is up, which is precisely when its
-// API is the way in. Every other failure — a missing keyring, an unreadable
+// matters: a locked file means the engine is up — or another `crewlet` command
+// is working on the node, which the holder's stamp names and the refusal says
+// how to tell — which is precisely when its API is the way in. Every other failure — a missing keyring, an unreadable
 // path, a driver that will not load — is a broken node, and answering one of
 // those by silently trying HTTP would replace an accurate message with a
 // connection refused.
@@ -332,12 +333,12 @@ func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootst
 		// through its API" reads as a refusal with no way forward, and
 		// the API's own complaint without the lock reads as though the
 		// local store were never an option.
-		return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds "+
-			"its database, so this has to go through its API — and it cannot: "+
-			"%w\n\nEither stop `crewlet run` on this node and re-run, or "+
-			"supply the value through the process environment instead: the "+
-			"resolver falls back to it, so a rotation needs no downtime that way",
-			err, bootstrapPath, cerr)
+		return nil, fmt.Errorf("%w\n\n%s's database is held by the process "+
+			"named above. While that is its engine, this has to go through its "+
+			"API — and it cannot: %w%s Otherwise either stop `crewlet run` on "+
+			"this node and re-run, or supply the value through the process "+
+			"environment instead: the resolver falls back to it, so a rotation "+
+			"needs no downtime that way", err, bootstrapPath, cerr, heldByACommand)
 	}
 	return &secretTarget{secretBackend: client, throughNode: true,
 		where: client.Describe()}, nil
@@ -358,10 +359,19 @@ func engineHoldsTheStore(err error, bootstrapPath, remedy string) error {
 	if !errors.Is(err, store.ErrLocked) {
 		return err
 	}
-	return fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
-		"database; the driver allows only one process on a file. %s",
-		err, bootstrapPath, remedy)
+	return fmt.Errorf("%w\n\n%s's database is held by the process named "+
+		"above, and the driver allows only one process on a file.%s %s",
+		err, bootstrapPath, heldByACommand, remedy)
 }
+
+// heldByACommand is what a refusal over the node database's lock says of the
+// holder it cannot tell from the engine: since a `crewlet` command holds that
+// lock for as long as it works on the node — the fleet's store reached with
+// the engine stopped, an offline import, a migration — the process named in
+// the lock's stamp may be one of those rather than `crewlet run`, and then the
+// way round is to wait for it rather than to go through the engine.
+const heldByACommand = "\n\nIf the holder is another crewlet command rather " +
+	"than `crewlet run`, re-run once it has finished."
 
 // loadBootstrapForStore reads the Tier A document that names the store.
 func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
