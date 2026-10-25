@@ -1,10 +1,21 @@
 // Package toolloop drives one phase's model-and-tools conversation.
 //
-// It is the innermost loop of the engine: ask the model, run whatever tools it
-// asked for, feed the results back, repeat until it stops asking or the round
-// budget runs out. Everything above it is this loop with a different surface
-// and a different prompt: the executor, the reviewer, the extension judge, a
-// worker.
+// It is the innermost loop of the engine: the model asks for tools, they run,
+// their results go back, until it stops asking or the round budget runs out.
+// Everything above it is this loop with a different surface and a different
+// prompt: the executor, the reviewer, the extension judge, a worker.
+//
+// THE CLI DRIVES THE ROUNDS; THE LOOP HOLDS THE PHASE. Every model call is a
+// vendor's coding CLI, which runs its own loop — ask the model, call a tool,
+// ask again — and calls the phase's tools over MCP. [Run] starts CLI runs of
+// the phase's provider, each served the phase's tools by a [dispatcher]
+// (dispatcher.go) that decides every call as it arrives, ends the run when
+// the phase needs it ended, and is told what the CLI's own record shows of
+// each model request; and between runs it does what only the loop can: a
+// person's note, a corrective, a call's result the run ended before. The fold
+// (fold.go) turns each run back into the record the loop kept when it drove
+// each round itself, so nothing downstream can tell the two apart. A round is
+// still one model request.
 //
 // Seven things here are load-bearing and each replaced an incident:
 //
@@ -12,44 +23,47 @@
 //     names its own scope. Re-reading the caps afterwards to work out which
 //     one said no is a read a peer's spend can invalidate between the refusal
 //     and the report.
-//   - PROGRESS IS PUBLISHED TWICE PER ROUND AND ONCE PER CALL — once the
-//     model has spoken, before its tools run, again BEFORE EACH CALL naming
-//     the call that is about to run, and once they all return — and both the
-//     live update and the durable record are built by ONE function over one
-//     message list. They used to be assembled separately, so the live view
-//     streamed a round's tool calls against an empty response and its prose
-//     appeared only when the phase ended. The per-call frame is what makes a
-//     round's calls visible WHILE they run: they are serial, a sandbox launch
-//     or a slow MCP server takes minutes, and a live view that learned of a
-//     call only once the whole round returned showed a seat doing nothing
-//     for exactly the stretch somebody was watching it.
-//   - THE LOOP IS THE CLOCK. Every round's provider call and every tool call
-//     is timed here, where the call is made, and carried on the record as a
-//     start and a duration. A reader that reconstructs timing from event
-//     arrival subtracts two publishers' clocks and a queue's latency, and a
-//     round's cache tokens exist nowhere else: the completion reports them
-//     and this is the one frame that sees every completion.
-//   - THE SEAT FENCE RUNS AT THE TOP OF EVERY ROUND, before any tokens are
-//     spent and before anything fires, AND BEFORE EACH OF THE ROUND'S TOOL
-//     CALLS, because a round is one model turn but many calls and the calls
-//     are what reach outside the engine. A node whose lease moved stops there
-//     rather than running the rest of the turn beside the seat's new owner.
-//   - A PERSON'S NOTE ENTERS AT THE ROUND BOUNDARY AND NOWHERE ELSE —
-//     immediately after the fence, when every call the previous round made
-//     has its answer, as a user message. Anywhere later it could sit
-//     between a call and its result, which a provider rejects and a model
-//     reads as the tool's output; before the fence it would be read by a
+//   - PROGRESS IS PUBLISHED AS A RUN OPENS, AS EACH RESPONSE IS READ, AND
+//     BEFORE AND AFTER EACH CALL — the model's prose before its tools run,
+//     each call named as it starts — and both the live update and the
+//     durable record are built by ONE function over one message list. They
+//     used to be assembled separately, so the live view streamed a round's
+//     tool calls against an empty response and its prose appeared only when
+//     the phase ended. The per-call frame is what makes a round's calls
+//     visible WHILE they run: a sandbox launch or a slow MCP server takes
+//     minutes, and a live view that learned of a call only once it returned
+//     showed a seat doing nothing for exactly the stretch somebody was
+//     watching it.
+//   - THE LOOP IS THE CLOCK. Every model request and every tool call is
+//     timed here — a request from the moment its CLI had everything it needed
+//     to ask to the moment its record was read, a call around the surface —
+//     and carried on the record as a start and a duration. A reader that
+//     reconstructs timing from event arrival subtracts two publishers' clocks
+//     and a queue's latency, and a request's cache tokens exist nowhere else:
+//     the CLI's record reports them and this is the one frame that sees every
+//     request.
+//   - THE SEAT FENCE RUNS BEFORE EVERY RUN, before any tokens are spent and
+//     before anything fires, AND BEFORE AND AFTER EACH TOOL CALL, because a
+//     round is one model request but many calls and the calls are what reach
+//     outside the engine. A node whose lease moved stops there rather than
+//     running the rest of the turn beside the seat's new owner.
+//   - A PERSON'S NOTE ENTERS AT A RUN'S OPENING AND NOWHERE ELSE —
+//     immediately after the fence, as a user message. One that arrives while
+//     a run is going ends the run once the calls of the response it arrived
+//     during have their answers, and the next run reads it. Anywhere else it
+//     could sit between a call and its result, which a provider rejects and
+//     a model reads as the tool's output — and inside a tool's result any
+//     tool's output could imitate one; before the fence it would be read by a
 //     turn that is about to end. See internal/agent/steer.
-//   - A PHASE THAT FINISHES BY A CALL IS ASKED AGAIN WHEN A ROUND ENDS
-//     WITHOUT ONE. A loop that declares terminators ([Config.TerminateAfter])
-//     has said how it ends — a successful call to one of them — so a round
-//     of prose there is not a finish: it is a model that wrote its report
-//     where nobody reads it (a submission's arguments typed out as a JSON
-//     block is the measured case). The request never forces a call — some
-//     endpoints ignore a forced tool choice, some models think-then-stop,
-//     and several current ones reject the force outright — so the call is
-//     ENFORCED HERE rather than requested of the provider: a bounded
-//     corrective re-prompt
+//   - A PHASE THAT FINISHES BY A CALL IS ASKED AGAIN WHEN A RUN ENDS WITHOUT
+//     ONE. A loop that declares terminators ([Config.TerminateAfter]) has said
+//     how it ends — a successful call to one of them — so a run that ends in
+//     prose there is not a finish: it is a model that wrote its report where
+//     nobody reads it (a submission's arguments typed out as a JSON block is
+//     the measured case). The request never forces a call — some endpoints
+//     ignore a forced tool choice, some models think-then-stop, and several
+//     current ones reject the force outright — so the call is ENFORCED HERE
+//     rather than requested of the provider: a bounded corrective re-prompt
 //     naming what finishes the phase is the difference between "the model
 //     declined" and "the phase produced nothing and said it was fine".
 //   - A CALL WHOSE ARGUMENTS DID NOT PARSE IS NEVER RUN WITH NONE. It is
@@ -131,10 +145,10 @@ const maxEmptyAnswerRetries = 1
 // An interface rather than a concrete registry because the phases differ in
 // what they expose and the loop must not know which phase it is running: the
 // executor sees the world, the reviewer sees only the tool it submits its
-// decision with, a worker sees a subset of its parent's. It
-// is re-read at the TOP OF EVERY ROUND so a surface mutated mid-loop — a
-// meta-tool activating another tool — is visible on the next provider call
-// rather than the one after.
+// decision with, a worker sees a subset of its parent's. Its offer is re-read
+// whenever its [Surface.Revision] moves, so a surface mutated mid-run — a
+// meta-tool activating another tool — is listed to the CLI before its next
+// request, or the run is ended for a CLI that never re-lists.
 type Surface interface {
 	// ToolDefs returns the tools to offer the model now.
 	ToolDefs() []llm.ToolDef
@@ -159,6 +173,10 @@ type Surface interface {
 	// because a failing tool is ORDINARY: its message goes back to the
 	// model, which is expected to react to it. A Go error from this method
 	// means the surface itself broke.
+	//
+	// CALLED CONCURRENTLY: a CLI may run a response's calls at once, and
+	// each is handed to the surface on its own goroutine — every call but a
+	// terminator or a [Surface.Detached] one, which runs alone.
 	Execute(ctx context.Context, call llm.ToolCall) (ToolResult, error)
 
 	// Phase names the phase for telemetry.
@@ -250,13 +268,12 @@ type Execution struct {
 	// monotonic clock, so a wall-clock correction mid-call cannot report a
 	// negative or inflated one.
 	//
-	// Measured HERE, around [Surface.Execute], because a round's calls are
-	// SERIAL and the question a reader asks of a slow round is which call
-	// held it: the round's own span covers the provider call only, and the
-	// phase's covers everything. Both are zero on an execution nothing
-	// timed — a call whose arguments did not parse, which is answered
-	// rather than run, and an agent-mode run's bridged calls, which ran
-	// inside somebody else's loop — and zero means "not measured", never
+	// Measured HERE, around [Surface.Execute], because the question a reader
+	// asks of a slow round is which call held it: the round's own span
+	// covers the model's request only, and the phase's covers everything.
+	// Both are zero on an execution nothing timed — a call answered rather
+	// than run: arguments that did not parse, a tool not offered, a call
+	// its run ended before — and zero means "not measured", never
 	// "instant".
 	StartedAt time.Time
 	Duration  time.Duration
@@ -267,26 +284,27 @@ type Execution struct {
 	Server string
 }
 
-// Round is one provider call of the loop: when it was made, how long the model
+// Round is one model request of the loop: when it was made, how long the model
 // took to answer, who answered and what it cost.
 //
 // THE MODEL'S HALF OF A ROUND ONLY. The round's tool calls are timed on their
-// own [Execution] rows, because they are serial and each is its own question
-// ("which call held this round?"); folding them into the round's duration would
-// make a slow model and a slow tool the same number. A round's wall clock is
-// therefore its StartedAt to the end of its last call, and a reader has both
-// halves to hand.
+// own [Execution] rows, because each is its own question ("which call held
+// this round?"); folding them into the round's duration would make a slow
+// model and a slow tool the same number. A round's wall clock is therefore its
+// StartedAt to the end of its last call, and a reader has both halves to hand.
 //
-// Recorded for every round whose completion arrived, including the rounds a
-// corrective re-prompt follows: each is a priced provider call and a reader
-// adding up where the time went needs all of them.
+// Recorded for every request a CLI's record showed, including the runs a
+// corrective re-prompt follows: each is a priced request and a reader adding
+// up where the time went needs all of them. A CLI whose record shows no
+// requests has its whole run recorded as one round, untimed.
 type Round struct {
 	// Round is one-based, on the same scale as [Execution.Round] and
 	// [Narration.Round], so the three lists join on it.
 	Round int
 
-	// StartedAt is when the provider call was made, in UTC, and Duration
-	// how long it took to answer, on the monotonic clock.
+	// StartedAt is when the request was made — when its CLI had everything
+	// it needed to ask — in UTC, and Duration how long it took to answer,
+	// on the monotonic clock.
 	StartedAt time.Time
 	Duration  time.Duration
 
@@ -544,10 +562,13 @@ type BudgetMeter interface {
 	// whether they fitted, in ONE operation against the shared counter.
 	//
 	// Already spent, because the loop charges a round once its reply is
-	// in — a round's size is known no sooner — and before any tool the
-	// round asked for runs. So a refusal decides what FOLLOWS the round:
-	// its tools do not run, and no later model call of the turn is made
-	// ([BudgetMeter.Refused]). It does not undo the round, which the vendor
+	// in — a round's size is known no sooner — as the CLI's record shows
+	// it, which is before any tool the round asked for runs: a call waits
+	// for the record of the request that made it. So a refusal decides
+	// what FOLLOWS the round: its tools do not run, and no later model call
+	// of the turn is made ([BudgetMeter.Refused]). A CLI whose record shows
+	// no requests is charged for its whole run once it is over, its tools
+	// already run, and the refusal stops the run after it. It does not undo the round, which the vendor
 	// has billed, and a meter must record a round it refuses exactly as it
 	// records one it admits: one that dropped it under-stated the company
 	// by the round that crossed the cap, and admitted the next round
@@ -565,8 +586,8 @@ type BudgetMeter interface {
 	// the vendor, then refused, and everything it bought thrown away. That
 	// is the half of a refusal Spend cannot carry, because a refusal is
 	// answered to one caller and a turn makes its calls from several — the
-	// next round of this loop, the round-cap judge, the next phase, a
-	// sibling worker, an agent-mode executor's launch — and before this
+	// next run of this loop, the round-cap judge, the next phase, a sibling
+	// worker, a box-mode executor's launch — and before this
 	// each of them paid for one call certain to be refused.
 	//
 	// A TRUE ANSWER IS A REFUSAL, NOT A FORECAST. Every caller asks it
@@ -615,9 +636,9 @@ type BudgetMeter interface {
 // Refusal is the error a meter's standing refusal answers, or nil: nil for a
 // nil meter, and nil while no refusal stands ([BudgetMeter.Refused]).
 //
-// It is the question the loop asks before every round, exported because the
-// loop is not the only frame that calls a model on a turn's meter: the
-// round-cap judge, an agent-mode executor's launch and the engine's auxiliary
+// It is the question the loop asks before every run and every call, exported
+// because the loop is not the only frame that calls a model on a turn's meter:
+// the round-cap judge, a box-mode executor's launch and the engine's auxiliary
 // seam before each of the turn's auxiliary calls ask it too, so every call in
 // a turn is stopped by the same answer — and, since a true answer is a
 // refusal of the call the caller was about to make, recorded by the same
@@ -770,7 +791,7 @@ type Result struct {
 	CacheRead  int
 	CacheWrite int
 
-	// Rounds is one entry per provider call, in order: when it was made,
+	// Rounds is one entry per model request, in order: when it was made,
 	// how long it took, who answered and what it cost. See [Round].
 	Rounds []Round
 
@@ -778,6 +799,14 @@ type Result struct {
 	// renders "round 3 of 8" reads the cap the loop actually enforced
 	// rather than a second copy of the config beside it.
 	MaxRounds int
+
+	// RunStartedAt is when the CLI run in flight was started, in UTC — the
+	// [Invocation.StartedAt] it will be recorded with — on a live snapshot
+	// published while one is out, and zero between runs and on a finished
+	// Result. Apart from [Result.RoundStartedAt] because a run is many
+	// rounds: "this run has been going for 6m" and "this request for 40s"
+	// are two different clocks.
+	RunStartedAt time.Time
 
 	// Running is the tool calls in flight, in the order they arrived,
 	// present only on a live snapshot published while calls run — see
@@ -790,15 +819,16 @@ type Result struct {
 	// Invocations is one entry per CLI run, in order — see [Invocation].
 	Invocations []Invocation
 
-	// RoundStartedAt is when the latest round's provider call was made, in
-	// UTC, on a live snapshot: the round in flight while the model is still
-	// answering, and the round whose tools are running after it has. What a
-	// live view counts "this round has taken 40s" from. Every round's
-	// opening frame carries it, published the moment the call is made, so
-	// a snapshot whose RoundStartedAt is later than every [Round] in
-	// [Result.Rounds] is a round in flight and one equal to the last is
-	// that round's tools. Zero on a finished Result, whose [Result.Rounds]
-	// carry every start.
+	// RoundStartedAt is when the latest round's request was made, in UTC,
+	// on a live snapshot: the request in flight while the model is still
+	// answering, and the round whose tools are running after it has. What
+	// a live view counts "this round has taken 40s" from. A request is in
+	// flight from the frame published as a run opens or as the last call
+	// of the previous response is answered, and [Result.RoundsUsed] counts
+	// it from there, so a snapshot whose RoundStartedAt is later than every
+	// [Round] in [Result.Rounds] is a request in flight and one equal to
+	// the last is that round's tools. Zero on a finished Result, whose
+	// [Result.Rounds] carry every start.
 	RoundStartedAt time.Time
 
 	// Narration is per-round what Text is in aggregate. Both are published:
@@ -1119,6 +1149,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			out.Narration = append(out.Narration, more.narration...)
 			out.Rounds = append(out.Rounds, more.rounds...)
 			out.Running = d.running()
+			// THE ROUND IN FLIGHT, and when it began: the request a run's
+			// CLI is making while the model answers, or the round whose
+			// calls are running — see [Result.RoundStartedAt].
+			round, started := d.inFlight(time.Now())
+			out.RoundsUsed, out.RoundStartedAt = round, started.UTC()
 		}
 		return out
 	}
@@ -1142,8 +1177,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			cfg.Progress.record(recorded)
 		}
 		if cfg.OnProgress != nil {
+			// A PARTIAL ENDS WHERE ITS RESPONSE IS READ: from then the
+			// narration is the round's text, and a frame carrying both
+			// shows one round twice.
+			if partial != nil && d.committed(partial.Round) {
+				partial = nil
+			}
 			live.Partial = partial.clone()
-			live.RoundStartedAt = runStarted
+			live.RunStartedAt = runStarted
 			cfg.OnProgress(live)
 		}
 	}
@@ -1213,9 +1254,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		runSpan.End()
 
-		// EVERY CALL OF THE RUN HAS SETTLED before anything is read: a call
-		// answered "still running" goes on after its CLI stopped, and its
-		// result is part of what the next run is handed.
+		// The run is over, and an end it reached is taken; then EVERY CALL
+		// OF THE RUN HAS SETTLED before anything is read: a call answered
+		// "still running" goes on after its CLI stopped, and its result is
+		// part of what the next run is handed.
+		d.finish()
 		d.awaitSettled()
 		if completion != nil {
 			// A backend that reported its spend as it went has charged it
@@ -1236,6 +1279,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				providerKey, keyServed = completion.ProviderKey, true
 			}
 		}
+		runStarted = time.Time{}
 		folded := d.fold(completion, model)
 		msgs = append(msgs, folded.messages...)
 		execs = append(execs, folded.executions...)
@@ -1368,8 +1412,8 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 	// ZERO, so the FIRST fragment publishes immediately.
 	var last time.Time
 	return func(delta llm.Delta) {
+		round, _ := d.inFlight(time.Now())
 		rec.Lock()
-		round := d.roundsUsed() + 1
 		p := *partial
 		if p == nil || p.Round != round {
 			p = &Partial{Round: round}
@@ -1515,10 +1559,9 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 // report to whoever reads the text: a rescued executor's to the reviewer as
 // "what the agent produced", a worker's `no_result` prose to its parent. So
 // those later rounds are left out, and the text is what the
-// model answered the task with — the same one closing reply an agent-mode
-// run's text is, so the two runtimes hand a reviewer the same thing. A round
-// that called a tool ends the run, so a model that worked and then stopped
-// again is a new answer, and kept.
+// model answered the task with. A round that called a tool ends the run of
+// declines, so a model that worked and then stopped again is a new answer, and
+// kept.
 //
 // THE FIRST, NOT THE LAST. Every later one is a reply to the corrective rather
 // than to the task — whatever it says, it was written to a different question —

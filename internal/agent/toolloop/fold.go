@@ -51,16 +51,24 @@ type group struct {
 func (d *dispatcher) fold(comp *llm.Completion, model string) folded {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if comp != nil && len(d.turns) == d.foldedTurns {
+	// A CALL THE RECORD NEVER SHOWED was placed on the request after the
+	// last one it did; with the run over, that request is counted.
+	for _, c := range d.calls[d.foldedCalls:] {
+		if c.provisional && c.round > d.rounds {
+			d.rounds = c.round
+		}
+	}
+	if r := d.currentRunLocked(); comp != nil && r != nil && r.synthetic == 0 &&
+		len(d.turns) == d.foldedTurns {
 		// A RUN WHOSE RECORD SHOWED NO REQUEST — a CLI that records none, or
 		// one that answered without calling anything — is one round, whose
-		// prose is its answer. Allocated here, once the run is over, unless
-		// a call already placed one.
-		if r := d.lastRunLocked(); r == nil || r.synthetic == 0 || !d.hasCallsFromLocked(d.foldedCalls) {
+		// prose is its answer: the round its calls were placed on, or a new
+		// one.
+		if len(d.calls) > d.foldedCalls {
+			r.synthetic = d.calls[len(d.calls)-1].round
+		} else {
 			d.rounds++
-			if r != nil {
-				r.synthetic = d.rounds
-			}
+			r.synthetic = d.rounds
 		}
 	}
 	out := d.foldLocked(comp, model, false)
@@ -80,8 +88,6 @@ func (d *dispatcher) snapshot() folded {
 func (d *dispatcher) foldLockedPending() []llm.Message {
 	return d.foldLocked(nil, "", true).messages
 }
-
-func (d *dispatcher) hasCallsFromLocked(from int) bool { return len(d.calls) > from }
 
 // foldLocked builds the record of turns and calls past the folded marks. live
 // leaves out what has not settled.
@@ -105,7 +111,7 @@ func (d *dispatcher) foldLocked(comp *llm.Completion, model string, live bool) f
 			out.called = true
 		}
 	}
-	if r := d.lastRunLocked(); comp != nil && r != nil && r.synthetic > 0 {
+	if r := d.currentRunLocked(); comp != nil && r != nil && r.synthetic > 0 {
 		// The run's answer goes on its synthetic round, which no record
 		// showed.
 		if g := groups[r.synthetic]; g == nil || g.turn == nil {
@@ -137,6 +143,9 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 	type entry struct {
 		call   llm.ToolCall
 		record *callRec
+		// offered is false for a call naming a tool the phase did not
+		// offer, which the CLI refused itself.
+		offered bool
 	}
 	var entries []entry
 	if g.turn != nil {
@@ -155,8 +164,9 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 				id = rec.id
 			}
 			entries = append(entries, entry{
-				call:   llm.ToolCall{ID: id, Name: tc.Name, Arguments: tc.Arguments},
-				record: rec,
+				call:    llm.ToolCall{ID: id, Name: tc.Name, Arguments: tc.Arguments},
+				record:  rec,
+				offered: g.turn.expect[i],
 			})
 		}
 	}
@@ -165,8 +175,9 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 			continue
 		}
 		entries = append(entries, entry{
-			call:   llm.ToolCall{ID: c.id, Name: c.name, Arguments: c.args},
-			record: c,
+			call:    llm.ToolCall{ID: c.id, Name: c.recorded(), Arguments: c.args},
+			record:  c,
+			offered: true,
 		})
 	}
 
@@ -182,17 +193,22 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 	var answers []llm.Message
 	for _, e := range entries {
 		rec := e.record
-		if rec != nil && live && !rec.settled {
+		if live && (rec == nil || !rec.settled) {
+			// NOT YET ANSWERED, on a live frame: a call still to come or
+			// still running is not a call that was not run.
 			continue
 		}
 		assistant.ToolCalls = append(assistant.ToolCalls, e.call)
 		switch {
 		case rec == nil:
 			// A call the model asked for that never reached the phase:
-			// the run was ended before the CLI made it.
+			// one the CLI refused itself, or the run ended before it.
+			why := notRun(e.call.Name)
+			if !e.offered {
+				why = notOffered(e.call.Name)
+			}
 			answers = append(answers, llm.Message{
-				Role: llm.RoleTool, ToolCallID: e.call.ID, Name: e.call.Name, Failed: true,
-				Content: e.call.Name + " was NOT run: the run ended before the call was made.",
+				Role: llm.RoleTool, ToolCallID: e.call.ID, Name: e.call.Name, Failed: true, Content: why,
 			})
 		case rec == d.suspended:
 			// THE PARKED CALL STAYS UNANSWERED — exactly one dangling
@@ -200,22 +216,25 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 		default:
 			answers = append(answers, llm.Message{
 				Role: llm.RoleTool, Content: rec.result.Output, ToolCallID: rec.id,
-				Name: rec.name, Failed: rec.result.Failed,
+				Name: e.call.Name, Failed: rec.result.Failed,
 			})
 		}
 		if rec != nil && rec != d.suspended && rec.settled {
 			out.executions = append(out.executions, Execution{
-				Round: g.round, Name: rec.name, Args: rec.args, CallID: rec.id,
+				Round: g.round, Name: e.call.Name, Args: rec.args, CallID: rec.id,
 				Output: rec.result.Output, Failed: rec.result.Failed,
 				StartedAt: zeroIfRefused(rec, rec.started), Duration: rec.took,
 				Origin: rec.result.Origin, Server: rec.result.Server,
 			})
 		}
 	}
-	if assistant.Content != "" || len(assistant.ToolCalls) > 0 {
-		out.messages = append(out.messages, assistant)
-		out.messages = append(out.messages, answers...)
-	}
+	// EVERY ROUND IS AN ASSISTANT TURN, an empty one included: it is a reply
+	// the model made, and the corrective that follows it says "your last
+	// reply" — dropped, the conversation runs the task and the corrective
+	// together as two user messages, and the next run reads a correction of a
+	// reply it was never shown.
+	out.messages = append(out.messages, assistant)
+	out.messages = append(out.messages, answers...)
 
 	round := Round{Round: g.round, Model: model, ToolCalls: len(entries)}
 	if g.turn != nil {
@@ -261,23 +280,80 @@ func (d *dispatcher) roundsUsed() int {
 	return d.rounds
 }
 
-// reopen readies the dispatcher for the next CLI run, after a run that was
-// ended for a reason the next one answers.
+// reopen readies the dispatcher for the next run: open again after a run that
+// was ended for a reason the next one answers, and the run's marks set.
 func (d *dispatcher) reopen() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.state.ended() || d.state == stateExhausted {
-		return
+	if !d.state.ended() && d.state != stateExhausted {
+		d.state, d.pend = stateOpen, stateOpen
+		select {
+		case <-d.done:
+			d.done = make(chan struct{})
+		default:
+		}
 	}
-	d.state = stateOpen
-	select {
-	case <-d.done:
-		d.done = make(chan struct{})
-	default:
-	}
-	d.parked = nil
-	d.invCalls = len(d.calls)
+	d.active, d.began = true, time.Now()
+	d.invCalls, d.invRuns, d.invTurns = len(d.calls), len(d.runs), len(d.turns)
 	d.invRounds = d.rounds
+}
+
+// finish closes the run: its CLI has exited, and an end it decided and was
+// still waiting to take — the rest of the deciding response never came — is
+// taken now.
+func (d *dispatcher) finish() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.active = false
+	d.endLocked()
+}
+
+// inFlight is the round a live frame names and when it started: while a run
+// is out, the request its CLI is making — the round after the last one read,
+// once every call of that one has been answered — or the round whose calls are
+// running or still to come; between runs, the last round read.
+func (d *dispatcher) inFlight(now time.Time) (int, time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	last := func() (int, time.Time) {
+		if t := d.turnOfRoundLocked(d.rounds); t != nil {
+			return d.rounds, t.start
+		}
+		return d.rounds, d.began
+	}
+	if !d.active {
+		return last()
+	}
+	if r := d.currentRunLocked(); r != nil && !r.opts.ObservesRequests {
+		// A run whose record shows no requests is one round, out for as
+		// long as the run is.
+		if r.synthetic != 0 {
+			return r.synthetic, r.start
+		}
+		return d.rounds + 1, r.start
+	}
+	for _, c := range slices.Backward(d.calls[d.invCalls:]) {
+		if c.admitted && !c.settled && !c.answered {
+			if t := d.turnOfRoundLocked(c.round); t != nil {
+				return c.round, t.start
+			}
+			return c.round, d.modelStartLocked(now)
+		}
+	}
+	if n := len(d.turns); n > d.invTurns && d.turns[n-1].awaiting(-1, nil) {
+		return last()
+	}
+	if d.state != stateOpen || d.pend != stateOpen {
+		return last()
+	}
+	return d.rounds + 1, d.modelStartLocked(now)
+}
+
+// committed reports whether the record already holds round's response.
+func (d *dispatcher) committed(round int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.turnOfRoundLocked(round) != nil
 }
 
 // running is the calls in flight, for a live frame.
@@ -288,7 +364,7 @@ func (d *dispatcher) running() []RunningCall {
 	for _, c := range d.calls {
 		if c.admitted && !c.settled && !c.started.IsZero() {
 			out = append(out, RunningCall{
-				ID: c.id, Round: c.round, Name: c.name, Args: c.args, StartedAt: c.started.UTC(),
+				ID: c.id, Round: c.round, Name: c.recorded(), Args: c.args, StartedAt: c.started.UTC(),
 			})
 		}
 	}
@@ -345,7 +421,7 @@ func (d *dispatcher) invocation(began time.Time, took time.Duration, comp *llm.C
 		InputTokens: used.Input, OutputTokens: used.Output,
 		CacheRead: used.CacheRead, CacheWrite: used.CacheWrite,
 	}
-	if r := d.lastRunLocked(); r != nil {
+	if r := d.currentRunLocked(); r != nil {
 		inv.RequestsObserved = r.opts.ObservesRequests
 	}
 	for _, c := range d.calls[d.invCalls:] {
@@ -388,5 +464,5 @@ func (d *dispatcher) pending() (string, string) {
 	if d.suspended == nil {
 		return "", ""
 	}
-	return d.suspended.id, d.suspended.name
+	return d.suspended.id, d.suspended.recorded()
 }

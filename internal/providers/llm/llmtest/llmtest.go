@@ -38,6 +38,12 @@ type Response struct {
 
 	// Model names the model that answered; empty takes the script's.
 	Model string
+
+	// Writing, when set, is called as the model begins this response —
+	// before any of it is streamed, reported or called. A case blocks in it
+	// to look at the host while the request is out, or sleeps in it to give
+	// the model's half of the round a duration.
+	Writing func()
 }
 
 // Call is one call a response makes.
@@ -49,6 +55,26 @@ type Call struct {
 	// Args are the arguments as the model wrote them — JSON, so a case can
 	// write some that do not parse. Empty is `{}`.
 	Args string
+
+	// Native makes the call one of the CLI's OWN tools — its web search,
+	// its fetch — which its record shows and which it runs itself: it never
+	// reaches the host's session.
+	Native bool
+
+	// Sent is the name the CLI calls the host's session with, where it is
+	// not Name: a CLI that rewrites a name its list does not hold to one it
+	// does, and runs that with the model's arguments.
+	Sent string
+
+	// GiveUp is how long the CLI waits for this call before it gives up on
+	// it — its own tool timeout — and cancels its request; its model is
+	// told the call failed and the script goes on. Zero waits for the
+	// answer.
+	GiveUp time.Duration
+
+	// Exit makes the CLI die once GiveUp has passed instead: it closes its
+	// end of the session — EOF, to the host — and its run fails.
+	Exit bool
 }
 
 // Run is what one Complete plays.
@@ -91,9 +117,15 @@ type Script struct {
 	// ToolTimeout is the CLI's own per-call timeout, told to the host.
 	ToolTimeout time.Duration
 
-	// Before, when set, is called before each call with its name; a case
-	// uses it to act between a response and its calls.
+	// Before, when set, is called before each call with its name — a call
+	// to one of the CLI's own tools included, which then takes as long as
+	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
+
+	// NoCallIDs makes the CLI one that sends no id of its own with a call,
+	// as most do: the host joins each call to the response that asked for it
+	// by its name and arguments.
+	NoCallIDs bool
 
 	mu   sync.Mutex
 	next int
@@ -269,6 +301,9 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		if isDead(dead) {
 			break
 		}
+		if r.Writing != nil {
+			r.Writing()
+		}
 		last = r
 		u := usageOf(r)
 		total.Input += u.Input
@@ -282,7 +317,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 				r.Calls[j].ID = fmt.Sprintf("call-%d-%d-%d", n, i, j)
 			}
 			calls = append(calls, llm.TurnCall{
-				ID: r.Calls[j].ID, Name: c.Name, Arguments: argsOf(c.Args), Host: true,
+				ID: r.Calls[j].ID, Name: c.Name, Arguments: argsOf(c.Args), Host: !c.Native,
 			})
 		}
 		if !s.Unobserved {
@@ -296,7 +331,12 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		if len(r.Calls) == 0 {
 			break
 		}
-		s.call(ctx, cs, r)
+		if exited := s.call(ctx, cs, conn, r); exited != nil {
+			if s.Unobserved {
+				host.Spent(total)
+			}
+			return nil, exited
+		}
 	}
 	if s.Unobserved {
 		host.Spent(total)
@@ -332,20 +372,40 @@ func ended(host llm.ToolHost) bool {
 	}
 }
 
-// call makes one response's calls, one after another or at once.
-func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, r Response) {
+// call makes one response's calls, one after another or at once, and answers
+// the error the run fails with when the CLI died during one ([Call.Exit]).
+func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn, r Response) error {
+	var exitMu sync.Mutex
+	var exited error
 	one := func(c Call) {
 		if s.Before != nil {
 			s.Before(c.Name)
+		}
+		if c.Native {
+			// The CLI's own tool: it runs it itself — for as long as
+			// Before takes — and the host never hears of it beyond the
+			// record.
+			return
 		}
 		raw := c.Args
 		if raw == "" {
 			raw = "{}"
 		}
-		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
-			Name: c.Name, Arguments: json.RawMessage(raw), Meta: mcp.Meta{"callId": c.ID},
-		})
-		got := Result{Name: c.Name, Err: err}
+		name := c.Name
+		if c.Sent != "" {
+			name = c.Sent
+		}
+		params := &mcp.CallToolParams{Name: name, Arguments: json.RawMessage(raw)}
+		if !s.NoCallIDs {
+			params.Meta = mcp.Meta{"callId": c.ID}
+		}
+		res, err := s.callOne(ctx, cs, conn, c, params)
+		if c.Exit && c.GiveUp > 0 {
+			exitMu.Lock()
+			exited = fmt.Errorf("llmtest: the CLI exited during %s: %w", name, err)
+			exitMu.Unlock()
+		}
+		got := Result{Name: name, Err: err}
 		if res != nil {
 			got.Output, got.Failed = text(res), res.IsError
 		}
@@ -356,8 +416,11 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, r Response) {
 	if !r.Parallel {
 		for _, c := range r.Calls {
 			one(c)
+			if exited != nil {
+				return exited
+			}
 		}
-		return
+		return nil
 	}
 	var wg sync.WaitGroup
 	for _, c := range r.Calls {
@@ -368,6 +431,43 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, r Response) {
 		}()
 	}
 	wg.Wait()
+	return exited
+}
+
+// callOne makes one call, giving up on it — or dying during it — as the call
+// says.
+func (s *Script) callOne(ctx context.Context, cs *mcp.ClientSession, conn net.Conn, c Call,
+	params *mcp.CallToolParams) (*mcp.CallToolResult, error) {
+	if c.GiveUp <= 0 {
+		return cs.CallTool(ctx, params)
+	}
+	if !c.Exit {
+		cctx, cancel := context.WithTimeout(ctx, c.GiveUp)
+		defer cancel()
+		return cs.CallTool(cctx, params)
+	}
+	// THE CLI DIES MID-CALL: its end of the session closes under the call,
+	// which the host reads as EOF.
+	type answer struct {
+		res *mcp.CallToolResult
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		res, err := cs.CallTool(ctx, params)
+		got <- answer{res, err}
+	}()
+	select {
+	case a := <-got:
+		return a.res, a.err
+	case <-time.After(c.GiveUp):
+	}
+	_ = conn.Close()
+	a := <-got
+	if a.err == nil {
+		a.err = errors.New("the session closed")
+	}
+	return nil, a.err
 }
 
 // argsOf decodes a call's arguments for the record a CLI reports, which
