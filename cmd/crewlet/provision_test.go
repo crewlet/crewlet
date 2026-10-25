@@ -158,7 +158,7 @@ func TestARunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) {
 
 	var recorded bytes.Buffer
 	printResult(&recorded, &gitlab.Result{Rotated: []string{"swe"}, Recorded: 1}, sink)
-	if !strings.Contains(recorded.String(), "Next:") {
+	if !printsANextStep(recorded.String()) {
 		t.Errorf("a run that minted a credential did not say what is left to "+
 			"do:\n%s", recorded.String())
 	}
@@ -168,7 +168,7 @@ func TestARunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) {
 
 	var unchanged bytes.Buffer
 	printResult(&unchanged, &gitlab.Result{Kept: []string{"swe"}}, sink)
-	if strings.Contains(unchanged.String(), "Next:") {
+	if printsANextStep(unchanged.String()) {
 		t.Errorf("a run that changed nothing told the operator to act:\n%s",
 			unchanged.String())
 	}
@@ -200,9 +200,78 @@ func TestAChatRunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) 
 				"left to do:\n%s", name, recorded.String())
 		}
 		report(&unchanged, 0)
-		if strings.Contains(unchanged.String(), "Next:") {
+		if printsANextStep(unchanged.String()) {
 			t.Errorf("%s: a run that recorded nothing told the operator to act:\n%s",
 				name, unchanged.String())
+		}
+	}
+}
+
+// printsANextStep is whether a report has a Next: LINE — the step the run
+// asks for, which [printNextStep] prints at the start of its own line. A
+// line that only mentions one, as the kept line does for a run with the
+// command's minting flag, asks for nothing.
+func printsANextStep(report string) bool {
+	for line := range strings.Lines(report) {
+		if strings.HasPrefix(line, "Next: ") {
+			return true
+		}
+	}
+	return false
+}
+
+// THE KEPT LINE NAMES THE COMMAND'S OWN FLAG, AND NO RESTART.
+//
+// GitLab, Mattermost and Slack share the line a re-run prints for the seats
+// it left alone, and it named -rotate for all three: Slack has no such flag
+// (it mints afresh with -reinstall), so that operator was handed a flag the
+// command refuses. It also said to restart the engine after, which is the
+// step for -env-file and -print alone — with -secret-store a reload of a
+// running node is what the engine needs, and the run that mints says so on
+// its Next: line.
+func TestTheKeptLineNamesTheCommandsOwnFlag(t *testing.T) {
+	t.Parallel()
+	sink, err := provision.NewPrintSink(io.Discard)
+	if err != nil {
+		t.Fatalf("NewPrintSink: %v", err)
+	}
+	kept := []string{"swe"}
+	reports := []struct {
+		name, flag, other string
+		report            func(w io.Writer)
+	}{
+		{"gitlab", "-rotate", "-reinstall", func(w io.Writer) {
+			printResult(w, &gitlab.Result{Kept: kept}, sink)
+		}},
+		{"mattermost", "-rotate", "-reinstall", func(w io.Writer) {
+			printChatResult(w, &mattermost.Result{Kept: kept}, sink)
+		}},
+		{"slack", "-reinstall", "-rotate", func(w io.Writer) {
+			printSlackResult(w, &slack.Result{Kept: kept}, "slack-apps.json", sink)
+		}},
+	}
+	for _, c := range reports {
+		var out bytes.Buffer
+		c.report(&out)
+		got := out.String()
+		if !strings.Contains(got, "Left 1 seat(s) alone") {
+			t.Fatalf("%s: the report does not say it kept the seat:\n%s", c.name, got)
+		}
+		if !strings.Contains(got, "pass "+c.flag+" to mint fresh ones") {
+			t.Errorf("%s: the kept line does not name %s, the command's own "+
+				"flag:\n%s", c.name, c.flag, got)
+		}
+		if strings.Contains(got, c.other) {
+			t.Errorf("%s: the kept line names %s, another command's flag:\n%s",
+				c.name, c.other, got)
+		}
+		if strings.Contains(got, "restart") {
+			t.Errorf("%s: the kept line asks for a restart, which -secret-store "+
+				"does not need:\n%s", c.name, got)
+		}
+		if printsANextStep(got) {
+			t.Errorf("%s: a run that kept every seat asked for a next step:\n%s",
+				c.name, got)
 		}
 	}
 }

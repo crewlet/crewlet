@@ -329,7 +329,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink pr
 		fmt.Fprintf(w, "Installed %d app(s): %s\n",
 			len(res.Installed), strings.Join(res.Installed, ", "))
 	}
-	printKept(w, res.Kept)
+	printKept(w, res.Kept, "-reinstall")
 	if len(res.Failed) > 0 {
 		handles := slices.Sorted(maps.Keys(res.Failed))
 		fmt.Fprintf(w, "\n%d seat(s) FAILED — everything else completed and is "+

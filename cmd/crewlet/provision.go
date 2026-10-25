@@ -562,7 +562,7 @@ func printResult(w io.Writer, res *gitlab.Result, sink provision.TokenSink) {
 		fmt.Fprintf(w, "Minted a token for %d seat(s): %s\n",
 			len(res.Rotated), strings.Join(res.Rotated, ", "))
 	}
-	printKept(w, res.Kept)
+	printKept(w, res.Kept, "-rotate")
 	if len(res.Decommissioned) > 0 {
 		fmt.Fprintf(w, "Deleted %d account(s) whose seats have left: %s\n",
 			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
@@ -601,20 +601,29 @@ func printNextStep(w io.Writer, recorded int, sink provision.TokenSink) {
 	fmt.Fprintf(w, "Next: %s\n", sink.NextStep())
 }
 
-// printKept reports the seats a run deliberately did not touch.
+// printKept reports the seats a run deliberately did not touch, naming fresh,
+// the command's own flag for minting their credentials anyway.
 //
 // SAID OUT LOUD, because it is the successful outcome of a re-run: a report
 // that mentioned only what changed would read as a run that did nothing,
-// and the operator's next move would be to reach for -rotate — which is
+// and the operator's next move would be to reach for that flag — which is
 // exactly the outage this behaviour exists to prevent.
-func printKept(w io.Writer, kept []string) {
+//
+// THE FLAG IS THE CALLER'S, because the commands sharing this line do not
+// share one: GitLab and Mattermost mint afresh with -rotate, Slack with
+// -reinstall, and a line naming -rotate to a Slack operator named a flag
+// that command refuses. And the step after it is the sink's, said on that
+// run's own Next: line ([printNextStep]): a restart is what -env-file and
+// -print need, while -secret-store needs a reload of a running node.
+func printKept(w io.Writer, kept []string, fresh string) {
 	if len(kept) == 0 {
 		return
 	}
 	fmt.Fprintf(w, "Left %d seat(s) alone — their credential still works, "+
 		"and rotating it would revoke what the running engine is using: %s\n"+
-		"  (pass -rotate to mint fresh ones, and restart the engine after)\n",
-		len(kept), strings.Join(kept, ", "))
+		"  (pass %s to mint fresh ones; that run's Next: line says what the "+
+		"engine then needs)\n",
+		len(kept), strings.Join(kept, ", "), fresh)
 }
 
 func printNotes(w io.Writer, notes []string) {
@@ -878,7 +887,7 @@ func printChatResult(w io.Writer, res *mattermost.Result, sink provision.TokenSi
 		fmt.Fprintf(w, "Disabled %d departed bot(s): %s\n",
 			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
 	}
-	printKept(w, res.Kept)
+	printKept(w, res.Kept, "-rotate")
 	// THE CHANNELS ARE THE PART TO CHECK. A bot receives only what its
 	// channels deliver, so this line is the difference between an agent
 	// that wakes and one that never does.
