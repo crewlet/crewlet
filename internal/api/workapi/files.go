@@ -405,11 +405,14 @@ func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 // bytesFailed answers an upload whose bytes did not reach the store: a body
 // that stopped arriving is the CLIENT'S (400, never a 503 telling it to retry
 // a request whose own connection failed), one over the cap is the one
-// spelling of a 413 every JSON surface answers, and a store that did not take
-// them is a condition that clears when it answers again — the broker's own
-// election at the soonest, the default store being the data nodes' NATS
-// bucket — with the store's own words in the log.
+// spelling of a 413 every JSON surface answers, a store with no room for them
+// ([objstore.Full]) is a 507 naming the room an operator makes, in the store's
+// own words for it, since no wait makes it, and any other store that
+// did not take them is a condition that clears when it answers again — the
+// broker's own election at the soonest, the default store being the data
+// nodes' NATS bucket — with the store's own words in the log.
 func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
+	var full *objstore.Full
 	switch {
 	case errors.Is(err, paced.ErrBody):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
@@ -417,6 +420,20 @@ func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) 
 	case errors.Is(err, objstore.ErrTooLarge):
 		httpjson.FailWith(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
 			map[string]string{"detail": err.Error()})
+	case errors.As(err, &full):
+		// NO ROOM, WHICH NO RETRY MAKES: the store refuses the same upload
+		// the same way until an operator makes room, so HTTP's own status
+		// for a server that cannot store what the request needs, with no
+		// Retry-After — the 503 below asked for the same body again. The
+		// store's own words name its bucket, which is the log's.
+		log.WarnContext(r.Context(), "api_file_store_full", "op_id", key, "error", err.Error())
+		httpjson.FailWithFields(w, http.StatusInsufficientStorage, httpjson.CodeStoreFull,
+			httpjson.Detail{
+				"detail": "the object store has no room for the file's content, and " +
+					"nothing was stored or recorded",
+				"hint":  "the same upload is refused the same until " + full.Remedy,
+				"op_id": key,
+			})
 	default:
 		log.WarnContext(r.Context(), "api_file_store_unavailable", "op_id", key,
 			"error", err.Error())

@@ -534,6 +534,67 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 	})
 }
 
+// fullBucket is a backend with no room left: a put reads its content and is
+// refused as a backend refuses one for room ([objstore.Full]), storing
+// nothing, naming a room of the case's own ([caseRemedy]) — so a hint naming
+// it spliced the store's remedy rather than a spelling of the route's own.
+type fullBucket struct{ objstore.Backend }
+
+// caseRemedy is the room [fullBucket] names.
+const caseRemedy = "an operator makes room in this case's own bucket"
+
+func (fullBucket) Put(_ context.Context, name string, r io.Reader, _ objstore.PutMeta) error {
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	return &objstore.Full{Remedy: caseRemedy, Err: fmt.Errorf(
+		"natsobj: put %s: OBJ_crewlet_files holds as many bytes as it reserves", name)}
+}
+
+// AN UPLOAD THE OBJECT STORE HAS NO ROOM FOR IS `507 store_full`, NAMING THE
+// ROOM AN OPERATOR MAKES: the store refuses the same upload the same way until
+// then, so the answer is HTTP's own status for a server that cannot store what
+// a request needs, with no Retry-After — never the 503 that asked a client to
+// send the same gibibyte again in two seconds. Nothing is recorded, and the
+// store's own words, naming its bucket, stay in the node's log.
+//
+// Mutation: answer the full store through the catch-all (503 unavailable) and
+// this fails on the status, the code and the Retry-After; splice a room of the
+// route's own and it fails on the hint.
+func TestAnUploadTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	store, err := objstore.NewStore(fullBucket{fake.backend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.store = store
+	s := filesSurface(t, fake, chart{})
+	rec := httptest.NewRecorder()
+	s.upload(bytes.NewReader([]byte("no room")), rec)
+
+	answer := answerOf(t, rec)
+	hint, _ := answer["hint"].(string)
+	switch {
+	case rec.Code != http.StatusInsufficientStorage || answer["error"] != string(httpjson.CodeStoreFull):
+		t.Fatalf("an upload the store had no room for answered %d: %s, want 507 store_full",
+			rec.Code, rec.Body.String())
+	case rec.Header().Get("Retry-After") != "":
+		t.Errorf("an upload the store had no room for asked its client back in %s seconds",
+			rec.Header().Get("Retry-After"))
+	case !strings.Contains(hint, caseRemedy):
+		t.Errorf("an upload the store had no room for answered the hint %q, which does not name %q",
+			hint, caseRemedy)
+	case strings.Contains(rec.Body.String(), "OBJ_crewlet_files"):
+		t.Errorf("the object store's own words reached the client: %s", rec.Body.String())
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.puts) != 0 {
+		t.Errorf("a file was recorded whose content the store had no room for")
+	}
+}
+
 // THE WRITER'S REFUSALS ABOUT THE FILE KEEP THEIR OWN CODES, and every other
 // refusal reads as it reads on every write here.
 //

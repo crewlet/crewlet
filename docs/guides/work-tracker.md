@@ -2432,7 +2432,7 @@ hash.
 | Path | up to 1 024 bytes, `/` between folders; no empty folder, no `.` or `..`, no backslash or control character. A leading `/` and surrounding spaces are dropped |
 | Version | every write moves it; `if_version` (tools) or `If-Match` (REST) refuses a write when the file has changed since it was read |
 | Removing | the file leaves the project's listing and its history records who removed it and when; its content is deleted from storage by the object store's [hourly collection](../concepts/object-store.md#collection-and-audit) once no file names it and it was last written more than a day ago, so write it again to bring it back |
-| A full store | on the fleet's own NATS bucket, a write whose content the bucket has no room for — it holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation) — is refused `store_full`, and nothing is written. The same write is refused the same until an operator makes room, so a seat says so rather than trying again |
+| A full store | on the fleet's own NATS bucket, a write whose content the bucket has no room for — it holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation) — is refused `store_full` — over REST [`507`](../reference/api-endpoints.md#project-files) — and nothing is written. The same write is refused the same until an operator makes room, so a seat says so rather than trying again |
 
 A file's changes are history rows like any other — `file_written` and
 `file_removed` — naming who made them. They wake nobody: a file is read from its

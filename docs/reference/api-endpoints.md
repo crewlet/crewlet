@@ -6100,6 +6100,7 @@ origin.
 | `409` | `upload_expired` | The upload took longer than a write may name its object after (twelve hours from when its key was minted); send it again |
 | `413` | `body_too_large` | The content is over 1 GiB — refused before reading where `Content-Length` says so, and otherwise once the body passes it |
 | `500` | `content_corrupt` | The store answered with content that is not what the file records; trying again reads the same bytes, so restore the file from a backup or upload it again |
+| `507` | `store_full` | The object store has no room for the upload — the fleet's NATS bucket holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation) — so nothing was stored or recorded. **No** `Retry-After`: the same upload is refused the same until an operator makes room, which the `hint` names; the node logs `api_file_store_full` with the store's own answer |
 | `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now — the object store's bucket failing every attempt of a request for forty seconds to a minute among them, which ends an upload or a download then rather than at its deadline, and the store taking no more of an upload and not answering it for a minute, which ends the upload then; an upload in parts is answered up to thirty seconds later, once its unfinished upload has been abandoned |
 
 A download is served wherever the tracker is native **and** the node runs the

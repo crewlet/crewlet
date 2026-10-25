@@ -287,9 +287,10 @@ store:
   a failure to try again, since every upload is refused the same until room is
   made: a push is refused `store_full` ([what git
   prints](code-host.md#what-git-prints-and-what-it-means)), and so is a
-  project file's write through a tool, which the [act
+  project file's write — through a tool, which the [act
   transport](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface) answers
-  `507`. The
+  `507`, and through [its upload route](../reference/api-endpoints.md#project-files),
+  `507` too. The
   [`objects_bucket_near_ceiling`](#alarms) alarm fires once less than a fifth
   of the reservation is left, and the `crewlet.objects.bucket.bytes` and
   `crewlet.objects.bucket.max_bytes` gauges (from the node holding the
