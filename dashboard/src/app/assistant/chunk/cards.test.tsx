@@ -1,8 +1,8 @@
 /**
  * What the drawer draws of the engine's cards: the columns the engine chose for
  * its width, values worded by their type as the screens word them, the facts
- * kept for the model left out, a failed step's reason, and "Prepare it again"
- * on a card that moved.
+ * kept for the model left out, a failed step's reason, "Prepare it again" on a
+ * card that moved, and a run that took no step drawn without a count.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -13,6 +13,7 @@ import {
   CardBlock,
   factText,
   prepareAgainQuestion,
+  runChipOf,
   stepsOf,
   type CardHandlers,
 } from "./blocks.tsx";
@@ -150,4 +151,8 @@ test("a failed step says why, in the engine's words", () => {
     ],
   });
   expect(step!.detail).toContain("FAIR-2 changed since it was read. Read it again.");
+});
+
+test("a run that took no step carries no count", () => {
+  expect(runChipOf(base, Date.parse("2026-10-24T09:41:05Z")).meta).toBeUndefined();
 });

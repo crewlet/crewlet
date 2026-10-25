@@ -81,3 +81,14 @@ test("the shimmer goes once a card is drawn", () => {
   expect(screen.getByText("Settle-up algorithm")).toBeTruthy();
   expect(container.querySelector(SHIMMER)).toBeNull();
 });
+
+test("a run that took no step has no count and nothing to open", () => {
+  const { container } = draw({
+    ...turn,
+    phase: "completed",
+    done: { state: "completed", duration_ms: 1000, steps: 0 },
+    replies: [{ id: "m", text: "Nothing to look up." }],
+  });
+  expect(container.textContent).not.toContain("0 steps");
+  expect(container.querySelector("[aria-expanded]")).toBeNull();
+});
