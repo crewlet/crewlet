@@ -576,16 +576,27 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 			if p.EffectiveWebTools() != cliprofile.WebToolsDenied || p.LocalTools != cliprofile.LocalToolsDenied {
 				t.Errorf("web %q, local %q: an assistant profile denies both", p.EffectiveWebTools(), p.LocalTools)
 			}
-			for _, arg := range p.CompleteArgs {
-				if strings.Contains(arg, `web_search="live"`) || strings.Contains(arg, `web_search="cached"`) ||
-					strings.Contains(arg, `web_search="indexed"`) {
-					t.Errorf("argv still turns a web search on: %q", arg)
-				}
+			// EVERY ARGV A CALL CAN RUN: the profile as written, and the
+			// streamed variant a call that asked to be streamed runs, which
+			// must keep every argument the denial states, in place, and
+			// only add to them.
+			streamed := p.Streamed()
+			if !slices.Equal(streamed.CompleteArgs[:len(p.CompleteArgs)], p.CompleteArgs) {
+				t.Errorf("the streamed argv %q does not keep the denial's %q intact",
+					streamed.CompleteArgs, p.CompleteArgs)
 			}
-			for _, flag := range []string{"--allowedTools", "--allowed-tools", "--allow-tool"} {
-				for _, tool := range []string{"WebFetch", "WebSearch", "web_fetch", "web_search"} {
-					if allowsAfterFlag(p.CompleteArgs, flag, tool) {
-						t.Errorf("argv allows %s through %s: %q", tool, flag, p.CompleteArgs)
+			for _, argv := range [][]string{p.CompleteArgs, streamed.CompleteArgs} {
+				for _, arg := range argv {
+					if strings.Contains(arg, `web_search="live"`) || strings.Contains(arg, `web_search="cached"`) ||
+						strings.Contains(arg, `web_search="indexed"`) {
+						t.Errorf("argv still turns a web search on: %q", arg)
+					}
+				}
+				for _, flag := range []string{"--allowedTools", "--allowed-tools", "--allow-tool"} {
+					for _, tool := range []string{"WebFetch", "WebSearch", "web_fetch", "web_search"} {
+						if allowsAfterFlag(argv, flag, tool) {
+							t.Errorf("argv allows %s through %s: %q", tool, flag, argv)
+						}
 					}
 				}
 			}
@@ -599,6 +610,9 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 			}
 			if name == "claude-code" && !allowsAfterFlag(p.CompleteArgs, "--disallowedTools", "WebFetch", "WebSearch") {
 				t.Errorf("claude-code must put both web tools on --disallowedTools: %q", p.CompleteArgs)
+			}
+			if name == "claude-code" && !p.CanStream() {
+				t.Error("claude-code lost its streamed variant, so the assistant's answers arrive whole again")
 			}
 			if name != "pi" && slices.Equal(p.CompleteArgs, seat.CompleteArgs) &&
 				slices.Equal(p.SeedFiles, seat.SeedFiles) {

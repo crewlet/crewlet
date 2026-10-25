@@ -884,6 +884,26 @@ type Profile struct {
 	// the ANSWER.
 	TextEvents []string `yaml:"text_events,omitempty"`
 
+	// DeltaPaths locates an INCREMENTAL fragment of the answer in one line
+	// of a `jsonl` stream, for a CLI that streams its tokens apart from the
+	// event that carries the whole answer. Empty takes the live view from
+	// [Profile.TextPaths], event by event.
+	//
+	// A second set of paths rather than more text paths, because the two
+	// are read differently and must not be mixed: fragments CONCATENATE as
+	// they arrive, for the person watching, while the answer the call
+	// returns is still read from text_paths alone. Claude Code's stream-json
+	// spells every answer twice, as `text_delta` fragments while it is
+	// written and as the `result` once it is done; reading both as text
+	// would hand the model's answer back doubled.
+	DeltaPaths []Path `yaml:"delta_paths,omitempty"`
+
+	// DeltaEvents restricts fragment extraction to lines whose
+	// discriminator ([Profile.EventTypePath]) is one of these, as
+	// [Profile.TextEvents] restricts the answer. Empty takes every line
+	// delta_paths resolves on.
+	DeltaEvents []string `yaml:"delta_events,omitempty"`
+
 	// ErrorPaths locates a boolean the CLI sets when it failed despite
 	// exiting zero.
 	ErrorPaths []Path `yaml:"error_paths,omitempty"`
@@ -1204,6 +1224,66 @@ type Profile struct {
 	// WebDenial is how this CLI turns its web tools off, or nil where it
 	// has no measured way to. See [WebDenial].
 	WebDenial *WebDenial `yaml:"web_denial,omitempty"`
+
+	// Stream is how this CLI streams its answer while it is written, or nil
+	// where it cannot or where output is already a jsonl stream. See
+	// [Stream].
+	Stream *Stream `yaml:"stream,omitempty"`
+}
+
+// Stream is how one CLI whose answer is otherwise ONE document streams its
+// tokens instead: the arguments that switch it to an event stream, and how
+// that stream is read.
+//
+// CHOSEN PER CALL, NEVER PER ENTRY. Streaming is a property of one request
+// ([llm.Request.OnDelta]): the backend runs [Profile.Streamed] for a call
+// that asked to be streamed and the profile as written for every other, so
+// no entry, document or operator resource has a setting for it, and a call
+// nobody is watching never pays for the larger output.
+//
+// THE ARGUMENTS ARE APPENDED to complete_args (after a web denial has
+// replaced them), so every isolation and denial flag the call runs with is
+// the one the profile already states; a variant restating the argv would be
+// a second copy of the denial for drift to separate from the first. That
+// relies on the CLI taking the LAST value of a repeated flag, which each
+// built-in variant measured against its CLI.
+//
+// The answer is still read from the profile's own text_paths, error_paths
+// and usage: a variant names only the events those are read from and the
+// fragments the live view is drawn from.
+type Stream struct {
+	// Args is appended to complete_args for a streamed call.
+	Args []string `yaml:"args,omitempty"`
+	// EventTypePath, TextEvents, DeltaPaths and DeltaEvents are the
+	// streamed call's [Profile] fields of the same names.
+	EventTypePath Path     `yaml:"event_type_path,omitempty"`
+	TextEvents    []string `yaml:"text_events,omitempty"`
+	DeltaPaths    []Path   `yaml:"delta_paths,omitempty"`
+	DeltaEvents   []string `yaml:"delta_events,omitempty"`
+}
+
+// CanStream reports whether the profile has a streamed variant.
+func (p *Profile) CanStream() bool { return p.Stream != nil }
+
+// Streamed is the profile a streamed call runs: its arguments extended by the
+// variant's, its output a jsonl stream read through the variant's events and
+// fragment paths. The variant itself is dropped from the result, so applying
+// it twice cannot append its arguments twice. A profile with no variant comes
+// back unchanged.
+func (p Profile) Streamed() Profile {
+	out := p.Clone()
+	s := p.Stream
+	if s == nil {
+		return out
+	}
+	out.CompleteArgs = append(out.CompleteArgs, s.Args...)
+	out.Output = OutputJSONL
+	out.EventTypePath = append(Path(nil), s.EventTypePath...)
+	out.TextEvents = append([]string(nil), s.TextEvents...)
+	out.DeltaPaths = clonePaths(s.DeltaPaths)
+	out.DeltaEvents = append([]string(nil), s.DeltaEvents...)
+	out.Stream = nil
+	return out
 }
 
 // EffectiveWebTools is the web stance with its default applied: empty reads
@@ -1733,6 +1813,8 @@ func (p *Profile) problems() []string {
 			"denial the vendor lacks")
 	}
 	p.validateWebStance(add)
+	p.validateDeltas(add)
+	p.validateStream(add)
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {
 			add("seed_files[%d].path is empty", i)
@@ -1826,6 +1908,51 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 		for _, problem := range denied.problems() {
 			add("with web_tools denied, %s", problem)
 		}
+	}
+}
+
+// validateDeltas holds the fragment fields to the stream they read.
+func (p *Profile) validateDeltas(add func(string, ...any)) {
+	if (len(p.DeltaPaths) > 0 || len(p.DeltaEvents) > 0) && p.EffectiveOutput() != OutputJSONL {
+		add("delta_paths or delta_events is set but output is %q: a fragment of the "+
+			"answer only exists in a jsonl stream", p.EffectiveOutput())
+		return
+	}
+	if len(p.DeltaEvents) > 0 && len(p.EventTypePath) == 0 {
+		add("delta_events is set but event_type_path is empty, so there is nothing to " +
+			"compare the event names against")
+	}
+	if len(p.DeltaEvents) > 0 && len(p.DeltaPaths) == 0 {
+		add("delta_events is set but delta_paths is empty: naming the events that " +
+			"carry fragments says nothing about where in them a fragment is")
+	}
+}
+
+// validateStream holds a streamed variant to its rules, and validates the
+// profile it makes as any profile is validated, so a broken variant is
+// refused where it is written rather than on the first call that streams.
+func (p *Profile) validateStream(add func(string, ...any)) {
+	s := p.Stream
+	if s == nil {
+		return
+	}
+	if p.EffectiveOutput() == OutputJSONL {
+		add("stream is set but output is already jsonl: the CLI streams every call " +
+			"as it is; remove stream, and set delta_paths if its fragments are apart " +
+			"from its answer")
+		return
+	}
+	if len(s.Args) == 0 {
+		add("stream.args is empty: a variant that adds no argument cannot switch the " +
+			"CLI to an event stream")
+	}
+	if len(s.DeltaPaths) == 0 {
+		add("stream.delta_paths is empty: say where in a line of the stream a " +
+			"fragment of the answer is")
+	}
+	streamed := p.Streamed()
+	for _, problem := range streamed.problems() {
+		add("with the stream applied, %s", problem)
 	}
 }
 
