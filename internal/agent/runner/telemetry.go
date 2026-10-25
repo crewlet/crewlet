@@ -1404,6 +1404,7 @@ func phaseInvocations(runs []toolloop.Invocation) []types.PhaseInvocation {
 		out[i] = types.PhaseInvocation{
 			StartedAt: utcOrZero(r.StartedAt), DurationMS: int(r.Duration.Milliseconds()),
 			ProviderKey: r.ProviderKey, Model: r.Model, Outcome: string(r.Outcome),
+			FirstRound: r.FirstRound, LastRound: r.LastRound,
 			RequestsObserved: r.RequestsObserved,
 			InputTokens:      r.InputTokens, OutputTokens: r.OutputTokens,
 			CacheReadTokens: r.CacheRead, CacheWriteTokens: r.CacheWrite,
