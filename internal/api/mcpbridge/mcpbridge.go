@@ -1,49 +1,78 @@
-// Package mcpbridge serves one running seat's tool surface to a coding agent,
-// over MCP.
+// Package mcpbridge serves one box-mode run's tool surface to the coding CLI in
+// its box, over MCP on HTTP.
 //
 // # What this is for
 //
-// A subscription CLI in agent mode runs the executor itself: the vendor's own
-// loop drives the model, and the engine's job is to hand that loop the seat's
-// tools. Those tools cannot be shipped into the box — most are MCP children
-// holding the SEAT's credentials, several are engine control, and the whole
-// point of a sandbox is that its credentials are not the company's. So the box
-// gets one MCP server, on the engine, and every call comes back out.
+// A providers.llm entry in box mode runs a seat's executor as a detached run of
+// its CLI in a sandbox box: the vendor's own loop drives the model, with its own
+// shell and editor, and the engine's job is to hand that loop the seat's tools.
+// Those tools cannot be shipped into the box — most are MCP children holding the
+// SEAT's credentials, several are engine control, and the whole point of a
+// sandbox is that its credentials are not the company's. So the box gets one MCP
+// server, on the engine, and every call comes back out.
+//
+// # A transport, beside the one every host-mode run uses
+//
+// A CLI that runs on this host reaches its phase's tools through a unix socket
+// (internal/toolsession). A box is another machine, or another network
+// namespace, so it reaches them over HTTP instead, on a listener this node
+// binds. The MCP server behind both is the same [toolsession.Server], kept in
+// step with what the surface offers; what this package adds is the route, the
+// credential that admits a box to it, and the dispatcher a DETACHED run's calls
+// go through.
 //
 // # The dispatch is the seat's own, never a second implementation
 //
-// A bridged call goes through [tools.Surface.Execute] — the same frame a
-// native tool loop calls. That is the whole design rule here, and it is worth
-// stating as a prohibition: this package must never grow its own idea of
-// whether a tool is granted, whether a skill guard allows it, what a failure
-// looks like, or what gets recorded. Every one of those already exists, is
-// tested, and is what an operator reading a turn expects to see. A second copy
-// would drift, and it would drift on the security half.
+// A bridged call goes through [tools.Surface] — the same frame a tool loop
+// calls. That is the design rule here, stated as a prohibition: this package
+// must never grow its own idea of whether a tool is granted, whether a skill
+// guard allows it, what a failure looks like, or what gets recorded on the
+// surface. Every one of those already exists and is what an operator reading a
+// turn expects to see. A second copy would drift, and it would drift on the
+// security half.
 //
-// What this package adds on top of that frame is only what is genuinely new:
+// What the dispatcher adds is what a detached run's calls are owed that a
+// surface cannot know, because they are about the RUN and not about one call:
 //
+//   - THE SEAT'S FENCE, per call. The run outlives the turn that launched it,
+//     and the node it calls may stop holding the seat, or a person may ask
+//     the seat to stop, while it runs. A call is refused once either has
+//     happened — and every call after it — rather than made as a seat this
+//     node no longer speaks for.
+//   - THE ORDER CALLS ARRIVED IN. A CLI makes a response's calls at once, and
+//     each is placed in the run's call log when it is admitted rather than
+//     when it returns ([tools.Surface.Admit]), so the repeat count an
+//     operation id carries does not depend on which tool finished first.
+//   - A CALL IS THE RUN'S, NOT THE REQUEST'S. It runs under the context the
+//     run was launched with, stripped of that context's cancellation (the
+//     launching turn has suspended), and never under the HTTP request's: a
+//     box that disconnects mid-call abandons only the answer, never a tool
+//     half-way through a write.
+//   - A PANIC IS CONTAINED. A tool that panics is answered as failed, said in
+//     the log with its stack, and the run's tools are closed to it: the
+//     process stays up, and a defect does not run again on the next call.
+//   - A RUN THAT IS OVER REFUSES. A call that reaches a session after its run
+//     ended, or after a relaunch replaced it, is answered and not run.
 //   - A CREDENTIAL A BOX MAY HOLD. The endpoint is per-run, its token expires
 //     with the run, and nothing secret enters the box — see internal/runtoken.
-//   - A DURABLE LEDGER. A native tool loop keeps its calls in memory and the
-//     turn writes them at the end. A bridged run outlives its launching turn
-//     and can outlive the process, so every call is appended where a resume
-//     can read it back — otherwise a restart mid-run leaves the reviewer
-//     judging a turn whose whole tool log is gone.
-//   - A LIFETIME. A run's session is opened when the run starts and closed
-//     when it ends, and a token for a closed run resolves to nothing. Without
-//     that, a box that outlived its run keeps a working key to a live seat's
-//     tools.
+//   - A DURABLE LEDGER. A run outlives its launching turn and can outlive the
+//     process, so every call is appended where a resume can read it back,
+//     with when it ran, how long it took and who answered it.
 //   - AN IDENTITY. The per-run token is this route's credential, so once it
 //     has verified, every call is the run's SEAT acting — attached here, per
-//     call, over whatever the request's own context says. See
-//     [Session.actingAs] for why the guard's answer cannot be the one.
+//     call. See [binding.actingAs] for why the request's own answer cannot be
+//     the one.
+//
+// What it does NOT add is what belongs to a tool loop: rounds, a terminator, a
+// budget's per-request refusal, a person's notes. A box-mode run's loop is its
+// CLI's own, the engine's phase is suspended while it runs, and those are
+// settled when the run is collected and its turn resumes.
 package mcpbridge
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -54,15 +83,17 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 var log = logging.Get("api.mcpbridge")
@@ -81,17 +112,17 @@ const PathPrefix = "/mcp/"
 // tool prefix a coding agent sees (`mcp__crewlet__…`) and the server its logs
 // name agree. Defined by config because config is where the name is RESERVED:
 // an mcp_servers entry called the same thing would be overwritten by the
-// bridge in every agent-mode box, silently.
+// bridge in every box-mode run's box, silently.
 const serverName = config.BridgeServerName
 
-// Session is one run's live tool surface.
+// Session is one run's live tool surface, as the engine opens it.
 //
 // It is the seat's, not the run's: the surface, the guard and the recording
-// are the ones the turn built, so a bridged call and a native one are the same
-// call made from two places.
+// are the ones the turn built, so a bridged call and a host-mode one are the
+// same call made from two places.
 type Session struct {
-	// RunID identifies the run. It is the token's subject and the ledger's
-	// key, and it is in every log line here.
+	// RunID identifies the run. Its token names it, the ledger is keyed by
+	// it, and it is in every log line here.
 	RunID string
 
 	// Handle and Role name the seat, for the logs and the handshake.
@@ -99,7 +130,7 @@ type Session struct {
 	Role   string
 
 	// Surface is the seat's live tool surface for this run — the SAME
-	// object a native loop would execute against. See the package doc for
+	// object a tool loop would execute against. See the package doc for
 	// why nothing here reimplements what it does.
 	//
 	// It must be bound to the run's TURN ([tools.Surface.ForTurn]): the
@@ -110,32 +141,20 @@ type Session struct {
 	// Ledger receives every call as it completes, so a resume after a
 	// restart can rebuild what the run did. Nil keeps the calls in the
 	// surface alone, which is correct for a run whose whole life is one
-	// process — a test, or a host-placement run the engine is watching.
+	// process — a test.
 	Ledger Ledger
 
-	// nonce distinguishes THIS session from an earlier one for the same
-	// run. It is half the token's subject, so a token minted for a
-	// superseded session no longer resolves — see [Bridge.Open].
-	nonce string
-
-	// synced is the surface revision the server was last rendered from,
-	// so a bridged call that changed nothing re-renders nothing.
-	synced uint64
-
-	// server is the ONE MCP server this session exposes, built at Open and
-	// kept for the run's life. One rather than one per request because the
-	// SDK asks for a server only when a box opens a new MCP session — every
-	// later request on that session is served by the server it was opened
-	// with — so a server built per request would advertise, to a box that
-	// connected once and stayed connected, exactly the tool set the run
-	// started with. The live set is kept current by [Session.sync] instead.
-	srv *mcp.Server
+	// Fence is the seat's fence, asked before every call and again after
+	// it: nil while this node still holds the seat the run acts for and
+	// nobody has asked it to stop. Once it answers otherwise, the call in
+	// hand and every call after it are refused — see [binding.Call]. Nil
+	// is an open fence, which is a test's.
+	Fence func() error
 
 	mu sync.Mutex
-	// advertised is what server currently carries, by name, so sync can
-	// tell an activation from a re-read and only notify a box when
-	// something actually changed.
-	advertised map[string]struct{}
+	// live is the session's current opening: what a token minted at its
+	// latest [Bridge.Open] reaches. Nil until it is opened.
+	live *binding
 }
 
 // Ledger is the durable record of a bridged run's calls.
@@ -148,7 +167,31 @@ type Ledger interface {
 	// returned to the box: the tool already ran and its effect already
 	// happened, so failing the call would tell a coding agent to retry
 	// work that has been done.
-	Append(ctx context.Context, runID string, call tools.Call) error
+	Append(ctx context.Context, runID string, call Call) error
+}
+
+// Call is one finished bridged call, as the ledger records it.
+type Call struct {
+	// Call is the call as the surface records it: the tool, its arguments,
+	// what it answered, whether it failed and why.
+	tools.Call
+
+	// Seq is the call's place in the order the session ADMITTED its calls,
+	// from 1 — the order the CLI made them in, which is not the order they
+	// finish in when it makes several at once.
+	Seq int
+
+	// StartedAt is when the call was handed to the surface, in UTC, and
+	// Duration how long the surface took to answer, on the monotonic clock.
+	// Both zero on a call answered without running — arguments that did not
+	// parse.
+	StartedAt time.Time
+	Duration  time.Duration
+
+	// Origin and Server are who answered the call — [toolloop.ToolResult]'s
+	// — and empty where no tool did.
+	Origin string
+	Server string
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -159,8 +202,14 @@ type Bridge struct {
 	// ttl bounds a minted endpoint.
 	ttl time.Duration
 
-	mu       sync.RWMutex
-	sessions map[string]*Session
+	mu sync.RWMutex
+	// sessions is every live opening, by its id — which a token names, so
+	// one opening never answers for another.
+	sessions map[string]*binding
+	// runs is each run's ONE live opening. A relaunch replaces it, and the
+	// run's end closes it — both by run id, the only key the paths that
+	// end a run hold.
+	runs map[string]*binding
 
 	// mounted records that this process built the bridge's HTTP handler,
 	// which is the only way a box's call reaches a session. See
@@ -218,15 +267,22 @@ func New(opts Options) (*Bridge, error) {
 		signer:   signer,
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		ttl:      ttl,
-		sessions: map[string]*Session{},
+		sessions: map[string]*binding{},
+		runs:     map[string]*binding{},
 	}, nil
 }
 
 // Open registers a run's session and returns the URL its box should dial.
 //
+// ctx is the context the run was launched under, and where every bridged
+// call's context comes from: its values — the turn's trace, its attribution —
+// and NEVER its cancellation. The launching turn suspends once the run has
+// started and its context ends with it; the run's calls go on for as long as
+// the run does.
+//
 // The URL is EMPTY when no base is configured, and that is a real answer
 // rather than an error: a deployment whose API is not reachable from a box
-// cannot bridge, and the caller's move is to refuse agent mode for that seat
+// cannot bridge, and the caller's move is to refuse box mode for that seat
 // with a message naming the setting — not to start a run that will fail on its
 // first tool call.
 //
@@ -235,7 +291,7 @@ func New(opts Options) (*Bridge, error) {
 // live tool surface nothing can dispatch to — and, since the caller reads the
 // empty URL as a refusal and never launches a run, nothing ever closes it
 // either.
-func (b *Bridge) Open(s *Session) string {
+func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	if b == nil || s == nil {
 		return ""
 	}
@@ -243,11 +299,11 @@ func (b *Bridge) Open(s *Session) string {
 	// would answer a box's handshake and then take the process down on its
 	// first tools/list — an assembly mistake in one seat's wiring becoming
 	// a fleet node's crash. Refused, the caller gets an empty endpoint and
-	// declines agent mode for that seat, which is the same shape as a
+	// declines box mode for that seat, which is the same shape as a
 	// deployment with no bridge URL.
 	//
 	// A SURFACE WITH NO SEAT IS THE SAME MISTAKE. Every call is decided as
-	// the turn's seat (see [Session.actingAs]), so a session whose surface
+	// the turn's seat (see [binding.actingAs]), so a session whose surface
 	// was never bound to a turn would answer the box's handshake and then
 	// refuse every gated builtin as undecidable — a run that burns its
 	// budget finding out that nothing it holds can be called.
@@ -269,83 +325,76 @@ func (b *Bridge) Open(s *Session) string {
 		log.Warn("mcp_bridge_not_mounted", "run_id", s.RunID, "seat", s.Handle)
 		return ""
 	}
-	// THE PREVIOUS SERVER, WHATEVER HELD IT. Captured before attach
-	// replaces it, and disconnected below on both shapes this takes: a
-	// relaunch handing in a fresh Session for a run id that already has
-	// one, and a caller re-opening the SAME Session value. The second is
-	// the one an identity check would miss — attach would swap the server
-	// out from under the sessions a box had already opened on it, and
-	// those would go on serving from this surface, unreachable and
-	// unclosable, which is the leak Close exists to prevent.
-	b.mu.Lock()
-	previous := b.sessions[s.RunID]
-	b.mu.Unlock()
-	stale := previous.server()
 
-	s.attach()
+	opened := newBinding(ctx, s)
+	s.mu.Lock()
+	s.live = opened
+	s.mu.Unlock()
+
+	// THE RUN'S PREVIOUS OPENING, WHATEVER HELD IT, is replaced in the same
+	// step the new one is filed: a relaunch hands in a fresh Session for a
+	// run id that already has one, or the same Session again. Either way
+	// the earlier box must not keep a working key to the surface the new
+	// run now owns.
 	b.mu.Lock()
-	b.sessions[s.RunID] = s
+	previous := b.runs[s.RunID]
+	if previous != nil {
+		delete(b.sessions, previous.id)
+	}
+	b.sessions[opened.id] = opened
+	b.runs[s.RunID] = opened
 	b.mu.Unlock()
 
-	if stale != nil {
+	if previous != nil {
 		// A relaunch: a resumed executor back in a box under the turn id
 		// it already had. The coordinator deliberately does not end a run
 		// its own turn relaunched, so nothing else closes the earlier
-		// session — and the earlier box must not keep a working key to
-		// the surface the new run now owns. Its TOKEN stops resolving
-		// too, because the subject names this session and not the run:
-		// closing the transport only ends a connection the box would
-		// reopen, and it holds a signed token that has not expired.
+		// opening. Its TOKEN stops resolving too, because the subject names
+		// the opening and not the run: closing the transport only ends a
+		// connection the box would reopen, and it holds a signed token that
+		// has not expired.
 		log.Info("mcp_bridge_session_replaced", "run_id", s.RunID, "seat", s.Handle)
-		closeAll(stale)
+		previous.end()
 	}
-	return b.base + PathPrefix + b.signer.Mint(s.subject(), b.ttl)
+	return b.base + PathPrefix + b.signer.Mint(opened.subject(), b.ttl)
 }
 
-// subject is what a run's token names: this SESSION, not its run.
+// subjectSep joins an opening's id to its run id in a token's subject.
 //
-// The run id alone was the subject once, and a relaunch reuses the turn id —
-// so the superseded box's token went on validating and resolving, to the new
-// session, whose surface and durable call log it could then drive. The nonce
-// is what makes a token stop working when the session it was minted for is
-// replaced.
-//
-// The separator is "~" and the nonce comes FIRST, so the parse is a cut at
-// the first one whatever a run id contains. Two characters are unavailable
-// for it: "." delimits [runtoken.Signer.Mint]'s own payload, and the whole
-// token is a URL PATH SEGMENT, so anything reserved there is worse than
-// wrong — "#" opens the fragment, and a client sends the engine everything
-// before it and keeps the rest, which authenticates as a truncated token
-// rather than failing as a malformed one. "~" is unreserved (RFC 3986 §2.3)
-// and appears in neither a hex nonce nor a UUID.
-func (s *Session) subject() string { return s.nonce + subjectSep + s.RunID }
-
-// subjectSep joins a session's nonce to its run id. See [Session.subject].
+// "~", and the id FIRST, so the parse is a cut at the first one whatever a run
+// id contains. Two characters are unavailable for it: "." delimits
+// [runtoken.Signer.Mint]'s own payload, and the whole token is a URL PATH
+// SEGMENT, so anything reserved there is worse than wrong — "#" opens the
+// fragment, and a client sends the engine everything before it and keeps the
+// rest, which authenticates as a truncated token rather than failing as a
+// malformed one. "~" is unreserved (RFC 3986 §2.3) and appears in neither a
+// hex id nor a UUID.
 const subjectSep = "~"
 
-// newNonce is a session's half of its token subject.
+// newSessionID is an opening's id: half its token's subject.
 //
 // Sixteen bytes of crypto/rand: it is not a secret on its own — the token's
-// HMAC is what makes it unforgeable — but it must not be GUESSABLE either,
-// or a superseded box could mint nothing while still naming the session that
+// HMAC is what makes it unforgeable — but it must not be GUESSABLE either, or
+// a superseded box could mint nothing while still naming the opening that
 // replaced it. rand.Read never returns an error.
-func newNonce() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+func newSessionID() string {
+	var raw [16]byte
+	_, _ = rand.Read(raw[:])
+	return hex.EncodeToString(raw[:])
 }
 
 // Close ends a run's session. A token for a closed run resolves to nothing,
-// and every MCP session a box opened on it is closed.
+// every MCP session a box opened on it is closed, and a call that still
+// reaches it is refused.
 //
-// BOTH HALVES, because the handler holds the second on its own. The route's
-// gate stops a new request the moment the map entry is gone, but the SDK keeps
-// each MCP session a box opened — its transport, its server and, through the
+// ALL THREE, because the handler holds the second on its own. The route's gate
+// stops a new request the moment the map entry is gone, but the SDK keeps each
+// MCP session a box opened — its transport, its server and, through the
 // server's handlers, this session's live surface — until the client sends a
 // DELETE or an idle timeout fires, and a box torn down mid-run sends nothing.
 // Closed here, they leave the handler's table at once; left alone, every
-// agent-mode run this process ever served would pin its seat's surface for
-// the life of the process.
+// box-mode run this process ever served would pin its seat's surface for the
+// life of the process.
 //
 // IDEMPOTENT, because the paths that call it are: a run ends once, but the
 // engine cleans up on the completion path, on the failure path and on the
@@ -356,10 +405,13 @@ func (b *Bridge) Close(runID string) {
 		return
 	}
 	b.mu.Lock()
-	s := b.sessions[runID]
-	delete(b.sessions, runID)
+	opened := b.runs[runID]
+	delete(b.runs, runID)
+	if opened != nil {
+		delete(b.sessions, opened.id)
+	}
 	b.mu.Unlock()
-	closeAll(s.server())
+	opened.end()
 }
 
 // Live reports how many sessions are open. For the health surface and for a
@@ -373,40 +425,14 @@ func (b *Bridge) Live() int {
 	return len(b.sessions)
 }
 
-// session resolves a token to its live session.
+// resolve finds a token's live opening, or says WHY it missed, for the log
+// only.
 //
 // TWO GATES, and both are needed. The signature and expiry say the token was
-// minted by this fleet and has not aged out; the map says the run it names is
-// still going. A token that passes the first and fails the second is the
-// ordinary case — a box that outlived its run — and it must not reach a
+// minted by this fleet and has not aged out; the map says the opening it names
+// is still the run's. A token that passes the first and fails the second is
+// the ordinary case — a box that outlived its run — and it must not reach a
 // surface.
-//
-// # The session is not fleet state, and cannot be
-//
-// A session holds a live [tools.Surface]: the seat's MCP children, its skill
-// guard, its per-turn recording. Those are objects in the process that claimed
-// the seat, so THE NODE THAT OPENED A SESSION IS THE ONLY ONE THAT CAN SERVE
-// IT. Signing shares authentication across a fleet; it does not and could not
-// share the surface.
-//
-// So the bridge URL a box is handed must resolve to that node. Each node mints
-// its endpoint from its OWN CREWLET_MCP_BRIDGE_URL, which makes a
-// per-node-addressable value correct and a shared load-balancer address wrong:
-// behind a balancer, calls land on peers that never held the session and
-// answer 401 forever. That misconfiguration used to be indistinguishable from
-// a forged token, so [Bridge.miss] tells the two apart in the LOG — never in
-// the response, where naming the reason tells an attacker the same thing.
-func (b *Bridge) session(token string) *Session {
-	s, _, _ := b.resolve(token)
-	return s
-}
-
-// resolve is [Bridge.session] plus WHY it missed, for the log only.
-//
-// One function because the signature check is the expensive half and the two
-// answers come out of the same parse: asking separately verified the HMAC
-// twice on every rejected request, on the one route that has no credential in
-// front of it.
 //
 // The reason is never in the RESPONSE — see [Bridge.Handler] — and its two
 // values are logged at different levels for the same reason they are told
@@ -417,31 +443,43 @@ func (b *Bridge) session(token string) *Session {
 // naming a session this node does not hold, is either an ended run's box
 // (ordinary, self-limiting) or the deployment error below — and producing one
 // takes the signing key, so warning about it cannot be abused.
-func (b *Bridge) resolve(token string) (s *Session, runID, reason string) {
+//
+// # The session is not fleet state, and cannot be
+//
+// A session holds a live [tools.Surface]: the seat's MCP children, its skill
+// guard, its per-turn recording. Those are objects in the process that claimed
+// the seat, so THE NODE THAT OPENED A SESSION IS THE ONLY ONE THAT CAN SERVE
+// IT. Signing shares authentication across a fleet; it does not and could not
+// share the surface. Each node mints its endpoint from its OWN
+// CREWLET_MCP_BRIDGE_URL, which makes a per-node-addressable value correct and
+// a shared load-balancer address wrong: behind a balancer, calls land on peers
+// that never held the session and answer 401 forever.
+func (b *Bridge) resolve(token string) (opened *binding, runID, reason string) {
 	subject := b.signer.Validate(token)
 	if subject == "" {
 		return nil, "", "the token is forged, malformed or expired"
 	}
-	nonce, runID, ok := strings.Cut(subject, subjectSep)
+	id, runID, ok := strings.Cut(subject, subjectSep)
 	if !ok {
 		return nil, "", "the token is forged, malformed or expired"
 	}
 	b.mu.RLock()
-	held := b.sessions[runID]
+	held, current := b.sessions[id], b.runs[runID]
 	b.mu.RUnlock()
-	if held != nil && held.nonce == nonce {
+	if held != nil && held.session.RunID == runID {
 		return held, runID, ""
 	}
-	if held != nil {
+	if current != nil {
 		return nil, runID, "this node holds a DIFFERENT session for that run — " +
 			"the run was relaunched and this token names the superseded one, " +
 			"which is a box that outlived the run it was started for"
 	}
 	return nil, runID, "this fleet signed the token, but this node holds no session " +
-		"for that run: the run has ended, or " + BaseURLVar + " resolves to a " +
-		"node other than the one that owns the seat (a load balancer in front of " +
-		"several). It must address the node that opened the session, because a " +
-		"session is a live tool surface rather than fleet state"
+		"for that run: the run has ended, this node restarted since it opened " +
+		"the run's session, or " + BaseURLVar + " resolves to a node other than " +
+		"the one that owns the seat (a load balancer in front of several). It must " +
+		"address the node that opened the session, because a session is a live " +
+		"tool surface rather than fleet state"
 }
 
 // Miss says WHY a token did not resolve, for the log only. Exported for the
@@ -454,7 +492,7 @@ func (b *Bridge) Miss(token string) (runID, reason string) {
 // Mounted reports whether this process built the bridge's HTTP handler.
 //
 // A session is reachable only through [Bridge.Handler] on the node that opened
-// it (see [Bridge.session]), so a bridge whose handler no listener took serves
+// it (see [Bridge.resolve]), so a bridge whose handler no listener took serves
 // nobody: a node with api.port 0 has a base URL and a signer and no socket.
 // Building the handler is the signal rather than a separate call a wiring
 // could forget, because the handler is the one thing a listener cannot serve
@@ -477,11 +515,11 @@ func (b *Bridge) Handler() http.Handler {
 	// its tools mid-job for no reason the run could see.
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
-			s := b.session(r.PathValue("token"))
-			if s == nil {
+			opened, _, _ := b.resolve(r.PathValue("token"))
+			if opened == nil {
 				return nil
 			}
-			return s.server()
+			return opened.server.MCP()
 		}, nil)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -493,8 +531,7 @@ func (b *Bridge) Handler() http.Handler {
 		// NO DETAIL: forged, expired and "that run is over" are three
 		// different facts, and telling the caller which one it was tells
 		// an attacker the same.
-		token := r.PathValue("token")
-		if s, runID, reason := b.resolve(token); s == nil {
+		if opened, runID, reason := b.resolve(r.PathValue("token")); opened == nil {
 			// LEVELLED BY WHO COULD HAVE CAUSED IT, not by how it reads.
 			// This route is deliberately exempt from authentication (the
 			// box holds no API token — see [PathPrefix]), so a line
@@ -514,125 +551,8 @@ func (b *Bridge) Handler() http.Handler {
 	})
 }
 
-// attach builds the MCP server this session exposes, carrying the surface's
-// current tool set.
-func (s *Session) attach() {
-	s.mu.Lock()
-	s.nonce = newNonce()
-	s.srv = mcp.NewServer(&mcp.Implementation{
-		Name:    serverName,
-		Title:   s.Role + " (" + s.Handle + ")",
-		Version: "1",
-	}, nil)
-	// Nil rather than empty, so the first sync renders unconditionally
-	// however the surface's revision happens to be numbered.
-	s.advertised = nil
-	s.mu.Unlock()
-	s.sync()
-}
-
-// sync brings the server's tool list up to the surface's active set.
-//
-// AFTER EVERY BRIDGED CALL, because the active set MOVES and a bridged call is
-// the only thing that moves it: a coding agent activates a tool by calling
-// `activate_tool` over this same bridge, and the engine's own loop — the other
-// writer of an active set — is suspended for as long as the box runs. So a
-// sync at each call's end sees every activation the moment it lands, and
-// the SDK's list-changed notification tells a connected box to re-list.
-//
-// A server built once at Open and never touched would advertise the set the
-// run started with for its whole life, and the MCP-backed delivery tools —
-// which every run starts without and activates when it needs one — would be
-// listed as active by the surface and refused as unknown by the server.
-func (s *Session) sync() {
-	// ASKED BEFORE THE LOCK IS WORTH TAKING. Almost no bridged call is an
-	// activation, and ToolDefs deep-clones every active tool's schema — so
-	// on a seat with a large grant the unconditional render was the cost of
-	// the whole surface on every call, serialised behind this mutex.
-	rev := s.Surface.Revision()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.advertised != nil && s.synced == rev {
-		return
-	}
-	if s.advertised == nil {
-		s.advertised = map[string]struct{}{}
-	}
-	s.synced = rev
-	live := make(map[string]struct{})
-	for _, def := range s.Surface.ToolDefs() {
-		live[def.Name] = struct{}{}
-		if _, have := s.advertised[def.Name]; have {
-			continue
-		}
-		s.srv.AddTool(&mcp.Tool{
-			Name:        def.Name,
-			Description: def.Description,
-			InputSchema: def.Parameters,
-			// AND THE HINTS THE REGISTRY HOLDS, which this bridge
-			// advertised none of: a box was handed a seat's whole
-			// grant with every tool unannotated, so a coding agent's
-			// client could not tell `get_work_item` from
-			// `remove_work_item` and had nothing to ask a person on
-			// before an irreversible call. Read off the SURFACE
-			// rather than recomputed, so an MCP tool's own
-			// advertised hints travel too — a bridged tool is not
-			// necessarily a builtin.
-			Annotations: crewletmcp.SDKAnnotations(
-				s.Surface.AnnotationsOf(def.Name)),
-		}, s.handler(def.Name))
-		s.advertised[def.Name] = struct{}{}
-	}
-	// An active set only grows today; removal is here so that the server
-	// is a rendering of the surface rather than a record of what was once
-	// added, should that ever change.
-	var gone []string
-	for name := range s.advertised {
-		if _, still := live[name]; !still {
-			gone = append(gone, name)
-		}
-	}
-	if len(gone) > 0 {
-		s.srv.RemoveTools(gone...)
-		for _, name := range gone {
-			delete(s.advertised, name)
-		}
-	}
-}
-
-// server is this session's MCP server, nil-safe on the session so a caller
-// holding a map miss does not have to branch before asking.
-func (s *Session) server() *mcp.Server {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.srv
-}
-
-// closeAll ends every MCP session a box opened on one server.
-//
-// Closing a server session runs the handler's own removal hook, so the
-// session leaves the SDK's table as well as ending on the wire — which is what
-// makes [Bridge.Close] release the surface rather than merely hide it.
-//
-// It takes the SERVER rather than the Session because the two callers hold
-// the object at different moments: Close has a session it just removed, and
-// Open has the server a replaced session held BEFORE attach swapped it.
-func closeAll(server *mcp.Server) {
-	if server == nil {
-		return
-	}
-	for session := range server.Sessions() {
-		if err := session.Close(); err != nil {
-			log.Debug("mcp_bridge_session_close", "error", err)
-		}
-	}
-}
-
-// Connections reports how many MCP sessions the server currently holds for
-// this run. For the health surface and for the test that has to know a close
+// Connections reports how many MCP sessions the session's current opening
+// holds. For the health surface and for the test that has to know a close
 // reached the SDK's table and not only the bridge's own map.
 //
 // Sessions, not boxes: one client connect opens more than one — the SDK
@@ -640,88 +560,275 @@ func closeAll(server *mcp.Server) {
 // that probe's session is never retired — so the number says "something is
 // still attached", never "how many boxes".
 func (s *Session) Connections() int {
-	server := s.server()
-	if server == nil {
+	s.mu.Lock()
+	opened := s.live
+	s.mu.Unlock()
+	if opened == nil {
 		return 0
 	}
 	n := 0
-	for range server.Sessions() {
+	for range opened.server.MCP().Sessions() {
 		n++
 	}
 	return n
 }
 
-// handler dispatches one bridged call through the seat's own surface.
-func (s *Session) handler(name string) mcp.ToolHandler {
-	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args, err := decodeArgs(req)
-		if err != nil {
-			// BACK TO THE CALLER AS A FAILED RESULT, not a protocol
-			// error: malformed arguments are the one failure a model
-			// reliably fixes, and a protocol error tears down the
-			// session it would have fixed them in.
-			return failure(err.Error()), nil
-		}
+// --- one opening: the dispatcher a box's calls go through ------------------
 
-		res, err := s.Surface.Execute(s.actingAs(ctx),
-			llm.ToolCall{Name: name, Arguments: args})
-		if err != nil {
-			// The surface returns an error only for something that
-			// genuinely could not run — a torn-down turn. That IS a
-			// protocol error: there is nothing for the caller to fix
-			// and nothing to retry against.
-			log.ErrorContext(ctx, "mcp_bridge_dispatch_failed",
-				"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)
-			return nil, fmt.Errorf("crewlet: %s: %w", name, err)
-		}
-		if res.Suspend {
-			// A SUSPEND CANNOT CROSS THIS BOUNDARY. It stops the
-			// ENGINE's tool loop with the call unanswered so the
-			// conversation can be persisted and re-entered; there is no
-			// engine loop here, and the conversation belongs to a vendor
-			// CLI that would simply hang. The tool that wants it is
-			// run_sandbox, which is offered to a bridged run as a
-			// handle-plus-wait pair instead — see the engine's bridge
-			// surface.
-			log.ErrorContext(ctx, "mcp_bridge_suspend_refused",
-				"run_id", s.RunID, "seat", s.Handle, "tool", name)
-			return failure("This tool cannot be used from a coding run; " +
-				"it suspends the caller's own loop."), nil
-		}
+// binding is one opening of a session: the MCP server a token minted at that
+// opening reaches, and the gates every call on it passes.
+//
+// ITS OWN VALUE, apart from the [Session] the engine fills in, so that a
+// session opened twice — a relaunch handing the same value in again — is two
+// openings: the first ends, its token stops resolving and its calls are
+// refused, while the second serves.
+type binding struct {
+	id      string
+	session *Session
+	server  *toolsession.Server
 
-		s.appendCall(ctx, name, args, res.Output, res.Failed, res.Cause)
-		// THE CALL MAY HAVE BEEN AN ACTIVATION. See [Session.sync].
-		s.sync()
-		return &mcp.CallToolResult{
-			IsError: res.Failed,
-			Content: []mcp.Content{&mcp.TextContent{Text: res.Output}},
-		}, nil
+	// ctx is the run's launch context with its cancellation removed — what
+	// every call runs under. Held, against the rule that a context is
+	// threaded rather than stored, because a call arrives on an HTTP
+	// request whose context is the box's connection, and the run's own
+	// context has no other way to reach it; see [Bridge.Open].
+	ctx context.Context
+
+	mu sync.Mutex
+	// ended is an opening whose run ended or was relaunched: every call is
+	// refused.
+	ended bool
+	// stopped is why the opening's calls are refused from here on: the
+	// seat's fence closed, or a tool panicked. Nil while it serves.
+	stopped error
+	// admitted counts the calls admitted, the next one's [Call.Seq].
+	admitted int
+}
+
+var _ toolsession.Dispatcher = (*binding)(nil)
+
+func newBinding(ctx context.Context, s *Session) *binding {
+	opened := &binding{id: newSessionID(), session: s, ctx: context.WithoutCancel(ctx)}
+	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
+	return opened
+}
+
+// subject is what a token minted for this opening names: the opening, and its
+// run. The run id alone was the subject once, and a relaunch reuses the turn
+// id — so the superseded box's token went on resolving, to the new session,
+// whose surface and durable call log it could then drive.
+func (o *binding) subject() string { return o.id + subjectSep + o.session.RunID }
+
+// end refuses every later call on the opening and closes every MCP session a
+// box holds on it. Nil-safe, and safe to call twice.
+//
+// Closing a server session runs the handler's own removal hook, so the session
+// leaves the SDK's table as well as ending on the wire — which is what makes
+// [Bridge.Close] release the surface rather than merely hide it.
+func (o *binding) end() {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.ended = true
+	o.mu.Unlock()
+	for ss := range o.server.MCP().Sessions() {
+		if err := ss.Close(); err != nil {
+			log.Debug("mcp_bridge_session_close", "error", err)
+		}
 	}
 }
 
+// Offered is what the surface offers now, with the hints the registry holds
+// for each, so a box's client can tell a read from a write.
+func (o *binding) Offered() []toolsession.Tool {
+	surface := o.session.Surface
+	defs := surface.ToolDefs()
+	out := make([]toolsession.Tool, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, toolsession.Tool{Def: def, Annotations: surface.AnnotationsOf(def.Name)})
+	}
+	return out
+}
+
+// Revision is the surface's: an activation over the bridge is the only thing
+// that moves it while the run is in its box.
+func (o *binding) Revision() uint64 { return o.session.Surface.Revision() }
+
+// The answers a call gets when it is not run. None of them says more than the
+// run needs to stop: what stopped it is in the engine's log.
+const (
+	// endedNote answers a call on an opening whose run ended or was
+	// replaced by a relaunch.
+	endedNote = "This run has ended; this call was not run. End your turn now."
+
+	// stoppedNote answers a call once the run's tools are closed: the seat
+	// moved off this node, a person asked it to stop, or a tool failed
+	// inside the engine.
+	stoppedNote = "This run's tools are closed and this call was not run. " +
+		"End your turn now."
+
+	// failedInsideNote answers the call that broke inside the engine.
+	failedInsideNote = "This call failed inside the engine, and this run's tools are " +
+		"now closed. End your turn now."
+
+	// suspendNote answers a tool that would park the caller's own loop,
+	// which a box-mode run does not have.
+	suspendNote = "This tool cannot be used from a coding run; it suspends the " +
+		"caller's own loop."
+)
+
+// Call decides and runs one call a box made. It never fails as a Go error: a
+// call that could not run is a failed result the CLI hands its model.
+//
+// The request's context is deliberately not used — see the package doc, "a
+// call is the run's, not the request's".
+func (o *binding) Call(_ context.Context, in toolsession.Call) toolsession.Result {
+	s := o.session
+	// THE FENCE BEFORE ANY CALL, outside the lock: it reads the node's own
+	// copy of the seat's grant and pauses, and nothing it answers depends on
+	// another call of this opening.
+	fenced := fence(s)
+
+	o.mu.Lock()
+	if o.ended {
+		o.mu.Unlock()
+		return refused(endedNote)
+	}
+	if o.stopped == nil && fenced != nil {
+		o.stopLocked(fenced)
+	}
+	if o.stopped != nil {
+		o.mu.Unlock()
+		return refused(stoppedNote)
+	}
+	o.admitted++
+	seq := o.admitted
+	if in.ArgumentsError != "" {
+		// ANSWERED, NOT RUN, and recorded: the call was made, and an empty
+		// object in place of what the model wrote is a call it never made.
+		// Not admitted to the run's call log, since nothing ran.
+		o.mu.Unlock()
+		out := unparsedArguments(in.Name, in.ArgumentsError)
+		o.record(Call{Call: tools.Call{Name: in.Name, Output: out, Failed: true,
+			Cause: tools.RefusalInvalid}, Seq: seq})
+		return refused(out)
+	}
+	args := in.Arguments
+	if args == nil {
+		args = map[string]any{}
+	}
+	// ITS PLACE IN THE RUN'S CALL LOG, fixed here, under the lock that
+	// orders admissions — see [tools.Surface.Admit].
+	admission := s.Surface.Admit(in.Name, args)
+	o.mu.Unlock()
+
+	started := time.Now()
+	res, broke, err := o.execute(admission, in.Name, args)
+	took := time.Since(started)
+	switch {
+	case broke != nil:
+		log.ErrorContext(o.ctx, "mcp_bridge_tool_panicked", "run_id", s.RunID,
+			"seat", s.Handle, "tool", in.Name, "panic", broke.Value, "stack", broke.Stack)
+		o.stop(broke)
+		res = toolloop.ToolResult{Output: failedInsideNote, Failed: true,
+			Cause: tools.RefusalInternalError}
+	case err != nil:
+		// The surface returns an error only for a call that could not run
+		// at all — nothing was recorded on it, and nothing is here: the
+		// call did not happen as far as any record says.
+		log.ErrorContext(o.ctx, "mcp_bridge_dispatch_failed",
+			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name, "error", err)
+		return refused(fmt.Sprintf("This call could not be run: %v", err))
+	case res.Suspend:
+		// A SUSPEND CANNOT CROSS THIS BOUNDARY. It parks a tool loop with
+		// the call unanswered so the conversation can be persisted and
+		// re-entered; a box-mode run's loop is its CLI's own, which would
+		// simply wait on an answer that never comes. The one tool that
+		// wants it is run_sandbox, which a box-mode seat is never offered:
+		// its own box is where its code work runs.
+		log.ErrorContext(o.ctx, "mcp_bridge_suspend_refused",
+			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name)
+		return refused(suspendNote)
+	}
+
+	// AND AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered — it
+	// ran, and what it did is done — but nothing after it runs as a seat
+	// this node no longer holds.
+	if after := fence(s); after != nil {
+		o.stop(after)
+	}
+	o.record(Call{
+		Call: tools.Call{Name: in.Name, Args: args, Output: res.Output, Failed: res.Failed,
+			Cause: res.Cause},
+		Seq: seq, StartedAt: started.UTC(), Duration: took,
+		Origin: res.Origin, Server: res.Server,
+	})
+	return toolsession.Result{Output: res.Output, Failed: res.Failed}
+}
+
+// execute runs one admitted call as the run's seat, under the run's context,
+// and contains a panic — broke is it, recovered.
+func (o *binding) execute(a tools.Admission, name string, args map[string]any,
+) (res toolloop.ToolResult, broke *turn.PanicError, err error) {
+	defer func() {
+		if broke = turn.Recovered(recover()); broke != nil {
+			res, err = toolloop.ToolResult{}, nil
+		}
+	}()
+	res, err = o.session.Surface.ExecuteAdmitted(o.actingAs(o.ctx), a,
+		llm.ToolCall{Name: name, Arguments: args})
+	return res, nil, err
+}
+
+// fence asks the session's fence, an open one where it has none.
+func fence(s *Session) error {
+	if s.Fence == nil {
+		return nil
+	}
+	return s.Fence()
+}
+
+// stop closes the opening's tools for good, saying why once.
+func (o *binding) stop(why error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.stopLocked(why)
+}
+
+func (o *binding) stopLocked(why error) {
+	if o.stopped != nil {
+		return
+	}
+	o.stopped = why
+	log.WarnContext(o.ctx, "mcp_bridge_run_stopped", "run_id", o.session.RunID,
+		"seat", o.session.Handle, "reason", why.Error(),
+		"detail", "every later tool call of this run is refused, and the run's "+
+			"coding CLI is told to end its turn")
+}
+
 // actingAs is the context one bridged call runs under: the run's own SEAT,
-// replacing whatever identity the request arrived with.
+// replacing whatever identity the context carries.
 //
 // # The token is the credential, so the seat is the caller
 //
-// This handler runs only for a request whose per-run token verified and named
-// this live session — that is the whole of this route's authentication, and
+// A call reaches here only on a request whose per-run token verified and named
+// this live opening — that is the whole of this route's authentication, and
 // what it establishes is that the caller is the box the run was started in,
 // acting for the seat the run belongs to. So "who is calling" has exactly one
-// answer here, and it is the turn's seat, as [turnctx.Principal] states it for
-// a native loop.
+// answer here, and it is the turn's seat, as [turnctx.Principal] states it.
 //
-// # And the request's own context cannot say so
+// # And no other context can say so
 //
 // The route is exempt from the credential guard, because the box holds no API
 // token — but the guard still RESOLVES every request, exempt or not, so a box
-// presenting nothing arrives here carrying [iam.Anonymous] (and, on a
-// development build started with -dev-principal, the development principal).
-// The MCP SDK then keeps the context of the request that OPENED the session
-// for the session's whole life. [turnctx.WithPrincipal] deliberately lets an
+// presenting nothing arrives carrying [iam.Anonymous] (and, on a development
+// build started with -dev-principal, the development principal); and the
+// launch context the call runs under is the turn's, which may carry the person
+// whose message the turn answered. [turnctx.WithPrincipal] deliberately lets an
 // answer already on the context win — correct for a surface reached through
-// somebody's own credential — so the anonymous answer reached every gated
-// builtin, and each one refused the seat's own call as needing a credential.
+// somebody's own credential — so either would reach every gated builtin in the
+// seat's place.
 //
 // REPLACED HERE, per call, and nowhere else. Teaching WithPrincipal to prefer
 // the turn would let the turn a person's request happens to carry overwrite
@@ -729,13 +836,13 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 // call IS the run, so it is the one place that may set the answer outright —
 // and setting it outright is also what keeps a development principal from
 // ever riding a seat's bridged call.
-func (s *Session) actingAs(ctx context.Context) context.Context {
-	seat := turnctx.Principal(s.Surface.Turn())
+func (o *binding) actingAs(ctx context.Context) context.Context {
+	seat := turnctx.Principal(o.session.Surface.Turn())
 	if seat.Seat == "" {
 		// UNREACHABLE past [Bridge.Open], which refuses a surface with no
 		// seat. Answered as unknown rather than left alone, so a surface
 		// that somehow lost its turn is never decided as whoever the
-		// request's own context happened to name.
+		// context happened to name.
 		return iam.WithUnresolved(ctx, errNoSeat)
 	}
 	return iam.WithPrincipal(ctx, seat)
@@ -745,7 +852,7 @@ func (s *Session) actingAs(ctx context.Context) context.Context {
 var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " +
 	"seat, so a bridged call has nobody to act as")
 
-// appendCall records one finished call in the durable ledger.
+// record appends one finished call to the durable ledger.
 //
 // BEST EFFORT, and the reason is that the alternative is worse. The tool has
 // already run and its effect has already happened, so failing the call would
@@ -753,50 +860,29 @@ var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " 
 // the whole delivery machinery exists to prevent. A lost ledger row costs the
 // reviewer one line of evidence after a restart; a duplicated side effect
 // costs somebody two identical messages.
-func (s *Session) appendCall(ctx context.Context, name string, args map[string]any,
-	out string, failed bool, cause error) {
+//
+// Under the run's context rather than the request's, so a box that hangs up
+// does not take the row with it.
+func (o *binding) record(call Call) {
+	s := o.session
 	if s.Ledger == nil {
 		return
 	}
-	// THE CAUSE, which the call's class and whether its write may have
-	// landed are both read out of ([tools.Call.Refusal],
-	// [tools.Call.Unknown]): a class stored beside it would be a second
-	// answer to one question.
-	call := tools.Call{Name: name, Args: args, Output: out, Failed: failed, Cause: cause}
-	if err := s.Ledger.Append(ctx, s.RunID, call); err != nil {
-		log.WarnContext(ctx, "mcp_bridge_ledger_append_failed",
-			"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)
+	if err := s.Ledger.Append(o.ctx, s.RunID, call); err != nil {
+		log.WarnContext(o.ctx, "mcp_bridge_ledger_append_failed",
+			"run_id", s.RunID, "seat", s.Handle, "tool", call.Name, "error", err)
 	}
 }
 
-// decodeArgs turns a call's raw arguments into the map the surface takes.
-//
-// THROUGH json.Number, so a large id in a tool's arguments survives: Go's
-// default decodes every JSON number to float64, which silently rounds an
-// issue id past 2^53 and sends the wrong one to a tracker.
-func decodeArgs(req *mcp.CallToolRequest) (map[string]any, error) {
-	raw := req.Params.Arguments
-	// A tool with no arguments arrives as an absent or empty raw message,
-	// which is a call with an empty object rather than a malformed one.
-	if len(raw) == 0 || string(raw) == "null" {
-		return map[string]any{}, nil
-	}
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.UseNumber()
-	var out map[string]any
-	if err := dec.Decode(&out); err != nil {
-		return nil, fmt.Errorf("arguments are not a JSON object: %w", err)
-	}
-	if out == nil {
-		out = map[string]any{}
-	}
-	return out, nil
+// unparsedArguments is the answer to a call whose arguments did not parse: the
+// tool loop's own wording, so a model reads the same fix whichever way its CLI
+// reached the seat's tools.
+func unparsedArguments(name, why string) string {
+	return fmt.Sprintf("%s was NOT run: its arguments could not be read (%s). "+
+		"Call it again with its arguments as one complete JSON object.", name, why)
 }
 
-// failure is a tool result the caller reads and can act on.
-func failure(msg string) *mcp.CallToolResult {
-	return &mcp.CallToolResult{
-		IsError: true,
-		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-	}
+// refused is a call answered without the tool's own output.
+func refused(msg string) toolsession.Result {
+	return toolsession.Result{Output: msg, Failed: true}
 }

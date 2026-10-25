@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -50,6 +52,8 @@ func (h *heldTool) Call(ctx context.Context, _ map[string]any) (tools.Result, er
 // bridge a test can dial: the engine, the run's row store, and the client
 // session its box would hold.
 type bridgedRun struct {
+	engine  *Engine
+	handle  string
 	pending sandbox.PendingStore
 	session *mcp.ClientSession
 }
@@ -109,7 +113,8 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	return bridgedRun{pending: e.sandbox.Load().pending, session: session}
+	return bridgedRun{engine: e, handle: seat.Handle(), pending: e.sandbox.Load().pending,
+		session: session}
 }
 
 // call makes one bridged call and waits for its answer.
@@ -129,6 +134,48 @@ func (b bridgedRun) row(t *testing.T, turnID string) sandbox.PendingRun {
 		t.Fatalf("the run's row: found %v, %v", found, err)
 	}
 	return row
+}
+
+// A LAUNCHED RUN'S CALLS STOP WHEN A PERSON STOPS ITS SEAT. The run outlives
+// the turn that launched it, so the seat's fence is handed to its session and
+// asked before every call the box makes: once a person's pause asks the seat's
+// running work to stop, a call is refused rather than made — through the real
+// launcher and the real bridge, because the fence is one field of wiring in
+// LaunchExecutor and nothing else can show it was set.
+//
+// Mutation: drop the Fence from the session LaunchExecutor opens, and the
+// stopped seat's call runs.
+func TestALaunchedRunsCallsStopWhenAPersonStopsItsSeat(t *testing.T) {
+	t.Parallel()
+	read := newHeldTool("read_page")
+	close(read.release)
+	run := launchBridged(t, "t-fenced", read)
+	run.call(t, "read_page")
+
+	seat, err := run.engine.seatID(run.handle)
+	if err != nil {
+		t.Fatalf("seatID: %v", err)
+	}
+	run.engine.pauses.mu.Lock()
+	if run.engine.pauses.pauses == nil {
+		run.engine.pauses.pauses = map[uuid.UUID]coord.SeatPause{}
+	}
+	run.engine.pauses.pauses[seat] = coord.SeatPause{Seat: seat, By: "ana", StopRunning: true}
+	run.engine.pauses.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := run.session.CallTool(ctx, &mcp.CallToolParams{Name: "read_page",
+		Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("a call ran on a seat a person had asked to stop")
+	}
+	if calls := run.row(t, "t-fenced").BridgeCalls; len(calls) != 1 {
+		t.Errorf("the run recorded %d calls, want the one made before the stop", len(calls))
+	}
 }
 
 // A LAUNCH BINDS ITS BRIDGE SESSION TO ITS JOB, so the box's calls are filed

@@ -38,8 +38,8 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // name, not a posture to degrade into.
 //
 // An unset base URL builds NOTHING, and that is a real configuration rather
-// than an error: most deployments run no agent mode. The route is then absent,
-// and a seat that asks for agent mode is refused with the variable named —
+// than an error: most deployments run no box mode. The route is then absent,
+// and a seat that asks for box mode is refused with the variable named —
 // which is a better failure than a run that starts and cannot call a tool.
 func Build(env func(string) string, material runtoken.Material) (*Bridge, error) {
 	if !Configured(env) {

@@ -89,12 +89,20 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
 	ledger := newBridgeLedger(pending, req.Spend)
-	endpoint := e.bridge.Open(&mcpbridge.Session{
+	endpoint := e.bridge.Open(ctx, &mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  l.turn.Handle(),
 		Role:    l.seat.Name,
 		Surface: req.Surface,
 		Ledger:  ledger,
+		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
+		// executor of, so it closes on the grant that turn was admitted
+		// under — the same check its own tool loop would run, now asked
+		// before and after every call the box makes. The run outlives the
+		// turn: the seat can move off this node, or a person stop it,
+		// while it runs, and a call after either is refused rather than
+		// made as a seat this node no longer speaks for.
+		Fence: e.seatFence(l.turn.Handle()),
 	})
 	if endpoint == "" {
 		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
