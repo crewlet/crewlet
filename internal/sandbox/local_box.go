@@ -159,9 +159,32 @@ type directBox struct {
 	// readCap is the whole-read cap the suite gave the box, zero — every
 	// box in production — for [MaxFileBytes]: see [readLimit].
 	readCap int
+	// confine is the boundary every command runs in, nil for a seat's
+	// unconfined Direct cell.
+	confine *boxConfine
 }
 
 var _ Sandbox = (*directBox)(nil)
+
+// boxConfine is one box's confinement: the host's mechanism and its rules.
+type boxConfine struct {
+	host  *HostConfinement
+	rules confineRules
+}
+
+// argv is a shell command line as this box runs it: confined where the box
+// is, as written where it is not.
+func (b *directBox) argv(cmd string) ([]string, error) {
+	argv := []string{"/bin/sh", "-c", cmd}
+	if b.confine == nil {
+		return argv, nil
+	}
+	wrapped, err := b.confine.host.wrap(b.confine.rules, argv)
+	if err != nil {
+		return nil, localErrorf("local sandbox %s: %v", b.layout.id, err)
+	}
+	return wrapped, nil
+}
 
 func (b *directBox) ID() string   { return b.layout.id }
 func (b *directBox) Home() string { return b.layout.home() }
@@ -213,8 +236,12 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 	if err != nil {
 		return ExecResult{}, err
 	}
+	argv, err := b.argv(cmd)
+	if err != nil {
+		return ExecResult{}, err
+	}
 	return runHost(ctx, hostCommand{
-		argv:    []string{"/bin/sh", "-c", cmd},
+		argv:    argv,
 		cwd:     dir,
 		env:     b.childEnv(opts.Env),
 		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
@@ -248,7 +275,11 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// Not exec.CommandContext: the job must outlive the turn that starts it,
 	// so binding it to the caller's context would kill it at the first
 	// return.
-	proc := exec.Command("/bin/sh", "-c", cmd) //nolint:noctx // deliberate; see above
+	argv, err := b.argv(cmd)
+	if err != nil {
+		return "", err
+	}
+	proc := exec.Command(argv[0], argv[1:]...) //nolint:noctx // deliberate; see above
 	proc.Dir = dir
 	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
 	procgroup.Detach(proc)

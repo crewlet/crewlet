@@ -59,6 +59,14 @@ import (
 )
 
 func main() {
+	// THE LANDLOCK HELPER, before anything else runs: a confined host box's
+	// every command is this binary re-executed to restrict itself and then
+	// become the box's job (internal/sandbox's ConfineMain). It is no
+	// operator's command, so it is answered here, ahead of the dispatch and
+	// its usage, and it never returns on success.
+	if len(os.Args) > 1 && os.Args[1] == sandbox.ConfineCommand {
+		os.Exit(sandbox.ConfineMain(os.Args[2:]))
+	}
 	// WHERE THIS PROCESS'S LOGS GO, decided by the one function that owns
 	// the process. Everything below adjusts only the level and the format
 	// (logging.SetVerbosity), because a command that installed a
