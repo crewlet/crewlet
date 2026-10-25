@@ -85,6 +85,39 @@ func (r *Reader) read(ctx context.Context, scope statelog.ScopeSet, set bool,
 	return err
 }
 
+// readChild runs fn in one transaction of the read authority, over the scope
+// of the conversation that the row of id in table belongs to: resolved inside
+// the transaction, because only the row says which conversation it is in. A
+// row this node does not hold reads over the whole domain, since a create this
+// node could not decode is exactly a row it does not hold.
+func (r *Reader) readChild(ctx context.Context, table string, id uuid.UUID,
+	fn func(*sql.Tx) error) error {
+
+	resolve := func(ctx context.Context, tx *sql.Tx) (statelog.ScopeSet, error) {
+		var conversation string
+		err := tx.QueryRowContext(ctx,
+			`SELECT conversation_id FROM `+table+` WHERE `+childKey[table]+` = ?`,
+			id.String()).Scan(&conversation)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return DomainScope(), nil
+		case err != nil:
+			return statelog.ScopeSet{}, err
+		}
+		return ConversationScope(conversation), nil
+	}
+	q := readLevel.Query(statelog.ScopeSet{}, false)
+	q.Resolve = resolve
+	_, err := r.log.Read(ctx, q, fn)
+	return err
+}
+
+// childKey is the key column of each table a point read resolves through.
+var childKey = map[string]string{
+	"assistant_turns": "id", "assistant_cards": "id", "assistant_proposals": "id",
+	"assistant_parked": "turn_id",
+}
+
 // Conversation is one conversation as its owner reads it.
 type Conversation struct {
 	ID             uuid.UUID
@@ -506,7 +539,7 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 // Turn is one of the owner's turns.
 func (r *Reader) Turn(ctx context.Context, owner, id uuid.UUID) (Turn, error) {
 	var t Turn
-	err := r.read(ctx, DomainScope(), false, func(tx *sql.Tx) error {
+	err := r.readChild(ctx, "assistant_turns", id, func(tx *sql.Tx) error {
 		var err error
 		t, err = r.scanTurn(tx.QueryRowContext(ctx, `SELECT `+turnColumns+`
 			FROM assistant_turns WHERE id = ? AND owner_id = ?`, id.String(), owner.String()))
@@ -522,7 +555,7 @@ func (r *Reader) Turn(ctx context.Context, owner, id uuid.UUID) (Turn, error) {
 // [ErrNotFound] for a turn that keeps nothing.
 func (r *Reader) Parked(ctx context.Context, owner, turn uuid.UUID) ([]byte, error) {
 	var out []byte
-	err := r.read(ctx, DomainScope(), false, func(tx *sql.Tx) error {
+	err := r.readChild(ctx, "assistant_parked", turn, func(tx *sql.Tx) error {
 		var conversation, sealed string
 		err := tx.QueryRowContext(ctx, `
 			SELECT p.conversation_id, p.messages_sealed FROM assistant_parked p
@@ -548,7 +581,7 @@ func (r *Reader) Parked(ctx context.Context, owner, turn uuid.UUID) ([]byte, err
 // Card is one of the owner's cards.
 func (r *Reader) Card(ctx context.Context, owner, id uuid.UUID) (Card, error) {
 	var c Card
-	err := r.read(ctx, DomainScope(), false, func(tx *sql.Tx) error {
+	err := r.readChild(ctx, "assistant_cards", id, func(tx *sql.Tx) error {
 		var err error
 		c, err = r.scanCard(tx.QueryRowContext(ctx, `SELECT `+cardColumns+`
 			FROM assistant_cards k JOIN assistant_conversations c ON c.id = k.conversation_id
@@ -564,7 +597,7 @@ func (r *Reader) Card(ctx context.Context, owner, id uuid.UUID) (Card, error) {
 // Proposal is one of the owner's proposals, at its state now.
 func (r *Reader) Proposal(ctx context.Context, owner, id uuid.UUID) (Proposal, error) {
 	var p Proposal
-	err := r.read(ctx, DomainScope(), false, func(tx *sql.Tx) error {
+	err := r.readChild(ctx, "assistant_proposals", id, func(tx *sql.Tx) error {
 		var err error
 		p, err = r.scanProposal(tx.QueryRowContext(ctx, `SELECT `+proposalColumns+`
 			FROM assistant_proposals WHERE id = ? AND owner_id = ?`, id.String(), owner.String()))
