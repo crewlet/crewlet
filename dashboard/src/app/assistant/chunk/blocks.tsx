@@ -449,7 +449,9 @@ export function CardBlock({
       const { refusal, phrase, hint } = card.error;
       return (
         <RefusalCard
-          title={phrase ? `You do not have permission to ${phrase}.` : "Not permitted"}
+          // THE HEAD NAMES WHAT WAS ASKED FOR ("Read the fleet"), and the
+          // card's own tag says it was not permitted; the sentence says why.
+          title={phrase ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}` : "Not permitted"}
           heading={phrase ? `You do not have permission to ${phrase}.` : undefined}
           actions={
             <CopyButton

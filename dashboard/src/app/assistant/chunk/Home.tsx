@@ -17,7 +17,7 @@
  */
 
 import { type ReactNode } from "react";
-import { Card, Eyebrow, Stack, SuggestionList, SuggestionRow, Tag, Text } from "@crewlethq/ui";
+import { Eyebrow, Stack, SuggestionList, SuggestionRow, Tag, Text } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
   BotGlyph,
@@ -35,7 +35,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { decisionSubjects, seatConditionsOf } from "~/lib/decisions.ts";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
-import { fmtCount, fmtDate, greeting, plural } from "~/lib/format.ts";
+import { fmtCount, fmtDate, greeting } from "~/lib/format.ts";
 
 /** The share of a ceiling from which the budget row is drawn. */
 const BUDGET_FROM = 0.75;
@@ -138,7 +138,7 @@ export function Home({ name, onAsk, onFill, now }: HomeProps) {
         chevron
         onSelect={() => onAsk("What needs my decision?")}
       >
-        {plural(asks.length, "A decision is waiting on you", "Decisions waiting on you")}
+        {asks.length === 1 ? "A decision is waiting on you" : "Decisions waiting on you"}
       </SuggestionRow>,
     );
   }
@@ -159,11 +159,9 @@ export function Home({ name, onAsk, onFill, now }: HomeProps) {
         chevron
         onSelect={() => onAsk("Which coding runs are parked on a question?")}
       >
-        {plural(
-          runs.length,
-          "A coding run is parked on a question",
-          "Coding runs are parked on a question",
-        )}
+        {runs.length === 1
+          ? "A coding run is parked on a question"
+          : "Coding runs are parked on a question"}
       </SuggestionRow>,
     );
   }
@@ -201,9 +199,7 @@ export function Home({ name, onAsk, onFill, now }: HomeProps) {
       {rows.length > 0 ? (
         <Stack as="section" gap={2} aria-labelledby="assistant-needs-you">
           <Eyebrow id="assistant-needs-you">Needs you</Eyebrow>
-          <Card>
-            <SuggestionList divided>{rows}</SuggestionList>
-          </Card>
+          <SuggestionList divided>{rows}</SuggestionList>
         </Stack>
       ) : null}
       <Stack as="section" gap={2} aria-labelledby="assistant-anywhere">
