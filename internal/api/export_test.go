@@ -19,3 +19,22 @@ func (a *App) Routes() []string { return slices.Clone(a.routes) }
 // Policies is every guarded route's policy, keyed by its pattern. See
 // [routeTable].
 func (a *App) Policies() map[string]authz.Policy { return maps.Clone(a.policies) }
+
+// OverviewRoutes are the reads served from the stream service, by pattern.
+func (a *App) OverviewRoutes() []string {
+	var out []string
+	for _, route := range a.overviewRoutes() {
+		out = append(out, route.pattern)
+	}
+	return out
+}
+
+// NamedReadRoutes are the named read routes' patterns, each with the
+// question it answers.
+func NamedReadRoutes() map[string]string {
+	out := map[string]string{}
+	for _, route := range namedRoutes {
+		out[route.method+" "+route.pattern] = route.what
+	}
+	return out
+}
