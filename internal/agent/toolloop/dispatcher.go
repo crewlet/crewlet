@@ -740,6 +740,14 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	}
 	c.id = callIDFromMeta(in.Meta, c.run)
 	d.placeLocked(c)
+	if c.argsErr == "" && c.turn != nil {
+		// THE ARGUMENTS THE MODEL WROTE, as the CLI's record shows them. A
+		// CLI may hand its server something else for arguments that are not
+		// an object — Claude Code turns an array into an object of its
+		// elements — and the call is answered as one whose arguments did
+		// not parse, below, rather than run on an object nobody wrote.
+		c.argsErr = c.turn.calls[c.slot].ArgumentsError
+	}
 	if c.id == "" {
 		c.id = fmt.Sprintf("call_%d", c.seq)
 	}

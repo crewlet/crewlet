@@ -526,25 +526,48 @@ func (r *recordReader) callOf(doc map[string]any, paths *cliprofile.CallPaths) l
 	call.Arguments = map[string]any{}
 	if len(paths.Args) > 0 {
 		if v, ok := lookup(doc, paths.Args); ok {
-			call.Arguments = argumentsOf(v)
+			call.Arguments, call.ArgumentsError = argumentsOf(v)
 		}
 	}
 	return call
 }
 
 // argumentsOf is a call's arguments as the record carries them: an object, or
-// an object encoded as a JSON string, as some CLIs record them. Anything else
-// is no arguments.
-func argumentsOf(v any) map[string]any {
+// an object encoded as a JSON string, as some CLIs record them; null or an
+// empty string is no arguments. Anything else is arguments the model wrote
+// that are not an object, and the second value says so.
+//
+// NOT NO ARGUMENTS, which is what this once read them as: a CLI may hand its
+// server an object the model never wrote in their place — Claude Code records
+// the array its model wrote and calls the server with its elements as an
+// object — and a record read as `{}` let the host run that call. Said, the
+// host answers the call as one whose arguments did not parse, as it answers
+// one whose server could not read them.
+func argumentsOf(v any) (map[string]any, string) {
 	switch a := v.(type) {
+	case nil:
+		return map[string]any{}, ""
 	case map[string]any:
-		return a
+		return a, ""
 	case string:
-		if doc, ok := decodeRecordLine(a); ok {
-			return doc
+		if trimmed := strings.TrimSpace(a); trimmed == "" || trimmed == "null" {
+			return map[string]any{}, ""
 		}
+		if doc, ok := decodeRecordLine(a); ok {
+			return doc, ""
+		}
+		return map[string]any{}, "they are not one JSON object"
 	}
-	return map[string]any{}
+	kind := "value"
+	switch v.(type) {
+	case []any:
+		kind = "array"
+	case bool:
+		kind = "boolean"
+	case float64, json.Number:
+		kind = "number"
+	}
+	return map[string]any{}, "they are a JSON " + kind + ", not an object"
 }
 
 // figuresLocked reads an event's counts into a request: the last value read

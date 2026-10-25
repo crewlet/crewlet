@@ -61,6 +61,12 @@ type Call struct {
 	// write some that do not parse. Empty is `{}`.
 	Args string
 
+	// Handed is what the CLI hands the host's session for the arguments in
+	// place of Args, where it does not hand Args: a CLI that turns what its
+	// model wrote into something else (Claude Code sends an array's elements
+	// as an object). The record still shows Args.
+	Handed string
+
 	// Native makes the call one of the CLI's OWN tools — its web search,
 	// its fetch — which its record shows and which it runs itself: it never
 	// reaches the host's session.
@@ -383,8 +389,10 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 			if r.Calls[j].ID == "" {
 				r.Calls[j].ID = fmt.Sprintf("call-%d-%d-%d", n, i, j)
 			}
+			args, argsErr := argsOf(c.Args)
 			calls = append(calls, llm.TurnCall{
-				ID: r.Calls[j].ID, Name: c.Name, Arguments: argsOf(c.Args), Host: !c.Native,
+				ID: r.Calls[j].ID, Name: c.Name, Arguments: args, ArgumentsError: argsErr,
+				Host: !c.Native,
 			})
 		}
 		id := fmt.Sprintf("req-%d-%d", n, i)
@@ -479,6 +487,9 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 			return
 		}
 		raw := c.Args
+		if c.Handed != "" {
+			raw = c.Handed
+		}
 		if raw == "" {
 			raw = "{}"
 		}
@@ -563,17 +574,17 @@ func (s *Script) callOne(ctx context.Context, cs *mcp.ClientSession, conn net.Co
 
 // argsOf decodes a call's arguments for the record a CLI reports, which
 // carries them decoded; arguments that do not parse are reported as none.
-func argsOf(raw string) map[string]any {
+func argsOf(raw string) (map[string]any, string) {
 	if strings.TrimSpace(raw) == "" {
-		return map[string]any{}
+		return map[string]any{}, ""
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
 	var out map[string]any
 	if err := dec.Decode(&out); err != nil || out == nil {
-		return map[string]any{}
+		return map[string]any{}, "they are not one JSON object"
 	}
-	return out
+	return out, ""
 }
 
 func text(res *mcp.CallToolResult) string {

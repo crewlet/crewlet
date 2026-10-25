@@ -190,6 +190,16 @@ type TurnCall struct {
 	Name      string
 	Arguments map[string]any
 
+	// ArgumentsError is why the arguments the model wrote, as the CLI's
+	// record shows them, are not an object — empty when they are, or when
+	// the record shows none. A CLI may hand its server something else for
+	// arguments that are not an object (Claude Code hands it an array's
+	// elements as one: `["a","b"]` arrives as `{"0":"a","1":"b"}`), and the
+	// record is the one place the engine can see that the model never wrote
+	// what the server received: the host answers such a call as one whose
+	// arguments did not parse rather than running it.
+	ArgumentsError string
+
 	// Host marks a call to one of the host's tools. Every other call is the
 	// CLI's own — its web search, its fetch — which it runs itself and the
 	// host never sees.

@@ -524,6 +524,37 @@ func TestArgumentsThatDoNotParseAreAnsweredNotRun(t *testing.T) {
 	}
 }
 
+// ARGUMENTS A CLI REPLACED ARE ANSWERED, NOT RUN, TOO. Claude Code calls its
+// server with an array's elements as an object — the model wrote `["a","b"]`
+// and the server reads `{"0":"a","1":"b"}` — so the session reads a perfectly
+// good object, and only the CLI's record, which keeps the array, shows that
+// the model never wrote it. Read from there, the call is refused exactly as
+// one the session could not read.
+func TestArgumentsTheCLIReplacedAreAnsweredNotRun(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("post")
+	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
+		{Calls: []llmtest.Call{{Name: "post", Args: `["a", "b"]`, Handed: `{"0":"a","1":"b"}`}}},
+		{Calls: []llmtest.Call{{Name: "post", Args: `{"body":"x"}`}}},
+		{Text: "done"},
+	}}}}
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := surf.calls(); len(got) != 1 {
+		t.Fatalf("the surface ran %v, want only the corrected call", got)
+	}
+	got := prov.Results()
+	if len(got) != 2 || !got[0].Failed || !strings.Contains(got[0].Output, "was NOT run") {
+		t.Errorf("the CLI was answered %+v, want the refusal saying why", got)
+	}
+	if first := res.Executions[0]; !first.Failed || !strings.Contains(first.Output, "not one JSON object") ||
+		!first.StartedAt.IsZero() {
+		t.Errorf("first execution %+v, want a failed row naming why", first)
+	}
+}
+
 // A PERSON'S NOTE ENDS THE RUN AND OPENS THE NEXT AS A USER MESSAGE — never
 // inside a tool's result, where any tool's output could imitate one.
 func TestANoteEndsTheRunAndOpensTheNextAsAUserMessage(t *testing.T) {

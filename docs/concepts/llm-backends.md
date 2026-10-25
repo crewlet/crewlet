@@ -2004,7 +2004,9 @@ it makes no further request it would be billed for.
   a CLI that does not, the run ends after the activation and the next starts
   with the new list.
 - **Arguments that did not parse** are answered with why, as a failed result the
-  model can fix, and the tool never runs on an empty object.
+  model can fix, and the tool never runs on an empty object — nor on an object
+  the CLI made of what the model wrote, where the CLI's record shows that the
+  model wrote something else.
 - **A panic** in a tool cuts the phase, logged with its stack.
 - **A call is the phase's, not the connection's.** It runs under the phase's
   context, so a CLI that gives up on it, or dies, cancels nothing a tool is
@@ -2097,12 +2099,19 @@ the exception, below.
 
 **Where a CLI departs from what the gates assume:**
 
-- **Arguments a CLI repairs or replaces.** Qwen Code repairs malformed arguments
-  before they reach the server, so a call whose arguments did not parse never
-  reaches the engine as one; Kimi Code hands the server `{}` for arguments it
-  could not parse. On both, a tool's own validation of its arguments is what
-  stands between a model's typo and a write. Muse Code instead asks its model
-  again, up to eight times, and Hermes five times before it exits 2.
+- **Arguments a CLI repairs or replaces.** Most CLIs check what the model
+  wrote against the tool's schema before they call the server, and answer the
+  model themselves when it does not fit. Claude Code hands the server an
+  array's elements as an object (`["a","b"]` arrives as `{"0":"a","1":"b"}`);
+  its record keeps the array, so the engine answers that call as one whose
+  arguments did not parse, as it answers a call the server could not read.
+  Qwen Code repairs malformed arguments — an unterminated object is closed —
+  and records the repair, so the repaired call runs; Kimi Code reads arguments
+  it cannot parse as `{}`, in its record too, and calls the server only where
+  `{}` fits the tool's schema, a tool with no required argument. On those two
+  a tool's own validation of its arguments is what stands between a model's
+  typo and a write. Muse Code instead asks its model again, up to eight times,
+  and Hermes five times before it exits 2.
 - **A name a CLI rewrites.** Hermes runs a close listed tool in place of a name
   its list does not hold. The engine refuses such a call, because Hermes's
   record — the file its hook writes — carries the name the model asked for.

@@ -284,7 +284,8 @@ func (c *Conn) Respond(ctx context.Context, r Response) []Result {
 			call.ID = fmt.Sprintf("conn%d-call-%d-%d", c.seq, i, j)
 		}
 		calls[j] = call
-		seen[j] = llm.TurnCall{ID: call.ID, Name: call.Name, Arguments: argsOf(call.Args), Host: true}
+		args, argsErr := argsOf(call.Args)
+		seen[j] = llm.TurnCall{ID: call.ID, Name: call.Name, Arguments: args, ArgumentsError: argsErr, Host: true}
 	}
 	if !c.opts.Unobserved {
 		uu := u
@@ -332,6 +333,9 @@ func (c *Conn) call(ctx context.Context, call Call) Result {
 		return Result{Name: call.Name, Output: "No such tool available: " + call.Name, Failed: true}
 	}
 	raw := call.Args
+	if call.Handed != "" {
+		raw = call.Handed
+	}
 	if raw == "" {
 		raw = "{}"
 	}
