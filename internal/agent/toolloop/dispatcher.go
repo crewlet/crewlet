@@ -57,6 +57,9 @@ var log = logging.Get("agent.toolloop")
 //   - A CALL IS THE PHASE'S, NOT THE CONNECTION'S. It runs under the phase's
 //     context, so a CLI that gives up on it, or dies, cancels nothing a tool
 //     is half-way through writing; its result is recorded either way.
+//   - A CALL IS ITS RUN'S. Each run's session hands its calls to that run
+//     alone ([runCalls]), and a run that is over takes none: a call that
+//     reaches it after its release is refused, never run.
 
 // dstate is where the phase stands, as the dispatcher sees it.
 type dstate int
@@ -245,9 +248,10 @@ func (t *observedTurn) awaiting(except int, skip func(name string) bool) bool {
 
 // run is one CLI run on the dispatcher: one [llm.ToolHost.Serve].
 type run struct {
-	opts     llm.ServeOptions
-	session  *toolsession.Session
-	start    time.Time
+	opts  llm.ServeOptions
+	start time.Time
+	// released is closed when the backend releases the run: its CLI is gone,
+	// and the run takes no call ([runCalls]).
 	released chan struct{}
 	// synthetic is the round an unobserved run's calls are placed on.
 	synthetic int
@@ -257,6 +261,38 @@ type run struct {
 	// of the run carries — see [callContext].
 	ctx context.Context
 }
+
+// over reports whether the run has been released.
+func (r *run) over() bool {
+	select {
+	case <-r.released:
+		return true
+	default:
+		return false
+	}
+}
+
+// runCalls is one CLI run's side of the dispatcher: what the run's session
+// hands each call to.
+//
+// ONE PER RUN, so a call is the run's that delivered it. Handed the phase's
+// dispatcher instead, a session's call was taken for whichever run was out when
+// it arrived — or for the last one, after every run had ended — and run there:
+// a call that reached the dispatcher once its own run was over (one already
+// past the session as the run was released) ran a tool for a run that no
+// longer existed, as the bridge's per-opening dispatcher never does.
+type runCalls struct {
+	d *dispatcher
+	r *run
+}
+
+var _ toolsession.Dispatcher = (*runCalls)(nil)
+
+func (v *runCalls) Offered() []toolsession.Tool { return v.d.Offered() }
+func (v *runCalls) Revision() uint64            { return v.d.Revision() }
+
+// Call decides and runs one call the run's CLI made — see [dispatcher.call].
+func (v *runCalls) Call(in toolsession.Call) toolsession.Result { return v.d.call(v.r, in) }
 
 // callContext is the context one call of a run runs under: the VALUES of the
 // context the backend served the run under, and the PHASE's cancellation.
@@ -375,10 +411,7 @@ func newDispatcher(ctx context.Context, cfg Config, firstRound int) *dispatcher 
 	return d
 }
 
-var (
-	_ llm.ToolHost           = (*dispatcher)(nil)
-	_ toolsession.Dispatcher = (*dispatcher)(nil)
-)
+var _ llm.ToolHost = (*dispatcher)(nil)
 
 // --- llm.ToolHost ----------------------------------------------------------
 
@@ -398,9 +431,10 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 	if title == "" {
 		title = d.cfg.Surface.Phase()
 	}
+	r := &run{opts: opts, start: time.Now(), released: make(chan struct{}), ctx: ctx}
 	// THE RUN'S CONTEXT for its connection, which is the run's as much as its
 	// calls are; no call runs under it — see [callContext].
-	session, err := d.cfg.Host.Open(ctx, config.ToolServerName, title, d)
+	session, err := d.cfg.Host.Open(ctx, config.ToolServerName, title, &runCalls{d: d, r: r})
 	if err != nil {
 		return llm.Served{}, err
 	}
@@ -409,7 +443,6 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 		// next request offers the tool — see [toolsession.Server.HoldAnswersForRelist].
 		session.Server().HoldAnswersForRelist()
 	}
-	r := &run{opts: opts, session: session, start: time.Now(), released: make(chan struct{}), ctx: ctx}
 	d.mu.Lock()
 	d.runs = append(d.runs, r)
 	d.mu.Unlock()
@@ -616,7 +649,7 @@ func (d *dispatcher) Pending() []llm.Message {
 	return d.foldLockedPending()
 }
 
-// --- toolsession.Dispatcher -----------------------------------------------
+// --- what each run's session serves ([runCalls]) ---------------------------
 
 // Offered is what the CLI is offered now.
 func (d *dispatcher) Offered() []toolsession.Tool {
@@ -647,15 +680,20 @@ func (d *dispatcher) offeredLocked(name string) bool {
 	return ok
 }
 
-// Call decides and runs one call the CLI made.
+// call decides and runs one call r's CLI made.
 //
 // The MCP request's context is not this call's, and the session does not hand
 // it over ([toolsession.Dispatcher.Call]): a CLI that gives up on the call, or
 // dies, abandons only the delivery of its answer. The call runs under the
 // phase's context to its end and is recorded ([callContext]), and the
 // session's release waits for it.
-func (d *dispatcher) Call(in toolsession.Call) toolsession.Result {
-	c, refusal := d.admit(in)
+func (d *dispatcher) call(r *run, in toolsession.Call) toolsession.Result {
+	c, refusal := d.admit(r, in)
+	if c == nil {
+		// A RUN THAT IS OVER takes no call — see [runCalls]. Answered, and on
+		// no record: no run of the phase made it.
+		return toolsession.Result{Output: refusal, Failed: true}
+	}
 	if refusal != "" {
 		return d.withheld(c.run, toolsession.Result{Output: refusal, Failed: true})
 	}
@@ -719,13 +757,18 @@ func (d *dispatcher) unlockGate(exclusive bool) {
 	}
 }
 
-// admit records a call and decides whether it may run at all.
-func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
+// admit records a call r's CLI made and decides whether it may run at all — or
+// answers no record at all for a call r is over for, which no run of the phase
+// made.
+func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if r.over() {
+		return nil, notRun(in.Name)
+	}
 	c := &callRec{
 		seq: len(d.calls) + 1, name: in.Name, args: in.Arguments,
-		argsErr: in.ArgumentsError, run: d.currentRunLocked(), exclusive: d.exclusive(in.Name),
+		argsErr: in.ArgumentsError, run: r, exclusive: d.exclusive(in.Name),
 	}
 	if c.args == nil {
 		c.args = map[string]any{}
