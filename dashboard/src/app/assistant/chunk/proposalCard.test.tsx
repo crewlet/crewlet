@@ -61,7 +61,8 @@ test("the screen's gate holds Approve, and says why, before anything is pressed"
     scope: "Work list filters",
     parse: (raw) => ({ ok: true, value: raw }),
     preview: () => [{ field: "Assignee", next: "Cleared", current: "Jane" }],
-    blocked: () => "This list is one person's work, and that filter is what the page is.",
+    blocked: () =>
+      "This list shows one person's work, so that filter stays as it is. Use All work to filter by someone else.",
     apply: () => {},
   };
   registerPage({ actions: { "work.filter.apply": spec } });
@@ -69,8 +70,9 @@ test("the screen's gate holds Approve, and says why, before anything is pressed"
   const approve = screen.getByRole("button", { name: /Apply to this list/ });
   expect(approve.getAttribute("aria-disabled")).toBe("true");
   expect(
-    screen.getAllByText("This list is one person's work, and that filter is what the page is.")
-      .length,
+    screen.getAllByText(
+      "This list shows one person's work, so that filter stays as it is. Use All work to filter by someone else.",
+    ).length,
   ).toBeGreaterThan(0);
 });
 

@@ -154,6 +154,6 @@ export function withoutLocked(
 export function lockGate(lock: Readonly<Record<string, string>> | undefined) {
   return (patch: UrlPatch): string | null =>
     lock && Object.keys(patch).some((k) => Object.hasOwn(lock, k))
-      ? "This list is one person's work, and that filter is what the page is."
+      ? "This list shows one person's work, so that filter stays as it is. Use All work to filter by someone else."
       : null;
 }
