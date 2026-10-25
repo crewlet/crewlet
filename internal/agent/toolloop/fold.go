@@ -219,7 +219,10 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 				Name: e.call.Name, Failed: rec.result.Failed,
 			})
 		}
-		if rec != nil && rec != d.suspended && rec.settled {
+		// THE PARKED CALL IS AN EXECUTION LIKE ANY OTHER: it ran — it
+		// launched what the resume collects — and only its ANSWER is left
+		// open, above.
+		if rec != nil && rec.settled {
 			out.executions = append(out.executions, Execution{
 				Round: g.round, Name: e.call.Name, Args: rec.args, CallID: rec.id,
 				Output: rec.result.Output, Failed: rec.result.Failed,

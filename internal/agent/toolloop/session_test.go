@@ -317,6 +317,18 @@ func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	if dangling != 1 {
 		t.Errorf("%d dangling calls, want exactly the parked one", dangling)
 	}
+	// THE CALL THAT PARKED THE PHASE RAN, so it is on the record like any
+	// other call — only its answer is left open. A record without it says
+	// nothing started the run the resume collects.
+	var parked *toolloop.Execution
+	for i := range res.Executions {
+		if res.Executions[i].CallID == res.PendingToolCallID {
+			parked = &res.Executions[i]
+		}
+	}
+	if parked == nil || parked.Name != "run_sandbox" || parked.Output != "started" {
+		t.Errorf("executions %+v, want the parked run_sandbox call with what it returned", res.Executions)
+	}
 }
 
 // THE FENCE STOPS THE NEXT CALL: a node whose lease moved runs nothing more,
