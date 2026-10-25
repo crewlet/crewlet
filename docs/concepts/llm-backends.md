@@ -1739,6 +1739,27 @@ of an unrecorded read, accepted. A seat on a CLI with no web tool of its own
 reaches the web the way it reaches everything external, through the MCP servers
 you configure.
 
+**An entry can turn the web off, and the Dashboard Assistant requires it.**
+Web stays on for every seat unless its entry says otherwise. An entry whose
+model must read nothing the engine's own guard did not hand it (the
+Dashboard Assistant's) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
+what that CLI runs with instead:
+
+| Profile | How web is turned off | Measured |
+|---|---|---|
+| `claude-code` | `WebFetch` and `WebSearch` move from `--allowedTools` to `--disallowedTools` | refused on 2.1.310 |
+| `codex` | `-c web_search="disabled"` in place of `"live"`; the read-only sandbox already cuts the shell's network | refused on 0.150.1 |
+| `opencode` | the seeded policy keeps its deny-all rule and drops the two allow rules | not measured; derived from the 2.0 permissions format |
+| `pi` | nothing changes: `--no-tools` already sends no tools | measured on 0.85.1 (no web tool exists) |
+
+Every other profile has no `web_denial`, says why in `web_tools_note`, and
+refuses `web_tools: denied`, so it cannot serve the assistant until one is
+measured and added (an operator may supply their own `web_denial` in
+`overrides`, and owns that claim). Whichever profile it is, `crewlet llm
+doctor` runs its web probe on a denied entry and reports a fetch that
+succeeded as a problem, exactly as it reports a shell that ran on a profile
+denying local tools; run it before the assistant goes live.
+
 **`pi` is the one profile that denies every tool outright** (`--no-tools`),
 and it is honest there for a reason no other vendor gives it: measured off
 the request its CLI actually sent, the baseline is `bash`, `edit`, `read`
@@ -2848,6 +2869,9 @@ it runs on.
 | `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`: each names a file, under a file name `credential_paths` also has, because an adopted file is kept under its name and a seat is seeded only with those names. |
 | `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |
+| `web_tools` | The entry's stance on the CLI's own web tools: `allowed` (the default, and every seat's) or `denied`. `denied` runs the CLI through `web_denial`, and is refused on a profile that has none. |
+| `web_tools_note` | How the profile's web denial was measured, or why it has none. |
+| `web_denial` | `{complete_args, seed_files}`: what the run uses instead when `web_tools` is `denied`. Each field set replaces the profile field of that name whole; a field left unset keeps it. Overriding `complete_args` (or `seed_files`) beside `web_tools: denied` is refused where the denial replaces it: override `web_denial.complete_args` instead. |
 | `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
 
 ---
@@ -2896,8 +2920,17 @@ system prompt : seats: added to the CLI's own (append_system_prompt)
               : side passes: replaces the CLI's own (system_prompt)
 smoke test    : ok — 812 in / 34 out
 local tools   : denied by profile — probe: refused
-web           : ok — fetched https://www.cloudflare.com/cdn-cgi/trace
+web           : allowed; ok — fetched https://www.cloudflare.com/cdn-cgi/trace
 problems      : none
+```
+
+The `web` line leads with the entry's stance. On an entry with
+`overrides: {web_tools: denied}` (the one an assistant runs on) the probe's
+expectation is reversed: a refusal is the healthy answer, and a fetch is a
+problem naming the denial that did not take effect:
+
+```
+web           : denied by entry (WebFetch and WebSearch on --disallowedTools; measured refused on Claude Code 2.1.310); probe: refused
 ```
 
 On an `api-key` entry the `sign-in` line names the key instead —

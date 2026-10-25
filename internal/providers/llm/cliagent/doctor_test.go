@@ -426,7 +426,8 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 		"append_system_prompt": map[string]any{"args": []any{"--append-system-prompt", "{system}"}},
 	})
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.Smoke, "ok") || !strings.HasPrefix(d.Web, "ok") {
+	// The web line leads with the entry's stance, then the probe's verdict.
+	if !strings.HasPrefix(d.Smoke, "ok") || !strings.HasPrefix(d.Web, "allowed; ok") {
 		t.Fatalf("smoke = %q, web = %q — the fake did not answer the probes it was asked", d.Smoke, d.Web)
 	}
 	var probes [][]string

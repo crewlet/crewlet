@@ -116,7 +116,9 @@ type Diagnosis struct {
 	// LocalTools is the profile's stance on the CLI's own shell and file
 	// tools, beside what the shell probe measured.
 	LocalTools string
-	// Web is whether the CLI's own fetch tool reached the web, measured.
+	// Web is the entry's web stance beside whether the CLI's own fetch tool
+	// reached the web, measured. On a denied entry a fetch that succeeded is
+	// a problem, as a shell that ran is on a profile denying local tools.
 	Web string
 
 	// AgentRuntime is what an AGENT-MODE entry needs beyond a login, and
@@ -232,15 +234,16 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	answered := false
 
 	stance := p.localToolsStance()
+	web := p.webStance()
 	switch {
 	case !smoke:
 		d.Smoke = "skipped (-no-smoke)"
 		d.LocalTools = stance + " — probe skipped (-no-smoke)"
-		d.Web = "probe skipped (-no-smoke)"
+		d.Web = web + "; probe skipped (-no-smoke)"
 	case d.BinaryPath == "not on PATH":
 		d.Smoke = "skipped — no binary to run"
 		d.LocalTools = stance + " — probe skipped, no binary to run"
-		d.Web = "probe skipped — no binary to run"
+		d.Web = web + "; probe skipped, no binary to run"
 	default:
 		d.Smoke, answered = p.smokeTest(ctx)
 		if strings.HasPrefix(d.Smoke, "failed") {
@@ -251,9 +254,10 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		if problem != "" {
 			d.Problems = append(d.Problems, problem)
 		}
-		d.Web = p.webProbe(ctx)
-		if strings.HasPrefix(d.Web, "failed") {
-			d.Problems = append(d.Problems, d.Web)
+		verdict, problem = p.webProbe(ctx)
+		d.Web = web + "; " + verdict
+		if problem != "" {
+			d.Problems = append(d.Problems, problem)
 		}
 	}
 
@@ -483,36 +487,63 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	}
 }
 
+// webStance renders the entry's declared web stance.
+func (p *Provider) webStance() string {
+	if p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied {
+		return "denied by entry (" + orNone(p.profile.WebToolsNote) + ")"
+	}
+	return "allowed"
+}
+
 // webProbe asks the CLI to fetch a URL with its own browser and reports
-// whether it did.
+// whether it did. The second return is the problem line, empty when there is
+// none.
 //
-// Web is the one local tool a profile keeps ON, so a CLI that cannot reach
-// it is a problem: the seat has less reach than the same CLI at a terminal,
-// and the cause is usually a vendor sandbox flag that also cut the network,
-// or an egress proxy the child environment was not told about.
-func (p *Provider) webProbe(ctx context.Context) string {
+// WHICH ANSWER IS THE PROBLEM DEPENDS ON THE STANCE, and the verdict is
+// measured either way rather than inferred from the profile. On an entry that
+// keeps web on, a CLI that cannot reach it is the problem: the seat has less
+// reach than the same CLI at a terminal, and the cause is usually a vendor
+// sandbox flag that also cut the network, or an egress proxy the child
+// environment was not told about. On an entry that DENIES web (the one an
+// assistant runs on), a CLI that fetched is the problem, and the worse one:
+// the denial is a claim the assistant is admitted on, and a vendor that
+// renamed a flag would leave the model fetching under a configuration that
+// says it cannot.
+func (p *Provider) webProbe(ctx context.Context) (verdict, problem string) {
+	denied := p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied
 	comp, err := p.Complete(ctx, probeRequest(webProbePrompt))
 	if err != nil {
-		return "failed — " + err.Error()
+		return "probe failed: " + err.Error(), "the web probe failed: " + err.Error()
 	}
-	if reportsCurrentClock(comp.Content, time.Now()) {
-		return "ok — fetched " + webProbeURL
-	}
-	// Same split as smokeTest, and for the same reason: an empty answer is
-	// a completion now, so "it said: \"\"" would send an operator to the
-	// egress proxy for a model that never spoke.
-	if strings.TrimSpace(comp.Content) == "" {
-		return fmt.Sprintf(
-			"failed — the %q CLI exited 0 and answered with nothing (%d output tokens "+
-				"billed), so this probe says nothing about web access either way. "+
-				"Point this entry at a stronger model and run the doctor again",
+	fetched := reportsCurrentClock(comp.Content, time.Now())
+	switch {
+	case fetched && denied:
+		return "probe: FETCHED " + webProbeURL, fmt.Sprintf(
+			"the entry denies the %q CLI its web tools, but the CLI fetched %s with "+
+				"its own web tool: the profile's web_denial is not taking effect on "+
+				"this build (%s); check overrides.web_denial against the installed "+
+				"version before an assistant runs on this entry",
+			p.agent, webProbeURL, orNone(p.profile.WrittenFor))
+	case fetched:
+		return "ok — fetched " + webProbeURL, ""
+	case strings.TrimSpace(comp.Content) == "":
+		// Same split as smokeTest, and for the same reason: an empty
+		// answer is a completion now, so "it said: \"\"" would send an
+		// operator to the egress proxy, or past a denial that may not
+		// hold, for a model that never spoke.
+		return "probe inconclusive", fmt.Sprintf(
+			"the web probe is inconclusive: the %q CLI exited 0 and answered with "+
+				"nothing (%d output tokens billed), so it says nothing about web access "+
+				"either way. Point this entry at a stronger model and run the doctor again",
 			p.agent, comp.OutputTokens)
+	case denied:
+		return "probe: refused", ""
 	}
 	// WHAT IT SAID, WHOLE: the reader is an operator deciding what to fix,
 	// and a refusal's reason — a sandbox flag, a proxy's answer — is rarely
 	// in its first hundred and twenty bytes, which is where this used to stop.
-	return fmt.Sprintf(
-		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
+	return "failed", fmt.Sprintf(
+		"the %q CLI could not fetch %s with its own web tool (it said: %q). "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (env / passthrough_env)",
