@@ -177,7 +177,10 @@ async function sendOnce(
 }
 
 /**
- * Take a page action the stream carried: claim it, apply it, report it. `mine`
+ * Take a page action the stream carried: claim it, apply it, report it, and
+ * answer whether this tab took it and reported what it came to (false where
+ * it was not this tab's to take, was taken already, or its claim was
+ * refused). `mine`
  * says this tab approved the change or asked the question it answers.
  * Resolves once the outcome is reported, or once it is clear this tab will
  * not apply it.
@@ -187,10 +190,12 @@ export async function takeAction(
   mine: boolean,
   deps: ActionDeps,
   wait: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms)),
-): Promise<void> {
-  if (action.name === ASSISTANT_ACTION_CONTEXT_INVALIDATE || taken.has(action.action_id)) return;
+): Promise<boolean> {
+  if (action.name === ASSISTANT_ACTION_CONTEXT_INVALIDATE || taken.has(action.action_id)) {
+    return false;
+  }
   const here = pageSnapshot()?.context.source_revision ?? "";
-  if (!mine && action.source_revision !== here) return;
+  if (!mine && action.source_revision !== here) return false;
   taken.add(action.action_id);
   const report = deps.report ?? sendReport;
   try {
@@ -207,7 +212,7 @@ export async function takeAction(
         words: "Applied in another tab of Crewlet.",
         undoable: false,
       });
-      return;
+      return false;
     }
     // A REFUSAL IS THE ENGINE'S SENTENCE; a claim nobody answered is not a
     // claim, so neither applies anything.
@@ -219,7 +224,7 @@ export async function takeAction(
         : "Crewlet did not confirm this change, so it was not applied.",
       undoable: false,
     });
-    return;
+    return false;
   }
   const result = applyOnPage(action);
   deps.settle({
@@ -242,6 +247,7 @@ export async function takeAction(
     report,
     wait,
   ).catch(() => {});
+  return true;
 }
 
 /** Test seam: a tab that has taken nothing. */

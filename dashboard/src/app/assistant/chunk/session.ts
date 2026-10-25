@@ -139,11 +139,12 @@ function pageAction(frame: AssistantNarrowFrame): void {
   const at = generation;
   void takeAction(action, mine, {
     settle: (local) => dispatch({ type: "action_local", actionId: action.action_id, local }),
-  }).then(() => {
+  }).then((reported) => {
     // THE TURN RESUMES ONLY ONCE THE PAGE HAS REPORTED, and the stream that
-    // carried the action may already have closed on the parked turn, so this
-    // tab reads the turn again from where it was, to hear the rest of it.
-    if (mine && at === generation) rejoin(frame.turn_id);
+    // carried the action may already have closed on the parked turn, so the
+    // tab that reported it reads the turn again from where it was. Only that
+    // tab, once: a replayed frame of an action already taken reads nothing.
+    if (reported && at === generation) rejoin(frame.turn_id);
   });
 }
 
@@ -347,18 +348,23 @@ function undecided(proposal: AssistantProposalCard, err: unknown): void {
         proposalId,
         state: err.code === "proposal_expired" ? "expired" : "stale",
       });
-      return;
+    } else {
+      const failed = writeFailed(err);
+      dispatch({
+        type: "approval_failed",
+        proposalId,
+        failure:
+          failed.kind === "unknown"
+            ? "Could not confirm. It may have landed."
+            : `${failed.sentence} Nothing changed.`,
+        unknown: failed.kind === "unknown",
+      });
     }
-    const failed = writeFailed(err);
-    dispatch({
-      type: "approval_failed",
-      proposalId,
-      failure:
-        failed.kind === "unknown"
-          ? "Could not confirm. It may have landed."
-          : `${failed.sentence} Nothing changed.`,
-      unknown: failed.kind === "unknown",
-    });
+    // THE ENGINE ANSWERED, AND A REFUSED DECISION RESUMES THE TURN with that
+    // result (an expired or moved change is told to the model), but no stream
+    // comes with a refusal: the turn is read again, or the drawer would show
+    // it working until the page is reloaded.
+    rejoin();
     return;
   }
   dispatch({
