@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -18,13 +19,13 @@ import (
 func TestEveryTableCardCarriesItsDownloads(t *testing.T) {
 	t.Parallel()
 	list := assistanttest.Routes(map[string]exec.Response{
-		"GET /work": assistanttest.JSON(map[string]any{"items": []any{
+		"GET /work": evals.JSON(map[string]any{"items": []any{
 			map[string]any{"key": "ENG-7", "title": "Rotate keys", "status": "todo"}}}),
 	})
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{
+	f := assistanttest.NewRig(t, evals.RigOptions{
 		Tools: []catalog.Tool{assistanttest.Tool(t, "list_tasks")}, Handler: list,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_tasks", map[string]any{}),
-			assistanttest.Say("One task is open.")}})
+		Rounds: []evals.Round{evals.Call("c1", "list_tasks", map[string]any{}),
+			evals.Say("One task is open.")}})
 	accepted, err := f.Ask("list", "What is open?", nil)
 	if err != nil {
 		t.Fatal(err)

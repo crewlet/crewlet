@@ -281,7 +281,7 @@ func TestATableLeadsWithTheColumnsTheDrawerDraws(t *testing.T) {
 			{Key: "status", Label: "Status", Path: "status", Type: wire.ColumnLabel},
 			{Key: "due", Label: "Due", Path: "due", Type: wire.ColumnDatetime}}}}
 	answer := []byte(`{"items":[{"key":"FAIR-1","title":"Settle up","status":"todo"}]}`)
-	built, err := cards.Build(spec, answer, assistanttest.Epoch)
+	built, err := cards.Build(spec, answer, evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
