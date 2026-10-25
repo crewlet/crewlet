@@ -43,6 +43,26 @@ type surface struct {
 	entered  chan struct{}
 	// panics names a tool whose call panics.
 	panics string
+	// failOnce names tools whose FIRST call fails and every later one
+	// succeeds.
+	failOnce map[string]bool
+	// broken makes Execute itself fail — a torn-down turn, not a tool.
+	broken error
+	// delay is how long every call takes, and origin and server who
+	// answers it.
+	delay          time.Duration
+	origin, server string
+	// hook, when set, is called as each call begins, outside the lock.
+	hook func(ctx context.Context, call llm.ToolCall)
+}
+
+// remove takes a tool off what the surface offers, as a surface whose active
+// set moved does.
+func (s *surface) remove(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tools = slices.DeleteFunc(s.tools, func(d llm.ToolDef) bool { return d.Name == name })
+	s.revision++
 }
 
 func newSurface(names ...string) *surface {
@@ -72,7 +92,13 @@ func (s *surface) Detached(name string) bool {
 }
 func (s *surface) Phase() string { return "execute" }
 
-func (s *surface) Execute(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+	s.mu.Lock()
+	hook := s.hook
+	s.mu.Unlock()
+	if hook != nil {
+		hook(ctx, call)
+	}
 	s.mu.Lock()
 	s.ran = append(s.ran, call.Name)
 	if call.Name == s.activates {
@@ -80,8 +106,16 @@ func (s *surface) Execute(_ context.Context, call llm.ToolCall) (toolloop.ToolRe
 		s.revision++
 	}
 	res, ok := s.results[call.Name]
+	if s.failOnce[call.Name] {
+		delete(s.failOnce, call.Name)
+		res, ok = toolloop.ToolResult{Output: "Invalid submission: outcome is required", Failed: true}, true
+	}
 	hold, entered, holdTool, panics := s.hold, s.entered, s.holdTool, s.panics
+	broken, delay, origin, server := s.broken, s.delay, s.origin, s.server
 	s.mu.Unlock()
+	if broken != nil {
+		return toolloop.ToolResult{}, broken
+	}
 	if call.Name == panics {
 		panic("a tool fell over")
 	}
@@ -89,8 +123,14 @@ func (s *surface) Execute(_ context.Context, call llm.ToolCall) (toolloop.ToolRe
 		close(entered)
 		<-hold
 	}
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	if !ok {
 		res = toolloop.ToolResult{Output: call.Name + " ok"}
+	}
+	if res.Origin == "" {
+		res.Origin, res.Server = origin, server
 	}
 	return res, nil
 }
