@@ -380,16 +380,26 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if ts.Page != nil {
 		chip = &wire.PageChip{Title: ts.Page.Title, Screen: ts.Page.Screen}
 	}
+	// THE FRAME LOG OPENS BEFORE THE ROW SAYS THE TURN RUNS HERE: a stream
+	// that reads the row running on this node then always finds its log,
+	// and is never answered from the transcript as a turn whose runner died
+	// ([Service.answerFromTranscript]), which would close a live turn
+	// interrupted.
+	s.openStream(t, history.Conversation, false, 0)
+	abandon := func() {
+		t.cancel(nil)
+		s.hub.Forget(id)
+	}
 	if _, err := s.records.OpenTurn(ctx, t.write().Step("open"), assistantdomain.NewTurn{
 		Conversation: ts.Conversation, Turn: id, Node: s.node, PromptVersion: PromptVersion,
 		Model: provider.Model(), ProviderKey: key, TraceID: traceOf(ctx), Page: chip,
 	}); errors.Is(err, assistantdomain.ErrTurnOpen) {
 		// THE SAME KEY IS THE SAME TURN, decided by the record: an attempt
 		// that raced its first one (on another node) starts nothing.
-		t.cancel(nil)
+		abandon()
 		return accepted, nil
 	} else if err != nil {
-		t.cancel(nil)
+		abandon()
 		return wire.TurnAccepted{}, s.writeFailure(err)
 	}
 	t.messages = 1
@@ -413,7 +423,6 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 			in.Name = seat.Name
 		}
 	}
-	s.openStream(t, history.Conversation, false, 0)
 
 	assistantCfg := config.Assistant{}
 	if c != nil {
@@ -621,6 +630,16 @@ func (s *Service) runningHere(id uuid.UUID) bool {
 	defer s.mu.Unlock()
 	_, ok := s.turns[id]
 	return ok
+}
+
+// liveHere reports whether this node runs turn id, or has a start of it in
+// flight.
+func (s *Service) liveHere(id uuid.UUID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, running := s.turns[id]
+	_, starting := s.attempts[id]
+	return running || starting
 }
 
 // local is the runner of turn id on this node, if it is the owner's.
@@ -855,6 +874,11 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 	state := row.State
 	var failure *wire.ErrorEvent
 	switch {
+	case state == wire.TurnRunning && row.Node == s.node && s.liveHere(row.ID):
+		// A RUNNER OF THIS NODE HOLDS IT (starting, or between its log
+		// and its track): the snapshot is what it can say now, and the
+		// client asks again.
+		return nil
 	case state == wire.TurnRunning && (row.Node == s.node || gone):
 		state, failure, err = s.closeInterrupted(ctx, owner, row)
 		if err != nil {

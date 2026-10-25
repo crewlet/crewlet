@@ -3,9 +3,11 @@ package assistant_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -137,5 +139,39 @@ func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 	// rather than running under a coding agent's.
 	if f.Model.Requests()[0].Agent {
 		t.Error("the turn was sent as a seat's call, which keeps the CLI's coding-agent prompt")
+	}
+}
+
+// A STREAM IN THE MOMENT AFTER A START'S ROW LANDS NEVER KILLS THE TURN: the
+// row says the turn runs on this node before its runner is tracked, and a
+// stream then (a second tab reading open_turn, a client's retry) is served
+// from the turn's log, which opened first, never answered from the transcript
+// as a turn whose runner died and closed interrupted.
+//
+// Mutation: open the log after the row (where it was) and drop the liveHere
+// guard, and the stream closes the starting turn interrupted.
+func TestAStreamOfAStartingTurnNeverInterruptsIt(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{evals.Say("Done.")}})
+	turn := assistant.TurnID(evals.Key("starting"))
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.Store.AfterOpen(func() { once.Do(func() { close(entered); <-release }) })
+	started := make(chan error, 1)
+	go func() { _, err := f.Ask("starting", "Hello?", nil); started <- err }()
+	<-entered
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	_ = f.Svc.Stream(ctx, f.Person.ID, f.Conversation, turn, 0, &evals.Collector{})
+	cancel()
+	close(release)
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	if done := evals.Last(f.Follow(turn, 0), wire.EventDone); done == nil ||
+		done.Done.State != wire.TurnCompleted {
+		t.Fatalf("the turn a stream met while starting ended %+v, want completed", done)
+	}
+	if row, _ := f.Store.Turn(t.Context(), f.Person.ID, turn); row.State != wire.TurnCompleted {
+		t.Errorf("the turn is %s, want completed", row.State)
 	}
 }

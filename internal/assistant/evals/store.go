@@ -37,6 +37,10 @@ type Store struct {
 	// failCloses and failConversations are how many of the next closes and
 	// conversation reads fail as a store that could not confirm them.
 	failCloses, failConversations int
+	// afterOpen, when set, is called once a turn's opening has landed,
+	// outside the lock, so a suite can act in the moment after the row says
+	// the turn runs.
+	afterOpen func()
 }
 
 type storedConversation struct {
@@ -261,8 +265,27 @@ func (s *Store) ClearConversation(_ context.Context, w assistant.Write, id uuid.
 	return assistant.Written{Outcome: "applied", Position: "CREWLET_ASSISTANT_LOG@1:1"}, nil
 }
 
+// AfterOpen makes every landed turn opening call fn before it answers.
+func (s *Store) AfterOpen(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afterOpen = fn
+}
+
 // OpenTurn implements [assistant.Records].
-func (s *Store) OpenTurn(_ context.Context, w assistant.Write, t assistantdomain.NewTurn) (int, error) {
+func (s *Store) OpenTurn(ctx context.Context, w assistant.Write, t assistantdomain.NewTurn) (int, error) {
+	seq, err := s.openTurn(w, t)
+	s.mu.Lock()
+	after := s.afterOpen
+	s.mu.Unlock()
+	if err == nil && after != nil {
+		after()
+	}
+	return seq, err
+}
+
+// openTurn is [Store.OpenTurn]'s record, under s.mu.
+func (s *Store) openTurn(w assistant.Write, t assistantdomain.NewTurn) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.keep(w, "turn_opened", t); err != nil {
