@@ -1547,19 +1547,24 @@ kimi-code:
   # anthropic-proxy and runs Claude Code behind it. Both install a `kimi` on
   # PATH and they are different programs: this profile's `--agent-file`,
   # `--output-format stream-json` and `~/.kimi-code` layout are the official
-  # one's. The same trap the grok profile records, with the same tell — if
-  # `kimi --version` prints a 1.0.x, that is the other one.
+  # one's. The same trap the grok profile records, with the same tell: the
+  # wrapper's releases are 1.0.x, and Moonshot's went from 0.43 straight to
+  # 2.0, so a `kimi --version` of 1.x is the other program.
   #
   # It is also the successor to `kimi-cli`, whose docs are still the first
   # search hit and whose print mode took `--input-format`/`--final-message-only`
   # flags this build does not have. `kimi migrate` is the seam between them.
   #
-  # MEASURED AGAINST 0.42.0: the flags off `kimi --help`, the tool surface and
-  # the system prompt off the request body the CLI actually sent (a stub HTTP
-  # endpoint standing in for the model), and the failure classifications off
-  # real 401 and 429 responses. What is NOT measured is a spent Kimi
-  # subscription, which no profile here can produce on demand.
-  written_for: "Kimi Code CLI 0.42.x (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
+  # MEASURED ON 0.42.0 AND 2.3.1, through the engine's own code path against a
+  # stub HTTP endpoint standing in for the model, with the state directory
+  # inside a git checkout whose every level above the call held an AGENTS.md,
+  # a .kimi-code/AGENTS.md, skills, an agent definition, an .mcp.json and a
+  # .env: none of them reached a request, no MCP server started, FetchURL was
+  # the one tool offered, and the engine read each answer. Both builds read
+  # every variable below. The retry cap and the failure classifications are
+  # off real 401 and 429 responses to 0.42.0. What is NOT measured is a spent
+  # Kimi subscription, which no profile here can produce on demand.
+  written_for: "Kimi Code CLI 2.3.x, measured on 0.42.0 and 2.3.1 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
   version_args: ["--version"]
   # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
   # ANSWER rather than the failure classification (the opposite of muse-code's
@@ -1588,32 +1593,35 @@ kimi-code:
   # warning" and matches nothing, so a stale entry costs one tool rather than
   # lifting the whole restriction.
   #
-  # MEASURED, by reading the tool array the CLI actually put on the wire:
-  # TWENTY-FIVE tools by default, ONE with this agent file. What goes is
-  # `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the plan-mode pair,
-  # `TodoList`, `Skill`, `AskUserQuestion`, the `Task*` background family, the
-  # `Cron*` family, an undocumented GOAL family (`CreateGoal`, `GetGoal`,
-  # `UpdateGoal`, `SetGoalBudget`) — and `Agent`/`AgentSwarm`, which is what
-  # bounds the construct: with no `Agent` tool there is no sub-agent to
-  # delegate to, so `subagents` needs no entry of its own.
+  # MEASURED on both builds, by reading the tool array the CLI actually put on
+  # the wire: TWENTY-FIVE tools by default, ONE with this agent file, on either
+  # channel. What goes is `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the
+  # plan-mode pair, `TodoList`, `Skill`, `AskUserQuestion`, `WaitFor`, the
+  # `Task*` background family, the `Cron*` family, an undocumented GOAL family
+  # (`CreateGoal`, `GetGoal`, `UpdateGoal`, `SetGoalBudget`) — and
+  # `Agent`/`AgentSwarm`, which is what bounds the construct: with no `Agent`
+  # tool there is no sub-agent to delegate to, so `subagents` needs no entry of
+  # its own.
   #
   # The goal family is the reason an allowlist is right here beyond the
   # failure-direction argument: it is in the binary and not in the vendor's
   # published tool table, so a denylist written from the docs would have
   # admitted four tools nobody knew to name.
   #
-  # `FetchURL` is the one that survives, and it is web — the one local tool
-  # this backend never denies. `WebSearch` is named beside it and was NOT in
-  # the measured baseline: it is registered only when the Moonshot search
-  # service is configured, which the OAuth login provisions
-  # (`[services.moonshot_search].oauth` is "injected automatically by the
-  # login flow") and a credential-less test does not. So the name is
-  # load-bearing on a real subscription seat and inert here, which is the
+  # `FetchURL` is the one that survives without more, and it is web — the one
+  # local tool this backend never denies. `WebSearch` is the other: the CLI
+  # registers it only when the Moonshot search service is configured, which
+  # the OAuth login provisions (`[services.moonshot_search].oauth` is
+  # "injected automatically by the login flow"). Measured with that section in
+  # config.toml, the default grew to twenty-six and this agent file offered
+  # exactly `FetchURL` and `WebSearch`. So the name is load-bearing on a real
+  # subscription seat and inert on a seat with no search service, which is the
   # opposite of muse-code's gated `web_fetch` — there, naming it admitted
   # nothing ever.
   local_tools: denied
   model_args: ["--model", "{model}"]
-  # `--agent-file`, and it is the tool denial AND the system prompt at once.
+  # BOTH CHANNELS ARE `--agent-file`, and the file is the tool allowlist AND
+  # the system prompt at once.
   #
   # This CLI's per-call prompt channel is an AGENT FILE: YAML frontmatter
   # declaring the agent's name, its description (REQUIRED) and its tool
@@ -1621,29 +1629,80 @@ kimi-code:
   # does not degrade — the vendor's reference says a file passed explicitly
   # "must be valid, otherwise the CLI reports the error and exits" — so the
   # envelope below is what makes the channel usable at all. It is also why
-  # this profile's channel is passed on EVERY call, including one carrying no
-  # system prompt: see [SystemPromptFile]. Such a call — `crewlet llm doctor`'s
-  # two isolation probes are the only ones the engine makes — gets a valid
-  # agent file with an EMPTY body, which is an empty system prompt rather than
-  # the vendor's default one. That is the right answer for a probe, and it is
-  # loud rather than silent if this CLI ever refuses it.
+  # the file is passed on EVERY call, including one carrying no system prompt:
+  # see [SystemPromptFile]. The two channels write the same file under the
+  # same name and frontmatter, and a call takes one of them; only the body
+  # differs.
+  #
+  # The body is a TEMPLATE the CLI renders each time it builds the prompt, and
+  # `${base_prompt}` in it is the vendor's own default prompt — a body without
+  # it "owns the entire prompt". Measured on both builds:
+  #
+  #   system_prompt         body `{system}`: the engine's text is the whole
+  #                         system message, byte for byte. For a side pass,
+  #                         whose system prompt is the whole instruction and
+  #                         whose answer is parsed. Two vendor reminders still
+  #                         travel as USER messages — today's date, and a
+  #                         paragraph on its permission mode naming tools the
+  #                         call is not offered (about 230 and 510–550
+  #                         characters).
+  #   append_system_prompt  body `{system}` and then `${base_prompt}`: the
+  #                         engine's text first, then Kimi's default under its
+  #                         identity line "You are Kimi Code CLI, an
+  #                         interactive general AI agent running on a user's
+  #                         computer." For a seat at work. The default is the
+  #                         one a call with no agent file gets, less its
+  #                         `# Skills` section (`Skill` is not in the
+  #                         allowlist): about 6,950 characters on 0.42.0 and
+  #                         6,650 on 2.3.1, a few hundred of them the call's
+  #                         directory path and listing.
+  #
+  # THE ENGINE'S TEXT FIRST AND THE VENDOR'S AFTER IT, because Kimi's default
+  # is not a constant: it carries the call's working directory, whose path
+  # names the call, a listing of that directory, and the AGENTS.md chain. With
+  # the default first, every call's copy of a seat's prompt would follow bytes
+  # no other call sends, and miss the provider's prompt cache; with it second,
+  # nothing comes before the engine's text — the harness note and then the
+  # seat's prompt — and the per-call bytes come after it. Measured: two seat
+  # calls sent system messages identical through the engine's text and some
+  # 5,800 characters beyond it, up to the directory path. Every request also
+  # carries a `prompt_cache_key` that is a session id new on every call, on
+  # either channel; that is the CLI's, and no flag sets it.
+  #
+  # THE CLI SUBSTITUTES ITS TEMPLATE VARIABLES ACROSS THE WHOLE BODY, the
+  # engine's text included, in one pass and with no escape: a `${cwd}` in a
+  # seat's prompt — from a knowledge page, a policy, a shell snippet — reaches
+  # the model as the call's directory. The names substituted are
+  # `${base_prompt}`, `${product_name}`, `${role_additional}`,
+  # `${reply_style_guide}`, `${notify_user_guidance}`, `${os}`, `${shell}`,
+  # `${windows_notes}`, `${cwd}`, `${cwd_listing}`, `${agents_md}`,
+  # `${additional_dirs_info}`, `${additional_dirs_section}`, `${skills}`,
+  # `${skills_section}` and `${plugin_sections}`, and from 2.x
+  # `${todo_list_guidance}` too. Any other `${…}` stays verbatim — `${now}`
+  # among them, which is not one — and a bare `$` is never special. That is the
+  # cost of the only per-call channel this CLI has.
+  #
+  # The CLI TRIMS the body, so the engine's text loses its leading and
+  # trailing whitespace, and it REFUSES a body that trims to nothing: "Missing
+  # prompt body", exit 1, on both builds. The append body never is one. The
+  # replace body is one only for a call with no system prompt, which keeps the
+  # CLI's own prompt and so takes the append channel, whatever its kind.
+  #
+  # THE APPEND CHANNEL READS THE AGENTS.md CHAIN, through `${agents_md}` in
+  # the default, from the working directory up to the project root, and no
+  # switch turns that walk off. The engine's `.git` file in the call's
+  # directory is what ends it there: this CLI takes a `.git` FILE as the root
+  # only when its first line is `gitdir:`, which the engine's is. Before that
+  # file, every AGENTS.md from a checkout above the state directory — four of
+  # them in the measurement, each under its absolute path — reached a seat's
+  # system prompt; with it, the chain is empty. Nothing else of the project's
+  # reaches a call on either channel: its skills need the `Skill` tool, which
+  # the allowlist leaves out, and its agent definitions and MCP servers are
+  # above the call's root.
   #
   # `$KIMI_CODE_HOME/SYSTEM.md` is the other prompt override and is NOT usable
   # here: it is one static file per home, and a seat's prompt differs per
   # phase and per turn. `--agent-file` outranks it either way.
-  #
-  # The body is rendered as a TEMPLATE each time the prompt is built, and
-  # `${skills}`, `${agents_md}`, `${cwd}`, `${cwd_listing}`, `${os}`,
-  # `${shell}`, `${now}`, `${additional_dirs_info}`, `${base_prompt}` and
-  # `${plugin_sections}` substitute inside it. A bare `$` is never special and
-  # an unknown `${…}` stays verbatim, so ordinary prose is safe; a seat whose
-  # prompt legitimately contains one of those ten names is not, and that is
-  # the cost of the only channel this CLI has.
-  #
-  # NO `${base_prompt}`, deliberately: a body without it "owns the entire
-  # prompt", which is the replace-rather-than-append decision every other
-  # profile here makes for the same reason — a coding-agent identity over the
-  # top of whatever seat is actually being served.
   system_prompt:
     args: ["--agent-file", "{file}"]
     file:
@@ -1662,6 +1721,21 @@ kimi-code:
           - FetchURL
         ---
         {system}
+  append_system_prompt:
+    args: ["--agent-file", "{file}"]
+    file:
+      name: crewlet-seat.md
+      template: |
+        ---
+        name: crewlet-seat
+        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        tools:
+          - WebSearch
+          - FetchURL
+        ---
+        {system}
+
+        ${base_prompt}
   # `--prompt` TAKES THE PROMPT AS ITS VALUE, so it goes in prompt_args rather
   # than complete_args — the same shape as grok's `-p`, and the same failure
   # if it sits earlier: the next flag becomes the prompt.
@@ -1724,6 +1798,16 @@ kimi-code:
     # already refusing. An auth failure is not retried at all, which
     # this measured at 3.1 s either way.
     KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
+    # The vendor's own switch for its telemetry, which is on by default and is
+    # a connection that is not the call's own: events keyed to a device id in
+    # the seat's home, sent with the seat's login, and — when a send fails —
+    # kept on disk under the home for the next start to send, which is one
+    # call's trace waiting for the next. Read in both builds' source, where it
+    # is checked before the sink is started at all. Measured on both through
+    # the engine: without it every call made the home's `telemetry` directory
+    # and spent about 1.8 s more before it exited, and with it neither; the
+    # request the model receives is the same either way.
+    KIMI_DISABLE_TELEMETRY: "1"
   config_env:
     KIMI_CODE_HOME: ".kimi-code"
   # TWO FILES, because this CLI splits its login across them: `kimi login`
@@ -1738,17 +1822,34 @@ kimi-code:
   credential_paths:
     - ".kimi-code/credentials/oauth/kimi-code.json"
     - ".kimi-code/config.toml"
-  # Sessions, their index, and the logs. Everything else under the home is
-  # either the credential above or re-created on the next start.
+  # Sessions, their index, the logs, the workspace registry and the telemetry
+  # queue: what a call writes about itself.
   #
   # Each session directory holds `agents/*/wire.jsonl`, which the vendor
   # documents as carrying "user prompts, command output, repository paths,
   # tool return values, or traces of credentials" — one seat's turn is not
   # allowed to reach the next one through it.
+  #
+  # `workspaces.json` gains one entry per call, naming that call's working
+  # directory, and the CLI never removes one: two calls left two, on both
+  # builds. The CLI makes it again on its next start. Like every volatile
+  # path it is pruned only with none of the seat's calls in flight — when the
+  # seat's last call releases it and when its next generation opens — so no
+  # running call loses the entry it registered. Measured through the engine:
+  # after each of six calls in one seat, none was left.
+  #
+  # `telemetry` is where the CLI queues the events it could not send; with
+  # KIMI_DISABLE_TELEMETRY it is never made, and pruned it reaches no later
+  # call where an entry turns telemetry back on.
+  #
+  # What else persists carries nothing of a call: `device_id`, one per home;
+  # `cache/query-store`, made with empty shards; `locks`, its lock files.
   volatile_paths:
     - ".kimi-code/sessions"
     - ".kimi-code/session_index.jsonl"
     - ".kimi-code/logs"
+    - ".kimi-code/workspaces.json"
+    - ".kimi-code/telemetry"
   host_credential_paths:
     - ".kimi-code/credentials/oauth/kimi-code.json"
     - ".kimi-code/config.toml"

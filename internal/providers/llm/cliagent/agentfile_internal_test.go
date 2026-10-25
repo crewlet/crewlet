@@ -27,11 +27,8 @@ import (
 func TestASystemPromptFileTemplateWrapsTheSeatsIdentity(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_PROMPT_FILE": "--agent-file"}, map[string]any{
-		// The leading "--" is for the FAKE, not for any real profile:
-		// the fake CLI is this test binary and Go's flag package would
-		// refuse --agent-file as an unknown test flag.
 		"system_prompt": map[string]any{
-			"args": []any{"--", "--agent-file", "{file}"},
+			"args": []any{"--agent-file", "{file}"},
 			"file": map[string]any{
 				"name":     "crewlet-seat.md",
 				"template": "---\nname: crewlet-seat\ndescription: a seat\ntools: []\n---\n{system}",
@@ -73,15 +70,14 @@ func TestASystemPromptFileTemplateWrapsTheSeatsIdentity(t *testing.T) {
 //
 // The envelope is not only the seat's identity: on the one vendor that needs
 // it, the same frontmatter is the only per-call place its tools can be denied.
-// So a request carrying no system prompt — `crewlet llm doctor`'s two
-// isolation probes are exactly that — must still get the channel, or the
-// calls that exist to prove the tools are off would be the calls that run
-// with the vendor's defaults and every tool it has.
+// So a request carrying no system prompt must still get the channel, or the
+// calls that never notice would be the ones that run with the vendor's
+// defaults and every tool it has.
 func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_PROMPT_FILE": "--agent-file"}, map[string]any{
 		"system_prompt": map[string]any{
-			"args": []any{"--", "--agent-file", "{file}"},
+			"args": []any{"--agent-file", "{file}"},
 			"file": map[string]any{
 				"name":     "crewlet-seat.md",
 				"template": "---\ntools: []\n---\n{system}",
@@ -104,6 +100,51 @@ func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
 	}
 	if !strings.Contains(body, "tools: []") {
 		t.Errorf("the child read %q, which does not carry the profile's denial", body)
+	}
+}
+
+// A CALL WITH NO SYSTEM PROMPT TAKES A SEAT'S ROUTE, WHATEVER ITS KIND.
+//
+// A side pass takes the replacing channel because its system prompt is the
+// whole instruction. With none, the replacing form of a file that is passed
+// for its policy renders an EMPTY system prompt — on Kimi Code an agent file
+// with no body, which the CLI refuses ("Missing prompt body", exit 1). The
+// appending form keeps the vendor's own prompt under the same frontmatter,
+// which is what a call with no system prompt asks for; a call that has one
+// still takes the channel its kind wants.
+func TestACallWithNoSystemPromptTakesASeatsRoute(t *testing.T) {
+	t.Parallel()
+	agentFile := func(body string) map[string]any {
+		return map[string]any{
+			"args": []any{"--agent-file", "{file}"},
+			"file": map[string]any{"name": "crewlet-seat.md", "template": "---\ntools: []\n---\n" + body},
+		}
+	}
+	p := fakeProvider(t, map[string]string{"FAKE_PROMPT_FILE": "--agent-file"}, map[string]any{
+		"system_prompt":        agentFile("REPLACING {system}"),
+		"append_system_prompt": agentFile("APPENDING {system}"),
+	})
+	for name, tc := range map[string]struct {
+		agent  bool
+		system string
+		want   string // the body the CLI reads
+	}{
+		"a side pass with a system prompt": {agent: false, system: "Classify.", want: "REPLACING Classify."},
+		"a side pass with none":            {agent: false, want: "APPENDING "},
+		"a seat with none":                 {agent: true, want: "APPENDING "},
+	} {
+		msgs := []llm.Message{{Role: llm.RoleUser, Content: "the build is red"}}
+		if tc.system != "" {
+			msgs = append([]llm.Message{{Role: llm.RoleSystem, Content: tc.system}}, msgs...)
+		}
+		got, err := ask(t, p, llm.Request{Agent: tc.agent, Messages: msgs})
+		if err != nil {
+			t.Fatalf("%s: Complete: %v", name, err)
+		}
+		_, _, file := splitFileProbe(t, got.Content)
+		if body := strings.TrimPrefix(file, "---\ntools: []\n---\n"); body != tc.want {
+			t.Errorf("%s: the CLI read the body %q, want %q", name, body, tc.want)
+		}
 	}
 }
 
@@ -167,33 +208,78 @@ func TestASystemPromptFileNameMayNotBeAPath(t *testing.T) {
 	}
 }
 
-// THE KIMI PROFILE'S AGENT FILE IS THE PROFILE'S TOOL DENIAL, so it has to be
-// a file that CLI accepts: the vendor's reference says a file passed through
-// `--agent-file` "must be valid, otherwise the CLI reports the error and
-// exits", and `description` is the one required field.
+// THE KIMI PROFILE'S AGENT FILE IS THE PROFILE'S TOOL DENIAL, on both of its
+// channels, so each has to be a file that CLI accepts: the vendor's reference
+// says a file passed through `--agent-file` "must be valid, otherwise the CLI
+// reports the error and exits", and `description` is the one required field.
+//
+// The two channels are one file whose body differs. The replacing body is the
+// engine's text alone, so a side pass gets nothing of the vendor's; the
+// appending body is the engine's text and THEN `${base_prompt}`, the vendor's
+// default — in that order because the default carries the call's directory,
+// its listing and the AGENTS.md chain, and anything per call ahead of a seat's
+// prompt makes every call's copy of it a cache miss.
 //
 // Stated once here so that an edit dropping the frontmatter — or the two web
-// tools, or the allowlist that removes everything else — has to argue with
-// this rather than with nothing.
-func TestTheKimiProfilesAgentFileDeniesItsToolsAndKeepsTheWeb(t *testing.T) {
+// tools, or the allowlist that removes everything else, or the order — has to
+// argue with this rather than with nothing.
+func TestTheKimiProfilesAgentFilesDenyTheirToolsAndKeepTheWeb(t *testing.T) {
 	t.Parallel()
 	p, ok := cliprofile.Builtin("kimi-code")
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
-	spec := p.SystemPrompt.File
-	if spec == nil {
-		t.Fatal("kimi-code declares no system_prompt.file, so --agent-file would " +
-			"be handed a bare prompt and the CLI would exit on it")
+	var fronts []string
+	for _, tc := range []struct {
+		field string
+		ch    cliprofile.Channel
+		body  string
+	}{
+		{"system_prompt", p.SystemPrompt, "{system}"},
+		{"append_system_prompt", p.AppendSystemPrompt, "{system}\n\n${base_prompt}"},
+	} {
+		spec := tc.ch.File
+		if spec == nil {
+			t.Errorf("kimi-code declares no %s.file, so --agent-file would be handed a "+
+				"bare prompt and the CLI would exit on it", tc.field)
+			continue
+		}
+		if !slices.Equal(tc.ch.Args, []string{"--agent-file", "{file}"}) {
+			t.Errorf("%s.args = %q, want the agent file by its path", tc.field, tc.ch.Args)
+		}
+		if got := spec.Name; filepath.Ext(got) != ".md" {
+			t.Errorf("%s.file.name = %q — agent files are Markdown and discovery scans for .md",
+				tc.field, got)
+		}
+		front, body, found := strings.Cut(
+			strings.TrimPrefix(spec.Template, "---\n"), "---\n")
+		if !found {
+			t.Errorf("%s.file.template carries no YAML frontmatter:\n%s", tc.field, spec.Template)
+			continue
+		}
+		fronts = append(fronts, front)
+		// The CLI trims the body before it reads it.
+		if got := strings.TrimSpace(body); got != tc.body {
+			t.Errorf("%s body = %q, want %q", tc.field, got, tc.body)
+		}
+		holdsKimiAllowlist(t, tc.field, front)
 	}
-	if got := spec.Name; filepath.Ext(got) != ".md" {
-		t.Errorf("name = %q — agent files are Markdown and discovery scans for .md", got)
+	// One file, one policy: a seat and a side pass on this CLI are offered
+	// the same tools, whichever channel the call takes.
+	if len(fronts) == 2 && fronts[0] != fronts[1] {
+		t.Errorf("the two channels' frontmatter differ:\n%s\n---\n%s", fronts[0], fronts[1])
 	}
-	front, body, found := strings.Cut(
-		strings.TrimPrefix(spec.Template, "---\n"), "---\n")
-	if !found {
-		t.Fatalf("the template carries no YAML frontmatter:\n%s", spec.Template)
+	if p.SystemPrompt.File != nil && p.AppendSystemPrompt.File != nil &&
+		p.SystemPrompt.File.Name != p.AppendSystemPrompt.File.Name {
+		t.Errorf("the channels write %q and %q — one agent file per call, under one name",
+			p.SystemPrompt.File.Name, p.AppendSystemPrompt.File.Name)
 	}
+}
+
+// holdsKimiAllowlist checks one agent file's frontmatter keeps the two web
+// tools and nothing else.
+func holdsKimiAllowlist(t *testing.T, field, front string) {
+	t.Helper()
 	var meta struct {
 		Name            string   `yaml:"name"`
 		Description     string   `yaml:"description"`
@@ -201,56 +287,37 @@ func TestTheKimiProfilesAgentFileDeniesItsToolsAndKeepsTheWeb(t *testing.T) {
 		DisallowedTools []string `yaml:"disallowedTools"`
 	}
 	if err := yaml.Unmarshal([]byte(front), &meta); err != nil {
-		t.Fatalf("the frontmatter is not YAML the CLI can read: %v\n%s", err, front)
+		t.Errorf("%s: the frontmatter is not YAML the CLI can read: %v\n%s", field, err, front)
+		return
 	}
 	if meta.Description == "" {
-		t.Error("description is empty, and it is the one REQUIRED frontmatter field — " +
-			"the CLI reports the error and exits rather than running without it")
+		t.Errorf("%s: description is empty, and it is the one REQUIRED frontmatter field — "+
+			"the CLI reports the error and exits rather than running without it", field)
 	}
 	if meta.Name == "" || strings.ToLower(meta.Name) != meta.Name || strings.Contains(meta.Name, " ") {
-		t.Errorf("name = %q, want a kebab-case identifier: a missing or non-kebab-case "+
-			"name is skipped with a warning", meta.Name)
+		t.Errorf("%s: name = %q, want a kebab-case identifier: a missing or non-kebab-case "+
+			"name is skipped with a warning", field, meta.Name)
 	}
 	// An ALLOWLIST, not a denylist: on this CLI an entry it does not
 	// recognise matches nothing and is reported with a warning, so a stale
 	// name costs one tool here where a denylist would cost the restriction.
 	if len(meta.Tools) == 0 {
-		t.Fatal("tools is empty or absent — omitting it allows EVERY tool")
+		t.Errorf("%s: tools is empty or absent — omitting it allows EVERY tool", field)
 	}
 	if len(meta.DisallowedTools) > 0 {
-		t.Errorf("disallowedTools = %v: the allowlist is the denial here, and a "+
-			"second list is one more thing to keep in step", meta.DisallowedTools)
+		t.Errorf("%s: disallowedTools = %v: the allowlist is the denial here, and a "+
+			"second list is one more thing to keep in step", field, meta.DisallowedTools)
 	}
 	// Web is the one local tool this backend never denies, and these are
 	// what this CLI calls its two.
-	for _, want := range []string{"WebSearch", "FetchURL"} {
-		if !slices.Contains(meta.Tools, want) {
-			t.Errorf("tools = %v, want %s kept: a subscription seat must not have "+
-				"less reach than the same CLI at a terminal", meta.Tools, want)
-		}
-	}
-	// Everything that reaches the filesystem, the shell, the network by
-	// another route, or another agent.
-	for _, denied := range []string{
-		"Bash", "Read", "Write", "Edit", "Grep", "Glob", "ReadMediaFile",
-		"Agent", "AgentSwarm", "TodoList", "Skill", "TaskList", "TaskOutput",
-		"CronCreate", "AskUserQuestion", "EnterPlanMode",
-	} {
-		if slices.Contains(meta.Tools, denied) {
-			t.Errorf("tools allows %s — Crewlet's tools ride the prompt envelope, and "+
-				"a CLI acting on its own is invisible to the tool registry, the "+
-				"permission model and redaction", denied)
-		}
-	}
-	// NO ${base_prompt}: a body carrying it wraps the vendor's default
-	// prompt instead of replacing it, which is the coding-agent identity
-	// every other profile here replaces for the same reason.
-	if strings.Contains(body, "${base_prompt}") {
-		t.Error("the body embeds ${base_prompt}, so the vendor's own agent identity " +
-			"sits over the top of whatever seat is being served")
-	}
-	if strings.TrimSpace(body) != "{system}" {
-		t.Errorf("the body is %q, want the seat's prompt and nothing else", body)
+	tools := slices.Clone(meta.Tools)
+	slices.Sort(tools)
+	if want := []string{"FetchURL", "WebSearch"}; !slices.Equal(tools, want) {
+		t.Errorf("%s: tools = %v, want exactly %v: a subscription seat must not have "+
+			"less reach than the same CLI at a terminal, and anything else reaches the "+
+			"filesystem, the shell or another agent — Crewlet's tools ride the prompt "+
+			"envelope, and a CLI acting on its own is invisible to the tool registry, "+
+			"the permission model and redaction", field, meta.Tools, want)
 	}
 }
 
@@ -290,38 +357,64 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	if strings.HasPrefix(version, "1.") {
 		// The unscoped `kimi-code` package on npm is a Claude Code
 		// wrapper that also installs a `kimi`, and checking it answers
-		// the wrong question. Its versions are 1.0.x; Moonshot's own are
-		// 0.x.
+		// the wrong question. Its versions are 1.0.x; Moonshot's own went
+		// from 0.43 to 2.0 without one.
 		t.Skipf("this is not MoonshotAI's own kimi (%q) — the unscoped npm package "+
 			"of the same name is a different program", version)
 	}
 
-	dir := t.TempDir()
-	agentFile := filepath.Join(dir, p.SystemPrompt.File.FileName())
-	if err := os.WriteFile( //nolint:gosec // a test's own temp dir
-		agentFile, []byte(p.SystemPrompt.File.Render("You are Agent CTO.")), 0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
+	// Both channels, because each is an agent file the CLI parses before
+	// anything else: a frontmatter or a body it refused would stop it short
+	// of the auth failure this asserts on.
+	for field, ch := range map[string]cliprofile.Channel{
+		"system_prompt":        p.SystemPrompt,
+		"append_system_prompt": p.AppendSystemPrompt,
+	} {
+		dir := t.TempDir()
+		// A MODEL THE CLI KNOWS, ON A PROVIDER WITH NO CREDENTIAL. With no
+		// config.toml at all, 0.42.0 and 2.3.1 both stop at "Model … is not
+		// configured in config.toml" — before the credential, so the case
+		// proved nothing. Declared with no key, the model takes them on to
+		// "provider … has no credential configured", which is past every
+		// flag and the agent file. The base URL is a closed local port: a
+		// build that tried the network anyway would fail there, not reach
+		// anyone.
+		if err := os.MkdirAll(filepath.Join(dir, ".kimi-code"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".kimi-code", "config.toml"), []byte(
+			"default_model = \"kimi-code/k3\"\n\n"+
+				"[providers.probe]\ntype = \"kimi\"\nbase_url = \"http://127.0.0.1:9/v1\"\n\n"+
+				"[models.\"kimi-code/k3\"]\nprovider = \"probe\"\nmodel = \"k3\"\nmax_context_size = 131072\n",
+		), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		agentFile := filepath.Join(dir, ch.File.FileName())
+		if err := os.WriteFile( //nolint:gosec // a test's own temp dir
+			agentFile, []byte(ch.File.Render("You are Agent CTO.")), 0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
 
-	args := append([]string(nil), p.CompleteArgs...)
-	for _, a := range p.ModelArgs {
-		args = append(args, strings.ReplaceAll(a, "{model}", "kimi-code/k3"))
-	}
-	for _, a := range p.SystemPrompt.Args {
-		args = append(args, strings.ReplaceAll(a, "{file}", agentFile))
-	}
-	args = append(args, p.PromptArgs...)
-	args = append(args, "say hello")
+		args := append([]string(nil), p.CompleteArgs...)
+		for _, a := range p.ModelArgs {
+			args = append(args, strings.ReplaceAll(a, "{model}", "kimi-code/k3"))
+		}
+		for _, a := range ch.Args {
+			args = append(args, strings.ReplaceAll(a, "{file}", agentFile))
+		}
+		args = append(args, p.PromptArgs...)
+		args = append(args, "say hello")
 
-	cmd := exec.Command(binary, args...)
-	cmd.Dir = dir
-	// No KIMI_CODE_HOME here: the profile declares it in config_env and
-	// vendorCLIEnv derives it, which is the point of deriving rather than
-	// re-stating what profiles.yaml already says.
-	cmd.Env = vendorCLIEnv(p, dir, nil)
-	combined, _ := cmd.CombinedOutput()
-	assertArgvReachedAuth(t, args, string(combined))
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = dir
+		// No KIMI_CODE_HOME here: the profile declares it in config_env and
+		// vendorCLIEnv derives it, which is the point of deriving rather than
+		// re-stating what profiles.yaml already says.
+		cmd.Env = vendorCLIEnv(p, dir, nil)
+		combined, _ := cmd.CombinedOutput()
+		t.Run(field, func(t *testing.T) { assertArgvReachedAuth(t, args, string(combined)) })
+	}
 }
 
 // THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM.

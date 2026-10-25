@@ -185,11 +185,13 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// travel through AGENTS.md / CLAUDE.md, which load only once a
 		// workspace is TRUSTED — and the per-call directory never is.
 		"muse-code": "",
-		// 0.42.x, MoonshotAI's OWN CLI from @moonshot-ai/kimi-code:
-		// --agent-file, a path — but an AGENT FILE rather than a bare
-		// prompt, which is what a channel's file spec exists for. Not
-		// the unscoped `kimi-code` package on npm, which is a Claude
-		// Code wrapper and has none of this.
+		// 0.42.0 and 2.3.1, MoonshotAI's OWN CLI from
+		// @moonshot-ai/kimi-code: --agent-file, a path — but an AGENT
+		// FILE rather than a bare prompt, which is what a channel's file
+		// spec exists for, and the appending channel is the same file
+		// with the vendor's `${base_prompt}` after the text. Not the
+		// unscoped `kimi-code` package on npm, which is a Claude Code
+		// wrapper and has none of this.
 		"kimi-code": "{file}",
 		// No channel. 0.21.2's identity slot is SOUL.md, a file in the
 		// CLI's home rather than a per-call argument — and this

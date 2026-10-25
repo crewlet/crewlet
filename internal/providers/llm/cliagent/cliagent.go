@@ -267,6 +267,29 @@ func (p *Provider) String() string {
 	return fmt.Sprintf("%s/%s/%s", providerName, p.agent, p.model)
 }
 
+// routeFor picks the channel one call's system prompt takes
+// ([cliprofile.Profile.RouteFor]), and a call that carries NO system prompt
+// takes a seat's route whatever its kind: the appending channel wherever the
+// profile declares one, so the CLI's own prompt stays in force.
+//
+// A side pass takes the replacing channel because its system prompt is the
+// whole instruction. With none, there is nothing to put in the vendor's place,
+// and the replacing channel would put nothing there: harmless where a channel
+// is passed only with text to carry, but a channel whose file carries policy is
+// passed on every call ([cliprofile.SystemPromptFile]), and its replacing form
+// then renders an EMPTY system prompt. On Kimi Code that is an agent file with
+// no body, which the CLI refuses outright ("Missing prompt body", exit 1,
+// measured on 0.42.0 and 2.3.1). The appending form with nothing to add is the
+// vendor's own prompt under the same policy, which is what a call with no
+// system prompt asks for. Every caller in the engine sends one today; this is
+// what holds the next that does not.
+func (p *Provider) routeFor(req llm.Request) cliprofile.Route {
+	if system, _ := SplitSystem(req); system == "" {
+		return p.profile.RouteFor(true)
+	}
+	return p.profile.RouteFor(req.Agent)
+}
+
 // Complete runs one CLI invocation and reads its answer.
 //
 // An entry its CLI last reported spent is NOT called while it sits out
@@ -284,9 +307,9 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 
 	// THE SYSTEM PROMPT ON THE CHANNEL THIS KIND OF CALL TAKES: beside the
 	// CLI's own for a seat at work, in place of it for a text function —
-	// see [cliprofile.Profile.RouteFor]. Lifted before the transcript is
-	// rendered, so it is never both.
-	route := p.profile.RouteFor(req.Agent)
+	// see [Provider.routeFor]. Lifted before the transcript is rendered, so
+	// it is never both.
+	route := p.routeFor(req)
 	if route.KeepsDefault {
 		req = withHarnessNote(req)
 	}
