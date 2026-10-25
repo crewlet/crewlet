@@ -49,6 +49,126 @@ func accountQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
 	return ns, q
 }
 
+// THE APPLIER'S PENDING COUNT ASKS THE BROKER NOTHING.
+//
+// The applier asks it on every run it holds records for, so at least once a
+// committed run, per domain, per data node — and it was a consumer info, which
+// only the consumer's LEADER answers, the server serves only once its main API
+// queue is empty, and a member that still believes in a leader the group has
+// just lost drops without a word: a request on the commit path, its wait added
+// to every linearizable read whose barrier is in the run. Every record the
+// pull delivers already carries the count in its own metadata, so the answer
+// is what the pull holds — the newest delivery's count of what follows it, and
+// what it delivered that no fetch has taken — and a broker that never answers
+// a consumer info changes nothing.
+func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
+	t.Parallel()
+	ns, q := accountQueue(t, probeDomain())
+	log, err := q.DomainLog(t.Context(), probeDomain().Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	cons, err := q.DomainConsumer(t.Context(), probeDomain().Name, "node-a", 0)
+	if err != nil {
+		t.Fatalf("open the consumer: %v", err)
+	}
+	t.Cleanup(cons.Close)
+	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()))
+	const subject = "crewlet.probe.log.task.a"
+	appendN(t, log, subject, 5)
+
+	pending := func(want uint64) {
+		t.Helper()
+		start := time.Now()
+		got, err := cons.Pending(context.Background())
+		if took := time.Since(start); took > 100*time.Millisecond {
+			t.Errorf("Pending took %v: a count the pull already holds was asked "+
+				"of the broker", took)
+		}
+		if err != nil || got != want {
+			t.Fatalf("Pending = (%d, %v), want (%d, nil)", got, err, want)
+		}
+	}
+	// A RUN PART-FETCHED: two of the five delivered, and the second's own
+	// metadata counts the three behind it.
+	if got, err := cons.Fetch(t.Context(), 2, 0, 30*time.Second); err != nil || len(got) != 2 {
+		t.Fatalf("Fetch(2) = (%d records, %v), want 2", len(got), err)
+	}
+	pending(3)
+	// The rest, under a request that goes on standing for its wait.
+	if got, err := cons.Fetch(t.Context(), 16, 0, 30*time.Second); err != nil || len(got) != 3 {
+		t.Fatalf("Fetch(16) = (%d records, %v), want the 3 behind the first", len(got), err)
+	}
+	pending(0)
+	// WHAT THE STANDING REQUEST DELIVERS AND NO FETCH HAS TAKEN is still to
+	// come for the applier: held in the pull, it is counted.
+	appendN(t, log, subject, 2)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := cons.Pending(context.Background())
+		if err != nil {
+			t.Fatalf("Pending: %v", err)
+		}
+		if got == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Pending = %d with two records delivered into the pull and "+
+				"not taken, want 2", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// AN APPLIER'S RUNS: a fetch and a count each, as nextRun asks them.
+	for run := range 32 {
+		appendN(t, log, subject, 3)
+		got, err := cons.Fetch(t.Context(), 64, 0, 30*time.Second)
+		if err != nil || len(got) == 0 {
+			t.Fatalf("run %d: Fetch = (%d records, %v)", run, len(got), err)
+		}
+		for _, msg := range got {
+			if err := msg.Ack(); err != nil {
+				t.Fatalf("run %d: ack: %v", run, err)
+			}
+		}
+		if _, err := cons.Pending(context.Background()); err != nil {
+			t.Fatalf("run %d: Pending: %v", run, err)
+		}
+	}
+	if n := held.Count(); n != 0 {
+		t.Errorf("the applier's counts sent %d consumer infos to the broker, want none", n)
+	}
+}
+
+// A PULL THAT HAS DELIVERED NOTHING COUNTS NOTHING, and says so rather than
+// answering zero: zero is the answer that closes the applier's run as LEVEL
+// with the log, which only a delivery's own count can say.
+func TestAPendingCountBeforeAnyDeliveryIsUnknown(t *testing.T) {
+	t.Parallel()
+	ns, q := accountQueue(t, probeDomain())
+	cons, err := q.DomainConsumer(t.Context(), probeDomain().Name, "node-a", 0)
+	if err != nil {
+		t.Fatalf("open the consumer: %v", err)
+	}
+	t.Cleanup(cons.Close)
+	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()))
+	if got, err := cons.Pending(context.Background()); err == nil {
+		t.Errorf("Pending before any fetch = (%d, nil), want an error: nothing "+
+			"has counted what follows", got)
+	}
+	// A PULL THAT STANDS AND HAS DELIVERED NOTHING counts nothing either.
+	if got, err := cons.Fetch(t.Context(), 4, 0, 50*time.Millisecond); err != nil || len(got) != 0 {
+		t.Fatalf("Fetch on an empty log = (%d records, %v), want none", len(got), err)
+	}
+	if got, err := cons.Pending(context.Background()); err == nil {
+		t.Errorf("Pending after a fetch that delivered nothing = (%d, nil), want "+
+			"an error: nothing has counted what follows", got)
+	}
+	if n := held.Count(); n != 0 {
+		t.Errorf("an unknown count sent %d consumer infos to the broker, want none", n)
+	}
+}
+
 // A GROUP'S ACKNOWLEDGEMENT FLOOR A MEMBER DROPS IS ASKED AGAIN.
 //
 // The trim's feed term reads it on the trim tick, whose lifetime carries no

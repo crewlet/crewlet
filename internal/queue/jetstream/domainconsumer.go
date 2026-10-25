@@ -1114,19 +1114,46 @@ func (c *DomainConsumer) Close() {
 var errHandleClosed = errors.New("jetstream: state-log consumer handle closed")
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has
-// not delivered, which is what tells a partially filled batch whether waiting
-// would buy anything.
-func (c *DomainConsumer) Pending(ctx context.Context) (uint64, error) {
-	cons, err := c.consumerFor(ctx)
-	if err != nil {
-		return 0, err
+// not handed to a fetch, which is what tells a partially filled batch whether
+// waiting would buy anything.
+//
+// # Counted from what the pull delivered, never asked of the broker
+//
+// The applier asks it on every run it holds records for — at least once a
+// committed run, per domain, per data node — so a request here is a request on
+// the commit path, and a linearizable read whose barrier is in the run waits
+// for it too. The consumer's info was that request: answered only by the
+// consumer's LEADER, served by the server only once its main API queue is
+// empty, and dropped without a word by a member that still believes in a
+// leader its group has just lost (server/jetstream_api.go,
+// jsConsumerInfoRequest: "only the consumer leader should answer"). Measured
+// under load on a fleet of three, the slow ones took 77 ms at the median and
+// 910 ms at worst, every millisecond added to the commit, and the fleet's
+// info requests grew with its data nodes, its domains and its run rate.
+//
+// Every record the pull delivers carries the same count in its own metadata —
+// what the consumer still held past it, at the instant it was delivered — so
+// the answer is the pull's ([puller.undelivered]): the newest delivery's count
+// and what was delivered that no fetch has taken. A hint either way, as a
+// consumer info was, and one no leader election or backed-up queue can drop or
+// delay. A pull that has delivered nothing has counted nothing, and says so:
+// the applier commits the run in hand on an unknown count, where a zero would
+// call it level with the log on nobody's word.
+func (c *DomainConsumer) Pending(context.Context) (uint64, error) {
+	c.mu.Lock()
+	p := c.pull
+	c.mu.Unlock()
+	if p != nil {
+		if n, counted := p.undelivered(); counted {
+			return n, nil
+		}
 	}
-	info, err := cons.Info(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("jetstream: read %s: %w", c.name, err)
-	}
-	return info.NumPending, nil
+	return 0, fmt.Errorf("jetstream: %s's pull has delivered no record whose metadata "+
+		"counts what follows it: %w", c.name, errNotCounted)
 }
+
+// errNotCounted is a pending count no delivery has made yet.
+var errNotCounted = errors.New("jetstream: nothing counted yet")
 
 // Name is what this consumer is called on the broker, for an operator tracing
 // a stalled applier back to the thing that is not delivering.

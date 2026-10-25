@@ -67,9 +67,15 @@ type Fetcher interface {
 	// honoured by that.
 	Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]Message, error)
 
-	// Pending is how many records this consumer has not yet delivered. It
-	// is what tells a partially filled batch whether waiting would buy
-	// anything.
+	// Pending is how many records this consumer has not yet handed to a
+	// Fetch. It is what tells a partially filled batch whether waiting
+	// would buy anything.
+	//
+	// A HINT, and ASKED ON EVERY RUN the loop holds records for — so an
+	// implementation answers it from what its fetches already learned
+	// rather than with a request of its own, which would sit on the commit
+	// path of every run. An error is "not known", which closes the run
+	// rather than the applier and never claims it level with the log.
 	Pending(ctx context.Context) (uint64, error)
 }
 

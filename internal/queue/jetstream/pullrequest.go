@@ -156,6 +156,11 @@ type puller struct {
 	// settled is the newest delivery having reported nothing pending
 	// behind it: the burst it belonged to is complete.
 	settled bool
+	// behind is what the newest delivery's own metadata counted the
+	// consumer still holding past it, and counted whether that delivery's
+	// metadata could be read — see [puller.undelivered].
+	behind  uint64
+	counted bool
 	// requests are the requests the server may still be serving, oldest
 	// first — the order the server fills them in.
 	requests []*standingRequest
@@ -308,6 +313,10 @@ func (p *puller) deliver(msg *nats.Msg) {
 		// an answer that will not come.
 		meta, unreadable := msg.Metadata()
 		p.settled = unreadable != nil || meta.NumPending == 0
+		p.behind, p.counted = 0, unreadable == nil
+		if p.counted {
+			p.behind = meta.NumPending
+		}
 		if len(p.requests) > 0 {
 			// A record names no request, and the server fills the
 			// requests it holds in turn, so it is counted against
@@ -446,6 +455,29 @@ func (p *puller) wakeAt(now, deadline time.Time) time.Time {
 		return until
 	}
 	return deadline
+}
+
+// undelivered is how many records of the consumer no fetch has taken yet: what
+// the pull delivered and still holds, and what the newest delivery's own
+// metadata counted behind it — every record the pull delivers carries the
+// consumer's count of what follows it, which is the same count the consumer's
+// info answers, as of that delivery. False until a delivery's metadata could
+// be read, since nothing has counted anything then.
+//
+// IT ASKS THE BROKER NOTHING, which is why it is here rather than a consumer
+// info: the applier asks it on every run it holds records for, and an info is
+// a request only the consumer's leader answers — after its main API queue
+// drains — on the commit path. A record appended after the newest delivery is
+// counted once the request standing delivers it, as it does at once while one
+// stands; with none standing, the next fetch is what finds it, exactly as a
+// count read a moment earlier would have missed it.
+func (p *puller) undelivered() (uint64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.counted {
+		return 0, false
+	}
+	return p.behind + uint64(len(p.buffered)), true
 }
 
 // full reports whether the buffer already holds a whole fetch. Held under p.mu.
