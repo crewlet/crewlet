@@ -6914,7 +6914,7 @@ written against; a version this engine does not speak is
 | `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |
 | `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn |
 | `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, below |
-| `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in |
+| `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, on whichever node of the fleet that is, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in |
 | `GET` | `/assistant/cards/{id}/export.csv` | | `200` the table card as CSV, from the snapshot the conversation stored, never a fresh read |
 | `GET` | `/assistant/cards/{id}/export.xlsx` | | `200` the same table as XLSX |
 
@@ -6924,10 +6924,13 @@ or `null` when the person removed the page chip. The model reads the page
 context fenced as somebody else's words: it is a hint and never an authority.
 
 **Before anything is spent.** A question is refused, recording nothing, when the
-company's token budget has no room in a window (`429 budget_exhausted` with the
-window, its `resets_at` and a `Retry-After` until it resets), when the person
-already has two turns running or has asked twenty in a minute
-(`429 assistant_busy` with a `Retry-After`), when the conversation already has a
+company's token budget, or the person's own `assistant.token_budget`, has no
+room in a window (`429 budget_exhausted` with the `scope` that is spent, `org`
+or `person`, the window, its `resets_at` and a `Retry-After` until it resets),
+when the person already has two turns running on the node, or has asked twenty
+in a minute across every node of the fleet (`429 assistant_busy` with a
+`Retry-After`; while the fleet's counter cannot be read, the node's own rate of
+twenty a minute, five at once, still holds), when the conversation already has a
 turn running or waiting on an approval (`409 assistant_turn_running`), and when
 no model in the chain can be resolved (`503 assistant_unavailable`).
 
@@ -6945,9 +6948,18 @@ Send `Last-Event-ID` to resume: every frame after it is replayed. A client that
 falls 512 frames behind is disconnected rather than dropped from, and resumes
 the same way. Frames the running node no longer keeps (it keeps a turn's frames
 two minutes after a segment ends) are answered with a `snapshot` of the turn as
-its transcript holds it, then how it ended. A turn whose runner was this node
-and is gone is closed `interrupted` once and answered with
-`error {code: turn_interrupted}`.
+its transcript holds it, then how it ended.
+
+**Any node answers the stream.** A stream that reaches a node not running its
+turn follows it there: the frames it missed are asked of the running node, and
+the rest are heard as the running node tells the fleet, numbered as the running
+node numbered them, so a reconnect that lands on another node resumes exactly
+where it left off. Frames cross the broker encrypted under the fleet keyring,
+bound to their turn, and a node shows only a frame the fleet sealed. A turn whose
+runner is gone (its node restarted, or has left the fleet) is closed
+`interrupted` once, by whichever node notices first, and answered with
+`error {code: turn_interrupted}`; a runner that is only slow to answer leaves the
+turn open, and the stream answers the `snapshot` it can.
 
 A `delta` appends prose to one assistant message while the model writes it, a
 settled line at a time: nothing of a line still being written is sent, so a
@@ -6970,7 +6982,7 @@ asked, and a card is built by the engine from the route's own answer.
 | `409` | `assistant_protocol_mismatch` | The request speaks another protocol version; reload the dashboard |
 | `415` | `unsupported_media_type` | A body not declared `Content-Type: application/json` |
 | `409` | `assistant_turn_running` | The conversation's turn is still running or waiting on an approval |
-| `429` | `assistant_busy` / `budget_exhausted` | Too many turns at once, or the company's window is spent; `Retry-After` says when |
+| `429` | `assistant_busy` / `budget_exhausted` | Too many turns at once, or a window of the company's or the person's own budget is spent (`scope`); `Retry-After` says when |
 | `503` | `assistant_unavailable` | The assistant cannot run here now; a `Retry-After` where a wait is known to help |
 
 Every segment of a turn leaves an `assistant_turn_completed` row in the
