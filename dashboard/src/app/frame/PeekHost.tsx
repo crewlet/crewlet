@@ -51,8 +51,12 @@ import { PeekRestingWidth } from "./peekWidth.ts";
 
 export { PeekNeighbours } from "@crewlethq/ui";
 
-/** What a click on nothing leaves alone while a peek is open: the rail itself. */
-export const PEEK_KEEPS = ".crewlet-peek-rail";
+/**
+ * What a click on nothing leaves alone while a peek is open: the rail itself,
+ * and the assistant beside the page, whose Open in app cards open this very
+ * peek and whose conversation is about it.
+ */
+export const PEEK_KEEPS = ".crewlet-peek-rail, .crewlet-app-shell__aside";
 
 /**
  * Publish the order `[` and `]` should walk, as the objects a list draws.
