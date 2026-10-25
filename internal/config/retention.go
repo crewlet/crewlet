@@ -185,7 +185,7 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// one gibibyte of the 7.5 GiB that eight unset ceilings reserve at their
+	// one gibibyte of the 7 GiB that eight unset ceilings reserve at their
 	// smallest (see [StoreMaxBytesFloor]).
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
@@ -205,7 +205,7 @@ const (
 	// DefaultAssistantLogMaxBytes is the Dashboard Assistant's log ceiling,
 	// and AssistantLogMaxBytesFloor and AssistantLogMaxBytesCeiling bound it.
 	//
-	// # A gibibyte, and the arithmetic behind it
+	// # Half a gibibyte, and the arithmetic behind it
 	//
 	// THE LOG GROWS WITH HEADCOUNT, NOT WITH THE DISK, so unset takes a
 	// fixed default rather than a share of the volume, as the identity
@@ -213,17 +213,24 @@ const (
 	// (the question, the answer, a few steps, a card, its opening and its
 	// close), sealed and signed at about 20 KiB together for an ordinary
 	// turn; the reference company's two hundred people asking ten questions
-	// a day write about 40 MB a day. A gibibyte is then about four weeks of
-	// a COMPLETELY BLOCKED trim, against a `trim_blocked` alarm raised after
-	// a day, so the question is how long somebody has to act on a firing
+	// a day write about 40 MB a day. 512 MiB is then about two weeks of a
+	// COMPLETELY BLOCKED trim, against a `trim_blocked` alarm raised after a
+	// day, so the question is how long somebody has to act on a firing
 	// alarm. The conversations themselves go after their retention whatever
 	// the log holds: the rows are purged by their own records.
+	//
+	// NOT A GIBIBYTE, because a fixed default at or above [MinDomainCeiling]
+	// in internal/engine is never scaled: it is reserved in full on every
+	// fresh node, so a gibibyte here raised the least a node boots in by a
+	// whole gibibyte. Two weeks of a blocked trim is still far past the
+	// alarm, and the identity estate's log, which also grows with headcount,
+	// takes the same 512 MiB.
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: ten people write a twentieth of the reference rate, for which
 	// 64 MiB is a month. THE CEILING IS A TYPO GUARD: sixty-four times the
 	// default is far past any modelled company.
-	DefaultAssistantLogMaxBytes int64 = 1 << 30
+	DefaultAssistantLogMaxBytes int64 = 512 << 20
 	AssistantLogMaxBytesFloor   int64 = 64 << 20
 	AssistantLogMaxBytesCeiling int64 = 64 << 30
 
@@ -271,10 +278,10 @@ const (
 	// THE FLOOR IS SIX GIBIBYTES, a bound on what the field may say rather
 	// than what a node of a given configuration needs. Every node reserves
 	// every state-log domain's ceiling whatever it runs, and left unset the
-	// eight come to 7.5 GiB at their smallest: the tracker's, the vectors',
-	// the knowledge base's, the artifacts', the datastore's, the usage log's
-	// and the assistant's at the gibibyte scaling stops at, and the identity
-	// log's 512 MiB default. So a value this floor admits can be short of
+	// eight come to 7 GiB at their smallest: the tracker's, the vectors', the
+	// knowledge base's, the artifacts', the datastore's and the usage log's at
+	// the gibibyte scaling stops at, and the identity log's and the
+	// assistant's 512 MiB defaults. So a value this floor admits can be short of
 	// what a configuration boots in, and that is said where it can be acted
 	// on: engine.BrokerFloorFor computes the least a fresh node of the
 	// configuration reserves, `crewlet validate` and every start's

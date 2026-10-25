@@ -1048,14 +1048,14 @@ stream:
                                     #   refuses the append, and the top of it
                                     #   is kept for gate records as on the
                                     #   tracker's log
-  # assistant_log_max_bytes: 1073741824
+  # assistant_log_max_bytes: 536870912
                                     #   the Dashboard Assistant's log, where
                                     #   every person's conversations, turns
                                     #   and proposals are recorded (64 MiB..
-                                    #   64 GiB). UNSET TAKES a flat 1 GiB,
+                                    #   64 GiB). UNSET TAKES a flat 512 MiB,
                                     #   sized by how many people ask the
                                     #   assistant rather than by the disk:
-                                    #   about four weeks of a completely
+                                    #   about two weeks of a completely
                                     #   blocked trim at the reference
                                     #   company's rate. Crossing it refuses
                                     #   the append, and the top of it is kept
