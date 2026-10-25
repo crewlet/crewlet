@@ -1163,8 +1163,14 @@ const (
 	// SendButton's held tint, running arc and glyph cross fade, on uilet
 	// 0.61.0, took it to 4444.1 KiB: their rules in the one sheet, the
 	// Assistant mark in the panel's chunk and the indicator's status words.
-	// 4445 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 349<<10
+	// 4445 KiB, which still refuses a doubled baseline. Telling the
+	// assistant which draft is open took it from 4444.3 KiB to 4479.1 KiB:
+	// the one draft hook and its parser in the frame, each editing screen's
+	// field list, help and setters in that screen's chunk (about thirty
+	// screens), the card's file thumbnail in the panel's, and the brand and
+	// integration field lists. 4480 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 384<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
