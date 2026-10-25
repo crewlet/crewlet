@@ -1773,12 +1773,24 @@ cursor-agent:
   # the per-call scratch directory IS the project, so the file is seeded there
   # on every call. Its user-level file, cli-config.json, is synced back with
   # the login, so the policy is kept out of it. Deny takes precedence over
-  # allow, and the user-level default allows Shell(ls).
+  # allow, and the user-level default allows Shell(ls). `Mcp(crewlet:*)`
+  # lets the seat's server's tools run without asking — a call to a tool no
+  # entry allows needs an approval a headless run cannot give (read from the
+  # 2026.10.22 bundle's permission check, `Mcp(<server>:<tool>)`); a call
+  # with no such server, as a text function's, matches nothing.
+  #
+  # THE HOME'S mcp.json, ~/.cursor/mcp.json — the os home, which is the
+  # seat's — names servers the CLI starts with no approval asked: measured on
+  # 2026.10.22 with `cursor-agent mcp list`, which resolves what a run loads,
+  # a server planted there was started; with this file in its place, none was
+  # listed. Rewritten every generation, for text functions too.
   local_tools: denied
   seed_files:
     - path: .cursor/cli.json
       in: work
-      content: '{"permissions":{"allow":["WebFetch(*)"],"deny":["Shell(*)","Write(*)","Read(*)"]}}'
+      content: '{"permissions":{"allow":["WebFetch(*)","Mcp(crewlet:*)"],"deny":["Shell(*)","Write(*)","Read(*)"]}}'
+    - path: .cursor/mcp.json
+      content: '{"mcpServers":{}}'
   model_args: ["--model", "{model}"]
   # NO SYSTEM-PROMPT CHANNEL. The system prompt is assembled by Cursor's
   # service: the run request carries the user message and no system prompt
@@ -1837,6 +1849,80 @@ cursor-agent:
   # route is the same: auth.api_key under auth.mode api-key, never forwarded
   # otherwise.
   api_key_env: "CURSOR_API_KEY"
+  # THE SEAT'S TOOLS, PER CURSOR'S OWN DOCUMENTATION AND ITS 2026.10.22 BUNDLE,
+  # AND MOSTLY NOT MEASURED. A run's model streams from Cursor's own service,
+  # which no stand-in answers, and print mode starts no MCP server before it
+  # has reached that service (measured: offline, it exits 1 on "Failed to
+  # reach the Cursor API" and starts none). What `cursor-agent mcp list` and
+  # `mcp list-tools` — which resolve the same files a run loads — measured on
+  # 2026.10.22, with a checkout above the call holding a .cursor/mcp.json and
+  # an .mcp.json at every level:
+  #
+  #   - the call's own .cursor/mcp.json is its project's, read because the
+  #     engine's .git file makes the call's directory the project root; none
+  #     of the checkout's files above it was listed;
+  #   - a project's server needs an approval, kept per directory under the
+  #     home's .cursor/projects (pruned): "not loaded (needs approval)" until
+  #     given, then the stand-in started, was listed and listed its tools.
+  #     --approve-mcps gives it for the run ("Automatically approve all MCP
+  #     servers"); with the home's file empty (seed_files) and the project's
+  #     the profile's, all is the seat's server.
+  #
+  # NOT measured, and what the doctor's smoke test (`crewlet llm doctor`, on a
+  # real sign-in) is for: the calls themselves, the record below, the counts,
+  # how a response's calls run, whether the list is re-read. Nor what a team
+  # account brings: the service hands an account its team's required plugins,
+  # which may name MCP servers (and hooks) of their own, beside these files —
+  # the bundle reads an EffectivePlugin list, and --approve-mcps approves every
+  # server — so a seat signed in to a team runs what that team configures.
+  # The doctor's smoke line says what the call reached; this profile cannot
+  # keep a team's plugins out.
+  #
+  # The tool timeout is the MCP SDK's 60 s, with no knob in print mode: the
+  # bundle's --mcp-tool-timeout belongs to `cursor-agent worker`, and nothing
+  # a run reads sets one — so the host answers a call still running near 60 s
+  # itself and hands the next run its result. Concurrency is declared at once
+  # and relisting off: unmeasured, these are the values whose cost is bounded
+  # if wrong (a call that ends a phase waits for siblings that come only once
+  # it is answered for the host's two seconds; a tool activated mid-run ends
+  # the run and the next starts with it).
+  mcp:
+    complete_args: ["-p", "--output-format", "stream-json", "--trust", "--exclude-workspace-context"]
+    output: jsonl
+    args: ["--approve-mcps"]
+    seed:
+      - path: .cursor/mcp.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json}}}}'
+    tool_timeout_seconds: 60
+    relists: false
+    concurrency: at_once
+  # EACH REQUEST, FROM THE stream-json STDOUT, as the bundle writes it: the
+  # prose a model call wrote before its first tool call, flushed under that
+  # call's model_call_id when the call starts; each tool_call `started` event
+  # under the same model_call_id, an MCP call as tool_call.mcpToolCall.args
+  # {toolCallId, providerIdentifier (the mcp.json key), toolName, args}; its
+  # `completed` event once it has run, which ends the request; and the last
+  # response's prose flushed with no id before the result event, which
+  # begins the request after the last one. The counts are the result's, for
+  # the run (usage, above). No id is known to reach the server with a call:
+  # calls are joined by name and arguments.
+  requests:
+    source: stdout
+    host_namespace: "crewlet"
+    events:
+      - match: [{path: ["type"], equals: "assistant"}]
+        id: ["model_call_id"]
+        text: ["message", "content", "0", "text"]
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "started"}]
+        id: ["model_call_id"]
+        call:
+          id: ["call_id"]
+          name: ["tool_call", "mcpToolCall", "args", "toolName"]
+          namespace: ["tool_call", "mcpToolCall", "args", "providerIdentifier"]
+          args: ["tool_call", "mcpToolCall", "args", "args"]
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["subtype"], equals: "completed"}]
+        closes: true
   login_args: ["login"]
   logout_args: ["logout"]
   status_args: ["status"]

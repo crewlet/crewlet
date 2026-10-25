@@ -18,16 +18,17 @@ import (
 func TestTheSmokeTestCertifiesEveryShippedToolRoute(t *testing.T) {
 	t.Parallel()
 	for agent, join := range map[string]string{
-		"codex":      "joined to its record by the id it sends in _meta callId",
-		"gemini-cli": "joined to its record by name and arguments",
-		"qwen-code":  "joined to its record by name and arguments",
-		"opencode":   "joined to its record by name and arguments",
-		"copilot":    "joined to its record by name and arguments",
-		"grok":       "joined to its record by name and arguments",
-		"pi":         "joined to its record by name and arguments",
-		"kimi-code":  "joined to its record by name and arguments",
-		"muse-code":  "joined to its record by the id it sends in _meta idempotencyKey",
-		"hermes":     "joined to its record by name and arguments",
+		"codex":        "joined to its record by the id it sends in _meta callId",
+		"gemini-cli":   "joined to its record by name and arguments",
+		"qwen-code":    "joined to its record by name and arguments",
+		"opencode":     "joined to its record by name and arguments",
+		"copilot":      "joined to its record by name and arguments",
+		"grok":         "joined to its record by name and arguments",
+		"pi":           "joined to its record by name and arguments",
+		"kimi-code":    "joined to its record by name and arguments",
+		"muse-code":    "joined to its record by the id it sends in _meta idempotencyKey",
+		"hermes":       "joined to its record by name and arguments",
+		"cursor-agent": "joined to its record by name and arguments",
 	} {
 		t.Run(agent, func(t *testing.T) {
 			t.Parallel()
