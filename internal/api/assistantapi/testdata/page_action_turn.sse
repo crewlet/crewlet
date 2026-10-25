@@ -36,5 +36,5 @@ data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.10
 event: done
-data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":10,"at":"2026-10-24T09:41:00Z","kind":"done","done":{"state":"waiting_for_approval","duration_ms":0,"steps":1,"trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":10,"at":"2026-10-24T09:41:00Z","kind":"done","done":{"state":"waiting_for_approval","duration_ms":0,"steps":1,"message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
 

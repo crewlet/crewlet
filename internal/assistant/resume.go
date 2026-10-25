@@ -99,7 +99,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	// READ BEFORE THE RESUME RECORD, like everything that can fail: once it
 	// lands the turn is running on this node, and a return after it would
 	// leave it running with no runner.
-	conversation, err := s.transcripts.Conversation(ctx, r.Owner, r.Conversation)
+	transcript, err := s.transcripts.Transcript(ctx, r.Owner, r.Conversation)
 	if err != nil {
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
@@ -146,7 +146,8 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		ToolCallID: keep.PendingCall, Content: resultOf(r, t.boundary),
 		Failed: r.State != wire.ProposalApplied}})
 
-	after := s.openStream(t, conversation, true, floor)
+	after := s.openStream(t, transcript.Conversation, true, floor)
+	s.settleWaiting(ctx, t.write(), waitingSteps(transcript, r.Turn), r.State, r.Failure, t.emit)
 	if r.Card.Type != "" {
 		if err := s.showProposal(ctx, t, r.Proposal, r.Card); err != nil {
 			s.log.WarnContext(ctx, "assistant_proposal_card_unshown", "turn", r.Turn,
@@ -292,7 +293,15 @@ func (s *Service) tell(ctx context.Context, person iam.Principal, row assistantd
 func (s *Service) settledPast(ctx context.Context, person iam.Principal,
 	row assistantdomain.Turn, r approval.Resumption) (wire.TurnAccepted, error) {
 
+	transcript, err := s.transcripts.Transcript(ctx, r.Owner, r.Conversation)
+	if err != nil {
+		return wire.TurnAccepted{}, s.readFailure(err)
+	}
 	return s.tell(ctx, person, row, s.continuing(ctx, r.Owner, r.Turn, 0), func(t *turn) error {
+		t.derived = &Derivation{At: row.StartedAt, Name: "assistant_settled_past",
+			Identity: []string{r.Turn.String(), r.Proposal.String()}}
+		s.settleWaiting(ctx, t.write(), waitingSteps(transcript, r.Turn), r.State, r.Failure,
+			t.emit)
 		if r.Card.Type != "" {
 			if err := s.showProposal(ctx, t, r.Proposal, r.Card); err != nil {
 				return err
