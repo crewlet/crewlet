@@ -157,3 +157,25 @@ func StateNow(p assistantdomain.Proposal, now time.Time) wire.ProposalState {
 	}
 	return p.State
 }
+
+// Lapsed reports whether a parked turn waits on nothing any more: none of its
+// proposals (ps, the turn's own) can still move it. Each one is settled at
+// now ([StateNow]), or is a page action approved or applying past its expiry,
+// which the page never reported. A server write in doubt (unknown) is NOT
+// lapsed: the person's Retry still settles it, and the turn waits for that.
+//
+// THE ONE RULE every place that ends a parked turn as expired reads: a Start
+// in its conversation, a reload, an expired decision and the reaper's
+// backstop.
+func Lapsed(ps []assistantdomain.Proposal, now time.Time) bool {
+	for _, p := range ps {
+		switch state := StateNow(p, now); {
+		case state.Settled():
+		case p.Scope == wire.ScopePage && Expired(p.ExpiresAt, now) &&
+			(state == wire.ProposalApproved || state == wire.ProposalApplying):
+		default:
+			return false
+		}
+	}
+	return true
+}

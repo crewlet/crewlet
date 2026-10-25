@@ -208,15 +208,20 @@ func answer(p assistantdomain.Proposal, state wire.ProposalState, at wire.TurnAc
 		TurnID: turn, StreamURL: at.StreamURL, AfterSeq: at.AfterSeq}
 }
 
-// expire records a proposal that nobody decided before its expiry. The
-// proposal reads as expired whether or not the record lands, so a failure is
-// logged rather than answered.
+// expire records a proposal that nobody decided before its expiry, and ends
+// its parked turn as expired where it waits on nothing else. The proposal
+// reads as expired whether or not either record lands (and the turn's expiry
+// has a backstop of its own), so a failure is logged rather than answered.
 func (a *Approver) expire(ctx context.Context, d decider, p assistantdomain.Proposal) {
 	if _, err := a.move(ctx, d.call("expire"), p.ID, assistantdomain.ProposalMove{
 		From: wire.ProposalProposed, To: wire.ProposalExpired}); err != nil &&
 		!errors.Is(err, ErrAlreadyDecided) {
 		log.WarnContext(ctx, "assistant_proposal_expiry_not_recorded",
 			"proposal", p.ID, "error", err)
+	}
+	if err := a.d.Turns.Lapse(ctx, d.person.ID, p.Conversation, p.Turn); err != nil {
+		log.WarnContext(ctx, "assistant_turn_expiry_not_recorded", "proposal", p.ID,
+			"turn", p.Turn, "error", err)
 	}
 }
 
@@ -264,7 +269,8 @@ const CodeStale = "proposal_stale"
 
 // resume hands a decision to its parked turn. The decision is recorded either
 // way, so a turn that cannot be resumed is logged: the person sees the card's
-// state, and the turn ends with its own expiry.
+// state, and the turn ends with its own expiry (the service's expiry
+// backstop).
 func (a *Approver) resume(ctx context.Context, r Resumption) wire.TurnAccepted {
 	at, err := a.d.Turns.Resume(ctx, r)
 	if err != nil {

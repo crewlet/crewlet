@@ -100,6 +100,7 @@ type Service struct {
 	streams  int
 	closed   bool
 	titlesWG sync.WaitGroup
+	reaperWG sync.WaitGroup
 }
 
 // turnNamespace is the UUIDv5 namespace a turn's id is derived in from the
@@ -136,7 +137,7 @@ func New(d Deps) (*Service, error) {
 	if d.Remote != nil {
 		tap = d.Remote.Publish
 	}
-	return &Service{
+	s := &Service{
 		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
@@ -150,7 +151,10 @@ func New(d Deps) (*Service, error) {
 		}, now),
 		base: base, cancel: cancel,
 		turns: map[uuid.UUID]*turn{}, running: map[uuid.UUID]int{},
-	}, nil
+	}
+	s.reaperWG.Add(1)
+	go s.reapLoop()
+	return s, nil
 }
 
 // maxProposalTTLSeconds is the longest proposal lifetime a company may set
@@ -273,7 +277,9 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if err != nil {
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
-	if history.Conversation.OpenTurn != uuid.Nil {
+	if current, err := s.lapseOpen(ctx, ts.Person.ID, history); err != nil {
+		return wire.TurnAccepted{}, err
+	} else if current && history.Conversation.OpenTurn != uuid.Nil {
 		return wire.TurnAccepted{}, ErrTurnRunning
 	}
 	acts, err := s.acts(ctx, ts.Person)
@@ -757,18 +763,10 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
 	row assistantdomain.Turn) (wire.TurnState, *wire.ErrorEvent, error) {
 
-	err := s.records.CloseTurn(ctx, Write{Owner: owner,
-		By: iam.Actor{Name: "engine", Kind: iam.ActorSystem},
-		Derived: &Derivation{At: row.StartedAt, Name: "assistant_interrupt",
-			Identity: []string{row.ID.String()}}}, row.ID, assistantdomain.TurnEnd{
+	state, err := s.closeDerived(ctx, owner, row, "assistant_interrupt", assistantdomain.TurnEnd{
 		State: wire.TurnInterrupted, Steps: row.Steps, ErrorCode: string(wire.ErrorTurnInterrupted)})
-	state := wire.TurnInterrupted
-	var moved *assistantdomain.TurnMoved
-	switch {
-	case errors.As(err, &moved):
-		state = moved.State
-	case err != nil:
-		return "", nil, s.writeFailure(err)
+	if err != nil {
+		return "", nil, err
 	}
 	if state != wire.TurnInterrupted {
 		return state, nil, nil

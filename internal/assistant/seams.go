@@ -53,7 +53,8 @@ type Catalogue interface {
 }
 
 // Transcripts is the read side of the assistant's own domain, every read keyed
-// on the owner: *assistantdomain.Reader as written.
+// on the owner but the expiry backstop's nomination: *assistantdomain.Reader as
+// written.
 type Transcripts interface {
 	Conversations(ctx context.Context, owner uuid.UUID, cursor string, limit int) (wire.ConversationList, error)
 	Conversation(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Conversation, error)
@@ -61,6 +62,10 @@ type Transcripts interface {
 	Turn(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Turn, error)
 	Parked(ctx context.Context, owner, turn uuid.UUID) ([]byte, error)
 	Card(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Card, error)
+	// ParkedPast nominates parked turns, of any owner, none of whose
+	// proposals expires after now: the expiry backstop's one question
+	// across owners, which only nominates ([Service.ReapLapsed] decides).
+	ParkedPast(ctx context.Context, now time.Time, limit int) ([]assistantdomain.TurnRef, error)
 }
 
 // Records is the write side of the assistant's own domain, one method per
