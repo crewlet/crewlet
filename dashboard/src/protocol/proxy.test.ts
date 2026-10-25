@@ -81,6 +81,7 @@ const REST_PATH_FIRST = new Set([
   "putText",
   "putBytes",
   "blob",
+  "stream",
 ]);
 /** Constructors whose first argument is the URL they dial. */
 const DIALS = new Set(["WebSocket", "EventSource"]);

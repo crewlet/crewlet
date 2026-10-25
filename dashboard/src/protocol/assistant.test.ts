@@ -1,0 +1,271 @@
+/**
+ * The assistant's transport: its routes, and a turn's stream as the engine
+ * serves it.
+ *
+ * THE STREAM IS THE ENGINE'S OWN GOLDEN (`internal/assistant/wire/testdata/
+ * frames.sse`), served through a stubbed `fetch` in chunks cut anywhere, so a
+ * resume, a stall and a refusal are each exercised over bytes the engine's
+ * encoder wrote rather than a fixture typed to agree with this client.
+ */
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { repoRoot } from "~/test/engineFiles.ts";
+import {
+  call,
+  exportFile,
+  isAssistantPath,
+  openTurnStream,
+  versioned,
+  type StreamStop,
+} from "./assistant.ts";
+import type { AssistantNarrowFrame } from "./assistantWire.ts";
+import { RestError } from "./rest.ts";
+
+const GOLDEN = readFileSync(
+  join(repoRoot(), "internal/assistant/wire/testdata/frames.sse"),
+  "utf8",
+);
+/** The golden's first turn, the events of one stream. */
+const FIRST = GOLDEN.split("\n\n")
+  .filter((block) => block.includes("3db96f52-a891-5953-9735-0ae522cf6347."))
+  .map((block) => `${block}\n\n`);
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+/** A body that hands over `chunks` one read at a time, then ends or hangs. */
+function body(chunks: string[], end: "close" | "hang" = "close"): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let at = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (at < chunks.length) {
+        controller.enqueue(encoder.encode(chunks[at++]!));
+        return;
+      }
+      if (end === "close") controller.close();
+      return new Promise(() => {});
+    },
+  });
+}
+
+const sse = (stream: ReadableStream<Uint8Array>) =>
+  new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+
+/** Every request sent, and a fetch answering each in turn from `answers`. */
+function serve(...answers: ((init: RequestInit) => Response | Promise<Response>)[]) {
+  const sent: { url: string; init: RequestInit }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      sent.push({ url, init });
+      const answer = answers[Math.min(sent.length - 1, answers.length - 1)]!;
+      return answer(init);
+    }),
+  );
+  return sent;
+}
+
+/** Open a stream and collect what it reports until it closes. */
+function watch(url: string, lastEventId?: string, stallMs = 60_000) {
+  const frames: AssistantNarrowFrame[] = [];
+  const states: string[] = [];
+  const stops: StreamStop[] = [];
+  let closed!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    closed = resolve;
+  });
+  const stream = openTurnStream(
+    url,
+    {
+      frame: (f) => frames.push(f),
+      state: (s) => {
+        states.push(s);
+        if (s === "closed") closed();
+      },
+      stop: (r) => stops.push(r),
+    },
+    { lastEventId, stallMs, backoffMs: 5, maxBackoffMs: 10 },
+  );
+  return { frames, states, stops, ended, stream };
+}
+
+const URL_ = "/assistant/conversations/c1/stream?turn=3db96f52-a891-5953-9735-0ae522cf6347";
+
+describe("a turn's stream", () => {
+  test("reads every frame once, cut anywhere, and closes when the turn is done", async () => {
+    const text = FIRST.join("");
+    const pieces: string[] = [];
+    for (let i = 0; i < text.length; i += 37) pieces.push(text.slice(i, i + 37));
+    const sent = serve(() => sse(body(pieces)));
+    const w = watch(URL_);
+    await w.ended;
+    expect(w.frames.map((f) => f.seq)).toEqual(FIRST.map((_, i) => i + 1));
+    expect(w.states).toEqual(["connecting", "live", "closed"]);
+    expect(w.stops).toEqual([]);
+    // THE SESSION COOKIE AND NOTHING ELSE, and no cache in front of it.
+    expect(sent[0]!.init.credentials).toBe("same-origin");
+    expect(sent[0]!.init.cache).toBe("no-store");
+    expect(new Headers(sent[0]!.init.headers).get("Last-Event-ID")).toBeNull();
+  });
+
+  // A RESUME ASKS FOR WHAT IT MISSED: the connection dropped after the fifth
+  // frame, and the next dial names it, so the engine replays only the rest.
+  test("a dropped connection is dialled again from the last frame it read", async () => {
+    const sent = serve(
+      () => sse(body(FIRST.slice(0, 5))),
+      () => sse(body(FIRST.slice(5))),
+    );
+    const w = watch(URL_);
+    await w.ended;
+    expect(w.frames.map((f) => f.seq)).toEqual(FIRST.map((_, i) => i + 1));
+    expect(w.states).toContain("reconnecting");
+    expect(new Headers(sent[1]!.init.headers).get("Last-Event-ID")).toBe(
+      "3db96f52-a891-5953-9735-0ae522cf6347.5",
+    );
+  });
+
+  test("a stream the caller already holds part of resumes from the frame it names", async () => {
+    const sent = serve(() => sse(body(FIRST.slice(3))));
+    const w = watch(URL_, "3db96f52-a891-5953-9735-0ae522cf6347.3");
+    await w.ended;
+    expect(new Headers(sent[0]!.init.headers).get("Last-Event-ID")).toBe(
+      "3db96f52-a891-5953-9735-0ae522cf6347.3",
+    );
+  });
+
+  // A QUIET STREAM IS STALLED after two missed keepalives: a connection a
+  // proxy silently dropped never errors, it just stops, and only a timer can
+  // tell it from a long tool call.
+  test("a stream that goes quiet past its keepalives is dialled again", async () => {
+    const sent = serve(
+      () => sse(body(FIRST.slice(0, 2), "hang")),
+      () => sse(body(FIRST.slice(2))),
+    );
+    const w = watch(URL_, undefined, 30);
+    await w.ended;
+    expect(sent).toHaveLength(2);
+    expect(new Headers(sent[1]!.init.headers).get("Last-Event-ID")).toBe(
+      "3db96f52-a891-5953-9735-0ae522cf6347.2",
+    );
+    expect(w.frames).toHaveLength(FIRST.length);
+  });
+
+  test("a frame of another protocol version stops the stream for good", async () => {
+    const other = FIRST[0]!.replace('"v":1', '"v":2');
+    const sent = serve(() => sse(body([other, ...FIRST.slice(1)])));
+    const w = watch(URL_);
+    await w.ended;
+    expect(w.stops).toEqual([{ code: "protocol_mismatch", version: 2 }]);
+    expect(w.frames).toEqual([]);
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a refusal stops it with the engine's own answer; a 5xx is dialled again", async () => {
+    const refused = serve(
+      () =>
+        new Response(JSON.stringify({ error: "not_found", detail: "no such turn" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const w = watch(URL_);
+    await w.ended;
+    expect(refused).toHaveLength(1);
+    const stop = w.stops[0];
+    expect(stop?.code).toBe("refused");
+    expect(stop?.code === "refused" && stop.error).toBeInstanceOf(RestError);
+
+    const retried = serve(
+      () => new Response("{}", { status: 503, headers: { "Retry-After": "1" } }),
+      () => sse(body(FIRST)),
+    );
+    const again = watch(URL_);
+    await again.ended;
+    expect(retried).toHaveLength(2);
+    expect(again.stops).toEqual([]);
+  });
+
+  test("closing it ends the read and dials nothing more", async () => {
+    const sent = serve(() => sse(body(FIRST.slice(0, 1), "hang")));
+    const w = watch(URL_);
+    await vi.waitFor(() => expect(w.frames).toHaveLength(1));
+    w.stream.close();
+    await w.ended;
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a stream address that is not the assistant's is never dialled", async () => {
+    const sent = serve(() => sse(body(FIRST)));
+    const w = watch("https://elsewhere.example/assistant/x");
+    await w.ended;
+    expect(sent).toHaveLength(0);
+    expect(w.stops[0]?.code).toBe("invalid_path");
+  });
+});
+
+describe("the assistant's own paths", () => {
+  test("only a path under /assistant/ on this origin is followed", () => {
+    expect(isAssistantPath("/assistant/cards/c1/export.csv")).toBe(true);
+    expect(isAssistantPath("/assistant/conversations/c1/stream?turn=t")).toBe(true);
+    for (const refused of [
+      "//evil.example/assistant/x",
+      "https://evil.example/assistant/x",
+      "/assistant/../operator/act/x",
+      "/assistant/./x",
+      "/assistant/x\\y",
+      "/assistant/x\ny",
+      "/work/items",
+      "assistant/x",
+    ]) {
+      expect(isAssistantPath(refused), refused).toBe(false);
+    }
+  });
+
+  test("an export is read from its card's own path and refused anywhere else", async () => {
+    const sent = serve(() => new Response("a,b\n", { status: 200 }));
+    await exportFile("/assistant/cards/c1/export.csv");
+    expect(sent[0]!.url.endsWith("/assistant/cards/c1/export.csv")).toBe(true);
+    await expect(exportFile("/operator/act/x")).rejects.toBeInstanceOf(RestError);
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("a route", () => {
+  test("is sent at its table's path with the id encoded, its version and its operation key", async () => {
+    const sent = serve(
+      () =>
+        new Response(JSON.stringify({ turn_id: "t", stream_url: "/assistant/x", after_seq: 0 }), {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const accepted = await call(
+      "POST /assistant/conversations/{id}/turns",
+      { ...versioned, input: { text: "hi" }, page_context: null },
+      { id: "c/1", opKey: "op-1" },
+    );
+    expect(accepted.turn_id).toBe("t");
+    expect(sent[0]!.url.endsWith("/assistant/conversations/c%2F1/turns")).toBe(true);
+    expect(sent[0]!.init.method).toBe("POST");
+    const headers = new Headers(sent[0]!.init.headers);
+    expect(headers.get("Idempotency-Key")).toBe("op-1");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(sent[0]!.init.body))).toEqual({
+      protocol_version: 1,
+      input: { text: "hi" },
+      page_context: null,
+    });
+  });
+
+  test("a route that names an id refuses to be sent without one", async () => {
+    await expect(call("GET /assistant/conversations/{id}", null, {})).rejects.toBeInstanceOf(
+      TypeError,
+    );
+  });
+});
