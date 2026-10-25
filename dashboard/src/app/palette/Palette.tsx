@@ -86,6 +86,8 @@ import {
   ZapGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useNavigator, useRoute } from "../router.tsx";
+import { ProductMark } from "@crewlethq/icons/product-mark";
+import { useAssistantControl } from "../assistant/control.ts";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -200,6 +202,7 @@ export function CommandPalette({
   const nav = useNavigator();
   const route = useRoute();
   const viewer = useViewer();
+  const assistant = useAssistantControl();
   // WHO THE LOCKS ARE READ FOR, or null while nobody has said — a lock
   // claimed on a guess is a refusal nobody made.
   const standing: Standing = viewer.loading
@@ -540,8 +543,23 @@ export function CommandPalette({
   const answeredMd = answer.kind === "answered" ? answer.answer : null;
 
   const actionRows = (): CommandPaletteItem[] => {
-    if (picking || !runs.tracker) return [];
+    if (picking) return [];
     const rows: CommandPaletteItem[] = [];
+    // --- assistant page actions (WP12) ---
+    // THE QUESTION, ASKED OF THE ASSISTANT, beside the page it was typed on:
+    // offered only where this reader may ask, and asked as the panel would
+    // ask it (`control.ts`).
+    if (term && (scope === "all" || scope === "actions") && assistant.unavailable === null) {
+      rows.push({
+        id: "act-assistant",
+        icon: <ProductMark product="assistant" size="sm" />,
+        label: `Ask the assistant: “${term}”`,
+        hint: "answers in the panel, with this page attached",
+        onSelect: () => assistant.ask(term),
+      });
+    }
+    // --- end assistant page actions (WP12) ---
+    if (!runs.tracker) return rows;
     const blockedRow = (reason: string) => () => {
       stay();
       setNotice({ refused: false, text: reason });

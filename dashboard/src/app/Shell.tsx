@@ -105,6 +105,7 @@ import { assistantUnavailableFor } from "./assistant/availability.ts";
 import {
   ASSISTANT_COMPOSER_ID,
   AssistantControlContext,
+  queueQuestion,
   type AssistantFocus,
 } from "./assistant/control.ts";
 import { framePageOf, setFramePage } from "./assistant/context.ts";
@@ -639,6 +640,13 @@ function Frame({ children }: { children: ReactNode }) {
       open: assistantOpen,
       unavailable: assistantUnavailable,
       toggle: (focus: AssistantFocus = "composer") => showAssistant(!assistantOpen, focus),
+      // --- assistant page actions (WP12) ---
+      ask: (question: string) => {
+        if (assistantUnavailable !== null) return;
+        queueQuestion(question);
+        if (!assistantOpen) showAssistant(true, "composer");
+      },
+      // --- end assistant page actions (WP12) ---
     }),
     [assistantOpen, assistantUnavailable, showAssistant],
   );
@@ -709,6 +717,8 @@ function Frame({ children }: { children: ReactNode }) {
     // `[` and `]` walk the rows they are actually looking at. See `PeekHost`.
     <NewTaskOpener.Provider value={openNewTask}>
       <PeekNeighbours>
+        {/* AROUND THE PALETTE TOO (WP12): its "Ask the assistant" row asks
+            through the same control the Ask button reads. */}
         <AssistantControlContext.Provider value={assistantControl}>
           <AppShell
             className="app"
@@ -805,29 +815,29 @@ function Frame({ children }: { children: ReactNode }) {
               screen
             )}
           </AppShell>
-        </AssistantControlContext.Provider>
 
-        {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
+          {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
           open, so a palette that threw is a dialog saying so — closed the
           way the palette closes — and the next ⌘K is a fresh palette. Its
           code is a chunk of its own, the first the idle prefetch fetches. */}
-        {paletteOpen && (
-          <LayerBoundary title="Search" onClose={() => setPaletteOpen(false)}>
-            <CommandPalette
-              onClose={() => setPaletteOpen(false)}
-              onShowKeys={() => setLegendOpen(true)}
-            />
-          </LayerBoundary>
-        )}
-        {/* THE SHEET'S CODE IS THE WORK WORKSPACE'S CHUNK — it is a Work form,
+          {paletteOpen && (
+            <LayerBoundary title="Search" onClose={() => setPaletteOpen(false)}>
+              <CommandPalette
+                onClose={() => setPaletteOpen(false)}
+                onShowKeys={() => setLegendOpen(true)}
+              />
+            </LayerBoundary>
+          )}
+          {/* THE SHEET'S CODE IS THE WORK WORKSPACE'S CHUNK — it is a Work form,
           and the frame's own entry stays the frame — so it is mounted only
           while open, through the same loader every screen uses. */}
-        {newTask !== null && (
-          <LayerBoundary title="New task" onClose={() => setNewTask(null)}>
-            <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
-          </LayerBoundary>
-        )}
-        {legendOpen && <KeyLegend runs={runs} onClose={() => setLegendOpen(false)} />}
+          {newTask !== null && (
+            <LayerBoundary title="New task" onClose={() => setNewTask(null)}>
+              <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
+            </LayerBoundary>
+          )}
+          {legendOpen && <KeyLegend runs={runs} onClose={() => setLegendOpen(false)} />}
+        </AssistantControlContext.Provider>
       </PeekNeighbours>
     </NewTaskOpener.Provider>
   );
