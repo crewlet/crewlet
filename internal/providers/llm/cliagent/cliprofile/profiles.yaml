@@ -3473,6 +3473,102 @@ pi:
     # config root is ~/.pi/agent rather than ~/.pi, so the seat home's copy is
     # .pi/agent and every path below is relative to that.
     PI_CODING_AGENT_DIR: ".pi/agent"
+  # THE HOME'S OWN MCP SERVERS NEVER START. 1.4.0 starts every server the
+  # agent directory's mcp.json names whenever its MCP support is on, which a
+  # run with tools turns on; the file is the profile's own, empty, rewritten
+  # every generation (measured: a server planted there started on a run with
+  # tools without it, and not with it). A text function, with --no-extensions,
+  # starts none either way.
+  seed_files:
+    - path: .pi/agent/mcp.json
+      content: '{"mcpServers":{}}'
+  # THE SEAT'S TOOLS: one stdio server, REGISTERED BY AN EXTENSION written into
+  # the call's own directory and loaded by its path (-e), beside the CLI's own
+  # MCP support (-e builtin:mcp) — --no-extensions turns built-in extensions
+  # off with every discovered one, and an explicit -e path still loads. The
+  # vendor's two configuration files cannot carry a per-run server: the agent
+  # directory's mcp.json is the seat's, shared by every call of it at once,
+  # and a project's .pi/mcp.json is read only from a TRUSTED working
+  # directory — which would trust its other project files too (measured: with
+  # --approve, a server in .pi/mcp.json of the directory pi ran in started;
+  # with the profile's --no-approve, none). The registration's `exposure:
+  # direct` declares the tools to the model by name (`mcp__crewlet__<name>`);
+  # --tools keeps those and nothing else. Measured on 1.4.0 through the
+  # engine's own code path against a local stand-in.
+  #
+  # The registration's `timeout` is the CLI's per-call timeout, in seconds
+  # (60 by default; 4 gave a 10 s call up at 4.0 s). It re-reads the server's
+  # list when told it changed — a tool activated mid-run was offered from the
+  # request after the one the activation's result went back in — and makes
+  # one response's calls at once. A call with malformed arguments is refused
+  # by the CLI itself, as is a name without the server's prefix.
+  #
+  # THE SESSION IS THE RECORD: in place of --no-session, the run keeps its
+  # session in its own directory (--session-dir), which goes with it, and
+  # prints the plain answer as a text function does — `--mode json` prints the
+  # record on stdout, but a failed request there exits 0 with nothing on
+  # stderr, where a failure, and a spent plan's words, are read.
+  mcp:
+    complete_args:
+      - "-p"
+      - "--no-tools"
+      - "--no-context-files"
+      - "--no-extensions"
+      - "--no-skills"
+      - "--no-prompt-templates"
+      - "--no-themes"
+      - "--no-approve"
+      - "--session-dir"
+      - "{work}/.crewlet-pi-session"
+    seed:
+      - path: crewlet-mcp.mjs
+        in: work
+        content: |
+          // Written by Crewlet: the seat's tools, served as the crewlet MCP server for this run alone.
+          export default function (pi) {
+            pi.registerMcpServer("crewlet", {
+              command: {relay_command_json},
+              args: {relay_args_json},
+              timeout: {tool_timeout_seconds},
+              exposure: "direct",
+            });
+          }
+    args: ["-e", "builtin:mcp", "-e", "{work}/crewlet-mcp.mjs", "--tools", "mcp__crewlet__*"]
+    tool_timeout_seconds: 600
+    relists: true
+    concurrency: at_once
+  # EACH REQUEST, FROM THE SESSION FILE, which the CLI appends an entry to as
+  # each message completes: an assistant message is a response — its id, its
+  # model, its prose and calls as content blocks, why it stopped, and its
+  # counts, `input` WITHOUT the cached part and `output` with the reasoning in
+  # it (measured with a stand-in reporting 40 cached and 7 reasoning tokens:
+  # 61 + 40 of a 101-token prompt, 12 out). The CLI sends no id with a call, so
+  # a call is joined by name and arguments; each was in the file within 0.1 s
+  # of reaching the server. The CLI has no turn cap of its own: a run's rounds
+  # are bounded by the phase's.
+  requests:
+    source: file
+    in: work
+    file: ".crewlet-pi-session/*.jsonl"
+    host_prefix: "mcp__crewlet__"
+    stops: {toolUse: tool_use, stop: end}
+    events:
+      - match: [{path: ["type"], equals: "message"}, {path: ["message", "role"], equals: "assistant"}]
+        id: ["id"]
+        model: ["message", "model"]
+        stop: ["message", "stopReason"]
+        blocks:
+          path: ["message", "content"]
+          each:
+            - match: [{path: ["type"], equals: "text"}]
+              text: ["text"]
+            - match: [{path: ["type"], equals: "toolCall"}]
+              call: {id: ["id"], name: ["name"], args: ["arguments"]}
+        usage:
+          input: [["message", "usage", "input"]]
+          output: [["message", "usage", "output"]]
+          cache_read: [["message", "usage", "cacheRead"]]
+          cache_write: [["message", "usage", "cacheWrite"]]
   # OAuth tokens and API keys both land here, 0600, and the file auto-refreshes
   # an expired token in place.
   credential_paths: [".pi/agent/auth.json"]
