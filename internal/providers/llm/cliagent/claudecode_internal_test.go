@@ -158,23 +158,3 @@ func TestClaudeCodeCallsCarryTheVendorsSwitches(t *testing.T) {
 		}
 	}
 }
-
-// WHAT CLAUDE CODE LEAVES IN TMPDIR IS PRUNED WITH THE REST of a call's
-// leftovers. The engine points TMPDIR inside the seat's home, and Claude Code
-// leaves a probe directory there on almost every call: kept, the home grows by
-// one directory per call for the life of the seat. Derived from the
-// environment a call is handed, so moving TMPDIR elsewhere fails this rather
-// than leaving the prune pointed at a directory nothing writes.
-func TestClaudeCodePrunesTheTemporaryDirectoryItsCallsWrite(t *testing.T) {
-	t.Parallel()
-	p := claudeCode(t)
-	home := t.TempDir()
-	env := childEnv(p, &Checkout{Home: home, Cache: t.TempDir(), Work: t.TempDir()}, nil, Auth{})
-	rel, err := filepath.Rel(home, env["TMPDIR"])
-	if err != nil || !filepath.IsLocal(rel) {
-		t.Fatalf("TMPDIR = %q is not inside the seat home %q", env["TMPDIR"], home)
-	}
-	if !slices.Contains(p.VolatilePaths, rel) {
-		t.Errorf("volatile_paths = %q lacks %q, the directory TMPDIR names", p.VolatilePaths, rel)
-	}
-}

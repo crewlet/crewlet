@@ -182,12 +182,10 @@ claude-code:
     # file and nothing more.
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1"
   credential_paths: [".claude/.credentials.json"]
+  # The `claude-<uid>/fswatch-probe-*` directory Claude Code leaves in TMPDIR
+  # on almost every call (measured on 2.1.303 and 2.1.310) goes with the
+  # engine's own prune of that directory, which every profile gets.
   volatile_paths:
-    # The directory TMPDIR names, which the engine points inside the seat's
-    # home. Claude Code leaves a `claude-<uid>/fswatch-probe-*` directory there
-    # on almost every call (measured on 2.1.303 and 2.1.310), one per call for
-    # the life of the seat; nothing in it is read by a later call.
-    - "tmp"
     # .claude.json is not merely settings: it carries a `projects` map whose
     # entries hold per-directory conversation HISTORY. Observed on disk after
     # a real call, which is why it is pruned rather than trusted — the

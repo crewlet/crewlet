@@ -527,9 +527,23 @@ func (w *Workspace) seatState(seat string) *seatState {
 	return state
 }
 
-// prune deletes the profile's volatile paths from a seat home.
+// seatTempDir is the directory TMPDIR names, under the seat's home.
+//
+// The ENGINE'S, not a profile's: every child is handed it, and every CLI
+// leaves something in it — Claude Code a probe directory on almost every call,
+// Qwen Code a compile cache, OpenCode its own scratch — so it is pruned with
+// the volatile paths whatever the profile lists, and made again, private and
+// empty, for the generation that follows. Kept, a seat's home grew by what
+// every call it ever made left behind.
+const seatTempDir = "tmp"
+
+// prune deletes the profile's volatile paths, and the engine's temporary
+// directory, from a seat home, and leaves that directory in place and empty.
+//
+// Run only where no call of the seat is in flight — a generation opening, a
+// login home being emptied — so nothing that is still writing loses its files.
 func (w *Workspace) prune(home string) error {
-	for _, rel := range w.profile.VolatilePaths {
+	for _, rel := range append(slices.Clone(w.profile.VolatilePaths), seatTempDir) {
 		target, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return err
@@ -537,6 +551,11 @@ func (w *Workspace) prune(home string) error {
 		if err := os.RemoveAll(target); err != nil {
 			return fmt.Errorf("cli-agent: pruning %q: %w", target, err)
 		}
+	}
+	// MADE AGAIN, because a CLI handed a TMPDIR that does not exist fails
+	// the first temporary file it opens rather than making the directory.
+	if err := os.MkdirAll(filepath.Join(home, seatTempDir), 0o700); err != nil {
+		return fmt.Errorf("cli-agent: preparing the seat's temporary directory: %w", err)
 	}
 	return nil
 }

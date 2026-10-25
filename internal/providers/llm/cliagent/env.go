@@ -90,7 +90,7 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	env["XDG_DATA_HOME"] = filepath.Join(c.Home, ".local", "share")
 	env["XDG_STATE_HOME"] = filepath.Join(c.Home, ".local", "state")
 	env["XDG_CACHE_HOME"] = c.Cache
-	env["TMPDIR"] = filepath.Join(c.Home, "tmp")
+	env["TMPDIR"] = filepath.Join(c.Home, seatTempDir)
 	for name, rel := range p.ConfigEnv {
 		env[name] = filepath.Join(c.Home, rel)
 	}
