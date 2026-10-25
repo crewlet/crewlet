@@ -1071,8 +1071,12 @@ const (
 	// palettes a logo slot reads stay in its lazy chunk (uilet 0.49.1). What
 	// the frame gained is the folder keys (0.6 KiB) and the Brand row, the
 	// folder and brand routes and the kind's words (0.5 KiB). 321 KiB, still
-	// under two seconds on that link.
-	initialBudget = 321 << 10
+	// under two seconds on that link. The brand setup wizard (uilet 0.50)
+	// brought the setup layout's and the vertical stepper's rules into the
+	// one sheet by the same rule (0.8 KiB); the setup page itself loads with
+	// the brand's screens: 321.1 KiB. 322 KiB, still under two seconds on
+	// that link.
+	initialBudget = 322 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
