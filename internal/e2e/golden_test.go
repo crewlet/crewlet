@@ -1378,11 +1378,12 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	// the two agree once the charges are through, and the poll that sees them
 	// agree is a snapshot in which every refused round so far is counted.
 	// Every round of the loop here is a tool-use reply, and every auxiliary
-	// pass a text reply, so each call's cost is known from its kind. EVERY
-	// call the model answered is summed: each is one run of the scripted CLI,
-	// whose answer and usage the backend reads off the one document it prints
-	// ([scriptedEntry]), so there is no call the engine was billed for and
-	// never handed.
+	// pass a text reply, so each request's cost is known from its kind. EVERY
+	// request the model answered is summed: each is one model request of a
+	// scripted CLI run, whose usage the backend reads off the record the CLI
+	// prints for it, and a stop never lands between the model's answer and
+	// that record ([cliRun.handleStop]) — so there is no request the engine
+	// was billed for and never read.
 	var used, want int
 	var calls []string
 	waitFor(t, "the counter to hold every completion the model answered", func() bool {
