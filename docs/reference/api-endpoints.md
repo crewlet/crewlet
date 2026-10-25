@@ -3816,6 +3816,7 @@ or not it went through:
 | `operator_acted` | Every [operator tool](#operatormcp--your-own-assistant) call that is not a proven read, on **all three** transports: a button on the dashboard (`/operator/act`), a person's own assistant (`/operator/mcp`) and a script on the [human write surface](#the-human-write-surface) (`/work`, `/pages`), whose verbs with no tool behind them are recorded too. A write the Dashboard Assistant sent after you approved it is recorded under the transport `assistant`, its credential `assist:<grant>`, with an `assistant` reference (`conversation_id`, `turn_id`, `grant_id`, `session`, `proposal_id`) and `conversation_id` beside it as a listing field |
 | `backup_requested` | Every [`POST /backup`](#post-backup) that began copying, whether the copy finished or not |
 | `assistant_conversation_read` | Every administrator's compliance read of a person's Dashboard Assistant conversation: the reader, `conversation_id`, `owner_id` and the reason they gave. The conversation itself is never copied here |
+| `assistant_turn_completed` | Every segment of a person's Dashboard Assistant turn: answered, stopped, failed, out of budget, or parked on a proposal. It names the conversation, the turn (`assistant_turn_id`, never a seat's `turn_id`), how it ended and every step's tool, route pattern, outcome, HTTP status and bytes read, and never an argument, an answer or the person's question |
 
 Each carries `source: "operator"` on the envelope, so
 `GET /events?source=operator` is the runtime audit on its own. Who acted is
@@ -3824,7 +3825,7 @@ request records: `actor` (the seat's handle for a person, or for a token or
 service account bound to one, and the login otherwise), `actor_kind` (`human`, `operator` or `system`) and
 `operator_id` (the credential — `session:<lineage>`, `pat:<id>`, or a Tier A
 token's login) — resolved once for the call, so a directory rebind landing
-while it ran never makes the record name a different person. Both are filed
+while it ran never makes the record name a different person. All of them are filed
 under `lifecycle`.
 
 ```json
@@ -3857,8 +3858,9 @@ the audit says who called what, and what became of it.
 **A listing carries what a row needs without its payload.** `GET /events`
 never returns payloads, so the store promotes the runtime audit's dimensions
 into each row's `tags`: `actor_kind` and `operator_id` (who acted, beside
-the row's own `actor` column), `tool` (an `operator_acted` call's tool) and
-`dir` (a `backup_requested` copy's directory) — beside `node`, the envelope's
+the row's own `actor` column), `tool` (an `operator_acted` call's tool),
+`dir` (a `backup_requested` copy's directory) and `conversation_id` (an
+`assistant_turn_completed` turn's conversation) — beside `node`, the envelope's
 publishing node, which every event row carries. That is what the dashboard's
 Audit log and backup history draw from.
 
