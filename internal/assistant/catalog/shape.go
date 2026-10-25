@@ -1,0 +1,180 @@
+package catalog
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/assistant/cards"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
+)
+
+// Result is one read's answer shaped twice: the cards the person sees and the
+// text the model reads.
+type Result struct {
+	// Cards are what the person is shown, built from the route's own JSON.
+	Cards []wire.Card
+	// Model is what the model is handed: a compact summary of the cards,
+	// fenced where the answer carries text somebody wrote, at most
+	// [cards.ModelBytes] plus the fence.
+	Model string
+	// Refusal is the route's refusal, when the answer was one.
+	Refusal *wire.Refusal
+}
+
+// Failed reports a read the route refused or could not answer.
+func (r Result) Failed() bool { return r.Refusal != nil }
+
+// Shape is a read's answer as the person and the model receive it, in this
+// order, each step before the next:
+//
+//  1. A refusal is an error card in the engine's own words, the tool's phrase
+//     beside the refusal's sentence, and the model reads the refusal.
+//  2. An answer past what a step reads (exec.Response.Truncated) is never
+//     carded as though whole: it is a notice, for both.
+//  3. Every string in the answer passes redact.Secrets, so no credential the
+//     answer carried reaches a card, the log or the model.
+//  4. The card is built by the tool's spec, capped with a notice when cut.
+//  5. The model's summary is the card's, every row or item whole, and is
+//     fenced under the turn's boundary when the tool reads text a person or
+//     an agent wrote (ADR-0040), or has every fence marker in it defused
+//     when it does not, so no field of any answer can open or close a fence.
+func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now time.Time) (Result, error) {
+	if !cards.Permitted(resp.Status) {
+		refusal := cards.Refusal(resp.Status, resp.Body)
+		refusal.Message = redact.Secrets(refusal.Message)
+		model, err := json.Marshal(map[string]any{"refused": refusal})
+		if err != nil {
+			return Result{}, fmt.Errorf("catalog: encode a refusal: %w", err)
+		}
+		return Result{Cards: []wire.Card{cards.Error(refusal, t.Phrase,
+			cards.Retryable(resp.Status))}, Model: provenance.Neutralise(b, string(model)),
+			Refusal: &refusal}, nil
+	}
+	if resp.Truncated {
+		return notice(cards.TooLargeText)
+	}
+	spec, ok := t.CardFor(args)
+	if !ok {
+		return Result{}, fmt.Errorf("catalog: %s cards no answer of its kind", t.Name)
+	}
+	body, err := redacted(resp.Body)
+	if err != nil {
+		return Result{}, err
+	}
+	built, err := cards.Build(spec, body, now)
+	if err != nil {
+		return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
+	}
+	model, err := fitModel(t, built.Card, b)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Cards: built.Cards(), Model: model}, nil
+}
+
+// modelText is a summary as the model reads it: fenced whole, with the
+// envelope that labels it, for a tool that reads somebody's text; defused for
+// one that does not.
+//
+// ONE FENCE PER RESULT, labelled with the tool's Source and Trust. A route's
+// answer is the company's own rows, written by its people and its agents, and
+// the answer does not name each field's writer the way a builtin read does;
+// so the label is the least it can vouch for that is still true of every
+// writer, and a model told it is a colleague's weighs a request in it as one.
+//
+// THE MODEL CUT INCLUDES THE FENCE: the summary is built to [cards.ModelBytes]
+// less [fenceBytes], so what the model is handed never passes the bound.
+func modelText(t Tool, b provenance.Boundary, summary []byte) (string, error) {
+	if !t.Fence {
+		return provenance.Neutralise(b, string(summary)), nil
+	}
+	out, err := json.Marshal(map[string]any{
+		"provenance": provenance.NewEnvelope(t.Trust, nil),
+		"answer":     provenance.Fence(b, t.Source, t.Trust, nil, string(summary)),
+	})
+	if err != nil {
+		return "", fmt.Errorf("catalog: encode a fenced result: %w", err)
+	}
+	return string(out), nil
+}
+
+// notice is a result that is one notice, the same sentence for both readers.
+func notice(text string) (Result, error) {
+	model, err := json.Marshal(map[string]string{"notice": text})
+	if err != nil {
+		return Result{}, fmt.Errorf("catalog: encode a notice: %w", err)
+	}
+	return Result{Cards: []wire.Card{cards.Notice(wire.NoticeInfo, text)}, Model: string(model)}, nil
+}
+
+// fenceBytes is a first guess at what the fence and its envelope add to a
+// summary: two marker lines, the envelope's note, and the escaping a JSON
+// string adds to a summary of JSON. [fitModel] measures rather than trusts it.
+const fenceBytes = 2 << 10
+
+// fitModel is the card's summary as the model reads it, at most
+// [cards.ModelBytes] with the fence included: the summary is built to the
+// bound less the fence's guess, and built again smaller by what the result
+// went past it, whole rows still, until it fits.
+func fitModel(t Tool, card wire.Card, b provenance.Boundary) (string, error) {
+	budget := cards.ModelBytes - fenceBytes
+	for budget > 0 {
+		summary, err := cards.Summary(card, budget)
+		if err != nil {
+			return "", fmt.Errorf("catalog: summarise %s's answer: %w", t.Name, err)
+		}
+		model, err := modelText(t, b, summary)
+		if err != nil {
+			return "", err
+		}
+		over := len(model) - cards.ModelBytes
+		if over <= 0 {
+			return model, nil
+		}
+		budget -= over + over/4 + 64
+	}
+	return "", fmt.Errorf("catalog: %s's answer does not fit the %d bytes a model is handed",
+		t.Name, cards.ModelBytes)
+}
+
+// redacted is body with redact.Secrets applied to every string it holds, keys
+// and values alike, re-encoded. Redacting the encoded text instead could
+// split a marker across a JSON escape, and a credential is a value wherever it
+// sits.
+func redacted(body []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("%w: %w", cards.ErrNotJSON, err)
+	}
+	out, err := json.Marshal(scrub(doc))
+	if err != nil {
+		return nil, fmt.Errorf("catalog: re-encode a redacted answer: %w", err)
+	}
+	return out, nil
+}
+
+func scrub(v any) any {
+	switch t := v.(type) {
+	case string:
+		return redact.Secrets(t)
+	case []any:
+		for i := range t {
+			t[i] = scrub(t[i])
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			out[redact.Secrets(k)] = scrub(val)
+		}
+		return out
+	}
+	return v
+}
