@@ -72,6 +72,40 @@ describe("drawing a slide", () => {
     expect(container.querySelector("svg")?.getAttribute("viewBox")).toBe("0 0 800 400");
   });
 
+  // A DECK STORED BEFORE THE ENGINE HELD A DRAWING'S VALUES TO ITS GRAMMAR is
+  // drawn without what the grammar refuses: an escape that spells `url(`, and
+  // a CSS function that reaches outside the drawing. Mutation: drop the
+  // backslash check and the escaped fill is drawn.
+  test("a drawing value the engine's grammar refuses is not drawn", () => {
+    const drawing: DeckSlide = {
+      id: "x",
+      path: "slides/x.html",
+      title: "x",
+      root: {
+        tag: "section",
+        children: [
+          {
+            tag: "svg",
+            attrs: { "aria-label": "Revenue (in \\ out)" },
+            children: [
+              { tag: "rect", attrs: { fill: "u\\72l(https://x.test/p.svg#a)" } },
+              { tag: "circle", attrs: { mask: "image-set('https://x.test/a.png' 1x)" } },
+              { tag: "ellipse", attrs: { fill: "var(--x)", stroke: "rgb(1, 2, 3)" } },
+              { tag: "g", attrs: { transform: "rotate(-45 5 5)" } },
+            ],
+          },
+        ],
+      },
+    };
+    const { container } = render(<>{renderSlide(drawing, ctx)}</>);
+    expect(container.querySelector("rect")?.getAttribute("fill")).toBeNull();
+    expect(container.querySelector("circle")?.getAttribute("mask")).toBeNull();
+    expect(container.querySelector("ellipse")?.getAttribute("fill")).toBeNull();
+    expect(container.querySelector("ellipse")?.getAttribute("stroke")).toBe("rgb(1, 2, 3)");
+    expect(container.querySelector("g")?.getAttribute("transform")).toBe("rotate(-45 5 5)");
+    expect(container.querySelector("svg")?.getAttribute("aria-label")).toBe("Revenue (in \\ out)");
+  });
+
   test("a link opens the https address in a new tab and gives it no opener", () => {
     const { container } = render(<>{renderSlide(slide("ask"), ctx)}</>);
     const a = container.querySelector("a")!;

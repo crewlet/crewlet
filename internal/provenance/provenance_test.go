@@ -251,6 +251,11 @@ func TestTheLeastTrustDecidesAWholeResult(t *testing.T) {
 		{[]Trust{TrustOwn, TrustColleague}, TrustColleague},
 		{[]Trust{TrustColleague, TrustPage, TrustOwn}, TrustPage},
 		{[]Trust{TrustPage, TrustExternal}, TrustExternal},
+		// THE ADOPTED VOICE outranks a colleague's words and never the
+		// reader's own: a result carrying both is labelled by the lesser.
+		{[]Trust{TrustCompany, TrustOwn}, TrustCompany},
+		{[]Trust{TrustCompany, TrustColleague}, TrustColleague},
+		{[]Trust{TrustCompany}, TrustCompany},
 		{[]Trust{TrustOwn, "trusted"}, TrustExternal},
 		{nil, TrustExternal},
 	}
@@ -326,7 +331,44 @@ func TestSourcesAndTrustsAreClosed(t *testing.T) {
 			t.Fatalf("source %q is not valid", s)
 		}
 	}
+	for _, trust := range Trusts {
+		if !trust.Valid() {
+			t.Fatalf("trust %q is not valid", trust)
+		}
+		if _, ranked := trustRank[trust]; !ranked {
+			t.Fatalf("trust %q has no rank, so Least reads it as external", trust)
+		}
+		if _, noted := notes[trust]; !noted {
+			t.Fatalf("trust %q carries no note for the envelope", trust)
+		}
+	}
 	if Source("page").Valid() || Trust("trusted").Valid() {
 		t.Fatal("an undefined label reads as valid")
+	}
+}
+
+// TestTheCompanyTrustIsNeverInferredAndConfinesItself: no set of authors earns
+// `company`, which only a caller reading an administrator's adoption states,
+// and its note says what the adopted text may govern and what it never does.
+func TestTheCompanyTrustIsNeverInferredAndConfinesItself(t *testing.T) {
+	admin := Author{Kind: iam.ActorHuman, Seat: "founder"}
+	for _, authors := range [][]Author{nil, {admin}, {{Kind: iam.ActorSystem}}} {
+		if got := TrustFor("analyst", authors); got == TrustCompany {
+			t.Fatalf("TrustFor(%v) inferred company", authors)
+		}
+		if got := TrustForPartial("analyst", authors); got == TrustCompany {
+			t.Fatalf("TrustForPartial(%v) inferred company", authors)
+		}
+	}
+	note := NewEnvelope(TrustCompany, []Author{admin}).Note
+	for _, says := range []string{"tone and wording", "never the task", "tools",
+		"who receives anything", "access"} {
+		if !strings.Contains(note, says) {
+			t.Errorf("the company note does not say %q: %q", says, note)
+		}
+	}
+	fenced := Fence(fixed, SourceBrandVoice, TrustCompany, []Author{admin}, "Write plainly.")
+	if !strings.Contains(fenced, "source=brand_voice trust=company authors=human:founder") {
+		t.Fatalf("the voice's fence is labelled %q", strings.SplitN(fenced, "\n", 2)[0])
 	}
 }

@@ -78,7 +78,8 @@ import {
   TrashGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
-import { artifactSectionPath } from "~/app/routes.ts";
+import { artifactFolderPath, artifactSectionPath } from "~/app/routes.ts";
+import { artifactPlace, useFolderTree } from "~/lib/artifacts/folders.ts";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { useKeymap } from "~/app/keymap.ts";
@@ -146,8 +147,23 @@ const DETAIL_POLL_MS = 60_000;
 /** How many versions the chip's menu lists before "Every version" takes the rest. */
 const CHIP_VERSIONS = 8;
 
-/** Where the bar's way back goes: the gallery. */
+/** Where the bar's way back goes when the artifact is in no folder the reader sees: the gallery. */
 const BACK = { href: href(["artifacts"]), label: "Back to artifacts" };
+
+/**
+ * Where an artifact's page leads back to: the folder it is kept in, named,
+ * where the reader can see it, and the gallery otherwise. The tree is read
+ * only for an artifact filed in a folder.
+ */
+function useWayBack(folder: string | undefined) {
+  const tree = useFolderTree(Boolean(folder));
+  const place = artifactPlace(folder, tree.index);
+  const back =
+    place.at === "folder"
+      ? { href: href(artifactFolderPath(place.id)), label: `Back to ${place.name}` }
+      : BACK;
+  return { place, back };
+}
 
 export function ArtifactPage({ id }: { id: string }) {
   const detail = useQuery("artifact", { id }, { pollMs: DETAIL_POLL_MS });
@@ -317,6 +333,7 @@ function Loaded({
   // THE PAGE HAS THE WINDOW'S HEIGHT: the body scrolls inside itself and a
   // panel beside it stays in view however far the artifact is read.
   useFillScreen(true);
+  const { place: kept, back } = useWayBack(detail.folder);
   const people = useArtifactPeople();
   const toast = useToast();
   const connection = useConnection();
@@ -518,7 +535,7 @@ function Loaded({
   const pins = usePins();
   const pin = usePinToggle(
     detail.id,
-    (pins.data?.items ?? []).some((item) => item.id === detail.id),
+    (pins.data?.contents ?? []).some((item) => item.id === detail.id),
   );
   const renameAccess = useArtifactAccess({ role: "editor", held: detail.role });
   const trashAccess = useArtifactAccess({ role: "owner", held: detail.role, person: true });
@@ -701,7 +718,9 @@ function Loaded({
   ];
 
   const panelBody: Record<PanelName, () => ReactNode> = {
-    details: () => <DetailsPanel detail={detail} showing={showing} />,
+    details: () => (
+      <DetailsPanel detail={detail} showing={showing} place={kept} onChanged={refetch} />
+    ),
     history: () => (
       <HistoryTab
         detail={detail}
@@ -819,7 +838,7 @@ function Loaded({
           icon={detail.icon}
           kindLabel={KIND_WORDS[detail.kind]}
           start={<FrameNavToggle />}
-          back={BACK}
+          back={back}
           {...(renameAccess.can ? { onRename: rename } : {})}
           renaming={renaming}
           onRenamingChange={setRenaming}

@@ -28,10 +28,11 @@ import (
 
 // TestTheArtifactListenerServesOnlyTheServingRoutes walks the route table whole
 // and holds it to the reviewed set, and probes every shape of path the API
-// serves: none of them answers anything here but an empty 404, and the four
+// serves: none of them answers anything here but an empty 404, and the five
 // serving routes do answer (the control, without which refusing everything
-// would pass). Mutation: route `/health` or any API prefix to a handler and a
-// probe below answers it.
+// would pass). The fifth, the adopted brand's files by their hash, is
+// ADR-0048's amendment of ADR-0035's list. Mutation: route `/health` or any
+// API prefix to a handler and a probe below answers it.
 func TestTheArtifactListenerServesOnlyTheServingRoutes(t *testing.T) {
 	t.Parallel()
 	want := []string{
@@ -39,6 +40,7 @@ func TestTheArtifactListenerServesOnlyTheServingRoutes(t *testing.T) {
 		"GET /t/{ticket}/_assets/{asset}",
 		"GET /_crewlet/runtime/{contract}/{file...}",
 		"GET /_crewlet/kit/{version}/{file...}",
+		"GET /_crewlet/brand/{file}",
 	}
 	if !slices.Equal(artifactserve.Routes, want) {
 		t.Fatalf("the listener's routes are %v, want exactly %v", artifactserve.Routes, want)
@@ -51,6 +53,7 @@ func TestTheArtifactListenerServesOnlyTheServingRoutes(t *testing.T) {
 		"/operator/act", "/operator/mcp", "/iam/people", "/config", "/secrets",
 		"/static/dashboard/index.html", "/favicon.ico", "/metrics", "/_edge/cache",
 		"/t", "/t/", "/_crewlet/", "/_crewlet/runtime/", "/_crewlet/runtime/1.0.0/",
+		"/_crewlet/brand/", "/_crewlet/brand/" + string(r.objects["app.js"].Hash) + ".js",
 		"/robots.txt", "/.well-known/security.txt",
 	} {
 		empty(t, r.do(request{url: f.Origin + path}), http.StatusNotFound)
@@ -64,6 +67,7 @@ func TestTheArtifactListenerServesOnlyTheServingRoutes(t *testing.T) {
 	for _, u := range []string{
 		f.Origin + "/_crewlet/runtime/1.0.0/runtime.js",
 		f.Origin + "/_crewlet/kit/0.18.0/kit.css",
+		f.Origin + "/_crewlet/brand/" + string(r.adopt([]byte(":root{--brand-primary:#2450e6}"))) + ".css",
 		base(f) + "app.js",
 		base(f) + "_assets/" + r.reads.assets[0].ID.String(),
 	} {

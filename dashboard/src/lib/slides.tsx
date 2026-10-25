@@ -180,14 +180,37 @@ function svgProperty(name: string): string {
   return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
-/** A drawing attribute with its references moved into the instance's id space. */
+/** The drawing attributes whose value is a list of transform functions. */
+const SVG_TRANSFORMS: ReadonlySet<string> = new Set([
+  "transform",
+  "gradientTransform",
+  "patternTransform",
+]);
+
+/**
+ * A drawing attribute with its references moved into the instance's id space,
+ * or null for one the engine's drawing grammar would refuse.
+ *
+ * A PRESENTATION ATTRIBUTE IS READ AS CSS, where an escape spells `url(`
+ * without writing it and a function such as `image-set()` reaches outside the
+ * drawing. The engine refuses both at publish (`internal/artifacts/svgsafe`);
+ * a deck stored before it did is drawn here without them: no backslash but in
+ * the words of an `aria-label`, and a parenthesis only in `url(#id)`, a
+ * transform or a colour function. Never stricter than the engine, so nothing
+ * it admits is dropped.
+ */
 function svgValue(name: string, value: string, prefix: string): string | null {
   if (/javascript:|data:|<|expression/i.test(value)) return null;
   if (name === "id") return prefix + value;
   if (name === "href") return value.startsWith("#") ? "#" + prefix + value.slice(1) : null;
+  if (name === "aria-label") return value;
+  if (value.includes("\\")) return null;
   if (/url\(/i.test(value)) {
     const m = /^url\(\s*#([A-Za-z][A-Za-z0-9_.-]{0,63})\s*\)$/.exec(value.trim());
     return m ? `url(#${prefix}${m[1]})` : null;
+  }
+  if (value.includes("(") && !SVG_TRANSFORMS.has(name) && !/^\s*(?:rgba?|hsla?)\(/i.test(value)) {
+    return null;
   }
   return value;
 }

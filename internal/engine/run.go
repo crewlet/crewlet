@@ -772,6 +772,11 @@ type Engine struct {
 	// shared by every registry it builds ([builtin.DataTurns]).
 	dataTurns *builtin.DataTurns
 
+	// folderTurns is this node's tally of the folder records each agent
+	// turn segment writes, shared by every registry it builds
+	// ([builtin.FolderTurns]).
+	folderTurns *builtin.FolderTurns
+
 	// onArtifactsServing is told whenever this node's artifact copies leave
 	// or return to service, and stopArtifactWatchFn ends the watcher that
 	// tells it. See presence.go.
@@ -1193,6 +1198,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		steers:              steers,
 		presenceWire:        presenceWire,
 		dataTurns:           builtin.NewDataTurns(nil),
+		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,

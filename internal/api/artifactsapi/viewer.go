@@ -177,22 +177,25 @@ func (g Gate) List(ctx context.Context, reads Lister, p iam.Principal, q artifac
 	if err != nil {
 		return ListPage{}, err
 	}
-	shown, err := g.Visible(ctx, p, page.Items)
+	shown, err := g.Visible(ctx, p, page.Contents)
 	if err != nil {
 		return ListPage{}, err
 	}
-	out := ListPage{Items: make([]ListItem, 0, len(shown)), Total: page.Total, After: page.After,
-		Level: string(page.Level), Position: page.Position, Complete: page.Complete}
+	out := ListPage{Prefix: page.Prefix, Delimiter: page.Delimiter,
+		Contents: make([]ListItem, 0, len(shown)), CommonPrefixes: page.CommonPrefixes,
+		IsTruncated: page.IsTruncated, NextContinuationToken: page.NextContinuationToken,
+		Total: page.Total, Level: string(page.Level), Position: page.Position, Complete: page.Complete}
 	for _, item := range shown {
 		role, err := g.shownRole(ctx, p, item.Head)
 		if err != nil {
 			return ListPage{}, err
 		}
-		out.Items = append(out.Items, ListItem{
+		out.Contents = append(out.Contents, ListItem{
 			Artifact: shapeHead(item.Head, role, false),
-			Pinned:   item.Pinned, OpenedAt: item.OpenedAt,
+			Pinned:   item.Pinned, OpenedAt: item.OpenedAt, FolderPath: item.FolderPath,
 		})
 	}
+	out.KeyCount = len(out.Contents) + len(out.CommonPrefixes)
 	return out, nil
 }
 
@@ -215,15 +218,24 @@ type Lister interface {
 		artifactsdomain.ListPage, error)
 }
 
-// ListPage is one page of a listing as a viewer is shown it.
+// ListPage is one page of a listing as a viewer is shown it, in S3's
+// ListObjectsV2 terms (artifactsdomain.ListPage says what each means).
 type ListPage struct {
-	Items []ListItem `json:"items"`
+	Prefix         string                         `json:"prefix"`
+	Delimiter      string                         `json:"delimiter,omitempty"`
+	Contents       []ListItem                     `json:"contents"`
+	CommonPrefixes []artifactsdomain.CommonPrefix `json:"common_prefixes,omitempty"`
+
+	// KeyCount is what this page shows, contents and common prefixes: a row
+	// the authority table withheld is not counted.
+	KeyCount              int    `json:"key_count"`
+	IsTruncated           bool   `json:"is_truncated"`
+	NextContinuationToken string `json:"next_continuation_token,omitempty"`
 
 	// Total is how many artifacts the query matched in the estate's own
 	// filter, which decides every relation the authority table does; a row
 	// the table still withheld is counted and not listed.
 	Total    int               `json:"total"`
-	After    string            `json:"after,omitempty"`
 	Level    string            `json:"read_level"`
 	Position statelog.Position `json:"position"`
 	Complete bool              `json:"complete"`
@@ -234,6 +246,9 @@ type ListItem struct {
 	Artifact
 	Pinned   bool      `json:"pinned,omitempty"`
 	OpenedAt time.Time `json:"opened_at"`
+
+	// FolderPath is the folder it is filed in, as the viewer sees it.
+	FolderPath string `json:"folder_path,omitempty"`
 }
 
 // ---- effective access ------------------------------------------------- //

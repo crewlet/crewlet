@@ -1,13 +1,16 @@
 package artifactsapi_test
 
 import (
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/datasetsapi"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -24,11 +27,22 @@ import (
 // minted it in, the presence chrome draws what a member is doing, and the
 // history and the company trail word every op a history row is filed under. Every
 // one of those is a closed set the engine owns, so `contract/artifacts.ts`
-// declares each once and this holds it: a value the engine grew that the
+// (and `contract/brand.ts`, for a brand kit's) declares each once and this
+// holds it: a value the engine grew that the
 // dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
 // dashboard keeps that the engine dropped is a choice every write refuses.
 // The ORDER is held too, because the role ladder is an order (each includes
 // the ones before it) and the dashboard draws the others in the engine's.
+// contractFile is the dashboard module a gated name is declared in: a brand
+// kit's rows in `contract/brand.ts`, which only the brand's lazy screens read,
+// every other artifacts row in `contract/artifacts.ts`.
+func contractFile(name string) string {
+	if strings.HasPrefix(name, "BRAND_") {
+		return "contract/brand.ts"
+	}
+	return "contract/artifacts.ts"
+}
+
 func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -43,6 +57,11 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		"ARTIFACT_LIST_SCOPES":  names(artifactsdomain.ListScopes),
 		"ARTIFACT_LIST_SORTS":   names(artifactsdomain.ListSorts),
 		"ARTIFACT_HISTORY_OPS":  names(artifactsdomain.HistoryOps),
+
+		"ARTIFACT_FOLDER_VISIBILITIES": names(artifactsdomain.FolderVisibilities),
+		"BRAND_KIT_FACES":              brandformat.KitFaces,
+		"BRAND_SYSTEM_STACKS":          brandformat.SystemStacks,
+		"BRAND_FONT_STYLES":            brandformat.FontStyles,
 	} {
 		body, err := clientsource.Literal(tree, name)
 		if err != nil {
@@ -54,7 +73,7 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		}
 		if !slices.Equal(client, engine) {
 			t.Errorf("the dashboard's %s is %q and the engine's is %q, in that order: "+
-				"change contract/artifacts.ts to the engine's", name, client, engine)
+				"change %s to the engine's", name, client, engine, contractFile(name))
 		}
 	}
 }
@@ -120,6 +139,23 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,
 		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
 		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
+		"ARTIFACT_FOLDER_NAME_MAX_BYTES": artifacts.MaxFolderNameBytes,
+		"ARTIFACT_FOLDER_MAX_DEPTH":      artifacts.MaxFolderDepth,
+		"ARTIFACT_MOVE_MAX_ITEMS":        artifacts.MaxMovesPerCall,
+		"BRAND_NAME_MAX_BYTES":           brandformat.MaxNameBytes,
+		"BRAND_TAGLINE_MAX_BYTES":        brandformat.MaxTaglineBytes,
+		"BRAND_VOICE_SUMMARY_MAX_BYTES":  brandformat.MaxVoiceSummaryBytes,
+		"BRAND_VOICE_MAX_EXAMPLES":       brandformat.MaxVoiceExamples,
+		"BRAND_VOICE_EXAMPLE_MAX_BYTES":  brandformat.MaxVoiceExampleBytes,
+		"BRAND_FAMILY_NAME_MAX_BYTES":    brandformat.MaxFamilyNameBytes,
+		"BRAND_FONT_FILES_MAX":           brandformat.MaxFontFilesPerFamily,
+		"BRAND_FONT_FILE_MAX_BYTES":      brandformat.MaxFontFileBytes,
+		"BRAND_SVG_MAX_BYTES":            brandformat.MaxSVGBytes,
+		"BRAND_IMAGE_MAX_BYTES":          brandformat.MaxImageBytes,
+		"BRAND_IMAGE_MAX_SIDE":           brandformat.MaxImageSide,
+		"BRAND_FONT_WEIGHT_MIN":          brandformat.MinFontWeight,
+		"BRAND_FONT_WEIGHT_MAX":          brandformat.MaxFontWeight,
+		"BRAND_FONT_WEIGHT_STEP":         brandformat.FontWeightStep,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -131,7 +167,126 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		}
 		if client != engine {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
-				"contract/artifacts.ts to the engine's figure", name, client, engine)
+				"%s to the engine's figure", name, client, engine, contractFile(name))
+		}
+	}
+}
+
+// THE DASHBOARD LISTS FOLDERS WITH THE ENGINE'S DELIMITER: a folder page asks
+// for one level with `delimiter`, and a delimiter the engine does not take is a
+// listing refused with a 400.
+func TestTheDashboardListsWithTheEnginesDelimiter(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "ARTIFACT_LIST_DELIMITER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != artifactsdomain.ListDelimiter {
+		t.Errorf("the dashboard lists with delimiter %q and the engine takes %q", got,
+			artifactsdomain.ListDelimiter)
+	}
+}
+
+// THE DASHBOARD JUDGES A BRAND'S CONTRAST AS THE ADOPTION DOES: the Brand
+// page's badges block a Save on the pair that refuses an adoption, so they
+// measure the same pairs, in the same order, on the same fallbacks. A pair the
+// page skips is a Save it allows and an adoption refuses; a fallback that
+// differs is a badge passing a text the adoption measures as unreadable.
+func TestTheDashboardJudgesBrandContrastAsTheAdoptionDoes(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	fallbacks, err := clientsource.Literal(tree, "BRAND_COLOR_FALLBACKS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(fallbacks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"text": brandformat.Fallbacks.Text, "light_ground": brandformat.Fallbacks.LightGround,
+		"dark_ground": brandformat.Fallbacks.DarkGround, "dark_text": brandformat.Fallbacks.DarkText,
+	}
+	if len(keys) != len(want) {
+		t.Errorf("the dashboard declares fallbacks %q and the engine fills %d", keys, len(want))
+	}
+	for role, hex := range want {
+		if got := clientsource.Scalars(fallbacks, role); len(got) != 1 || got[0] != hex {
+			t.Errorf("the dashboard fills %s with %q and the engine with %q", role, got, hex)
+		}
+	}
+
+	pairs, err := clientsource.Literal(tree, "BRAND_CONTRAST_PAIRS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fg, ground, floor, refuses []string
+	for _, p := range brandformat.ContrastPairs {
+		fg = append(fg, p.Foreground)
+		ground = append(ground, p.Ground)
+		floor = append(floor, strconv.FormatFloat(p.Min, 'f', -1, 64))
+		refuses = append(refuses, strconv.FormatBool(p.Refuses))
+	}
+	for key, want := range map[string][]string{
+		"foreground": fg, "ground": ground, "min": floor, "refuses": refuses,
+	} {
+		if got := clientsource.Scalars(pairs, key); !slices.Equal(got, want) {
+			t.Errorf("the dashboard's pairs read %s %q and the engine's %q", key, got, want)
+		}
+	}
+}
+
+// THE DASHBOARD DRAWS THE FACES THE BRAND STYLESHEET NAMES: the Brand page's
+// preview sets each face from the dashboard's table, and every artifact page
+// from the generated stylesheet, so a list that differs is a preview showing a
+// face no page shows.
+func TestTheDashboardDrawsTheFacesTheBrandStylesheetNames(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "BRAND_FACE_FAMILIES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(slices.Clone(brandformat.KitFaces), brandformat.SystemStacks...)
+	if !slices.Equal(keys, want) {
+		t.Errorf("the dashboard lists faces %q and the engine resolves %q", keys, want)
+	}
+	for _, name := range want {
+		if got := clientsource.Scalars(body, name); len(got) != 1 || got[0] != brandformat.FaceFamilies[name] {
+			t.Errorf("the dashboard draws %s as %q and the stylesheet as %q", name, got,
+				brandformat.FaceFamilies[name])
+		}
+	}
+}
+
+// THE DASHBOARD NAMES A FAMILY BY THE ENGINE'S GRAMMAR, held by behaviour: the
+// Typography editor checks an uploaded family's name against the pattern and
+// the bound before it uploads a byte, so a name the two answer differently is
+// refused after the upload, or refused at the field when the publish would
+// take it.
+func TestTheDashboardNamesAFamilyByTheEnginesGrammar(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	source, err := clientsource.Scalar(tree, "BRAND_FAMILY_NAME_PATTERN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern, err := regexp.Compile(source)
+	if err != nil {
+		t.Fatalf("BRAND_FAMILY_NAME_PATTERN does not compile: %v", err)
+	}
+	for _, name := range []string{
+		"Acme", "Acme Sans", "Acme Sans 2", "IBM Plex-Sans", "a", "Z9",
+		"", " Acme", "Acme ", "Acme  Sans", "2Acme", "-Acme", "Acme_Sans", "Acmé", "Acme\tSans",
+		`A";}*{x:url(//y)}/*`, strings.Repeat("a", brandformat.MaxFamilyNameBytes),
+		strings.Repeat("a", brandformat.MaxFamilyNameBytes+1),
+	} {
+		dashboard := pattern.MatchString(name) && len(name) <= brandformat.MaxFamilyNameBytes
+		if engine := brandformat.ValidFamily(name); dashboard != engine {
+			t.Errorf("family %q: the dashboard says %v and the engine %v", name, dashboard, engine)
 		}
 	}
 }

@@ -8,6 +8,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 )
 
 var updateStarters = flag.Bool("update", false, "rewrite testdata/slides-starters.golden.json from the route's answer")
@@ -251,4 +256,92 @@ func TestTheSlidesStartersGoldenIsTheRoutesAnswer(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Errorf("%s is not the route's answer: run with -update and review the diff", path)
 	}
+}
+
+// THE COMPANY'S BRAND IS THE FIRST THEME A DECK CAN BEGIN IN, whenever one is
+// adopted: answered per request, so an adoption shows at once and a cleared
+// brand is gone at once, its sample drawn through the slide format like any
+// theme's, its cover drawing the logo a deck begun in it shows (at the path
+// the starter copies it to, named with the adopted brand's slot it is drawn
+// from), and the default plan untouched (a plan naming no theme is the
+// engine's own).
+func TestTheSlidesStartersOfferTheAdoptedBrandFirst(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	starters := func() artifactsapi.SlidesStartersAnswer {
+		t.Helper()
+		w := g.do(person("bob"), "GET", "/artifacts/starters/slides", ``)
+		if w.Code != http.StatusOK {
+			t.Fatalf("the starters: %d %s", w.Code, w.Body)
+		}
+		var got artifactsapi.SlidesStartersAnswer
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	before := starters()
+	for _, th := range before.Themes {
+		if th.ID == slideformat.BrandTheme {
+			t.Fatalf("with no brand adopted the starters offer %q", th.ID)
+		}
+	}
+
+	b := brandformat.Brand{V: brandformat.Version, Name: "Acme",
+		Logos:  brandformat.Logos{Primary: "logo.svg"},
+		Colors: brandformat.Colors{Primary: "#0f7b5f"},
+		Type:   brandformat.Type{Heading: brandformat.Face{Kit: "geist"}, Body: brandformat.Face{Stack: "system-sans"}}}
+	canonical, err := brandformat.Canonical(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.estate.mu.Lock()
+	g.estate.adoption = &artifactsdomain.Adoption{BrandJSON: canonical, Files: []artifactsdomain.BrandFile{
+		{Slot: string(brandformat.SlotLogoPrimary), ContentType: "image/svg+xml", Object: entryLogo.Object},
+	}}
+	g.estate.mu.Unlock()
+	after := starters()
+	if len(after.Themes) != len(before.Themes)+1 {
+		t.Fatalf("an adopted brand answered %d themes, want %d", len(after.Themes), len(before.Themes)+1)
+	}
+	first := after.Themes[0]
+	if first.ID != slideformat.BrandTheme || first.Name != "Acme" || first.Sample.Theme != slideformat.BrandTheme ||
+		len(first.Sample.Slides) != len(after.Layouts) {
+		t.Fatalf("the brand theme answered %+v with a sample of %d slides", first.Theme, len(first.Sample.Slides))
+	}
+	if after.Default.Theme != before.Default.Theme {
+		t.Errorf("the default plan moved to %q", after.Default.Theme)
+	}
+	const logo = "brand/logo-primary.svg"
+	if first.Logo == nil || *first.Logo != (artifactsapi.SampleLogo{Path: logo, Slot: "logo.primary"}) {
+		t.Errorf("the brand theme names its cover logo %+v", first.Logo)
+	}
+	if !holdsImage(first.Sample.Slides[0].Root, logo) {
+		t.Errorf("the brand sample's cover draws no logo at %s", logo)
+	}
+	for _, th := range after.Themes[1:] {
+		if th.Logo != nil {
+			t.Errorf("the engine's theme %q names a logo", th.ID)
+		}
+	}
+
+	g.estate.mu.Lock()
+	g.estate.adoption = nil
+	g.estate.mu.Unlock()
+	if cleared := starters(); len(cleared.Themes) != len(before.Themes) {
+		t.Errorf("a cleared brand still answers %d themes", len(cleared.Themes))
+	}
+}
+
+// holdsImage reports whether n or any node under it is an image of src.
+func holdsImage(n slideformat.Node, src string) bool {
+	if n.Tag == "img" && n.Attrs["src"] == src {
+		return true
+	}
+	for _, c := range n.Children {
+		if holdsImage(c, src) {
+			return true
+		}
+	}
+	return false
 }

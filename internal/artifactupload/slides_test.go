@@ -82,11 +82,11 @@ func TestADeckPublishesAsWritten(t *testing.T) {
 	}
 	page, err := h.domain.reader.List(t.Context(), artifactsdomain.Viewer{Admin: true},
 		artifactsdomain.ListQuery{Q: "plcae"})
-	if err != nil || len(page.Items) != 1 {
-		t.Errorf("a search for slide 4's text found %d (%v)", len(page.Items), err)
+	if err != nil || len(page.Contents) != 1 {
+		t.Errorf("a search for slide 4's text found %d (%v)", len(page.Contents), err)
 	}
 	if notes, _ := h.domain.reader.List(t.Context(), artifactsdomain.Viewer{Admin: true},
-		artifactsdomain.ListQuery{Q: "ten minutes"}); len(notes.Items) != 1 {
+		artifactsdomain.ListQuery{Q: "ten minutes"}); len(notes.Contents) != 1 {
 		t.Error("a search for a slide's notes found nothing")
 	}
 	if h.held() != 0 || h.unnamedBytes() != 0 {

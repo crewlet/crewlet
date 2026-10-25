@@ -2,6 +2,7 @@ package slideformat
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -169,6 +170,12 @@ func TestASlideOutsideTheSubsetIsRefused(t *testing.T) {
 		{"svg foreign ref", head + `<svg aria-label="x"><use href="https://x.test/s.svg#a"/></svg></section>`, "its own shapes", RuleAttribute, 1},
 		{"svg dangling ref", head + `<svg aria-label="x"><rect fill="url(#g)"/></svg></section>`, "#g", RuleReference, 1},
 		{"svg no label", head + `<svg viewBox="0 0 1 1"></svg></section>`, "aria-label", RuleAttribute, 1},
+		{"svg escaped url", head + `<svg aria-label="x"><rect fill="u\72l(https://x.test/p.svg#a)"/></svg></section>`, "backslash", RuleAttribute, 1},
+		{"svg escaped by reference", head + `<svg aria-label="x"><rect filter="u&#92;72l(https://x.test/f.svg#a)"/></svg></section>`, "backslash", RuleAttribute, 1},
+		{"svg image-set", head + `<svg aria-label="x"><rect mask="image-set('https://x.test/a.png' 1x)"/></svg></section>`, "url(#id)", RuleAttribute, 1},
+		{"svg var", head + `<svg aria-label="x"><rect fill="var(--x)"/></svg></section>`, "a colour is", RuleAttribute, 1},
+		{"svg use cycle", head + `<svg aria-label="x"><g id="a"><use href="#a"></use></g></svg></section>`, "draws this element again", RuleReference, 1},
+		{"svg use bomb", head + `<svg aria-label="x"><defs><g id="l0"><rect/></g>` + useLevels(10) + `</defs><use href="#l10"/></svg></section>`, "once its uses, markers and paint servers are expanded", RuleReference, 0},
 		{"notes markup", head + `<aside><b>x</b></aside></section>`, "plain text", RuleElement, 1},
 		{"after notes", head + `<aside>x</aside><p>y</p></section>`, "after the notes", RuleElement, 1},
 		{"doctype", "<!doctype html>" + head + "</section>", "no doctype", RuleMarkup, 1},
@@ -428,14 +435,23 @@ func TestAPlanOutsideTheStarterIsRefused(t *testing.T) {
 }
 
 // AN INDEX'S THEME IS OPTIONAL AND CLOSED: a deck that names none reads, one
-// that names a theme there is reads it back, and one naming any other is
-// refused naming the themes there are.
+// that names a theme there is (the company's brand among them) reads it back,
+// and one naming any other is refused naming the themes there are.
 func TestAnIndexNamesOneOfTheThemes(t *testing.T) {
 	t.Parallel()
 	src := composedSource(t, "Deck", Plan{Theme: "grove"})
 	deck, err := Read(src)
 	if err != nil || deck.Theme != "grove" {
 		t.Fatalf("a grove deck read as %q, %v", deck.Theme, err)
+	}
+	branded := dirSource{files: map[string][]byte{}}
+	for p, b := range src.files {
+		branded.files[p] = b
+	}
+	branded.files[IndexPath] = []byte(strings.Replace(string(src.files[IndexPath]), `"grove"`,
+		`"`+BrandTheme+`"`, 1))
+	if deck, err := Read(branded); err != nil || deck.Theme != BrandTheme {
+		t.Fatalf("a deck begun in the company's brand read as %q, %v", deck.Theme, err)
 	}
 	src.files[IndexPath] = []byte(strings.Replace(string(src.files[IndexPath]), `"grove"`, `"neon"`, 1))
 	found := refusal(t, src)
@@ -466,4 +482,102 @@ func TestTheIconRuleIsWritten(t *testing.T) {
 			t.Errorf("%s does not say an x-icon %s", rel, rule)
 		}
 	}
+}
+
+// brandLook is a look as the brand format resolves one: the brand theme's
+// roles, an uploaded heading family and a system body stack, and a logo.
+func brandLook() Look {
+	return Look{
+		Theme: Theme{ID: BrandTheme, Name: "Acme", Tag: "Your company brand",
+			Feature: "#0f3d2e", FeatureInk: "#ffffff", FeatureMuted: "#b8d4c8",
+			Stage: "#f6f7fb", Ink: "#121625", Muted: "#5b6472", Accent: "#0f7b5f",
+			Card: "#ffffff", Edge: "#e2e4e8",
+			Display: "'Acme Sans', system-ui, sans-serif", Body: "system-ui, sans-serif",
+			DisplayWeight: 700, Tracking: -1},
+		Logo: "brand/logo-on-dark.svg", LogoAlt: `Acme & "Co"`,
+		Faces: map[string]IndexFace{"heading": {Family: "Acme Sans", Src: "brand/fonts/heading.woff2"}},
+	}
+}
+
+// A DECK BEGUN IN THE COMPANY'S BRAND IS A DECK IN THE FORMAT: drawn in the
+// theme its caller resolved, its index naming BrandTheme and declaring the
+// look's faces, its cover showing the look's logo (alt text escaped), and the
+// files the look names read as the version's image and face.
+func TestABrandedDeckIsInTheFormat(t *testing.T) {
+	t.Parallel()
+	look := brandLook()
+	files, err := ComposeBranded("Board review", Plan{Slides: []PlanSlide{
+		{Layout: LayoutCover}, {Layout: "points"}, {Layout: "closing"}}}, look)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[look.Logo] = []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>`)
+	files[look.Faces["heading"].Src] = []byte("wOF2")
+	deck, err := Read(dirSource{files: files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deck.Theme != BrandTheme || len(deck.Slides) != 3 || len(deck.Faces) != 1 ||
+		deck.Faces[0].Family != "Acme Sans" {
+		t.Fatalf("a branded deck read as theme %q, %d slides, faces %+v", deck.Theme,
+			len(deck.Slides), deck.Faces)
+	}
+	cover := string(files[SlidePath("cover")])
+	if !strings.Contains(cover, `<img src="brand/logo-on-dark.svg" alt="Acme &amp; &#34;Co&#34;"`) {
+		t.Errorf("the cover shows no logo, or an unescaped one:\n%s", cover)
+	}
+	if strings.Contains(string(files[SlidePath("points")]), "<img") {
+		t.Error("a slide other than the cover shows the logo")
+	}
+	// WITHOUT THE FILES the look names, the deck is refused by name, never
+	// read with an image or a face that is not there.
+	delete(files, look.Logo)
+	if _, err := Read(dirSource{files: files}); !errors.Is(err, ErrRefused) {
+		t.Errorf("a branded deck missing its logo file read: %v", err)
+	}
+}
+
+// THE BRAND IS THE CALLER'S TO RESOLVE: Compose refuses a plan drawn in it,
+// ComposeBranded refuses any other theme and a look that is not the brand's,
+// and Sample draws a resolved brand theme with every layout like any theme.
+func TestTheBrandThemeIsResolvedByItsCaller(t *testing.T) {
+	t.Parallel()
+	if _, err := Compose("Deck", Plan{Theme: BrandTheme}); !errors.Is(err, ErrPlan) {
+		t.Errorf("Compose drew the brand theme with no look: %v", err)
+	}
+	look := brandLook()
+	if _, err := ComposeBranded("Deck", Plan{Theme: "grove"}, look); !errors.Is(err, ErrPlan) {
+		t.Errorf("ComposeBranded drew an engine theme: %v", err)
+	}
+	other := look
+	other.Theme.ID = "grove"
+	if _, err := ComposeBranded("Deck", Plan{}, other); !errors.Is(err, ErrPlan) {
+		t.Errorf("ComposeBranded took a look that is not the brand's: %v", err)
+	}
+	crowded := look
+	crowded.Faces = map[string]IndexFace{}
+	for i := range MaxFaces + 1 {
+		crowded.Faces[string(rune('a'+i))] = IndexFace{Family: "Acme Sans", Src: "brand/f.woff2"}
+	}
+	if _, err := ComposeBranded("Deck", Plan{}, crowded); !errors.Is(err, ErrPlan) {
+		t.Errorf("ComposeBranded declared more faces than a deck may: %v", err)
+	}
+	deck, err := Sample(look.Theme)
+	if err != nil || deck.Theme != BrandTheme || len(deck.Slides) != len(Layouts()) {
+		t.Fatalf("the brand theme sampled as %q with %d slides: %v", deck.Theme, len(deck.Slides), err)
+	}
+}
+
+// useLevels is levels groups, each drawing the one below ten times: ten to
+// the levels shapes from a hundred elements.
+func useLevels(levels int) string {
+	var b strings.Builder
+	for level := 1; level <= levels; level++ {
+		fmt.Fprintf(&b, `<g id="l%d">`, level)
+		for range 10 {
+			fmt.Fprintf(&b, `<use href="#l%d"/>`, level-1)
+		}
+		b.WriteString(`</g>`)
+	}
+	return b.String()
 }

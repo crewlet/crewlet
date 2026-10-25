@@ -58,7 +58,7 @@ is accepted.
 | `order` | Required: the slide ids in deck order, each once, 1 to 500 |
 | `cover` | Optional: the slide the gallery draws as the card's cover, else the first |
 | `sections` | Optional: the outline, any key to a run's one sentence (at most 300 bytes) and the slide it starts at. No two start at one slide |
-| `theme` | Optional: the look the deck began in, one of `nightshade`, `ink`, `paper`, `signal`, `studio`, `grove`. Crewlet's own key, written by the starter; the slides hold their own styles, so a deck naming none draws the same. The deck editor adds a slide from that theme's layouts, and duplicates a slide in a deck naming none. See [Themes and layouts](#themes-and-layouts) |
+| `theme` | Optional: the look the deck began in, one of `nightshade`, `ink`, `paper`, `signal`, `studio`, `grove`, or `brand` (the company's adopted brand). Crewlet's own key, written by the starter; the slides hold their own styles, so a deck naming none draws the same. The deck editor adds a slide from that theme's layouts, and duplicates a slide in a deck naming none. See [Themes and layouts](#themes-and-layouts) |
 | `faces` | Optional, at most 4: a typeface keyed by its family lowercased with spaces as `-`, its `family` and the font file of the version it loads from (`src`). See [Images and typefaces](#images-and-typefaces) |
 | `v`, `createdOnFiles`, `lists` | Claude's own bookkeeping: accepted and kept as written, never read. `lists` may only be `css` |
 | `designSystems` | Must be empty or absent: a Crewlet deck installs no design system |
@@ -230,7 +230,18 @@ A drawing reaches nothing outside itself: no `<script>`, no event attribute,
 no `<foreignObject>`, no `<style>` element or `style` attribute (use
 presentation attributes), and every reference (`href`, `url(#…)`) is to an id
 the same drawing declares. Ids are a letter then letters, digits, `_`, `.`
-and `-`. The dashboard gives each drawn copy of a drawing its own id prefix,
+and `-`. A presentation attribute is read as CSS, where an escape or a
+function could reach outside the drawing, so an attribute value carries no
+backslash (an `aria-label` excepted), a parenthesis only in `url(#id)`, a
+transform (`matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`) or a
+colour (`rgb()`, `rgba()`, `hsl()`, `hsla()`), and is otherwise numbers,
+lengths, percentages, hex colours and keywords; a `font-family` list may
+quote its names. A filter, clip or mask is the drawing's own element, named
+by `url(#id)`, never a CSS function such as `blur()` or `inset()`. A drawing
+draws at most 50,000 elements once every `<use>`, marker (at each vertex of a
+path naming it as `marker-mid`) and paint server is expanded, and no reference
+reaches back into what refers to it. The
+dashboard gives each drawn copy of a drawing its own id prefix,
 so a slide drawn twice (its thumbnail and the stage) never resolves the other
 copy's gradients.
 
@@ -302,6 +313,15 @@ theme and layout (see [API Endpoints](api-endpoints.md)).
 | `signal` | Yellow on black, for a big room |
 | `studio` | Warm cream and terracotta, Palatino over Avenir Next |
 | `grove` | Deep green and mint, set in the system face |
+| `brand` | The company's adopted brand: its colours, its typefaces and its logo on the cover. Offered first whenever a brand is adopted, and refused when none is |
+
+A deck begun in `brand` is drawn from the brand adopted at that moment, and
+keeps that look: its slides hold their styles inline like any deck's, the
+brand's uploaded typefaces are copied in as font files of the version and
+declared in `faces`, and the cover shows the logo meant for its ground (the
+logo for dark grounds when the cover's ground is dark), copied in as an image
+of the version under `brand/`. A later adoption changes no deck already
+begun; start a new one from the new brand to take it.
 
 | Layout | Holds |
 |---|---|
@@ -322,6 +342,9 @@ A slide's id is its layout's, numbered from two when a layout is used again
 - **`theme` in the index.** Added as an optional key, so every deck written
   before it is still in the format. A deck that names a theme outside the
   list above is refused, naming the themes there are.
+- **`brand` as a theme.** Added beside the engine's six. A deck naming it is
+  in the format whether or not a brand is adopted now, since the index only
+  records the look the deck began in.
 
 ## How a deck is drawn
 

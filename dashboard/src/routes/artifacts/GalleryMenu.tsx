@@ -1,19 +1,22 @@
 /**
  * A listed artifact's own actions, on a gallery card's More and a list row's:
- * pin or unpin, copy its link, rename it and move it to the trash, or, for
- * one in the trash, restore it.
+ * pin or unpin, copy its link, rename it, move it to a folder and move it to
+ * the trash, or, for one in the trash, restore it.
  *
- * ONLY WHAT THE READER MAY DO is offered. Renaming is an editor's, and the
- * trash and a restore are the owner's and a person's (D06), the same rules
- * the artifact's own Settings hold them to; a menu item the reader could not
- * use would only say no after they chose it.
+ * ONLY WHAT THE READER MAY DO is offered. Renaming and filing in a folder are
+ * an editor's who holds the artifacts app (the folder's own say is the
+ * engine's, decided at the move), and the trash and a restore are the
+ * owner's and a person's (D06), the same rules the artifact's own Settings
+ * hold them to; a menu item the reader could not use would only say no after
+ * they chose it.
  */
 
 import { useState } from "react";
-import { Button, FormField, Input, Menu, Modal, useToast, type MenuEntry } from "@crewlethq/ui";
+import { Menu, useToast, type MenuEntry } from "@crewlethq/ui";
 import {
   CopyGlyph,
   EllipsisGlyph,
+  FolderInputGlyph,
   PencilGlyph,
   PinGlyph,
   RotateCcwGlyph,
@@ -28,21 +31,24 @@ import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { usePinToggle } from "~/lib/artifacts/pinToggle.ts";
 import { copyAddress } from "./parts.tsx";
 import { TrashDialog } from "./SettingsTab.tsx";
+import { RenameDialog } from "./RenameDialog.tsx";
+import { MoveDialog } from "./MoveDialog.tsx";
 
 export function ArtifactMenu({
   item,
   onChanged,
 }: {
   item: ArtifactListItem;
-  /** The listing moved: a rename, the trash or a restore. */
+  /** The listing moved: a rename, a move, the trash or a restore. */
   onChanged: () => void;
 }) {
   const toast = useToast();
   const pin = usePinToggle(item.id, item.pinned ?? false);
   const rename = useArtifactAccess({ role: "editor", held: item.role });
+  const file = useArtifactAccess({ app: true, role: "editor", held: item.role });
   const own = useArtifactAccess({ role: "owner", held: item.role, person: true });
   const restore = useKeyedGesture();
-  const [open, setOpen] = useState<"rename" | "trash" | null>(null);
+  const [open, setOpen] = useState<"rename" | "move" | "trash" | null>(null);
   const trashed = item.status === "trashed";
 
   const copy: MenuEntry = {
@@ -95,6 +101,16 @@ export function ArtifactMenu({
               },
             ]
           : []),
+        ...(file.can
+          ? [
+              {
+                key: "move",
+                label: "Move to…",
+                icon: <FolderInputGlyph size="sm" />,
+                onSelect: () => setOpen("move"),
+              },
+            ]
+          : []),
         ...(own.can
           ? [
               { kind: "separator" as const, key: "sep" },
@@ -119,7 +135,24 @@ export function ArtifactMenu({
         items={items}
       />
       {open === "rename" && (
-        <RenameDialog item={item} onClose={() => setOpen(null)} onRenamed={onChanged} />
+        <RenameDialog
+          label="Title"
+          initial={item.title}
+          problem={artifactTitleProblem}
+          request={(title) => patchArtifact(item.id, { title })}
+          onClose={() => setOpen(null)}
+          onRenamed={onChanged}
+        />
+      )}
+      {open === "move" && (
+        <MoveDialog
+          subject={{ kind: "artifacts", items: [item] }}
+          onClose={() => setOpen(null)}
+          onMoved={() => {
+            setOpen(null);
+            onChanged();
+          }}
+        />
       )}
       <TrashDialog
         detail={item}
@@ -131,82 +164,11 @@ export function ArtifactMenu({
   );
 }
 
-/** Renaming an artifact in place: its title, as its Settings' Details names it. */
-function RenameDialog({
-  item,
-  onClose,
-  onRenamed,
-}: {
-  item: Pick<ArtifactListItem, "id" | "title">;
-  onClose: () => void;
-  onRenamed: () => void;
-}) {
-  const [title, setTitle] = useState(item.title);
-  const gesture = useKeyedGesture();
-  const toast = useToast();
-  const trimmed = title.trim();
-  const bytes = utf8Bytes(trimmed);
-  const wrong =
-    trimmed === ""
-      ? "An artifact has a title."
-      : bytes > ARTIFACT_TITLE_MAX_BYTES
-        ? `The title is ${bytes} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
-        : undefined;
-  const save = async () => {
-    if (wrong || trimmed === item.title) return onClose();
-    const answer = await gesture.run(patchArtifact(item.id, { title: trimmed }));
-    if (answer?.kind === "done") {
-      toast.ok("Renamed");
-      onClose();
-      onRenamed();
-    }
-  };
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      title="Rename"
-      placement="top"
-      footer={
-        <>
-          <Button size="small" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            size="small"
-            variant="primary"
-            loading={gesture.busy}
-            disabledReason={wrong}
-            onClick={() => void save()}
-          >
-            Save
-          </Button>
-        </>
-      }
-    >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save();
-        }}
-      >
-        <FormField label="Title" error={title === item.title ? undefined : wrong}>
-          {(field) => (
-            <Input
-              id={field.id}
-              aria-describedby={field.describedBy}
-              aria-invalid={field.invalid}
-              width="full"
-              autoFocus
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          )}
-        </FormField>
-      </form>
-      {gesture.answer && gesture.answer.kind !== "done" && (
-        <p className="artifact-refusal">{gesture.answer.text}</p>
-      )}
-    </Modal>
-  );
+/** What is wrong with an artifact's title, as its rename says it, or undefined. */
+export function artifactTitleProblem(title: string): string | undefined {
+  const bytes = utf8Bytes(title);
+  if (title === "") return "An artifact has a title.";
+  return bytes > ARTIFACT_TITLE_MAX_BYTES
+    ? `The title is ${bytes} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
+    : undefined;
 }

@@ -56,6 +56,8 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 		Link:         e.artifactLink,
 		Org:          e.currentOrg,
 		Await:        e.router.Await,
+		KitVersion:   kitVersion,
+		FolderTurns:  e.folderTurns,
 	}
 	if e.sandbox.Load() != nil {
 		deps.Boxes = artifactBoxes{engine: e}

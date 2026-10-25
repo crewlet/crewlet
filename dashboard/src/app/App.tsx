@@ -65,8 +65,8 @@ import { useHeldReading, useViewer } from "~/lib/viewer.ts";
 import { useOrgArrived, useServicesKnown, useServicesRun } from "~/lib/services.ts";
 import { ServiceNotice } from "./ServiceNotice.tsx";
 import { safeNext, signInHash } from "~/lib/session.ts";
-import { isArtifactKind } from "~/lib/artifacts/words.ts";
-import { currentSessionNeed, onSessionNeed, type ArtifactKind } from "~/protocol/index.ts";
+import { isMakeKind, type MakeKind } from "~/lib/artifacts/words.ts";
+import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
 import { lazyScreen, prefetchOnIdle } from "./lazyScreen.ts";
 import { ScreenBoundary } from "./boundaries.tsx";
@@ -107,8 +107,10 @@ const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
 const Diary = lazyScreen("knowledge", (m) => m.Diary);
 const ArtifactGallery = lazyScreen("artifacts", (m) => m.ArtifactGallery);
 const ArtifactPage = lazyScreen("artifacts", (m) => m.ArtifactPage);
+const ArtifactFolders = lazyScreen("artifacts", (m) => m.ArtifactFolders);
+const ArtifactFolderPage = lazyScreen("artifacts", (m) => m.ArtifactFolderPage);
 /** Each kind's create page, a chunk of its own (`lazyScreen.ts`). */
-const NEW_ARTIFACT: Readonly<Record<ArtifactKind, ComponentType>> = {
+const NEW_ARTIFACT: Readonly<Record<MakeKind, ComponentType>> = {
   doc: lazyScreen("new-doc", (m) => m.DocCreate),
   slides: lazyScreen("new-slides", (m) => m.SlidesCreate),
   sheet: lazyScreen("new-sheet", (m) => m.SheetCreate),
@@ -120,6 +122,8 @@ const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
 const Principles = lazyScreen("settings", (m) => m.Principles);
+const Brand = lazyScreen("brand", (m) => m.BrandPage);
+const BrandSetup = lazyScreen("brand", (m) => m.BrandSetup);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Models = lazyScreen("settings", (m) => m.Models);
 const Tools = lazyScreen("settings", (m) => m.Tools);
@@ -215,6 +219,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <Diary key={route.handle} handle={route.handle} />;
     case "artifacts":
       return <ArtifactGallery key={route.section} section={route.section} />;
+    case "artifact-folders":
+      return <ArtifactFolders />;
+    case "artifact-folder":
+      return <ArtifactFolderPage key={route.id} id={route.id} />;
     case "artifact":
       return <ArtifactPage key={route.id} id={route.id} />;
     case "new-artifact": {
@@ -224,6 +232,10 @@ export function screenFor(route: Resolved): ReactNode {
     }
     case "principles":
       return <Principles />;
+    case "brand":
+      return <Brand />;
+    case "brand-setup":
+      return <BrandSetup />;
     case "integrations":
       // ONE PAGE FOR EVERY SELECTION, never keyed on it: the directory holds
       // its place and its readings while the detail beside it changes.
@@ -288,7 +300,7 @@ function NewArtifactRedirect() {
   const nav = useNavigator();
   useEffect(() => {
     const kind = route.query.get("kind") ?? "";
-    if (!isArtifactKind(kind)) {
+    if (!isMakeKind(kind)) {
       nav.replace(artifactSectionPath("all"));
       return;
     }

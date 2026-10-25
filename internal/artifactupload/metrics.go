@@ -24,7 +24,7 @@ var Refusals = []string{
 	"edit_refused", "policy_refused", "upload_missing", "upload_mismatch", "upload_not_found",
 	"upload_expired", "upload_consumed", "uploads_outstanding", "turn_quota", "quota_exceeded",
 	"version_moved", "carried_object_gone", "label_taken", "trashed", "not_found", "conflict",
-	"other",
+	"folder_not_found", "brand_contrast", "brand_incomplete", "other",
 }
 
 // reasonOf is a refusal's reason, from [Refusals].
@@ -78,10 +78,19 @@ func reasonOf(err error) string {
 		return "upload_consumed"
 	case errors.Is(err, artifactsdomain.ErrLabelTaken):
 		return "label_taken"
+	case errors.Is(err, artifactsdomain.ErrBrandContrast):
+		return "brand_contrast"
+	case errors.Is(err, artifactsdomain.ErrBrandIncomplete):
+		return "brand_incomplete"
 	case errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrPurged):
 		return "trashed"
 	case errors.Is(err, artifactsdomain.ErrNotFound):
 		return "not_found"
+	case errors.Is(err, artifactsdomain.ErrFolderNotFound):
+		// THE FOLDER A CREATE FILES INTO is gone or not visible: a
+		// definite refusal, so what the create staged is undone rather
+		// than left for a retry that would be refused the same way.
+		return "folder_not_found"
 	case errors.Is(err, artifactsdomain.ErrConflict):
 		return "conflict"
 	case errors.Is(err, ErrInvalid), errors.Is(err, artifactsdomain.ErrInvalid),

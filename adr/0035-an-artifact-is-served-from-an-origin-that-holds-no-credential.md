@@ -194,3 +194,23 @@ dashboard's own element-constructing renderer and never reach the artifact
 origin at all; neither do a deck's slides or a design's canvas, which the
 dashboard draws natively. A design's artboards are framed, one document per
 ticket, as above.
+
+## The adopted brand's files
+
+*Amendment, by [ADR-0048](0048-the-adopted-brand-is-the-companys-public-face.md).*
+
+The listener mounts a fifth route, `GET /_crewlet/brand/{file}`: the files of
+the company's adopted brand (its generated stylesheet, its logos and its
+faces), each named `<sha256>.<ext>`. It is public as the runtime and the kit
+are, because the adopted brand is the company's public face, and it is unlike
+them in two ways: it serves a hash only while an adoption names it (an
+allowlist the artifacts applier writes), never by asking the object store, and
+a shared cache keys it with the host, since it is one company's. Its responses
+are inert (`sandbox`, `nosniff`), immutable for a year.
+
+The origin also places one element at the opening of an HTML page of a version
+that pinned the brand, beside the runtime's: a stylesheet link built from the
+pinned hash alone, and only when the page's `<html>` element does not keep its
+own design. Nothing else of a page changes, and a version records the pin, so
+what a page shows is still fully determined by its version.
+`TestTheArtifactListenerServesOnlyTheServingRoutes` holds the five routes.

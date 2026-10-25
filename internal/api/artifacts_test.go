@@ -39,6 +39,14 @@ var (
 // answering with a value naming what it was asked.
 type apiArtifacts struct{}
 
+func (apiArtifacts) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	return artifactsdomain.Adoption{}, false, nil
+}
+
+func (apiArtifacts) BrandFile(context.Context, objstore.Hash) (artifactsdomain.BrandFile, error) {
+	return artifactsdomain.BrandFile{}, artifactsdomain.ErrNotFound
+}
+
 func (apiArtifacts) Artifact(_ context.Context, id artifacts.ID, _ statelog.Freshness) (
 	artifactsdomain.Head, statelog.Position, error) {
 	if id != apiPage {
@@ -129,7 +137,38 @@ func (a apiArtifacts) Restore(context.Context, artifactsdomain.Call, artifacts.I
 func (a apiArtifacts) Purge(context.Context, artifactsdomain.Call, artifacts.ID) (artifactsdomain.Written, error) {
 	return a.applied()
 }
+func (a apiArtifacts) ClearBrand(context.Context, artifactsdomain.Call) (artifactsdomain.Written, error) {
+	return a.applied()
+}
 func (a apiArtifacts) RemoveAsset(context.Context, artifactsdomain.Call, artifacts.ID, uuid.UUID) (
+	artifactsdomain.Written, error) {
+	return a.applied()
+}
+func (apiArtifacts) Folders(context.Context, artifactsdomain.Viewer, statelog.Freshness) (
+	artifactsdomain.FolderTree, error) {
+	return artifactsdomain.FolderTree{Folders: []artifactsdomain.FolderItem{}}, nil
+}
+func (apiArtifacts) Folder(context.Context, string, statelog.Freshness) (
+	artifactsdomain.Folder, statelog.Position, error) {
+	return artifactsdomain.Folder{}, statelog.Position{}, artifactsdomain.ErrFolderNotFound
+}
+func (a apiArtifacts) CreateFolders(context.Context, artifactsdomain.Call, artifactsdomain.FolderCreateInput) (
+	artifactsdomain.FolderCreated, error) {
+	w, err := a.applied()
+	return artifactsdomain.FolderCreated{Result: w.Result}, err
+}
+func (a apiArtifacts) RenameFolder(context.Context, artifactsdomain.Call, string, string) (
+	artifactsdomain.Written, error) {
+	return a.applied()
+}
+func (a apiArtifacts) MoveFolder(context.Context, artifactsdomain.Call, string, string) (
+	artifactsdomain.Written, error) {
+	return a.applied()
+}
+func (a apiArtifacts) RemoveFolder(context.Context, artifactsdomain.Call, string) (artifactsdomain.Written, error) {
+	return a.applied()
+}
+func (a apiArtifacts) Move(context.Context, artifactsdomain.Call, artifacts.ID, string) (
 	artifactsdomain.Written, error) {
 	return a.applied()
 }
@@ -178,7 +217,10 @@ func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 		method, path, want string
 		status             int
 	}{
-		{"GET", "/artifacts", `"items"`, http.StatusOK},
+		{"GET", "/artifacts", `"contents"`, http.StatusOK},
+		{"GET", "/artifacts?delimiter=%7C", "bad_params", http.StatusBadRequest},
+		{"GET", "/artifact-folders", `"folders"`, http.StatusOK},
+		{"DELETE", "/artifact-folders/" + uuid.NewString(), "not_found", http.StatusNotFound},
 		{"GET", "/artifacts/usage", `"artifacts":7`, http.StatusOK},
 		{"GET", "/artifacts/trail?op=read_elevated", `"read_elevated"`, http.StatusOK},
 		{"GET", page, `"Hello"`, http.StatusOK},

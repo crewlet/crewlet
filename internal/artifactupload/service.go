@@ -32,6 +32,7 @@ type Writes interface {
 	Create(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.CreateInput) (artifactsdomain.Published, error)
 	Publish(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.PublishInput) (artifactsdomain.Published, error)
 	AddAsset(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.AssetInput) (artifactsdomain.Asset, artifactsdomain.Written, error)
+	AdoptBrand(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.BrandAdoptInput) (artifactsdomain.Written, error)
 }
 
 // Reads is the artifacts domain's read side as the pipeline asks it.
@@ -40,6 +41,11 @@ type Reads interface {
 	Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
 	HeldObjects(ctx context.Context, id artifacts.ID, hashes []objstore.Hash) (map[objstore.Hash]objstore.Object, error)
 	Usage(ctx context.Context) (artifactsdomain.Usage, error)
+
+	// Brand is the company's adopted brand, false when none is adopted:
+	// what a file copied from the brand ([FileSpec.Brand]) and a deck begun
+	// in it are copied from.
+	Brand(ctx context.Context, fresh statelog.Freshness) (artifactsdomain.Adoption, bool, error)
 }
 
 // Presigner signs a put a client makes straight to the bucket: the object

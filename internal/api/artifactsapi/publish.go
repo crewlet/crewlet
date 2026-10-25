@@ -276,6 +276,10 @@ type createBody struct {
 	// WorkItem is the tracker item the artifact is made for, which lists it
 	// there. It confers nothing.
 	WorkItem string `json:"work_item,omitempty"`
+
+	// Folder is the folder the artifact is created in, by id; absent is the
+	// top level. Filing into it asks contributor on it.
+	Folder string `json:"folder,omitempty"`
 }
 
 // publishedAnswer is a version a create or a publish landed.
@@ -352,10 +356,18 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	if !s.audiencesKnown(w, r, audiences...) {
 		return
 	}
+	if body.Folder != "" {
+		if _, err = s.gate.AdmitFolder(r.Context(), s.reads, p, authz.ActionArtifactFolderFile,
+			body.Folder); err != nil {
+			refuseFolderAdmission(w, r, authz.ActionArtifactFolderFile, err, false)
+			return
+		}
+	}
 	actor := iam.ActorFor(p)
 	out, report, err := pipe.Create(r.Context(), s.creatorCall(p, key, item), artifactupload.CreateRequest{
 		Kind: body.Kind, Title: body.Title, Description: body.Description, Icon: body.Icon,
 		Owner: actor.Name, OwnerKind: actor.Kind, SourceKey: body.SourceKey, Shares: shares,
+		Folder: body.Folder,
 		Upload: body.Upload, Files: body.Files, Entry: body.Entry, Label: body.Label,
 		Contract: body.Contract, Capabilities: body.Capabilities, Starter: body.Starter,
 		Doc: body.Doc, Deck: body.Deck, Layout: body.Layout,
@@ -563,9 +575,20 @@ func (s *Service) versionMoved(w http.ResponseWriter, r *http.Request, key strin
 			"could not be written")
 		return
 	}
+	head := shapeHead(moved.Head, a.Role(), a.Elevated())
+	// ITS FOLDER ONLY WHERE THE PUBLISHER SEES IT, as every read of a head
+	// names it; a folder this node could not decide on is left out, which
+	// shows less rather than more.
+	shown := folderShowing{g: s.gate, reads: s.reads, p: a.Principal}
+	folder, err := shown.folder(r.Context(), head.Folder)
+	if err != nil {
+		log.WarnContext(r.Context(), "artifacts_moved_folder_undecided", "artifact",
+			moved.Head.ID.String(), "error", err.Error())
+	}
+	head.Folder = folder
 	detail := httpjson.Detail{
 		"detail": say(moved), "op_id": key,
-		"head": shapeHead(moved.Head, a.Role(), a.Elevated()),
+		"head": head,
 		"live": moved.Live,
 	}
 	if entry, err := s.entryText(r.Context(), moved.Live, artifacts.MaxConflictEntryText); err != nil {

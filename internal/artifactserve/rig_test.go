@@ -75,6 +75,24 @@ type reads struct {
 	headErr  error
 	asked    []statelog.Freshness
 	headRead int
+
+	// brand is every file an adoption serves, by hash: the brand route's
+	// allowlist.
+	brand    map[objstore.Hash]artifactsdomain.BrandFile
+	brandErr error
+}
+
+func (r *reads) BrandFile(_ context.Context, hash objstore.Hash) (artifactsdomain.BrandFile, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.brandErr != nil {
+		return artifactsdomain.BrandFile{}, r.brandErr
+	}
+	f, ok := r.brand[hash]
+	if !ok {
+		return artifactsdomain.BrandFile{}, artifactsdomain.ErrNotFound
+	}
+	return f, nil
 }
 
 func (r *reads) Artifact(_ context.Context, id artifacts.ID, fresh statelog.Freshness) (

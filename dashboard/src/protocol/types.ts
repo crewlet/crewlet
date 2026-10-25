@@ -55,6 +55,7 @@ import type {
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type {
   ARTIFACT_CAPABILITIES,
+  ARTIFACT_FOLDER_VISIBILITIES,
   ARTIFACT_HISTORY_OPS,
   ARTIFACT_KINDS,
   ARTIFACT_LIST_SCOPES,
@@ -5046,6 +5047,12 @@ export type ArtifactListScope = (typeof ARTIFACT_LIST_SCOPES)[number];
 export type ArtifactListSort = (typeof ARTIFACT_LIST_SORTS)[number];
 /** What an artifact's history row is filed under (`artifactsdomain.HistoryOps`). */
 export type ArtifactHistoryOp = (typeof ARTIFACT_HISTORY_OPS)[number];
+/**
+ * A top-level folder's visibility (`artifactsdomain.FolderVisibility`): a
+ * preset a create may ask for, or `custom` for shares no preset describes,
+ * which is answered and never asked for.
+ */
+export type ArtifactFolderVisibility = (typeof ARTIFACT_FOLDER_VISIBILITIES)[number] | "custom";
 /** How one datastore field is stored and drawn. */
 export type ColumnType = (typeof COLUMN_TYPES)[number];
 /** Who reads a collection's rows. */
@@ -5106,6 +5113,8 @@ export interface ArtifactHead {
   owner: string;
   owner_kind: string;
   source_key?: string;
+  /** The folder it is filed in, absent at the top level. A folder grants nothing. */
+  folder?: string;
   head_number: number;
   contract?: string;
   /** What the head version declares; empty, never absent, for none. */
@@ -5148,17 +5157,250 @@ export interface ArtifactListItem extends ArtifactRow {
   pinned?: boolean;
   /** When this reader last opened it; the zero instant for never. */
   opened_at: string;
+  /** The folder it is filed in as this reader sees it (`Marketing/Q4/`); absent at the top level or in a folder the reader cannot see. */
+  folder_path?: string;
 }
 
-/** `artifacts{scope, kind, q, sort, status, pinned, work_item, cursor, limit}`. */
+/**
+ * One child folder of a one-level listing (`artifactsdomain.CommonPrefix`), as
+ * S3's ListObjectsV2 answers a common prefix.
+ */
+export interface ArtifactCommonPrefix {
+  /** The folder's path with a trailing `/` (`Marketing/Q4/Campaigns/`): what to list next. */
+  prefix: string;
+  /** The folder's id: the address a create or a move files into, and a rename-proof link. */
+  folder: string;
+  name: string;
+  visibility: ArtifactFolderVisibility;
+  /** The artifacts directly in it this reader can see. */
+  items: number;
+  /** The folders directly in it this reader can see. */
+  folders: number;
+}
+
+/**
+ * `artifacts{prefix | folder, delimiter, max-keys, continuation-token, scope, kind, q, sort, status, pinned, work_item}`:
+ * one page in S3's ListObjectsV2 terms. With `delimiter: "/"` the page is one
+ * level (the prefix's artifacts and its child folders as `common_prefixes`);
+ * without it, everything beneath the prefix. `folder` (an id) names the
+ * folder in place of `prefix`, which the answer then echoes as the resolved
+ * path: a path may name two folders a reader sees (a company "Drafts" and
+ * their own private one, `409 folder_ambiguous`), and an id never does.
+ */
 export interface ArtifactListAnswer {
-  items: ArtifactListItem[];
+  /** The query's prefix, echoed; empty for the top level. */
+  prefix: string;
+  delimiter?: string;
+  contents: ArtifactListItem[];
+  /** A one-level page's child folders, A to Z, all on the first page. */
+  common_prefixes?: ArtifactCommonPrefix[];
+  /** What this page shows: contents and common prefixes together. */
+  key_count: number;
+  is_truncated: boolean;
+  /** Send back as `continuation-token` for the next page. */
+  next_continuation_token?: string;
   /** How many matched the estate's own filter; a row the authority table withheld is counted and not listed. */
   total: number;
-  after?: string;
   read_level: string;
   position: LogPosition;
   complete: boolean;
+}
+
+/** One folder (`artifactsdomain.Folder`). Shares are shown to its owner and managers only. */
+export interface ArtifactFolder {
+  id: string;
+  /** The folder it sits in; absent for a top-level folder. */
+  parent?: string;
+  /** Its top-level folder, its own id for a top-level folder. */
+  root: string;
+  name: string;
+  owner: string;
+  owner_kind: string;
+  /** 1 for a top-level folder. */
+  depth: number;
+  max_depth: number;
+  visibility: ArtifactFolderVisibility;
+  /** The top-level folder's owner, whom its visibility is decided on. */
+  root_owner?: string;
+  root_owner_kind?: string;
+  /** Answered only to a reader whose `role` on the folder is `owner`. */
+  shares?: ArtifactShare[];
+  status: "live" | "removed";
+  created_by: ArtifactActor;
+  created_at: string;
+  updated_by: ArtifactActor;
+  updated_at: string;
+  version: number;
+}
+
+/** One folder of a reader's tree, with what is directly in it that they can see (`artifactsdomain.FolderItem`). */
+export interface ArtifactFolderItem extends ArtifactFolder {
+  artifacts: number;
+  folders: number;
+  /**
+   * What the reader may do with the folder, as the engine decided it:
+   * `owner` renames, moves, removes and unfiles (the folder's owner, the
+   * owner's lead, or an administrator), `contributor` files into it and makes
+   * subfolders, `viewer` sees it only.
+   */
+  role: ArtifactFolderRole;
+}
+
+/** A reader's decided relation to one folder (`ArtifactFolderItem.role`). */
+export type ArtifactFolderRole = "owner" | "contributor" | "viewer";
+
+/** `artifact_folders{}` and `GET /artifact-folders`: every folder the reader can see (`artifactsdomain.FolderTree`). */
+export interface ArtifactFoldersAnswer {
+  /** Parents before children, siblings A to Z. */
+  folders: ArtifactFolderItem[];
+  /** The artifacts the reader can see that sit in no folder they can see ("Not in a folder"). */
+  top_level: number;
+  read_level: string;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** `POST /artifact-folders`: one folder, or a path created with its missing parents. */
+export type ArtifactFolderCreateRequest =
+  | { name: string; parent?: string; visibility?: "company" | "private" }
+  | { path: string; parents: true; parent?: string; visibility?: "company" | "private" };
+
+/** What a folder create answers (`artifactsdomain.FolderCreated`): the chain, parents first. */
+export interface ArtifactFolderCreated {
+  folders: ArtifactFolder[];
+  /** How many of them this request made: 0 (answered `200`) when the whole path was already there. */
+  created: number;
+  op_id: string;
+  outcome: string;
+  position: LogPosition;
+}
+
+/** `PATCH /artifact-folders/{id}`: a rename or a move, one a request (a body naming both is refused). */
+export interface ArtifactFolderPatchRequest {
+  name?: string;
+  /** The new parent's id; an empty string moves it to the top level. */
+  parent?: string;
+  /**
+   * The reader saw and accepted that the move widens who sees the folder (a
+   * private tree into a company one): without it such a move is refused
+   * `409 folder_widens`.
+   */
+  confirm_widen?: boolean;
+}
+
+/** What `PATCH /artifact-folders/{id}` answers. */
+export interface ArtifactFolderPatched {
+  /** The folder as it is now, absent while the write is still pending here. */
+  folder?: ArtifactFolder;
+  op_id: string;
+  outcome: string;
+  position: LogPosition;
+}
+
+/** `PUT /artifacts/{id}/folder`: file one artifact; an empty string files it at the top level. */
+export interface ArtifactMoveRequest {
+  folder: string;
+}
+
+/** `POST /artifacts/folder-moves`: file up to `ARTIFACT_MOVE_MAX_ITEMS` artifacts, each decided alone. */
+export interface ArtifactMovesRequest {
+  items: { artifact: string; folder: string }[];
+}
+
+/** What `PUT /artifacts/{id}/folder` answers. */
+export interface ArtifactMoved {
+  artifact: string;
+  /** The folder it is filed in now, `""` for the top level. */
+  folder: string;
+  op_id: string;
+  outcome: string;
+  position: LogPosition;
+}
+
+/** One item's outcome in `POST /artifacts/folder-moves`. */
+export interface ArtifactMoveResult {
+  artifact: string;
+  /**
+   * `moved`, or the refusal's code: `not_found`, `unauthorized`,
+   * `folder_not_found`, `artifact_trashed`, `invalid` or `unavailable`.
+   */
+  outcome: string;
+  /** What to do about a refusal, in a sentence. */
+  message?: string;
+}
+
+/** What `POST /artifacts/folder-moves` answers. */
+export interface ArtifactMovesAnswer {
+  results: ArtifactMoveResult[];
+}
+
+/** A brand colour role's value: `#rrggbb`, lowercase. */
+export type BrandColor = string;
+
+/** One typeface of a brand (`brandformat.Face`): exactly one of `kit`, `stack`, or `family` with `files`. */
+export interface BrandFace {
+  kit?: string;
+  stack?: string;
+  family?: string;
+  files?: { path: string; weight: number; style: "normal" | "italic" }[];
+  licensed?: boolean;
+}
+
+/**
+ * A kit's `brand.json` (`brandformat.Brand`). A DRAFT may lack its primary
+ * logo and its primary colour (a publish requires only the name); an adoption
+ * requires both.
+ */
+export interface BrandDocument {
+  v: 1;
+  name: string;
+  tagline?: string;
+  logos: { primary?: string; on_dark?: string; mark?: string };
+  colors: {
+    primary?: BrandColor;
+    secondary?: BrandColor;
+    text?: BrandColor;
+    light_ground?: BrandColor;
+    dark_ground?: BrandColor;
+    primary_on_dark?: BrandColor;
+  };
+  type: { heading: BrandFace; body: BrandFace };
+  voice: { summary?: string; write_like?: string[]; avoid?: string[] };
+}
+
+/** One file the adopted brand serves (`artifactsdomain.BrandFile`), read through `GET /brand/files/{hash}`. */
+export interface BrandFileRef {
+  /** `css`, `logo.primary`, `logo.on_dark`, `logo.mark`, `font.heading.<n>` or `font.body.<n>`. */
+  slot: string;
+  content_type: string;
+  object: ArtifactObject;
+}
+
+/** `brand{}` and `GET /brand`: the company's adopted brand, or `{brand: null}`. */
+export interface BrandAnswer {
+  brand: {
+    kit: string;
+    kit_version: number;
+    document: BrandDocument;
+    css_sha: string;
+    files: BrandFileRef[];
+    adopted_by: ArtifactActor;
+    adopted_at: string;
+    /**
+     * The newest version of the adopted kit, when it is newer than the
+     * adopted one: the "Review and adopt" banner. Answered only to a reader
+     * who can see the kit or is an administrator.
+     */
+    newer_version?: number;
+    /** Who published `newer_version`, answered with it. */
+    newer_by?: ArtifactActor;
+  } | null;
+}
+
+/** `POST /brand/adoptions`: adopt one version of a kit (an administrator, a person, a recent proof). */
+export interface BrandAdoptRequest {
+  kit: string;
+  version: number;
 }
 
 /** The stored bytes behind one file (`objstore.Object`). */
@@ -5210,6 +5452,12 @@ export interface ArtifactVersionSummary {
   author: ArtifactActor;
   created_at: string;
   position: number;
+  /**
+   * The adopted brand stylesheet's digest this version was published under,
+   * which the artifact origin links at serve time. An HTML page's and a
+   * design's only; absent where none was adopted, and on every other kind.
+   */
+  brand?: string;
 }
 
 /** `artifact_version{id, n}`: one version with its manifest. */
@@ -5260,6 +5508,9 @@ export interface ArtifactHistorySummary {
   limit?: number;
   usage?: number;
   key?: string;
+  /** A move's folders by id, absent for the top level: never a folder's name. */
+  from_folder?: string;
+  to_folder?: string;
 }
 
 /** One row of an artifact's change record (`artifactsdomain.HistoryEntry`). */
@@ -5527,6 +5778,12 @@ export interface DeckTheme {
   name: string;
   tag: string;
   sample: ArtifactDeck;
+  /**
+   * The brand theme's cover logo (`artifactsapi.SampleLogo`): the path its
+   * sample names and the adopted brand's file slot (`logo.primary`) it is
+   * drawn from, since a sample holds no bytes. Absent for every other theme.
+   */
+  logo?: { path: string; slot: string };
 }
 
 /** `GET /artifacts/starters/slides` (`artifactsapi.SlidesStartersAnswer`). */
@@ -5573,6 +5830,8 @@ export interface ArtifactOutline {
   design?: DesignOutline;
   /** A board's outline: its widgets and its first stats, never a value (D64). */
   dashboard?: DashboardOutline;
+  /** A brand kit's outline: its `brand.json`, read (`brandformat.Brand`). */
+  brand?: { document: BrandDocument };
 }
 
 // ---- dashboards (`internal/artifacts/dashspec`, `internal/api/datasetsapi`) ----
@@ -6076,7 +6335,11 @@ export interface ArtifactJoined {
 /** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
 export interface ArtifactChangedPush {
   artifact: string;
-  /** `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset`. */
+  /**
+   * `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`,
+   * `transfer`, `reset` or `folder` (it was filed in another folder; a
+   * folder's removal moves its artifacts up and pushes nothing per artifact).
+   */
   what: string;
   head?: number;
   position: LogPosition;
@@ -6183,6 +6446,7 @@ export interface QueryMap {
   config_diff: ConfigDiff;
   config_entities: { kind: string; ids?: string[]; id?: string; entity?: unknown };
   artifacts: ArtifactListAnswer;
+  artifact_folders: ArtifactFoldersAnswer;
   artifact: ArtifactDetail;
   artifact_versions: ArtifactVersionsAnswer;
   artifact_version: ArtifactVersion;
@@ -6199,6 +6463,7 @@ export interface QueryMap {
   artifact_data_schema: DataSchemaAnswer;
   artifact_data_state: DataStateAnswer;
   artifact_data_usage: DataUsageAnswer;
+  brand: BrandAnswer;
 }
 
 export type QueryName = keyof QueryMap;

@@ -20,7 +20,8 @@ import { useCallback, useState } from "react";
 import { useToast } from "@crewlethq/ui";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { useOpenNewTask, type OpenNewTask } from "~/app/newTask.ts";
-import { ITEM_KEY_SHAPE, artifactPath } from "~/app/routes.ts";
+import { ID_SHAPE, ITEM_KEY_SHAPE, artifactPath } from "~/app/routes.ts";
+import { useFolderTree } from "~/lib/artifacts/folders.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
 import { plural, utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
@@ -37,6 +38,53 @@ import { newActOpID, type DeckPlan } from "~/protocol/index.ts";
 export function useWorkItem(): string {
   const [item] = useParam("item", "");
   return ITEM_KEY_SHAPE.test(item) ? item : "";
+}
+
+/** Where a new artifact is filed, as its create page holds it. */
+export interface SaveIn {
+  /** The folder's id, or `""` for the top level. */
+  folder: string;
+  /** Its name, `""` at the top level. */
+  name: string;
+  /** Its path in words ("Marketing › Q4 review"), `""` at the top level. */
+  path: string;
+  /** The address names a folder and the tree that names it is still being read. */
+  reading: boolean;
+  /** File it elsewhere: a folder's id, or `""` for the top level. */
+  set: (folder: string) => void;
+}
+
+/**
+ * The folder a new artifact is filed in (`folder=`): the folder page New was
+ * pressed on, or the one the reader chose with Save in. A folder the reader
+ * cannot see or file into, once the tree says so, is the top level, so a
+ * create never carries a folder the engine would refuse; while the tree is
+ * still being read the address's folder stands, and the engine decides.
+ */
+export function useSaveIn(): SaveIn {
+  const [raw, setRaw] = useParam("folder", "");
+  const asked = ID_SHAPE.test(raw) ? raw : "";
+  const tree = useFolderTree(asked !== "");
+  const found = asked ? tree.index.get(asked) : undefined;
+  const usable = found && found.role !== "viewer" ? found : undefined;
+  const reading = asked !== "" && tree.data === null;
+  const folder = usable ? usable.id : reading ? asked : "";
+  return {
+    folder,
+    name: usable?.name ?? "",
+    path: usable ? tree.index.label(usable.id) : "",
+    reading,
+    set: setRaw,
+  };
+}
+
+/**
+ * The id of the folder a task's brief names for an agent to file in, or
+ * undefined at the top level and while the tree that confirms the folder is
+ * still being read. By id alone (`artifactTaskBody` says why).
+ */
+export function briefFolder(saveIn: SaveIn): string | undefined {
+  return saveIn.folder && !saveIn.reading ? saveIn.folder : undefined;
 }
 
 /**
@@ -95,6 +143,7 @@ export function useCreateArtifact(): CreateArtifact {
   const toast = useToast();
   const gesture = useKeyedGesture();
   const workItem = useWorkItem();
+  const { folder } = useSaveIn();
   const { run } = gesture;
 
   /** The new artifact's id from a done answer, or "" for anything else. */
@@ -106,14 +155,20 @@ export function useCreateArtifact(): CreateArtifact {
       const name = title.trim();
       const id = made(
         await run(
-          createFromStarter({ kind, title: name, ...(workItem ? { workItem } : {}), ...plan }),
+          createFromStarter({
+            kind,
+            title: name,
+            ...(workItem ? { workItem } : {}),
+            ...(folder ? { folder } : {}),
+            ...plan,
+          }),
         ),
       );
       if (!id) return;
       toast.ok(plan.doc ? `Created “${name}”` : `Started “${name}”`);
       nav.to(artifactPath(id));
     },
-    [run, workItem, toast, nav],
+    [run, workItem, folder, toast, nav],
   );
 
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -121,7 +176,15 @@ export function useCreateArtifact(): CreateArtifact {
   const sheet = useCallback(
     async (title: string, writes: DraftWrites) => {
       const name = title.trim();
-      const id = made(await run(createSheet({ title: name, ...(workItem ? { workItem } : {}) })));
+      const id = made(
+        await run(
+          createSheet({
+            title: name,
+            ...(workItem ? { workItem } : {}),
+            ...(folder ? { folder } : {}),
+          }),
+        ),
+      );
       if (!id) return;
       const schema = await keyedWrite({
         ...configureSchema(id, writes.collections),
@@ -175,7 +238,7 @@ export function useCreateArtifact(): CreateArtifact {
       }
       nav.to(artifactPath(id));
     },
-    [run, workItem, toast, nav],
+    [run, workItem, folder, toast, nav],
   );
 
   return {

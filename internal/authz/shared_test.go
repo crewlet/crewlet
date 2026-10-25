@@ -826,6 +826,10 @@ func TestOnlyAnAgentsEditsAreSteerable(t *testing.T) {
 	want := []authz.Action{
 		authz.ActionArtifactCreate, authz.ActionArtifactPublish, authz.ActionArtifactUpdate,
 		authz.ActionArtifactAsset, authz.ActionArtifactSchema, authz.ActionArtifactDataWrite,
+		// FILING ITS OWN WORK: an agent asked to put the report it made in
+		// a folder, or to make a subfolder in a folder it owns, carries it
+		// out as it carries out any other edit to its own work.
+		authz.ActionArtifactFolderCreate, authz.ActionArtifactMove, authz.ActionArtifactFolderFile,
 	}
 	var got []authz.Action
 	for _, a := range authz.Actions() {

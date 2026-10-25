@@ -10338,34 +10338,51 @@ a.live-row:focus-visible {
    and one on a phone, five only on a screen wide enough that four would be
    posters. A column count by the page's width rather than auto-fill, so a
    card's size moves in steps a reader recognises rather than with every
-   pixel. */
+   pixel.
+
+   THE FOLDERS' TILES ABOVE THE CARDS STAND IN THE SAME COLUMNS (folders.css),
+   so a tile's edges line up with the card's under it at every width: the
+   count and the step between columns are declared here once, for both, and
+   only the cards go on to two and one across, where the tiles are rows. */
+.artifacts-cards,
+.artifacts-folders {
+  --artifacts-grid-columns: 4;
+  --artifacts-grid-column-gap: var(--spacing-5);
+}
+@container page (width >= 1500px) {
+  .artifacts-cards,
+  .artifacts-folders {
+    --artifacts-grid-columns: 5;
+  }
+}
+@container page (width < 1000px) {
+  .artifacts-cards,
+  .artifacts-folders {
+    --artifacts-grid-columns: 3;
+    --artifacts-grid-column-gap: var(--spacing-4);
+  }
+}
 .artifacts-cards {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--spacing-6) var(--spacing-5);
+  grid-template-columns: repeat(var(--artifacts-grid-columns), minmax(0, 1fr));
+  gap: var(--spacing-6) var(--artifacts-grid-column-gap);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-@container page (width >= 1500px) {
-  .artifacts-cards {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-}
 @container page (width < 1000px) {
   .artifacts-cards {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--spacing-5) var(--spacing-4);
+    row-gap: var(--spacing-5);
   }
 }
 @container page (width < 640px) {
   .artifacts-cards {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    --artifacts-grid-columns: 2;
   }
 }
 @container page (width < 440px) {
   .artifacts-cards {
-    grid-template-columns: minmax(0, 1fr);
+    --artifacts-grid-columns: 1;
   }
 }
 .artifacts-more {
@@ -10403,6 +10420,17 @@ a.live-row:focus-visible {
 .artifacts-preview-frame {
   position: absolute;
   inset: 0;
+}
+
+/* UNDER THE PHONE BREAKPOINT THE BAR DOCKS to the window's foot (the kit's
+   `SelectionBar`, at the same 640px), over the content, so the content keeps
+   room under its last card for the bar and the gap around it: the last card
+   was otherwise under the bar, out of a thumb's reach. Here rather than in
+   the folders' own sheet, because it pads the frame's own content. */
+@media (width < 640px) {
+  .app .crewlet-app-shell__content:has(.artifacts-selection) {
+    padding-bottom: calc(var(--size-control-lg) + var(--spacing-8));
+  }
 }
 
 /* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
@@ -11526,6 +11554,10 @@ a.live-row:focus-visible {
   }
 }
 .dashboard-board {
+  min-width: 0;
+}
+/* The board's brand region holds the board's column of the body's grid. */
+.dashboard-brand {
   min-width: 0;
 }
 .dashboard-cell {

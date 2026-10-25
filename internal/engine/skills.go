@@ -20,7 +20,7 @@ import (
 // running without its company's guidance until the next walk.
 
 // skillVariables resolves the operator's substitution map for an epoch, plus
-// the one variable the engine reserves.
+// the two variables the engine reserves.
 //
 // RESOLVED, because a value may be a ${VAR} reference: the whole point of
 // the map is to carry deployment facts like a tenant URL into skill prose,
@@ -51,17 +51,31 @@ import (
 // registry's own signal for a variable nobody defined — and is what an
 // operator needs to hear. Defining it as "" would compose every link as a
 // rooted path a person cannot click and say nothing at all.
-func skillVariables(env *config.Resolver, c *Company, publicBase string) map[string]string {
+//
+// # Why crewlet_kit_version is injected too
+//
+// The artifacts skill tells a seat which kit release to link, and the only
+// honest answer is the newest one this binary embeds ([kitVersion]): a page
+// pinned to an older kit keeps working, but it never reads the brand slots a
+// newer kit added, so the company's adopted brand silently skips it. A
+// version written into the skill's prose went stale the first time the engine
+// moved to a new kit, and nothing ties the skill to the build except this.
+// It is reserved for the same reason as the base URL, and left undefined only
+// for a build whose embedded kit tree cannot be read.
+func skillVariables(env *config.Resolver, c *Company, publicBase, kit string) map[string]string {
 	declared := c.Config.SkillVariables
-	if len(declared) == 0 && publicBase == "" {
+	if len(declared) == 0 && publicBase == "" && kit == "" {
 		return nil
 	}
-	out := make(map[string]string, len(declared)+1)
+	out := make(map[string]string, len(declared)+2)
 	for name, value := range declared {
 		out[name] = env.Value(value)
 	}
 	if publicBase != "" {
 		out[config.ReservedBaseURLVariable] = publicBase
+	}
+	if kit != "" {
+		out[config.ReservedKitVersionVariable] = kit
 	}
 	return out
 }
@@ -94,7 +108,7 @@ func (e *Engine) publicBase(*Company) string { return e.externalBase }
 // against the new map — rather than on that skill's next edit, which might
 // be never.
 func (e *Engine) refreshSkillVariables(c *Company) {
-	e.skills.SetVariables(skillVariables(e.resolver(), c, e.publicBase(c)))
+	e.skills.SetVariables(skillVariables(e.resolver(), c, e.publicBase(c), kitVersion()))
 }
 
 // auditSkills reports every skill whose trigger names a tool the current

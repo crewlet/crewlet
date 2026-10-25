@@ -658,6 +658,48 @@ func Field(body Body, name string) []string {
 	return out
 }
 
+// Scalars is the value of every `name: …` property in a literal's body, at any
+// depth, that is a constant scalar: a string (its cooked value), a number (its
+// source text, `4.5`) or `true`/`false`. It is [Field] for a list of records
+// whose rows carry a number or a flag beside their strings.
+//
+// A VALUE THAT IS NOT WHOLLY ONE CONSTANT is not read: `min: AA`, `min: 4.5 *
+// 2` and `refuses: !open` are each an expression whose value lives elsewhere,
+// so the reader answers one value fewer and a gate comparing the count against
+// the engine's rows fails on it loudly, rather than reading the `4.5` out of an
+// expression that is not 4.5.
+func Scalars(body Body, name string) []string {
+	toks := body.toks
+	var out []string
+	for i := 0; i+2 < len(toks); i++ {
+		key := toks[i]
+		keyName, quoted := key.literal()
+		switch {
+		case key.kind == kIdent && key.text() == name:
+		case quoted && key.kind == kString && keyName == name:
+		default:
+			continue
+		}
+		if i > 0 && !toks[i-1].is("{", ",") {
+			continue
+		}
+		if !toks[i+1].is(":") {
+			continue
+		}
+		if i+3 < len(toks) && !toks[i+3].is(",", "}") {
+			continue
+		}
+		value := toks[i+2]
+		switch {
+		case value.kind == kNumber, value.word("true"), value.word("false"):
+			out = append(out, value.text())
+		case value.kind == kString:
+			out = append(out, value.value)
+		}
+	}
+	return out
+}
+
 // Keys is the keys of an object literal's own properties, in order — the
 // top level only, bare or quoted alike.
 //

@@ -65,13 +65,14 @@ afterEach(() => {
 
 describe("which chunk draws a screen", () => {
   // A CHUNK IS A SCREEN DIRECTORY, not a sidebar row: Company's rows draw
-  // screens from three of them, and a row that moves moves no code.
+  // screens from four of them, and a row that moves moves no code.
   test("every screen directory is a chunk, and the org editor is one of its own", () => {
     expect([...CHUNKS].sort()).toEqual(
       [
         "account",
         "agents",
         "artifacts",
+        "brand",
         "home",
         "inbox",
         "knowledge",

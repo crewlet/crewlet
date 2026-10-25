@@ -700,7 +700,8 @@ func Catalogue() []Instrument {
 				"listener) answered, by what it was (`dest`: `document`, a " +
 				"page decided again on every request; `subresource`, a file " +
 				"a page loads; `runtime` and `kit`, the embedded public " +
-				"files) and by status class (`status`: `2xx` to `5xx`). A " +
+				"files; `brand`, the company's adopted brand's files) and by " +
+				"status class (`status`: `2xx` to `5xx`). A " +
 				"rise in `document` `5xx` is viewers whose frames this node " +
 				"would not serve: a copy of the artifacts or identity log it " +
 				"could not vouch for, or an object store that did not answer. " +

@@ -47,8 +47,8 @@ func TestAShareStoredBeforeTheGrantRuleIsListedAndWithdrawn(t *testing.T) {
 	// Never counted where it is withheld: the login's own Shared listing.
 	page, err := n.reader.List(t.Context(), artifactsdomain.Viewer{Record: "token:maya"},
 		artifactsdomain.ListQuery{Scope: artifactsdomain.ScopeShared})
-	if err != nil || page.Total != 0 || len(page.Items) != 0 {
-		t.Errorf("the login's Shared listing counts %d and lists %d (%v)", page.Total, len(page.Items), err)
+	if err != nil || page.Total != 0 || len(page.Contents) != 0 {
+		t.Errorf("the login's Shared listing counts %d and lists %d (%v)", page.Total, len(page.Contents), err)
 	}
 
 	// A new share to a login is refused; the stored one may change its role.
