@@ -5,10 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // reopenAgentRun serves a box-mode run's tool bridge again on this node, which
@@ -88,11 +85,10 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 
-	// THE RUN'S CONTEXT, as its launch had it: its trace, continued from the
-	// ids on its row as the resume continues them, and the seat a model call
-	// made inside one of its calls — a delegated worker's — runs its CLI as.
-	ctx = tracing.WithRemote(ctx, events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID})
-	ctx = llm.WithSeat(ctx, handle)
+	// THE RUN'S CONTEXT, as its launch had it: its trace, and the seat a
+	// model call made inside one of its calls — a delegated worker's — runs
+	// its CLI as.
+	ctx = parkedRunContext(ctx, run)
 
 	input, _, err := e.parkedTurnRunner(ctx, company, resumeInput{
 		Company: company, Run: run, State: state,

@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -706,6 +707,23 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 	}
 }
 
+// parkedRunContext is the context a parked run's turn runs under on this node:
+// the resume that collects it, and a box-mode run taken over while it works
+// ([Engine.reopenAgentRun]).
+//
+// ITS TRACE, continued from the ids on the run's row — the suspended span
+// reconstructed as a remote parent, since no span survives a suspend — and
+// ITS SEAT, bound for every model call the turn makes ([llm.WithSeat]) exactly
+// as the dispatch path binds it for a fresh turn. A coding CLI keeps a home of
+// its own per seat — its transcripts, its sign-in — and a call that names no
+// seat runs in the one home every unbound call shares: a resumed turn's
+// executor, its reviewer and a worker a box delegated to all did, beside each
+// other's transcripts and on whichever login that home last held.
+func parkedRunContext(ctx context.Context, run sandbox.PendingRun) context.Context {
+	ctx = tracing.WithRemote(ctx, events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID})
+	return llm.WithSeat(ctx, run.AgentHandle)
+}
+
 // guardResume runs one resume, abandoning it if it panics.
 //
 // It publishes the unhandled-exception guard itself because the frame that
@@ -803,10 +821,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// span beneath it. That is the honest shape: two spans in one trace,
 	// with the wait between them visible as the gap it actually is. Every
 	// run carries ids: the launch takes them from the active span, minting
-	// a fresh trace when there is none.
-	ctx = tracing.WithRemote(ctx, events.TraceContext{
-		TraceID: in.Run.TraceID, SpanID: in.Run.SpanID,
-	})
+	// a fresh trace when there is none. And the seat is bound, as the
+	// dispatch path binds it — see [parkedRunContext].
+	ctx = parkedRunContext(ctx, in.Run)
 	ctx, span := tracing.Start(ctx, "engine", "agent.turn.resume",
 		attribute.String("crewlet.seat", in.Turn.Handle()),
 		attribute.String("crewlet.turn_id", in.Run.TurnID),
