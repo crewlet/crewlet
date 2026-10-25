@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The tracker duty: the work a gesture could not finish, and nothing else.
+// The Worklet duty: the work a gesture could not finish, and nothing else.
 //
 // # What is here and what deliberately is not
 //

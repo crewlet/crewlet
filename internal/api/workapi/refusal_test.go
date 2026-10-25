@@ -32,8 +32,8 @@ import (
 // sentence and nowhere else to write one.
 //
 // So the three are asked the SAME question by a caller holding the same
-// access — create an item, holding the knowledge base and not the tracker —
-// and the three texts compared byte for byte. The HTTP surface is the one that refuses at
+// access (create an item, holding Doclet and not Worklet), and the three
+// texts compared byte for byte. The HTTP surface is the one that refuses at
 // its ROUTE, before any tool runs, which is exactly why it is the one that
 // could drift. Its `detail` is the same text written as a sentence, which the
 // API boundary ([httpjson.Sentence]) does to every detail it answers.

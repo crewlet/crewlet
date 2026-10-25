@@ -17,7 +17,7 @@ import (
 // the rule that decides which. The rules are tried in order and the
 // first that names an item wins:
 //
-//  1. TRIGGER — the event that woke the turn names the item: a native tracker
+//  1. TRIGGER: the event that woke the turn names the item, a Worklet
 //     wake, or a Jira, GitHub or GitLab webhook about one issue.
 //  2. ASKED_BY — the turn answers a colleague's ask, and inherits the item the
 //     ASKING turn was on. Help given on a task is work on that task.

@@ -1254,7 +1254,7 @@ func (s countingSearcher) Search(context.Context, knowledge.Query) knowledge.Res
 
 // THE KNOWLEDGE QUESTION SEARCHES PAGES, AND ONLY FOR SOMEBODY WHO HOLDS THE
 // KNOWLEDGE BASE (ADR-0033). Everybody may ask it; a hit is a page, so a caller
-// holding the tracker alone is answered `available: false` with the reason
+// holding Worklet alone is answered `available: false` with the reason
 // `no_access` and never searched for — a screen says their access leaves the
 // pages out, not that the company wrote nothing down — and a caller holding
 // neither app is refused naming both, since nothing it searches is theirs.

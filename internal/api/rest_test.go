@@ -58,7 +58,7 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 
 	// The routes every node serves from its company and its projection. A
 	// question whose SOURCE is absent is left unregistered by design (a
-	// company on Confluence has no native pages) and answers 404 for a
+	// company on Confluence has no Doclet pages) and answers 404 for a
 	// reason that is not "the route was never built", so those are
 	// exercised separately below.
 	for _, path := range []string{
@@ -99,7 +99,7 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	// No native knowledge base wired, which is a company on Confluence, so
+	// No Doclet wired, which is a company on Confluence, so
 	// `pages` is unregistered.
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/doclet/pages", nil)))

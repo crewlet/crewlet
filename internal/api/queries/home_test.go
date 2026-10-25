@@ -280,7 +280,7 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 }
 
 // EACH FEED ROW IS SHOWN BY ITS APP (ADR-0033): the work the tracker records
-// to whoever holds the tracker, the pages to whoever holds the knowledge base,
+// to whoever holds Worklet, the pages to whoever holds Doclet,
 // and the schedules' runs — the company's own machinery — to everybody, an
 // admin holding all three. A kind the caller may not see is DROPPED rather than
 // refused, named in `kinds=` or not, and its source is never read: a refusal of
@@ -411,7 +411,7 @@ func TestYourOwnAsksNeedNoTracker(t *testing.T) {
 	_, err = askHolding(t, lead, "ana", "decisions", map[string]any{"handle": "bo"})
 	var refusal *queries.Refusal
 	if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
-		t.Errorf("a lead without the tracker reading a report's decisions = %v, "+
+		t.Errorf("a lead without Worklet reading a report's decisions = %v, "+
 			"want a refusal naming [worklet]", err)
 	}
 }

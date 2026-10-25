@@ -202,7 +202,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // in the target and that operation's ledger never put it there, which is
 // exactly how somebody else's move looks ([worklet.Writer.MoveTaskToProject]).
 // So the one call that finishes it here is the same one — and the root stays
-// marked mid-move for as long as anything is left, so the tracker duty
+// marked mid-move for as long as anything is left, so the Worklet duty
 // finishes the walk on its own once nobody holds its claim, which is the
 // remedy where this caller has no repeat that is the same operation, or where
 // this node cannot vouch for the task the walk stopped at.
@@ -214,8 +214,8 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named stri
 	if stopped.Key != "" {
 		as = " as " + worklet.ItemNamed(stopped.Root, stopped.Key, stopped.KeyCollision)
 	}
-	duty := "the tracker duty finishes the walk on its own once nobody is " +
-		"walking it — read the item with get_work_item to see it done"
+	duty := "the Worklet duty finishes the walk on its own once nobody is " +
+		"walking it; read the item with get_work_item to see it done"
 	frozen := fmt.Sprintf("%s is in the trash under it and still in its old "+
 		"project, and a task in the trash is frozen, so the move waits for it: "+
 		"it has to be restored (restore_work_item, where you have it) or purged "+

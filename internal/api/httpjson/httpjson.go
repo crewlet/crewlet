@@ -1621,8 +1621,8 @@ func Refuse(w http.ResponseWriter, err error) {
 const NoActiveRevisionRetry = configplane.ReconcileInterval
 
 // NoActiveRevision writes `503 no_active_revision`: a request for something
-// only a company can have — a delivery to route, the company's own tracker or
-// knowledge base — on a node that has not been handed one yet.
+// only a company can have (a delivery to route, Worklet or Doclet) on a
+// node that has not been handed one yet.
 //
 // ONE WRITER FOR THE CODE AND ITS HINT, used by the webhook edge, the human
 // write surface, the operator's MCP surface and the read surface's native

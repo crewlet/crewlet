@@ -494,7 +494,7 @@ func (p *recordingProject) ops() []string {
 // ([authz.ErrUnresolved] for the comment), which is offerable, so the comment
 // control is enabled and the tool decides on the item; the board's ordinary
 // writes, which no ask admits, are not offered at all.
-func TestActsOffersTheAnswerToAPersonWithoutTracker(t *testing.T) {
+func TestActsOffersTheAnswerToAPersonWithoutWorklet(t *testing.T) {
 	t.Parallel()
 	s := actSurface(t, &recordingWork{})
 	acts, err := s.Acts(t.Context(), reader)
@@ -502,13 +502,13 @@ func TestActsOffersTheAnswerToAPersonWithoutTracker(t *testing.T) {
 		t.Fatalf("Acts: %v", err)
 	}
 	if !slices.Contains(acts, worklet.CommentOnWorkTool) {
-		t.Errorf("somebody without the tracker is not offered %s, so an ask put "+
+		t.Errorf("somebody without Worklet is not offered %s, so an ask put "+
 			"to them could never be answered from a screen: %v",
 			worklet.CommentOnWorkTool, acts)
 	}
 	for _, write := range []string{worklet.CreateWorkItemTool, worklet.UpdateWorkItemTool} {
 		if slices.Contains(acts, write) {
-			t.Errorf("somebody without the tracker is offered %s, which no ask "+
+			t.Errorf("somebody without Worklet is offered %s, which no ask "+
 				"admits them to: %v", write, acts)
 		}
 	}

@@ -14,7 +14,7 @@ import (
 // prompt of a phase that can call the tools it is about.
 //
 // The claim is not that the registry works (its own suite covers that) but
-// that a real node builds one, fills it from its company's own knowledge base
+// that a real node builds one, fills it from its company's Doclet
 // through the node's skill sync, and offers it to the phases.
 //
 // # Published as pages, never installed
@@ -210,7 +210,7 @@ func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
 	}
 }
 
-// A SKILL PAGE PUBLISHED TO THE COMPANY'S OWN KNOWLEDGE BASE REACHES THE
+// A SKILL PAGE PUBLISHED TO DOCLET REACHES THE
 // REGISTRY, and one edited into an ordinary page leaves it.
 //
 // The native backend has no page webhook, so what notices is the page
@@ -219,7 +219,7 @@ func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
 // ceasing to be one. It asks the node's skill sync to walk the container
 // afterwards, and this is the whole path, from a wiki write to what an
 // executor would be offered.
-func TestASkillPagePublishedNativelyReachesTheRegistry(t *testing.T) {
+func TestASkillPagePublishedToDocletReachesTheRegistry(t *testing.T) {
 	t.Parallel()
 	n := start(t)
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))

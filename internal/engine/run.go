@@ -1521,7 +1521,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
 		// BEFORE equip too, and for exactly the same reason: the ten
-		// native tracker and knowledge tools are registered only where
+		// Worklet and Doclet tools are registered only where
 		// their halves exist, so a node that equipped first would run a
 		// company on the native backends whose seats have no way to read
 		// or write them.

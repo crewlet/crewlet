@@ -16,7 +16,7 @@ import (
 // as unknown, and clearing it re-encodes the carried copy straight back: an
 // administrator taking somebody's last grant away left it exactly where it
 // was. Mutation: derive the known names from a marshalled zero value again and
-// the person still carries the tracker.
+// the person still carries Worklet.
 func TestStrippingAPersonsLastGrantSticks(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

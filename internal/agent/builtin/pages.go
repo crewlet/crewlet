@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The native knowledge base's tool names.
+// Doclet's tool names.
 const (
 	ListPagesTool     = "list_pages"
 	GetPageTool       = "get_page"
@@ -209,7 +209,7 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, 
 //
 // # Why a page write asks a second question here
 //
-// A page is ordinarily anybody's to write who uses the knowledge base, and the
+// A page is ordinarily anybody's to write who uses Doclet, and the
 // skills container's pages are pages. But they are also the instructions the
 // engine injects into a phase of every seat's turn, so writing one rewrites
 // the prompt the whole company runs under, and a credential holding only the
@@ -278,8 +278,8 @@ var _ tools.SeatCallable = (*listPages)(nil)
 func (t *listPages) Name() string { return ListPagesTool }
 
 func (t *listPages) Description() string {
-	return "List pages in the company's knowledge base by container, parent " +
-		"or title. For BROWSING a structure you know; to find pages ABOUT a " +
+	return "List pages in Doclet, the company's knowledge base, by container, " +
+		"parent or title. For BROWSING a structure you know; to find pages ABOUT a " +
 		"subject, use search_knowledge, which ranks by relevance."
 }
 
@@ -748,7 +748,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 
 	// A RENAME IS THE CONTAINER LEAD'S OR THE PAGE'S CREATOR'S, however it
 	// is asked for. The tool's own gate decided the SAVE, which is anybody's
-	// who uses the knowledge base; an address change is
+	// who uses Doclet; an address change is
 	// [authz.ActionPageRename], decided on the stored page — the container
 	// it is in and who created it — so it is asked here, and BEFORE the save,
 	// so a caller who may not rename lands nothing rather than half of what
@@ -1141,11 +1141,11 @@ func pageWriteFailure(ctx context.Context, name string, err error) tools.Result 
 func pageReadFailure(ctx context.Context, name string, err error) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+
-			"read the knowledge base right now (%s). This is NOT an empty "+
-			"result — do not conclude the page does not exist. Try again, or say "+
-			"you could not check.", name, why))
+			"read Doclet right now (%s). This is NOT an empty result: do not "+
+			"conclude the page does not exist. Try again, or say you could not "+
+			"check.", name, why))
 	}
-	return faulted(ctx, name, err, fmt.Sprintf("%s could not read the knowledge "+
-		"base: %s. This is NOT an empty result — do not conclude the page does "+
-		"not exist. Say you could not check.", name, faultSaid))
+	return faulted(ctx, name, err, fmt.Sprintf("%s could not read Doclet: %s. "+
+		"This is NOT an empty result: do not conclude the page does not exist. "+
+		"Say you could not check.", name, faultSaid))
 }

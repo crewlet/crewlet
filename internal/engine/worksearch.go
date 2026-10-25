@@ -69,10 +69,10 @@ func (r itemRanker) Building(_ context.Context) bool {
 }
 
 // WorkSearch is this node's ranked item search, or nil where there is no
-// native tracker to search — a company whose tracker is a vendor's or none,
-// or a node that has not met its company yet. The lexical index is built for
-// either native backend, so a nil here is decided by the tracker rather than
-// by whether an index exists.
+// Worklet to search (a company whose tracker is a vendor's or none, or a node
+// that has not met its company yet). The lexical index is built for either
+// native backend, so a nil here is decided by Worklet rather than by whether
+// an index exists.
 func (e *Engine) WorkSearch() *worklet.Searcher {
 	n := e.native.Load()
 	if n == nil || n.itemSearch == nil {

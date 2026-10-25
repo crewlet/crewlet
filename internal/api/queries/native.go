@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The native tracker and knowledge base, read for a screen.
+// Worklet and Doclet, read for a screen.
 //
 // # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
 //
@@ -376,7 +376,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	case unread && errors.Is(err, worklet.ErrNoTask):
 		// A MISSING ITEM IS THE REFUSAL A CALLER NOT ASKED ON IT GETS, to
 		// somebody the item would have been decided for: "no such item"
-		// before "you may not" would tell a person without the tracker
+		// before "you may not" would tell a person without Worklet
 		// which keys exist.
 		if _, refusal := s.mayReadItem(ctx, principal,
 			authz.Object{Kind: authz.KindTask, ID: ref}); refusal != nil {
@@ -413,7 +413,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 // mayReadItem decides `get_work_item` ([authz.ActionWorkRead]) on object for
 // principal, and renders the decision as the error this surface refuses with.
 //
-// # Read the item, then decide again — only for somebody without the tracker
+// # Read the item, then decide again, only for somebody without Worklet
 //
 // A tracker holder reads any item, which the table answers before anything is
 // read. Somebody WITHOUT it reads one item: the one an open ask on it names
@@ -749,7 +749,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // It DEMANDED a handle and checked nothing, on the reasoning that the whole
 // surface is guarded so the caller already holds the company's credential.
 // That reasoning stopped holding once a guarded surface meant "somebody
-// signed in" rather than "the operator": every person holding the tracker
+// signed in" rather than "the operator": every person holding Worklet
 // reaches this question, and its answer carries the richest personal record
 // the engine keeps — somebody's unread notices, what they mean to work on
 // next, and who set that order. The parameter selected whose. A scope rule

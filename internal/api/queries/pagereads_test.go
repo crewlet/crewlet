@@ -303,14 +303,14 @@ func TestASkillListingCarriesWhoLoadedEachSkill(t *testing.T) {
 // (ADR-0033). A page is the knowledge base's, and two things beside it are the
 // tracker's rows: the tasks whose bodies link here (`linked_from.tasks`) and
 // the task each read happened on (`page_reads`' `last_work_item`). A reader of
-// the pages without the tracker is shown the pages that link here and who read
+// the pages without Worklet is shown the pages that link here and who read
 // it, and no task — the list empty and its total zero rather than the key gone,
 // since the shape a reader parses is the same either way — and the tracker is
 // not asked to place a run for them at all.
 //
 // Mutation: drop the tracker check from linksFor, or from pageReads' placing of
 // each run, and the knowledge-only reader is shown ENG-412.
-func TestLinkedFromTasksNeedTracker(t *testing.T) {
+func TestLinkedFromTasksNeedWorklet(t *testing.T) {
 	t.Parallel()
 	links := search.Backlinks{
 		Pages:      []search.PageLink{{ID: "p-2", Container: "ENG", Title: "Scheduler on-call"}},

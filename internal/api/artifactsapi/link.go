@@ -223,7 +223,7 @@ func (s *Service) liveWorkItem(w http.ResponseWriter, r *http.Request, ref strin
 		return worklet.Task{}, false
 	case errors.Is(err, statelog.ErrForeignPosition):
 		invalid(w, fmt.Sprintf("after names a position on another log; a work item's create "+
-			"answers with a position on the tracker's log, %s, and that is the one to send",
+			"answers with a position on Worklet's log, %s, and that is the one to send",
 			worklet.Domain{}.Stream().Name))
 		return worklet.Task{}, false
 	case errors.As(err, new(*statelog.Refused)):
@@ -232,7 +232,7 @@ func (s *Service) liveWorkItem(w http.ResponseWriter, r *http.Request, ref strin
 		return worklet.Task{}, false
 	case err != nil:
 		log.WarnContext(r.Context(), "artifacts_work_item_unread", "work_item", ref, "error", err.Error())
-		unavailable(w, err, "the tracker could not be read to check the work item; try again")
+		unavailable(w, err, "Worklet could not be read to check the work item; try again")
 		return worklet.Task{}, false
 	case detail.Task.Removed != nil:
 		invalid(w, fmt.Sprintf("work item %s was removed; restore it before linking an artifact to it",

@@ -565,7 +565,7 @@ func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, erro
 	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
 }
 
-// Knowledge is the native knowledge search, answered by a data node's index.
+// Knowledge is the Doclet knowledge search, answered by a data node's index.
 type Knowledge struct{ r *Router }
 
 // Knowledge answers the knowledge search.
@@ -573,8 +573,7 @@ func (r *Router) Knowledge() Knowledge { return Knowledge{r: r} }
 
 var _ knowledge.Searcher = Knowledge{}
 
-// Backend is the native one: the engine's own knowledge base, searched on a
-// node that holds it.
+// Backend is Doclet's, searched on a node that holds it.
 func (Knowledge) Backend() string { return doclet.Backend }
 
 // CanSearch is the no-I/O pre-gate, and on the native backend every seat can

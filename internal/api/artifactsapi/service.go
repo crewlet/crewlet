@@ -342,11 +342,11 @@ func pathVersion(w http.ResponseWriter, r *http.Request) (int, bool) {
 func checkWorkItem(item string) (string, error) {
 	item = strings.TrimSpace(item)
 	if len(item) > artifacts.MaxWorkItemBytes {
-		return "", fmt.Errorf("work_item is a tracker key, at most %d bytes", artifacts.MaxWorkItemBytes)
+		return "", fmt.Errorf("work_item is a Worklet key, at most %d bytes", artifacts.MaxWorkItemBytes)
 	}
 	for i := 0; i < len(item); i++ {
 		if c := item[i]; c <= ' ' || c > '~' {
-			return "", errors.New("work_item is a tracker key: visible ASCII, no space")
+			return "", errors.New("work_item is a Worklet key: visible ASCII, no space")
 		}
 	}
 	return item, nil

@@ -71,7 +71,7 @@ type HumanSurfaces struct {
 	Tokens *auth.Tokens
 
 	// Directory serves /iam, and Work the human write surface over the
-	// native tracker and knowledge base — which reads the halves it serves
+	// Worklet and Doclet, which reads the halves it serves
 	// per request, since a node meets them at its first company and may
 	// meet that long after this surface was built.
 	Directory guardedMounter

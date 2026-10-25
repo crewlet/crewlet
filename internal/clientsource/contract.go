@@ -98,11 +98,11 @@ var contract = []Entry{
 		"internal/worklet.TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes"},
 	{"CHANGES", ReadLiteral, "internal/worklet.TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase"},
 	{"GROUP_AXES", ReadLiteral, "internal/worklet.TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes"},
-	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
-	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
-	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
-		"internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 
 	// backups.ts
 	{"BackupsAnswer", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},

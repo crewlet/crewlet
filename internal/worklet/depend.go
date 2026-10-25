@@ -38,7 +38,7 @@ import (
 // THE CRASH RESIDUE IS A ONE-SIDED EDGE: step 2 landed and a step-3 commit did
 // not, so a task waits on a blocker that does not know it. That is a NAMED
 // state rather than a silent one (the applier flags such an edge `one_sided`),
-// and Worklet's duty writes the missing commit, carrying the same
+// and the Worklet duty writes the missing commit, carrying the same
 // [Snapshot.Dependents] and `Late: true`, because the blocker's assignee was
 // never told at all.
 //

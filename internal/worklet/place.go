@@ -281,7 +281,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 		// NOT THE CALLER'S TO FIX, and not a race either: the gap holds
 		// keys only the duty's duplicate repair can pull apart.
 		return nil, fmt.Errorf("worklet: %s cannot be placed beside %s until "+
-			"the tracker duty has repaired the keys around it: %w",
+			"the Worklet duty has repaired the keys around it: %w",
 			place.Task, neighbour.Key, err)
 	}
 	return placements, nil

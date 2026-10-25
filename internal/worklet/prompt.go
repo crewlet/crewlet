@@ -204,7 +204,7 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 		return types.WorkItem{}, false
 	}
 	return types.WorkItem{
-		Backend: types.WorkNative, ID: id,
+		Backend: types.WorkWorklet, ID: id,
 		Key: metadata[MetaTaskKey], Project: metadata[MetaProject],
 	}, true
 }

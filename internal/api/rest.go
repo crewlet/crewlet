@@ -152,7 +152,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/feed", what: "company_feed"},
 	// WHO IS ASKING. Not under /worklet/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
-	// native tracker still has a viewer.
+	// Worklet still has a viewer.
 	{method: "GET", pattern: "/viewer", what: "viewer"},
 	// THE ARTIFACTS. The literals `/artifacts/usage` and `/artifacts/trail`
 	// beat the `{id}` wildcard, so neither is read as an artifact of that id; every other

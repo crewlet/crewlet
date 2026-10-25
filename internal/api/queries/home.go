@@ -248,11 +248,11 @@ const feedSourceReads = 4
 // stops being asked.
 //
 // EVERYBODY'S, AND EACH KIND SHOWN BY ITS APP (ADR-0033): the work the
-// tracker records to whoever holds the tracker, the pages to whoever holds the
+// tracker records to whoever holds Worklet, the pages to whoever holds the
 // knowledge base, and the schedules' runs — the company's own machinery — to
 // everybody, through [authz.Shows]. A kind the caller may not see is DROPPED
 // from what is read, named in `kinds=` or not, never refused: a refusal of
-// `kinds=page` would confirm to somebody without the knowledge base that the
+// `kinds=page` would confirm to somebody without Doclet that the
 // company keeps pages, and an answer of the rows they may see is the one they
 // asked for.
 func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {

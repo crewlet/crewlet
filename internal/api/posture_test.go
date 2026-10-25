@@ -178,8 +178,8 @@ func TestThePostureMatrix(t *testing.T) {
 		{"a credential this node refuses", plain, malformed, nil},
 		// EACH APP ALONE, so a row that names the wrong app is a
 		// column that disagrees.
-		{"a Tier A token carrying the tracker alone", plain, "Bearer " + tracks, nil},
-		{"a Tier A token carrying the knowledge base alone", plain, "Bearer " + knows, nil},
+		{"a Tier A token carrying Worklet alone", plain, "Bearer " + tracks, nil},
+		{"a Tier A token carrying Doclet alone", plain, "Bearer " + knows, nil},
 		// THE MOST AUTHORITY A CALLER CAN HAVE AND STILL BE REFUSED the
 		// deployment's controls, which is what makes each refusal about
 		// admin rather than about a caller who holds nothing.
@@ -201,7 +201,7 @@ func TestThePostureMatrix(t *testing.T) {
 		// A PERSONAL ACCESS TOKEN MINTED CARRYING THE TRACKER, whose
 		// owner holds admin: it reaches what the TOKEN carries, never
 		// what its owner could.
-		{"a personal access token carrying the tracker", plain, "Bearer " + machine.pat, nil},
+		{"a personal access token carrying Worklet", plain, "Bearer " + machine.pat, nil},
 		// A SERVICE ACCOUNT'S TOKEN HOLDING ADMIN: every admin route a
 		// pipeline runs, and none that needs a person present — the
 		// value of a credential is never revealed to a token.
@@ -399,7 +399,7 @@ type postureMachine struct {
 }
 
 // postureTokens is the guard's REAL machine-token arm over three rows: a
-// person's token minted carrying the tracker (their owner holds admin), a
+// person's token minted carrying Worklet (their owner holds admin), a
 // service account's token carrying admin, and a revoked token of the first
 // person's that carried admin.
 func postureTokens(t *testing.T) postureMachine {

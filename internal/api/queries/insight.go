@@ -395,7 +395,7 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 //
 // EVERYBODY MAY ASK, and only a holder of the knowledge base is searched for
 // (ADR-0033): the search reads pages and nothing else — a hit is a page — so a
-// caller without the knowledge base has no half of it they may see. The
+// caller without Doclet has no half of it they may see. The
 // tracker's holder is answered `available: false` with [KnowledgeNoAccess]
 // and the search never runs, so the screen they ask from can say that their
 // access leaves the pages out rather than that the company wrote nothing
@@ -600,8 +600,8 @@ const (
 	// optional interface rather than added to [knowledge.Searcher].
 	KnowledgeBuilding KnowledgeReason = "building"
 
-	// KnowledgeNoAccess — the caller holds the tracker and not the
-	// knowledge base, so no page was searched for them (ADR-0033).
+	// KnowledgeNoAccess: the caller holds Worklet and not Doclet, so no
+	// page was searched for them (ADR-0033).
 	//
 	// ITS OWN STATE, NOT AN EMPTY RESULT AND NOT A REFUSAL: an empty
 	// result says the company wrote nothing that matches, which nobody

@@ -675,7 +675,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	var published, indexed int
 	// SUMMED ACROSS SOURCES, because the gate is about the whole index: a
 	// seat whose company has pages indexed and items not is one that would
-	// be told its own tracker holds nothing.
+	// be told its own Worklet holds nothing.
 	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason.
 	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		for _, source := range x.sources {

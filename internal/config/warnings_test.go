@@ -427,7 +427,7 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	}
 }
 
-// VECTORS NEED A CORPUS, AND A NATIVE TRACKER IS ONE.
+// VECTORS NEED A CORPUS, AND WORKLET IS ONE.
 //
 // The rule this narrows refused vectors whenever `knowledge.backend` was
 // `none` — which was right when the knowledge base was the only thing there

@@ -97,7 +97,7 @@ func (e *Engine) skillSource(c *Company) skillsync.Source {
 				"backend serves Doclet's skills after it restarts"
 			return src
 		}
-		src.Walk = e.walkNativeSkills
+		src.Walk = e.walkDocletSkills
 		return src
 	default:
 		src.Unreadable = "knowledge.backend " + string(backend) + " has no " +

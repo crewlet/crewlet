@@ -125,10 +125,10 @@ var catalogue = []EngineSource{
 	{
 		Name:   "tracker.items",
 		Domain: DomainTracker,
-		Summary: "Work items from the tracker, one row each. `scope` narrows them to the viewer's " +
+		Summary: "Work items from Worklet, one row each. `scope` narrows them to the viewer's " +
 			"own (`mine`), the viewer's queue, their priorities, the unassigned triage list, the " +
 			"blocked or the overdue work, each resolved for whoever is viewing.",
-		Access: "people and agents holding the tracker; anybody else is told they cannot read it",
+		Access: "people and agents holding Worklet; anybody else is told they cannot read it",
 		Params: []SourceParam{
 			{Key: "scope", Type: ParamEnum, Summary: "whose work: all, or one of the viewer's own lists",
 				Enum:    []string{"all", "mine", "queue", "priorities", "triage", "blocked", "overdue"},
@@ -161,7 +161,7 @@ var catalogue = []EngineSource{
 		Name:    "tracker.workload",
 		Domain:  DomainTracker,
 		Summary: "Open work per assignee across every project: how much each person or agent is carrying.",
-		Access:  "people and agents holding the tracker; anybody else is told they cannot read it",
+		Access:  "people and agents holding Worklet; anybody else is told they cannot read it",
 		Params: []SourceParam{
 			{Key: "unit", Type: ParamText, MaxBytes: 64,
 				Summary: "a team's key or name; absent reads everybody"},

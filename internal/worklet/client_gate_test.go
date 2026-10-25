@@ -276,7 +276,7 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 // engine refuses, and one below it refuses one the engine would take — which
 // the Save view dialog did, with a `maxLength` of 80 against 128, cutting a
 // pasted name in the browser where nobody saw it.
-func TestTheDashboardBoundsTrackerTextAtTheEnginesCaps(t *testing.T) {
+func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
 		"TASK_TITLE_MAX_BYTES":        worklet.MaxTitle,

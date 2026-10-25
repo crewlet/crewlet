@@ -49,6 +49,6 @@ import "time"
 // — but the activation pointer publishes each one LATER, at this resolution,
 // than the one it replaces (coord.ActivationAt, decided inside the
 // compare-and-set that moves the pointer), so a later activation always
-// carries a later stamp whichever node's clock made it. The work-tracker guide
+// carries a later stamp whichever node's clock made it. The Worklet guide
 // still asks for synchronised clocks, because the stamps are read off them.
 func ActivationStamp(activatedAt time.Time) int64 { return activatedAt.UTC().UnixMilli() }

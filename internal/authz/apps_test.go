@@ -157,7 +157,7 @@ func TestTheAskedArmAdmitsOnlyThePersonAsked(t *testing.T) {
 //
 // A page's creator trashes, restores and renames it and an item's reporter
 // removes and restores it, whoever leads its container — but the app still
-// governs: somebody who no longer uses the knowledge base does not tidy pages
+// governs: somebody who no longer uses Doclet does not tidy pages
 // in it. And the author arm is the AUTHOR's: a colleague tidies nobody else's
 // work. Mutation: check the author arm after the container relation and the
 // author outside the lead's project is refused.

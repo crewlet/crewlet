@@ -1868,7 +1868,7 @@ func (w *Writer) report(wrote *committing, result statelog.Result) {
 // The id is the subject's and always known; the key and project are labels,
 // and a record whose labels could not be read still names its item by id.
 func writtenItem(ctx context.Context, tx *sql.Tx, id string, payload []byte) types.WorkItem {
-	named := types.WorkItem{Backend: types.WorkNative, ID: id}
+	named := types.WorkItem{Backend: types.WorkWorklet, ID: id}
 	if task, found, err := readTask(ctx, tx, id); err == nil && found {
 		named.Key, named.Project = task.Key, task.Project
 		return named

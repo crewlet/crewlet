@@ -319,7 +319,7 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.ActionProjectPolicy, authz.Object{Kind: authz.KindProject},
 			false, authz.ReasonUnnamed},
 		// BUT THE TOOL ITSELF IS THE APP: adding a label is open to
-		// everybody who uses the tracker, and gating the whole verb as the
+		// everybody who uses Worklet, and gating the whole verb as the
 		// container's refused a colleague the one facet internal/worklet
 		// grants them.
 		{"a colleague declares a label", seat("sre", worklet),
@@ -1042,12 +1042,12 @@ func TestACallerWithoutTheAppIsRefusedBeforeAnythingIsRead(t *testing.T) {
 // A person's notices name the company's tasks and their queue lists them, so
 // their day IS the tracker's: reading it, marking it, pinning views over it and
 // ordering it each take the app beside the relation, and somebody who does not
-// use the tracker has no day there to keep. Without the app on the rows one
+// use Worklet has no day there to keep. Without the app on the rows one
 // question had two answers — the query surface asks the app of every work
 // question it registers, so the queue a REST route refused would have been
 // answered over the act transport. Mutation: drop the app from the mark's row
 // and its case is admitted.
-func TestReadingAndKeepingADayBothTakeTheTracker(t *testing.T) {
+func TestReadingAndKeepingADayBothTakeWorklet(t *testing.T) {
 	t.Parallel()
 	own := authz.Object{Kind: authz.KindPerson, Owner: "erin.ng"}
 	theirs := authz.Object{Kind: authz.KindPerson, Owner: "someone.else"}

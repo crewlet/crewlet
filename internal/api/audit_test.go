@@ -83,8 +83,8 @@ func (auditWork) UpdateTask(context.Context, string, string, string, uint64,
 
 // auditedApp is an app serving the act transport and the backup route, both
 // auditing into one record. Two Tier A credentials: `founder`, holding admin
-// and with it every app, and `ci`, which holds the knowledge base alone — so
-// a tracker write is one the authority table refuses it.
+// and with it every app, and `ci`, which holds Doclet alone, so
+// a Worklet write is one the authority table refuses it.
 func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 	t.Helper()
 	audit := &recordedAudit{}

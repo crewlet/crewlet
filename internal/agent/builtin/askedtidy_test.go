@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// ---- answering what you were asked, without the tracker ----------------- //
+// ---- answering what you were asked, without Worklet ----------------- //
 
 // askedTracker is the tracker's read side with the one fact these cases turn
 // on made real: an OPEN ask on a task is addressed to one seat, and a thread
@@ -113,7 +113,7 @@ func refusedForTracker(got tools.Result) bool {
 // to the read and to the answer; their comment closes the ask it answers, and
 // it does not make them follow a board they do not use. The control is the
 // same person on an item nobody asked them on.
-func TestAnAskedPersonReadsAndAnswersWithoutTracker(t *testing.T) {
+func TestAnAskedPersonReadsAndAnswersWithoutWorklet(t *testing.T) {
 	t.Parallel()
 	surface, trk := askedRig(t)
 	legal := boundTo("legal")
@@ -327,8 +327,8 @@ func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 	}
 
 	for name, caller := range map[string]iam.Principal{
-		"a colleague who did not file it":  boundTo("sam", iam.GrantWorklet),
-		"the reporter without the tracker": boundTo("ana", iam.GrantDoclet),
+		"a colleague who did not file it": boundTo("sam", iam.GrantWorklet),
+		"the reporter without Worklet":    boundTo("ana", iam.GrantDoclet),
 	} {
 		for _, tool := range []string{worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool} {
 			got := callAs(t, surface[tool], caller, map[string]any{"item": "ENG-1"})
@@ -456,9 +456,9 @@ func TestAPageCreatorRenamesTrashesAndRestoresIt(t *testing.T) {
 			caller iam.Principal
 			want   bool
 		}{
-			"the creator":                            {boundTo("ana", iam.GrantDoclet), true},
-			"somebody else":                          {boundTo("sam", iam.GrantDoclet), false},
-			"the creator without the knowledge base": {boundTo("ana", iam.GrantWorklet), false},
+			"the creator":                {boundTo("ana", iam.GrantDoclet), true},
+			"somebody else":              {boundTo("sam", iam.GrantDoclet), false},
+			"the creator without Doclet": {boundTo("ana", iam.GrantWorklet), false},
 		} {
 			d := authz.Decide(t.Context(), c.caller, action, builtin.PageObject(page),
 				chartRefuses, time.Now())

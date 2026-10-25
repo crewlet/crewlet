@@ -62,9 +62,9 @@ func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 		t.Fatalf("reported %d writes, want the create and the edit: %+v", len(got), got)
 	}
 	for i, item := range got {
-		if item.Backend != types.WorkNative || item.ID != "t-1" || item.Project != "ENG" ||
+		if item.Backend != types.WorkWorklet || item.ID != "t-1" || item.Project != "ENG" ||
 			item.Key == "" {
-			t.Errorf("write %d named %+v — a native item by the task's id, "+
+			t.Errorf("write %d named %+v; want a Worklet item by the task's id, "+
 				"with the key and project a person reads", i, item)
 		}
 	}

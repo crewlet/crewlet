@@ -167,7 +167,7 @@ type PageWriter interface {
 		authority doclet.CommentAuthority) (doclet.Written, error)
 }
 
-// KnowledgeSearcher is the native knowledge search over this node's corpus,
+// KnowledgeSearcher is the Doclet knowledge search over this node's corpus,
 // with the one question a caller asks of an empty answer.
 //
 // ANSWER, NOT THE BEST-EFFORT SEARCH: a search that could not run is an error

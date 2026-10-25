@@ -144,7 +144,7 @@ func (s *servedEstate) For(context.Context) (estate.Backend, bool) {
 }
 
 // spendingEngine is an engine WITHOUT the data role running one seat on the
-// native tracker, whose writes are served by one data node over the estate.
+// Worklet, whose writes are served by one data node over the estate.
 func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	t.Helper()
 	broker := memory.NewBroker()

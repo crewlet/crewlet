@@ -203,7 +203,7 @@ func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 // class reads anything.
 var subjectOf = map[string]subject{
 	// AN ITEM AND ITS THREAD ARE DECIDED ON THE ITEM, because somebody
-	// without the tracker may still read the item an OPEN ASK on it names
+	// without Worklet may still read the item an OPEN ASK on it names
 	// them on and post the answer — and which asks are open, and whom
 	// they name, is a stored row ([authz.ClassAppOrAsked]). A tracker
 	// holder is admitted before anything is read; anybody else is told

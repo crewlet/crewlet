@@ -1504,7 +1504,7 @@ func pack(v []float32, dim int) ([]byte, error) {
 	return out, nil
 }
 
-// TaskCorpus embeds the native tracker's tasks.
+// TaskCorpus embeds Worklet's tasks.
 //
 // ONE STATEMENT, because `tracker_tasks` and `kb_vectors` are both in the
 // replicated estate: the selection is an anti-join between the rows and their

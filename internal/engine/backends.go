@@ -120,7 +120,7 @@ type Backends struct {
 // [OpenBackends] never builds a partial set, so this is for the caller that
 // supplies its own to [New]. A partial set used to be RUN rather than refused:
 // the engine skipped whatever needed the missing piece, so an engine lent a
-// queue and no store served a company with no native tracker, no conversation
+// queue and no store served a company with no Worklet, no conversation
 // ledger and no record of its turns, and said nothing. Every node `crewlet run`
 // builds holds all four, and so must every engine.
 func (b *Backends) Complete() error {

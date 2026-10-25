@@ -40,7 +40,7 @@ func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 	// THE TRACKER ALONE, so the lead relation is the only way in: a token
 	// carrying admin would be admitted by the admin path before the chart
 	// was asked, and the row would assert nothing about it. The second
-	// lead holds the knowledge base instead, so the relation is all they
+	// lead holds Doclet instead, so the relation is all they
 	// have and the tracker is what they lack.
 	authorize(&b,
 		config.APIToken{ID: "lead", Token: token,

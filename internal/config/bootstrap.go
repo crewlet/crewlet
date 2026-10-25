@@ -573,9 +573,9 @@ func (b *Bootstrap) ValidateRoles() error {
 		if b.Store.Scratch {
 			p.add(field("store.scratch"), ErrConflict,
 				"this node holds data, and a scratch store is deleted at every "+
-					"boot — the company's tracker, pages and this node's record "+
-					"of its own turns with it. Remove it, or drop %q from "+
-					"node.roles", placement.RoleData)
+					"boot, and with it the company's Worklet and Doclet copies and "+
+					"this node's record of its own turns. Remove it, or drop %q "+
+					"from node.roles", placement.RoleData)
 		}
 	} else {
 		if !b.Store.Scratch {
@@ -2294,7 +2294,7 @@ type Coordination struct {
 	// follows its own tick and a tracker walk's claim its own heartbeat, each
 	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
 	// presence lease is kept in a lease bucket of its own.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Every other lease — a fleet duty, a tracker walk's claim — sizes its own."`
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
 }
 
 // NATSTLS is the transport material for an external NATS server.

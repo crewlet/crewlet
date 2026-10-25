@@ -36,8 +36,8 @@ import (
 //
 // ALL THREE ARE THE KNOWLEDGE BASE'S, and two of them carry the TRACKER'S rows
 // beside its own: the tasks that link a page, and the task each read happened
-// on. Those are shown to whoever holds the tracker and left out for anybody
-// else ([shows], ADR-0033): a person who reads the pages without the tracker
+// on. Those are shown to whoever holds Worklet and left out for anybody
+// else ([shows], ADR-0033): a person who reads the pages without Worklet
 // is not told what the company is working on through the pages' margins.
 
 // PageReadsMaxDays is how far back a page's readers are read: thirty company
@@ -239,9 +239,9 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 
 // linksFor is a page's backlinks as the caller is shown them: the pages that
 // link here always — this question is the knowledge base's — and the TASKS
-// only to whoever holds the tracker, whose rows they are. Left out, the task
+// only to whoever holds Worklet, whose rows they are. Left out, the task
 // list is empty and its total zero rather than absent, because the shape a
-// reader parses is the same either way; a reader without the tracker is
+// reader parses is the same either way; a reader without Worklet is
 // shown no task anywhere, so an empty list here reads as the rest does.
 func linksFor(ctx context.Context, links search.Backlinks) *search.Backlinks {
 	if !shows(ctx, authz.KindTask) {

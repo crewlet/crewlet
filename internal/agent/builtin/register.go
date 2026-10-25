@@ -111,11 +111,11 @@ type Deps struct {
 	// two can never disagree about scope, exclusions or credentials.
 	Knowledge KnowledgeSearcher
 
-	// Pages is the native knowledge base. Both halves nil omits all five
+	// Pages is Doclet. Both halves nil omits all five
 	// tools, which is what a company running Confluence has.
 	Pages PageDeps
 
-	// Work is the native tracker. Both halves nil omits every one of its tools,
+	// Work is Worklet. Both halves nil omits every one of its tools,
 	// which is what a company running Jira has — and omitting them is the
 	// point: a seat offered a tracker tool against a tracker this company
 	// does not run would reach for it and fail at the call.
@@ -647,7 +647,7 @@ func orDefault(value, fallback int) int {
 // projectReads reports whether this build's reader answers the project seam.
 //
 // A TYPE ASSERTION rather than a second field on the deps, because the reader
-// is ONE object: a build wiring the native tracker satisfies the whole seam
+// is ONE object: a build wiring Worklet satisfies the whole seam
 // and a build wiring none satisfies nothing, so a separate switch would be a
 // second thing to keep in step with the first.
 func projectReads(deps WorkDeps) bool {

@@ -2840,7 +2840,7 @@ func (s *stateLog) requestRejoin(now time.Time) {
 				"node", s.nodeID, "path", s.db.ReplicatedFile(), "error", err.Error(),
 				"asks_fleet_again_in", max(0, time.Until(s.rejoinAfter)).Round(time.Second),
 				"detail", "this node has no replicated database open, so it "+
-					"answers no tracker, page or search read from its own copy "+
+					"answers no Worklet, Doclet or search read from its own copy "+
 					"and applies no record — its seats read the estate from the "+
 					"other data nodes meanwhile; it reopens the file on its next "+
 					"heartbeat, and if that keeps failing the error names the "+

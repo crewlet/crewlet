@@ -66,7 +66,7 @@ func PageActorOf(p iam.Principal) (doclet.Actor, error) {
 	kind := doclet.AuthorKind(a.Kind)
 	if !kind.Valid() {
 		return doclet.Actor{}, fmt.Errorf("builtin: a %s cannot author a page; "+
-			"the knowledge base records agents, people and operators", a.Kind)
+			"Doclet records agents, people and operators", a.Kind)
 	}
 	return doclet.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
 }

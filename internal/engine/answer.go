@@ -111,7 +111,7 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // no log to read a position off, so it answers false and caches nothing.
 func (e *Engine) KnowledgeCorpus() (string, bool) {
 	c := e.core.Load()
-	if e.NativeSearcher() == nil || c == nil || c.log == nil {
+	if e.DocletSearcher() == nil || c == nil || c.log == nil {
 		return "", false
 	}
 	parts := make([]string, 0, 3)

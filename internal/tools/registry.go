@@ -137,7 +137,7 @@ type Entry struct {
 	// A first-party declaration at all because the gate used to key on
 	// ORIGIN — a tool delivered if an MCP server served it — and that was a
 	// proxy for the real question, correct only while every shared surface
-	// was somebody else's product. A native tracker breaks the proxy:
+	// was somebody else's product. Worklet breaks the proxy:
 	// commenting on a work item reaches the person who asked, and it is a
 	// builtin.
 	//

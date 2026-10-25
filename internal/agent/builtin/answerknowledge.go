@@ -95,7 +95,7 @@ import (
 // The pages are the knowledge base's and the work items the tracker's, and an
 // answer QUOTES them: an answer written from a work item, read by somebody
 // kept off the tracker, is the work item read. So the pages are searched only
-// for an asker holding the knowledge base and the items only for one holding
+// for an asker holding Doclet and the items only for one holding
 // the tracker ([authz.Shows], the one per-app filter every cross-app answer
 // goes through), and the table refuses an asker holding neither before
 // anything is searched ([authz.ClassAnyApp]). The apps are in the cache key for
@@ -364,9 +364,9 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE TABLE REFUSES THIS before the tool runs; refused here too,
 		// because an answer from nothing would be one written from what
 		// the model already believes rather than from the company.
-		return refused(tools.RefusalForbidden, AnswerKnowledgeTool+" answers from the "+
-			"knowledge base and the tracker, and your access includes neither. An "+
-			"admin can give it to you."), nil
+		return refused(tools.RefusalForbidden, AnswerKnowledgeTool+" answers from "+
+			"Doclet and Worklet, and your access includes neither. An admin can "+
+			"give it to you."), nil
 	}
 	key, cacheable := t.cacheKey(question, reach)
 	if cacheable {

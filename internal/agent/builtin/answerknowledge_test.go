@@ -650,9 +650,9 @@ func TestALongQuestionIsRefusedNotCut(t *testing.T) {
 //
 // An answer quotes its sources, so an answer written from a work item and read
 // by somebody kept off the tracker is the work item read. The pages are
-// searched only for an asker holding the knowledge base and the items only for
-// one holding the tracker — through the one per-app filter every cross-app
-// answer asks — and an asker holding neither is refused by the table before
+// searched only for an asker holding Doclet and the items only for
+// one holding Worklet (through the one per-app filter every cross-app
+// answer asks), and an asker holding neither is refused by the table before
 // anything is searched or spent. Mutating either search to ignore the asker's
 // apps, or the table to admit an asker with neither, turns this red.
 func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
@@ -709,7 +709,7 @@ func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 // TWO ASKERS WHO MAY READ DIFFERENT CORPORA NEVER SHARE AN ANSWER.
 //
 // The cache is the node's, and its key used to be the question and the corpus
-// position — so a person holding the tracker alone, asking what a colleague
+// position, so a person holding Worklet alone, asking what a colleague
 // holding both apps had just asked, was handed an answer written from pages
 // they may not read. The apps are in the key; askers who may read the same
 // corpora still share, an admin with somebody holding both apps among them.

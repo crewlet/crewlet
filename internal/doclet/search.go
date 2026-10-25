@@ -99,7 +99,7 @@ type SearcherOptions struct {
 	SkillsContainer func() string
 }
 
-// NewSearcher builds the native knowledge searcher.
+// NewSearcher builds the Doclet knowledge searcher.
 func NewSearcher(opts SearcherOptions) *Searcher {
 	s := &Searcher{index: opts.Index, skills: opts.SkillsContainer}
 	if opts.Index != nil {

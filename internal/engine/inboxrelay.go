@@ -17,12 +17,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE INBOX RELAY: how a node whose own tracker copy is OUT OF SERVICE still
+// THE INBOX RELAY: how a node whose own Worklet copy is OUT OF SERVICE still
 // tells its open dashboards whose inbox moved.
 //
 // # Why one is needed at all
 //
-// A node learns whose inbox moved from its OWN tracker applier, after every
+// A node learns whose inbox moved from its OWN Worklet applier, after every
 // committed batch ([Engine.SetOnInboxMoved]), and that is complete only while
 // that applier applies every record. A copy that is WRONG — an applier halted
 // at a record it cannot decode, a stalled prefix, an estate file shut, rows

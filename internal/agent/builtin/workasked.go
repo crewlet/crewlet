@@ -31,7 +31,7 @@ import (
 //
 // # One refusal for an item that is not there and one you were not asked on
 //
-// Told apart, a caller without the tracker could learn which keys exist one
+// Told apart, a caller without Worklet could learn which keys exist one
 // guess at a time — "there is no ENG-7" against "you may not read ENG-8" —
 // on a board they were deliberately kept off. So a missing item is refused
 // with the very decision an item they were not asked on gets: the table's
@@ -105,7 +105,7 @@ func (d WorkDeps) askedOn(ctx context.Context, action authz.Action, ref,
 	return item, nil
 }
 
-// notAsked is the refusal of somebody without the tracker on an item no open
+// notAsked is the refusal of somebody without Worklet on an item no open
 // ask names them on — and, by the rule in this file's doc, on an item that is
 // not there at all.
 //
@@ -129,7 +129,7 @@ func (d WorkDeps) answerOnly(ctx context.Context, why string) *tools.Result {
 	if refused == nil {
 		refused = refusalOf(authorityRefusal(string(authz.ActionWorkComment), ErrRefused))
 	}
-	refused.Output += " Without the tracker you may only answer a question on " +
-		"this item that is addressed to you — " + why
+	refused.Output += " Without Worklet you may only answer a question on " +
+		"this item that is addressed to you: " + why
 	return refused
 }

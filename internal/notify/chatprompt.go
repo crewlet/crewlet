@@ -161,7 +161,7 @@ func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 }
 
 // ConversationIdentity implements [Prompt]. THIS IS ONE OF THE TWO SOURCES
-// WHERE THE TWO ANSWERS DIFFER — the native tracker's is the other — and the
+// WHERE THE TWO ANSWERS DIFFER (Worklet's is the other), and the
 // invariant is what decides how.
 //
 // A DIRECT CONVERSATION IS ONE CONVERSATION, thread or no thread: the whole

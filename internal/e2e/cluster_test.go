@@ -1168,7 +1168,7 @@ func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 		if err := n.engine.WaitCommitted(t.Context(), last); err != nil {
 			t.Fatalf("member %d never applied the corpus: %v", i, err)
 		}
-		searcher := n.engine.NativeSearcher()
+		searcher := n.engine.DocletSearcher()
 		if searcher == nil {
 			t.Fatalf("member %d runs no native searcher", i)
 		}

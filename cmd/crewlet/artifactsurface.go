@@ -20,8 +20,8 @@ import (
 // through a peer's, and a node without `data` through a data node), the chart
 // the rest of the API decides by, the company's own artifacts settings read per
 // decision, the Tier A plan quotas this node stamps, the upload pipeline the
-// engine builds on first use, the company's own tracker a link to a work item
-// is checked against, and the frames minted for the artifact origin where the
+// engine builds on first use, Worklet, which a link to a work item is
+// checked against, and the frames minted for the artifact origin where the
 // deployment names one.
 
 // artifactsSurfaces builds the artifacts surface and its questions' source, or

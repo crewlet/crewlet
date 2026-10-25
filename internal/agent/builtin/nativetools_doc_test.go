@@ -18,9 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// nativeTools is what registering the native tracker, or the native knowledge
-// base, ADDS to a seat's catalogue: the tool names beyond those registered
-// with neither. Counted from the registry rather than written down, because
+// nativeTools is what registering Worklet, or Doclet, ADDS to a seat's
+// catalogue: the tool names beyond those registered with neither. Counted
+// from the registry rather than written down, because
 // the pages below state the count in words and a count kept by hand is how
 // one page came to say eighteen while listing nineteen.
 func nativeTools(t *testing.T) (tracker, pages []string) {
@@ -182,7 +182,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
 	for _, c := range []struct{ page, text, want string }{
 		{"docs/guides/tools-and-mcp.md", guide, title(spelled(t, total)) +
-			" more, registered **only where the company runs the engine's own backends**"},
+			" more, registered **only where the company runs Worklet or Doclet**"},
 		{"docs/guides/tools-and-mcp.md", guide, "lists the tracker's " +
 			spelled(t, len(tracker)) + " in full"},
 		{"docs/getting-started/choosing-your-stack.md",
@@ -190,7 +190,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 			"seats get " + spelled(t, total) + " tools for them — " +
 				spelled(t, len(tracker)) + " over the tracker and " +
 				spelled(t, len(pages)) + " over the pages"},
-		{"docs/guides/work-tracker.md", readPage(t, "docs/guides/work-tracker.md"),
+		{"docs/guides/worklet.md", readPage(t, "docs/guides/worklet.md"),
 			title(spelled(t, len(tracker))) + " tools, and they are deliberately few"},
 		// THE INDEX'S SUMMARY OF THAT GUIDE, and the quickstart's account of
 		// what an operator's own assistant gets — both hand-kept counts of
@@ -218,7 +218,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 
 	// AND THE GUIDE'S TABLE: every tool in it is one the registry adds, and
 	// the sentence above it counts its rows and the rest.
-	start := strings.Index(guide, "### The native tracker and knowledge base")
+	start := strings.Index(guide, "### Worklet and Doclet")
 	end := strings.Index(guide, "The writes on each side count as a **delivery**")
 	if start < 0 || end < start {
 		t.Fatal("the tools guide has no native-tools section to read")

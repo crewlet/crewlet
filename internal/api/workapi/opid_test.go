@@ -308,7 +308,7 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 // is refused, because the root is already in the target and that operation's
 // ledger never put it there. Where this node cannot vouch for the step it
 // stopped at, the same key here stops there again, and the answer sends the
-// client to another node or to the tracker duty; where a task in the trash
+// client to another node or to the Worklet duty; where a task in the trash
 // holds the walk, to its restore.
 //
 // AND IT SAYS WHERE THE KEY IS. These requests send none, so the key is the
@@ -340,7 +340,7 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 		"a step this node cannot vouch for": {
 			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 1, Of: 5, Err: worklet.ErrStepUnvouched},
-			want: []string{"cannot vouch", "another node", "tracker duty",
+			want: []string{"cannot vouch", "another node", "the Worklet duty",
 				"send op_id back"},
 		},
 	} {

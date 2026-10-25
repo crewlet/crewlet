@@ -99,7 +99,7 @@ func boundSurface(t *testing.T, trk *fakeTracker, chart *seatChart) *tools.Regis
 }
 
 // asJane calls a tool as a person signed in as `jane.founder`, whom the
-// directory binds to the seat `jane-founder`, holding the tracker and NOT
+// directory binds to the seat `jane-founder`, holding Worklet and NOT
 // admin — so every relation below is the chart's to answer.
 func asJane(t *testing.T, reg *tools.Registry, name string,
 	args map[string]any) tools.Result {

@@ -124,7 +124,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 
 	work, ok := OperatorWork(e)
 	if !ok {
-		t.Fatal("a data node running the native tracker hands its operator no tracker")
+		t.Fatal("a data node running Worklet hands its operator no Worklet")
 	}
 	if answer, err := work.Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil ||
 		answer.TotalHint != 42 {
@@ -136,7 +136,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	}
 	kb, ok := OperatorPages(e)
 	if !ok {
-		t.Fatal("a data node running the native knowledge base hands its operator none")
+		t.Fatal("a data node running Doclet hands its operator none")
 	}
 	if containers, err := kb.Containers(t.Context(), statelog.Freshness{}); err != nil ||
 		len(containers) != 1 || containers[0].Key != "ENG" {

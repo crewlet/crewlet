@@ -580,9 +580,9 @@ func Register(r *Registry, s Sources) {
 		// counting the rows of a list it loaded was counting the list.
 		r.Register("seat_activity", Everybody(), s.seatActivity)
 		// WHO READ A PAGE, from every node's days — see pagereads.go.
-		// Gated on the USAGE domain rather than on the native pages: a
+		// Gated on the USAGE domain rather than on Doclet's pages: a
 		// read is recorded with its backend, so a company on Confluence
-		// has readers too. The knowledge base's, as the pages are.
+		// has readers too. Doclet's, as the pages are.
 		r.Register("page_reads", Requires(iam.GrantDoclet), s.pageReads)
 	}
 	if s.Coord != nil {
@@ -699,7 +699,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("sign_in_policy", Requires(iam.GrantAdmin), s.signInPolicy)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
-	// the native tracker on Confluence, or the native knowledge base on
+	// Worklet on Confluence, or Doclet on
 	// Jira, and registering the pair together would offer one screen a
 	// question its half of the company cannot answer. Each is its app's —
 	// the tracker's questions the tracker's, the pages' the knowledge
@@ -952,7 +952,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // with handle: its body where the authority table's `audit.seat.read` admits
 // them to the seat — an admin, or its lead — through the SAME decision the
 // seat's turns, memory and conversations are read under, never a second copy
-// of who that is; the work item it is on where they hold the tracker; and
+// of who that is; the work item it is on where they hold Worklet; and
 // their own record, to which a coding run's question may be put.
 //
 // AN UNDECIDABLE DECISION IS NO BODY: a chart this node cannot read withholds
@@ -987,7 +987,7 @@ func (s Sources) reach(ctx context.Context, handle string) livestate.Reach {
 // THE ITEM IS WITHHELD FROM THE PAYLOAD TOO, not only from the tags: a phase
 // record states the item it was charged to as its own top-level `work_item`
 // (types.AgentPhaseCompleted.WorkItem), so a lead reading their agent's body
-// without the tracker would otherwise be handed exactly the field the live
+// without Worklet would otherwise be handed exactly the field the live
 // call's mask (livestate.MaskCall) and the turn listing withhold from them.
 func maskHistory(rows []store.EventRecord, r livestate.Reach) []store.EventRecord {
 	if r.Body && r.Tracker {

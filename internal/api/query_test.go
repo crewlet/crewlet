@@ -429,7 +429,7 @@ func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.
 
 // A NATIVE QUESTION ON A NODE WITH NO COMPANY IS ONE ANSWER ON BOTH TRANSPORTS.
 //
-// The company's own tracker and knowledge base come up with its first
+// Worklet and Doclet come up with its first
 // revision, and until then every question over them is answered for what it
 // is: no company yet, come back at the reconcile poll, and why. REST answered
 // that — `503 no_active_revision`, the poll's fifteen seconds and the halves'
@@ -624,7 +624,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	a := newApp(t, api.Options{})
 	status, body := overREST(t, a, "pages", nil)
 	if status != http.StatusNotFound {
-		t.Errorf("status = %d, want 404 with no native knowledge base wired", status)
+		t.Errorf("status = %d, want 404 with no Doclet wired", status)
 	}
 	if got := body.(map[string]any)["error"]; got != "unknown_query" {
 		t.Errorf("error = %v", got)

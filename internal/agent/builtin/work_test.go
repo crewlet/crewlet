@@ -302,7 +302,7 @@ func (f *fakeTracker) Thread(_ context.Context, q worklet.ThreadQuery,
 // as records the actor and hands back a writer bound to it, which is the
 // tracker's own rule: a writer acts as exactly one party.
 // The PROJECT seam, which [builtin.ProjectReader] asserts for: a reader that
-// answers the task questions and not these is a build with no native tracker,
+// answers the task questions and not these is a build with no Worklet,
 // and the registration turns on exactly that.
 func (f *fakeTracker) Projects(_ context.Context, q worklet.ProjectQuery) (
 	worklet.ProjectListing, error) {

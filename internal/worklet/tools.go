@@ -1,6 +1,6 @@
 package worklet
 
-// The native tracker's tool names.
+// Worklet's tool names.
 //
 // BARE, not prefixed. A first-party tool may be named in a prompt — this build
 // registers it under a name this build chose — and a prefix would cost tokens

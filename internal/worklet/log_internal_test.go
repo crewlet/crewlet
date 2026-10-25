@@ -14,7 +14,7 @@ import (
 // in internal/logging refuses a discarding handler; what it cannot see is a
 // default that still writes but loses `component=tracker` (the process-wide
 // `slog.Default()`) or drops a level, and that is what this pins.
-func TestEveryTrackerLoggerGivenNoneIsThePackagesOwn(t *testing.T) {
+func TestEveryWorkletLoggerGivenNoneIsThePackagesOwn(t *testing.T) {
 	t.Parallel()
 	for name, got := range map[string]*slog.Logger{
 		"housekeeping duty": newDuty(DutyDeps{}).deps.Logger,

@@ -927,7 +927,7 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 //
 // An in-memory stream is not "queued events do not survive a restart": the
 // first restart recreates every log empty, and a node whose rows are ahead of
-// it stops serving for good. Measured on a company with no native tracker
+// it stops serving for good. Measured on a company with no Worklet
 // whose pages were the engine's own: it booted, logged an error, and after one
 // restart its pages applier stopped on the recreated stream and the node never
 // admitted a seat again.

@@ -103,12 +103,12 @@ func TestAnEventReachesOnlyAnAdmin(t *testing.T) {
 }
 
 // AN INBOX MOVEMENT IS THE TRACKER'S, as the `work_inbox` question it tells a
-// screen to ask again is: a reader without the tracker receives none however
+// screen to ask again is: a reader without Worklet receives none however
 // they watch.
 //
 // Mutation: declare KindInboxChanged everybody's, and the overview reader
 // receives the frame.
-func TestAnInboxMovementReachesOnlyTheTracker(t *testing.T) {
+func TestAnInboxMovementReachesOnlyWorklet(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string

@@ -229,7 +229,7 @@ func keys(t *testing.T, body map[string]any) []string {
 // TWO VIEWERS WITH DIFFERENT TRACKER ACCESS OPEN ONE DASHBOARD AND EACH SEES
 // ONLY THEIR OWN ROWS: the board is one spec, `scope: mine` is resolved for
 // whoever reads it, a cached answer never reaches a second principal, and a
-// viewer without the tracker is told the source is closed, with no row of
+// viewer without Worklet is told the source is closed, with no row of
 // anybody's.
 func TestTwoViewersOfOneBoardEachSeeOnlyTheirOwnRows(t *testing.T) {
 	t.Parallel()
@@ -253,7 +253,7 @@ func TestTwoViewersOfOneBoardEachSeeOnlyTheirOwnRows(t *testing.T) {
 
 	code, raw, carol := rig.dataset(t, "carol", "work")
 	if code != http.StatusOK || carol["status"] != "refused" {
-		t.Fatalf("carol, without the tracker, is answered a refusal of the dataset: %d %s", code, raw)
+		t.Fatalf("carol, without Worklet, is answered a refusal of the dataset: %d %s", code, raw)
 	}
 	refusal, _ := carol["refusal"].(map[string]any)
 	if refusal["dataset"] != "work" || !strings.Contains(fmt.Sprint(refusal["grants"]), "worklet") {

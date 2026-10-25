@@ -539,7 +539,7 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 	}
 	if got := r.do(as(person("ana", iam.GrantDoclet)), http.MethodPost,
 		"/worklet/items/ENG-1/rank", map[string]any{"after": "ENG-2"}, "If-Match", "3"); got.status != http.StatusForbidden {
-		t.Errorf("somebody without the tracker moved a card: %d", got.status)
+		t.Errorf("somebody without Worklet moved a card: %d", got.status)
 	}
 }
 

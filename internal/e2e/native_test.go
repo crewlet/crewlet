@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The engine's own tracker and knowledge base, end to end.
+// Worklet and Doclet, end to end.
 //
 // What these assert is NOT that a store round-trips — the unit suites cover
 // that against fakes. It is that a REAL node, with a real embedded broker, a
@@ -180,7 +180,7 @@ func TestAPageBecomesSearchable(t *testing.T) {
 		t.Fatalf("wait for this node to apply the write: %v", err)
 	}
 
-	searcher := n.engine.NativeSearcher()
+	searcher := n.engine.DocletSearcher()
 	if searcher == nil {
 		t.Fatal("no native searcher")
 	}

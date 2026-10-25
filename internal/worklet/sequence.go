@@ -1221,9 +1221,9 @@ func carriedAll(ctx context.Context, tx *sql.Tx, current Task,
 			"is still outside %s: %w", current.ID, current.Project, err)
 	}
 	return TaskPatch{}, fmt.Errorf("worklet: task %s (%s) under %s is still in %s "+
-		"— filed under the subtree after the walk read it, or not carried yet — "+
+		"(filed under the subtree after the walk read it, or not carried yet), "+
 		"so %s stays marked mid-move; re-run the move under the same operation "+
-		"id, or leave it to the tracker duty, and the next pass carries it into "+
+		"id, or leave it to the Worklet duty, and the next pass carries it into "+
 		"%s: %w", key, id, current.Key, project, current.Key, current.Project,
 		errUncarried)
 }
@@ -1451,7 +1451,7 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 // UNIQUE PER CLAIM, never the node id alone, and that is the whole of it.
 // [coord] reads an owner that already holds a lease as that holder RENEWING
 // it — an owner is a holder, not a machine — so under the node id two walks
-// on one node were both told yes: the tracker duty's completion of a merge or
+// on one node were both told yes: the Worklet duty's completion of a merge or
 // a move ran beside the live walk it was meant to leave alone on every
 // single-node deployment, two moves of one task walked it together, and
 // whichever finished first released the other's lease in the middle of its
@@ -1518,7 +1518,7 @@ func (h *held) release(ctx context.Context) {
 // its own ledger never moved there, and is refused as somebody else's move
 // ([Writer.finishMove]). The same operation is answered from the ledger for
 // the root and carries the rest; and the root stays marked mid-move for as
-// long as anything is left, so the tracker duty finishes the walk on its own
+// long as anything is left, so the Worklet duty finishes the walk on its own
 // once nobody holds its claim ([duty.finishMoves]).
 type MoveStopped struct {
 	// Root is the task the move named, and Key the key it holds in the
@@ -1559,13 +1559,13 @@ func (e *MoveStopped) Error() string {
 	if e.Key != "" {
 		root = fmt.Sprintf("%s (%s)", e.Key, e.Root)
 	}
-	next := fmt.Sprintf("the same operation (%s) finishes it — a new one is "+
-		"refused, since the root is already in %s — and so does the tracker "+
+	next := fmt.Sprintf("the same operation (%s) finishes it (a new one is "+
+		"refused, since the root is already in %s), and so does Worklet's "+
 		"duty once nobody is walking it", e.OpID, e.Target)
 	if e.Waiting != "" {
 		next = fmt.Sprintf("task %s is in the trash and the move waits for it: "+
-			"restore it and the same operation (%s), or the tracker duty, "+
-			"carries it into %s — or purge it", e.Waiting, e.OpID, e.Target)
+			"restore it and the same operation (%s), or the Worklet duty, "+
+			"carries it into %s; or purge it", e.Waiting, e.OpID, e.Target)
 	}
 	return fmt.Sprintf("worklet: task %s moved into %s, and %d of the %d tasks "+
 		"under it followed before the walk stopped — the rest are still in "+
@@ -1663,7 +1663,7 @@ func (e *MoveStopped) Unwrap() error { return e.Err }
 // CRASH RESIDUE: a tag declared with no task yet (harmless); an alias for a key
 // still held (harmless — the apply never lowers `current`); a numbering gap;
 // descendants still keyed in the old project, under a root marked mid-move.
-// REPAIRER: the re-run above or the tracker duty, whichever comes first — the
+// REPAIRER: the re-run above or the Worklet duty, whichever comes first; the
 // other then finds nothing left to move.
 func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
 	notify *Notify) (WriteResult, error) {
@@ -1915,7 +1915,7 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 }
 
 // finishAbandonedMove completes a move whose walk stopped with its root marked
-// mid-move: the tracker duty's half of [Writer.MoveTaskToProject], run under
+// mid-move: the Worklet duty's half of [Writer.MoveTaskToProject], run under
 // the move's own claim, which the caller holds. It reports whether there was a
 // walk to finish. The walk runs it too, once, when its last append met a task
 // filed behind it ([errUncarried]).
@@ -2415,7 +2415,7 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 //	child onto Into → A clearing the marker and writing the cancelled
 //	status → release.
 //
-// CRASH RESIDUE: children partly re-parented. REPAIRER: the tracker duty, once
+// CRASH RESIDUE: children partly re-parented. REPAIRER: the Worklet duty, once
 // the claim this sequence heartbeats has lapsed — it finishes a walk only
 // under that claim, never beside a live holder — and it is idempotent for the
 // same reason the move's walk is: a child already carrying the new parent is
@@ -2656,7 +2656,7 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 				// every tick. See [mergeWaits].
 				return moved, fmt.Errorf("worklet: %d subtask(s) re-parented "+
 					"onto %s and %s still has more, so it stays marked "+
-					"mid-merge; the tracker duty moves the rest once the "+
+					"mid-merge; the Worklet duty moves the rest once the "+
 					"move can land: %w", moved, into, duplicate, err)
 			}
 			moved++

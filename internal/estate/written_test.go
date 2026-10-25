@@ -27,7 +27,7 @@ func (w reportingWriter) CreateTask(ctx context.Context, opID string, task workl
 	notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := w.fakeNode.CreateTask(ctx, opID, task, notify)
 	if err == nil && w.log != nil && out.Outcome == statelog.OutcomeApplied {
-		w.log.Add(types.WorkItem{Backend: types.WorkNative, ID: "task-" + out.Key, Key: out.Key})
+		w.log.Add(types.WorkItem{Backend: types.WorkWorklet, ID: "task-" + out.Key, Key: out.Key})
 	}
 	return out, err
 }

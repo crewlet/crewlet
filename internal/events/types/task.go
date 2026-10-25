@@ -20,7 +20,7 @@ import (
 //
 // There were five more — created, started, completed, failed, delegated — and
 // none of them had a publisher, because they described an engine-owned task
-// object that the native tracker replaced. Work is [internal/worklet]'s first
+// object that Worklet replaced. Work is [internal/worklet]'s first
 // state-log domain now: every change is one arbitrated record, applied into N
 // identical SQL copies with a history row beside it, and reachable through the
 // tracker's own change feed. A second, lossier copy of the same facts on the

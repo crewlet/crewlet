@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The native tracker's tool names, re-exported from the package that owns the
+// Worklet's tool names, re-exported from the package that owns the
 // vocabulary.
 //
 // DECLARED IN internal/worklet rather than here, because the tracker's own
@@ -755,11 +755,11 @@ var _ tools.SeatCallable = (*listWorkItems)(nil)
 func (t *listWorkItems) Name() string { return ListWorkItemsTool }
 
 func (t *listWorkItems) Description() string {
-	return "List work items on the company's tracker, filtered. Use this to " +
-		"see what you are assigned, what is open in a project, or whether " +
-		"something has already been filed before you file it again. Returns " +
-		"summaries — call get_work_item for one item's full description, " +
-		"comments and links."
+	return "List work items in Worklet, the company's tracker, filtered. Use " +
+		"this to see what you are assigned, what is open in a project, or " +
+		"whether something has already been filed before you file it again. " +
+		"Returns summaries; call get_work_item for one item's full " +
+		"description, comments and links."
 }
 
 func (t *listWorkItems) Parameters() map[string]any {
@@ -1013,7 +1013,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	},
 		t.deps.now(), t.deps.zone())
 	if err != nil {
-		return failed(fmt.Sprintf("That filter is not one the tracker accepts: %v", err)), nil
+		return failed(fmt.Sprintf("That filter is not one Worklet accepts: %v", err)), nil
 	}
 	// THIS SURFACE'S OWN LEVEL, and it OVERRULES rather than fills in.
 	// One query grammar serves the board, the socket, the REST route and
@@ -1123,7 +1123,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 // reads as metadata rather than as a caveat about the rows.
 func incompleteNote(in *worklet.Incomplete) string {
 	if in == nil {
-		return "This node could not account for part of the tracker, so this " +
+		return "This node could not account for part of Worklet, so this " +
 			"list may be missing items. Do not conclude something has not been " +
 			"filed."
 	}
@@ -1372,7 +1372,7 @@ type createWorkItem struct {
 	deps WorkDeps
 
 	// pages checks a decision's page evidence — see [evidenceLookup]. Nil
-	// on a company with no native knowledge base.
+	// on a company with no Doclet.
 	pages PageReader
 }
 
@@ -2800,7 +2800,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 		// THE HALF-WRITTEN EDGES ARE REPORTED, never swallowed. A
 		// dependency whose mirror lost its race is durable on the
-		// authoring side and repaired by the tracker duty — so the
+		// authoring side and repaired by the Worklet duty, so the
 		// honest answer names it rather than either failing the call or
 		// claiming it landed whole.
 		if len(result.OneSided) > 0 {
@@ -3230,7 +3230,7 @@ type commentOnWorkItem struct {
 	deps WorkDeps
 
 	// pages checks a decision's page evidence — see [evidenceLookup]. Nil
-	// on a company with no native knowledge base.
+	// on a company with no Doclet.
 	pages PageReader
 }
 
@@ -3357,10 +3357,10 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	} else {
 		// A QUESTION OF YOUR OWN IS NOT AN ANSWER: `ask` and `decision`
-		// put one to somebody, which is the tracker's to do.
+		// put one to somebody, which is Worklet's to do.
 		if decided || strings.TrimSpace(argString(args, "ask")) != "" {
 			return *t.deps.answerOnly(ctx, "`ask` and `decision` put a new "+
-				"question to somebody, which takes the tracker."), nil
+				"question to somebody, which takes Worklet."), nil
 		}
 		if before, refused = t.deps.askedOn(ctx, authz.ActionWorkComment, ref,
 			actor.Handle); refused != nil {
@@ -3654,17 +3654,17 @@ func jsonResult(v any) (tools.Result, error) {
 func readFailure(ctx context.Context, name string, err error) tools.Result {
 	if errors.Is(err, worklet.ErrBadQuery) || errors.Is(err, statelog.ErrForeignPosition) {
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused "+
-			"what it was asked: %v. Nothing is wrong with the tracker — change "+
-			"the arguments, because the same ones are refused again.", name, err))
+			"what it was asked: %v. Nothing is wrong with Worklet; change the "+
+			"arguments, because the same ones are refused again.", name, err))
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+
-			"read the tracker right now (%s). This is NOT an empty result — do "+
-			"not conclude the item or the list does not exist. Try again, or say "+
-			"you could not check.", name, why))
+			"read Worklet right now (%s). This is NOT an empty result: do not "+
+			"conclude the item or the list does not exist. Try again, or say you "+
+			"could not check.", name, why))
 	}
-	return faulted(ctx, name, err, fmt.Sprintf("%s could not read the tracker: "+
-		"%s. This is NOT an empty result — do not conclude the item or the list "+
+	return faulted(ctx, name, err, fmt.Sprintf("%s could not read Worklet: "+
+		"%s. This is NOT an empty result: do not conclude the item or the list "+
 		"does not exist. Say you could not check.", name, faultSaid))
 }
 

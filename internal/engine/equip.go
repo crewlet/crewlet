@@ -282,7 +282,7 @@ func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 		// never offered a search its company cannot serve.
 		//
 		// THE BACKEND, not the presence of an `integrations.confluence`
-		// block: a company on the native knowledge base configures no
+		// block: a company on Doclet configures no
 		// vendor at all, and gating on the vendor block would have left
 		// every native company's seats without search_knowledge while
 		// the pages they were meant to find were sitting in the index.

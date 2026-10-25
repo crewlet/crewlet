@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 )
 
-// Source is the notification source name the native knowledge base registers
+// Source is the notification source name Doclet registers
 // under. Bare, for the reason [worklet.Source] is.
 const Source = "page"
 
@@ -167,7 +167,7 @@ func (s FeedSource) Open(ctx context.Context, group string) (changefeed.Records,
 	if s.Log == nil {
 		return nil, fmt.Errorf("doclet: the change feed has no log to consume, " +
 			"so nothing derives a wake from a committed record and every " +
-			"notification about the knowledge base depends on the writer's own " +
+			"notification about Doclet depends on the writer's own " +
 			"goroutine")
 	}
 	return s.Log.Consume(ctx, group)

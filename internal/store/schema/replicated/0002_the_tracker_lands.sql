@@ -1,4 +1,4 @@
--- The native tracker's durable state: the read side of the mutation log.
+-- Worklet's durable state: the read side of the mutation log.
 --
 -- Every table here is REBUILT FROM THE LOG rather than written by a caller.
 -- The applier is the only writer, its transaction carries the checkpoint, and

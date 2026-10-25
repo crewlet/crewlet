@@ -70,7 +70,7 @@ import (
 // turn pays it with its own if it is charged, turn count included. If it is
 // not, nothing ever is — which is what an unattributed turn is.
 //
-// ONLY A NATIVE ITEM IS CHARGED: the counters are the engine's own tracker's
+// ONLY A WORKLET ITEM IS CHARGED: the counters are Worklet's
 // rows. A turn on a Jira issue or a pull request is attributed on its events
 // and charges nothing here.
 
@@ -101,11 +101,11 @@ type segmentCharge struct {
 	ended time.Time
 }
 
-// native reports a charge this engine's own tracker takes: one on a native
-// work item. A turn on nothing charges nothing, and a turn on another
-// tracker's item is attributed on its events and has no row here to add to.
-func (c segmentCharge) native() bool {
-	return c.item != nil && c.item.Backend == types.WorkNative
+// onWorklet reports a charge Worklet takes: one on a Worklet work item. A
+// turn on nothing charges nothing, and a turn on another tracker's item is
+// attributed on its events and has no row here to add to.
+func (c segmentCharge) onWorklet() bool {
+	return c.item != nil && c.item.Backend == types.WorkWorklet
 }
 
 // segmentOpID is the operation id of one segment of a run.
@@ -327,11 +327,11 @@ func (e *Engine) endSegment(ctx context.Context, tel turnTelemetry, spend runner
 type cardedCharge struct {
 	segmentCharge
 	// write is the tracker write the charge goes through; nil where there
-	// is nothing to charge — no native item, or no writer on this node.
+	// is nothing to charge: no Worklet item, or no writer on this node.
 	write turnRecorder
 }
 
-// cardsFor readies a segment's charge: on a native item this node can write
+// cardsFor readies a segment's charge: on a Worklet item this node can write
 // to, its card fitted to the task's turn list ([Engine.withCards]) and the
 // writer it goes through; otherwise a charge with nothing to write, and no
 // rewrite paid for a card nothing will show.
@@ -345,12 +345,12 @@ type cardedCharge struct {
 // charge to the task that woke it was dropped without a word, and a task's
 // spend read zero however much was spent on it.
 func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharge {
-	if !charge.native() {
+	if !charge.onWorklet() {
 		return cardedCharge{segmentCharge: charge}
 	}
 	halves, ok := e.trackerHalves()
 	if !ok {
-		// A NATIVE ITEM ON A NODE THAT HANDS OUT NO TRACKER WRITER is a
+		// A WORKLET ITEM ON A NODE THAT HANDS OUT NO WORKLET WRITER is a
 		// company that moved its tracker off the engine while the turn ran,
 		// or a data node in a maintenance mode, which publishes nothing:
 		// there is nowhere to charge.
@@ -363,7 +363,7 @@ func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharg
 	})}
 }
 
-// recordTurnSpend writes a segment's readied charge to its native work item.
+// recordTurnSpend writes a segment's readied charge to its Worklet work item.
 //
 // TELEMETRY NEVER FAILS THE WORK, so this returns nothing, on the terms
 // [Engine.publishTurnCompleted] states: the turn has finished and its result is

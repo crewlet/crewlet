@@ -1936,14 +1936,14 @@ func TestEverySavedViewIsTheCallersAndCountedOnlyForARecord(t *testing.T) {
 // decided before anything is read, and never asks the thread.
 //
 // A MISSING ITEM IS THE SAME REFUSAL as one they were not asked on, to
-// somebody without the tracker, so the refusal is no oracle for which keys
+// somebody without Worklet, so the refusal is no oracle for which keys
 // exist; and a thread this node cannot read is unavailable, never "you were not
 // asked".
 //
 // Mutation: answer the detail on the first ErrUnresolved without the probe, and
 // bo reads ana's item; return ErrNotFound for a missing item before deciding,
 // and the two refusals differ.
-func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
+func TestAnAskedPersonReadsTheItemWithoutWorklet(t *testing.T) {
 	t.Parallel()
 	item := worklet.TaskDetail{Task: worklet.Task{ID: "task-1", Key: "ENG-1", Project: "ENG"}}
 	ask := func(work *stubWork, ctx context.Context) (any, error) {

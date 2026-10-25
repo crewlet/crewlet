@@ -261,7 +261,7 @@ func keyHeldByAnother(ctx context.Context, tx *sql.Tx, key, id string) (bool, er
 // # Why it is a batch, and why the batch is keyed rather than counted
 //
 // A re-run reads only what is LEFT: a moved child is no longer a child, so
-// the tracker duty finishing a walk whose holder died starts from the
+// the Worklet duty finishing a walk whose holder died starts from the
 // beginning and sees exactly the remainder. That is what lets one walk serve
 // both callers.
 //

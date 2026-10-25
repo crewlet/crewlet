@@ -78,7 +78,7 @@ func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 // EVERY APP OPENS A TOOL A PERSON REACHES.
 //
 // An app is a permission somebody is given so they can USE something, and a
-// person uses the tracker and the knowledge base through the operator
+// person uses Worklet and Doclet through the operator
 // catalogue — the dashboard's act route, their assistant, the HTTP write
 // surface all dispatch into it. An app no operator tool belongs to is a
 // permission nobody could be told what it opens: ticked on somebody's row, it
@@ -192,8 +192,8 @@ func everyToolName(t *testing.T) []string {
 
 // operatorDeps wires EVERY operator tool on, because a walk over a catalogue
 // that omitted half of it would certify the half it saw. OperatorTools drops
-// a tool whose dependency is nil by design — a company on Jira is shown no
-// native tracker — so a nil here is a verb this walk silently stops covering.
+// a tool whose dependency is nil by design (a company on Jira is shown no
+// Worklet), so a nil here is a verb this walk silently stops covering.
 func operatorDeps(t *testing.T) builtin.OperatorDeps {
 	t.Helper()
 	trk := newFakeTracker()

@@ -269,10 +269,10 @@ func (e *Engine) Knowledge() knowledge.Searcher {
 	// and then answers as though a search had run and found nothing —
 	// indistinguishable from a real empty result, and it hides the fact
 	// that nothing is configured.
-	// THE ROUTER'S, ON EVERY NODE RUNNING THE NATIVE KNOWLEDGE BASE: a
+	// THE ROUTER'S, ON EVERY NODE RUNNING DOCLET: a
 	// node holding the index answers from it, and one holding none
 	// searches through one that does.
-	if native := e.NativeSearcher(); native != nil && e.router != nil {
+	if native := e.DocletSearcher(); native != nil && e.router != nil {
 		return e.router.Knowledge()
 	}
 	if r := e.remote.Load(); r != nil && r.wiki {

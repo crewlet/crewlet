@@ -185,8 +185,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if runTracker {
 		running := sl.Domain(worklet.Domain{}.Name())
 		if running == nil {
-			return fmt.Errorf("engine: this node runs no tracker domain, so the " +
-				"tracker has nowhere to write — the domain is in the register " +
+			return fmt.Errorf("engine: this node runs no tracker domain, so " +
+				"Worklet has nowhere to write; the domain is in the register " +
 				"and its stream failed to come up")
 		}
 		n.writer, err = worklet.NewWriter(worklet.WriterDeps{
@@ -233,7 +233,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Metrics: e.metrics,
 		})
 		if err != nil {
-			return fmt.Errorf("engine: tracker writer: %w", err)
+			return fmt.Errorf("engine: Worklet writer: %w", err)
 		}
 		// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is
 		// a level served: the refusal ladder, the coverage probe and the
@@ -242,7 +242,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// the same one seat admission reads.
 		if n.trackerReader, err = worklet.NewReader(
 			sl.estate().Reader(), running.reader); err != nil {
-			return fmt.Errorf("engine: tracker reader: %w", err)
+			return fmt.Errorf("engine: Worklet reader: %w", err)
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
@@ -314,9 +314,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if wiki {
 		running := sl.Domain(doclet.Domain{}.Name())
 		if running == nil {
-			return fmt.Errorf("engine: this node runs no pages domain, so the " +
-				"knowledge base has nowhere to write — the domain is in the " +
-				"register and its stream failed to come up")
+			return fmt.Errorf("engine: this node runs no pages domain, so " +
+				"Doclet has nowhere to write; the domain is in the register and " +
+				"its stream failed to come up")
 		}
 		if n.pages, err = doclet.NewStore(doclet.Options{
 			Publisher: running.publisher, DB: sl.estate().Reader(),
@@ -637,8 +637,8 @@ func (e *Engine) PagesStore() *doclet.Store {
 	return store
 }
 
-// NativeSearcher is the native knowledge searcher, or nil.
-func (e *Engine) NativeSearcher() *doclet.Searcher {
+// DocletSearcher is Doclet's knowledge searcher, or nil.
+func (e *Engine) DocletSearcher() *doclet.Searcher {
 	n := e.native.Load()
 	if n == nil {
 		return nil
@@ -1340,7 +1340,7 @@ type trackerSeams struct {
 }
 
 // trackerHalves is this node's tracker seams, or false where it runs no
-// native tracker.
+// Worklet.
 //
 // THE ROUTER'S, ON EVERY NODE, so every tool is handed the same kind of half:
 // a data node's router answers from its own copy and a stateless node's asks a
@@ -1619,7 +1619,7 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 
 // OperatorWork is the tracker's read side as the operator's surfaces reach it —
 // the dashboard's and the REST routes' questions, and the operator's own MCP —
-// or false where this company runs no native tracker here.
+// or false where this company runs no Worklet here.
 //
 // THE ROUTER'S, ON EVERY NODE, exactly as a seat's tools are handed it
 // ([Engine.trackerHalves]), and never this node's own copy read directly. Read
@@ -1651,7 +1651,7 @@ func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) 
 
 // OperatorPages is the knowledge base's read side as the operator's surfaces
 // reach it, through the router for [OperatorWork]'s reason — or false where
-// this company runs no native knowledge base here.
+// this company runs no Doclet here.
 func OperatorPages(e *Engine) (estate.Pages, bool) {
 	_, wiki, ok := e.nativeHalves()
 	if !ok || !wiki || e.router == nil {
@@ -1867,7 +1867,7 @@ func (e *Engine) nudgeSkills() { e.skillSync.Announce(skillBackend(config.Knowle
 // walkRemoteSkills reads the tool-skill container through a data node, for a
 // node that holds none.
 //
-// STALE, for the reason [Engine.walkNativeSkills] gives, and one hop further:
+// STALE, for the reason [Engine.walkDocletSkills] gives, and one hop further:
 // the walk runs because a data node APPLIED the change and announced it, and
 // the floor this node carries is its own writes' — so the answering node is
 // at or past both.
@@ -1890,7 +1890,7 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 	return out, nil
 }
 
-// walkNativeSkills reads the tool-skill container out of this node's own page
+// walkDocletSkills reads the tool-skill container out of this node's own page
 // projection.
 //
 // # It waits for hydration first
@@ -1899,7 +1899,7 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 // and the registry replaces wholesale, so reading early would silently delete
 // every skill the walk did not reach. The wait is cancelled with the walk: a
 // source change or a stop ends it.
-func (e *Engine) walkNativeSkills(ctx context.Context, container string) ([]skills.Page, error) {
+func (e *Engine) walkDocletSkills(ctx context.Context, container string) ([]skills.Page, error) {
 	if !e.awaitHydration(ctx) {
 		return nil, ctx.Err()
 	}

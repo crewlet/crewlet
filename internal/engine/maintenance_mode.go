@@ -299,7 +299,7 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 	return e.mode.Publishes() && e.StateLogHydrated(ctx)
 }
 
-// writeSide is this node's own tracker writer and knowledge-base store — nil
+// writeSide is this node's own Worklet writer and Doclet store: nil
 // where the runtime runs neither, and nil in a mode that does not publish.
 //
 // ONE GATE FOR EVERY SURFACE THAT WRITES THE COMPANY'S RECORDS through this

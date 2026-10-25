@@ -745,10 +745,9 @@ func TestTwoNodesConvergeOnAChangeOnlyOneHeard(t *testing.T) {
 	}
 }
 
-// A CONTAINER ONE NODE SAW MOVE IS WALKED BY EVERY NODE. The native knowledge
-// base's appliers know a skill page moved but not which one, and a node that
-// holds no copy of the knowledge base runs no applier at all — so without the
-// announcement it heard of a skill edit only on its periodic walk.
+// A CONTAINER ONE NODE SAW MOVE IS WALKED BY EVERY NODE. Doclet's appliers
+// know a skill page moved but not which one, and a node that holds no copy of
+// Doclet runs no applier at all, so without the announcement it heard of a skill edit only on its periodic walk.
 func TestAnAnnouncedContainerIsWalkedByANodeThatSawNothing(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()

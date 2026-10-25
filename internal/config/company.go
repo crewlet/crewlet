@@ -45,9 +45,9 @@ type Company struct {
 	// ("next Friday") or an all-day date resolves to; and the wall clock a
 	// schedule that names no zone of its own fires on. One clock, and a
 	// top-level field rather than a setting of any one subsystem, because
-	// the three this replaced — the native tracker's own clock, the
-	// scheduler's default zone and the UTC every other day boundary
-	// assumed — disagreed about where one company's day began (ADR-0018).
+	// the three this replaced (Worklet's own clock, the scheduler's
+	// default zone and the UTC every other day boundary assumed) disagreed
+	// about where one company's day began (ADR-0018).
 	//
 	// A clock for AUTHORED INSTANTS AND CALENDAR BOUNDARIES only: no
 	// duration is measured against it, because a duration measured on a

@@ -72,12 +72,12 @@ func TestSummaries(t *testing.T) {
 		// its KEY is the word a person knows it by.
 		name: "a turn's start names the item it is on",
 		payload: AgentTurnStarted{RoleName: "CTO",
-			WorkItem: &WorkItem{Backend: WorkNative, ID: "7c1e", Key: "ENG-412"}},
+			WorkItem: &WorkItem{Backend: WorkWorklet, ID: "7c1e", Key: "ENG-412"}},
 		want: "CTO started a turn on ENG-412",
 	}, {
 		name: "a resumed segment says it resumed",
 		payload: AgentTurnStarted{RoleName: "CTO", Resumed: true,
-			WorkItem: &WorkItem{Backend: WorkNative, ID: "7c1e", Key: "ENG-412"}},
+			WorkItem: &WorkItem{Backend: WorkWorklet, ID: "7c1e", Key: "ENG-412"}},
 		want: "CTO resumed a turn on ENG-412",
 	}, {
 		// An item a tracker gave no label is still named, by the one

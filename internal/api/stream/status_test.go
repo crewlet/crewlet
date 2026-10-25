@@ -149,7 +149,7 @@ func withheld(t *testing.T, who string, i int, call map[string]any) {
 // tracker's.
 //
 // Mutation: hand every audience the row unmasked, or keep the body versions
-// on a withheld call, or keep the work item for a reader without the tracker,
+// on a withheld call, or keep the work item for a reader without Worklet,
 // and this fails.
 func TestAStatusAudienceGetsNoBodyAndNoMovingBodyVersions(t *testing.T) {
 	t.Parallel()

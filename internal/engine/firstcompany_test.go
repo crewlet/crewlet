@@ -52,7 +52,7 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 	// THE RUNTIME AND ITS TOOLS.
 	writer := e.TrackerWriter()
 	if writer == nil || e.PagesStore() == nil || e.Pages() == nil {
-		t.Fatal("the first company's apply left the node with no native tracker " +
+		t.Fatal("the first company's apply left the node with no Worklet " +
 			"or knowledge base")
 	}
 	for _, tool := range []string{builtin.CreateWorkItemTool, builtin.WritePageTool} {

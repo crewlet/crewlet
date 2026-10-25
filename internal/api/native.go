@@ -22,7 +22,7 @@ import (
 //
 // # Why nothing here is captured when the API is built
 //
-// A node's own tracker and knowledge base come up with its FIRST COMPANY, and
+// A node's own Worklet and Doclet come up with its FIRST COMPANY, and
 // a node that booted with none meets that at an apply — after its API has been
 // serving for as long as it took somebody to import one. The API used to take
 // every native source from the engine ONCE, while it was being wired: the read
@@ -282,7 +282,7 @@ func (l liveWork) TurnPlaces(ctx context.Context, runs []string,
 }
 
 // Thread is the read `work_item` asks [worklet.AskedOn] through (whether an
-// open ask on an item names somebody without the tracker), routed like every
+// open ask on an item names somebody without Worklet), routed like every
 // other tracker read, so the probe and the comment that would answer the ask
 // are resolved by one data node's rows under the same session floors.
 func (l liveWork) Thread(ctx context.Context, q worklet.ThreadQuery,
@@ -367,8 +367,8 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 // liveBacklinks is which pages link to a page, resolved per question.
 //
 // ITS OWN SOURCE, and a native-half one: the links are an index the engine
-// keeps over its own knowledge base's pages, which comes up with the node's
-// first company and is absent for a company whose wiki is a vendor's.
+// keeps over Doclet's pages, which comes up with the node's first company
+// and is absent for a company whose wiki is a vendor's.
 type liveBacklinks struct{ engine *engine.Engine }
 
 func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
@@ -423,7 +423,7 @@ func (l liveFiles) Files(ctx context.Context, q worklet.FileQuery) (worklet.File
 // not run rather than one not published yet — see the file comment.
 //
 // THE KNOWLEDGE SEARCH IS WHATEVER BACKEND THE COMPANY RUNS NOW, native or not:
-// ranked search over the company's own wiki is exactly as useful to an
+// ranked search over Doclet is exactly as useful to an
 // operator's assistant on Confluence, and an apply can add one — so it is read
 // per call too, and present exactly where the engine has a searcher.
 func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {

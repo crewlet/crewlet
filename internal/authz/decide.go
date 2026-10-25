@@ -45,7 +45,7 @@ const (
 	// holds the row's app, OR the person an open ask on the item names
 	// ([Object.Asked]): a colleague who put a question to somebody needs
 	// them to be able to read it and answer, and a person who answers
-	// questions is not thereby somebody who uses the tracker.
+	// questions is not thereby somebody who uses Worklet.
 	//
 	// THE ASKED ARM IS NARROW BY CONSTRUCTION. It admits only a caller an
 	// OPEN ask names, and only once a surface has read the item and

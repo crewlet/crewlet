@@ -1,6 +1,6 @@
 package topics
 
-// The native tracker's own log, and why its grammar lives here.
+// Worklet's own log, and why its grammar lives here.
 //
 // The tracker's mutations are a state log: one ordered stream per domain,
 // every record published to the subject of the object it mutates, and the

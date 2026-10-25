@@ -71,7 +71,7 @@ func TestALinkNeedsAReadOfTheArtifact(t *testing.T) {
 }
 
 // A LINK NEEDS A WRITE OF THE WORK ITEM, decided as `update_work_item` decides
-// it: a caller who may read the artifact and does not use the tracker is
+// it: a caller who may read the artifact and does not use Worklet is
 // refused naming the verb, and nothing is read or written.
 //
 // Mutation: drop mayUpdateWorkItem from the handler and the link lands.
@@ -80,7 +80,7 @@ func TestALinkNeedsAWriteOfTheWorkItem(t *testing.T) {
 	g := newRig(t, true)
 	w := g.do(person("bob"), "POST", at(page, "/work-items"), linkENG12, keyed()...)
 	if w.Code != http.StatusForbidden || errorOf(t, w) != "unauthorized" {
-		t.Fatalf("a link by a viewer without the tracker: %d %s", w.Code, w.Body)
+		t.Fatalf("a link by a viewer without Worklet: %d %s", w.Code, w.Body)
 	}
 	if !strings.Contains(w.Body.String(), "update_work_item") {
 		t.Errorf("the refusal does not name the verb it refused: %s", w.Body)

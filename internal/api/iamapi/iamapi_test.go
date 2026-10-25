@@ -1159,8 +1159,8 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutASeat(t *testing.T) {
 // There is no default an omission could stand for: somebody enrolled holding
 // every app and somebody enrolled holding the overview alone are both
 // legitimate, so a body naming neither is one whose author did not decide —
-// and the record it lands decides who may use the tracker and the knowledge
-// base until somebody notices. So `grants` is REQUIRED on a create, a service
+// and the record it lands decides who may use Worklet and Doclet until
+// somebody notices. So `grants` is REQUIRED on a create, a service
 // account's included, and on an invitation: absent is `400 invalid_body`
 // naming the field, decided BEFORE ANY KEY IS READ OR LINK MINTED, as a
 // missing seat is. A name this build does not know is refused the same way,

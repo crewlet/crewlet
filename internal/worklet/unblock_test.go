@@ -334,7 +334,7 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 //
 // `tracker_history` grows for the life of the company and is never swept — it
 // is the account of everything that ever happened — and this scan runs on
-// every tick of the tracker duty. A predicate with no index behind it is a
+// every tick of the Worklet duty. A predicate with no index behind it is a
 // full scan of that table, forever, several times a minute.
 //
 // The index it used to have named `kind`, and the scan stopped selecting on

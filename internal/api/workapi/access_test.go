@@ -15,7 +15,7 @@ import (
 // there, and the person an OPEN ask on the item names may post the answer to it
 // and nothing else — and which ask is open is only known once the item is read.
 // Decided at the route as `comment_on_work_item` on the bare kind, a person
-// asked a question without the tracker was refused at the door to the one
+// asked a question without Worklet was refused at the door to the one
 // thread they were asked to answer on. So the route admits everybody and the
 // tool decides, in the same words as everywhere else: the asked person's answer
 // lands, the same person's remark on an item nobody asked them on is the

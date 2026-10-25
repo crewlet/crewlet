@@ -320,8 +320,8 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 //
 // Admin includes every app whether or not a row says so, so what this buys is
 // what happens when admin is taken AWAY: a row that listed the apps beside it
-// keeps them, and an administrator stepping down — a `remove_grants: [admin]`
-// from the dashboard, say — goes on using the tracker. A command that sent
+// keeps them, and an administrator stepping down (a `remove_grants: [admin]`
+// from the dashboard, say) goes on using Worklet. A command that sent
 // admin alone would leave that row holding nothing past the overview. So the
 // expansion is the command's, on every subcommand that sends a set, and it
 // reaches the node as the stored list.

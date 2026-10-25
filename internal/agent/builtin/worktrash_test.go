@@ -100,7 +100,7 @@ func trashSurface(t *testing.T, spy *trashSpy) *tools.Registry {
 // their own board.
 //
 // Both halves, because the gate stepping aside is only safe if the tool then
-// asks: the lead is admitted, and a colleague holding the tracker but leading
+// asks: the lead is admitted, and a colleague holding Worklet but leading
 // nothing — and who did not file the item — is refused with the authority's
 // own answer. Delete the
 // ask from either tool and the second half goes red.

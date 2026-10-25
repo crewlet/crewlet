@@ -329,7 +329,7 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 
 // A PURGE A NODE DOES NOT SERVE IS REFUSED, not left unknown.
 //
-// The route is absent on a node with no native tracker, and the mux answered
+// The route is absent on a node with no Worklet, and the mux answered
 // it with net/http's text/plain 404 — which carries no engine code, so this
 // command read it as a gateway that might have swallowed the purge: "whether
 // the purge landed is unknown", and an -op-id retry that met the same 404 for

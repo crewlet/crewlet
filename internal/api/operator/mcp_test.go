@@ -141,7 +141,7 @@ func TestTheCatalogueIsReadForEveryCall(t *testing.T) {
 }
 
 // THE TRACKER AND THE KNOWLEDGE BASE ARE SEPARATE HALVES. A company can run
-// the native tracker on Confluence, or the native wiki on Jira, and a surface
+// Worklet on Confluence, or Doclet on Jira, and a surface
 // that offered both halves whenever it had one would hand an assistant tools
 // that fail at the call.
 func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
@@ -158,7 +158,7 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	}
 	for _, name := range names {
 		if strings.Contains(name, "page") {
-			t.Errorf("a company with no native knowledge base was offered %q", name)
+			t.Errorf("a company with no Doclet was offered %q", name)
 		}
 	}
 }

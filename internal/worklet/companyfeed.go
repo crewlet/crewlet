@@ -221,8 +221,8 @@ func (r *Reader) CompanyFeed(ctx context.Context, q FeedQuery) (FeedPage, error)
 	}
 	for _, kind := range kinds {
 		if !kind.Valid() {
-			return FeedPage{}, invalid("%q is not a feed kind; the "+
-				"tracker answers %v", kind, FeedKinds)
+			return FeedPage{}, invalid("%q is not a feed kind; Worklet "+
+				"answers %v", kind, FeedKinds)
 		}
 	}
 	var out FeedPage

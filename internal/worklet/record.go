@@ -1413,7 +1413,7 @@ const MaxCommitBytes = 1_279_262
 // abandoned walk by re-deriving every descendant's number from them; nothing
 // read the two fields, and the re-derivation could not have worked — the
 // subtree's membership moves while a walk is stopped. A move that stopped is
-// finished by its re-run or by the tracker duty, each on a FRESH range
+// finished by its re-run or by the Worklet duty, each on a FRESH range
 // ([Writer.followRoot]).
 type KeyMint struct {
 	// N is the counter value this task took. Its key is "<PROJECT>-<n>"

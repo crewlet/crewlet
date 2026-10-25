@@ -360,7 +360,7 @@ func (m stoppedMover) MoveTaskToProject(_ context.Context, opID, _, _ string,
 // call, which the tracker refuses as somebody else's move. The answer is the
 // root's receipt, the walk's count, and the one thing that finishes it: the
 // same call, a restore first where a task in the trash holds it, and neither
-// where this node cannot vouch for the step it stopped at — the tracker duty
+// where this node cannot vouch for the step it stopped at: the Worklet duty
 // finishes it then.
 //
 // Mutation: drop the MoveStopped arm in move_work_item and every case answers
@@ -380,7 +380,7 @@ func TestAMoveStoppedAfterItsRootMovedSaysWhatFinishesIt(t *testing.T) {
 			stop: worklet.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
 				Followed: 2, Of: 5, Err: refused},
 			want: []string{"ENG-1 moved to OPS as OPS-3", "2 of the 5",
-				"exactly the same arguments", "tracker duty"},
+				"exactly the same arguments", "the Worklet duty"},
 		},
 		"a task in the trash": {
 			stop: worklet.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
@@ -391,7 +391,7 @@ func TestAMoveStoppedAfterItsRootMovedSaysWhatFinishesIt(t *testing.T) {
 		"a step this node cannot vouch for": {
 			stop: worklet.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
 				Followed: 1, Of: 5, Err: fmt.Errorf("stopped: %w", worklet.ErrStepUnvouched)},
-			want:      []string{"cannot vouch", "tracker duty"},
+			want:      []string{"cannot vouch", "the Worklet duty"},
 			notWanted: []string{"exactly the same arguments"},
 			unvouched: true,
 		},

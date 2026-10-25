@@ -244,12 +244,12 @@ type Halves struct {
 	Objects ObjectStore
 }
 
-// servesWork reports whether these halves hold the tracker's whole surface.
+// servesWork reports whether these halves hold Worklet's whole surface.
 func (h Halves) servesWork() bool {
 	return h.Work.Reader != nil && h.Work.Writer != nil && h.Tracker != nil
 }
 
-// servesPages reports whether these halves hold the knowledge base's.
+// servesPages reports whether these halves hold Doclet's.
 func (h Halves) servesPages() bool {
 	return h.Pages.Reader != nil && h.Pages.Writer != nil && h.PageStore != nil
 }
@@ -341,8 +341,8 @@ type Service struct {
 // company does not run answers in the very bytes its absence would have.
 func New(opts Options) (*Service, error) {
 	if opts.Halves == nil {
-		return nil, errors.New("workapi: no halves: every route reads the " +
-			"tracker and knowledge base this node serves as the request finds them")
+		return nil, errors.New("workapi: no halves: every route reads Worklet " +
+			"and Doclet as this node serves them when the request finds them")
 	}
 	if opts.Chart == nil {
 		return nil, errors.New("workapi: no chart: every decision here reads " +
@@ -755,7 +755,7 @@ func subtreeStoppedHere(receipt map[string]any) {
 // move differs from a removal: the root is already in the target and that
 // operation's ledger never put it there, which is exactly how somebody else's
 // move looks. And the root stays marked mid-move while anything is left, so
-// the tracker duty finishes the walk on its own — the remedy where this node
+// the Worklet duty finishes the walk on its own, the remedy where this node
 // cannot vouch for the step the walk stopped at, since the same key here stops
 // there again. Formed from the receipt's own fields, never from words read out
 // of the tool's sentence.
@@ -780,7 +780,7 @@ func moveStoppedHere(receipt map[string]any) {
 	}
 	followed, _ := receipt["subtree_followed"].(float64)
 	total, _ := receipt["subtree_total"].(float64)
-	duty := "the tracker duty finishes the move on its own once nobody is " +
+	duty := "the Worklet duty finishes the move on its own once nobody is " +
 		"walking it"
 	sameKey := "the SAME " + opkey.Header + " — send op_id back as that " +
 		"header, which is this request's key whether it sent one or not"

@@ -60,7 +60,7 @@ func (s *Service) workRoutes(mount mounter) {
 	// the route admits everybody (`work.thread`) and the tool decides,
 	// exactly as it decides the same call made through the act route or an
 	// assistant. Decided here as `comment_on_work_item` on the bare kind, a
-	// person asked a question without the tracker could never answer it.
+	// person asked a question without Worklet could never answer it.
 	route("POST /worklet/items/{key}/comments", task(authz.ActionWorkThread),
 		(*served).postItemComment)
 	// WHO WROTE THE REMARK IS A ROW, so the route admits whoever may comment

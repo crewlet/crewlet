@@ -148,7 +148,7 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 	sess := connectAs(t, server.URL+operator.MCPPath, "ops")
 
 	if refused, out := list(t, sess); refused {
-		t.Fatalf("a credential holding the tracker was refused the board: %s", out)
+		t.Fatalf("a credential holding Worklet was refused the board: %s", out)
 	}
 	dir.set("ops", machine("token:ops", iam.GrantDoclet))
 	refused, out := list(t, sess)

@@ -409,8 +409,8 @@ type rule struct {
 	// belongs to none. It is
 	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
 	// onto every relation class ([withApp]): a project's lead who does not
-	// use the tracker does not set its policy, and a comment's author who no
-	// longer uses the knowledge base does not edit it there. An
+	// use Worklet does not set its policy, and a comment's author who no
+	// longer uses Doclet does not edit it there. An
 	// administrator holds every app through [iam.Expand], so naming one
 	// never narrows admin's path.
 	//
@@ -540,7 +540,7 @@ type rule struct {
 // production one. The alternative — a default class — is exactly how a new
 // verb ships ungated, and it ships looking correct.
 var rules = map[Action]rule{
-	// --- using the tracker ------------------------------------------- //
+	// --- using Worklet ------------------------------------------- //
 	//
 	// THE APP IS THE WHOLE RULE: reading the board, a project, its files,
 	// its views and its catalogue, and filing, updating, merging and
@@ -549,7 +549,7 @@ var rules = map[Action]rule{
 	//
 	// READING ONE ITEM IS ALSO THE ASKED PERSON'S. Somebody a colleague put
 	// a question to reads the item the question is on, whether or not they
-	// use the tracker — see [ClassAppOrAsked].
+	// use Worklet (see [ClassAppOrAsked]).
 	ActionWorkRead:      {class: ClassAppOrAsked, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	ActionWorkList:      {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	ActionWorkSearch:    {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
@@ -585,7 +585,7 @@ var rules = map[Action]rule{
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label
-	// is open to everybody who uses the tracker, and renaming or archiving
+	// is open to everybody who uses Worklet, and renaming or archiving
 	// one takes the word off everybody's board. So the TOOL takes the app
 	// and the lead-only facets — a rename, an archive, any policy edit —
 	// ask [ActionProjectPolicy] from inside it.
@@ -633,7 +633,7 @@ var rules = map[Action]rule{
 	// views is a gesture nobody asked a lead to make. Every one of them is
 	// the TRACKER's — a person's notices name its tasks and their queue
 	// lists them — so each takes the app beside the relation, and a person
-	// who does not use the tracker has no queue there to keep.
+	// who does not use Worklet has no queue there to keep.
 	ActionPersonRead:    {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	ActionMyWork:        {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	ActionInboxRead:     {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
@@ -641,7 +641,7 @@ var rules = map[Action]rule{
 	ActionInboxMark:     {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	ActionPinsSet:       {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny},
 
-	// --- using the knowledge base ------------------------------------ //
+	// --- using Doclet ------------------------------------ //
 	ActionPageRead:      {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
 	ActionPageList:      {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
 	ActionKnowledgeRead: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},

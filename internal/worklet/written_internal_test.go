@@ -22,7 +22,7 @@ func (l *countingLog) Add(item types.WorkItem) { l.items = append(l.items, item)
 func TestAnUnknownWriteReportsNoItem(t *testing.T) {
 	t.Parallel()
 	at := statelog.Position{Stream: "S", Generation: 1, Seq: 7}
-	item := types.WorkItem{Backend: types.WorkNative, ID: "t-1", Key: "ENG-1", Project: "ENG"}
+	item := types.WorkItem{Backend: types.WorkWorklet, ID: "t-1", Key: "ENG-1", Project: "ENG"}
 	cases := map[string]struct {
 		result statelog.Result
 		want   int

@@ -474,7 +474,7 @@ func (s *Syncer) Refresh(backend string) {
 // and TELLS THE FLEET: every node that holds no copy of the backend — and so
 // runs nothing that would notice — walks its container on hearing it.
 //
-// The native knowledge base's appliers call this: each one that holds a copy
+// Doclet's appliers call this: each one that holds a copy
 // sees the change itself, and a node that holds none hears it only from them.
 // Every applier announces, so a fleet with several data nodes sends several
 // nudges for one edit; a hearer coalesces them into one walk, and the event is

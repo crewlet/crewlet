@@ -29,7 +29,7 @@ func (f *fakeThreads) Thread(_ context.Context, q worklet.ThreadQuery,
 // ASKED-ON SEES ONLY AN OPEN ASK NAMING THEM.
 //
 // The probe is the one read behind the authority table's `asked` arm, which
-// admits somebody without the tracker to an item and to answering on it. Over
+// admits somebody without Worklet to an item and to answering on it. Over
 // the real reader: nobody is asked on an item with no ask; the person an open
 // ask names is; the asker and a bystander are not; a second open ask to the
 // same person keeps them asked (the inference's ambiguity is MORE asked, not

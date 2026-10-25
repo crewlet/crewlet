@@ -2127,8 +2127,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bind of a development build.
 		DevPrincipal: dev,
 		Runtime:      runtime,
-		// WHOSE INBOX MOVED, from this engine's own tracker applier —
-		// how a person at the dashboard learns they have work.
+		// WHOSE INBOX MOVED, from this engine's own Worklet applier: how a
+		// person at the dashboard learns they have work.
 		Inbox: e,
 		// WHOSE CREDENTIALS MOVED, from this engine's own identity
 		// applier — what closes the open tab of a session that ended.
@@ -2275,7 +2275,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
 			SandboxTail: sandboxTails(e),
-			// THE COMPANY'S OWN TRACKER AND KNOWLEDGE BASE through the
+			// WORKLET AND DOCLET through the
 			// estate router, exactly as a seat's tools reach them
 			// (engine.OperatorWork), so an operator and an agent looking
 			// at one item see one item: answered from this node's copy

@@ -272,7 +272,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform worklet.Inform) (
 }
 
 // evidenceLookup is the world a decision's evidence is checked against: this
-// surface's own tracker reader and knowledge-base reader.
+// surface's own Worklet reader and Doclet reader.
 type evidenceLookup struct {
 	work  WorkDeps
 	pages PageReader
@@ -284,7 +284,7 @@ var _ worklet.EvidenceLookup = evidenceLookup{}
 // reference in these tools takes.
 func (l evidenceLookup) TaskID(ctx context.Context, ref string) (string, error) {
 	if l.work.Reader == nil {
-		return "", errors.New("this surface has no tracker reader to check " +
+		return "", errors.New("this surface has no Worklet reader to check " +
 			"a work item against")
 	}
 	got, err := l.work.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
@@ -296,7 +296,7 @@ func (l evidenceLookup) TaskID(ctx context.Context, ref string) (string, error) 
 
 // PageID resolves a page by id or by address to a live page's id.
 //
-// A COMPANY WITH NO NATIVE KNOWLEDGE BASE CANNOT CITE A PAGE by kind: there is
+// A COMPANY WITHOUT DOCLET CANNOT CITE A PAGE by kind: there is
 // nothing to check it against, and a reference nothing checked is the dead
 // link the check exists to prevent. That is the caller's to change — cite it
 // as a url — so it is refused as invalid rather than reported as a failure.

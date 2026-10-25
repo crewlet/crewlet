@@ -94,7 +94,7 @@ func TestADecisionIsValidatedField(t *testing.T) {
 			d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceURL, Ref: "javascript:alert(1)"}}
 		}, "https://"},
 		{"a relative url", func(d *worklet.Decision) {
-			d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceURL, Ref: "/pages/1"}}
+			d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceURL, Ref: "/doclet/pages/1"}}
 		}, "https://"},
 		{"no role", func(d *worklet.Decision) { d.Role = "" }, "decision.role"},
 		{"an unknown role", func(d *worklet.Decision) { d.Role = "owner" }, "decision.role"},

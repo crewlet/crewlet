@@ -44,7 +44,7 @@ them was a person being given too much — each was the engine refusing what
 everybody involved intended, or granting nothing while looking like it did.
 
 A finer vocabulary also cannot say what a company actually decides about a
-colleague. "Uses the tracker", "uses the knowledge base" and "runs the place"
+colleague. "Uses Worklet", "uses Doclet" and "runs the place"
 are the three questions a founder answers when somebody joins; a reader of the
 trail, a manager of people and an operator of the deployment were three grants
 nobody could tell apart, and they are one.

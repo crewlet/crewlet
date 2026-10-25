@@ -145,7 +145,7 @@ func TestAnUnrecordableDependencyRefusesBeforeAnyWrite(t *testing.T) {
 // Every argument naming another item — a parent, a blocker, a link, the
 // question a comment answers — is read before anything is written, and a read
 // that failed came back as a sentence alone. The HTTP write surface reads its
-// status from a result's CAUSE, so a node that could not read its own tracker
+// status from a result's CAUSE, so a node that could not read its own Worklet
 // answered 422 "refused" rather than 503, and a client never came back. The
 // read's error is the cause now; and an item that plainly does not exist
 // still carries none of the tracker's not-found errors, because it is not the

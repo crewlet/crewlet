@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ASKED PROBE: whether somebody without the tracker may read a work item
+// THE ASKED PROBE: whether somebody without Worklet may read a work item
 // and answer on it, because an open question on it is addressed to them.
 //
 // A company that keeps somebody off the tracker still asks them things — a
