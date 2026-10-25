@@ -1956,7 +1956,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `DataGrid` + `cells` | the kit's `DataGrid`, bound to the URL (its sort and columns), the peek and the keymap; bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each: the kit's `PropertyList`, given routes and turns |
 | `Histogram` + `FacetRail` | a log's time axis (the kit's `Histogram`, given the engine's buckets and the reader's zone), and one dimension of it as chips |
-| `TimeRangePicker` | the one control for `window=` |
+| `lib/rangePicker` | the one control for `window=`: a screen's range mapped onto the kit's `TimeRangePicker` (Today as the company's day, a custom window on the reader's zone or as whole company days) |
 | `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation (the kit's `PageNote`), wrapped so its last line never holds a word alone |
 
 **Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the

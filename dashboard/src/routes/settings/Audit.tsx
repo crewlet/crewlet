@@ -114,6 +114,7 @@ import {
   TableEntityCell,
   TableTextCell,
   toCsv,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
@@ -124,7 +125,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -1033,7 +1034,7 @@ export function Audit() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         {/* THROUGH THE ONE DOWNLOAD PATH. This had its own, which revoked the
             file's URL in the same task as the click that queued it — racing
             the read the download is about to make — and said nothing either

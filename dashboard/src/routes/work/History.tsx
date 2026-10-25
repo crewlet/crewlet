@@ -65,9 +65,9 @@ import { href, useParam } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type CoverageFacts } from "~/components/work.tsx";
-import { Button, Card, EmptyValue, Select, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, EmptyValue, Select, Skeleton, Tag, TimeRangePicker } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
@@ -329,7 +329,7 @@ export function HistoryView({
       {!embedded && <PublishCoverage answer={state.data} />}
 
       <div className="toolbar">
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         {/* THE DIMENSIONS, as pickers in the one bar — see the file's doc. */}
         <FacetPicker name="Kind" all="Any kind" value={kind} onChange={setKind} facets={kinds} />
         <FacetPicker name="By" all="Anyone" value={actor} onChange={setActor} facets={actors} />
