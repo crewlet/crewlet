@@ -850,52 +850,9 @@ func (p *Provider) completion(
 	// Content becomes "" with the vendor's real usage attached below — an
 	// empty answer costs tokens, and it was previously the one outcome that
 	// spent them without ever reaching a budget.
-	comp := &llm.Completion{
-		Model:      p.model,
-		Content:    out.text,
-		StopReason: llm.StopEnd,
-	}
-	// AN ENVELOPE ONLY WHERE ONE WAS ASKED FOR. A call that offered no tools
-	// sent no contract, so its reply is the answer verbatim — and reading it
-	// as an envelope anyway is not harmless forgiveness: the envelope reader
-	// accepts `content`, `text`, `message` and `response` as the message key,
-	// so an auxiliary answer that IS a JSON object carrying one of them
-	// (the persist decider's `{"kind": "LONG", "content": "..."}`) came back
-	// as that one field, its caller's decode failed, and the decision was
-	// silently dropped.
-	var env Envelope
-	if len(tools) > 0 {
-		env = ParseEnvelope(out.text, tools)
-		if env.Parsed {
-			comp.Content = env.Message
-		}
-		// A reply whose calls could not be read is still the round's
-		// content, for the conversation the corrective follows; the tool
-		// loop never shows it.
-		comp.ProtocolError = env.ProtocolError
-	}
-	for i, call := range env.ToolCalls {
-		comp.ToolCalls = append(comp.ToolCalls, llm.ToolCall{
-			// The CLI has no id of its own to give, and the tool loop
-			// pairs results to calls by it. Derived from the position
-			// so two calls in one answer stay distinguishable.
-			ID:        fmt.Sprintf("cli_%d", i),
-			Name:      call.Name,
-			Arguments: call.Arguments,
-			// Arguments the envelope could not read: the tool loop
-			// answers the call with this instead of running it on an
-			// empty map, as it does for every other backend.
-			ArgumentsError: call.ArgumentsError,
-		})
-	}
-	if len(comp.ToolCalls) > 0 {
-		// The CLI reports no stop reason of its own in text mode: the
-		// envelope it was asked for is either an answer or a set of
-		// calls, so those are the only two this backend can honestly
-		// name. A CLI that hit its own cap or refused returns that as
-		// prose or a failure the exit path classifies.
-		comp.StopReason = llm.StopToolUse
-	}
+	read := ReadReply(out.text, tools)
+	comp := &read
+	comp.Model = p.model
 
 	if out.reported {
 		// InputTokens is ALWAYS the full prompt count, cache included —
@@ -1179,4 +1136,63 @@ func nonEmpty(candidates ...string) string {
 		}
 	}
 	return ""
+}
+
+// toolCalls are an envelope's calls as the provider contract carries them.
+func toolCalls(calls []EnvelopeCall) []llm.ToolCall {
+	var out []llm.ToolCall
+	for i, call := range calls {
+		out = append(out, llm.ToolCall{
+			// The CLI has no id of its own to give, and the tool loop
+			// pairs results to calls by it. Derived from the position
+			// so two calls in one answer stay distinguishable.
+			ID:        fmt.Sprintf("cli_%d", i),
+			Name:      call.Name,
+			Arguments: call.Arguments,
+			// Arguments the envelope could not read: the tool loop
+			// answers the call with this instead of running it on an
+			// empty map, as it does for every other backend.
+			ArgumentsError: call.ArgumentsError,
+		})
+	}
+	return out
+}
+
+// ReadReply is a text-mode reply as the round's completion carries it: its
+// content, the calls it asked for, and, for a reply whose calls cannot be
+// read, the protocol fault and the calls it named. Exported as the one
+// reading of a reply, so a suite that scripts a model's raw text reads it
+// exactly as the backend does.
+func ReadReply(reply string, tools []llm.ToolDef) llm.Completion {
+	comp := llm.Completion{Content: reply, StopReason: llm.StopEnd}
+	// AN ENVELOPE ONLY WHERE ONE WAS ASKED FOR. A call that offered no tools
+	// sent no contract, so its reply is the answer verbatim, and reading it
+	// as an envelope anyway is not harmless forgiveness: the envelope reader
+	// accepts `content`, `text`, `message` and `response` as the message key,
+	// so an auxiliary answer that IS a JSON object carrying one of them
+	// (the persist decider's `{"kind": "LONG", "content": "..."}`) came back
+	// as that one field, its caller's decode failed, and the decision was
+	// silently dropped.
+	if len(tools) == 0 {
+		return comp
+	}
+	env := ParseEnvelope(reply, tools)
+	if env.Parsed {
+		comp.Content = env.Message
+	}
+	// A reply whose calls could not be read is still the round's content,
+	// for the conversation the corrective follows; the tool loop never
+	// shows it.
+	comp.ProtocolError = env.ProtocolError
+	comp.ToolCalls = toolCalls(env.ToolCalls)
+	comp.RefusedCalls = toolCalls(env.Refused)
+	if len(comp.ToolCalls) > 0 {
+		// The CLI reports no stop reason of its own in text mode: the
+		// envelope it was asked for is either an answer or a set of
+		// calls, so those are the only two this backend can honestly
+		// name. A CLI that hit its own cap or refused returns that as
+		// prose or a failure the exit path classifies.
+		comp.StopReason = llm.StopToolUse
+	}
+	return comp
 }

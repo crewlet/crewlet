@@ -30,6 +30,10 @@ type Envelope struct {
 	// for the conversation only: the tool loop never shows it
 	// ([llm.Completion.ProtocolError]).
 	ProtocolError string
+	// Refused are the calls a reply with a ProtocolError named, wherever it
+	// wrote them: never run, kept so the refusal is on the record
+	// ([llm.Completion.RefusedCalls]).
+	Refused []EnvelopeCall
 }
 
 // EnvelopeCall is one requested tool call.
@@ -73,7 +77,9 @@ var nameKeys = []string{"name", "tool", "tool_name", "function"}
 //
 // The order matters. A fenced block is tried first and the LAST one wins,
 // because a model that reasons in prose and then answers puts the answer at
-// the end; taking the first would return its worked example.
+// the end; taking the first would return its worked example. Its MESSAGE
+// wins, that is: a worked example that asks for a call is a second set of
+// calls, which refuses the reply (below).
 //
 // THE ENVELOPE FIRST, THEN THE VENDORS' OWN FORMS. A model trained on its
 // vendor's native tool channel sometimes writes a call in that channel's form
@@ -86,6 +92,18 @@ var nameKeys = []string{"name", "tool", "tool_name", "function"}
 // a question about calls: a document naming an offered tool is a request to
 // run it, and anything else in that shape is a protocol fault the tool loop
 // asks again about, never prose shown to a person.
+//
+// ONE REPLY, ONE SET OF CALLS. The reading above picks one source (the last
+// envelope, a vendor document, or markup), and every call the reply writes
+// ANYWHERE ([namedCalls]) must be accounted for by the ones it picked
+// ([missingFrom]). A call that is not (an earlier envelope's, markup beside
+// the envelope, a whole call to an offered tool written in a code block)
+// makes the reply a protocol fault that runs nothing and names every call as
+// refused. Measured on Claude Code in text mode: the proposal written as
+// markup, then an envelope asking for nothing. Read by the envelope alone it
+// was a round with no call, the model believed its proposal made, and the
+// turn completed on a message saying so, with no proposal and no step
+// saying why.
 func ParseEnvelope(reply string, tools []llm.ToolDef) Envelope {
 	env, ok := strictEnvelope(reply)
 	if !ok {
@@ -94,7 +112,23 @@ func ParseEnvelope(reply string, tools []llm.ToolDef) Envelope {
 	if !ok {
 		env = Envelope{Message: reply}
 	}
-	return withMarkupCalls(env, tools)
+	env = withMarkupCalls(env, tools)
+	named, fault := namedCalls(reply, tools)
+	if env.ProtocolError == "" {
+		env.ProtocolError = fault
+	}
+	if env.ProtocolError == "" {
+		if stray := missingFrom(named, env.ToolCalls); len(stray) > 0 {
+			env.ProtocolError = fmt.Sprintf("it wrote a call to %q outside the envelope it "+
+				"answered with (in a second envelope, as markup or in a code block), and one "+
+				"reply carries exactly one envelope", stray[0].Name)
+		}
+	}
+	if env.ProtocolError != "" {
+		return Envelope{Message: reply, Parsed: env.Parsed, ProtocolError: env.ProtocolError,
+			Refused: distinctCalls(append(env.ToolCalls, named...))}
+	}
+	return env
 }
 
 // strictEnvelope is the envelope the contract asks for, read from the reply's
@@ -106,6 +140,11 @@ func strictEnvelope(reply string) (Envelope, bool) {
 			continue
 		}
 		if env, ok := fromDocument(doc); ok {
+			if env.ProtocolError != "" {
+				// None of its calls runs; [ParseEnvelope] names the ones
+				// it could read as refused.
+				return Envelope{Message: reply, Parsed: true, ProtocolError: env.ProtocolError}, true
+			}
 			return env, true
 		}
 	}
@@ -216,9 +255,19 @@ func outermostObject(reply string) (string, bool) {
 // looked like one at all.
 //
 // A JSON object that carries neither a message synonym nor a call synonym is
-// NOT an envelope — it is the model answering a question with JSON — so it is
+// NOT an envelope: it is the model answering a question with JSON, so it is
 // rejected here and the reply is handed back as prose. Accepting it would
 // turn every JSON answer into an empty envelope and silently drop the answer.
+//
+// A CALL KEY THAT DOES NOT READ AS CALLS IS A PROTOCOL FAULT, never a smaller
+// set of calls and never prose. The envelope carries the readable calls in
+// ToolCalls and the reason in ProtocolError, and its caller runs none of them.
+// Read the forgiving way, an entry with no name was dropped and the rest ran,
+// or a list nothing could be read from turned the whole reply into the
+// answer: either way the model had asked for a call that neither ran nor was
+// refused, and a turn could end on a message like "I'll post it now" with
+// nothing delivered and nothing to say why. A NULL or EMPTY list is not a
+// fault: it is the model saying "no calls, here is my note".
 func fromDocument(doc map[string]any) (Envelope, bool) {
 	env := Envelope{Parsed: true}
 	found := false
@@ -240,58 +289,63 @@ func fromDocument(doc map[string]any) (Envelope, bool) {
 		if !ok {
 			continue
 		}
-		var calls []any
-		switch typed := v.(type) {
-		case []any:
-			calls = typed
-		case map[string]any:
-			// ONE CALL WRITTEN WITHOUT ITS LIST. A model asked for a
-			// list of one routinely drops the brackets, and the object
-			// is as runnable as the list holding it — so it is read as
-			// that list, and the rule below decides it exactly as it
-			// would have decided `[obj]`.
-			calls = []any{typed}
-		case nil:
-			// `null` is the model saying "no calls", the same answer as
-			// an empty list, as an argument list's `null` is no
-			// arguments in [readArguments].
-		default:
-			// A STRING, A NUMBER, A BOOLEAN: a call key the model
-			// filled with something no call can be read from. The same
-			// verdict as the unreadable list below, for the same reason
-			// — skipping it here left `found` to the message synonym, so
-			// the reply parsed as an envelope that asked for no tools
-			// and the call was dropped without a word.
-			return Envelope{}, false
-		}
-		for _, raw := range calls {
-			call, ok := readCall(raw)
-			if ok {
-				env.ToolCalls = append(env.ToolCalls, call)
-			}
-		}
-		// A NON-EMPTY LIST NOTHING COULD BE READ FROM IS NOT AN ENVELOPE.
-		// An EMPTY list is: the model saying "no calls, here is my note",
-		// which is an ordinary final answer — whether a reply with no call
-		// may END the phase is the tool loop's question, not the parser's.
-		//
-		// The difference matters because of what happens next. A document
-		// that is not an envelope becomes assistant prose, and in a phase
-		// that has to end in a call the tool loop's corrective re-prompt
-		// asks again — one round, and the model reliably fixes it. Accepting this
-		// one instead reported that the model requested NO tools when it
-		// had requested several, so the turn ended on a message like
-		// "I'll post it now" with nothing delivered and nothing to say
-		// why: the exact shape the delivery derivation exists to catch,
-		// arriving one layer below where it looks.
-		if len(calls) > 0 && len(env.ToolCalls) == 0 {
-			return Envelope{}, false
-		}
+		env.ToolCalls, env.ProtocolError = readCalls(key, v)
 		found = true
 		break
 	}
 
 	return env, found
+}
+
+// readCalls reads the value of an envelope's call key: the calls it could
+// read, and why it is a protocol fault when any part of it is not a call.
+func readCalls(key string, v any) ([]EnvelopeCall, string) {
+	var raws []any
+	switch typed := v.(type) {
+	case []any:
+		raws = typed
+	case map[string]any:
+		// ONE CALL WRITTEN WITHOUT ITS LIST. A model asked for a list of
+		// one routinely drops the brackets, and the object is as runnable
+		// as the list holding it, so it is read as that list.
+		raws = []any{typed}
+	case nil:
+		// `null` is the model saying "no calls", the same answer as an
+		// empty list, as an argument list's `null` is no arguments in
+		// [readArguments].
+		return nil, ""
+	default:
+		return nil, fmt.Sprintf("its %q holds a %s, not a list of tool calls", key, jsonKind(typed))
+	}
+	// Every readable call is kept, after an unreadable one too: they are the
+	// refusal's record.
+	var calls []EnvelopeCall
+	fault := ""
+	for i, raw := range raws {
+		call, ok := readCall(raw)
+		if !ok {
+			if fault == "" {
+				fault = fmt.Sprintf("entry %d of its %q is not a tool call with a name", i+1, key)
+			}
+			continue
+		}
+		calls = append(calls, call)
+	}
+	return calls, fault
+}
+
+// jsonKind names a decoded JSON value's kind, as a protocol fault quotes it.
+func jsonKind(v any) string {
+	switch v.(type) {
+	case string:
+		return "string"
+	case json.Number:
+		return "number"
+	case bool:
+		return "boolean"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
 }
 
 // readCall reads one tool call.

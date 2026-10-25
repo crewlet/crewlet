@@ -143,10 +143,12 @@ func TestACompletionsTurnCarriesEverythingItShares(t *testing.T) {
 	// The answer's own: who served it and what it cost and why it stopped
 	// — the round's record, not the conversation's. A protocol fault too:
 	// a round whose calls could not be read never joins the conversation
-	// at all (the tool loop asks again), so no turn carries it.
+	// at all (the tool loop asks again), so no turn carries it, nor the
+	// calls it named, which are refused on the round's record only.
 	answerOnly := map[string]bool{
 		"Model": true, "ProviderKey": true, "StopReason": true, "ProtocolError": true,
-		"InputTokens": true, "OutputTokens": true, "CacheRead": true, "CacheWrite": true,
+		"RefusedCalls": true,
+		"InputTokens":  true, "OutputTokens": true, "CacheRead": true, "CacheWrite": true,
 	}
 	cv, mv := reflect.ValueOf(c), reflect.ValueOf(m)
 	for i := range mv.NumField() {

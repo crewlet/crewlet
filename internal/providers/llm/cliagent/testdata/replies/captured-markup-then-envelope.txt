@@ -1,0 +1,16 @@
+
+<invoke name="describe_api">
+<parameter name="search">config</parameter>
+</invoke>
+```json
+{
+  "tool_calls": [
+    {
+      "name": "describe_api",
+      "arguments": {
+        "search": "config"
+      }
+    }
+  ]
+}
+```

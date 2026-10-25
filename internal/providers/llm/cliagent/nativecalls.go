@@ -151,6 +151,148 @@ func withMarkupCalls(env Envelope, tools []llm.ToolDef) Envelope {
 	return Envelope{Message: toolmarkup.Prose(text, blocks), ToolCalls: calls, Parsed: true}
 }
 
+// namedCalls is every call the reply writes, wherever it writes it, and why
+// the reply is a protocol fault when one of its envelopes has a call key that
+// does not read as calls ([readCalls]). [ParseEnvelope] holds the calls it
+// picked to this list: one it did not pick is a call that would otherwise be
+// lost without a word.
+//
+// Read from every place a call can be:
+//   - every candidate document ([envelopeCandidates]) that is an envelope,
+//     whatever tool it names, since the envelope is the contract's own form;
+//   - every candidate that is a vendor's call document, naming an offered
+//     tool ([nativeDocument]);
+//   - every whole markup call outside code ([toolmarkup.Read]);
+//   - every whole markup call inside a fenced block that names an offered
+//     tool. A fenced block is code, and markup in code is an example as far
+//     as the prose a person reads is concerned ([toolmarkup]); but a complete
+//     call to a tool this very request offers, in a reply whose envelope does
+//     not make it, is the model making the call in the wrong place, and
+//     reading it as an example ended a turn on a promise nothing kept.
+//
+// Markup that does not read as a whole call is not on this list: a fragment
+// in a code block is an example, and a fragment outside code is a fault the
+// reading of the reply's own prose already reports ([withMarkupCalls]).
+func namedCalls(reply string, tools []llm.ToolDef) ([]EnvelopeCall, string) {
+	var calls []EnvelopeCall
+	fault := ""
+	for _, candidate := range envelopeCandidates(reply) {
+		if doc, ok := decodeEnvelopeObject(candidate); ok {
+			if env, isEnvelope := fromDocument(doc); isEnvelope {
+				calls = append(calls, env.ToolCalls...)
+				if fault == "" {
+					fault = env.ProtocolError
+				}
+			}
+		}
+		if doc, ok := decodeJSONValue(candidate); ok {
+			if _, native, isNative := nativeDocument(doc); isNative {
+				calls = append(calls, offeredOnly(native, tools)...)
+			}
+		}
+	}
+	calls = append(calls, markupCalls(reply, tools, false)...)
+	for _, block := range fencedBlocks(reply) {
+		calls = append(calls, markupCalls(block, tools, true)...)
+	}
+	return distinctCalls(calls), fault
+}
+
+// markupCalls are the whole markup calls in text, those naming an offered
+// tool only when offeredOnly is set.
+func markupCalls(text string, tools []llm.ToolDef, onlyOffered bool) []EnvelopeCall {
+	// The blocks read before a fault are whole calls; the fault itself is
+	// reported where the markup is the reply's prose ([withMarkupCalls]).
+	blocks, _ := toolmarkup.Read(text)
+	var calls []EnvelopeCall
+	for _, b := range blocks {
+		call, ok := markupCall(b, tools)
+		if !ok {
+			continue
+		}
+		calls = append(calls, call)
+	}
+	if onlyOffered {
+		return offeredOnly(calls, tools)
+	}
+	return calls
+}
+
+// offeredOnly is the calls that name a tool in tools.
+func offeredOnly(calls []EnvelopeCall, tools []llm.ToolDef) []EnvelopeCall {
+	var out []EnvelopeCall
+	for _, c := range calls {
+		if unoffered([]EnvelopeCall{c}, tools) == "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// callIdentity is what makes two calls the same call: the tool and its
+// arguments, compared as canonical JSON, since the same call written as an
+// envelope and as markup decodes to equal values by different routes.
+func callIdentity(c EnvelopeCall) string {
+	return c.Name + "\x00" + canonicalJSON(c.Arguments) + "\x00" + c.ArgumentsError
+}
+
+// canonicalJSON is a decoded value as JSON with its keys in order, the form
+// two readings of one value agree on.
+func canonicalJSON(v any) string {
+	out, err := json.Marshal(v)
+	if err != nil {
+		// Every value here was decoded from text, so it encodes; one that
+		// does not still compares as itself, never as another value.
+		return fmt.Sprintf("%#v", v)
+	}
+	return string(out)
+}
+
+// distinctCalls is calls with each call kept once, in the order first written.
+func distinctCalls(calls []EnvelopeCall) []EnvelopeCall {
+	seen := map[string]bool{}
+	var out []EnvelopeCall
+	for _, c := range calls {
+		if id := callIdentity(c); !seen[id] {
+			seen[id] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// missingFrom is every call in named that picked does not account for.
+//
+// A call is accounted for by a picked call to the same tool whose arguments
+// hold every argument it writes, with the same value. Written twice, a call
+// is often written less completely once: Claude Code in text mode opens with
+// an empty `<invoke name="propose_api_change"></invoke>` and then writes the
+// whole call as the envelope (measured), which is one request, not two. A
+// call the picked set does not hold that way (another tool, another value,
+// an argument the picked call lacks) is a second request, and refused.
+func missingFrom(named, picked []EnvelopeCall) []EnvelopeCall {
+	var out []EnvelopeCall
+	for _, c := range named {
+		if !slices.ContainsFunc(picked, func(p EnvelopeCall) bool {
+			return p.Name == c.Name && holdsArguments(p.Arguments, c.Arguments)
+		}) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// holdsArguments reports whether whole has every argument of part, equal.
+func holdsArguments(whole, part map[string]any) bool {
+	for key, value := range part {
+		held, ok := whole[key]
+		if !ok || canonicalJSON(held) != canonicalJSON(value) {
+			return false
+		}
+	}
+	return true
+}
+
 // markupCall is one markup block as a call: a JSON body read by the envelope's
 // own call rule, an `<invoke>` by its parameters.
 func markupCall(b toolmarkup.Block, tools []llm.ToolDef) (EnvelopeCall, bool) {

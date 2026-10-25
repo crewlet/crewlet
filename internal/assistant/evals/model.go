@@ -42,6 +42,12 @@ type Round struct {
 	// while the round is still being written.
 	Streamed chan struct{}
 	Hold     chan struct{}
+	// Read, when set, reads Text as a text-mode CLI's raw reply against
+	// the request's tools, the way that backend reads it, in place of
+	// Text and Calls as the answer: what a suite scripting a reply
+	// captured from a real CLI passes (cliagent.ReadReply), so the turn
+	// meets the round exactly as the backend hands it over.
+	Read func(reply string, tools []llm.ToolDef) llm.Completion
 }
 
 // Say is a round that answers in prose.
@@ -95,6 +101,11 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	}
 	if next.Err != nil {
 		return nil, next.Err
+	}
+	if next.Read != nil {
+		c := next.Read(next.Text, req.Tools)
+		c.Model, c.InputTokens, c.OutputTokens = m.Name, next.Input, next.Output
+		return &c, nil
 	}
 	c := &llm.Completion{Content: next.Text, ToolCalls: next.Calls, Model: m.Name,
 		InputTokens: next.Input, OutputTokens: next.Output}

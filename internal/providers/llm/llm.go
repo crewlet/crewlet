@@ -164,6 +164,14 @@ type Completion struct {
 	// is the one that can correct it.
 	ProtocolError string
 
+	// RefusedCalls are the calls a reply with a [Completion.ProtocolError]
+	// named, wherever it wrote them, and empty otherwise. NONE OF THEM RAN
+	// and none joins the conversation: they are the record of what the model
+	// asked for and was refused, so a reader of the round (a person watching
+	// the steps) sees that it asked and that nothing ran, rather than a
+	// round that silently produced nothing.
+	RefusedCalls []ToolCall
+
 	// StopReason is why the model stopped writing this response — see
 	// [StopReason].
 	StopReason StopReason

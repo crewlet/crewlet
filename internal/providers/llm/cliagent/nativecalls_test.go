@@ -200,17 +200,34 @@ func TestNoToolIsRunThatTheRequestDidNotOffer(t *testing.T) {
 	}
 }
 
-// Markup a model shows as code is an example, not a call, and not a fault.
+// Markup a model shows as code is an example, not a call, and not a fault:
+// a call to a tool the request does not offer, a fragment, an inline span.
 func TestMarkupInCodeIsNeitherACallNorAFault(t *testing.T) {
 	t.Parallel()
 	for _, reply := range []string{
-		"A call looks like this:\n```xml\n" + liveInvokeReply + "\n```",
+		"A call looks like this:\n```xml\n" +
+			`<invoke name="Bash"><parameter name="command">ls</parameter></invoke>` + "\n```",
+		"It starts like this:\n```xml\n<invoke name=\"call_api\">\n```",
 		"Write `<invoke name=\"call_api\">` to call it.",
 	} {
 		env := ParseEnvelope(reply, assistantTools)
 		if env.ProtocolError != "" || len(env.ToolCalls) != 0 || env.Message != reply {
 			t.Errorf("%q read as %+v, want the prose verbatim", reply, env)
 		}
+	}
+}
+
+// A WHOLE CALL TO AN OFFERED TOOL IN A CODE BLOCK IS A FAULT, not an example:
+// the model made the call in the wrong place, and read as prose the turn
+// ended on a reply saying the change was prepared when nothing was.
+func TestAWholeFencedCallToAnOfferedToolIsAFault(t *testing.T) {
+	t.Parallel()
+	env := ParseEnvelope("I have prepared it.\n```xml\n"+liveInvokeReply+"\n```", assistantTools)
+	if env.ProtocolError == "" || len(env.ToolCalls) != 0 {
+		t.Fatalf("read as %+v, want a protocol fault that runs nothing", env)
+	}
+	if len(env.Refused) != 1 || env.Refused[0].Name != "propose_api_change" {
+		t.Errorf("refused %+v, want the fenced call on the record", env.Refused)
 	}
 }
 

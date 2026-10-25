@@ -167,6 +167,33 @@ type Surface interface {
 	Phase() string
 }
 
+// Refuser is a [Surface] that keeps a record of the calls this loop answers
+// without running them: a call whose arguments did not parse, a call named
+// in a reply the backend could not read ([llm.Completion.RefusedCalls]), and
+// a call written after the one that suspended its round. Execute never sees
+// these calls, so a surface that records its steps in Execute would
+// otherwise show a round where the model asked for something and nothing
+// happened, with no step saying so.
+//
+// Optional: a surface with no record of its own does not implement it, and
+// the loop still answers or re-asks exactly as it does for one that does.
+type Refuser interface {
+	// Refused records that call did not run, and why, in words a person
+	// reading the record understands.
+	Refused(ctx context.Context, call llm.ToolCall, reason string)
+}
+
+// refused tells the surface, where it keeps a record, that calls did not run.
+func refused(ctx context.Context, s Surface, calls []llm.ToolCall, reason string) {
+	r, ok := s.(Refuser)
+	if !ok {
+		return
+	}
+	for _, call := range calls {
+		r.Refused(ctx, call, reason)
+	}
+}
+
 // ToolResult is what one tool call produced.
 type ToolResult struct {
 	// Output is fed back to the model as the tool message's content.
@@ -1388,6 +1415,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// is all the model needs of it. See [maxProtocolCorrectives].
 		if fault := protocolFault(completion); fault != "" {
 			partial = nil
+			// What it asked for is on the record as refused, so a round
+			// that ran nothing never reads as one that asked for nothing.
+			refused(ctx, cfg.Surface, completion.RefusedCalls,
+				"The model's reply could not be read, so it did not run: "+fault+".")
 			publish(roundsUsed, nil)
 			if protocolRetries >= maxProtocolCorrectives || roundsUsed == cfg.MaxRounds {
 				return nil, &ProtocolError{Phase: cfg.Surface.Phase(), Round: roundsUsed, Reason: fault}
@@ -1579,7 +1610,7 @@ func runCalls(
 	// Every call this round makes is told which round it is in, on the
 	// phase's scale — see [CallRound].
 	callCtx := withCallRound(ctx, round)
-	for _, call := range calls {
+	for i, call := range calls {
 		// THE FENCE AGAIN, PER CALL. The round check is one per model
 		// turn, and a round is every tool the model asked for in it — a
 		// sandbox launch, a search, three tracker writes and a chat post,
@@ -1602,17 +1633,10 @@ func runCalls(
 			// call reaches the surface with no arguments otherwise — a
 			// search over everything, a post with no body — which is a
 			// call the model never made; the model reads why instead,
-			// as a failed result, and calls again. Not announced as
-			// running and not timed, because nothing ran: the row says
-			// so with a zero duration, which means "not measured".
-			out := unparsedArguments(call)
-			*execs = append(*execs, Execution{
-				Round: round, Name: call.Name, Args: call.Arguments,
-				Output: out, Failed: true,
-			})
-			*msgs = append(*msgs, llm.Message{
-				Role: llm.RoleTool, Content: out, ToolCallID: call.ID, Name: call.Name, Failed: true,
-			})
+			// as a failed result, and calls again ([answerUnrun]).
+			refused(ctx, cfg.Surface, []llm.ToolCall{call},
+				"Its arguments could not be read, so it did not run: "+call.ArgumentsError+".")
+			answerUnrun(round, call, unparsedArguments(call), msgs, execs)
 			continue
 		}
 		// Timed on the monotonic clock and stamped in UTC, and ANNOUNCED
@@ -1642,6 +1666,18 @@ func runCalls(
 			} else {
 				// The call is left UNANSWERED on purpose: exactly one
 				// dangling tool call is the invariant a resume checks.
+				//
+				// SO EVERY CALL AFTER IT IS ANSWERED NOW. Left as they
+				// were, they never ran and were never refused: the
+				// model, resumed, reads one answer and believes the
+				// rest landed, and a resume that checks the invariant
+				// finds more than one call dangling.
+				for _, later := range calls[i+1:] {
+					refused(ctx, cfg.Surface, []llm.ToolCall{later}, fmt.Sprintf(
+						"It was asked for after %s, which stopped to wait for a decision, "+
+							"so it did not run.", call.Name))
+					answerUnrun(round, later, afterSuspend(later, call), msgs, execs)
+				}
 				return true, call.ID, call.Name, res.SuspendPayload, nil
 			}
 		}
@@ -1663,6 +1699,28 @@ func runCalls(
 		})
 	}
 	return false, "", "", nil, nil
+}
+
+// answerUnrun answers a call the loop did not run with out, a failed result:
+// on the record and in the conversation, as any failed call is. Not announced
+// as running and not timed, because nothing ran: the row says so with a zero
+// duration, which means "not measured".
+func answerUnrun(round int, call llm.ToolCall, out string, msgs *[]llm.Message, execs *[]Execution) {
+	*execs = append(*execs, Execution{
+		Round: round, Name: call.Name, Args: call.Arguments,
+		Output: out, Failed: true,
+	})
+	*msgs = append(*msgs, llm.Message{
+		Role: llm.RoleTool, Content: out, ToolCallID: call.ID, Name: call.Name, Failed: true,
+	})
+}
+
+// afterSuspend is the result a call written after the one that suspended its
+// round is answered with.
+func afterSuspend(call, suspended llm.ToolCall) string {
+	return fmt.Sprintf("%s was NOT run: %s, asked for before it in the same reply, stopped "+
+		"the round to wait for a decision, and nothing after it runs. Call it again once "+
+		"that is decided, if it is still needed.", call.Name, suspended.Name)
 }
 
 // unparsedArguments is the result a call whose arguments did not parse is

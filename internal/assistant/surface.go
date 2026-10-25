@@ -63,7 +63,10 @@ type surface struct {
 	defs   []llm.ToolDef
 }
 
-var _ toolloop.Surface = (*surface)(nil)
+var (
+	_ toolloop.Surface = (*surface)(nil)
+	_ toolloop.Refuser = (*surface)(nil)
+)
 
 // newSurface offers tools in the catalogue's order.
 func newSurface(t *turn, tools []catalog.Tool) *surface {
@@ -111,11 +114,32 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 func (s *surface) refuseBefore(ctx context.Context, tool catalog.Tool, args map[string]any, summary string,
 	err error) toolloop.ToolResult {
 
-	message := redact.Secrets(err.Error())
+	message := s.recordRefusal(ctx, tool, args, summary, err.Error())
+	return failed(mcp.Classify(mcp.RefusalInvalid, err), "Refused before anything was sent: "+message)
+}
+
+// Refused records a call the tool loop answered without running it (a reply
+// the model wrote in a form that could not be read, arguments that did not
+// parse, a call after the one that stopped its round), so the person sees
+// the step the model asked for and that it did not run, never a turn that
+// asked for nothing. A call naming no tool this turn offers has no step to
+// draw; the loop has already answered or re-asked it.
+func (s *surface) Refused(ctx context.Context, call llm.ToolCall, reason string) {
+	if tool, offered := s.byName[call.Name]; offered {
+		s.recordRefusal(ctx, tool, call.Arguments, "Not run", reason)
+	}
+}
+
+// recordRefusal records one step refused as written, before anything was
+// sent, and returns the reason as the step shows it.
+func (s *surface) recordRefusal(ctx context.Context, tool catalog.Tool, args map[string]any,
+	summary, reason string) string {
+
+	message := redact.Secrets(reason)
 	step := s.t.stepStart(tool, args, nil, "")
 	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: codeInvalidInput,
 		Message: message}, 0, 0)
-	return failed(mcp.Classify(mcp.RefusalInvalid, err), "Refused before anything was sent: "+message)
+	return message
 }
 
 // read sends one read tool's request and shapes its answer.

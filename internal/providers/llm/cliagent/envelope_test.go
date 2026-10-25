@@ -37,8 +37,11 @@ func TestParseEnvelopeAcceptsTheShapesModelsProduce(t *testing.T) {
 		callNames: []string{"ls"},
 		parsed:    true,
 	}, {
-		name: "the LAST fence wins, because a worked example comes first",
-		reply: "Here is the format:\n```json\n{\"message\":\"example\",\"tool_calls\":[{\"name\":\"wrong\"}]}\n```\n" +
+		// A worked example that asks for a call is a second set of calls,
+		// and refused with the answer
+		// (TestTwoEnvelopesAskingForDifferentCallsRunNeither).
+		name: "the LAST fence's message wins, because a worked example comes first",
+		reply: "Here is the format:\n```json\n{\"message\":\"example\"}\n```\n" +
 			"And my answer:\n```json\n{\"message\":\"real\",\"tool_calls\":[{\"name\":\"right\"}]}\n```",
 		message:   "real",
 		callNames: []string{"right"},
@@ -125,17 +128,27 @@ func TestAJSONAnswerIsNotMistakenForAnEnvelope(t *testing.T) {
 	}
 }
 
-// A call with no name cannot be run, and letting it through would fail one
-// layer later with a message that no longer names the reply it came from.
-func TestACallWithoutANameIsDropped(t *testing.T) {
+// A CALL WITH NO NAME BESIDE ONE WITH A NAME IS A PROTOCOL FAULT, not the
+// named call alone: the model asked for two things and one cannot be read, so
+// running the other would report it done with half of what it asked for.
+// Neither runs, the readable one is on the record as refused, and the model
+// is asked again.
+func TestACallWithoutANameRefusesTheWholeReply(t *testing.T) {
 	t.Parallel()
-	env := ParseEnvelope(`{"message":"","tool_calls":[{"arguments":{"a":1}},{"name":"good"}]}`, nil)
-	if len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "good" {
-		t.Fatalf("tool calls = %+v, want only the named one", env.ToolCalls)
+	for _, reply := range []string{
+		`{"message":"","tool_calls":[{"arguments":{"a":1}},{"name":"good"}]}`,
+		`{"tool_calls":[{"nope":1},{"name":"good","arguments":{"outcome":"delivered"}}]}`,
+	} {
+		env := ParseEnvelope(reply, nil)
+		if env.ProtocolError == "" || len(env.ToolCalls) != 0 {
+			t.Errorf("%s read as %+v, want a protocol fault that runs nothing", reply, env)
+		}
+		if len(env.Refused) != 1 || env.Refused[0].Name != "good" {
+			t.Errorf("%s refused %+v, want the readable call on the record", reply, env.Refused)
+		}
 	}
 }
 
-// Arguments are never nil, so the tool loop can index into them without a
 // check at every call site.
 func TestArgumentsAreAlwaysAMap(t *testing.T) {
 	t.Parallel()
@@ -169,15 +182,16 @@ func TestTheContractNeverDemandsAToolCall(t *testing.T) {
 	}
 }
 
-// A call list nothing could be read from is NOT an envelope.
+// A call list nothing could be read from is a PROTOCOL FAULT, never an
+// envelope that asked for no tools and never prose.
 //
-// The distinction is what happens next. A document that is not an envelope
-// becomes assistant prose and, in a phase that has to end in a call, the tool
-// loop's corrective asks again — one round, and the model reliably fixes it. Accepted as an envelope
-// instead, the same reply reported that the model asked for NO tools when it
-// had asked for several, so the turn ended on a confident message with nothing
-// delivered.
-func TestACallListNothingCouldBeReadFromIsNotAnEnvelope(t *testing.T) {
+// Accepted as an envelope, the reply reported that the model asked for NO
+// tools when it had asked for several, so the turn ended on a confident
+// message with nothing delivered. Handed back as prose, a phase with no
+// terminator (the Dashboard Assistant) showed the raw document as its answer
+// and completed. As a fault, it runs nothing, shows nothing, and the tool
+// loop asks again.
+func TestACallListNothingCouldBeReadFromIsAProtocolFault(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, reply string }{
 		{"entries are strings, not objects",
@@ -197,12 +211,9 @@ func TestACallListNothingCouldBeReadFromIsNotAnEnvelope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			env := ParseEnvelope(tc.reply, nil)
-			if env.Parsed {
-				t.Errorf("parsed as an envelope with %d calls — the request was dropped "+
-					"and the message reported as a final answer", len(env.ToolCalls))
-			}
-			if env.Message != tc.reply {
-				t.Errorf("the reply did not fall through as prose: %q", env.Message)
+			if env.ProtocolError == "" || len(env.ToolCalls) != 0 {
+				t.Errorf("read as %+v: the request was dropped and the message "+
+					"would be reported as a final answer", env)
 			}
 		})
 	}
@@ -248,21 +259,6 @@ func TestANullCallListIsAnEmptyOne(t *testing.T) {
 	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":null}`, nil)
 	if !env.Parsed || env.Message != "nothing to do here" || len(env.ToolCalls) != 0 {
 		t.Errorf("env = %+v, want a parsed envelope with no calls", env)
-	}
-}
-
-// One unreadable entry beside a readable one keeps the readable one: the
-// tool loop's corrective is for a reply that requested nothing this build
-// could run, not for a reply with a stray element in its list.
-func TestAPartiallyReadableCallListKeepsWhatItCanRun(t *testing.T) {
-	t.Parallel()
-	env := ParseEnvelope(
-		`{"tool_calls":[{"nope":1},{"name":"submit_work","arguments":{"outcome":"delivered"}}]}`, nil)
-	if !env.Parsed {
-		t.Fatal("a list with one good call was refused")
-	}
-	if len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "submit_work" {
-		t.Errorf("calls = %+v", env.ToolCalls)
 	}
 }
 

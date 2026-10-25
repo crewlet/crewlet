@@ -1824,13 +1824,19 @@ rides in the prompt:
 The parser is deliberately forgiving — it accepts the last fenced block,
 a bare object, `arguments` as a JSON string, one call object written
 without its list, `null` for no calls, and `message` / `content` /
-`text` / `response` as synonyms. It is strict in the other direction: a
-call list it can read no call from — strings for entries, nameless
-objects, a string or a number where the list belongs — makes the reply
-not an envelope at all, because reading it as one would report a model
-that asked for no tools when it asked for some. When nothing parses, the whole reply
+`text` / `response` as synonyms. It is strict in the other direction:
+**every call a reply makes is run or refused, never lost.** A call list
+with an entry it cannot read as a call (a string, a nameless object, a
+string or a number where the list belongs) is a protocol fault, not a
+shorter list and not prose. So is a call the reply writes outside the
+envelope it is read by: in an earlier envelope, as markup beside it, or
+as a whole call to an offered tool in a code block, unless the envelope
+makes the same call (a model that writes one call as markup and again
+as the envelope asked for it once). Read the forgiving way, each of
+these ended a Dashboard Assistant turn `completed` on a message saying
+a proposal was prepared when none was. When nothing parses, the whole reply
 becomes assistant content with no tool calls, and in every phase that
-has to end in a call the tool loop's corrective re-prompt takes over —
+has to end in a call the tool loop's corrective re-prompt takes over,
 the finishing corrective naming the phase's submission. A request never
 forces a call, so there is one contract and it is the permissive one —
 "use an empty `tool_calls` list when no tool is needed" — on every phase
@@ -1851,10 +1857,14 @@ parser reads each of these as the call it is when it names a tool the
 request offered; a markup parameter is typed by the tool's schema (a
 declared string as written, anything else its JSON value where it holds
 one), and what the reply said around the calls is its message. Markup
-inside a fenced block or inline code is an example, not a call. One that
-names any other tool, is cut off, or sits beside the envelope's own calls
-runs nothing: it is a **protocol fault**, and the tool loop asks once more
-with a corrective naming the fault and the contract's shape. Such a reply
+inside a fenced block or inline code is an example, not a call, unless it
+is a whole call to an offered tool that the envelope does not make. One
+that names any other tool, is cut off, or sits beside the envelope's own
+calls runs nothing: it is a **protocol fault**, and the tool loop asks
+once more with a corrective naming the fault and the contract's shape.
+The calls the faulted reply named are handed to the surface as refused
+(`toolloop.Refuser`), so the Dashboard Assistant shows each as a refused
+step rather than a round that asked for nothing. Such a reply
 is never shown. Its prose is not narrated, its text never joins the
 conversation, a live view is cut short of any tag before it arrives, and
 a model that repeats the fault ends the loop with `model_protocol` (the

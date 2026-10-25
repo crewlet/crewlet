@@ -1,0 +1,12 @@
+
+<invoke name="api_request">
+<parameter name="route">GET /config/roles/{id}</parameter>
+<parameter name="path">{"id": "crewlet-swe"}</parameter>
+</invoke>
+```
+
+Correction: I must reply in the required format.
+
+```json
+{"message": "", "tool_calls": [{"name": "api_request", "arguments": {"route": "GET /config/roles/{id}", "path": {"id": "crewlet-swe"}}}]}
+```

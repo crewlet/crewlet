@@ -23,10 +23,14 @@
 //
 // CODE IS NOT A CALL. Markup inside a fenced block or an inline code span is a
 // model showing what a call looks like (an answer about a vendor's API, a
-// worked example), so neither reader sees it. A call a model fences instead
-// of writing out is then read as code: the corrective that follows asks for
-// the envelope, which costs one round, where executing an example costs a
-// change nobody asked for.
+// worked example), so [Read] and [Index] do not see it: it is prose a person
+// may read, and it never runs. The envelope parser holds one exception, on
+// the side of refusing: it reads each fenced block on its own with [Read],
+// and a WHOLE call in one that names a tool the request offered, in a reply
+// whose envelope does not make that call, is a protocol fault that runs
+// nothing and asks again. Executing an example costs a change nobody asked
+// for; showing a fenced call as the answer ended a turn on a promise nothing
+// kept.
 //
 // Standard library only, so the provider contract's packages can share it.
 package toolmarkup
