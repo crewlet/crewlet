@@ -44,6 +44,7 @@ type Store struct {
 	ops       map[string]bool
 	moves     []assistantdomain.ProposalMove
 	unknown   bool
+	fail      error
 	now       func() time.Time
 }
 
@@ -83,6 +84,9 @@ func (s *Store) Move(_ context.Context, c assistantdomain.Call, id uuid.UUID,
 	defer s.mu.Unlock()
 	if s.unknown {
 		return approval.Written{Outcome: "unknown"}, nil
+	}
+	if s.fail != nil {
+		return approval.Written{}, s.fail
 	}
 	if s.ops[c.OpID] {
 		return approval.Written{Outcome: "applied", Collapsed: true}, nil
@@ -125,6 +129,14 @@ func (s *Store) Recorded() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.moves)
+}
+
+// FailMoves makes every later move fail with err, as a store nobody can reach
+// does.
+func (s *Store) FailMoves(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fail = err
 }
 
 // AnswerUnknown makes every later move answer unknown, as a broker nobody

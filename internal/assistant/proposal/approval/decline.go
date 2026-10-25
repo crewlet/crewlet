@@ -30,12 +30,10 @@ func (a *Approver) Decline(ctx context.Context, ap Approval) (wire.ProposalAnswe
 		a.expire(ctx, d, p)
 		return wire.ProposalAnswer{}, ErrExpired
 	case state != wire.ProposalProposed:
-		w, moveErr := a.d.Store.Move(ctx, d.call("decline"), p.ID, assistantdomain.ProposalMove{
-			From: wire.ProposalProposed, To: wire.ProposalDeclined})
-		if moveErr == nil && w.Collapsed {
-			return answer(p, state, wire.TurnAccepted{TurnID: p.Turn}), nil
+		if err = a.repeated(ctx, d.call("decline"), p, wire.ProposalDeclined, state); err != nil {
+			return wire.ProposalAnswer{}, err
 		}
-		return wire.ProposalAnswer{}, &Decided{State: state}
+		return answer(p, state, wire.TurnAccepted{TurnID: p.Turn}), nil
 	}
 	if err = proposal.Verify(p, ap.Digest); err != nil {
 		return wire.ProposalAnswer{}, err

@@ -164,16 +164,36 @@ func (a *Approver) Approve(ctx context.Context, ap Approval) (wire.ProposalAnswe
 	return a.execute(ctx, d, p, wire.ProposalApproved, read)
 }
 
+// repeated reads a decision of a proposal that is no longer waiting, made by
+// sending this request's own move again: nil where the request's operation
+// already decided it (a retry of the decision whose answer was lost),
+// [Decided] where another decided it, and [Unconfirmed] or [ErrNotFound]
+// where the store cannot say which. A store that cannot be read is never
+// answered as another's decision: the person would be told the proposal was
+// decided when the retry may be the very decision that did.
+func (a *Approver) repeated(ctx context.Context, c assistantdomain.Call, p assistantdomain.Proposal,
+	to, state wire.ProposalState) error {
+
+	w, err := a.move(ctx, c, p.ID, assistantdomain.ProposalMove{
+		From: wire.ProposalProposed, To: to})
+	switch {
+	case err == nil && w.Collapsed:
+		return nil
+	case err == nil, errors.Is(err, ErrAlreadyDecided):
+		return &Decided{State: state}
+	}
+	return err
+}
+
 // repeat answers an approval of a proposal that is no longer waiting: the
 // state it is in now when this request is a retry of the approval that
-// decided it (its operation is already recorded), and [Decided] otherwise.
+// decided it (its operation is already recorded), and [repeated]'s refusal
+// otherwise.
 func (a *Approver) repeat(ctx context.Context, d decider, p assistantdomain.Proposal,
 	state wire.ProposalState) (wire.ProposalAnswer, error) {
 
-	w, err := a.d.Store.Move(ctx, d.call("approve"), p.ID, assistantdomain.ProposalMove{
-		From: wire.ProposalProposed, To: wire.ProposalApproved})
-	if err != nil || !w.Collapsed {
-		return wire.ProposalAnswer{}, &Decided{State: state}
+	if err := a.repeated(ctx, d.call("approve"), p, wire.ProposalApproved, state); err != nil {
+		return wire.ProposalAnswer{}, err
 	}
 	if p.Scope == wire.ScopePage && state == wire.ProposalApproved {
 		// THE PAGE NEVER HEARD IT: the answer that carried the action was

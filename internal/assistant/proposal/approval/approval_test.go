@@ -525,3 +525,51 @@ func TestAPageProposalIsStaleOnceThePageMoves(t *testing.T) {
 		t.Errorf("a stale page action was claimed afterwards: %v", err)
 	}
 }
+
+// A REPEATED DECISION THE STORE CANNOT ANSWER IS UNCONFIRMED, never another's:
+// an approval or a decline sent again after the first one decided the
+// proposal, met by a store that fails or answers unknown, is told nobody can
+// confirm it (503 with its operation), because the retry may be the very
+// decision that landed. Mutation: answer any failed repeat move with Decided
+// and every row reads already decided.
+func TestARepeatedDecisionTheStoreCannotAnswerIsUnconfirmed(t *testing.T) {
+	t.Parallel()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	ctx := approvaltest.As(t.Context(), ada)
+	approve := func(a *approval.Approver, ap approval.Approval) error {
+		_, err := a.Approve(ctx, ap)
+		return err
+	}
+	decline := func(a *approval.Approver, ap approval.Approval) error {
+		_, err := a.Decline(ctx, ap)
+		return err
+	}
+	failing := func(s *approvaltest.Store) { s.FailMoves(errors.New("the broker is unreachable")) }
+	unheard := func(s *approvaltest.Store) { s.AnswerUnknown() }
+	for _, tc := range []struct {
+		name   string
+		decide func(*approval.Approver, approval.Approval) error
+		store  func(*approvaltest.Store)
+	}{
+		{"an approval, the store failing", approve, failing},
+		{"an approval, the store unheard", approve, unheard},
+		{"a decline, the store failing", decline, failing},
+		{"a decline, the store unheard", decline, unheard},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := approvaltest.NewFleet()
+			p := f.Propose(t, ada, nil)
+			node := f.Node(t)
+			if err := tc.decide(node, approvaltest.Approve(p)); err != nil {
+				t.Fatal(err)
+			}
+			tc.store(f.Store)
+			err := tc.decide(node, approvaltest.Approve(p))
+			var unconfirmed *approval.Unconfirmed
+			if !errors.As(err, &unconfirmed) || errors.Is(err, approval.ErrAlreadyDecided) {
+				t.Errorf("the repeated decision answered %v, want Unconfirmed", err)
+			}
+		})
+	}
+}
