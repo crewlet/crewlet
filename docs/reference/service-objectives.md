@@ -19,13 +19,17 @@ carry an error budget and a burn rate exactly like an availability one.
 
 A client's own refusal is an answer, not a fault: a publish refused because
 its base version moved, a quota, a policy finding or a malformed request is a
-good event; a `5xx`, or an outcome nobody could establish, is a bad one.
+good event; a `5xx`, or an outcome nobody could establish, is a bad one. A
+publish refused because the object store has no room for its bytes
+(`507 store_full`) is the deployment's refusal rather than the client's, and
+a bad event: a full bucket refuses every publish until an operator makes room,
+and that is what the budget is there to burn.
 
 ## The objectives
 
 | Objective | Measures | Where | Good event | Within | Target |
 |---|---|---|---|---|---|
-| `publish_success` | Publish success | the publish pipeline (`internal/artifactupload`), every create and publish | published, or refused for the client's own reason (a moved head, a quota, a policy, a bad request), excluding the upload transfer | 30 s | 99.9% |
+| `publish_success` | Publish success | the publish pipeline (`internal/artifactupload`), every create and publish | published, or refused for the client's own reason (a moved head, a quota, a policy, a bad request; a full object store, `507 store_full`, is a bad event), excluding the upload transfer | 30 s | 99.9% |
 | `publish_applied` | Publish latency | the publish pipeline, for a publish that moves no new bytes (a rollback, carries, edits) | the domain's decision to the record applied | 2 s | 95% |
 | `view_first_byte` | View time to first byte | the artifact origin (`internal/artifactserve`), every document request | the first byte written, under any status but a 5xx | 300 ms | 99.9% |
 | `artifact_ready` | Artifact ready, reported by the viewer's browser | the dashboard, through `POST /artifacts/ready` | the frame's ticket minted to the page's bridge hello | 3 s | 99.5% |

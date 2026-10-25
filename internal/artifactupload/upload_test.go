@@ -289,6 +289,93 @@ func TestARefusedPublishLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+// A TRANSFER THE STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store refuses
+// the same file the same way until an operator makes room, so the transfer
+// answers a [artifactupload.StoreFull] — a refusal naming the file and the
+// room the store named, its surface's 507, counted
+// `store_full` — never a failure a client retries at once. Nothing was stored,
+// so the file's claim is given back and the same file transfers on the same
+// upload once room is made. The store's own words name its bucket and stay
+// out of the sentence.
+//
+// Mutation: answer ErrFull as any other failed put (transfer.go's case
+// removed) and this fails on the refusal, its reason and its sentence.
+func TestATransferTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{fillable: true})
+	c := h.person("ada", h.opKey("upload"))
+	files := map[string]string{"index.html": "<p>no room</p>"}
+	intent, err := h.svc.Intend(t.Context(), c, artifacts.ID{}, declare(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fill(true)
+	err = h.svc.Transfer(t.Context(), c, intent.Upload, "index.html", strings.NewReader(files["index.html"]),
+		int64(len(files["index.html"])))
+	var full *artifactupload.StoreFull
+	switch {
+	case !errors.As(err, &full) || full.Path != "index.html" || !errors.Is(err, objstore.ErrFull):
+		t.Fatalf("a transfer the store had no room for answered %v, want StoreFull of index.html over ErrFull",
+			err)
+	case full.Remedy != caseRemedy || !strings.Contains(err.Error(), caseRemedy):
+		t.Errorf("the refusal %q (remedy %q) does not name the store's room %q", err, full.Remedy, caseRemedy)
+	case strings.Contains(err.Error(), "OBJ_crewlet_files"):
+		t.Errorf("the store's own words reached the refusal's sentence: %q", err)
+	}
+	if got := h.meter.count(metrics.ArtifactsPublishRefusals, metrics.Attrs{"reason": "store_full"}); got != 1 {
+		t.Errorf("the refusal was counted %d times as store_full, want once", got)
+	}
+	if stored := h.stored(); len(stored) != 0 {
+		t.Errorf("a transfer the store had no room for left %v", stored)
+	}
+	h.fill(false)
+	if err := h.svc.Transfer(t.Context(), c, intent.Upload, "index.html",
+		strings.NewReader(files["index.html"]), int64(len(files["index.html"]))); err != nil {
+		t.Fatalf("the same file, sent again once room was made, answered %v", err)
+	}
+}
+
+// A PUBLISH THE STORE HAS NO ROOM FOR IS REFUSED AS FULL, AND GIVES BACK WHAT
+// IT STAGED: a file the pipeline produced (an inline file here) is put under
+// the publish's own reservation, and a full bucket refuses it — a refusal, so
+// the publish deletes what it stored and releases its reservation as every
+// refusal does, rather than hold them for a retry that would meet the same
+// full bucket. Counted `store_full`, and the same publish lands once room is
+// made. (Judged a bad publish_success event, the deployment's refusal and
+// never the client's: TestEveryPublishIsOneObjectiveEvent.)
+//
+// Mutation: answer ErrFull as any other failed put (stage.go's case removed)
+// and this fails on the refusal, its reason and the bytes still held.
+func TestAPublishTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{fillable: true, noVendor: true})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
+	h.fill(true)
+	req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+		Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("no room for these notes")}}}
+	_, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("full")), req)
+	var full *artifactupload.StoreFull
+	if !errors.As(err, &full) || full.Path != "notes.txt" || !errors.Is(err, objstore.ErrFull) {
+		t.Fatalf("a publish the store had no room for answered %v, want StoreFull of notes.txt over ErrFull", err)
+	}
+	if full.Remedy != caseRemedy || !strings.Contains(err.Error(), caseRemedy) {
+		t.Errorf("the refusal %q (remedy %q) does not name the store's room %q", err, full.Remedy, caseRemedy)
+	}
+	if got := h.meter.count(metrics.ArtifactsPublishRefusals, metrics.Attrs{"reason": "store_full"}); got != 1 {
+		t.Errorf("the refusal was counted %d times as store_full, want once", got)
+	}
+	if held := h.held(); held != 0 {
+		t.Errorf("the reservations hold %d bytes after the refusal, want the publish's given back", held)
+	}
+	if unnamed := h.unnamedBytes(); unnamed != 0 {
+		t.Errorf("the refused publish left %d bytes no row names", unnamed)
+	}
+	h.fill(false)
+	if _, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("room")), req); err != nil {
+		t.Fatalf("the same publish, once room was made, answered %v", err)
+	}
+}
+
 // THE PER-TURN GUARDRAILS (D28) refuse an agent's turn past twenty publishes,
 // ten of them on one artifact, or past 128 MiB written, before a byte moves,
 // and a person's call is held to none of them.

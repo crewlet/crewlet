@@ -101,10 +101,16 @@ func (s *Service) transfer(ctx context.Context, c artifactsdomain.Call, upload, 
 	stored, err := s.objects.PutMinted(putCtx, claimed.Key, body, claimed.Size,
 		objstore.PutMeta{ContentType: claimed.ContentType})
 	next := fileStored
+	var full *objstore.Full
 	switch {
 	case errors.Is(err, objstore.ErrTooLarge):
 		next, err = filePending, &UploadMismatch{Path: p, Reason: fmt.Sprintf("the body is longer than "+
 			"the %d bytes the upload declared", claimed.Size)}
+	case errors.As(err, &full):
+		// NO ROOM, which no retry makes ([StoreFull]): the claim is given
+		// back, since nothing was stored, so the same file is sent again
+		// once an operator has made room.
+		next, err = filePending, &StoreFull{Path: p, Remedy: full.Remedy, Err: err}
 	case err != nil:
 		next = filePending
 	case stored != want:

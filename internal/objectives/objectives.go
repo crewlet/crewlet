@@ -197,7 +197,7 @@ var catalogue = []Objective{
 		Name:      PublishSuccess,
 		Measures:  "Publish success",
 		Where:     "the publish pipeline (`internal/artifactupload`), every create and publish",
-		GoodEvent: "published, or refused for the client's own reason (a moved head, a quota, a policy, a bad request), excluding the upload transfer",
+		GoodEvent: "published, or refused for the client's own reason (a moved head, a quota, a policy, a bad request; a full object store, `507 store_full`, is a bad event), excluding the upload transfer",
 		Within:    PublishWithin,
 		Target:    TargetPublishSuccess,
 		Reason:    "a failed publish is work an agent or a person redoes",

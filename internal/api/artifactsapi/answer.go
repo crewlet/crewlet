@@ -183,6 +183,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	var (
 		gone       *artifactsdomain.CarriedObjectGone
 		quota      *artifactsdomain.QuotaExceeded
+		full       *artifactupload.StoreFull
 		mismatch   *artifactupload.UploadMismatch
 		missing    *artifactupload.UploadMissing
 		pending    *artifactupload.UploadsOutstanding
@@ -211,6 +212,15 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	case errors.As(err, &quota):
 		detail["limit"], detail["usage"], detail["key"] = quota.Limit, quota.Usage, quota.Key
 		fail(http.StatusRequestEntityTooLarge, httpjson.CodeQuotaExceeded)
+	case errors.As(err, &full):
+		// NO ROOM, WHICH NO RETRY MAKES: HTTP's own status for a server that
+		// cannot store what the request needs, with no Retry-After, its
+		// detail naming the room an operator makes. The store's own words
+		// name its bucket, which is the log's.
+		log.WarnContext(r.Context(), "artifacts_store_full", "verb", verb, "op_id", key,
+			"path", full.Path, "error", full.Err)
+		detail["path"] = full.Path
+		fail(http.StatusInsufficientStorage, httpjson.CodeStoreFull)
 	case errors.As(err, &mismatch):
 		detail["path"] = mismatch.Path
 		failClient(httpjson.CodeUploadMismatch)

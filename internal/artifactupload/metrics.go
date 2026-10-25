@@ -23,8 +23,8 @@ var Refusals = []string{
 	"invalid", "media_type", "content", "credential", "capability_unknown", "contract_unknown",
 	"edit_refused", "policy_refused", "upload_missing", "upload_mismatch", "upload_not_found",
 	"upload_expired", "upload_consumed", "uploads_outstanding", "turn_quota", "quota_exceeded",
-	"version_moved", "carried_object_gone", "label_taken", "trashed", "not_found", "conflict",
-	"other",
+	"store_full", "version_moved", "carried_object_gone", "label_taken", "trashed", "not_found",
+	"conflict", "other",
 }
 
 // reasonOf is a refusal's reason, from [Refusals].
@@ -36,6 +36,7 @@ func reasonOf(err error) string {
 		turn     *TurnQuota
 		content  *ContentRefused
 		quota    *artifactsdomain.QuotaExceeded
+		full     *StoreFull
 		moved    *artifactsdomain.VersionMoved
 		gone     *artifactsdomain.CarriedObjectGone
 		edit     *edits.Refused
@@ -54,6 +55,8 @@ func reasonOf(err error) string {
 		return "content"
 	case errors.As(err, &quota):
 		return "quota_exceeded"
+	case errors.As(err, &full):
+		return "store_full"
 	case errors.As(err, &moved):
 		return "version_moved"
 	case errors.As(err, &gone):
@@ -128,9 +131,17 @@ func (s *Service) observePublish(start time.Time, err error) {
 // refused for the client's own reason (a definite refusal: a moved head, a
 // quota, a policy, a bad request), and not when nobody could establish its
 // outcome.
+//
+// NOR WHEN THE OBJECT STORE HAD NO ROOM FOR IT ([StoreFull]): a definite
+// refusal, so it gives back what it staged and is counted `store_full` like
+// any other, but for the deployment's reason, never the client's — it is
+// answered 507, a 5xx, and every publish after it is refused the same until an
+// operator makes room. Judged answered, a full bucket would refuse every
+// publish while the objective stayed green and its burn-rate alarm silent.
 func (s *Service) judgePublish(start time.Time, err error) {
 	if s.judged != nil {
-		s.judged.Record(objectives.PublishSuccess, s.now().Sub(start), err == nil || refused(err))
+		answered := err == nil || refused(err) && !errors.As(err, new(*StoreFull))
+		s.judged.Record(objectives.PublishSuccess, s.now().Sub(start), answered)
 	}
 }
 

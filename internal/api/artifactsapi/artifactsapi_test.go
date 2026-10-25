@@ -2,6 +2,7 @@ package artifactsapi_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -845,6 +847,7 @@ func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {
 		{&artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2, Key: "artifacts.limits.company_bytes"}, 413, "quota_exceeded"},
 		{&artifactsdomain.CarriedObjectGone{Paths: []string{"a.css"}}, 409, "carried_object_gone"},
 		{&artifactupload.UploadMismatch{Path: "a.css"}, 422, "upload_mismatch"},
+		{fullStore("a.css"), 507, "store_full"},
 		{&artifactupload.UploadMissing{Paths: []string{"a.css"}}, 409, "upload_missing"},
 		{&artifactupload.UploadsOutstanding{Scope: "principal", Until: time.Now().Add(time.Minute)}, 429, "uploads_outstanding"},
 		{&artifactupload.ContentRefused{Path: "a.png"}, 422, "content_refused"},
@@ -870,6 +873,61 @@ func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {
 		if w.Code != c.status || errorOf(t, w) != c.code {
 			t.Errorf("%v: answered %d %s, want %d %s", c.err, w.Code, errorOf(t, w), c.status, c.code)
 		}
+	}
+}
+
+// caseRemedy is the room [fullStore] names: a case's own, so a detail naming
+// it spliced the refusal's remedy rather than a spelling of the surface's own.
+const caseRemedy = "an operator makes room in this case's own bucket"
+
+// fullStore is the pipeline's refusal of path for a store with no room left,
+// over the store's own words.
+func fullStore(path string) error {
+	return &artifactupload.StoreFull{Path: path, Remedy: caseRemedy, Err: &objstore.Full{
+		Remedy: caseRemedy, Err: errors.New("natsobj: put files/x: OBJ_crewlet_files holds as many " +
+			"bytes as it reserves")}}
+}
+
+// A FILE THE STORE HAS NO ROOM FOR IS `507 store_full`, NAMING THE FILE AND
+// THE ROOM AN OPERATOR MAKES, on the transfer of an upload's bytes and on a
+// publish alike: HTTP's own status for a server that cannot store what the
+// request needs, with no Retry-After — the same request is refused the same
+// until room is made — and never the 500 a failure nothing classified reads
+// as, which told the person the engine had broken. The store's own words name
+// its bucket and stay in the log.
+//
+// Mutation: drop writeFailed's StoreFull case and this fails on the status,
+// the code and the detail.
+func TestAFileTheStoreHasNoRoomForIsAnsweredFull(t *testing.T) {
+	t.Parallel()
+	for _, route := range []struct {
+		name, method, path, body string
+		headers                  []string
+	}{
+		{"a publish", "POST", at(page, "/versions"), publishV3, append(keyed(), "If-Match", ifMatch2)},
+		{"a transfer", "PUT", "/artifacts/uploads/u-1/files/a.css", "a{}", nil},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			t.Parallel()
+			g := newRig(t, true)
+			g.pipeline.err = fullStore("a.css")
+			w := g.do(person("sam"), route.method, route.path, route.body, route.headers...)
+			var answer map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+				t.Fatalf("answered %d %s, not JSON: %v", w.Code, w.Body, err)
+			}
+			detail, _ := answer["detail"].(string)
+			switch {
+			case w.Code != http.StatusInsufficientStorage || answer["error"] != "store_full":
+				t.Fatalf("answered %d %s, want 507 store_full", w.Code, w.Body)
+			case w.Header().Get("Retry-After") != "":
+				t.Errorf("asked its client back in %s seconds", w.Header().Get("Retry-After"))
+			case answer["path"] != "a.css" || !strings.Contains(detail, caseRemedy):
+				t.Errorf("answered %s, want the path and a detail naming %q", w.Body, caseRemedy)
+			case strings.Contains(w.Body.String(), "OBJ_crewlet_files"):
+				t.Errorf("the store's own words reached the client: %s", w.Body)
+			}
+		})
 	}
 }
 

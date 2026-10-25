@@ -6921,6 +6921,7 @@ The API origin **never renders an artifact**:
 | `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
 | `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |
 | `503` | `unavailable` | This node could not decide or reach the estate; the `Retry-After` says when to come back |
+| `507` | `store_full` | The object store has no room for a file's bytes — the fleet's NATS bucket holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation) — on a transfer or on a publish that stores a file of its own; `path` names it, and nothing of it was stored. A publish refused for it gives back what it staged and its reservation, and a transfer's file may be sent again. **No** `Retry-After`: the same request is refused the same until an operator makes room, which the `detail` names |
 
 ## The code host: `/git` and `/code`
 

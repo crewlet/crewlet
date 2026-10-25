@@ -60,6 +60,30 @@ func (e *UploadMismatch) Error() string {
 		e.Path, e.Reason)
 }
 
+// StoreFull is a file the object store had no room for (507 `store_full`,
+// [objstore.Full]): nothing of the file was stored, and the same upload or
+// publish is refused the same until an operator makes the room the store
+// named, Remedy.
+//
+// A REFUSAL, NOT A FAILURE: a publish refused for it gives back what it staged
+// and its reservation, as every refusal does, rather than hold them for a
+// retry that would meet the same full bucket — and its sentence names the
+// room, never "try again". Err is the store's own answer, whose words name its
+// bucket: reachable for the log, and kept out of the sentence.
+type StoreFull struct {
+	Path   string
+	Remedy string
+	Err    error
+}
+
+func (e *StoreFull) Error() string {
+	return fmt.Sprintf("artifactupload: %q was not stored: the object store has no room left for it, "+
+		"and the same upload is refused the same until %s", e.Path, e.Remedy)
+}
+
+// Unwrap is the store's answer, so errors.Is meets [objstore.ErrFull].
+func (e *StoreFull) Unwrap() error { return e.Err }
+
 // UploadMissing is a publish naming files whose bytes have not arrived (409
 // `upload_missing`): transfer them, then publish again.
 type UploadMissing struct {

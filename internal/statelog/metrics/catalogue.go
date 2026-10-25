@@ -1309,9 +1309,11 @@ func Catalogue() []Instrument {
 				"(internal/artifactupload.Refusals): a client sending the " +
 				"wrong bytes (`upload_mismatch`), a page breaking the policy " +
 				"(`policy_refused`), a company out of quota (`quota_exceeded`) " +
-				"or reservations (`uploads_outstanding`), an agent's turn past " +
-				"its guardrails (`turn_quota`), a moved head (`version_moved`) " +
-				"and the rest. Each reason is a different person to call.",
+				"or reservations (`uploads_outstanding`), an object store with " +
+				"no room left (`store_full`, the operator's to make), an " +
+				"agent's turn past its guardrails (`turn_quota`), a moved head " +
+				"(`version_moved`) and the rest. Each reason is a different " +
+				"person to call.",
 		},
 		// ---- the artifact origin ----------------------------------------
 		{

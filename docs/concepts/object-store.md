@@ -290,7 +290,8 @@ store:
   project file's write — through a tool, which the [act
   transport](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface) answers
   `507`, and through [its upload route](../reference/api-endpoints.md#project-files),
-  `507` too. The
+  `507` too — and an artifact's file, on its transfer or its publish (`507`,
+  [Artifacts](artifacts.md)), which gives back what the publish staged. The
   [`objects_bucket_near_ceiling`](#alarms) alarm fires once less than a fifth
   of the reservation is left, and the `crewlet.objects.bucket.bytes` and
   `crewlet.objects.bucket.max_bytes` gauges (from the node holding the

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -115,6 +118,9 @@ type harness struct {
 	judged  *judged
 	svc     *artifactupload.Service
 
+	// fillable is the backend a fillable harness fills, nil otherwise.
+	fillable *fillableBackend
+
 	mu     sync.Mutex
 	limits artifacts.Limits
 }
@@ -126,6 +132,10 @@ type options struct {
 
 	// noVendor turns the copying of CDN files off.
 	noVendor bool
+
+	// fillable makes the object store's backend one a case fills
+	// ([harness.fill]).
+	fillable bool
 }
 
 func newHarness(t *testing.T, o options) *harness {
@@ -135,8 +145,12 @@ func newHarness(t *testing.T, o options) *harness {
 		judged: &judged{}, limits: defaultLimits()}
 	h.backend = memobj.NewAt(h.clock.Now)
 	var backend objstore.Backend = h.backend
-	if o.presign {
+	switch {
+	case o.presign:
 		backend = &signingBackend{Backend: h.backend}
+	case o.fillable:
+		h.fillable = &fillableBackend{Backend: h.backend}
+		backend = h.fillable
 	}
 	store, err := objstore.NewStoreAt(backend, h.clock.Now)
 	if err != nil {
@@ -192,6 +206,15 @@ func defaultLimits() artifacts.Limits {
 		DataBytes: artifacts.DefaultDataBytes, DataStoreBytes: artifacts.DefaultDataStoreBytes,
 		PendingBytes: artifacts.DefaultPendingBytes,
 	}
+}
+
+// fill makes a fillable harness's bucket full, or makes room in it again.
+func (h *harness) fill(full bool) {
+	h.t.Helper()
+	if h.fillable == nil {
+		h.t.Fatal("fill on a harness whose store is not fillable")
+	}
+	h.fillable.full.Store(full)
 }
 
 // setLimits changes the quotas the pipeline and its calls are held to.
@@ -665,6 +688,31 @@ func (c *fakeCDN) set(path, contentType, body string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.files[path] = cdnFile{contentType: contentType, body: body}
+}
+
+// fillableBackend is the object store's twin as the fleet's own bucket, which
+// a case fills: once full, every put reads its content and is refused as a
+// backend refuses one for room ([objstore.Full]), storing nothing and naming
+// [caseRemedy].
+type fillableBackend struct {
+	*memobj.Backend
+	full atomic.Bool
+}
+
+// caseRemedy is the room a full [fillableBackend] names: a case's own, so a
+// sentence naming it spliced the store's remedy rather than a spelling of the
+// pipeline's own.
+const caseRemedy = "an operator makes room in this case's own bucket"
+
+func (f *fillableBackend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
+	if !f.full.Load() {
+		return f.Backend.Put(ctx, name, r, m)
+	}
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	return &objstore.Full{Remedy: caseRemedy, Err: fmt.Errorf(
+		"natsobj: put %s: OBJ_crewlet_files holds as many bytes as it reserves", name)}
 }
 
 // signingBackend is the object store's twin as a bucket whose provider proved
