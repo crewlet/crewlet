@@ -1,0 +1,65 @@
+# ADR-0047: An assistant write executes only from its owner's approval of a server-rendered preview
+
+- **Status:** accepted
+- **Authority:** `internal/api/assistantapi`
+- **Enforced-by:** nothing
+- **Tag-status:** unreleased
+
+## The decision
+
+**Nothing write-shaped executes inside an assistant turn.** When the model
+calls a write tool (sharing and unsharing an artifact included, decision D09)
+or a page action, the call is not sent: it becomes a **proposal**, the turn's
+loop suspends with the call unanswered, and the parked turn holds no grant.
+
+- **The card is rendered from a server-side preview, never from model prose.**
+  The preview reads the object's current values through the turn's read grant
+  and stores the exact request the approval would send (method, path, query and
+  body in `internal/api/opkey`'s one canonical encoding), the object's source
+  revision, and the before and after rows the card shows (decision D10). A
+  model cannot describe one change and have another sent.
+- **The approval is bound to what was shown.** The proposal's digest, a full
+  SHA-256 over its owner, conversation, turn, scope, tool, bound request, source
+  revision and expiry, is shown on the card and echoed by the approval; the
+  stored fields are re-hashed against it; the source revision is read again
+  and a moved object is `stale`.
+- **The approval is the person's, from their own browser.** It is a request
+  carrying their session cookie and a matching Origin, to a proposal they own
+  (anybody else's is not found), still proposed and unexpired (fifteen
+  minutes). The assistant cannot make it: the guard refuses `/assistant/` to an
+  assistant grant.
+- **It executes once.** The decision is an arbitrated state-log record on the
+  proposal's own subject, so two approvals on two nodes produce one; the
+  approving request derives a single-use exec grant, sixty seconds long, bound
+  to the request digest of the one request it may carry; and the write is sent
+  under the proposal's own operation key, so a retry after an unknown outcome
+  is the same write and the tracker holds one record.
+- **A step-up the write's verb asks for is asked of the approver.** The write's
+  `403 step_up_required` is answered on the approval request, the dashboard's
+  one step-up dialog confirms, and the approval is replayed. The proposal is
+  bound to the person and never to the session lineage, because a step-up
+  rotates the lineage.
+
+## Why the obvious alternatives are wrong
+
+**Executing a write the model asked for, with a confirmation afterwards.** A
+prompt injection in a page the person asked about would then act before anybody
+read what it did; the person's click is the only defence that does not depend
+on the model behaving.
+
+**Rendering the card from the model's tool arguments, or its description of
+them.** The card would then be the model's claim about the change rather than
+the engine's reading of it, and the field the person approves would not be the
+field that is sent.
+
+**A compare-and-swap in the coordination store for the decision.** The
+proposal, its card and its transcript have to be readable from any node, which
+is the replicated estate's job; the state log's arbitration is already the
+engine's exactly-once decision across nodes, and a second mechanism beside it
+would be a second answer to "was this approved".
+
+## What this does not decide
+
+The proposal states and their legal moves (`internal/assistant/proposal`), the
+routes and their refusal codes (`internal/api/assistantapi`), and which verbs
+are approval-gated at all (ADR-0048).
