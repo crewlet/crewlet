@@ -199,11 +199,11 @@ export function draftSource(base: BrandSource | null, edit: BrandEdit): BrandSou
 function namedPaths(doc: BrandDocument): string[] {
   return [
     doc.logos.primary,
-    ...(doc.logos.on_dark ? [doc.logos.on_dark] : []),
-    ...(doc.logos.mark ? [doc.logos.mark] : []),
+    doc.logos.on_dark,
+    doc.logos.mark,
     ...(doc.type.heading.files ?? []).map((f) => f.path),
     ...(doc.type.body.files ?? []).map((f) => f.path),
-  ].filter((p) => p !== "");
+  ].filter((p): p is string => p !== undefined && p !== "");
 }
 
 /**

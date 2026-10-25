@@ -92,7 +92,7 @@ describe("what a save brings", () => {
       "logos/mark.png",
       "fonts/heading-0.woff2",
     ]);
-    expect(files[0]!.body).toBe(picked);
+    expect(files[0]).toEqual({ path: "logos/primary.svg", body: picked });
     expect(base.reads).toEqual(["logos/mark.png", "fonts/heading-0.woff2"]);
   });
 

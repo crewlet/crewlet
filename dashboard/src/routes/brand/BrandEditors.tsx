@@ -14,6 +14,7 @@
 
 import { useState } from "react";
 import {
+  CharacterCount,
   Checkbox,
   ColorField,
   FilePickButton,
@@ -30,14 +31,12 @@ import {
 } from "@crewlethq/ui";
 import { TrashGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import {
+  BRAND_COLOR_FALLBACKS,
   BRAND_FONT_STYLES,
   BRAND_KIT_FACES,
-  BRAND_NAME_MAX_BYTES,
   BRAND_SYSTEM_STACKS,
   BRAND_TAGLINE_MAX_BYTES,
-  BRAND_VOICE_EXAMPLE_MAX_BYTES,
   BRAND_VOICE_MAX_EXAMPLES,
-  BRAND_VOICE_SUMMARY_MAX_BYTES,
 } from "~/contract/brand.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import type { BrandDocument, BrandFace } from "~/protocol/index.ts";
@@ -46,10 +45,8 @@ import {
   BRAND_FACE_ROLES,
   BRAND_LOGO_SLOTS,
   FACE_NAMES,
-  brandContrast,
   faceDrawing,
-  refusalWords,
-  refusingPair,
+  type BrandColorRole,
   type BrandFaceRole,
   type BrandLogoSlot,
 } from "~/lib/brand/brand.ts";
@@ -66,7 +63,16 @@ import {
   type BrandEdit,
 } from "~/lib/brand/draft.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
-import { ContrastRow, type BrandCardKey } from "./BrandCards.tsx";
+import {
+  nameProblem,
+  partProblem,
+  pickedFaceFiles,
+  taglineProblem,
+  voiceProblems,
+  withDocument,
+} from "~/lib/brand/validate.ts";
+import type { BrandCardKey } from "./BrandCards.tsx";
+import { ContrastPanel } from "./ContrastPanel.tsx";
 
 /** What every editor is handed. */
 export interface BrandEditorProps {
@@ -76,115 +82,80 @@ export interface BrandEditorProps {
   assets: BrandAssets;
 }
 
-/** The edit with its document changed by `change`, the picked files as they were. */
-function withDocument(edit: BrandEdit, change: (doc: BrandDocument) => BrandDocument): BrandEdit {
-  return { document: change(edit.document), files: edit.files };
-}
-
-/** A text that names a place to go, which the format refuses in a brand's words. */
-const LINKISH = /(https?:\/\/|www\.)/i;
-
-function textProblem(text: string, max: number, what: string): string | undefined {
-  const bytes = utf8Bytes(text.trim());
-  if (bytes > max) return `${what} is ${bytes} bytes and the most is ${max}.`;
-  if (LINKISH.test(text))
-    return "Leave links out: a brand's words are read as words, never as places to go.";
-  return undefined;
-}
-
-function nameProblem(doc: BrandDocument): string | undefined {
-  if (doc.name.trim() === "") return "Name the brand: the company's name as it should appear.";
-  return textProblem(doc.name, BRAND_NAME_MAX_BYTES, "The name");
-}
-
-function taglineProblem(doc: BrandDocument): string | undefined {
-  return textProblem(doc.tagline ?? "", BRAND_TAGLINE_MAX_BYTES, "The tagline");
-}
-
-function voiceProblems(voice: BrandDocument["voice"]): {
-  summary?: string;
-  like?: string;
-  avoid?: string;
-} {
-  const list = (lines: readonly string[] | undefined, what: string) => {
-    const kept = (lines ?? []).filter((l) => l.trim() !== "");
-    if (kept.length > BRAND_VOICE_MAX_EXAMPLES) {
-      return `${what} can hold at most ${BRAND_VOICE_MAX_EXAMPLES} lines.`;
-    }
-    for (const line of kept) {
-      const wrong = textProblem(line, BRAND_VOICE_EXAMPLE_MAX_BYTES, "A line");
-      if (wrong) return wrong;
-    }
-    return undefined;
-  };
-  const summary = textProblem(voice.summary ?? "", BRAND_VOICE_SUMMARY_MAX_BYTES, "The summary");
-  const like = list(voice.write_like, "Write like this");
-  const avoid = list(voice.avoid, "Avoid");
-  return {
-    ...(summary ? { summary } : {}),
-    ...(like ? { like } : {}),
-    ...(avoid ? { avoid } : {}),
-  };
-}
-
-function faceProblem(face: BrandFace, picked: readonly File[]): string | undefined {
-  if (face.kit || face.stack) return undefined;
-  const family = familyProblem(face.family ?? "");
-  if (family) return family;
-  const files = face.files ?? [];
-  if (files.length === 0) return "Add the family's WOFF2 files.";
-  const wrong = fontCountProblem(files.length) ?? fontProblem(picked);
-  if (wrong) return wrong;
-  if (!face.licensed) return "Confirm the company may embed this family in what it publishes.";
-  return undefined;
-}
-
-/** The files the edit picked for a face, in the face's order. */
-function pickedFaceFiles(edit: BrandEdit, role: BrandFaceRole): File[] {
-  return (edit.document.type[role].files ?? []).flatMap((f) => {
-    const file = edit.files.get(f.path);
-    return file ? [file] : [];
-  });
-}
-
 /**
  * Why a card's Save is held, in the sentence its field says, or undefined when
  * the engine will take the edit. Colours are held for the one contrast pair
  * that refuses an adoption.
  */
 export function cardProblem(card: BrandCardKey, edit: BrandEdit): string | undefined {
-  const doc = edit.document;
-  switch (card) {
-    case "logos":
-      return (
-        nameProblem(doc) ??
-        taglineProblem(doc) ??
-        (doc.logos.primary ? undefined : "Add the primary logo.")
-      );
-    case "colours": {
-      if (!doc.colors.primary) return "Choose the primary colour.";
-      const refusing = refusingPair(brandContrast(doc.colors));
-      return refusing ? refusalWords(refusing) : undefined;
-    }
-    case "type":
-      return (
-        faceProblem(doc.type.heading, pickedFaceFiles(edit, "heading")) ??
-        faceProblem(doc.type.body, pickedFaceFiles(edit, "body"))
-      );
-    case "voice": {
-      const wrong = voiceProblems(doc.voice);
-      return wrong.summary ?? wrong.like ?? wrong.avoid;
-    }
-  }
+  // THE LOGOS CARD holds the name and the tagline too.
+  return card === "logos"
+    ? (partProblem("identity", edit) ?? partProblem("logos", edit))
+    : partProblem(card, edit);
 }
 
-/** The name, the tagline, and the three logos, each on its own ground with a picker. */
-export function LogosEditor({ edit, onEdit, assets }: BrandEditorProps) {
+/** The brand's name and its tagline. */
+export function IdentityFields({ edit, onEdit }: Omit<BrandEditorProps, "assets">) {
   const doc = edit.document;
-  const [refused, setRefused] = useState<Partial<Record<BrandLogoSlot, string>>>({});
   const name = nameProblem(doc);
   const tagline = taglineProblem(doc);
+  return (
+    <div className="brand-editor-pair">
+      <FormField label="Name" required error={name}>
+        {(field) => (
+          <Input
+            id={field.id}
+            aria-describedby={field.describedBy}
+            aria-invalid={field.invalid}
+            width="full"
+            value={doc.name}
+            onChange={(e) => onEdit(withDocument(edit, (d) => ({ ...d, name: e.target.value })))}
+          />
+        )}
+      </FormField>
+      <FormField
+        label="Tagline"
+        optional
+        error={tagline}
+        helper={
+          <>
+            One line under the name.{" "}
+            <CharacterCount length={utf8Bytes(doc.tagline ?? "")} max={BRAND_TAGLINE_MAX_BYTES} />
+          </>
+        }
+      >
+        {(field) => (
+          <Input
+            id={field.id}
+            aria-describedby={field.describedBy}
+            aria-invalid={field.invalid}
+            width="full"
+            value={doc.tagline ?? ""}
+            onChange={(e) => onEdit(withDocument(edit, (d) => ({ ...d, tagline: e.target.value })))}
+          />
+        )}
+      </FormField>
+    </div>
+  );
+}
 
+/**
+ * The three logos, each on its own ground with a picker. `purposes` says
+ * under each where it appears and whether an adoption needs it, as the setup
+ * does; `refused` carries the engine's own refusal of a logo, by slot.
+ */
+export function LogoFields({
+  edit,
+  onEdit,
+  assets,
+  purposes = false,
+  refused: engineRefused = {},
+}: BrandEditorProps & {
+  purposes?: boolean;
+  refused?: Partial<Record<BrandLogoSlot, string>>;
+}) {
+  const doc = edit.document;
+  const [refused, setRefused] = useState<Partial<Record<BrandLogoSlot, string>>>({});
   const pick = (slot: BrandLogoSlot, file: File) => {
     const problem = logoProblem(file);
     setRefused((was) => ({ ...was, [slot]: problem ?? undefined }));
@@ -204,96 +175,109 @@ export function LogosEditor({ edit, onEdit, assets }: BrandEditorProps) {
     delete logos[slot];
     onEdit({ document: { ...doc, logos }, files });
   };
-
   return (
-    <div className="brand-editor">
-      <div className="brand-editor-pair">
-        <FormField label="Name" required error={name}>
-          {(field) => (
-            <Input
-              id={field.id}
-              aria-describedby={field.describedBy}
-              aria-invalid={field.invalid}
-              width="full"
-              value={doc.name}
-              onChange={(e) => onEdit(withDocument(edit, (d) => ({ ...d, name: e.target.value })))}
-            />
-          )}
-        </FormField>
-        <FormField label="Tagline" optional error={tagline} helper="One line under the name.">
-          {(field) => (
-            <Input
-              id={field.id}
-              aria-describedby={field.describedBy}
-              aria-invalid={field.invalid}
-              width="full"
-              value={doc.tagline ?? ""}
-              onChange={(e) =>
-                onEdit(withDocument(edit, (d) => ({ ...d, tagline: e.target.value })))
-              }
-            />
-          )}
-        </FormField>
-      </div>
-      <div className="brand-logo-slots">
-        {BRAND_LOGO_SLOTS.map((spec) => (
-          <LogoSlot
-            key={spec.slot}
-            label={spec.label}
-            description={spec.description}
-            ground={spec.ground}
-            groundColor={spec.ground === "dark" ? doc.colors.dark_ground : doc.colors.light_ground}
-            shape={spec.shape}
-            src={assets.logo(spec.slot)}
-            alt={`${doc.name} ${spec.label.toLowerCase()} logo`}
-            editable
-            error={refused[spec.slot]}
-            onFile={(file) => pick(spec.slot, file)}
-            {...(spec.slot === "primary" ? {} : { onRemove: () => remove(spec.slot) })}
-            emptyNote={spec.slot === "primary" ? undefined : spec.emptyNote}
-            labels={{ hint: LOGO_HINT }}
-          />
-        ))}
-      </div>
+    <div className="brand-logo-slots">
+      {BRAND_LOGO_SLOTS.map((spec) => (
+        <LogoSlot
+          key={spec.slot}
+          label={purposes && spec.slot === "primary" ? "Primary logo" : spec.label}
+          description={
+            purposes
+              ? `${spec.description}: ${spec.purpose.toLowerCase()}. ${spec.required ? "Required" : "Recommended"}.`
+              : spec.description
+          }
+          ground={spec.ground}
+          groundColor={spec.ground === "dark" ? doc.colors.dark_ground : doc.colors.light_ground}
+          shape={spec.shape}
+          src={assets.logo(spec.slot)}
+          alt={`${doc.name} ${spec.label.toLowerCase()} logo`}
+          editable
+          error={refused[spec.slot] ?? engineRefused[spec.slot]}
+          onFile={(file) => pick(spec.slot, file)}
+          {...(spec.slot === "primary" && !purposes ? {} : { onRemove: () => remove(spec.slot) })}
+          emptyNote={spec.slot === "primary" ? undefined : spec.emptyNote}
+          labels={{ hint: LOGO_HINT }}
+        />
+      ))}
     </div>
   );
 }
 
-/** Every colour role as a field, and how the pairs read while they are chosen. */
-export function ColoursEditor({ edit, onEdit }: BrandEditorProps) {
+/** The name, the tagline, and the three logos: the Logos card's editor. */
+export function LogosEditor({ edit, onEdit, assets }: BrandEditorProps) {
+  return (
+    <div className="brand-editor">
+      <IdentityFields edit={edit} onEdit={onEdit} />
+      <LogoFields edit={edit} onEdit={onEdit} assets={assets} />
+    </div>
+  );
+}
+
+/**
+ * What an empty optional colour falls back to, said in its field: the
+ * product's own value, or the primary for the accent on a dark ground.
+ */
+function fallbackOf(
+  role: BrandColorRole,
+  colors: BrandDocument["colors"],
+): { placeholder?: string; note: string } {
+  switch (role) {
+    case "text":
+    case "light_ground":
+    case "dark_ground":
+      return { placeholder: BRAND_COLOR_FALLBACKS[role], note: "Uses Crewlet's default." };
+    case "primary_on_dark":
+      return {
+        ...(colors.primary ? { placeholder: colors.primary } : {}),
+        note: "Uses the primary.",
+      };
+    default:
+      return { note: "Optional." };
+  }
+}
+
+/** Every colour role as a field, an empty optional one showing what it falls back to. */
+export function ColourFields({ edit, onEdit }: Omit<BrandEditorProps, "assets">) {
   const colors = edit.document.colors;
-  const results = brandContrast(colors);
-  const refusing = refusingPair(results);
-  const set = (role: keyof BrandDocument["colors"], value: string) =>
+  const set = (role: BrandColorRole, value: string) =>
     onEdit(
       withDocument(edit, (d) => {
         const next = { ...d.colors };
-        if (value === "" && role !== "primary") delete next[role];
+        if (value === "") delete next[role];
         else next[role] = value;
         return { ...d, colors: next };
       }),
     );
   return (
-    <div className="brand-editor">
-      <div className="brand-color-fields">
-        {BRAND_COLOR_ROLES.map((spec) => (
+    <div className="brand-color-fields">
+      {BRAND_COLOR_ROLES.map((spec) => {
+        const fallback = spec.required ? null : fallbackOf(spec.role, colors);
+        const empty = !colors[spec.role];
+        return (
           <ColorField
             key={spec.role}
             label={spec.label}
             value={colors[spec.role] ?? ""}
             required={spec.required}
             optional={!spec.required}
-            helper={spec.description}
+            helper={empty && fallback ? `${spec.description}. ${fallback.note}` : spec.description}
             onChange={(value) => set(spec.role, value)}
+            {...(fallback?.placeholder ? { labels: { placeholder: fallback.placeholder } } : {})}
           />
-        ))}
-      </div>
-      <ContrastRow results={results} />
-      {refusing ? (
-        <Text as="p" variant="body" className="brand-refusal" role="alert">
-          {refusalWords(refusing)}
-        </Text>
-      ) : null}
+        );
+      })}
+    </div>
+  );
+}
+
+/** Every colour role as a field, and how each pair reads while they are chosen, with its fix. */
+export function ColoursEditor({ edit, onEdit }: BrandEditorProps) {
+  const apply = (set: Partial<Record<BrandColorRole, string>>) =>
+    onEdit(withDocument(edit, (d) => ({ ...d, colors: { ...d.colors, ...set } })));
+  return (
+    <div className="brand-editor">
+      <ColourFields edit={edit} onEdit={onEdit} />
+      <ContrastPanel colors={edit.document.colors} onApply={apply} />
     </div>
   );
 }

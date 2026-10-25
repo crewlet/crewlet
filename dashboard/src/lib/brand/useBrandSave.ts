@@ -10,7 +10,9 @@
 import { useCallback, useRef, useState } from "react";
 import {
   newBrandSaveKeys,
+  publishBrandDraft,
   saveBrand,
+  type BrandDraftAnswer,
   type BrandSave,
   type BrandSaveAnswer,
   type BrandSaveKeys,
@@ -24,25 +26,33 @@ function requestOf(save: BrandSave): string {
     save.head,
     save.title,
     serializeBrandDocument(save.document),
-    save.files.map((f) => [
-      f.path,
-      f.body.size,
-      f.body.type,
-      f.body instanceof File ? [f.body.name, f.body.lastModified] : null,
-    ]),
+    save.files.map((f) =>
+      "from" in f
+        ? [f.path, "from", f.from]
+        : [
+            f.path,
+            f.body.size,
+            f.body.type,
+            f.body instanceof File ? [f.body.name, f.body.lastModified] : null,
+          ],
+    ),
   ]);
 }
 
-export interface BrandSaveGesture {
+/** One save gesture: its answer, whether it is out, and the way to send it. */
+export interface SaveGesture<A> {
   busy: boolean;
-  answer: BrandSaveAnswer | null;
-  run: (save: BrandSave) => Promise<BrandSaveAnswer | null>;
+  answer: A | null;
+  run: (save: BrandSave) => Promise<A | null>;
   reset: () => void;
 }
 
-export function useBrandSave(): BrandSaveGesture {
+/** A save gesture over `write`, keyed once per request and again only for the retry an unknown answer asks for. */
+function useSaveGesture<A extends { kind: string }>(
+  write: (save: BrandSave, keys: BrandSaveKeys) => Promise<A>,
+): SaveGesture<A> {
   const [busy, setBusy] = useState(false);
-  const [answer, setAnswer] = useState<BrandSaveAnswer | null>(null);
+  const [answer, setAnswer] = useState<A | null>(null);
   const last = useRef<{ request: string; keys: BrandSaveKeys } | null>(null);
   const run = useCallback(
     async (save: BrandSave) => {
@@ -55,18 +65,30 @@ export function useBrandSave(): BrandSaveGesture {
       last.current = { request, keys };
       setBusy(true);
       try {
-        const next = await saveBrand(save, keys);
+        const next = await write(save, keys);
         setAnswer(next);
         return next;
       } finally {
         setBusy(false);
       }
     },
-    [answer, busy],
+    [answer, busy, write],
   );
   const reset = useCallback(() => {
     last.current = null;
     setAnswer(null);
   }, []);
   return { busy, answer, run, reset };
+}
+
+/** Publish a version of the company's kit and adopt it. */
+export type BrandSaveGesture = SaveGesture<BrandSaveAnswer>;
+
+export function useBrandSave(): BrandSaveGesture {
+  return useSaveGesture(saveBrand);
+}
+
+/** Publish a version of the company's kit as a draft, adopting nothing: a setup step's Continue. */
+export function useBrandDraftSave(): SaveGesture<BrandDraftAnswer> {
+  return useSaveGesture(publishBrandDraft);
 }

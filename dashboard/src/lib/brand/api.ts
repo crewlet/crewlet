@@ -31,7 +31,12 @@
 import { isAbort, newActOpID, rest, RestError } from "~/protocol/index.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "../keyedWrite.ts";
 import { refusalText } from "../refusal.ts";
-import { publishVersion, uploadFiles, type UploadFile } from "../artifacts/api.ts";
+import {
+  publishVersion,
+  uploadFiles,
+  type PublishFile,
+  type UploadFile,
+} from "../artifacts/api.ts";
 import { serializeBrandDocument } from "./brand.ts";
 import type { BrandDocument } from "~/protocol/index.ts";
 
@@ -57,11 +62,12 @@ export function brandFile(hash: string, signal?: AbortSignal): Promise<Blob> {
   return rest.blob(`/brand/files/${encodeURIComponent(hash)}`, signal);
 }
 
-/** A file a brand save brings: its path in the kit's version and its bytes. */
-export interface BrandSaveFile {
-  path: string;
-  body: Blob;
-}
+/**
+ * A file a brand save brings: its path in the kit's version and its bytes, or,
+ * for a file a retained version of the same kit already holds, that version
+ * (`from`), which the engine carries without a byte moving.
+ */
+export type BrandSaveFile = { path: string; body: Blob } | { path: string; from: number };
 
 /** One save of the company's brand. */
 export interface BrandSave {
@@ -161,8 +167,11 @@ async function writeVersion(
 ): Promise<KeyedAnswer> {
   const files: UploadFile[] = [
     { path: BRAND_ENTRY, body: serializeBrandDocument(save.document) },
-    ...save.files.map((f) => ({ path: f.path, body: f.body })),
+    ...save.files.flatMap((f) => ("body" in f ? [{ path: f.path, body: f.body }] : [])),
   ];
+  const carried: PublishFile[] = save.files.flatMap((f) =>
+    "from" in f ? [{ path: f.path, from: f.from }] : [],
+  );
   let up: Awaited<ReturnType<typeof uploadFiles>>;
   try {
     up = await uploadFiles(kit, files, keys.upload);
@@ -179,7 +188,7 @@ async function writeVersion(
             kind: "brand",
             title: save.title,
             upload: up.upload,
-            files: up.files,
+            files: [...up.files, ...carried],
             entry: BRAND_ENTRY,
             // THE COMPANY'S KIT IS EVERY READER'S TO OPEN, as its adopted
             // brand is everyone's to read: its versions and history are
@@ -191,7 +200,7 @@ async function writeVersion(
       : {
           ...publishVersion(kit, save.head, {
             mode: "whole",
-            files: up.files,
+            files: [...up.files, ...carried],
             upload: up.upload,
             entry: BRAND_ENTRY,
             capabilities: [],
@@ -201,11 +210,21 @@ async function writeVersion(
   return keyedWrite(request);
 }
 
+/** What a draft save came to: the version that landed, or why none did. */
+export type BrandDraftAnswer =
+  | { kind: "saved"; kit: string; version: number; pending: boolean }
+  | { kind: "unknown"; text: string }
+  | { kind: "refused"; text: string; error?: RestError };
+
 /**
- * Publish the save as a version of the company's kit and adopt it. Rejects only
- * for the caller's own abort.
+ * Publish the save as a version of the company's kit (a first kit where
+ * `save.kit` is null), adopting nothing: a draft, which an administrator
+ * adopts later. Rejects only for the caller's own abort.
  */
-export async function saveBrand(save: BrandSave, keys: BrandSaveKeys): Promise<BrandSaveAnswer> {
+export async function publishBrandDraft(
+  save: BrandSave,
+  keys: Pick<BrandSaveKeys, "upload" | "write" | "newKitUpload" | "newKitWrite">,
+): Promise<BrandDraftAnswer> {
   let written = await writeVersion(save, save.kit, keys);
   // THE ADOPTED KIT IS GONE (its owner trashed it; the adoption's snapshot
   // outlives it): the brand is saved into a new kit holding the same files,
@@ -228,6 +247,17 @@ export async function saveBrand(save: BrandSave, keys: BrandSaveKeys): Promise<B
   if (!landed) {
     return { kind: "refused", text: "The engine saved the brand and did not say which version." };
   }
+  return { kind: "saved", ...landed, pending: written.pending };
+}
+
+/**
+ * Publish the save as a version of the company's kit and adopt it. Rejects only
+ * for the caller's own abort.
+ */
+export async function saveBrand(save: BrandSave, keys: BrandSaveKeys): Promise<BrandSaveAnswer> {
+  const written = await publishBrandDraft(save, keys);
+  if (written.kind !== "saved") return written;
+  const landed = { kit: written.kit, version: written.version };
   const adopted = await keyedWrite({ ...adoptBrand(landed.kit, landed.version), key: keys.adopt });
   switch (adopted.kind) {
     case "done":

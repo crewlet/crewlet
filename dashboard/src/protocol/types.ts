@@ -5346,14 +5346,18 @@ export interface BrandFace {
   licensed?: boolean;
 }
 
-/** A kit's `brand.json` (`brandformat.Brand`). */
+/**
+ * A kit's `brand.json` (`brandformat.Brand`). A DRAFT may lack its primary
+ * logo and its primary colour (a publish requires only the name); an adoption
+ * requires both.
+ */
 export interface BrandDocument {
   v: 1;
   name: string;
   tagline?: string;
-  logos: { primary: string; on_dark?: string; mark?: string };
+  logos: { primary?: string; on_dark?: string; mark?: string };
   colors: {
-    primary: BrandColor;
+    primary?: BrandColor;
     secondary?: BrandColor;
     text?: BrandColor;
     light_ground?: BrandColor;

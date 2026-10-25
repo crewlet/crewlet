@@ -651,9 +651,16 @@ export async function checkPage(
   return answer.body as ArtifactCheckAnswer;
 }
 
-/** A file a publish names: one an upload brought, one carried by digest, or one removed. */
+/**
+ * A file a publish names: one an upload brought, one carried by digest, one
+ * carried from a retained version of the same artifact (`from`, no byte moved
+ * and none read here), or one removed.
+ */
 export type PublishFile =
-  { path: string; upload: true } | { path: string; carry: string } | { path: string; remove: true };
+  | { path: string; upload: true }
+  | { path: string; carry: string }
+  | { path: string; from: number }
+  | { path: string; remove: true };
 
 /** A file a save brings: its text, or a picture's bytes. */
 export interface UploadFile {
