@@ -96,6 +96,14 @@ func signInCases() []signInCase {
 			without: "run `crewlet llm login sub`",
 		},
 		{
+			// Qwen Code keeps no login of its own — both measured builds
+			// refuse the OAuth login it once kept — so there is nothing to
+			// adopt or broker: its key is the sign-in.
+			name: "a CLI that keeps no login", agent: "qwen-code",
+			problem: "set auth.mode: api-key and give the key as auth.api_key (the CLI reads it from OPENAI_API_KEY)",
+			without: "-from-host",
+		},
+		{
 			// The operator wrote a token reference; that it resolved to
 			// nothing is the fault to name, ahead of the routes they did
 			// not take.

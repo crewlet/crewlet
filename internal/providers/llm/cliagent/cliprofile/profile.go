@@ -2331,6 +2331,14 @@ func (p *Profile) LoginLocation() string {
 	return strings.Join(where, " and ")
 }
 
+// KeepsLogin reports whether the CLI keeps a login of its own that the engine
+// can hold for it: credential files, or a login in its own database. A profile
+// that keeps none signs in only through what a call's environment carries — its
+// token, its key, or a model provider's key ([Profile.EnvSignIn]).
+func (p *Profile) KeepsLogin() bool {
+	return len(p.CredentialPaths) > 0 || p.CredentialStore != nil
+}
+
 // ReadsUsageReport reports whether this profile takes its counts from a report
 // apart from stdout — a usage file the CLI writes, or a usage command run after
 // the call — rather than from what the call printed.

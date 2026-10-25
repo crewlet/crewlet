@@ -65,6 +65,15 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "a token is read only under auth.mode subscription",
 		},
 		{
+			// Qwen Code keeps no login of its own and mints no token: under
+			// subscription, the mode that removes its key variable, nothing
+			// signs it in.
+			name:  "subscription on a CLI that signs in only with its key",
+			lines: []string{"agent: qwen-code"},
+			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
+			says: "set auth.mode: api-key and give the key as auth.api_key (the CLI reads it from OPENAI_API_KEY)",
+		},
+		{
 			name:  "inherit-env on a CLI that names neither variable",
 			lines: []string{"agent: pi", "auth: {mode: inherit-env}"},
 			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
@@ -216,6 +225,9 @@ func TestEveryCredentialRouteACLIReadsIsAccepted(t *testing.T) {
 			"overrides: {api_key_env: OPENROUTER_API_KEY}"},
 		"cursor-agent's own key variable": {
 			"agent: cursor-agent", `auth: {mode: api-key, api_key: "${CURSOR_API_KEY}"}`},
+		"qwen-code's key and its endpoint": {
+			"agent: qwen-code", `auth: {mode: api-key, api_key: "${DASHSCOPE_API_KEY}"}`,
+			"env: {OPENAI_BASE_URL: https://dashscope-intl.aliyuncs.com/compatible-mode/v1}"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -488,6 +488,26 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 	}
 }
 
+// A CLI THAT KEEPS NO LOGIN IS SENT TO ITS KEY, not to a login on the host:
+// Qwen Code keeps none — both measured builds refuse the OAuth login it once
+// kept — so `-from-host` would find nothing to adopt.
+func TestBrokeringALoginForACLIThatKeepsNoneNamesItsKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	p, err := New(Config{Key: "qwen", Agent: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = p.BrokerLogin(t.Context(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, ErrNoLoginCommand) {
+		t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+	}
+	if !strings.Contains(err.Error(), "auth.mode: api-key") || strings.Contains(err.Error(), "-from-host") {
+		t.Errorf("the refusal does not send the operator to the key alone: %v", err)
+	}
+}
+
 // NO BUILT-IN PROFILE SHIPS A CREDENTIAL LOGIN, because no shipped CLI has
 // one. opencode's did — `auth login --username`, a flag no release of either
 // OpenCode major accepts, which printed usage and exited 1 — and a declared

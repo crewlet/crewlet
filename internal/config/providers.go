@@ -865,6 +865,21 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		}
 	}
 
+	// SUBSCRIPTION READS A LOGIN THE CLI KEEPS OR A HEADLESS TOKEN. A CLI that
+	// keeps neither and signs in with a key alone would run signed in to
+	// nothing under it: the mode removes the key variable from the CLI's
+	// environment, and every call is refused for want of a key. Qwen Code is
+	// that CLI — both measured builds refuse the OAuth login it once kept.
+	if mode == AuthSubscription && !profile.KeepsLogin() && profile.TokenEnv == "" &&
+		!profile.EnvSignIn && profile.APIKeyEnv != "" {
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"subscription signs the CLI in with a login it keeps or a headless token, and "+
+				"the %q profile names neither — no credential_paths, credential_store or "+
+				"token_env — so the entry would sign in to nothing: this CLI signs in with "+
+				"its key, so set auth.mode: api-key and give the key as auth.api_key (the "+
+				"CLI reads it from %s)", agent, profile.APIKeyEnv)
+	}
+
 	if l.Auth.Token != "" {
 		switch {
 		case profile.TokenEnv == "":

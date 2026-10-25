@@ -340,15 +340,21 @@ func (p *Provider) noSignIn(hostLogin, unresolved []string) string {
 }
 
 // loginRemedy is how to write this entry a login of its own: adopt the one this
-// machine already has, else run the CLI's own login command.
+// machine already has, else run the CLI's own login command — or, for a CLI
+// that keeps no login at all, give it its key.
 //
 // NEVER A COMMAND THE CLI DOES NOT HAVE. Gemini CLI, Qwen Code and Grok declare
 // no login subcommand, and `crewlet llm login <key>` refuses for them, saying to
 // sign the CLI in by hand and adopt that login — so a doctor that offered the
 // command sent the operator to a refusal whose remedy it could have named
-// itself ([Provider.BrokerLogin] words the same route).
+// itself ([Provider.BrokerLogin] words the same route). Qwen Code keeps no
+// login to adopt either, so its route is its key.
 func (p *Provider) loginRemedy(hostLogin []string) string {
 	switch {
+	case !p.profile.KeepsLogin():
+		// No login to adopt or broker: the CLI keeps none, so its key, or
+		// a model provider's in env, is the whole sign-in.
+		return p.keyRemedy()
 	case len(hostLogin) > 0:
 		return fmt.Sprintf("this machine has a login at %s: adopt it with "+
 			"`crewlet llm login %s -from-host`", strings.Join(hostLogin, ", "), p.key)
@@ -358,6 +364,19 @@ func (p *Provider) loginRemedy(hostLogin []string) string {
 		return fmt.Sprintf("the %q CLI declares no login subcommand: sign it in by hand "+
 			"and adopt that login with `crewlet llm login %s -from-host`", p.agent, p.key)
 	}
+}
+
+// keyRemedy is how to sign in an entry whose CLI keeps no login of its own
+// ([cliprofile.Profile.KeepsLogin]): its key, in the variable the profile names.
+// Qwen Code is such a CLI — both measured builds refuse the OAuth login it once
+// kept — and neither adopting a login nor brokering one has anything to offer it.
+func (p *Provider) keyRemedy() string {
+	if p.profile.APIKeyEnv == "" {
+		return fmt.Sprintf("the %q profile names no place a login is kept and no key "+
+			"variable: declare one under providers.llm.%s.overrides", p.agent, p.key)
+	}
+	return fmt.Sprintf("sign it in with its key: set auth.mode: api-key and give the key "+
+		"as auth.api_key (the CLI reads it from %s)", p.profile.APIKeyEnv)
 }
 
 // modeName is how this entry runs, for the report.
