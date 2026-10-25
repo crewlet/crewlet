@@ -421,3 +421,34 @@ func TestTheDecisionRoutesRefuseAMissingDependency(t *testing.T) {
 		t.Error("NewDecisions built routes over nothing")
 	}
 }
+
+// A DECLINE IS ONE OPERATION, as an approval is: the route refuses a decline
+// that names none, the same decline sent again under its key answers the state
+// it already left the proposal in, and a second decline under another key is
+// told the proposal is decided. Mutation: drop opkey.Require from decision and
+// the first case answers 200.
+func TestADeclineIsOneOperation(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := s.fleet.Propose(t, ada, nil)
+	path := "/assistant/proposals/" + p.ID.String() + "/decline"
+
+	status, body := s.send(t, ada, http.MethodPost, path, decide(p.Digest),
+		map[string]string{opkey.Header: ""})
+	if status != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+		t.Fatalf("a decline with no operation answered %d %v", status, body)
+	}
+	key := map[string]string{opkey.Header: uuid.Must(uuid.NewV7()).String()}
+	for range 2 {
+		status, body = s.send(t, ada, http.MethodPost, path, decide(p.Digest), key)
+		ref, _ := body["proposal"].(map[string]any)
+		if status != http.StatusOK || ref["state"] != string(wire.ProposalDeclined) {
+			t.Fatalf("the decline under one operation answered %d %v", status, body)
+		}
+	}
+	status, body = s.send(t, ada, http.MethodPost, path, decide(p.Digest), nil)
+	if status != http.StatusConflict || body["error"] != "proposal_already_decided" {
+		t.Fatalf("a second decline answered %d %v", status, body)
+	}
+}

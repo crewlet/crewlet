@@ -315,11 +315,23 @@ export async function recentConversations(limit = 4) {
 }
 
 /**
- * The operation each approval is sent under, by proposal: minted at the first
+ * The operation each decision is sent under, by proposal: minted at the first
  * press and sent again on a retry, so a retry after an answer nobody heard is
- * the same write to the engine, which it collapses (ADR-0050).
+ * the same decision to the engine, which it collapses (ADR-0050). Approvals
+ * and declines keep separate keys, because each is its own operation.
  */
 const approvals = new Map<string, string>();
+const declines = new Map<string, string>();
+
+/** The operation `keys` holds for proposal `id`, minted on its first use. */
+function decisionKey(keys: Map<string, string>, id: string): string {
+  let key = keys.get(id);
+  if (key === undefined) {
+    key = newActOpID();
+    keys.set(id, key);
+  }
+  return key;
+}
 
 /** A decision's answer: the proposal at its state now, and the resumed turn's stream. */
 function decided(proposal: AssistantProposalCard, answer: AssistantProposalAnswer): void {
@@ -383,8 +395,7 @@ function undecided(proposal: AssistantProposalCard, err: unknown): void {
  */
 export async function approve(proposal: AssistantProposalCard): Promise<void> {
   const id = proposal.proposal_id;
-  const opKey = approvals.get(id) ?? newActOpID();
-  approvals.set(id, opKey);
+  const opKey = decisionKey(approvals, id);
   dispatch({ type: "approve", proposalId: id });
   try {
     const answer = await call(
@@ -401,11 +412,13 @@ export async function approve(proposal: AssistantProposalCard): Promise<void> {
 
 /** Decline a change; nothing is changed, and the turn hears that it was declined. */
 export async function decline(proposal: AssistantProposalCard): Promise<void> {
+  const id = proposal.proposal_id;
+  const opKey = decisionKey(declines, id);
   try {
     const answer = await call(
       "POST /assistant/proposals/{id}/decline",
       { ...versioned, digest: proposal.digest },
-      { id: proposal.proposal_id },
+      { id, opKey },
     );
     decided(proposal, answer);
   } catch (err) {
@@ -446,6 +459,7 @@ export function resetSessionForTest(): void {
   generation += 1;
   asked.clear();
   approvals.clear();
+  declines.clear();
   stream?.close();
   stream = null;
   view = EMPTY;
