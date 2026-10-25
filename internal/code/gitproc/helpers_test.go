@@ -28,9 +28,8 @@ import (
 const hang = 30 * time.Second
 
 // suiteShare is whose every transfer a case runs is: a machine's — a
-// credential acting as nobody — the one class whose runs no person waits
-// behind (gitproc.Cmd.Share is required of a transfer). A case whose subject
-// is the share names its own.
+// credential acting as nobody, as a CI runner's is (gitproc.Cmd.Share is
+// required of a transfer). A case whose subject is the share names its own.
 var suiteShare = gitproc.Share{Class: gitproc.ShareMachine, Principal: "suite"}
 
 // fakeVersion is the version every stand-in git answers with: the node floor

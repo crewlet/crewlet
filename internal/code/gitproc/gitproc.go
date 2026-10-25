@@ -135,12 +135,18 @@
 // to the principal that spent least, each run charged the greater of its CPU
 // and the slot-time it held, a slot-second at the share of a core one slot
 // stands for on the lane's shape (a quarter at four a core, a whole core on a
-// lane narrower than the cores). So a CI system's storm of clones or lazy
-// fetches waits behind itself, and a person's clone takes the next slot
-// released rather than the sixty-fifth. Work-conserving — a slot is never
-// free while anybody waits, so a class alone has the whole lane — and never
-// a longer wait than arrival order's: [SlotWait] bounds a waiter whichever
-// order it is granted in.
+// lane narrower than the cores). With both classes waiting, people take about
+// two thirds of what the lane spends and credentials acting as nobody about
+// one third: a CI system's storm of clones or lazy fetches waits behind every
+// credential of its class that asked less, and while people have spent less
+// lately than twice what the machines have, a person's clone takes the next
+// slot released rather than the sixty-fifth — past that, it waits behind the
+// machines' third. Work-conserving — a slot is never free while anybody
+// waits, so a class alone has the whole lane — and bounded as arrival order
+// is, though not ordered as it is: no waiter waits longer than [SlotWait],
+// whichever order it is granted in, but the principal that spent most in its
+// class can wait out that whole bound and be answered [ErrBusy] where
+// arrival order would have served it.
 //
 // The lanes are separate for a second reason that no sizing could fix: one
 // process waits on others. A push's receive-pack holds its transfer slot

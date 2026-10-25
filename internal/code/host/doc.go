@@ -269,12 +269,18 @@
 // furthest below its weighted share of what the lane has spent lately (a
 // person 4, a machine 2), then to the principal that spent least, each run
 // charged the greater of its CPU and the slot-time it held: so a CI
-// credential's storm of clones or lazy fetches waits behind itself, and a
-// person's clone takes the next slot released. That is also the whole answer
-// to a blobless clone's lazy fetches: a blame of a file of a thousand commits
-// is two hundred and one of them (BenchmarkLazyBlame), each an advertisement
-// and an upload-pack charged to the credential that asked, with no limiter of
-// the host's own beside the share.
+// credential's storm of clones or lazy fetches waits behind every credential
+// of its class that asked less, and a person's clone takes the next slot
+// released while people have spent less lately than twice what the machines
+// have — past that, the machines' third of the lane comes round first. No
+// waiter waits longer than gitproc.SlotWait in any order, and the credential
+// that spent most in its class may wait all of it and be answered busy where
+// arrival order would have served it: its own burst is what the share holds
+// back. That is also the whole answer to a blobless clone's lazy fetches: a
+// blame of a file of a thousand commits is two hundred and one of them
+// (BenchmarkLazyBlame), each an advertisement and an upload-pack charged to
+// the credential that asked, with no limiter of the host's own beside the
+// share.
 //
 // # The hook relay cannot end the process
 //

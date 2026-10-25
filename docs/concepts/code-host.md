@@ -1452,12 +1452,12 @@ within that class to the principal that has spent least, the oldest request
 first on a tie. A pipeline that pushes acts as the human seat the directory
 binds it to — one nobody else holds — so it is a `person`, but one principal
 among the people, and the one that spent most goes last: its burst still
-waits behind everyone who has asked less lately. A run is charged the greater
-of the CPU its git spent and the time it held its slot, each second of a slot
-counted as the share of a core that slot stands for: the node's cores divided
-among its transfer slots — a quarter of a core at four slots a core, a
-sixteenth where `git.max_transfers` gives sixteen a core — and never more than
-a whole core, which is what a slot stands for wherever memory or
+waits behind every person who has asked less lately. A run is charged the
+greater of the CPU its git spent and the time it held its slot, each second
+of a slot counted as the share of a core that slot stands for: the node's
+cores divided among its transfer slots — a quarter of a core at four slots a
+core, a sixteenth where `git.max_transfers` gives sixteen a core — and never
+more than a whole core, which is what a slot stands for wherever memory or
 `git.max_transfers` leaves the node fewer slots than cores, since one
 transfer's git runs on one core. So a slow clone holding a slot for an hour is
 charged for the hour, a storm of short, CPU-heavy fetches for the CPU, and on
@@ -1470,10 +1470,18 @@ this morning does not slow their fetch now.
 
 The share decides only **who goes next**. A slot is never left free while
 anybody waits, so a class alone — a CI system on a quiet node — has every
-slot; and nobody waits longer than they would in arrival order: a request
-still waiting for a slot after ten seconds is answered `503` with
-`Retry-After`, as it always was. The weights are the same on every node, so
-which node a balancer picks never decides who waits.
+slot, and nobody waits longer than **ten seconds** for one, whatever order it
+is granted in: a request still waiting then is answered `503` with
+`Retry-After`, as it always was. Inside that bound the order is not arrival
+order. With both classes waiting, people get about two thirds of what the
+lane spends and credentials acting as nobody about one third, so a person's
+clone does wait behind CI's when people have spent more than twice what the
+machine credentials have lately. And the credential that has spent most in
+its class goes last: while others who have asked less keep arriving, it can
+wait out the whole ten seconds and be answered `503` where arrival order
+would have served it — the burst the share exists to hold back is its own.
+The weights are the same on every node, so which node a balancer picks never
+decides who waits.
 
 `crewlet.code.git.share_wait` is how long transfers waited for their slot, by
 class: `machine` climbing while `person` stays flat is the share doing its job
@@ -1492,9 +1500,11 @@ Intel Core Ultra 7 265U): one blame was 201 lazy fetches — a version of the
 file each, each an advertisement and an upload-pack, so 402 runs of the
 node's git — bringing 412.5 KiB, costing the node 1.1 s of CPU (about 5.5 ms
 a fetch) and taking 7.2 s. Every one of those fetches is charged to the
-credential that made it, so a CI job blaming its way through history slows
-its own class and its own credential, never a person's clone, and the node
-keeps no limiter of lazy fetches beside the share.
+credential that made it, so a CI job blaming its way through history waits
+behind every machine credential that has asked less, and goes ahead of
+people's clones only for the machines' third of a busy lane — once people
+have spent more than twice what the machine credentials have lately; the
+node keeps no limiter of lazy fetches beside the share.
 
 **Measured** on four E-cores of an Intel Core Ultra 7 265U with the transfer
 lane as wide as the cores (`internal/code/gitproc`'s `BenchmarkTransferShare`,

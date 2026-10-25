@@ -21,8 +21,10 @@ import (
 // sixty-four of them, and a lane of SlotWait answers it busy. So the lane
 // grants a released slot to the CLASS of principal furthest below its weighted
 // share of what the lane's runs have spent lately, and within the class to
-// the PRINCIPAL that spent least — the credential that made a storm waits
-// behind the storm, and nobody else does.
+// the PRINCIPAL that spent least — so the credential that made a storm waits
+// behind every credential of its class that asked less, and a person waits
+// behind it only while people have spent more than twice what the machines
+// have lately: the machines' third of a contended lane.
 //
 // # Charged by what a transfer spends, and only while it matters
 //
@@ -39,13 +41,21 @@ import (
 // [ShareWindow], so a burst counts against its credential while it lasts and
 // is forgotten minutes after.
 //
-// # What it never does
+// # What it keeps of a FIFO lane, and what it does not
 //
 // It never leaves a slot free while anybody waits (WORK-CONSERVING: an
 // arrival that finds a free slot and nobody waiting takes it whatever its
-// class, so one class alone runs the lane at its full width), and it never
-// waits longer than a FIFO lane does: a waiter's SlotWait is the same bound,
-// so the share decides only who is answered first inside it.
+// class, so one class alone runs the lane at its full width), and it keeps a
+// FIFO lane's BOUND: no waiter waits longer than SlotWait, whichever order it
+// is granted in, so the share decides only who is answered first inside it.
+// It does not keep a FIFO lane's ORDER, and so not every wait is as short as
+// arrival order would make it: a person's clone waits behind a machine's
+// while people have spent more than twice what the machines have lately, and
+// the principal that spent most in its class goes last — while others who
+// spent less keep arriving it can be passed over at every release, wait out
+// SlotWait and be answered busy where arrival order would have handed it the
+// next slot. That is the share doing what it is for: holding back the
+// credential whose burst it is.
 
 // ShareClass is whose turn a TRANSFER waits for when the transfer lane is
 // full: a named string with a closed set, so a value a newer build passes is
@@ -81,14 +91,16 @@ func (c ShareClass) Valid() bool { return c.Weight() > 0 }
 // waits at a terminal, a machine credential stands for a pipeline nobody
 // watches second by second: with both classes waiting, persons take two
 // thirds of what the lane spends (TestAContendedTransferLaneSharesByClass),
-// and a person's clone behind sixty-four CI clones is granted the first slot
-// released rather than the sixty-fifth — BenchmarkTransferShare measures its
-// wait for a slot at 60 ms at the p99 there, one release's turn, against
-// 1.46 s in arrival order (one count of twenty clones). A RATIO, never a
-// cap: the share is work-conserving, so a machine alone takes the whole lane
-// (its machine-alone arm runs as many clones a second as arrival order's) — a
-// flat per-credential cap would throttle the CI system that checks out
-// through one token on an idle node. A constant of the class rather than an
+// and while people have spent less lately than twice what the machines have
+// — as when one person clones beside sixty-four of one CI token's clones —
+// a person's clone is granted the first slot released rather than the
+// sixty-fifth: BenchmarkTransferShare measures its wait for a slot at 60 ms
+// at the p99 there, one release's turn, against 1.46 s in arrival order (one
+// count of twenty clones). A RATIO, never a cap: the share is
+// work-conserving, so a machine alone takes the whole lane (its
+// machine-alone arm runs as many clones a second as arrival order's) — a flat
+// per-credential cap would throttle the CI system that checks out through
+// one token on an idle node. A constant of the class rather than an
 // option, because two git nodes weighing the classes differently would make
 // which node a balancer picked decide who waits.
 func (c ShareClass) Weight() int {

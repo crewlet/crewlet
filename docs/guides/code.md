@@ -191,13 +191,18 @@ hold it keeps the syncs warm ([Deployment](deployment.md)). A runner's token
 is also its own turn when the node's transfer slots are all busy: a credential
 bound to no seat — a Tier A token, or a service account's machine token — is a
 `machine` in the node's [fair share](../concepts/code-host.md#fair-share),
-one principal per credential, so a burst of CI clones or lazy fetches waits
-behind people's clones and behind the runners that have asked less lately,
-never the other way round — and a token shared by every runner is one
-principal whose whole burst waits behind itself. A pipeline that pushes acts
-as the human seat it is bound to — one nobody else holds — so the share
-counts it as that seat, among the people: its burst still waits behind
-everyone who has asked less lately.
+one principal per credential. With people and machines both waiting, people
+get about two thirds of what the slots spend and machines one third, and
+among the machines the credential that has asked least goes first: so a
+burst of CI clones or lazy fetches waits behind the runners that have asked
+less lately, and behind people's clones until people have spent more than
+twice what the machines have, when the machines' third comes round. A token
+shared by every runner is one principal, so its whole burst waits behind
+every machine credential that has asked less — on a busy node for as long as
+ten seconds, when a request still without a slot is answered `503`. A
+pipeline that pushes acts as the human seat it is bound to — one nobody else
+holds — so the share counts it as that seat, among the people: its burst
+still waits behind every person who has asked less lately.
 
 Hand the token over without a prompt. The same helper, for one command,
 through `-c`:
