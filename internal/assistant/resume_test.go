@@ -3,6 +3,7 @@ package assistant_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -74,8 +75,12 @@ func parkedRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted, assistantdo
 func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 	t.Parallel()
 	f, accepted, p := parkedRig(t)
-	if sent := f.Dispatcher.Sent(); len(sent) != 0 {
-		t.Fatalf("a proposing turn sent %+v", sent)
+	// A PROPOSING TURN WRITES NOTHING: its preview reads what the change
+	// would touch, and nothing else is sent until the approval.
+	for _, sent := range f.Dispatcher.Sent() {
+		if sent.Request.Method != http.MethodGet {
+			t.Fatalf("a proposing turn sent %+v", sent)
+		}
 	}
 	ctx := iam.WithPrincipal(context.Background(), f.Person)
 	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,

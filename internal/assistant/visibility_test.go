@@ -3,6 +3,7 @@ package assistant_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
@@ -27,8 +28,8 @@ func TestAVisibilityWriteIsNeverProposedWithoutItsAudience(t *testing.T) {
 		t.Fatal("share_artifact no longer declares that it changes visibility")
 	}
 	real := share.Preview
-	share.Preview = func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
-		p, err := real(ctx, read, args)
+	share.Preview = func(ctx context.Context, read proposal.Read, now time.Time, args map[string]any) (proposal.Preview, error) {
+		p, err := real(ctx, read, now, args)
 		p.Audience = nil
 		return p, err
 	}

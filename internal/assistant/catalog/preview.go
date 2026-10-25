@@ -9,11 +9,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -109,7 +111,15 @@ func (c changes) rows() []wire.Change { return proposal.Rows(c) }
 func built(t Tool, args map[string]any) (exec.Request, error) { return t.Request(args) }
 
 func createTaskPreview(t Tool) proposal.Previewer {
-	return func(_ context.Context, _ proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, now time.Time, args map[string]any) (proposal.Preview, error) {
+		company, err := companyOf(ctx, read)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		args, due, err := company.resolveDue(args, now)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -117,19 +127,22 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		a := Args(args)
 		var c changes
 		c.fact("project", "Project", orDefault(a.String("project"), "Your team's project"))
-		for _, f := range []struct{ arg, label string }{{"title", "Title"},
-			{"assignee", "Assignee"}, {"ask", "Asks"}, {"parent", "Parent"}, {"type", "Type"},
-			{"status", "Status"}, {"priority", "Priority"}, {"due", "Due"}} {
+		c.add("title", "Title", a.String("title"))
+		c.add("assignee", "Assignee", company.seatName(a.String("assignee")))
+		c.add("ask", "Asks", company.seatName(a.String("ask")))
+		for _, f := range []struct{ arg, label string }{{"parent", "Parent"}, {"type", "Type"},
+			{"status", "Status"}, {"priority", "Priority"}} {
 			c.add(f.arg, f.label, a.String(f.arg))
 		}
+		c.add("due", "Due", due)
 		c.add("labels", "Tags", strings.Join(a.Strings("labels"), ", "))
 		c.move("body", "Description", "", a.String("body"))
 		note := ""
 		switch {
 		case a.String("ask") != "":
-			note = a.String("ask") + " is asked a question they owe an answer to."
+			note = company.seatName(a.String("ask")) + " is asked the question and owes an answer."
 		case a.String("assignee") != "":
-			note = a.String("assignee") + " is woken with the new task."
+			note = company.handover(a.String("assignee"), "the new task")
 		}
 		return proposal.Preview{Title: "Create task", Target: a.String("title"), Note: note,
 			ApproveLabel: "Approve and create", Changes: c.rows(), Request: req}, nil
@@ -137,7 +150,15 @@ func createTaskPreview(t Tool) proposal.Previewer {
 }
 
 func updateTaskPreview(t Tool) proposal.Previewer {
-	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, now time.Time, args map[string]any) (proposal.Preview, error) {
+		company, err := companyOf(ctx, read)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		args, due, err := company.resolveDue(args, now)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -157,11 +178,18 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 		c.fact("task", "Task", key+" "+value(doc, "task.title"))
 		for _, f := range []struct{ arg, path, label string }{{"title", "task.title", "Title"},
 			{"status", "task.status", "Status"}, {"priority", "task.priority", "Priority"},
-			{"assignee", "task.assignee", "Assignee"}, {"due", "task.due_at", "Due"},
 			{"body", "task.body", "Description"}} {
 			if _, given := args[f.arg]; given {
 				c.move(f.arg, f.label, value(doc, f.path), a.String(f.arg))
 			}
+		}
+		if _, given := args["assignee"]; given {
+			c.move("assignee", "Assignee", company.seatName(value(doc, "task.assignee")),
+				company.seatName(a.String("assignee")))
+		}
+		if _, given := args["due"]; given {
+			c.move("due", "Due", company.dueOf(value(doc, "task.due_at"),
+				value(doc, "task.due_all_day") == "true"), due)
 		}
 		if _, given := args["labels"]; given {
 			c.move("labels", "Tags", value(doc, "task.tags"), strings.Join(a.Strings("labels"), ", "))
@@ -173,8 +201,10 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 		c.fact("reason", "Why", a.String("reason"))
 		note := ""
 		if to, given := args["assignee"]; given && to != value(doc, "task.assignee") {
-			note = "Hands the work to " + orDefault(a.String("assignee"), "nobody") +
-				", who is woken with it."
+			note = "Nobody is assigned to it any more."
+			if a.String("assignee") != "" {
+				note = company.handover(a.String("assignee"), "the work")
+			}
 		}
 		return proposal.Preview{Title: "Update task", Target: key, Note: note,
 			ApproveLabel: "Approve and update", Changes: c.rows(), Request: req,
@@ -183,8 +213,121 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 	}
 }
 
+// company is what a task preview reads of the company through the grant: its
+// clock, which a due date is resolved on, and its seats, which a handle is
+// shown by. Read from the one chart every reader is shown (`GET /org`).
+type company struct {
+	zone  *time.Location
+	seats map[string]seatShown
+}
+
+// seatShown is how a preview names one seat.
+type seatShown struct{ name, kind string }
+
+// companyOf reads the company's clock and seats through the grant.
+func companyOf(ctx context.Context, read proposal.Read) (company, error) {
+	doc, err := readGet(ctx, read, "GET /org", nil, nil)
+	if err != nil {
+		return company{}, err
+	}
+	zone, err := period.LoadZone(orDefault(value(doc, "timezone"), "UTC"))
+	if err != nil {
+		return company{}, fmt.Errorf("%w: the company's clock: %w", ErrPreviewRead, err)
+	}
+	out := company{zone: zone, seats: map[string]seatShown{}}
+	var walk func(node any)
+	walk = func(node any) {
+		roles, _ := cards.Lookup(node, "roles").([]any)
+		for _, r := range roles {
+			if handle := value(r, "handle"); handle != "" {
+				out.seats[handle] = seatShown{name: value(r, "name"), kind: value(r, "kind")}
+			}
+		}
+		for _, key := range []string{"units", "children"} {
+			units, _ := cards.Lookup(node, key).([]any)
+			for _, u := range units {
+				walk(u)
+			}
+		}
+	}
+	walk(doc)
+	return out, nil
+}
+
+// seatName is how a preview shows handle: the seat's name, with the handle
+// beside it where the two differ, and the handle alone for one the chart does
+// not hold.
+func (c company) seatName(handle string) string {
+	seat, held := c.seats[handle]
+	switch {
+	case handle == "":
+		return ""
+	case !held || seat.name == "":
+		return handle
+	case strings.EqualFold(seat.name, handle):
+		return seat.name
+	}
+	return seat.name + " (" + handle + ")"
+}
+
+// handover is the note a task handed to handle carries: an agent starts on
+// it, and a person is told about it.
+func (c company) handover(handle, what string) string {
+	name := c.seatName(handle)
+	seat, held := c.seats[handle]
+	switch {
+	case !held:
+		return name + " is assigned " + what + " once this is approved."
+	case seat.kind == "human":
+		return name + " is notified of " + what + " once this is approved."
+	}
+	return name + " starts on " + what + " once this is approved."
+}
+
+// resolveDue resolves a call's due date on the company's clock as of now,
+// through the function the act tool resolves it with ([period.Resolve]), and
+// answers the call with the date written out in place of a relative token, so
+// the write carries the very date the card shows however long the approval
+// waits; and that date as the card shows it. A call with no due date is
+// answered as it is.
+func (c company) resolveDue(args map[string]any, now time.Time) (map[string]any, string, error) {
+	token := strings.TrimSpace(Args(args).String("due"))
+	if token == "" {
+		return args, "", nil
+	}
+	anchor, err := period.Resolve(token, now, c.zone)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: due: %w", ErrInvalidArguments, err)
+	}
+	written := anchor.At.UTC().Format(time.RFC3339)
+	if anchor.AllDay {
+		written = anchor.At.In(c.zone).Format(time.DateOnly)
+	}
+	out := maps.Clone(args)
+	out["due"] = written
+	return out, c.dueText(anchor.At, anchor.AllDay), nil
+}
+
+// dueOf shows a task's stored due date, an RFC 3339 instant, or "" for none.
+func (c company) dueOf(stored string, allDay bool) string {
+	at, err := time.Parse(time.RFC3339, stored)
+	if err != nil {
+		return stored
+	}
+	return c.dueText(at, allDay)
+}
+
+// dueText is a due date as a person reads it, on the company's clock.
+func (c company) dueText(at time.Time, allDay bool) string {
+	local := at.In(c.zone)
+	if allDay {
+		return local.Format("Monday 2 January 2006")
+	}
+	return local.Format("Monday 2 January 2006, 15:04 MST")
+}
+
 func commentPreview(t Tool) proposal.Previewer {
-	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -206,7 +349,7 @@ func commentPreview(t Tool) proposal.Previewer {
 }
 
 func answerPreview(t Tool) proposal.Previewer {
-	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -264,7 +407,7 @@ func askOf(thread any, id string) (any, map[string]string) {
 }
 
 func prioritiesPreview(t Tool) proposal.Previewer {
-	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -306,7 +449,7 @@ const personRoute = "GET /work/people/{handle}"
 // could carry a notice the person never meant to clear (a security notice a
 // prompt in some task talked the model into marking) without showing it.
 func inboxPreview(t Tool) proposal.Previewer {
-	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -408,7 +551,7 @@ func (c *changes) notices(field, label string, ids []string, names map[string]st
 
 func seatPreview(pause bool) func(t Tool) proposal.Previewer {
 	return func(t Tool) proposal.Previewer {
-		return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+		return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 			req, err := built(t, args)
 			if err != nil {
 				return proposal.Preview{}, err
@@ -441,7 +584,7 @@ func seatPreview(pause bool) func(t Tool) proposal.Previewer {
 }
 
 func steerPreview(t Tool) proposal.Previewer {
-	return func(_ context.Context, _ proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(_ context.Context, _ proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -457,7 +600,7 @@ func steerPreview(t Tool) proposal.Previewer {
 }
 
 func runAnswerPreview(t Tool) proposal.Previewer {
-	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -490,7 +633,7 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 }
 
 func createPagePreview(t Tool) proposal.Previewer {
-	return func(_ context.Context, _ proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(_ context.Context, _ proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -509,7 +652,7 @@ func createPagePreview(t Tool) proposal.Previewer {
 }
 
 func editPagePreview(t Tool) proposal.Previewer {
-	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -544,7 +687,7 @@ func editPagePreview(t Tool) proposal.Previewer {
 
 func sharePreview(share bool) func(t Tool) proposal.Previewer {
 	return func(t Tool) proposal.Previewer {
-		return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
+		return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 			req, err := built(t, args)
 			if err != nil {
 				return proposal.Preview{}, err
@@ -590,7 +733,7 @@ func audienceLabel(s string) string {
 }
 
 func pageActionPreview(t Tool) proposal.Previewer {
-	return func(_ context.Context, _ proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(_ context.Context, _ proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err

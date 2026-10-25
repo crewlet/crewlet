@@ -31,6 +31,12 @@ func World() map[string]any {
 			map[string]any{"record_id": "r1", "subject_key": "ENG-42", "excerpt": "Ship it moved to review."},
 			map[string]any{"record_id": "r2", "subject_key": "SEC-7", "excerpt": "Rotate the signing key."}}},
 		"/work/people/pm": map[string]any{"handle": "pm", "version": 7, "priorities": []any{"ENG-9"}},
+		"/org": map[string]any{"timezone": "Europe/Berlin",
+			"roles": []any{map[string]any{"handle": "pm", "name": "Product manager", "kind": "agent"}},
+			"units": []any{map[string]any{"name": "Platform", "roles": []any{
+				map[string]any{"handle": "ada", "name": "Ada Lovelace", "kind": "human"}},
+				"children": []any{map[string]any{"name": "Backend", "roles": []any{
+					map[string]any{"handle": "engineer", "name": "Backend engineer", "kind": "agent"}}}}}}},
 		"/agents/pm": map[string]any{"handle": "pm", "role": "Product manager",
 			"live": map[string]any{"activity": "working"}},
 		"/sandbox-runs": map[string]any{"runs": []any{map[string]any{"turn_id": RecordID,

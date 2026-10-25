@@ -191,7 +191,7 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 	read := func(ctx context.Context, r exec.Request) (exec.Response, error) {
 		return s.t.svc.dispatcher.Do(ctx, s.t.read, r)
 	}
-	preview, err := tool.Preview(ctx, read, args)
+	preview, err := tool.Preview(ctx, read, s.t.svc.now(), args)
 	var drafted assistantdomain.NewProposal
 	if err == nil {
 		drafted, err = s.t.draft(tool, scope, preview, pageRevision)

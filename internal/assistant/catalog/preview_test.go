@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
@@ -14,6 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
+
+// wednesday is the instant every preview here is made at.
+var wednesday = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
 
 // reader is a turn grant over answers, refusing anything it does not hold.
 func reader(answers map[string]any) proposal.Read {
@@ -51,7 +55,7 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 			t.Errorf("%s proposes and this suite does not preview it", tool.Name)
 			continue
 		}
-		p, err := tool.Preview(t.Context(), read, args)
+		p, err := tool.Preview(t.Context(), read, wednesday, args)
 		if err != nil {
 			t.Errorf("%s: %v", tool.Name, err)
 			continue
@@ -84,12 +88,12 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 		}
 	}
 	share, _ := catalog.Lookup("share_artifact")
-	p, err := share.Preview(t.Context(), read, assistanttest.ProposalArgs["share_artifact"])
+	p, err := share.Preview(t.Context(), read, wednesday, assistanttest.ProposalArgs["share_artifact"])
 	if err != nil || !p.StepUp || len(p.Audience) != 1 {
 		t.Errorf("a company-wide share previews step-up %v, audience %v, %v", p.StepUp, p.Audience, err)
 	}
 	update, _ := catalog.Lookup("update_task")
-	p, err = update.Preview(t.Context(), read, assistanttest.ProposalArgs["update_task"])
+	p, err = update.Preview(t.Context(), read, wednesday, assistanttest.ProposalArgs["update_task"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +115,12 @@ func TestAChangePreparedAgainstAnOldVersionIsStale(t *testing.T) {
 	read := reader(assistanttest.World())
 	update, _ := catalog.Lookup("update_task")
 	args := map[string]any{"item": "ENG-42", "if_match": float64(2), "status": "done"}
-	if _, err := update.Preview(t.Context(), read, args); !errors.Is(err, catalog.ErrStale) {
+	if _, err := update.Preview(t.Context(), read, wednesday, args); !errors.Is(err, catalog.ErrStale) {
 		t.Errorf("an update against version 2 of a task at 3 = %v, want ErrStale", err)
 	}
 	edit, _ := catalog.Lookup("edit_page")
 	args = map[string]any{"page": assistanttest.RecordID, "base_version": float64(1), "body": "x"}
-	if _, err := edit.Preview(t.Context(), read, args); !errors.Is(err, catalog.ErrStale) {
+	if _, err := edit.Preview(t.Context(), read, wednesday, args); !errors.Is(err, catalog.ErrStale) {
 		t.Errorf("an edit against version 1 of a page at 2 = %v, want ErrStale", err)
 	}
 	moved := assistanttest.World()
@@ -140,7 +144,7 @@ func TestAChangePreparedAgainstAnOldVersionIsStale(t *testing.T) {
 func TestAMarkInboxCardNamesEveryNotice(t *testing.T) {
 	t.Parallel()
 	mark, _ := catalog.Lookup("mark_inbox")
-	p, err := mark.Preview(t.Context(), reader(assistanttest.World()),
+	p, err := mark.Preview(t.Context(), reader(assistanttest.World()), wednesday,
 		map[string]any{"read": []any{"r1", "r2", "r9"}})
 	if err != nil {
 		t.Fatal(err)
@@ -160,12 +164,55 @@ func TestAMarkInboxCardNamesEveryNotice(t *testing.T) {
 	for i := range many {
 		many[i] = fmt.Sprintf("x%d", i)
 	}
-	p, err = mark.Preview(t.Context(), reader(assistanttest.World()), map[string]any{"unread": many})
+	p, err = mark.Preview(t.Context(), reader(assistanttest.World()), wednesday, map[string]any{"unread": many})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(p.Changes) != 11 || p.Changes[10].To != "And 3 more" {
 		t.Errorf("thirteen notices preview as %d rows ending %+v", len(p.Changes),
 			p.Changes[len(p.Changes)-1])
+	}
+}
+
+// A TASK'S CARD SHOWS WHAT THE WRITE CARRIES: a relative due date resolved on
+// the company's clock, through the function the act tool resolves it with,
+// and written into the request as that date, so an approval an hour or a day
+// later writes the date the person saw; and a seat by its name, with a note in
+// words. Mutation: preview the token as typed, or send it unresolved, and this
+// fails.
+func TestATaskCardShowsWhatTheWriteCarries(t *testing.T) {
+	t.Parallel()
+	create, _ := catalog.Lookup("create_task")
+	p, err := create.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		map[string]any{"title": "File the report", "assignee": "engineer", "due": "+7d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]string{}
+	for _, c := range p.Changes {
+		rows[c.Field] = c.To
+	}
+	if rows["due"] != "Wednesday 23 April 2031" ||
+		rows["assignee"] != "Backend engineer (engineer)" {
+		t.Errorf("the card reads due %q and assignee %q", rows["due"], rows["assignee"])
+	}
+	if p.Note != "Backend engineer (engineer) starts on the new task once this is approved." {
+		t.Errorf("the note reads %q", p.Note)
+	}
+	var body struct {
+		Args map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal(p.Request.Body, &body); err != nil || body.Args["due"] != "2031-04-23" {
+		t.Errorf("the request carries due %v (%v), want the resolved date", body.Args["due"], err)
+	}
+
+	p, err = create.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		map[string]any{"title": "Review it", "assignee": "ada"})
+	if err != nil || p.Note != "Ada Lovelace (ada) is notified of the new task once this is approved." {
+		t.Errorf("a person's task notes %q, %v", p.Note, err)
+	}
+	if _, err := create.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		map[string]any{"title": "Never", "due": "someday"}); !errors.Is(err, catalog.ErrInvalidArguments) {
+		t.Errorf("a due date that is no date previewed: %v", err)
 	}
 }

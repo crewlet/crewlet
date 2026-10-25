@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -20,9 +21,9 @@ type Read func(ctx context.Context, r exec.Request) (exec.Response, error)
 
 // Previewer is a write tool's preview: it reads the object's current values
 // through read and answers what the call would change and the exact request
-// it would send. A catalogue descriptor provides one per write tool and page
-// action.
-type Previewer func(ctx context.Context, read Read, args map[string]any) (Preview, error)
+// it would send, as of now (a relative date such as "+7d" is resolved on it).
+// A catalogue descriptor provides one per write tool and page action.
+type Previewer func(ctx context.Context, read Read, now time.Time, args map[string]any) (Preview, error)
 
 // Revisions re-reads, through read, the revision a [Revision] names now: what
 // an approval compares the preview's revision against. Answering the same

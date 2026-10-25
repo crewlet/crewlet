@@ -64,11 +64,18 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 	d.mu.Lock()
 	d.sent = append(d.sent, Sent{Grant: g.ID(), Request: r})
 	d.mu.Unlock()
-	if d.Handler == nil {
-		return exec.Response{Status: http.StatusNotFound,
-			Body: []byte(`{"error":"not_found","message":"There is no such record here."}`)}, nil
+	resp := exec.Response{Status: http.StatusNotFound,
+		Body: []byte(`{"error":"not_found","message":"There is no such record here."}`)}
+	if d.Handler != nil {
+		resp = d.Handler(r)
 	}
-	return d.Handler(r), nil
+	if resp.Status == http.StatusNotFound && r.Method == http.MethodGet && r.Path == "/org" {
+		// THE COMPANY EVERY RIG RUNS IN, for a handler that names no chart
+		// of its own: on UTC, with no seats, which is what a task's preview
+		// reads its clock and its seat names from.
+		return JSON(map[string]any{"timezone": "UTC"}), nil
+	}
+	return resp, nil
 }
 
 // Sent is every request the dispatcher was handed.
