@@ -478,3 +478,30 @@ func TestPendingIsWhatTheRunDid(t *testing.T) {
 		t.Errorf("pending = %+v, want the second run's response and its call's result alone", got)
 	}
 }
+
+// A SUBMISSION THAT OUTLIVES ITS RUN STILL FINISHES THE PHASE. A call still
+// running near the CLI's tool timeout is answered "still running" and its run
+// ended; a submission that returns after that has finished the phase all the
+// same, and no further run is started — it would read the result and submit
+// again.
+func TestASubmissionThatOutlivesItsRunStillFinishesThePhase(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("submit_work")
+	surf.hook = func(context.Context, llm.ToolCall) { time.Sleep(600 * time.Millisecond) }
+	prov := script(runOf(calling("", "submit_work"), says("never")), runOf(calling("", "submit_work")))
+	// Answered "still running" at 300ms, while it runs to 600.
+	prov.ToolTimeout = 5300 * time.Millisecond
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, TerminateAfter: []string{"submit_work"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := surf.calls(); len(got) != 1 {
+		t.Errorf("the surface ran %v, want the one submission", got)
+	}
+	if n := len(prov.Seen()); n != 1 {
+		t.Errorf("%d runs, want none after the submission finished the phase", n)
+	}
+	if res.ExhaustedRounds || res.Withheld != "" {
+		t.Errorf("result %+v, want a finished phase", res)
+	}
+}

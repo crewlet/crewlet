@@ -812,15 +812,22 @@ func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
 	d.settleLocked(c, res, false)
 	_, terminator := d.terminators[c.name]
 	switch {
-	case d.state != stateOpen:
+	case d.state.ended():
 	case res.Suspend:
 		// THE PARK IS AT ONCE: its call stays unanswered, so nothing more
 		// of its response can come.
 		d.state, d.suspended, d.payload = stateParked, c, res.SuspendPayload
 		d.closeDoneLocked()
 	case terminator && !res.Failed:
-		d.decideLocked(stateFinished, c.round)
-	default:
+		// A SUBMISSION THAT RAN FINISHED THE PHASE, whatever the run was
+		// ending for meanwhile — a call answered "still running" returns
+		// after its run ended, and a next run would submit again.
+		if d.state != stateOpen {
+			d.state = stateFinished
+		} else {
+			d.decideLocked(stateFinished, c.round)
+		}
+	case d.state == stateOpen:
 		d.afterCallLocked(c, before)
 	}
 	d.mu.Unlock()
