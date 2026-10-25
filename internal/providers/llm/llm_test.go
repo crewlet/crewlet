@@ -73,17 +73,18 @@ func TestKindOfReadsThroughWrappingAndDefaultsToFatal(t *testing.T) {
 
 // AN EMPTY FRAGMENT IS NOT SENT. A keep-alive carries no text, and a
 // callback that published a frame for each one spent a running seat's whole
-// socket queue on nothing; a restart is sent although it carries none,
-// because it is news.
-func TestSendDropsEmptyFragmentsAndKeepsRestarts(t *testing.T) {
+// socket queue on nothing; a restart and a retraction are sent although they
+// carry none, because each is news.
+func TestSendDropsEmptyFragmentsAndKeepsRestartsAndRetractions(t *testing.T) {
 	t.Parallel()
 	var got []llm.Delta
 	req := llm.Request{OnDelta: func(d llm.Delta) { got = append(got, d) }}
 	req.Send(llm.Delta{})
 	req.Send(llm.Delta{Content: "hi"})
 	req.Send(llm.Delta{Restart: true, Model: "sonnet"})
-	if len(got) != 2 || got[0].Content != "hi" || !got[1].Restart {
-		t.Errorf("sent %+v, want the text and the restart only", got)
+	req.Send(llm.Delta{Retract: true})
+	if len(got) != 3 || got[0].Content != "hi" || !got[1].Restart || !got[2].Retract {
+		t.Errorf("sent %+v, want the text, the restart and the retraction only", got)
 	}
 	llm.Request{}.Send(llm.Delta{Content: "nobody asked"}) // no callback: no panic
 }
@@ -164,6 +165,40 @@ func TestACompletionsTurnCarriesEverythingItShares(t *testing.T) {
 		name := cv.Type().Field(i).Name
 		if !answerOnly[name] && !mv.FieldByName(name).IsValid() {
 			t.Errorf("Completion.%s reaches no turn: give Message the field or name it answer-only here", name)
+		}
+	}
+}
+
+// WHAT WAS SHOWN NEVER QUIETLY DIFFERS FROM WHAT IS TRUE. Reconcile appends
+// only when the shown text is a prefix of the answer, and otherwise starts
+// the reader over with the whole answer, so applying its result to the shown
+// text always yields the answer exactly.
+func TestReconcileAlwaysLandsOnTheAnswer(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		shown, want, tail string
+		restart           bool
+	}{
+		{"", "", "", false},
+		{"", "The sea", "The sea", false},
+		{"The sea", "The sea", "", false},
+		{"The sea", "The sea stays", " stays", false},
+		{"The sea st", "The tide", "The tide", true},
+		{"The sea stays", "The sea", "The sea", true},
+		{"{\"message\"", "plain prose", "plain prose", true},
+	}
+	for _, c := range cases {
+		tail, restart := llm.Reconcile(c.shown, c.want)
+		if tail != c.tail || restart != c.restart {
+			t.Errorf("Reconcile(%q, %q) = (%q, %v), want (%q, %v)",
+				c.shown, c.want, tail, restart, c.tail, c.restart)
+		}
+		landed := c.shown + tail
+		if restart {
+			landed = tail
+		}
+		if landed != c.want {
+			t.Errorf("Reconcile(%q, %q) lands the reader on %q", c.shown, c.want, landed)
 		}
 	}
 }
