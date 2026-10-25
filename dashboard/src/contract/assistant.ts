@@ -363,9 +363,16 @@ export interface AssistantProposalCard {
   expires_at: string;
   state: AssistantProposalState;
   source_revision?: string;
+  page_action?: AssistantPageActionRef;
   approve_label: string;
   receipt?: AssistantReceipt;
   failure?: AssistantFailure;
+}
+
+/** The page action a page-scope proposal applies; the screen parses the payload. */
+interface AssistantPageActionRef {
+  name: string;
+  payload: unknown;
 }
 
 /** One row of a proposal's change list. */

@@ -103,6 +103,12 @@ func New(d Draft) (assistantdomain.NewProposal, error) {
 		State: wire.ProposalProposed, SourceRevision: p.SourceRevision,
 		ApproveLabel: p.ApproveLabel,
 	}}
+	if d.Scope == wire.ScopePage {
+		card.Proposal.PageAction = &wire.PageActionRef{
+			Name:    strings.TrimPrefix(p.Request.Path, PageActionPath),
+			Payload: p.Request.Body,
+		}
+	}
 	if card, err = fit(card); err != nil {
 		return assistantdomain.NewProposal{}, err
 	}

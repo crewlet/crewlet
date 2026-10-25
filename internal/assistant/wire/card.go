@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -131,6 +132,12 @@ type ProposalCard struct {
 	State     ProposalState `json:"state"`
 	// SourceRevision is the object's revision the preview read.
 	SourceRevision string `json:"source_revision,omitempty"`
+	// PageAction is a page-scope proposal's action, by name and with the
+	// payload the screen would apply, so a screen on the tab that declares
+	// the action draws its own preview rows and holds Approve with its own
+	// refusal before the person presses anything. Changes stay the fallback
+	// where no screen does. Never on a server write.
+	PageAction *PageActionRef `json:"page_action,omitempty"`
 	// ApproveLabel names the effect, never "OK" ("Approve and save",
 	// "Apply to this list").
 	ApproveLabel string `json:"approve_label"`
@@ -139,6 +146,14 @@ type ProposalCard struct {
 	// Failure is the engine's refusal of a failed proposal, and whether a
 	// Retry is offered.
 	Failure *Failure `json:"failure,omitempty"`
+}
+
+// PageActionRef is the page action a page-scope proposal applies: the action's
+// name as the screen declares it, and the payload, which the screen parses
+// with its own rules before it shows or applies anything.
+type PageActionRef struct {
+	Name    string          `json:"name"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 // Change is one row of a proposal's change list.
@@ -303,6 +318,9 @@ func (p *ProposalCard) validate() error {
 		return fmt.Errorf("%w: a proposal names no title or no approve label", ErrInvalid)
 	case len(p.Changes) == 0:
 		return fmt.Errorf("%w: a proposal shows no change", ErrInvalid)
+	case p.PageAction != nil && (p.Scope != ScopePage || p.PageAction.Name == ""):
+		return fmt.Errorf("%w: only a page-scope proposal names a page action, and "+
+			"it names it", ErrInvalid)
 	}
 	for _, ch := range p.Changes {
 		if !ch.Kind.Valid() {
