@@ -32,7 +32,7 @@ func (r rewritingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[
 	return tools.Result{Output: "three notes"}, nil
 }
 
-// AN AGENT-MODE RUN'S BRIDGED CALLS ARE COUNTED ON THEIR OWN METER.
+// A BOX-MODE RUN'S BRIDGED CALLS ARE COUNTED ON THEIR OWN METER.
 //
 // The coding CLI calls the seat's tools over the bridge long after the segment
 // that launched it has suspended and charged what it spent. Counted on that
@@ -46,7 +46,7 @@ func (r rewritingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[
 // Mutations: build the bridged surface on the runner's own meter, bind its
 // tools to the segment's turn, or close its workers on the segment's tally, and
 // the meter comes up short while the segment's figures move.
-func TestAnAgentRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
+func TestABoxRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
 	t.Parallel()
 	launcher := &recordingLauncher{}
 	cost := auxspend.Spent{Calls: 1, Input: 420, Output: 35, CacheRead: 100}
@@ -69,13 +69,14 @@ func TestAnAgentRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
 		Subagent: &runner.SubagentConfig{Limits: shipped()},
 		Turn: runner.Turn{RunID: "t-bridge", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-bridge", WorkKey: "wk-bridge", AuxSpend: segment}},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil || !w.Suspended {
-		t.Fatalf("Execute = %+v, %v; want a suspended agent run", w, err)
+		t.Fatalf("Execute = %+v, %v; want a suspended box run", w, err)
 	}
 	req := launcher.req
 	if req.Spend == nil {

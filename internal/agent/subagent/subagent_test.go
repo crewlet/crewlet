@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -54,36 +55,76 @@ func (s *stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: out}, nil
 }
 
-// provider replays a caller-supplied reply function, so a case states the
-// model's behaviour — including blocking, panicking and token spend — as
-// ordinary Go rather than as a mock's expectations.
+// provider is the model behind every worker's CLI: reply states what it
+// answers at each of its requests — blocking, panicking and token spend
+// included — as ordinary Go rather than as a mock's expectations. A worker's run
+// plays its replies over the real session (llmtest.Conn) until one calls
+// nothing or the run is ended, so every call reaches the worker's tools as a
+// CLI's does.
+//
+// A run over a real session takes time of its own — a socket, the MCP
+// handshake, the tool list — so a case whose HEALTHY worker must beat a
+// wall-clock cap sets that cap at a second, far above it on a loaded machine,
+// and lets only the worker that hangs run into it.
 type provider struct {
 	name  string
-	reply func(ctx context.Context, n int, req llm.Request) (*llm.Completion, error)
+	reply func(ctx context.Context, n int, req modelView) (llmtest.Response, error)
 
 	mu   sync.Mutex
-	seen []llm.Request
+	seen []modelView
+	runs int
+}
+
+// modelView is what the model has in front of it at one of its requests: the
+// conversation its CLI run opened on, the tools the CLI offers it now, and what
+// every call the run made so far was answered.
+type modelView struct {
+	Messages []llm.Message
+	Tools    []llm.ToolDef
+	Answers  []llmtest.Result
 }
 
 func (p *provider) Model() string { return p.name }
 
 func (p *provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	p.mu.Lock()
-	p.seen = append(p.seen, req)
-	n := len(p.seen)
+	p.runs++
 	p.mu.Unlock()
-	if p.reply == nil {
-		return answer("done", 0, 0), nil
-	}
-	return p.reply(ctx, n, req)
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{ModelName: "scripted"},
+		func(c *llmtest.Conn) (llmtest.Response, error) {
+			offered, err := c.Relist(ctx)
+			if err != nil {
+				return llmtest.Response{}, err
+			}
+			seen := modelView{Messages: req.Messages, Tools: offered, Answers: c.Results()}
+			p.mu.Lock()
+			p.seen = append(p.seen, seen)
+			n := len(p.seen)
+			p.mu.Unlock()
+			if p.reply == nil {
+				return answer("done", 0, 0), nil
+			}
+			return p.reply(ctx, n, seen)
+		})
 }
 
+// count is how many model requests the provider was asked for, every worker's
+// run together.
 func (p *provider) count() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.seen)
 }
 
+// started is how many CLI runs reached the provider, every worker's together:
+// a run may be cut off before its model is asked anything.
+func (p *provider) started() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.runs
+}
+
+// offered is what the model was offered at its i-th request.
 func (p *provider) offered(i int) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -95,15 +136,19 @@ func (p *provider) offered(i int) []string {
 }
 
 // say builds a plain text answer with a token cost.
-func say(text string, in, out int) *llm.Completion {
-	return &llm.Completion{Model: "scripted", Content: text, InputTokens: in, OutputTokens: out}
+func say(text string, in, out int) llmtest.Response {
+	return llmtest.Response{Text: text, Usage: llm.Usage{Input: in, Output: out}}
 }
 
 // callTool builds an answer that asks for one tool.
-func callTool(name string, args map[string]any, in, out int) *llm.Completion {
-	return &llm.Completion{
-		Model: "scripted", InputTokens: in, OutputTokens: out,
-		ToolCalls: []llm.ToolCall{{ID: "c" + name, Name: name, Arguments: args}},
+func callTool(name string, args map[string]any, in, out int) llmtest.Response {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		panic(fmt.Sprintf("callTool %s: the fixture's arguments are not JSON: %v", name, err))
+	}
+	return llmtest.Response{
+		Calls: []llmtest.Call{{Name: name, Args: string(raw)}},
+		Usage: llm.Usage{Input: in, Output: out},
 	}
 }
 
@@ -297,6 +342,7 @@ func baseConfig(t *testing.T, w *world, p *provider) subagent.Config {
 		Universe: w.snapshot,
 		Parent:   w.parentAll,
 		Limits:   limits(),
+		Sessions: sessions,
 	}
 }
 
@@ -373,12 +419,12 @@ func batch(toolNames []string, tasks []subagent.Task) subagent.Request {
 }
 
 // submit is the answer a worker gives when it means to finish.
-func submit(fields map[string]any, in, out int) *llm.Completion {
+func submit(fields map[string]any, in, out int) llmtest.Response {
 	return callTool(subagent.SubmitTool, fields, in, out)
 }
 
 // answer is the ordinary submission: one `result` field.
-func answer(text string, in, out int) *llm.Completion {
+func answer(text string, in, out int) llmtest.Response {
 	return submit(map[string]any{"result": text}, in, out)
 }
 
@@ -551,7 +597,7 @@ func TestDiscoveryCannotReachWhatTheGrantRefused(t *testing.T) {
 	// once onto a tool the parent holds and the grant allows (legal), and
 	// once onto each class the grant refuses.
 	targets := []string{"web_search", "slack_post", subagent.ToolName, "activate_tool"}
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ modelView) (llmtest.Response, error) {
 		if n <= len(targets) {
 			return callTool("child_activate", map[string]any{"name": targets[n-1]}, 1, 1), nil
 		}
@@ -734,7 +780,7 @@ func TestASubagentRunsOnTheSeatsSubagentChain(t *testing.T) {
 func TestAChildCannotCallAToolItWasNotGranted(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ modelView) (llmtest.Response, error) {
 		switch n {
 		case 1:
 			return callTool("slack_post", map[string]any{"text": "leaked"}, 1, 1), nil
@@ -752,11 +798,22 @@ func TestAChildCannotCallAToolItWasNotGranted(t *testing.T) {
 	if n := w.byName["read_file"].ran.Load(); n != 1 {
 		t.Errorf("the granted tool ran %d times, want 1", n)
 	}
-	if len(res.Executions) < 2 || !res.Executions[0].Failed {
-		t.Fatalf("the denied call was not recorded as a failure: %+v", res.Executions)
+	// NEVER OFFERED, so the worker's CLI refused the call itself and the
+	// model read that it failed: the grant decides the list the CLI is
+	// given, and a name off it never reaches the worker's tools at all.
+	if offered := p.offered(0); slices.Contains(offered, "slack_post") {
+		t.Fatalf("the denied tool was offered: %v", offered)
 	}
-	if res.Executions[1].Failed {
-		t.Errorf("the granted call failed: %+v", res.Executions[1])
+	p.mu.Lock()
+	next := p.seen[1].Answers
+	p.mu.Unlock()
+	if len(next) == 0 || next[0].Name != "slack_post" || !next[0].Failed {
+		t.Fatalf("the model read %+v back from the denied call, want its failure", next)
+	}
+	for _, ex := range res.Executions {
+		if ex.Name == "slack_post" || ex.Failed {
+			t.Errorf("the worker's record carries %+v: a denied call ran, or a granted one failed", ex)
+		}
 	}
 	if !slices.Contains(res.Rejected, "slack_post") {
 		t.Errorf("the rejection is not on the record: %v", res.Rejected)
@@ -765,7 +822,7 @@ func TestAChildCannotCallAToolItWasNotGranted(t *testing.T) {
 
 func TestAParentAskingForMoreTurnsIsClampedNotRefused(t *testing.T) {
 	t.Parallel()
-	always := func(_ context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+	always := func(_ context.Context, _ int, _ modelView) (llmtest.Response, error) {
 		return callTool("read_file", map[string]any{"path": "/x"}, 1, 1), nil
 	}
 
@@ -806,15 +863,15 @@ func TestAParentAskingForMoreTurnsIsClampedNotRefused(t *testing.T) {
 func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(ctx context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(ctx context.Context, n int, _ modelView) (llmtest.Response, error) {
 		if n == 1 {
 			return callTool("read_file", map[string]any{"path": "/x"}, 60, 40), nil
 		}
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return llmtest.Response{}, ctx.Err()
 	}}
 	cfg := baseConfig(t, w, p)
-	cfg.Limits.TaskTimeout = 60 * time.Millisecond
+	cfg.Limits.TaskTimeout = time.Second
 
 	res := one(t, cfg, request("read_file"))
 	if !res.Failed() || !res.TimedOut() || res.Status != subagent.StatusTimedOut {
@@ -825,9 +882,10 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	}
 	// The partial work is the point: a child that spent a round did work the
 	// parent paid for, and reporting zeros throws away both the transcript
-	// and the only evidence of the cost. TWO rounds: the second's provider
-	// call was made — the round it was cut off in — and billed nothing yet.
-	if res.Rounds != 2 || res.Tokens() != 100 {
+	// and the only evidence of the cost. ONE round: the request its CLI's
+	// record showed. The second was still being answered when the cap fired,
+	// so no record of it reached the engine — and it billed nothing yet.
+	if res.Rounds != 1 || res.Tokens() != 100 {
 		t.Errorf("partial work lost: rounds=%d tokens=%d", res.Rounds, res.Tokens())
 	}
 	if len(res.Executions) != 1 {
@@ -841,7 +899,7 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 func TestAFastChildIsNotReportedAsTimedOut(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("all done", 10, 5), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -859,7 +917,7 @@ func TestAFastChildIsNotReportedAsTimedOut(t *testing.T) {
 func TestAPanickingChildDoesNotTakeTheParentDown(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		panic("provider SDK dereferenced nil")
 	}}
 	cfg := baseConfig(t, w, p)
@@ -879,7 +937,7 @@ func TestAPanickingChildDoesNotTakeTheParentDown(t *testing.T) {
 func TestAPanickingChildDoesNotTakeItsSiblingsDown(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "poison") {
 			panic("poison child")
 		}
@@ -908,10 +966,10 @@ func TestACancelledParentIsNotReportedAsATimeout(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	started := make(chan struct{})
-	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ modelView) (llmtest.Response, error) {
 		close(started)
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return llmtest.Response{}, ctx.Err()
 	}}
 	cfg := baseConfig(t, w, p)
 
@@ -933,7 +991,7 @@ func TestTheSliceIsAFractionOfTheParentsRemaining(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	m := &meter{}
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ modelView) (llmtest.Response, error) {
 		if n == 1 {
 			return callTool("read_file", map[string]any{"path": "/x"}, 100, 50), nil
 		}
@@ -977,7 +1035,7 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	m := &meter{}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 100, 50), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1106,7 +1164,7 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	m := &meter{}
 	release := make(chan struct{})
 	slow := blockingMeter{inner: countingMeter{m}, gate: release}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 60, 0), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1167,7 +1225,7 @@ func TestAWorkerStartedOnASpentSliceMakesNoCall(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	m := &meter{}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 100, 50), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1234,7 +1292,7 @@ func TestAWorkerStopsOnTheSeatsStandingRefusal(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	m := &meter{}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 10, 0), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1264,7 +1322,7 @@ func TestAnOrgRefusalIsNotBlamedOnTheChildsSlice(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	m := &meter{refuse: true}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 10, 0), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1297,7 +1355,7 @@ func TestARoundTheParentRefusedKeepsItsShareOfTheSlice(t *testing.T) {
 	m := &meter{}
 	var once sync.Once
 	gate := refuseOnceMeter{inner: countingMeter{m}, once: &once}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 10, 0), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1342,7 +1400,7 @@ func TestAParentRefusalOutranksTheSlicesOwn(t *testing.T) {
 	// follows between the company and the seat.
 	w := newWorld(t)
 	m := &meter{refuse: true}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 10, 0), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1365,7 +1423,7 @@ func TestABatchRunsAtMostMaxParallelChildrenAtOnce(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	var live, peak atomic.Int32
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		cur := live.Add(1)
 		for {
 			was := peak.Load()
@@ -1411,10 +1469,10 @@ func TestABatchRunsAtMostMaxParallelChildrenAtOnce(t *testing.T) {
 func TestABatchTimeoutKeepsTheAnswersThatAlreadyLanded(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "slow") {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return llmtest.Response{}, ctx.Err()
 		}
 		return answer("fast answer", 7, 3), nil
 	}}
@@ -1422,7 +1480,7 @@ func TestABatchTimeoutKeepsTheAnswersThatAlreadyLanded(t *testing.T) {
 	cfg.ParentRemaining = 0
 	cfg.Limits.MaxParallel = 2
 	cfg.Limits.TaskTimeout = 10 * time.Second // the BATCH cap is what must fire
-	cfg.Limits.CallTimeout = 60 * time.Millisecond
+	cfg.Limits.CallTimeout = time.Second
 
 	results, err := subagent.Run(context.Background(), cfg, batch([]string{"read_file"}, []subagent.Task{
 		{Prompt: "quick one", SystemPrompt: "s"},
@@ -1453,9 +1511,9 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 	const runs = 12
 	for range runs {
 		w := newWorld(t)
-		p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+		p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ modelView) (llmtest.Response, error) {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return llmtest.Response{}, ctx.Err()
 		}}
 		cfg := baseConfig(t, w, p)
 		cfg.ParentRemaining = 0
@@ -1493,8 +1551,8 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 		if queued != 1 {
 			t.Fatalf("%d of 2 children never started, want exactly 1: %+v", queued, results)
 		}
-		if p.count() != 1 {
-			t.Fatalf("%d children reached the model under MaxParallel 1", p.count())
+		if p.started() != 1 {
+			t.Fatalf("%d children started a CLI run under MaxParallel 1", p.started())
 		}
 	}
 }
@@ -1509,7 +1567,7 @@ func TestAnUnreachableCounterKeepsItsReservation(t *testing.T) {
 	m := &meter{}
 	var once sync.Once
 	failing := errOnceMeter{inner: countingMeter{m}, once: &once}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("answer", 60, 0), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -1549,16 +1607,16 @@ func TestAnUnreachableCounterKeepsItsReservation(t *testing.T) {
 func TestAPerChildTimeoutDoesNotFailTheWholeBatch(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "hang") {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return llmtest.Response{}, ctx.Err()
 		}
 		return answer("answer", 1, 1), nil
 	}}
 	cfg := baseConfig(t, w, p)
 	cfg.ParentRemaining = 0
-	cfg.Limits.TaskTimeout = 50 * time.Millisecond
+	cfg.Limits.TaskTimeout = time.Second
 	cfg.Limits.CallTimeout = 10 * time.Second
 
 	start := time.Now()
@@ -1589,7 +1647,7 @@ func TestResultsComeBackInInputOrder(t *testing.T) {
 	// one; completion order would silently re-pair every answer with the
 	// wrong question.
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
 		body := userText(req)
 		switch body {
 		case "first":
@@ -1621,7 +1679,7 @@ func TestResultsComeBackInInputOrder(t *testing.T) {
 func TestABatchPublishesOneSummary(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "bad") {
 			panic("nope")
 		}
@@ -1883,7 +1941,7 @@ func TestATemplateSuppliesThePersonaAndTheAnswerShape(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	var schema map[string]any
-	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
 		for _, def := range req.Tools {
 			if def.Name == subagent.SubmitTool {
 				schema = def.Parameters
@@ -1957,7 +2015,7 @@ func TestAnUnknownWorkerIsRefusedNamingWhatIsAvailable(t *testing.T) {
 func TestATaskOverridesItsTemplate(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return answer("done", 1, 1), nil
 	}}
 	cfg := baseConfig(t, w, p)
@@ -2033,7 +2091,7 @@ func TestADependentTaskWaitsAndIsGivenTheAnswer(t *testing.T) {
 	var order []string
 	var mu sync.Mutex
 	var synthesisPrompt string
-	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
 		body := userText(req)
 		mu.Lock()
 		switch {
@@ -2090,7 +2148,7 @@ func TestADependentTaskWaitsAndIsGivenTheAnswer(t *testing.T) {
 func TestADependentsPromptIsOutlinedAroundTheAnswersItWasGiven(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
 		switch body := userText(req); {
 		case strings.Contains(body, "gather A"):
 			return answer("A says yes — ✅", 1, 1), nil
@@ -2146,7 +2204,7 @@ func TestADependentsPromptIsOutlinedAroundTheAnswersItWasGiven(t *testing.T) {
 func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "will not answer") {
 			// Prose and no submission: a `no_result`, which is exactly the
 			// case where the fields a dependent was promised do not exist.
@@ -2196,10 +2254,10 @@ func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
 func TestASkipIsNotReclassifiedByADeadline(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "hangs") {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return llmtest.Response{}, ctx.Err()
 		}
 		return answer("fine", 1, 1), nil
 	}}
@@ -2235,7 +2293,7 @@ func TestAWorkerThatNeverSubmittedIsNotGivenAnAnswer(t *testing.T) {
 	// The engine writing a result from the transcript would put words in
 	// the worker's mouth on the one question the parent asked.
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
 		return say("here is my thinking, at length", 3, 4), nil
 	}}
 	res := one(t, baseConfig(t, w, p), request())
@@ -2265,7 +2323,7 @@ func TestAWorkerThatNeverSubmittedIsNotGivenAnAnswer(t *testing.T) {
 func TestAWorkerThatWroteItsAnswerAsTextIsAskedToSubmitIt(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ modelView) (llmtest.Response, error) {
 		if n == 1 {
 			return say("```json\n{\"result\":\"the incident was a bad deploy\"}\n```", 1, 1), nil
 		}
@@ -2294,7 +2352,7 @@ func TestAnInvalidSubmissionGoesBackToTheWorker(t *testing.T) {
 	// A rejected submission is the one tool failure a model reliably
 	// fixes; ending the task over it throws away everything it did.
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ modelView) (llmtest.Response, error) {
 		if n == 1 {
 			return submit(map[string]any{"result": "   "}, 1, 1), nil
 		}
@@ -2318,7 +2376,7 @@ func TestAnInvalidSubmissionGoesBackToTheWorker(t *testing.T) {
 func TestASubmissionEndsTheLoop(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ modelView) (llmtest.Response, error) {
 		if n == 1 {
 			return answer("done", 1, 1), nil
 		}
@@ -2336,24 +2394,16 @@ func TestASubmissionEndsTheLoop(t *testing.T) {
 }
 
 // A SUBMISSION SURVIVES THE FAILURE THAT FOLLOWED IT. A worker that answered
-// and then spent a round it did not have has still answered.
+// has answered, whatever its CLI did after: here the submission arrives beside
+// a tool call, and the CLI — slow to stop once the engine ended its run — is
+// still alive when the task's wall-clock cap kills it, so the run fails on the
+// deadline after the answer is in.
 func TestAnAnswerSurvivesALaterTimeout(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	// The submission arrives alongside a tool call, so the loop continues
-	// past it and then hits the wall.
-	p := &provider{name: "sub", reply: func(ctx context.Context, n int, _ llm.Request) (*llm.Completion, error) {
-		if n == 1 {
-			return &llm.Completion{Model: "scripted", ToolCalls: []llm.ToolCall{
-				{ID: "s1", Name: subagent.SubmitTool, Arguments: map[string]any{"result": "the answer"}},
-				{ID: "r1", Name: "read_file", Arguments: map[string]any{"path": "/x"}},
-			}}, nil
-		}
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}}
-	cfg := baseConfig(t, w, p)
-	cfg.Limits.TaskTimeout = 60 * time.Millisecond
+	cfg := baseConfig(t, w, nil)
+	cfg.Models = models(t, phase.Entry{Key: "default", Provider: answersThenHangs{}})
+	cfg.Limits.TaskTimeout = time.Second
 	cfg.Limits.MaxTurns = 6
 
 	res := one(t, cfg, request("read_file"))
@@ -2363,6 +2413,27 @@ func TestAnAnswerSurvivesALaterTimeout(t *testing.T) {
 	if res.Output["result"] != "the answer" {
 		t.Errorf("the answer was discarded with the failure: %+v", res.Output)
 	}
+}
+
+// answersThenHangs is a worker's CLI that submits beside a read, and then does
+// not stop when the engine ends its run: it lives until the task's deadline
+// kills it, and its run fails on that.
+type answersThenHangs struct{}
+
+func (answersThenHangs) Model() string { return "scripted" }
+
+func (answersThenHangs) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	c, err := llmtest.Connect(ctx, req, llmtest.ConnOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	c.Respond(ctx, llmtest.Response{Parallel: true, Calls: []llmtest.Call{
+		{Name: subagent.SubmitTool, Args: `{"result":"the answer"}`},
+		{Name: "read_file", Args: `{"path":"/x"}`},
+	}})
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 // --- the LLM-callable tool -------------------------------------------------
@@ -2435,17 +2506,17 @@ func TestTheToolCoercesTheRoundCapAsAModelEmitsIt(t *testing.T) {
 // call failed would tell it to throw away the siblings that worked.
 func TestTheToolResultCarriesPerTaskOutcomes(t *testing.T) {
 	t.Parallel()
-	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "hangs") {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return llmtest.Response{}, ctx.Err()
 		}
 		return answer("all good", 5, 5), nil
 	}}
 	w := newWorld(t)
 	cfg := baseConfig(t, w, p)
 	cfg.ParentRemaining = 0
-	cfg.Limits.TaskTimeout = 60 * time.Millisecond
+	cfg.Limits.TaskTimeout = time.Second
 	tool := subagent.NewTool(cfg)
 
 	res, err := tool.Call(context.Background(), map[string]any{"tasks": []any{
@@ -2546,7 +2617,7 @@ func TestTheToolNeverOffersTheDenylistToItsWorker(t *testing.T) {
 func TestATasksOwnOutputIsTheShapeItsWorkerAnswersIn(t *testing.T) {
 	t.Parallel()
 	var published map[string]any
-	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
 		for _, def := range req.Tools {
 			if def.Name == subagent.SubmitTool {
 				published = def.Parameters
@@ -2712,7 +2783,7 @@ func TestTheToolDescriptionNamesTheSeatsWorkers(t *testing.T) {
 }
 
 // userText returns the first user message's content.
-func userText(req llm.Request) string {
+func userText(req modelView) string {
 	for _, m := range req.Messages {
 		if m.Role == llm.RoleUser {
 			return m.Content
@@ -2811,8 +2882,8 @@ func TestTheParentsToolsAreReadWhenTheChildSpawns(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	parent := []string{"read_file"}
-	answer := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
-		return &llm.Completion{Content: "done"}, nil
+	answer := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
+		return llmtest.Response{Text: "done"}, nil
 	}}
 	cfg := baseConfig(t, w, answer)
 	cfg.Parent = func() []string { return parent }
@@ -2846,8 +2917,8 @@ func TestTheParentsToolsAreReadWhenTheChildSpawns(t *testing.T) {
 func TestEveryChildIsReportedOnce(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	answer := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
-		return &llm.Completion{Content: "done"}, nil
+	answer := &provider{name: "sub", reply: func(context.Context, int, modelView) (llmtest.Response, error) {
+		return llmtest.Response{Text: "done"}, nil
 	}}
 	var seen []subagent.Result
 	cfg := baseConfig(t, w, answer)
@@ -2880,13 +2951,13 @@ func TestAWorkerReportsHowLongItTook(t *testing.T) {
 	w := newWorld(t)
 	// A SLEEP rather than an injected clock: time.Since is monotonic, so a
 	// sleep can only overshoot and the assertion below is a floor.
-	slow := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+	slow := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ modelView) (llmtest.Response, error) {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return llmtest.Response{}, ctx.Err()
 		case <-time.After(delay):
 		}
-		return &llm.Completion{Content: "done"}, nil
+		return llmtest.Response{Text: "done"}, nil
 	}}
 	res := one(t, baseConfig(t, w, slow), subagent.Request{Tasks: []subagent.Task{
 		{ID: "a", Prompt: "go", SystemPrompt: "you are a worker"},
@@ -2905,9 +2976,9 @@ func TestAWorkerThatTimedOutStillReportsHowLongItTook(t *testing.T) {
 	t.Parallel()
 	const wallClock = 20 * time.Millisecond
 	w := newWorld(t)
-	blocked := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+	blocked := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ modelView) (llmtest.Response, error) {
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return llmtest.Response{}, ctx.Err()
 	}}
 	cfg := baseConfig(t, w, blocked)
 	cfg.Limits.TaskTimeout = wallClock
@@ -2931,10 +3002,10 @@ func TestAWorkerThatTimedOutStillReportsHowLongItTook(t *testing.T) {
 func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ modelView) (llmtest.Response, error) {
 		if n == 1 {
 			call := callTool("read_file", map[string]any{"path": "/x"}, 60, 40)
-			call.Content = "the answer is probably in that file"
+			call.Text = "the answer is probably in that file"
 			return call, nil
 		}
 		return answer("read it", 10, 5), nil
@@ -3115,10 +3186,8 @@ func TestAWorkerCountsTheRunsCallsButNotItsSiblings(t *testing.T) {
 
 	firstRecorded := make(chan struct{})
 	var once sync.Once
-	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req llm.Request) (*llm.Completion, error) {
-		answered := slices.ContainsFunc(req.Messages, func(m llm.Message) bool {
-			return m.Role == llm.RoleTool
-		})
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req modelView) (llmtest.Response, error) {
+		answered := len(req.Answers) > 0
 		switch {
 		case strings.Contains(userText(req), "first") && !answered:
 			return callTool(counter.Name(), map[string]any{"v": "first"}, 1, 1), nil
@@ -3130,7 +3199,7 @@ func TestAWorkerCountsTheRunsCallsButNotItsSiblings(t *testing.T) {
 			select {
 			case <-firstRecorded:
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return llmtest.Response{}, ctx.Err()
 			}
 			return callTool(counter.Name(), map[string]any{"v": "second"}, 1, 1), nil
 		}

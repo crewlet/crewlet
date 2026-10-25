@@ -49,6 +49,12 @@ func (r *Runner) Suspended() (Suspension, bool) {
 // rather than rebuilt, because a phase that rebuilt its surface would lose
 // every activation the pre-suspend rounds made.
 //
+// AND A NEW CLI RUN CONTINUES IT. The run that parked was stopped the moment
+// its detached call parked the phase, often on another node and days ago; the
+// conversation it left — the parked call its one open call, every call beside
+// it answered — is answered and handed to the next run as its transcript, so
+// the model reads what it did and what the box found, and the loop runs on.
+//
 // THE RECORD IT PUBLISHES COVERS THE WHOLE PHASE, pre-suspend rounds
 // included. This used to carry only the post-resume slice, on the argument
 // that the earlier rounds were already recorded and re-emitting them would
@@ -76,7 +82,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
 	// is the same run in a fresh process, so a count it derives must see
 	// every call made before it parked — the rounds that closed, the parked
-	// round's own calls and whatever an agent-mode run called over the
+	// round's own calls and whatever a box-mode run called over the
 	// bridge — or a call made again after a different one would take its
 	// first copy's operation id. See [turnctx.CallLog].
 	seedCalls(r.cfg.Turn.Context.CallLog(), history, parkedCalls(state),
@@ -245,6 +251,24 @@ func priorRounds(state execstate.State) toolloop.Result {
 	for _, m := range state.Steers {
 		out.Steers = append(out.Steers, toolloop.SteerMark{Round: m.Round, ID: m.NoteID})
 	}
+	// The CLI runs too, for the reason the rounds travel: the resumed record
+	// is the phase's only account, and a second suspend re-encodes them from
+	// here.
+	for _, inv := range state.Invocations {
+		out.Invocations = append(out.Invocations, toolloop.Invocation{
+			StartedAt:        inv.StartedAt,
+			Duration:         time.Duration(inv.DurationMS) * time.Millisecond,
+			ProviderKey:      inv.ProviderKey,
+			Model:            inv.Model,
+			Outcome:          toolloop.InvocationOutcome(inv.Outcome),
+			RequestsObserved: inv.RequestsObserved,
+			InputTokens:      inv.InputTokens,
+			OutputTokens:     inv.OutputTokens,
+			CacheRead:        inv.CacheReadTokens,
+			CacheWrite:       inv.CacheWriteTokens,
+			Calls:            inv.ToolCalls,
+		})
+	}
 	for _, r := range state.Rounds {
 		out.Rounds = append(out.Rounds, toolloop.Round{
 			Round: r.Round, StartedAt: r.StartedAt,
@@ -270,6 +294,9 @@ func priorRounds(state execstate.State) toolloop.Result {
 			continue
 		}
 		ex := toolloop.Execution{Round: round, Name: name}
+		// The call's own id, which the conversation's call carries too: it
+		// is what tells two calls of one response apart on the record.
+		ex.CallID, _ = exec["call_id"].(string)
 		if args, ok := exec["arguments"].(string); ok {
 			ex.Args = decodeArgs(args)
 		}
@@ -366,10 +393,12 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		// progress frames are stream-only.
 		RoundsUsed:     res.RoundsUsed,
 		RoundNarration: roundNarration(res.Narration),
-		// Their timing and their cache share, for the same reason.
+		// Their timing and their cache share, for the same reason — and the
+		// CLI runs they were made in.
 		Rounds:           phaseRounds(res.Rounds),
 		CacheReadTokens:  res.CacheRead,
 		CacheWriteTokens: res.CacheWrite,
+		Invocations:      phaseInvocations(res.Invocations),
 		// THE CLOCK FOLDS TOO, like the rounds above and for the same
 		// reason: this phase publishes no completed event, so a resume that
 		// started its clock at zero would report a run that took minutes as

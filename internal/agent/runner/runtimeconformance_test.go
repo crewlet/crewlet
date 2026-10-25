@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -9,33 +10,42 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // ONE SUITE, BOTH EXECUTOR RUNTIMES.
 //
-// Agent mode's whole design claim is that only the ROUNDS happen elsewhere:
-// same prompt, same surface, same submission, same outcome vocabulary, same
-// rescue. That claim is exactly the kind nobody notices breaking — the two
-// paths are separate code, each has its own tests, and each passes while
-// disagreeing with the other about what a turn means.
+// Both run the executor as a coding CLI's own loop, and differ in where: host
+// mode runs it on this host, its every call through the phase's tool session
+// and the engine's own gates; box mode runs it detached in a sandbox box, its
+// calls over the bridge, and collects the run afterwards from the calls it
+// made. The design claim is that only WHERE the rounds happen differs: same
+// prompt, same surface, same submission, same outcome vocabulary, same rescue.
+// That claim is exactly the kind nobody notices breaking — the two paths are
+// separate code, each has its own tests, and each passes while disagreeing
+// with the other about what a turn means.
 //
 // So every case below is written once, against a scenario rather than against
-// a runtime, and run twice: through the native tool loop with the model
-// scripted, and through an agent-mode run with the bridged calls scripted.
-// What is asserted is the WORK, which is the only thing either runtime owes
-// the turn engine — and the turn engine cannot tell them apart.
+// a runtime, and run twice: through a host-mode CLI with the model scripted,
+// its calls reaching the surface over the real session, and through a
+// box-mode run with the bridged calls scripted. What is asserted is the WORK,
+// which is the only thing either runtime owes the turn engine — and the turn
+// engine cannot tell them apart.
 //
 // A case that legitimately differs does not belong here. The two runtimes are
-// genuinely different in one place — a native pass makes model calls and an
-// agent run makes none — and that is asserted in agentrun_test.go, not here.
+// genuinely different in one place — a host-mode pass is a loop the engine
+// governs, run by run, and a box run is one the engine only launches and
+// collects — and that is asserted in agentrun_test.go, not here.
 
-// submitJSON is a completion whose only content is a submission with these
-// arguments — the native runtime's spelling of a bridged submit_work call.
-func submitJSON(name string, args map[string]any) llm.Completion {
-	return llm.Completion{
-		ToolCalls: []llm.ToolCall{{ID: "c1", Name: name, Arguments: args}},
+// submitJSON is a response whose only content is a submission with these
+// arguments — the host runtime's spelling of a bridged submit_work call.
+func submitJSON(t *testing.T, name string, args map[string]any) llmtest.Response {
+	t.Helper()
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("conformance fixture: %v", err)
 	}
+	return submitCall(t, name, string(raw))
 }
 
 // scenario is one turn's worth of behaviour, expressed the way each runtime
@@ -43,19 +53,19 @@ func submitJSON(name string, args map[string]any) llm.Completion {
 type scenario struct {
 	name string
 
-	// native is what the model says, in order.
-	native []llm.Completion
-	// bridged is what an agent-mode run called, in order. The submission
-	// is one of these, exactly as it is one of the native completions.
+	// host is what the model says, in order.
+	host []llmtest.Response
+	// bridged is what a box-mode run called, in order. The submission is
+	// one of these, exactly as it is one of the host-mode responses' calls.
 	bridged []ledger.Call
-	// text is the run's own closing prose, which only the agent runtime
-	// has — the native loop's equivalent is the last completion's content.
+	// text is the box run's own closing prose — the host loop's equivalent
+	// is its last response's.
 	text string
 
 	want turn.Work
 }
 
-func conformanceCases() []scenario {
+func conformanceCases(t *testing.T) []scenario {
 	delivered := map[string]any{
 		"outcome": "delivered", "summary": "posted the weekly summary",
 		"deliveries": []any{"slack_post"},
@@ -63,11 +73,10 @@ func conformanceCases() []scenario {
 	return []scenario{
 		{
 			name: "a delivery with a citation is delivered",
-			native: []llm.Completion{
+			host: []llmtest.Response{
 				activate("slack_post"),
-				{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post",
-					Arguments: map[string]any{"channel": "C1"}}}},
-				submitJSON(runner.SubmitWorkTool, delivered),
+				calling(callOf(t, "slack_post", map[string]any{"channel": "C1"})),
+				submitJSON(t, runner.SubmitWorkTool, delivered),
 			},
 			bridged: []ledger.Call{
 				{Name: "slack_post", Result: "posted"},
@@ -80,14 +89,14 @@ func conformanceCases() []scenario {
 		},
 		{
 			name: "a delivery nothing did is refused, then corrected",
-			native: []llm.Completion{
+			host: []llmtest.Response{
 				// The first submission cites a tool that never ran; the
 				// decoder rejects it and the model corrects itself.
-				submitJSON(runner.SubmitWorkTool, map[string]any{
+				submitJSON(t, runner.SubmitWorkTool, map[string]any{
 					"outcome": "delivered", "summary": "told them",
 					"deliveries": []any{"slack_post"},
 				}),
-				submitJSON(runner.SubmitWorkTool, map[string]any{
+				submitJSON(t, runner.SubmitWorkTool, map[string]any{
 					"outcome": "blocked", "summary": "no channel to post in",
 					"evidence": "the seat has no write tool on its surface",
 				}),
@@ -105,27 +114,18 @@ func conformanceCases() []scenario {
 			want: turn.Work{Outcome: turn.OutcomeBlocked, Summary: "no channel to post in"},
 		},
 		{
-			// NO TEXT IN `want`, because the two runtimes legitimately
-			// differ there and the agreement this suite asserts is about
-			// the OUTCOME. The native loop reminds an executor once that
-			// prose is not a submission (a model call the agent runtime,
-			// whose rounds are the CLI's, does not make), so its
-			// transcript carries the answer to that reminder too. That
-			// the prose survives a rescue is asserted per runtime:
-			// phases_test.go and agentrun_test.go.
-			name: "an executor that never submits is rescued",
-			native: []llm.Completion{
-				{Content: "I looked around and ran out of road"},
-			},
+			name:    "an executor that never submits is rescued",
+			host:    []llmtest.Response{text("I looked around and ran out of road")},
 			bridged: []ledger.Call{{Name: "slack_history", Result: "read"}},
 			text:    "I looked around and ran out of road",
-			// THE SAME TEXT FROM BOTH. The native loop asks a phase that
-			// ended in prose to finish twice more before the rescue, and
-			// the model answers each corrective with its report again;
+			// THE SAME TEXT FROM BOTH. The host loop asks a phase whose run
+			// ended in prose to finish twice more before the rescue — a run
+			// each, which a box run the engine does not govern never gets —
+			// and the model answers each corrective with its report again;
 			// those answers are to the corrective, not the task, so the
-			// text keeps the first — which is what an agent run's one
-			// closing reply is. A reviewer reads the same thing whichever
-			// runtime the executor ran on.
+			// text keeps the first — which is what a box run's one closing
+			// reply is. A reviewer reads the same thing whichever runtime the
+			// executor ran on.
 			want: turn.Work{
 				Outcome: turn.OutcomeIncomplete,
 				Text:    "I looked around and ran out of road",
@@ -134,8 +134,8 @@ func conformanceCases() []scenario {
 		},
 		{
 			name: "a malformed submission ends in the rescue, not an error",
-			native: []llm.Completion{
-				submitJSON(runner.SubmitWorkTool, map[string]any{"outcome": "teleported"}),
+			host: []llmtest.Response{
+				submitJSON(t, runner.SubmitWorkTool, map[string]any{"outcome": "teleported"}),
 			},
 			bridged: []ledger.Call{
 				{Name: runner.SubmitWorkTool, Args: map[string]any{"outcome": "teleported"}},
@@ -147,54 +147,55 @@ func conformanceCases() []scenario {
 
 func TestBothExecutorRuntimesAgreeAboutWhatATurnDid(t *testing.T) {
 	t.Parallel()
-	for _, tc := range conformanceCases() {
+	for _, tc := range conformanceCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			native := runNative(t, tc)
-			agent := runAgent(t, tc)
-			assertWork(t, "native", native, tc.want)
-			assertWork(t, "agent", agent, tc.want)
+			host := runHost(t, tc)
+			box := runBox(t, tc)
+			assertWork(t, "host", host, tc.want)
+			assertWork(t, "box", box, tc.want)
 			// AND THE SAME AS EACH OTHER, which is a stronger claim than
 			// both matching the table: a field the table forgot to name
 			// still has to agree.
-			if native.Outcome != agent.Outcome || native.Summary != agent.Summary ||
-				native.Rescued != agent.Rescued {
-				t.Errorf("the runtimes disagree:\n native = %+v\n agent  = %+v", native, agent)
+			if host.Outcome != box.Outcome || host.Summary != box.Summary ||
+				host.Rescued != box.Rescued {
+				t.Errorf("the runtimes disagree:\n host = %+v\n box  = %+v", host, box)
 			}
 		})
 	}
 }
 
-// runNative drives the scenario through the engine's own tool loop.
-func runNative(t *testing.T, tc scenario) turn.Work {
+// runHost drives the scenario through a host-mode CLI: the engine's tool loop,
+// its calls over the phase's session.
+func runHost(t *testing.T, tc scenario) turn.Work {
 	t.Helper()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: tc.native,
+		execute: tc.host,
 	}}}, buildOpts{})
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
-		t.Fatalf("native Execute: %v", err)
+		t.Fatalf("host Execute: %v", err)
 	}
 	return w
 }
 
-// runAgent drives the same scenario through an agent-mode run: the launch
-// suspends, and the resume rebuilds the phase from the run's bridged calls.
+// runBox drives the same scenario through a box-mode run: the launch suspends,
+// and the resume rebuilds the phase from the run's bridged calls.
 //
 // BOTH HALVES, not just the resume, because the launch is where the surface
 // and the prompt are built and a suite that skipped it would certify only the
 // half that is easy to reach.
-func runAgent(t *testing.T, tc scenario) turn.Work {
+func runBox(t *testing.T, tc scenario) turn.Work {
 	t.Helper()
 	launcher := &recordingLauncher{}
 	launched, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{agentRun: launcher})
 	if _, _, err := launched.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("agent Execute: %v", err)
+		t.Fatalf("box Execute: %v", err)
 	}
 	suspension, ok := launched.Suspended()
 	if !ok {
-		t.Fatal("the agent-mode launch recorded no suspension")
+		t.Fatal("the box-mode launch recorded no suspension")
 	}
 
 	// THE STATE THE ENGINE WOULD HAVE PERSISTED, round-tripped through the
@@ -216,7 +217,7 @@ func runAgent(t *testing.T, tc scenario) turn.Work {
 		})
 	w, _, err := resumed.Resume(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("agent Resume: %v", err)
+		t.Fatalf("box Resume: %v", err)
 	}
 	return w
 }

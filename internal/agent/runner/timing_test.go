@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -29,14 +30,14 @@ import (
 // is a second ledger that disagrees with the first.
 
 // cached is a round that also reports a prompt-cache share.
-func cached(c llm.Completion, read, write int) llm.Completion {
-	c.CacheRead, c.CacheWrite = read, write
-	return c
+func cached(r llmtest.Response, read, write int) llmtest.Response {
+	r.Usage.CacheRead, r.Usage.CacheWrite = read, write
+	return r
 }
 
 func TestAPhaseRecordCarriesItsRoundsCallsAndCache(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		cached(sayAndCall(t, "read_file", `{"path":"/a"}`, "start"), 50, 10),
 		cached(sayAndCall(t, "read_file", `{"path":"/b"}`, "again"), 55, 0),
 		cached(sayAndCall(t, runner.SubmitWorkTool,
@@ -100,7 +101,7 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 	// A two-round cap, extended by the step (4) under a ceiling of 8: the
 	// record states the cap the phase ENDED under, not the one it began
 	// with, and the ceiling it could have reached.
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
 		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
 		sayAndCall(t, runner.SubmitWorkTool,
@@ -134,7 +135,7 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 
 func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
 		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
 		sayAndCall(t, runner.SubmitWorkTool,
@@ -152,44 +153,49 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	if open := openingFrame(t, pub, "execute"); open.MaxRounds != 2 || open.RoundCeiling != 8 {
 		t.Errorf("the opening frame states max %d / ceiling %d, want 2 / 8", open.MaxRounds, open.RoundCeiling)
 	}
+	frames := progressFrames(t, pub, "execute")
 	var running []string
-	for _, frame := range progressFrames(t, pub, "execute") {
+	announced := map[string]bool{}
+	cap := 0
+	for _, frame := range frames {
 		round := frame.RoundNum + 1
-		want := 2
-		if round > 2 {
-			want = 6 // the extension moved it
+		// THE CAP IN FORCE WHEN THE FRAME WAS PUBLISHED: the budget's 2
+		// until the judge grants more, the 6 the extension moved it to
+		// after — never back, and never 2 on a round past the budget.
+		if frame.MaxRounds < cap {
+			t.Errorf("a round-%d frame states max %d after one stated %d", round, frame.MaxRounds, cap)
 		}
-		if frame.MaxRounds != want || frame.RoundCeiling != 8 {
-			t.Errorf("a round-%d frame states max %d / ceiling %d, want %d / 8",
-				round, frame.MaxRounds, frame.RoundCeiling, want)
+		cap = frame.MaxRounds
+		if (frame.MaxRounds != 2 && frame.MaxRounds != 6) || frame.RoundCeiling != 8 ||
+			(round > 2 && frame.MaxRounds != 6) {
+			t.Errorf("a round-%d frame states max %d / ceiling %d", round, frame.MaxRounds, frame.RoundCeiling)
 		}
 		if frame.RoundStartedAt.IsZero() {
-			t.Errorf("a round-%d frame names no round start", round)
+			t.Errorf("a round-%d frame names no start", round)
 		}
-		// A round's OPENING frame is published as its provider call is
-		// made, so it carries the rounds before it and a start later than
-		// every one of them; every later frame of the round carries it too.
-		switch len(frame.Rounds) {
-		case round:
-		case round - 1:
-			if frame.RunningCall != nil {
-				t.Errorf("round %d's opening frame names a running call", round)
-			}
-			if n := len(frame.Rounds); n > 0 && !frame.RoundStartedAt.After(frame.Rounds[n-1].StartedAt) {
-				t.Errorf("round %d's opening frame carries the previous round's start %v", round, frame.RoundStartedAt)
-			}
-		default:
+		// A frame carries every round the phase has made so far, on the
+		// phase's scale — the round its count says it is on.
+		if len(frame.Rounds) != round {
 			t.Errorf("a round-%d frame carries %d timed rounds", round, len(frame.Rounds))
 		}
-		if call := frame.RunningCall; call != nil {
+		for _, call := range frame.RunningCalls {
 			if call.Round != round {
 				t.Errorf("the call running in round %d is numbered %d", round, call.Round)
 			}
-			running = append(running, call.Name)
+			if call.ID == "" {
+				t.Errorf("the call running in round %d carries no id", round)
+			}
+			if !announced[call.ID] {
+				announced[call.ID] = true
+				running = append(running, call.Name)
+			}
 		}
 	}
-	// One announcement per call, each BEFORE it ran — the three calls this
-	// phase made, in order.
+	if last := frames[len(frames)-1]; last.MaxRounds != 6 {
+		t.Errorf("the phase's last frame states max %d, want the extended 6", last.MaxRounds)
+	}
+	// Every call announced WHILE it ran — the three calls this phase made,
+	// in order.
 	want := []string{"read_file", "read_file", runner.SubmitWorkTool}
 	if !slices.Equal(running, want) {
 		t.Errorf("running calls announced = %v, want %v", running, want)
@@ -198,7 +204,7 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 
 func TestAResumedPhaseStatesItsOwnSegmentStart(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		sayAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
 		sayAndCall(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"shipped it","deliveries":["slack_post"]}`,
@@ -309,6 +315,7 @@ func TestAWorkerNamesTheRoundThatSpawnedIt(t *testing.T) {
 		Subagent:  &runner.SubagentConfig{Limits: shipped()},
 		Turn: runner.Turn{RunID: "t-fan", AgentID: "agent-1",
 			Context: &turnctx.Turn{WorkItem: item}},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -363,31 +370,31 @@ type delegatingProvider struct {
 
 func (p *delegatingProvider) Model() string { return "scripted" }
 
-func (p *delegatingProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if slices.Contains(toolNames(req.Tools), subagent.SubmitTool) {
-		return &llm.Completion{
-			ToolCalls:   []llm.ToolCall{{ID: "w1", Name: subagent.SubmitTool, Arguments: map[string]any{"result": "found it"}}},
-			InputTokens: 30, OutputTokens: 5, CacheRead: 7,
-		}, nil
-	}
-	p.executor++
-	var c llm.Completion
-	switch p.executor {
-	case 1:
-		c = llm.Completion{ToolCalls: []llm.ToolCall{{ID: "e1", Name: "read_file", Arguments: map[string]any{"path": "/a"}}}}
-	case 2:
-		c = llm.Completion{ToolCalls: []llm.ToolCall{{ID: "e2", Name: subagent.ToolName, Arguments: map[string]any{
-			"tasks": []any{map[string]any{"id": "research", "prompt": "look", "system_prompt": "you research things"}},
-		}}}}
-	default:
-		c = llm.Completion{ToolCalls: []llm.ToolCall{{ID: "e3", Name: runner.SubmitWorkTool, Arguments: map[string]any{
-			"outcome": "no_action", "summary": "delegated the research",
-		}}}}
-	}
-	c.InputTokens, c.OutputTokens, c.CacheRead = 100, 10, 11
-	return &c, nil
+func (p *delegatingProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(c *llmtest.Conn) (llmtest.Response, error) {
+		if slices.Contains(c.OfferedNames(), subagent.SubmitTool) {
+			return llmtest.Response{
+				Calls: []llmtest.Call{{Name: subagent.SubmitTool, Args: `{"result":"found it"}`}},
+				Usage: llm.Usage{Input: 30, Output: 5, CacheRead: 7},
+			}, nil
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.executor++
+		var r llmtest.Response
+		switch p.executor {
+		case 1:
+			r = calling(llmtest.Call{Name: "read_file", Args: `{"path":"/a"}`})
+		case 2:
+			r = calling(llmtest.Call{Name: subagent.ToolName, Args: `{"tasks":[` +
+				`{"id":"research","prompt":"look","system_prompt":"you research things"}]}`})
+		default:
+			r = calling(llmtest.Call{Name: runner.SubmitWorkTool,
+				Args: `{"outcome":"no_action","summary":"delegated the research"}`})
+		}
+		r.Usage = llm.Usage{Input: 100, Output: 10, CacheRead: 11}
+		return r, nil
+	})
 }
 
 // batched is the one delegate call's summary.

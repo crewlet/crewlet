@@ -51,14 +51,14 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 			seat: offGate,
 		},
 		{
-			name: "an agent-mode executor already holds a shell, so a " +
+			name: "a box-mode executor already holds a shell, so a " +
 				"second box would put the work where the turn cannot see it",
 			seat:     gated,
 			agentRun: stubLauncher{},
 			want:     false,
 		},
 		{
-			name: "a gated seat on the native loop is the one that can " +
+			name: "a gated seat in host mode is the one that can " +
 				"actually launch one",
 			seat: gated,
 			want: true,
@@ -73,6 +73,7 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 				Models:   &phase.Registry{},
 				Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme"}, Role: tc.seat},
 				AgentRun: tc.agentRun,
+				Sessions: testHost(t),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -110,6 +111,7 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 			Models:   &phase.Registry{},
 			Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
 				Role: &org.Role{Name: "Engineer", Sandbox: &org.RoleSandbox{Enabled: true}}},
+			Sessions: testHost(t),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -121,10 +123,10 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 		}
 		universe := r.executorUniverse(snapshot, agentRun)
 		if _, held := universe.Lookup(MarkOnboardedTool); held {
-			t.Errorf("agent run %v: mark_onboarded is in the executor's snapshot, one activation away", agentRun)
+			t.Errorf("box mode %v: mark_onboarded is in the executor's snapshot, one activation away", agentRun)
 		}
 		if strings.Contains(universe.Discoverable(nil), MarkOnboardedTool) {
-			t.Errorf("agent run %v: the executor's catalogue lists mark_onboarded", agentRun)
+			t.Errorf("box mode %v: the executor's catalogue lists mark_onboarded", agentRun)
 		}
 	}
 }
@@ -140,8 +142,8 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{}, nil
 }
 
-// stubLauncher stands for "this executor runs as somebody else's agentic
-// loop". Only its presence is read.
+// stubLauncher stands for "this executor runs in box mode". Only its
+// presence is read.
 type stubLauncher struct{}
 
 func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) error { return nil }

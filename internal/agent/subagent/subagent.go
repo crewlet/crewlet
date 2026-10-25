@@ -413,6 +413,12 @@ func (c Config) validate() error {
 	if c.Seat.Role == nil {
 		errs = append(errs, errors.New("no parent role"))
 	}
+	if c.Sessions == nil {
+		// Refused before any task starts, rather than by every worker's loop
+		// once it has rendered its prompts: a worker reaches its tools
+		// through nothing else.
+		errs = append(errs, errors.New("no tool session host (Config.Sessions)"))
+	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("subagent: %w", err)
 	}

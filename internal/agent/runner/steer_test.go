@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -74,11 +75,11 @@ func TestTheReviewerSeesANoteTheExecutorWasSteeredWith(t *testing.T) {
 	box := steer.New()
 	pub := newCapture()
 	prov := &scriptedProvider{
-		execute: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "p", Name: "peek"}}},
+		execute: []llmtest.Response{
+			calling(llmtest.Call{Name: "peek"}),
 			submitWork(t),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","final_artifact":"a"}`)},
 	}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
@@ -127,8 +128,8 @@ func TestANoteBindsTheTurnsLaterIterations(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
 	prov := &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		execute: []llmtest.Response{submitWork(t)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"self_iterate","notes":"try again"}`)},
 	}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{steer: box})
@@ -153,52 +154,64 @@ func TestANoteBindsTheTurnsLaterIterations(t *testing.T) {
 	}
 }
 
-// workerProvider tells the executor's requests from a worker's by the
-// submission each surface offers, and has a person steer the turn while the
-// worker is running.
+// workerProvider tells the executor's runs from a worker's by the submission
+// each surface offers, and has a person steer the turn while the worker is
+// running.
 type workerProvider struct {
-	t    *testing.T
-	box  *steer.Box
-	mu   sync.Mutex
-	seen map[string][]llm.Request
+	t   *testing.T
+	box *steer.Box
+
+	mu sync.Mutex
+	// runs are each kind's CLI runs, and responses how many model requests
+	// each kind was asked for across them.
+	runs      map[string][]*llmtest.Conn
+	requests  map[string][]llm.Request
+	responses map[string]int
 }
 
 func (p *workerProvider) Model() string { return "scripted" }
 
-func (p *workerProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	offered := toolNames(req.Tools)
-	switch {
-	case slices.Contains(offered, subagent.SubmitTool):
-		p.seen["worker"] = append(p.seen["worker"], req)
-		if len(p.seen["worker"]) == 1 {
-			// The person steers the turn while its worker runs, and
-			// the worker's first submission is malformed — so the
-			// worker has a SECOND round, the one that would read the
-			// note if a worker were steered.
-			p.box.Offer(founderNote)
-			return &llm.Completion{ToolCalls: []llm.ToolCall{
-				{ID: "w1", Name: subagent.SubmitTool, Arguments: map[string]any{}},
-			}}, nil
+func (p *workerProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	kind := ""
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(c *llmtest.Conn) (llmtest.Response, error) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if kind == "" {
+			switch offered := c.OfferedNames(); {
+			case slices.Contains(offered, subagent.SubmitTool):
+				kind = "worker"
+			case slices.Contains(offered, runner.SubmitReviewTool):
+				kind = "review"
+			default:
+				kind = "execute"
+			}
+			p.runs[kind] = append(p.runs[kind], c)
+			p.requests[kind] = append(p.requests[kind], req)
 		}
-		return &llm.Completion{ToolCalls: []llm.ToolCall{{ID: "w2",
-			Name: subagent.SubmitTool, Arguments: map[string]any{"result": "found it"}}}}, nil
-	case slices.Contains(offered, runner.SubmitReviewTool):
-		c := submitCall(p.t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`)
-		return &c, nil
-	default:
-		p.seen["execute"] = append(p.seen["execute"], req)
-		if len(p.seen["execute"]) == 1 {
-			return &llm.Completion{ToolCalls: []llm.ToolCall{{ID: "d", Name: subagent.ToolName,
-				Arguments: map[string]any{"tasks": []any{
+		p.responses[kind]++
+		switch kind {
+		case "worker":
+			if p.responses[kind] == 1 {
+				// The person steers the turn while its worker runs, and
+				// the worker's first submission is malformed — so the
+				// worker has a SECOND round, the one that would read the
+				// note if a worker were steered.
+				p.box.Offer(founderNote)
+				return calling(llmtest.Call{Name: subagent.SubmitTool, Args: `{}`}), nil
+			}
+			return calling(llmtest.Call{Name: subagent.SubmitTool, Args: `{"result":"found it"}`}), nil
+		case "review":
+			return submitCall(p.t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`), nil
+		default:
+			if p.responses[kind] == 1 {
+				return calling(callOf(p.t, subagent.ToolName, map[string]any{"tasks": []any{
 					map[string]any{"id": "look", "prompt": "look into it",
 						"system_prompt": "You look into things."},
-				}}}}}, nil
+				}})), nil
+			}
+			return submitWork(p.t), nil
 		}
-		c := submitWork(p.t)
-		return &c, nil
-	}
+	})
 }
 
 // SUBAGENTS ARE NOT STEERED. A worker is a leaf its parent directs, and a note
@@ -208,28 +221,55 @@ func (p *workerProvider) Complete(_ context.Context, req llm.Request) (*llm.Comp
 func TestSubagentsAreNotSteered(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
-	prov := &workerProvider{t: t, box: box, seen: map[string][]llm.Request{}}
+	prov := &workerProvider{t: t, box: box, runs: map[string][]*llmtest.Conn{},
+		requests: map[string][]llm.Request{}, responses: map[string]int{}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		steer: box, subagent: &runner.SubagentConfig{Limits: shipped()},
 	})
 	if _, _, err := r.Execute(t.Context(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	workers := prov.seen["worker"]
-	if len(workers) < 2 {
-		t.Fatalf("the worker ran %d rounds; this case needs a round after the offer", len(workers))
+	prov.mu.Lock()
+	defer prov.mu.Unlock()
+	if n := prov.responses["worker"]; n < 2 {
+		t.Fatalf("the worker ran %d rounds; this case needs a round after the offer", n)
+	}
+	// NOT PAUSED FOR IT: a steerable loop ends its CLI's run once a note is
+	// waiting, and the next run reads it — so a worker steered by mistake
+	// would show a second run that opens on the note. One run, its rounds
+	// one CLI loop, is a worker the note never reached.
+	workers := prov.requests["worker"]
+	if len(workers) != 1 {
+		t.Errorf("the worker took %d CLI runs, want one the note never ended", len(workers))
 	}
 	for i, req := range workers {
 		if holds(req) {
-			t.Fatalf("worker round %d read the turn's note", i+1)
+			t.Fatalf("worker run %d read the turn's note", i+1)
+		}
+		if strings.Contains(req.Messages[0].Content, founderNote.Text) {
+			t.Error("the note reached a worker's prompt")
 		}
 	}
-	exec := prov.seen["execute"]
-	if len(exec) < 2 || !holds(exec[1]) {
-		t.Error("the executor's round after the delegate call did not read the note")
+	// And never inside a tool's result, where any tool's output could
+	// imitate one.
+	for _, conn := range prov.runs["worker"] {
+		for _, res := range conn.Results() {
+			if strings.Contains(res.Output, founderNote.Text) {
+				t.Errorf("the worker read the note in a tool's result: %q", res.Output)
+			}
+		}
 	}
-	if strings.Contains(workers[len(workers)-1].Messages[0].Content, founderNote.Text) {
-		t.Error("the note reached a worker's prompt")
+	// THE DELEGATE CALL ENDED THE EXECUTOR'S RUN and the next run read the
+	// note: a call that waits on other model runs is parked locally, and its
+	// result is handed to the run after it.
+	exec := prov.requests["execute"]
+	if len(exec) < 2 || !holds(exec[1]) {
+		t.Error("the executor's run after the delegate call did not read the note")
+	}
+	if len(exec) >= 2 && !slices.ContainsFunc(exec[1].Messages, func(m llm.Message) bool {
+		return m.Role == llm.RoleTool && m.Name == subagent.ToolName
+	}) {
+		t.Error("the executor's run after the delegate call was not handed its result")
 	}
 }
 
@@ -246,7 +286,7 @@ func TestAResumedExecutorReadsANoteAtItsRoundBoundary(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
+	prov := &scriptedProvider{execute: []llmtest.Response{submitWork(t)}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		steer: box, pub: pub,
 		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},

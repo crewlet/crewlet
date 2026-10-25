@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -21,17 +21,17 @@ import (
 //
 // Every first-party tool is on the executor's surface from its first round,
 // and an offered tool's whole definition reaches the model with every request
-// — as a text-mode prompt's tool catalogue, or over an agent-mode CLI's tool
-// bridge. The system prompt used to list each of them again, description and
-// all: with every builtin wired that copy was ~17 KB, most of the prompt, paid
-// on every round of every turn. What it lists now is what the model can learn
+// — its CLI lists it over MCP, from the phase's session in host mode or the
+// bridge in box mode. The system prompt used to list each of them again,
+// description and all: with every builtin wired that copy was ~17 KB, most of
+// the prompt, paid on every round of every turn. What it lists now is what the model can learn
 // nowhere else — the MCP servers it can still discover.
 //
 // REAL BUILTINS, registered by the builtin package itself, so the
 // descriptions a regression would duplicate are the ones production sends.
 func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
+	prov := &scriptedProvider{execute: []llmtest.Response{submitWork(t)}}
 	pub := newCapture()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		pub: pub,
@@ -58,14 +58,14 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	req := prov.requestsFor("execute")[0]
-	system := req.Messages[0].Content
+	run := prov.runsFor("execute")[0]
+	system := run.req.Messages[0].Content
 
-	offered := toolNames(req.Tools)
-	if !slices.Contains(offered, builtin.SearchKnowledgeTool) {
+	defs := run.conn.Offered()
+	if offered := toolNames(defs); !slices.Contains(offered, builtin.SearchKnowledgeTool) {
 		t.Fatalf("the real builtin was not offered (%v), so this case proves nothing", offered)
 	}
-	for _, def := range req.Tools {
+	for _, def := range defs {
 		if strings.Contains(system, "- "+def.Name+":") || strings.Contains(system, "- "+def.Name+"\n") {
 			t.Errorf("the system prompt lists %s, which the request already defines", def.Name)
 		}
@@ -78,7 +78,7 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 			t.Errorf("the system prompt lacks %q", want)
 		}
 	}
-	// Not the heading a text-mode prompt gives the definitions themselves.
+	// Not a heading of its own for the definitions the CLI already lists.
 	if strings.Contains(system, "## Available tools") {
 		t.Error("the system prompt has a second `## Available tools` section")
 	}
@@ -116,7 +116,7 @@ func TestTheReviewNamesOnlyTheToolsTheSeatHolds(t *testing.T) {
 	t.Parallel()
 	review := func(t *testing.T, opts buildOpts) string {
 		t.Helper()
-		prov := &scriptedProvider{review: []llm.Completion{
+		prov := &scriptedProvider{review: []llmtest.Response{
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)}}
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, opts)
 		if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
