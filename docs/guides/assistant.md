@@ -97,6 +97,7 @@ These limits are fixed, not configured:
 | Running turns per person | 2 | A third answers `429 assistant_busy`, so one person cannot occupy the model slots |
 | Turns per person per minute | 20, burst of 5 | The same refusal; a loop in a browser cannot spend the budget in seconds |
 | One answer per conversation | 1 | A second question in the same conversation waits for the first (`409 assistant_turn_running`). A question asked while a change waits for approval is answered, and the change stays approvable until it expires (`assistant.proposal_ttl_seconds`). A turn waiting on an approval ends as `expired` once every change it proposed has expired, within a minute even if nobody opens the conversation again |
+| Open streams per person | 4 per node, 60 opens a minute (burst of 10) | A fifth stream, or a loop reopening one, answers `429 assistant_busy`, so one person cannot hold the node's connections or keep it unsealing a transcript |
 | Tool result handed to the model | 16 KiB | Larger answers are cut for the model; the card still shows the snapshot |
 | Card size | 1000 rows, 256 KiB | A larger table is cut with a notice and never presented as whole |
 

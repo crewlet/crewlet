@@ -277,7 +277,11 @@ func (c *counted) Allow(ctx context.Context, bucket string, limit int, window ti
 	now time.Time) (bool, error) {
 
 	c.mu.Lock()
-	c.buckets = append(c.buckets, bucket)
+	if strings.HasPrefix(bucket, "assistant.turn:") {
+		// Only the turn rate is this suite's; a stream's opens are counted
+		// on their own buckets.
+		c.buckets = append(c.buckets, bucket)
+	}
 	err := c.err
 	c.mu.Unlock()
 	if err != nil {

@@ -44,6 +44,26 @@ const (
 	TurnsPerMinute = 20
 	TurnBurst      = 5
 
+	// StreamsPerPerson is how many turn streams one person may hold open on
+	// a node at once: four, so two tabs each following a turn and a
+	// reconnect overlapping the stream it replaces fit, while a script
+	// opening thousands cannot hold a goroutine and a frame buffer for
+	// each. Past it: 429 assistant_busy.
+	StreamsPerPerson = 4
+
+	// StreamOpensPerMinute and StreamOpenBurst are one person's stream
+	// opens: sixty a minute with ten at once, on this node and across the
+	// fleet's counter alike. A drawer opens one per turn and reconnects with
+	// backoff; the bound is what keeps a loop on the route from unsealing an
+	// ended turn's whole transcript on every request.
+	StreamOpensPerMinute = 60
+	StreamOpenBurst      = 10
+
+	// NodeStreamOpensPerSecond and NodeStreamOpenBurst are every person's
+	// stream opens on this node together.
+	NodeStreamOpensPerSecond = 20
+	NodeStreamOpenBurst      = 100
+
 	// NodeTurnsPerSecond and NodeTurnBurst are every person's turns on this
 	// node together: two a second with twenty at once. The model entry's
 	// own slots are the real bound on what runs; this only stops a stampede

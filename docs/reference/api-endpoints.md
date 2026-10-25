@@ -6954,6 +6954,10 @@ the same way. Frames the running node no longer keeps (it keeps a turn's frames
 two minutes after a segment ends) are answered with a `snapshot` of the turn as
 its transcript holds it, then how it ended.
 
+A person holds at most four streams open on a node, and opens at most sixty a
+minute (ten at once) on a node and across the fleet; past either a stream is
+refused `429 assistant_busy` with a `Retry-After`, before anything is read.
+
 **Any node answers the stream.** A stream that reaches a node not running its
 turn follows it there: the frames it missed are asked of the running node, and
 the rest are heard as the running node tells the fleet, numbered as the running

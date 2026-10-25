@@ -19,38 +19,42 @@ import (
 // (live.Server), the adapter that hands the service its fleet half
 // ([FleetRemote]), and a person's turn rate counted across every node.
 
-// turnRateWindow is the window [TurnsPerMinute] is counted over across the
-// fleet: a minute, which the fleet's counter keeps (coord.MaxRateWindow).
+// turnRateWindow is the window [TurnsPerMinute] and [StreamOpensPerMinute]
+// are counted over across the fleet: a minute, which the fleet's counter
+// keeps (coord.MaxRateWindow).
 const turnRateWindow = time.Minute
 
-// turnRateBucket is one person's turn-rate counter on the fleet's store.
-func turnRateBucket(person uuid.UUID) string { return turnRateScope + ":" + person.String() }
+// rateBucket is one person's counter of scope on the fleet's store.
+func rateBucket(scope string, person uuid.UUID) string { return scope + ":" + person.String() }
 
-// admitAcrossTheFleet counts one turn start of person on the fleet's counter,
-// refusing it past [TurnsPerMinute] in the current minute.
+// admitAcrossTheFleet counts one start of scope (a turn, a stream) by person
+// on the fleet's counter, refusing it past limit in the current minute with
+// reason.
 //
-// A COUNTER THAT CANNOT BE READ ADMITS, logged: this node's own rate
-// ([TurnsPerMinute], [TurnBurst]) and running allowance have already taken
-// the turn, so an outage of the coordination store narrows the assistant to
-// what one node holds a person to, never to no limit at all, and a person's
-// question is never refused for a store the engine could not reach.
-func (s *Service) admitAcrossTheFleet(ctx context.Context, person uuid.UUID) error {
+// A COUNTER THAT CANNOT BE READ ADMITS, logged: this node's own rate and
+// allowance have already taken it, so an outage of the coordination store
+// narrows the assistant to what one node holds a person to, never to no
+// limit at all, and a person is never refused for a store the engine could
+// not reach.
+func (s *Service) admitAcrossTheFleet(ctx context.Context, scope string, person uuid.UUID,
+	limit int, reason string) error {
+
 	if s.rate == nil {
 		return nil
 	}
-	bucket := turnRateBucket(person)
+	bucket := rateBucket(scope, person)
 	now := s.now()
-	ok, err := s.rate.Allow(ctx, bucket, TurnsPerMinute, turnRateWindow, now)
+	ok, err := s.rate.Allow(ctx, bucket, limit, turnRateWindow, now)
 	switch {
 	case err != nil:
 		s.log.WarnContext(ctx, "assistant_turn_rate_unread", "bucket", bucket,
 			"error", redact.Secrets(err.Error()),
-			"detail", "the fleet's turn count could not be read; this node's own turn "+
-				"rate still holds the person")
+			"detail", "the fleet's count could not be read; this node's own rate "+
+				"still holds the person")
 		return nil
 	case !ok:
 		return &Busy{RetryAfter: now.Truncate(turnRateWindow).Add(turnRateWindow).Sub(now),
-			Reason: turnRateReason}
+			Reason: reason}
 	}
 	return nil
 }

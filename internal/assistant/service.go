@@ -87,6 +87,8 @@ type Service struct {
 
 	hub     *live.Hub
 	limiter *costlimit.Limiter
+	// opens is the stream-open rate ([StreamOpensPerMinute]).
+	opens *costlimit.Limiter
 
 	// base is every turn's parent context, cancelled with errDraining when
 	// the node stops.
@@ -98,9 +100,11 @@ type Service struct {
 	turns    map[uuid.UUID]*turn
 	running  map[uuid.UUID]int
 	streams  int
-	closed   bool
-	titlesWG sync.WaitGroup
-	reaperWG sync.WaitGroup
+	// streaming counts each person's open streams ([StreamsPerPerson]).
+	streaming map[uuid.UUID]int
+	closed    bool
+	titlesWG  sync.WaitGroup
+	reaperWG  sync.WaitGroup
 }
 
 // turnNamespace is the UUIDv5 namespace a turn's id is derived in from the
@@ -149,8 +153,13 @@ func New(d Deps) (*Service, error) {
 			PrincipalRate: TurnsPerMinute / 60.0, PrincipalBurst: TurnBurst,
 			ScopeRate: NodeTurnsPerSecond, ScopeBurst: NodeTurnBurst,
 		}, now),
+		opens: costlimit.New(costlimit.Rates{
+			PrincipalRate: StreamOpensPerMinute / 60.0, PrincipalBurst: StreamOpenBurst,
+			ScopeRate: NodeStreamOpensPerSecond, ScopeBurst: NodeStreamOpenBurst,
+		}, now),
 		base: base, cancel: cancel,
 		turns: map[uuid.UUID]*turn{}, running: map[uuid.UUID]int{},
+		streaming: map[uuid.UUID]int{},
 	}
 	s.reaperWG.Add(1)
 	go s.reapLoop()
@@ -499,7 +508,8 @@ func (s *Service) admit(ctx context.Context, p iam.Principal) error {
 	}
 	// THE FLEET'S COUNT, outside the lock: it is a round trip to the
 	// coordination store, and no other person's start waits on it.
-	if err := s.admitAcrossTheFleet(ctx, p.ID); err != nil {
+	if err := s.admitAcrossTheFleet(ctx, turnRateScope, p.ID, TurnsPerMinute,
+		turnRateReason); err != nil {
 		s.unadmit(p.ID)
 		return err
 	}
@@ -700,6 +710,13 @@ const stopWait = 5 * time.Second
 func (s *Service) Stream(ctx context.Context, owner, conversation, turnID uuid.UUID, after uint64,
 	w FrameWriter) error {
 
+	// THE PERSON'S STREAMS ARE BOUNDED BEFORE ANYTHING IS READ: each one
+	// holds a goroutine and a frame buffer for as long as its turn runs, and
+	// one of an ended turn unseals the transcript to answer it.
+	if err := s.streamOpened(ctx, owner); err != nil {
+		return err
+	}
+	defer s.streamClosed(owner)
 	row, err := s.transcripts.Turn(ctx, owner, turnID)
 	if err != nil {
 		return s.readFailure(err)
@@ -707,8 +724,6 @@ func (s *Service) Stream(ctx context.Context, owner, conversation, turnID uuid.U
 	if row.Conversation != conversation {
 		return fmt.Errorf("%w: turn %s is not in conversation %s", ErrNotFound, turnID, conversation)
 	}
-	s.streamOpened()
-	defer s.streamClosed()
 	l, node := s.streamSource(ctx, owner, row, after)
 	if l != nil {
 		return s.follow(ctx, owner, row, l, after, w)
@@ -879,17 +894,53 @@ func frameAt(row assistantdomain.Turn, seq uint64, at time.Time, f wire.Frame) w
 	return f
 }
 
-// streamOpened and streamClosed keep the active streams gauge.
-func (s *Service) streamOpened() {
+// streamOpenScope is the costlimit scope every stream open is taken from.
+const streamOpenScope = "assistant.stream"
+
+// streamOpened takes one of owner's open streams ([StreamsPerPerson]) and one
+// stream open from their rate, on this node and on the fleet's counter, or
+// answers why not; it keeps the active streams gauge.
+func (s *Service) streamOpened(ctx context.Context, owner uuid.UUID) error {
+	if err := s.takeStream(owner); err != nil {
+		return err
+	}
+	if err := s.admitAcrossTheFleet(ctx, streamOpenScope, owner, StreamOpensPerMinute,
+		streamRateReason); err != nil {
+		s.streamClosed(owner)
+		return err
+	}
+	return nil
+}
+
+// takeStream takes one of owner's open streams on this node.
+func (s *Service) takeStream(owner uuid.UUID) error {
 	s.mu.Lock()
+	if s.streaming[owner] >= StreamsPerPerson {
+		s.mu.Unlock()
+		return &Busy{RetryAfter: 5 * time.Second, Reason: fmt.Sprintf(
+			"%d streams are open for this person; close one", StreamsPerPerson)}
+	}
+	if refused := s.opens.Take(streamOpenScope, owner.String(), 1); refused != nil {
+		s.mu.Unlock()
+		return &Busy{RetryAfter: refused.RetryAfter, Reason: streamRateReason}
+	}
+	s.streaming[owner]++
 	s.streams++
 	n := s.streams
 	s.mu.Unlock()
 	s.metrics.Set(metrics.AssistantStreamsActive, float64(n), nil)
+	return nil
 }
 
-func (s *Service) streamClosed() {
+// streamRateReason is what a person past their stream-open rate is told.
+const streamRateReason = "too many streams opened in a short time; wait a moment"
+
+// streamClosed gives back one of owner's open streams.
+func (s *Service) streamClosed(owner uuid.UUID) {
 	s.mu.Lock()
+	if s.streaming[owner]--; s.streaming[owner] <= 0 {
+		delete(s.streaming, owner)
+	}
 	s.streams--
 	n := s.streams
 	s.mu.Unlock()
