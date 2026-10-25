@@ -231,8 +231,15 @@ func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 	}{
 		"gemini-cli": {".gemini/settings.json", cliprofile.SeedHome,
 			[]string{"run_shell_command", "write_file", `"web_fetch"`}, nil},
+		// An allowlist of the web tools, every other tool denied by name, and
+		// the web tools allowed to run unprompted.
 		"qwen-code": {".qwen/settings.json", cliprofile.SeedHome,
-			[]string{"run_shell_command", `"web_fetch"`}, nil},
+			[]string{
+				`"core":["web_fetch","web_search"]`,
+				`"allow":["web_fetch","web_search"]`,
+				`"run_shell_command"`, `"enter_worktree"`, `"agent"`,
+			},
+			[]string{`"ask"`}},
 		// 2.0's own permissions format, deny-all first: the LAST matching
 		// rule wins, and 2.0 allows whatever is not denied, so a list of
 		// local tools to deny let its new ones through. In the call's own

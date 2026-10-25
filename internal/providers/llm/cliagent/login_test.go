@@ -181,7 +181,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 // auth.credential_bundle — not by its CLI, so an entry moved to another CLI
 // still restores the bundle it was configured with. Judged by its files' names
 // alone, that bundle was refused only where the two CLIs keep different names:
-// six keep an `auth.json` and two an `oauth_creds.json`, so codex's bundle was
+// six keep an `auth.json`, so codex's bundle was
 // written into pi's empty login, where it is a credential pi cannot read and,
 // as a login already present, turned every later restore away — the right
 // bundle included.
@@ -193,7 +193,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 // with nothing beside its login files.
 //
 // Mutation: skip the manifest's check in restoreBundle, and every pair that
-// shares a file name restores (codex into pi, qwen-code into gemini-cli), and
+// shares a file name restores (codex into pi, among others), and
 // every other pair is refused as a file it does not keep rather than as
 // another CLI's bundle.
 func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {

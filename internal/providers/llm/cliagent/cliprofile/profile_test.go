@@ -388,7 +388,7 @@ func TestEachProfileNamesTheVariablesItsCLIReads(t *testing.T) {
 		"claude-code":  {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
 		"codex":        {"CODEX_API_KEY", ""},
 		"gemini-cli":   {"GEMINI_API_KEY", ""},
-		"qwen-code":    {"DASHSCOPE_API_KEY", ""},
+		"qwen-code":    {"OPENAI_API_KEY", ""},
 		"opencode":     {"", ""},
 		"cursor-agent": {"CURSOR_API_KEY", ""},
 		"copilot":      {"GITHUB_TOKEN", ""},

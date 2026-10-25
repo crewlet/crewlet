@@ -536,50 +536,205 @@ gemini-cli:
 
 qwen-code:
   binary: qwen
-  written_for: "Qwen Code 0.23.x (`qwen --version`), a Gemini CLI fork"
+  written_for: "Qwen Code 0.23.x to 0.26.x, measured on 0.23.4 and 0.26.1 (`qwen --version`)"
   version_args: ["--version"]
-  complete_args: ["--output-format", "json", "--approval-mode", "default"]
-  # A Gemini CLI fork: same settings shape, same tool names, its own directory.
+  # Measured on 0.23.4 and 0.26.1 through the engine's own code path, the
+  # CLI pointed at a local stub, with the state directory inside a git
+  # checkout and every level above the call holding a QWEN.md, AGENTS.md,
+  # QWEN.local.md, .qwen/rules, skills under .qwen, .agents and .claude, a
+  # subagent, a command, a .qwen/settings.json with hooks and an MCP server,
+  # an .mcp.json and an .env: none of them reached a request, no hook or MCP
+  # server ran, the model was offered web_fetch alone, and every connection
+  # the CLI opened was the call's own.
+  #
+  #   --output-format stream-json  one event a line, read below. `json` prints
+  #                                the same events as one JSON ARRAY, which
+  #                                no object reader opens, so the whole
+  #                                array came back as the seat's reply.
+  #   --approval-mode default      a tool the settings below do not allow is
+  #                                refused, since a headless run cannot ask.
+  #   --auth-type openai           the sign-in, under api_key_env below.
+  complete_args:
+    - "--output-format"
+    - "stream-json"
+    - "--approval-mode"
+    - "default"
+    - "--auth-type"
+    - "openai"
   local_tools: denied
+  # The settings in the seat's home, each a switch both builds read:
+  #
+  #   tools.core, permissions  the web tools and nothing else. tools.core is
+  #                            the allowlist, and it covers only the tools
+  #                            Qwen Code calls core; its agent, skill,
+  #                            worktree, goal, messaging, scheduling and
+  #                            tool-search tools sit outside it, and with
+  #                            the file and shell tools excluded alone they
+  #                            stayed on offer — an enter_worktree the model
+  #                            asked for ran without a prompt and made a
+  #                            worktree in the repository above the state
+  #                            directory. So permissions.deny names every
+  #                            other tool either build registers, which
+  #                            removes it outright: a call the model makes
+  #                            to one anyway is answered "Matching deny
+  #                            rule". permissions.allow lets the web tools
+  #                            run unprompted — a fetch the model asked for
+  #                            ran. web_search is offered only where a
+  #                            DashScope web-search backend is configured,
+  #                            which nothing here does; neither build
+  #                            offered it.
+  #   memory                   no background memory extraction or
+  #                            consolidation. Both ran after every call, as
+  #                            a second request carrying the transcript and
+  #                            file-writing tools, and the memories they
+  #                            wrote were handed to the seat's next call.
+  #   general.chatRecording    no transcript on disk.
+  #   privacy.usageStatisticsEnabled
+  #                            no usage statistics, which both builds
+  #                            otherwise sent to the vendor's collector on
+  #                            every call.
+  #   general.enableAutoUpdate no update install, which would replace the
+  #                            binary every seat runs; neither build tried
+  #                            one in a headless call.
+  #   general.preventSystemSleep
+  #                            no `systemd-inhibit … sleep infinity` helper
+  #                            holding the host awake for the call.
+  #   model.openAILoggingDir   the request-log directory, fixed in the seat's
+  #                            home. Logging stays off; its housekeeping
+  #                            keys a marker file in the home by this
+  #                            directory, which defaults to one under the
+  #                            call's working directory, so the home gained
+  #                            a marker file for every call.
+  #   model.generationConfig.maxRetries
+  #                            0: a 429 reaches the engine in about a minute
+  #                            (seven attempts, the retries that remain) and
+  #                            is recognised by limit_markers below. The
+  #                            CLI's own policy — the client's retries, then
+  #                            ten more rounds starting 60s and growing to
+  #                            five minutes apart — held the call past the
+  #                            engine's timeout, so a spent quota came back
+  #                            as a timeout and the entry never sat out.
+  #   skills, disableAllHooks  no skill discovery at any level, and no hook
+  #                            from any settings file or extension. With
+  #                            the skill tool on offer, 0.26.1 listed its
+  #                            bundled skills in every call's first message.
+  #
+  # And `.qwen/.env` in the call's own directory. Both builds read an
+  # `.qwen/.env`, else an `.env`, from the first directory that has one on
+  # the walk from the working directory to the root — the engine's `.git`
+  # file does not end that walk — and apply every variable the environment
+  # leaves unset: without this file, an .env between the checkout and the
+  # state directory set QWEN_SYSTEM_MD for a seat's call, and a file of the
+  # checkout's replaced the seat's whole system prompt. With it, the walk
+  # ends where the call begins, and the file sets nothing.
+  #
+  # The project files a working directory leads Qwen Code to — QWEN.md,
+  # AGENTS.md, QWEN.local.md, .qwen/rules, .mcp.json — stop at the engine's
+  # `.git` file. 0.23.4 also looks one directory above the project root,
+  # which is <seat>/work: the engine's, holding nothing but call
+  # directories.
   seed_files:
     - path: .qwen/settings.json
-      content: '{"tools":{"exclude":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"],"allowed":["web_fetch","web_search","google_web_search"]},"excludeTools":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"]}'
+      content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
+    - path: .qwen/.env
+      in: work
+      content: "# This call's environment is the engine's; nothing above this directory is read.\n"
   model_args: ["--model", "{model}"]
-  # THE FORK RENAMED ITS PARENT'S VARIABLE: `QWEN_SYSTEM_MD`, where Gemini
-  # CLI reads `GEMINI_SYSTEM_MD` (this build reads neither of the other's —
-  # checked against the shipped 0.23.0 bundle). Same contract otherwise: a
-  # path, replacing the built-in prompt.
+  # BOTH SYSTEM-PROMPT CHANNELS, each a FILE a variable names, so the text
+  # never reaches argv, where /proc/<pid>/cmdline makes it readable by every
+  # account on the machine. The flags (--system-prompt,
+  # --append-system-prompt) take a string and nothing else.
   #
-  # THE ENV VAR RATHER THAN THE FLAG, and this fork is the only profile where
-  # the choice arises: 0.23.0 also has --system-prompt and
-  # --append-system-prompt. The variable names a FILE, so the seat's system
-  # prompt — the org chart, the policies, that seat's own memory — never
-  # reaches argv, where /proc/<pid>/cmdline makes it readable by every
-  # account on the machine. The flag takes a string and nothing else.
+  #   system_prompt         QWEN_SYSTEM_MD REPLACES the default: the
+  #                         request's system message is the engine's text
+  #                         and then, after a `---`, the CLI's
+  #                         output-language rule (about 900 characters,
+  #                         from the seat's home). For a side pass, whose
+  #                         system prompt is the whole instruction and whose
+  #                         answer is parsed.
+  #   append_system_prompt  QWEN_SYSTEM_IDENTITY_MD KEEPS the default and
+  #                         puts the engine's text in place of its opening
+  #                         sentence, "You are Qwen Code, a non-interactive
+  #                         CLI agent developed by Alibaba Group,
+  #                         specializing in software engineering tasks. …"
+  #                         (261 characters); the rest follows byte for
+  #                         byte, about 23,000 characters on 0.23.4 and
+  #                         15,000 on 0.26.1, then the output-language rule.
+  #                         For a seat at work. The CLI ignores this file
+  #                         when QWEN_SYSTEM_MD is set, and refuses a
+  #                         missing or empty one; the engine sets one
+  #                         variable a call, and only with text to put in it.
   #
-  # Replacing rather than appending, for the reason the claude-code profile
-  # records: an appended seat identity sits underneath the vendor's own
-  # coding-agent persona, which then keeps introducing itself over the top of
-  # the seat. Note this CLI still appends its own QWEN.md context after
-  # either one — that is the vendor's, and not something the profile can
-  # switch off here.
+  # The engine's text opens the system message on both channels, and nothing
+  # per call is in that message: two calls of a seat sent it byte for byte.
+  # The date, the working directory and a listing of it travel in the first
+  # user message.
   system_prompt:
     env: "QWEN_SYSTEM_MD"
+  append_system_prompt:
+    env: "QWEN_SYSTEM_IDENTITY_MD"
   prompt_mode: stdin
-  output: json
-  text_paths: [["response"]]
+  # THE ANSWER IS THE RESULT EVENT'S. The stream is an init event, an
+  # `assistant` event per model turn and a `user` event per tool result,
+  # then one `result` carrying the final answer, `is_error`, and the call's
+  # usage summed over every request it made, a fetch's own model request
+  # included. Text before the last turn and a tool's output are not the
+  # answer, so only `result` is read for text. Its input_tokens is the whole
+  # prompt, the cached part included — the OpenAI-compatible prompt_tokens
+  # it sums — and cache_read_input_tokens is part of it, so it is not read:
+  # added to the input count, it would charge cached tokens twice.
+  output: jsonl
+  event_type_path: ["type"]
+  text_events: ["result"]
+  text_paths: [["result"]]
+  error_paths: [["is_error"]]
   usage:
-    input: [["stats", "metrics", "input_tokens"], ["stats", "input_tokens"]]
-    output: [["stats", "metrics", "output_tokens"], ["stats", "output_tokens"]]
-  credential_paths: [".qwen/oauth_creds.json"]
-  volatile_paths: [".qwen/tmp", ".qwen/history", ".qwen/sessions"]
-  host_credential_paths: [".qwen/oauth_creds.json"]
-  api_key_env: "DASHSCOPE_API_KEY"
+    input: [["usage", "input_tokens"]]
+    output: [["usage", "output_tokens"]]
+  env:
+    # 0.26.1 fetched the models.dev catalogue on every call, a connection of
+    # its own; "off" leaves it on the table the build ships. 0.23.4 has no
+    # such fetch.
+    QWEN_CODE_MODELS_DEV: "off"
+  # What a call can leave in the seat's home for the next one: transcripts
+  # and project memory under projects, the managed memories, per-project
+  # scratch under tmp (a directory per call's working directory), the usage
+  # record both builds append to on every call, the request logs if an
+  # operator turns them on, and the global QWEN.md, AGENTS.md and rules,
+  # which both builds read into every call's system prompt.
+  volatile_paths:
+    - ".qwen/projects"
+    - ".qwen/memories"
+    - ".qwen/tmp"
+    - ".qwen/usage_record.jsonl"
+    - ".qwen/openai-logs"
+    - ".qwen/QWEN.md"
+    - ".qwen/AGENTS.md"
+    - ".qwen/rules"
+  # THE SIGN-IN IS AN API KEY. Qwen OAuth, the login this profile once
+  # adopted, is refused by both builds' own auth check ("Qwen OAuth free
+  # tier was discontinued on 2026-04-15", read from both bundles), and
+  # `qwen auth` is listed as removed, so there is no login to adopt and no
+  # token. The
+  # CLI's OpenAI-compatible sign-in is what runs, chosen by --auth-type
+  # above: the key in OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which
+  # an entry sets in env to its provider's (DashScope's, a Coding Plan's, any
+  # OpenAI-compatible one; unset, the CLI falls back to an endpoint of its
+  # own), and the model from the entry's `model`. Without --auth-type the CLI
+  # chooses that sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well,
+  # and otherwise exits "No auth type is selected". DASHSCOPE_API_KEY, the
+  # variable this profile named before, is read by neither build's model
+  # sign-in.
+  api_key_env: "OPENAI_API_KEY"
+  # The CLI's own words, measured on both builds against a stub refusing
+  # every request: the call exits 1 and its result event's error reads
+  # "[API Error: <status> <the provider's message>]". A call with no key is
+  # refused before any request.
   limit_markers:
-    - sentinel: "Quota exceeded"
-    - sentinel: "RESOURCE_EXHAUSTED"
+    - sentinel: "[API Error: 429"
   auth_markers:
-    - sentinel: "UNAUTHENTICATED"
+    - sentinel: "[API Error: 401"
+    - sentinel: "Missing API key for OpenAI-compatible auth"
 
 opencode:
   binary: opencode
