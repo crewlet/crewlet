@@ -2061,7 +2061,7 @@ first stage, which ships in the same release that moves the model default.
 ## `crewlet assistant eval`
 
 ```
-crewlet assistant eval -suite DIR [-model KEY] [-trials N] [-company PATH] [-config PATH]
+crewlet assistant eval -suite DIR [-model KEY -paid] [-trials N] [-company PATH] [-config PATH]
 ```
 
 Runs a directory of evaluation cases through the
@@ -2074,9 +2074,11 @@ as the answers its requests receive.
 `script` (the rounds a scripted model answers with), which calls no model and
 is deterministic: the engine's own tests run the shipped suite this way, so a
 change to the orchestrator or the catalogue that breaks a case fails CI. With
-`-model KEY`, the case's script is ignored and the question is put to that
-`providers.llm` entry of the company at `-company`, through its CLI, exactly as
-a turn would run on it. That is how a model is measured before
+`-model KEY -paid`, the case's script is ignored and the question is put to
+that `providers.llm` entry of the company at `-company`, through its CLI,
+exactly as a turn would run on it. That calls a paid model once per round of
+every trial, so `-model` without `-paid` is refused before anything is read,
+and the run says on stderr which model it is asking. That is how a model is measured before
 `assistant.llm` is switched to it ([Running the Dashboard Assistant](../guides/assistant.md#choosing-the-model)).
 The entry must satisfy the assistant's rules (text mode, no shell, web tools
 denied); `crewlet llm doctor KEY` proves one first.
@@ -2089,7 +2091,7 @@ evaluation measures what a model does with the tools it is offered: which it
 calls, with what arguments, what it proposes, and what it says.
 
 ```console
-$ crewlet assistant eval -suite examples/assistant-evals -model assistant -trials 3
+$ crewlet assistant eval -suite examples/assistant-evals -model assistant -paid -trials 3
 case                  pass  rounds  tokens  p50 round
 file-a-task           3/3   1       3988    5.8s
 find-a-task           3/3   2       4210    6.1s
@@ -2109,6 +2111,7 @@ It **exits non-zero** when any case fails any trial.
 |---|---|---|
 | `-suite DIR` | required | The directory of cases: every `*.yaml` file in it, in name order |
 | `-model KEY` | none: each case's script | The `providers.llm` entry to ask instead of the scripts |
+| `-paid` | off | Confirms that `-model` calls a paid model; required with it, refused without it |
 | `-trials N` | `1` | How many times each case is run. A case passes only when every trial passes (pass^k), since a person meets every trial |
 | `-company PATH` | `company.yaml` | Tier B, read with `-model` for the entry to ask, which must satisfy the assistant's rules |
 | `-config PATH` | `crewlet.yaml` | Tier A, read with `-model` to resolve the entry's `${VAR}` references as every command does |
@@ -2144,9 +2147,12 @@ expect:
   never_says: ["http"]            # text it must not contain, ignoring case
 ```
 
-Members carry the wire's own names (`source_revision`, `never_says`), and a member this
-build does not know is refused naming the file, as is a tool the catalogue does not
-have, so a misspelling is never an expectation silently left unchecked.
+A case is read by the configuration's own strict reader: a member this build does
+not know is refused naming the file, its path and its line, as is a tool the
+catalogue does not have, so a misspelling is never an expectation silently left
+unchecked. The page chip takes the wire's own member names (`source_revision`).
+The runner is `internal/assistant/evals`, the same harness the engine's suites
+drive.
 A request no `answers` entry matches is answered `404 not_found` in the
 engine's error envelope, as a route answers a record that is not there. Every
 `expect` field is optional, and a case with none is refused: a case that
