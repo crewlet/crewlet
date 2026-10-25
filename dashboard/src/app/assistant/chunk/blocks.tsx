@@ -565,8 +565,9 @@ export function CardBlock({
           }
         >
           {refusalBody(refusal.grants, refusal.message)}
-          {hint ? ` ${hint}` : ""} The assistant acts with your access only, so it cannot make this
-          change for you.
+          {/* A REFUSED READ IS NOT A CHANGE: the sentence fits a read and a write. */}
+          {hint ? ` ${hint}` : ""} The assistant acts with your access only, so it cannot do this
+          for you.
         </RefusalCard>
       );
     }
