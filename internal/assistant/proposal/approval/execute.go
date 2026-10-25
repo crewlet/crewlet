@@ -49,7 +49,7 @@ func (a *Approver) execute(ctx context.Context, d decider, p assistantdomain.Pro
 		resp, sendErr := a.d.Dispatcher.Do(sendCtx, grant, request)
 		cancel()
 		a.d.Grants.Revoke(grant.ID())
-		out = outcomeOf(resp, sendErr)
+		out = outcomeOf(p.Tool, resp, sendErr)
 	}
 	settleCtx, cancel := context.WithTimeout(ctx, SettleTimeout)
 	defer cancel()
@@ -130,6 +130,11 @@ func refused(r wire.Refusal) outcome {
 type actAnswer struct {
 	Outcome  string  `json:"outcome"`
 	Position *string `json:"position"`
+	Receipt  struct {
+		// Key is the task a write is about, as every task receipt names it
+		// (internal/agent/builtin's receiptItem).
+		Key string `json:"key"`
+	} `json:"receipt"`
 }
 
 // outcomeOf reads a sent write's answer.
@@ -140,7 +145,7 @@ type actAnswer struct {
 // be sent, a 5xx, or an answer cut short is UNKNOWN, offered a Retry under the
 // same operation key, because whether the write landed is exactly what nobody
 // can say.
-func outcomeOf(resp exec.Response, err error) outcome {
+func outcomeOf(tool string, resp exec.Response, err error) outcome {
 	switch {
 	case err != nil, resp.Truncated, resp.Status >= 500, resp.Status == 0:
 		return outcome{state: wire.ProposalUnknown}
@@ -148,6 +153,7 @@ func outcomeOf(resp exec.Response, err error) outcome {
 		return refused(exec.RefusalOf(resp))
 	}
 	out := outcome{state: wire.ProposalApplied, outcome: "applied"}
+	summary := "Applied"
 	if json.Valid(resp.Body) && len(bytes.TrimSpace(resp.Body)) > 0 {
 		out.answer = json.RawMessage(resp.Body)
 		var stated actAnswer
@@ -162,11 +168,26 @@ func outcomeOf(resp exec.Response, err error) outcome {
 			if stated.Position != nil && *stated.Position != "" {
 				out.position = *stated.Position
 			}
+			summary = receiptSummary(tool, stated.Receipt.Key)
 		}
 	}
-	out.receipt = &wire.Receipt{Summary: "Applied", Position: out.position}
+	out.receipt = &wire.Receipt{Summary: summary, Position: out.position}
 	if stream, _, found := strings.Cut(out.position, "@"); found && stream != "" {
 		out.invalidate = &wire.Invalidate{Domain: stream, Position: out.position}
 	}
 	return out
+}
+
+// receiptSummary is an applied write's receipt in a line, naming the task it
+// is about where the act tool's own receipt names one: "Created ENG-156" for
+// a create, "Applied to ENG-156" for any other write to a task, and "Applied"
+// for a write that names none.
+func receiptSummary(tool, key string) string {
+	switch {
+	case key == "":
+		return "Applied"
+	case strings.HasPrefix(tool, "create_"):
+		return "Created " + key
+	}
+	return "Applied to " + key
 }

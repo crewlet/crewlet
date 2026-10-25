@@ -375,7 +375,11 @@ func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
 	}
 	r := f.Turns.Resumed()[0]
 	switch {
-	case r.Receipt == nil || r.Receipt.Position != "CREWLET_TRACKER_LOG@1:42":
+	case r.Receipt == nil || r.Receipt.Position != "CREWLET_TRACKER_LOG@1:42" ||
+		r.Receipt.Summary != "Created ENG-156":
+		// THE RECEIPT NAMES WHAT WAS CREATED, from the act tool's own
+		// receipt, so the card says which task landed rather than
+		// "Applied".
 		t.Errorf("the receipt is %+v", r.Receipt)
 	case r.Invalidate == nil || r.Invalidate.Domain != "CREWLET_TRACKER_LOG":
 		t.Errorf("the invalidation is %+v", r.Invalidate)
