@@ -781,15 +781,15 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // their floors.
 //
 // THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, which is the figure the
-// deployment guide states: seven logs hold 6.5 GiB at their smallest, so the
+// deployment guide states: eight logs hold 6.56 GiB at their smallest, so the
 // 7.6 GiB host that was measured no longer boots by its logs alone (it is
-// refused naming the log it could not reserve), and 8.7 GiB, whose broker
+// refused naming the log it could not reserve), and 8.75 GiB, whose broker
 // grants three quarters of it, is where the same single budget has to fit
 // them. A log added later moves this figure, and the guide's, with it.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
-	// 8.7 GiB, in tenths so the arithmetic stays in integers.
-	free := 87 * gib / 10
+	// 8.75 GiB, in hundredths so the arithmetic stays in integers.
+	free := 875 * gib / 100
 	brokerCap := free / 4 * 3
 	q := brokerWithHeadroom(t, brokerCap)
 	if err := sizeAndProvision(t, q, config.Stream{}, free); err != nil {
