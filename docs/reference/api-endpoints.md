@@ -6809,7 +6809,8 @@ The API origin **never renders an artifact**:
 
 A brand kit is an artifact of kind `brand` (its `brand.json` and the logos and
 faces it names, held to the
-[brand format](../concepts/artifacts.md#the-company-brand) at publish). The
+[brand format](../concepts/artifacts.md#the-company-brand) at publish; a draft
+needs only its `name`). The
 company's brand is the one version of one kit an administrator **adopted**:
 the adoption snapshots that version's index, the stylesheet generated from it
 and a copy of every file it serves, so publishing to the kit, trashing it or
@@ -6820,7 +6821,7 @@ company's public face: everybody reads it.
 |---|---|---|
 | `GET /brand` | `get_company_brand` (everybody's) | The adopted brand, or `{"brand": null}`: the `kit` and its `kit_version`, the `document` (the adopted `brand.json`), the generated stylesheet's `css_sha`, every served file in `files` (`slot`, `content_type` and `object` as `{hash, size}`, the stylesheet first), `adopted_by` and `adopted_at`. `newer_version` and `newer_by` name the kit's newest version and its publisher where it is newer than the adopted one, answered only to a reader who may open the kit (by a share, or as an administrator, which reads no content and leaves no elevated-read record). Also the `brand` question on the socket |
 | `GET /brand/files/{hash}` | `get_company_brand` | One file an adoption serves, by its SHA-256: an **attachment**, an SVG as `text/plain`, under the API's own policy, as every artifact file is. A hash no current or retained adoption serves is `404` |
-| `POST /brand/adoptions` | `artifacts.brand.adopt` (an administrator, a person present, a recent proof) | `{"kit": "<id>", "version": <n>}`: adopt that version. Reading the kit is decided as any content read, so an administrator with no share on it is admitted on the admin path and the read recorded. The kit is read back and held to the brand format (`422 policy_refused` with its `findings`, code `brand_format`), its text colour on its light ground must reach 4.5:1 (`422 brand_contrast`, with `contrast`: the pair, its two colours, the unrounded `ratio` and the `min`), and a version the kit no longer keeps is `404 not_found`. The adoption also labels the version `Adopted <date>` where that label is free. Carries an `Idempotency-Key` |
+| `POST /brand/adoptions` | `artifacts.brand.adopt` (an administrator, a person present, a recent proof) | `{"kit": "<id>", "version": <n>}`: adopt that version. Reading the kit is decided as any content read, so an administrator with no share on it is admitted on the admin path and the read recorded. The kit is read back and held to the brand format (`422 policy_refused` with its `findings`, code `brand_format`). A brand that leaves out `logos.primary` or `colors.primary` is `422 policy_refused` with one `brand_format` finding per missing field (its message `field: <name>: is required to adopt the brand: ...`) and `missing`, the bare field names in that order; only a brand that holds both is measured for contrast: its text colour on its light ground must reach 4.5:1 (`422 brand_contrast`, with `contrast`: the pair, its two colours, the unrounded `ratio` and the `min`), and a version the kit no longer keeps is `404 not_found`. The adoption also labels the version `Adopted <date>` where that label is free. Carries an `Idempotency-Key` |
 | `DELETE /brand/adoptions/current` | `artifacts.brand.clear` (an administrator, a person present, a recent proof) | Withdraw the adopted brand. A framed page pinned to its stylesheet keeps it while its version is retained. Clearing when nothing is adopted answers success and writes nothing. Carries an `Idempotency-Key` |
 
 A framed version (`html`, `design`) **pins** the stylesheet adopted when it is
@@ -6859,6 +6860,7 @@ dashboard follow the adopted brand live, drawn by the dashboard.
 | `415` | `media_type_refused` | A file type an artifact may not publish |
 | `422` | `upload_mismatch` / `content_refused` | Bytes that are not the declared ones, or not what their type promises |
 | `422` | `edit_refused` / `policy_refused` | An edit that matched zero or several times (`index`, `matches`), or a page the publish policy refuses (`findings`) |
+| `422` | `policy_refused` | An adoption of a brand that leaves out a field an adopted brand holds (`findings`, `missing`) |
 | `422` | `brand_contrast` | An adoption whose text colour does not reach 4.5:1 on its light ground; `contrast` names the pair |
 | `422` | `capability_unknown` / `contract_unknown` / `credential_refused` / `invalid` | A capability or runtime this build does not serve, a credential in what an agent published, or a value the domain refuses |
 | `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |

@@ -41,7 +41,7 @@ func served(t *testing.T) (brandformat.Brand, map[brandformat.Slot]brandformat.S
 func TestTheStylesheetDefinesTheKitsInputsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	b, files := served(t)
-	css := string(brandformat.CSS(b, files))
+	css := string(brandformat.CSS(adoptable(t, b), files))
 	for _, want := range []string{
 		"  --brand-primary: #2450e6;\n", "  --brand-secondary: #9584ff;\n", "  --brand-text: #121625;\n",
 		"  --brand-light-ground: #ffffff;\n", "  --brand-dark-ground: #0d0f16;\n",
@@ -65,7 +65,7 @@ func TestTheStylesheetDefinesTheKitsInputsAndNothingElse(t *testing.T) {
 		t.Error("an absent primary_on_dark wrote a declaration: the kit derives it from the primary")
 	}
 	checkCSS(t, []byte(css))
-	if again := string(brandformat.CSS(b, files)); again != css {
+	if again := string(brandformat.CSS(adoptable(t, b), files)); again != css {
 		t.Error("the stylesheet is not the same bytes twice")
 	}
 }
@@ -77,9 +77,10 @@ func TestTheStylesheetDefinesTheKitsInputsAndNothingElse(t *testing.T) {
 // writes `--brand-text: ;`.
 func TestAnAbsentRoleOrFileWritesNothing(t *testing.T) {
 	t.Parallel()
-	b := brandformat.Brand{Colors: brandformat.Colors{Primary: "#2450e6"},
-		Type: brandformat.Type{Heading: brandformat.Face{Kit: "geist"}, Body: brandformat.Face{Stack: "system-serif"}}}
-	css := string(brandformat.CSS(b, nil))
+	b := brandformat.Brand{Logos: brandformat.Logos{Primary: "logo.svg"},
+		Colors: brandformat.Colors{Primary: "#2450e6"},
+		Type:   brandformat.Type{Heading: brandformat.Face{Kit: "geist"}, Body: brandformat.Face{Stack: "system-serif"}}}
+	css := string(brandformat.CSS(adoptable(t, b), nil))
 	want := ":root {\n  --brand-primary: #2450e6;\n  --brand-font-heading: " + brandformat.FaceFamilies["geist"] +
 		";\n  --brand-font-body: " + brandformat.FaceFamilies["system-serif"] + ";\n}\n"
 	if css != want {
@@ -98,6 +99,7 @@ func TestNoValueLeavesItsDeclaration(t *testing.T) {
 	t.Parallel()
 	for _, evil := range corpus {
 		b := brandformat.Brand{
+			Logos: brandformat.Logos{Primary: evil},
 			Colors: brandformat.Colors{Primary: evil, Secondary: evil, Text: evil, LightGround: evil,
 				DarkGround: evil, PrimaryOnDark: evil},
 			Type: brandformat.Type{
@@ -112,7 +114,7 @@ func TestNoValueLeavesItsDeclaration(t *testing.T) {
 			brandformat.SlotLogoOnDark:                            {Hash: hashA, Essence: "image/png", Ratio: math.Inf(1)},
 			brandformat.FontFileSlot(brandformat.SlotFontBody, 0): {Hash: objstore.Hash(evil), Essence: "font/woff2"},
 		}
-		css := brandformat.CSS(b, files)
+		css := brandformat.CSS(adoptable(t, b), files)
 		checkCSS(t, css)
 		if len(css) != 0 {
 			t.Errorf("a brand holding only %q wrote:\n%s", evil, css)
@@ -130,6 +132,7 @@ func FuzzCSSWritesOnlyBrandDeclarations(f *testing.F) {
 	f.Add("#2450e6", "#ffffff", "Acme Sans", "geist", hashA, 4.0, 700)
 	f.Fuzz(func(t *testing.T, color, ground, family, kitFace, hash string, ratio float64, weight int) {
 		b := brandformat.Brand{
+			Logos:  brandformat.Logos{Primary: "logo.svg"},
 			Colors: brandformat.Colors{Primary: color, LightGround: ground, Text: ground},
 			Type: brandformat.Type{
 				Heading: brandformat.Face{Kit: kitFace},
@@ -142,7 +145,13 @@ func FuzzCSSWritesOnlyBrandDeclarations(f *testing.F) {
 			brandformat.SlotLogoMark:                              {Hash: objstore.Hash(hash), Essence: ground, Ratio: ratio},
 			brandformat.FontFileSlot(brandformat.SlotFontBody, 0): {Hash: objstore.Hash(hash), Essence: "font/woff2"},
 		}
-		checkCSS(t, brandformat.CSS(b, files))
+		a, ok := brandformat.AsAdoptable(b)
+		if !ok {
+			// A BRAND WITH NO COLOUR IS NO ADOPTABLE ONE, and no stylesheet is
+			// ever made from it.
+			return
+		}
+		checkCSS(t, brandformat.CSS(a, files))
 	})
 }
 

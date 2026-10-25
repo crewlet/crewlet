@@ -892,13 +892,20 @@ one, agents included, and many may exist.
   content, animation or outside reference (`internal/artifacts/svgsafe`, the
   one allowlist a slide's drawings are held to too), a PNG or WebP without its
   metadata and never animated. A draft is never refused for its contrast.
+- **Drafted step by step.** A draft needs only its `name`: a kit may be saved
+  after each step of its setup, with no logo, no colour and no typeface yet.
+  Every field a draft does hold keeps all its rules. A typeface left unset
+  draws the artifact kit's own face (Geist).
 - **The company brand is an adoption.** An administrator, a person, at a
   recent proof of identity, adopts one version of one kit on Company › Brand
   (`POST /brand/adoptions`). The adoption **snapshots** that version: its
   index, a stylesheet generated from it once, and a copy of every logo and
   face, each an object of the adoption's own. Publishing a newer draft,
   trashing the kit or purging it changes nothing until somebody adopts again,
-  and the page shows a newer version waiting to be reviewed. An adoption is
+  and the page shows a newer version waiting to be reviewed. An adoption
+  requires the brand to hold a primary logo (`logos.primary`) and a primary
+  colour (`colors.primary`): one that leaves either out is refused naming each
+  missing field, before anything is copied. Once both are there, an adoption is
   refused when the brand's text does not reach 4.5:1 on its light ground;
   every other pair (the label on the accent, the dark mode's text, the accent
   on each ground) is listed as a warning.

@@ -219,7 +219,7 @@ func (s *Service) slidesStarters(w http.ResponseWriter, r *http.Request) {
 	}
 	var branded *SlidesStarterTheme
 	if adopted {
-		b, err := brandformat.Decode(adoption.BrandJSON) //nolint:govet // shadow: scoped to this block; see .golangci.yml
+		b, err := brandformat.DecodeAdopted(adoption.BrandJSON) //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err != nil {
 			// THE SNAPSHOT WAS CANONICAL WHEN IT WAS ADOPTED; one that no
 			// longer reads is the engine's fault, answered as such rather
@@ -259,7 +259,7 @@ func (s *Service) slidesStarters(w http.ResponseWriter, r *http.Request) {
 // sample's cover drawing the logo a deck begun in it shows
 // ([artifactupload.CoverLogo], the starter's own rule), at the path the
 // starter copies it to.
-func brandStarter(b brandformat.Brand, adoption artifactsdomain.Adoption) (*SlidesStarterTheme, error) {
+func brandStarter(b brandformat.Adoptable, adoption artifactsdomain.Adoption) (*SlidesStarterTheme, error) {
 	theme := brandformat.SlideTheme(b)
 	logo, err := artifactupload.CoverLogo(theme, adoption.Files)
 	if err != nil {
@@ -269,7 +269,7 @@ func brandStarter(b brandformat.Brand, adoption artifactsdomain.Adoption) (*Slid
 	if err != nil {
 		return nil, err
 	}
-	sample, err := slideformat.SampleBranded(slideformat.Look{Theme: theme, Logo: path, LogoAlt: b.Name},
+	sample, err := slideformat.SampleBranded(slideformat.Look{Theme: theme, Logo: path, LogoAlt: b.Brand().Name},
 		logo.ContentType)
 	if err != nil {
 		return nil, err

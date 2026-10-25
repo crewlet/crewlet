@@ -96,8 +96,9 @@ func (b Brand) Text() string {
 
 // Logos are the kit's logo files, each the path of a file of the version.
 type Logos struct {
-	// Primary is the logo on a light ground. Required.
-	Primary string `json:"primary"`
+	// Primary is the logo on a light ground. Required to ADOPT the brand
+	// ([AdoptionFields]); a draft may leave it out.
+	Primary string `json:"primary,omitempty"`
 
 	// OnDark is the logo on a dark ground; absent, a dark ground shows the
 	// primary.
@@ -111,8 +112,9 @@ type Logos struct {
 // Colors are the kit's colour roles, each [ColorPattern]. An absent optional
 // role takes the artifact kit's Crewlet fallback.
 type Colors struct {
-	// Primary is the brand's accent. Required.
-	Primary string `json:"primary"`
+	// Primary is the brand's accent. Required to ADOPT the brand
+	// ([AdoptionFields]); a draft may leave it out.
+	Primary string `json:"primary,omitempty"`
 
 	// Secondary is the supporting accent.
 	Secondary string `json:"secondary,omitempty"`
@@ -130,14 +132,16 @@ type Colors struct {
 	PrimaryOnDark string `json:"primary_on_dark,omitempty"`
 }
 
-// Type is the kit's two typefaces.
+// Type is the kit's two typefaces. A face that names no source is unset, and
+// takes the artifact kit's own face (Geist) wherever the brand is drawn.
 type Type struct {
 	Heading Face `json:"heading"`
 	Body    Face `json:"body"`
 }
 
 // Face is one typeface, from EXACTLY ONE source: a kit face, a system stack,
-// or an uploaded family.
+// or an uploaded family; or unset, naming none and carrying no file and no
+// licence.
 type Face struct {
 	// Kit is one of [KitFaces].
 	Kit string `json:"kit,omitempty"`

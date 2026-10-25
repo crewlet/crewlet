@@ -336,12 +336,10 @@ func (r *reader) fields(b Brand) {
 	r.text("tagline", b.Tagline, MaxTaglineBytes, false)
 	r.noHost("tagline", b.Tagline)
 
-	if b.Logos.Primary == "" {
-		r.field("logos.primary", RuleField, "is required: the path of the logo on a light ground")
-	}
-	if b.Colors.Primary == "" {
-		r.field("colors.primary", RuleField, "is required: the brand's accent, #rrggbb")
-	}
+	// A DRAFT NEEDS ONLY ITS NAME: the logo and the colour an adopted brand
+	// holds are the adoption's to require ([MissingToAdopt]), so a kit is
+	// saved step by step as it is set up. Every field that is present is held
+	// to its rule below either way.
 	for _, c := range []struct{ name, value string }{
 		{"colors.primary", b.Colors.Primary}, {"colors.secondary", b.Colors.Secondary},
 		{"colors.text", b.Colors.Text}, {"colors.light_ground", b.Colors.LightGround},
@@ -425,7 +423,7 @@ func (r *reader) lines2(name string, list []string) {
 	}
 }
 
-// face holds one typeface to EXACTLY ONE source.
+// face holds one typeface to EXACTLY ONE source, or to being unset.
 func (r *reader) face(name string, f Face) {
 	sources := 0
 	for _, set := range []bool{f.Kit != "", f.Stack != "", f.Family != ""} {
@@ -434,9 +432,12 @@ func (r *reader) face(name string, f Face) {
 		}
 	}
 	switch {
+	case sources == 0 && len(f.Files) == 0 && !f.Licensed:
+		// UNSET: the kit's own face is drawn wherever the brand is.
+		return
 	case sources == 0:
-		r.field(name, RuleField, "names no face: name a kit face (%s), a system stack (%s) or an "+
-			"uploaded family", strings.Join(KitFaces, ", "), strings.Join(SystemStacks, ", "))
+		r.field(name, RuleField, "carries files or a licence and names no face: name the uploaded "+
+			"family they belong to, or remove them")
 		return
 	case sources > 1:
 		r.field(name, RuleField, "names more than one source: name exactly one of kit, stack and family")

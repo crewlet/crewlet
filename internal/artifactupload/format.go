@@ -101,9 +101,17 @@ func slideRefusal(refused *slideformat.Refused) error {
 // brandRefusal is a kit's refusal in the linter's shape, for the reason a
 // deck's is: each finding on its own file, at its line where it has one.
 func brandRefusal(refused *brandformat.Refused) error {
-	out := &lint.Refusal{Findings: make([]lint.Finding, len(refused.Findings))}
-	for i, f := range refused.Findings {
-		out.Findings[i] = lint.Finding{Path: f.Path, Line: f.Line, Code: lint.CodeBrandFormat,
+	return &lint.Refusal{Findings: BrandFindings(refused.Findings)}
+}
+
+// BrandFindings are a kit's findings in the linter's shape (code
+// `brand_format`, the rule before the message): what a publish of a kit
+// outside the format and an adoption of a brand that leaves a field out both
+// answer, so a surface shows the two alike.
+func BrandFindings(findings []brandformat.Finding) []lint.Finding {
+	out := make([]lint.Finding, len(findings))
+	for i, f := range findings {
+		out[i] = lint.Finding{Path: f.Path, Line: f.Line, Code: lint.CodeBrandFormat,
 			Message: string(f.Rule) + ": " + f.Message}
 	}
 	return out

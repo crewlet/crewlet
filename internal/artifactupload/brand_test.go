@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"slices"
 	"strings"
 	"testing"
 
@@ -243,4 +244,43 @@ func (h *harness) read(o objstore.Object) string {
 		h.t.Fatalf("read %s: %v", o.Key, err)
 	}
 	return b.String()
+}
+
+// A DRAFT PUBLISHES STEP BY STEP AND IS ADOPTED ONLY WHEN COMPLETE: a kit
+// holding its name alone, then its name and its logo, each publishes as a
+// version of the kit, and adopting either is refused naming what it leaves
+// out before a byte is stored.
+//
+// Mutation: require logos.primary at publish again and the name-only draft is
+// refused at its first save.
+func TestADraftPublishesAndIsAdoptedOnlyWhenComplete(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		files   map[string]string
+		missing []string
+	}{
+		"the name alone": {map[string]string{brandformat.EntryPath: `{"v": 1, "name": "Acme"}`},
+			[]string{"logos.primary", "colors.primary"}},
+		"a name and a logo": {map[string]string{
+			brandformat.EntryPath: `{"v": 1, "name": "Acme", "logos": {"primary": "logos/primary.svg"}}`,
+			"logos/primary.svg":   authoredLogo}, []string{"colors.primary"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, options{})
+			got, err := createKit(h, c.files)
+			if err != nil {
+				t.Fatalf("the draft was refused at publish: %v", err)
+			}
+			before := len(h.stored())
+			_, err = h.svc.AdoptBrand(t.Context(), h.person("maya", h.opKey("adopt")), got.Artifact, 1)
+			var incomplete *artifactsdomain.BrandIncomplete
+			if !errors.As(err, &incomplete) || !slices.Equal(incomplete.Missing, c.missing) {
+				t.Fatalf("adopting the draft answered %v, want it refused naming %v", err, c.missing)
+			}
+			if after := len(h.stored()); after != before {
+				t.Errorf("the refused adoption stored %d objects", after-before)
+			}
+		})
+	}
 }

@@ -93,13 +93,14 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"and begin decks from the engine's themes."
 		return jsonResult(out)
 	}
-	b, err := brandformat.Decode(adoption.BrandJSON)
+	kit, err := brandformat.DecodeAdopted(adoption.BrandJSON)
 	if err != nil {
 		return faulted(ctx, t.Name(), err, "get_company_brand could not read the adopted brand's "+
 			"record: "+faultSaid+"."), nil
 	}
 	read := newForeignRead(turn, c.self())
-	brand, err := brandAnswer(adoption, b)
+	brand, err := brandAnswer(adoption, kit)
+	b := kit.Brand()
 	if err != nil {
 		return faulted(ctx, t.Name(), err, "get_company_brand could not name where the brand's "+
 			"files go: "+faultSaid+"."), nil
@@ -154,7 +155,8 @@ var brandLogos = []struct {
 }
 
 // brandAnswer is the adopted brand as get_company_brand states it.
-func brandAnswer(a artifactsdomain.Adoption, b brandformat.Brand) (map[string]any, error) {
+func brandAnswer(a artifactsdomain.Adoption, adopted brandformat.Adoptable) (map[string]any, error) {
+	b := adopted.Brand()
 	out := map[string]any{
 		"name": b.Name, "artifact": a.Kit.String(), "version": a.KitVersion,
 		"adopted_by": actorJSON(a.AdoptedBy), "adopted_at": a.AdoptedAt.UTC().Format(time.RFC3339),
@@ -221,7 +223,7 @@ func brandAnswer(a artifactsdomain.Adoption, b brandformat.Brand) (map[string]an
 		typ[face.key] = entry
 	}
 	out["type"] = typ
-	out["slides"] = slideColors(brandformat.SlideTheme(b))
+	out["slides"] = slideColors(brandformat.SlideTheme(adopted))
 	return out, nil
 }
 

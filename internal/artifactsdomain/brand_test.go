@@ -186,7 +186,7 @@ func TestTheAdoptedBrandOutlivesItsKitAndIgnoresItsDrafts(t *testing.T) {
 // AN ADOPTION'S TEXT MUST BE READABLE ON ITS GROUND, refused before anything
 // is appended and answered with the pair that refused it.
 //
-// Mutation: drop CheckBrandContrast from checkAdoption and the grey text is
+// Mutation: drop the contrast check from CheckBrandAdoptable and the grey text is
 // adopted.
 func TestAnUnreadableBrandIsNeverAdopted(t *testing.T) {
 	t.Parallel()
@@ -512,5 +512,51 @@ func TestTwoNodesConvergeOnTheAdoptedBrand(t *testing.T) {
 	}
 	if a.table("artifact_brand_files") == "" || a.table("artifact_brand_history") == "" {
 		t.Fatal("the compared brand rows are empty, so the comparison proves nothing")
+	}
+}
+
+// A DRAFT IS NEVER ADOPTED: a kit saved with its name alone, or with its name
+// and its logo, is refused at the adoption as a *BrandIncomplete naming each
+// field it leaves out, before anything is appended, and nothing is adopted.
+//
+// Mutation: drop the completeness check from CheckBrandAdoptable and the
+// name-only draft is adopted.
+func TestADraftIsNeverAdopted(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	for name, c := range map[string]struct {
+		raw     string
+		missing []string
+	}{
+		"the name alone":    {`{"v":1,"name":"Acme"}`, []string{"logos.primary", "colors.primary"}},
+		"a name and a logo": {`{"v":1,"name":"Acme","logos":{"primary":"logo.svg"}}`, []string{"colors.primary"}},
+		"a name and a colour": {`{"v":1,"name":"Acme","colors":{"primary":"#2450e6"}}`,
+			[]string{"logos.primary"}},
+	} {
+		b, err := brandformat.Decode([]byte(c.raw))
+		if err != nil {
+			t.Fatalf("%s: the draft does not read: %v", name, err)
+		}
+		index, err := brandformat.Canonical(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kit := n.createKit(person("jane", artifacts.RoleOwner), "Draft "+name, index)
+		in := adoption(t, kit, 1, index, "draft-"+name)
+		if b.Logos.Primary == "" {
+			in.Files, in.Uploaded = in.Files[:1], in.Uploaded[:1]
+		}
+		_, err = n.writer.AdoptBrand(t.Context(), admin(), in)
+		var incomplete *artifactsdomain.BrandIncomplete
+		if !errors.As(err, &incomplete) || !errors.Is(err, artifactsdomain.ErrBrandIncomplete) {
+			t.Errorf("%s: adopting the draft answered %v", name, err)
+			continue
+		}
+		if !slices.Equal(incomplete.Missing, c.missing) {
+			t.Errorf("%s: the refusal names %v, want %v", name, incomplete.Missing, c.missing)
+		}
+	}
+	if _, adopted := n.brandNow(); adopted {
+		t.Error("a draft was adopted")
 	}
 }
