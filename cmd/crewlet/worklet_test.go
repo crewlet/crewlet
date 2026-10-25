@@ -117,14 +117,14 @@ func (n *fakePurgeNode) set(change func(*fakePurgeNode)) {
 // company could not destroy a task under any circumstances: an erasure request
 // had no mechanism, and a credential pasted into a task body stayed in the
 // durable rows of every node for ever.
-func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
+func TestWorkletPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
-	stdout, stderr, err := cli(t, "work", "purge", "t-1",
+	stdout, stderr, err := cli(t, "worklet", "purge", "t-1",
 		"-reason", "an erasure request", "-confirm", "ENG-42",
 		bootstrapForURL(t, node.server.URL))
 	if err != nil {
-		t.Fatalf("work purge: %v\n%s", err, stderr)
+		t.Fatalf("worklet purge: %v\n%s", err, stderr)
 	}
 	item, query, key := node.asked()
 	if item != "t-1" {
@@ -169,8 +169,8 @@ func TestAPurgeWithoutTheItemsKeyIsRefused(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
 	for _, args := range [][]string{
-		{"work", "purge", "t-1", "-reason", "why"},
-		{"work", "purge", "-reason", "why", "-confirm", "ENG-42"},
+		{"worklet", "purge", "t-1", "-reason", "why"},
+		{"worklet", "purge", "-reason", "why", "-confirm", "ENG-42"},
 	} {
 		if _, _, err := cli(t, append(args,
 			bootstrapForURL(t, node.server.URL))...); err == nil {
@@ -188,7 +188,7 @@ func TestAPurgeWithoutTheItemsKeyIsRefused(t *testing.T) {
 func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
-	if _, _, err := cli(t, "work", "purge", "t-1",
+	if _, _, err := cli(t, "worklet", "purge", "t-1",
 		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL)); err == nil {
 		t.Fatal("a purge with no reason ran")
 	}
@@ -203,7 +203,7 @@ func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
 func TestAPurgeUnderAnIDTheEngineNeverMintedIsRefusedBeforeItIsSent(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
-	_, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+	_, _, err := cli(t, "worklet", "purge", "t-1", "-reason", "why",
 		"-confirm", "ENG-42", "-op-id", "op-abc", bootstrapForURL(t, node.server.URL))
 	if err == nil || !strings.Contains(err.Error(), "-op-id") {
 		t.Fatalf("a purge under a hand-made id = %v, want a refusal naming -op-id", err)
@@ -221,7 +221,7 @@ func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
 	node.answers(http.StatusServiceUnavailable, "unknown")
-	_, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+	_, _, err := cli(t, "worklet", "purge", "t-1", "-reason", "why",
 		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL))
 	_, _, sent := node.asked()
 	if err == nil || sent == "" || !strings.Contains(err.Error(), "-op-id "+sent) {
@@ -235,7 +235,7 @@ func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
 	// AND THE FLAG REACHES THE ROUTE, or the advice above is a sentence
 	// pointing at a flag that does nothing.
 	node.answers(http.StatusOK, "applied")
-	if _, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+	if _, _, err := cli(t, "worklet", "purge", "t-1", "-reason", "why",
 		"-confirm", "ENG-42", "-op-id", sent,
 		bootstrapForURL(t, node.server.URL)); err != nil {
 		t.Fatalf("retrying with the printed id failed: %v", err)
@@ -267,7 +267,7 @@ func TestEveryPurgeThatNamesItsOperationIsRetriedUnderIt(t *testing.T) {
 			node := newFakePurgeNode(t)
 			node.answers(http.StatusServiceUnavailable, tc.outcome)
 			node.set(func(n *fakePurgeNode) { n.unvouched = tc.unvouched })
-			_, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+			_, _, err := cli(t, "worklet", "purge", "t-1", "-reason", "why",
 				"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL))
 			_, _, sent := node.asked()
 			if err == nil || sent == "" || !strings.Contains(err.Error(), "-op-id "+sent) ||
@@ -286,7 +286,7 @@ func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
 	node.answers(http.StatusAccepted, "pending")
-	stdout, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+	stdout, _, err := cli(t, "worklet", "purge", "t-1", "-reason", "why",
 		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL))
 	if err != nil {
 		t.Fatalf("a pending purge was reported as a failure: %v", err)
@@ -308,7 +308,7 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
 	node.set(func(n *fakePurgeNode) { n.hangUp = true })
-	_, stderr, err := cli(t, "work", "purge", "t-1",
+	_, stderr, err := cli(t, "worklet", "purge", "t-1",
 		"-reason", "why", "-confirm", "ENG-42",
 		bootstrapForURL(t, node.server.URL))
 	if err == nil {
@@ -321,7 +321,7 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	}
 	if purgeRequestTimeout <= 3*statelog.DefaultResolveBudget ||
 		purgeRequestTimeout <= nodeRequestTimeout {
-		t.Errorf("work purge waits %s, not past the three %s waits a purge can "+
+		t.Errorf("worklet purge waits %s, not past the three %s waits a purge can "+
 			"make and the %s a round trip gets", purgeRequestTimeout,
 			statelog.DefaultResolveBudget, nodeRequestTimeout)
 	}
@@ -339,7 +339,7 @@ func TestAPurgeTheNodeDoesNotServeIsRefusedNotUnknown(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
 	t.Cleanup(server.Close)
-	stdout, stderr, err := cli(t, "work", "purge", "t-1",
+	stdout, stderr, err := cli(t, "worklet", "purge", "t-1",
 		"-reason", "why", "-confirm", "ENG-42", bootstrapForURL(t, server.URL))
 	if err == nil {
 		t.Fatalf("a purge the node does not serve exited zero:\n%s", stdout)

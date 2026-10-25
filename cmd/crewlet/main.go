@@ -214,8 +214,8 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 		return runBackup(environ, rest, stdout, stderr)
 	case "retention":
 		return runRetention(environ, rest, stdout, stderr)
-	case "work":
-		return runWork(environ, rest, stdout, stderr)
+	case "worklet":
+		return runWorklet(environ, rest, stdout, stderr)
 	case "objects":
 		return runObjects(environ, rest, stdout, stderr)
 	case "fleet":
@@ -251,9 +251,9 @@ Usage:
                               the running engine, to a path on ITS host
   crewlet retention <cmd>     What the state log is holding, why it is not
                               shrinking, and the gestures that change it
-  crewlet work <cmd>          The gestures on work items that belong to a person:
-                              purge, which destroys a task and every row it
-                              produced and which nothing undoes
+  crewlet worklet <cmd>       The gestures on Worklet's work items that belong to
+                              a person: purge, which destroys a task and every
+                              row it produced and which nothing undoes
   crewlet objects status      Where the company's files are kept, and what the
                               object store's collector last found missing
   crewlet objects migrate     Move the company's files to an S3 bucket: copy on a

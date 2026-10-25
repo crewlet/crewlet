@@ -1741,9 +1741,9 @@ const (
 // they send a client opposite ways: the first is retried under the same
 // operation and never under a fresh one, which would make a second change if
 // the first landed; the second wrote nothing. Every surface wrote the unknown
-// for itself, and they had drifted — `/iam` said it only in a sentence,
+// for itself, and they had drifted (`/iam` said it only in a sentence,
 // `/worklet` said it on some routes because the tool's receipt happened
-// to carry an `outcome` and not on others — so `crewlet work purge`, which
+// to carry an `outcome` and not on others), so `crewlet worklet purge`, which
 // branches on the field, told an operator whose purge may have destroyed the
 // item that the attempt "wrote nothing". One writer, and the three keys are
 // its and always win over a route's detail.

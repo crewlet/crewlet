@@ -15,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// `crewlet work` — the gestures on the company's own work items that belong to
-// a PERSON rather than to a seat.
+// `crewlet worklet`: the gestures on Worklet's work items that belong to a
+// PERSON rather than to a seat.
 //
 // # Why there is exactly one of them
 //
@@ -39,26 +39,26 @@ import (
 // `delete` only stops later records about it; neither takes the body out of a
 // single database.
 
-// runWork dispatches `crewlet work`.
-func runWork(environ config.Source, args []string, stdout, stderr io.Writer) error {
+// runWorklet dispatches `crewlet worklet`.
+func runWorklet(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "purge":
-		return workPurge(environ, rest, stdout, stderr)
+		return workletPurge(environ, rest, stdout, stderr)
 	case "", "help":
-		fmt.Fprintln(stderr, workPurgeUsage)
+		fmt.Fprintln(stderr, workletPurgeUsage)
 		return flag.ErrHelp
 	default:
-		return fmt.Errorf("unknown work command %q", sub)
+		return fmt.Errorf("unknown worklet command %q", sub)
 	}
 }
 
-// workPurgeUsage is the one usage line, printed wherever the command is
+// workletPurgeUsage is the one usage line, printed wherever the command is
 // refused for want of an argument.
-const workPurgeUsage = "usage: crewlet work purge <item> -reason TEXT " +
+const workletPurgeUsage = "usage: crewlet worklet purge <item> -reason TEXT " +
 	"-confirm <item-key> [-op-id ID] [<config.yaml>] [-url]"
 
-// workPurge is `crewlet work purge`.
+// workletPurge is `crewlet worklet purge`.
 //
 // # The confirmation is the item's KEY, and the node checks it
 //
@@ -80,10 +80,10 @@ const workPurgeUsage = "usage: crewlet work purge <item> -reason TEXT " +
 // It is the only thing that survives. The rows are destroyed; what remains is
 // the deletion marker, and its reason is the entire account of what used to be
 // at that key for whoever reads it a year later.
-func workPurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	item, rest := splitSubject(args)
 	var reason, confirm, opID *string
-	client, err := nodeClientFor(environ, rest, "work purge", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "worklet purge", stderr, func(fs *flag.FlagSet) {
 		reason = fs.String("reason", "", "why; recorded on the deletion marker")
 		confirm = fs.String("confirm", "",
 			"the item's KEY — this destroys the item and every row it produced")
@@ -96,7 +96,7 @@ func workPurge(environ config.Source, args []string, stdout, stderr io.Writer) e
 	}
 	switch {
 	case item == "" || strings.TrimSpace(*confirm) == "":
-		fmt.Fprintln(stderr, workPurgeUsage)
+		fmt.Fprintln(stderr, workletPurgeUsage)
 		return fmt.Errorf("a purge destroys the item and every row it produced " +
 			"on every node, and nothing undoes it — name the item's KEY in " +
 			"-confirm to run it")
@@ -207,7 +207,7 @@ func workPurge(environ config.Source, args []string, stdout, stderr io.Writer) e
 	return nil
 }
 
-// purgeRequestTimeout is how long `work purge` waits for the node's answer.
+// purgeRequestTimeout is how long `worklet purge` waits for the node's answer.
 //
 // SIX RESOLVE BUDGETS. A purge is one record, and what it can legitimately
 // wait on is the write path's own: the wait for this node to reach the

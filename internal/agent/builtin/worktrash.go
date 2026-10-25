@@ -86,7 +86,7 @@ func (t *removeWorkItem) Description() string {
 	return "Put a work item in the trash. It disappears from every list and " +
 		"board, its history is untouched, and it can be restored at any age " +
 		"with restore_work_item — there is no window. Nothing is destroyed: " +
-		"that is `crewlet work purge`, which has no inverse. Pass " +
+		"that is `crewlet worklet purge`, which has no inverse. Pass " +
 		"`subtree: true` to take its children with it; leaving them behind " +
 		"makes them orphans somebody has to find."
 }
