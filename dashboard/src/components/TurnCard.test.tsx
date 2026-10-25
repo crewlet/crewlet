@@ -85,6 +85,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     cacheReadTokens: 0,
     maxRounds: 0,
     roundStartedAt: "",
+    runStartedAt: "",
     runningCalls: [],
     bodyWithheld: false,
     steers: [],

@@ -351,6 +351,9 @@ export interface PhaseRecord {
    * running right now — a LIVE phase's only, "" / empty otherwise.
    */
   roundStartedAt: string;
+  /** When the CLI run in flight was launched — a LIVE phase's only, "" between
+   *  runs and otherwise. */
+  runStartedAt: string;
   /** Every tool call running now, in the order they arrived — a CLI may run
    *  a response's calls at once. */
   runningCalls: RunningToolCall[];
@@ -757,6 +760,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     cacheReadTokens: call.cache_read_tokens ?? 0,
     maxRounds: call.max_rounds ?? 0,
     roundStartedAt: call.round_started_at ?? "",
+    runStartedAt: call.run_started_at ?? "",
     runningCalls: runningCalls(call.running_calls),
     bodyWithheld: call.body_withheld === true,
     steers: (call.steers ?? []).map((s) => ({ round: s.round, noteId: s.note_id })),
@@ -852,6 +856,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     cacheReadTokens: num(p.cache_read_tokens),
     maxRounds: num(p.max_rounds),
     roundStartedAt: "",
+    runStartedAt: "",
     // A finished phase has nothing in flight: a call that never returned is
     // the failure its record carries.
     runningCalls: [],

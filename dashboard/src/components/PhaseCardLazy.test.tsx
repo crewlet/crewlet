@@ -101,6 +101,7 @@ function record() {
     cacheReadTokens: 0,
     maxRounds: 0,
     roundStartedAt: "",
+    runStartedAt: "",
     runningCalls: [],
     steers: [],
     node: "",

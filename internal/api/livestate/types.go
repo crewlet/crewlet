@@ -200,6 +200,11 @@ type LiveCall struct {
 	// round's tools run. Empty before the first round opens.
 	RoundStartedAt string `json:"round_started_at,omitempty"`
 
+	// RunStartedAt is when the CLI run in flight was launched: the run whose
+	// rounds are past every entry in Invocations. Empty between runs, and on
+	// a frozen call.
+	RunStartedAt string `json:"run_started_at,omitempty"`
+
 	// RunningCalls is every tool call the phase is running RIGHT NOW, in the
 	// order they arrived — `{id, round, name, arguments, started_at}`, each
 	// listed by the frame published before the call is handed to its tool

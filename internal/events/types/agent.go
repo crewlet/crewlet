@@ -993,6 +993,12 @@ type AgentTurnProgress struct {
 	// carries it, published the moment that round's provider call is made,
 	// so a start later than every entry in Rounds is a round in flight.
 	RoundStartedAt time.Time `json:"round_started_at,omitzero"`
+	// RunStartedAt is when the CLI run in flight was launched — the run
+	// whose rounds are past every entry in Invocations, which lists only
+	// the runs that have ended. Absent between runs, so a reader draws the
+	// run in flight from its launch rather than from the first round it
+	// happens to have timed.
+	RunStartedAt time.Time `json:"run_started_at,omitzero"`
 	// RunningCalls are the tool calls in flight, in the order they arrived
 	// — see [RunningCall]. A LIST because a coding CLI may run a
 	// response's calls at once. Absent whenever no call is running.

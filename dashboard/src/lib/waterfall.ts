@@ -420,11 +420,12 @@ function runOf(runs: readonly Invocation[], round: number): Invocation | undefin
  * nothing about which process was running. A run nothing timed is listed as
  * untimed and its rounds stay under the phase.
  *
- * THE RUN IN FLIGHT on a live phase is on no record until it ends, so its
- * launch is not known here: it is drawn open from the first instant measured
- * under it — its rounds past every ended run's — and takes its launch when it
- * ends. Without a round or a call under it yet, there is nothing to draw it
- * from, and it is not drawn.
+ * THE RUN IN FLIGHT on a live phase is on no record until it ends: it is drawn
+ * open from its launch, which the live frame states (`run_started_at`), over
+ * its rounds past every ended run's — and from the first instant measured
+ * under it on a frame that does not say. A run launched with nothing timed
+ * under it yet is drawn as the empty span it is: the CLI starting, or its
+ * model writing the first request.
  */
 function cliRuns(p: PhaseRecord, children: Node[], now: number, untimed: Untimed[]) {
   // A round's model call, and whatever of that round hangs under the phase
@@ -474,9 +475,10 @@ function cliRuns(p: PhaseRecord, children: Node[], now: number, untimed: Untimed
   if (!p.live) return;
   const past = p.invocations.reduce((n, r) => Math.max(n, r.lastRound), 0);
   const inFlight = take((n) => ofRound(n) && n.span.round > past);
-  if (!inFlight.length) return;
+  const launched = at(p.runStartedAt);
+  if (!inFlight.length && launched <= 0) return;
   const ordinal = p.invocations.length + 1;
-  const start = Math.min(...inFlight.flatMap(starts_));
+  const start = launched > 0 ? launched : Math.min(...inFlight.flatMap(starts_));
   for (const n of inFlight) if (n.span.kind === "model") n.span.invocation = ordinal;
   children.push({
     span: span({

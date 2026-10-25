@@ -249,6 +249,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		MaxRounds:      num(payload, "max_rounds"),
 		RoundCeiling:   num(payload, "round_ceiling"),
 		RoundStartedAt: str(payload, "round_started_at"),
+		RunStartedAt:   str(payload, "run_started_at"),
 		RunningCalls:   runningCalls(payload),
 		// NOT carried, for Rounds' reason: every frame states the phase's
 		// whole list.
@@ -339,6 +340,7 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	// a tool call that will never return is the streaming caret again.
 	call.RunningCalls = nil
 	call.RoundStartedAt = ""
+	call.RunStartedAt = ""
 }
 
 // clearCall drops a seat's live call and advances its overlay sequence, so the

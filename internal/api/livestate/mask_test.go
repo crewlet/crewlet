@@ -35,7 +35,7 @@ var callFamily = map[string]class{
 	"model": status, "input_tokens": status, "output_tokens": status,
 	"total_tokens": status, "round_num": status, "rounds_used": status,
 	"rounds": status, "max_rounds": status, "round_ceiling": status,
-	"round_started_at": status, "steers": status, "cache_read_tokens": status,
+	"round_started_at": status, "run_started_at": status, "steers": status, "cache_read_tokens": status,
 	"cache_write_tokens": status, "node": status, "in_progress": status,
 	"failed": status, "error": status, "updated_at": status, "started_at": status,
 	"versions": status, "body_withheld": status,

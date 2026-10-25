@@ -835,6 +835,7 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		MaxRounds:        caps.max,
 		RoundCeiling:     caps.ceiling,
 		RoundStartedAt:   res.RoundStartedAt,
+		RunStartedAt:     utcOrZero(res.RunStartedAt),
 		RunningCalls:     runningCalls(res.Running),
 		Invocations:      phaseInvocations(res.Invocations),
 		WorkItem:         e.workItem(),

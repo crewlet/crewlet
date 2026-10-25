@@ -250,6 +250,52 @@ describe("buildWaterfall", () => {
     expect([inFlight.start - T0, inFlight.end, inFlight.open]).toEqual([9_000, now, true]);
   });
 
+  // THE LAUNCH THE FRAME STATES is where the run in flight begins: its first
+  // round starts once the CLI is up and its model has begun, which is later.
+  // And a run with nothing timed under it yet — the CLI starting, its model
+  // writing the first request — is still a run, drawn open from its launch.
+  test("draws the run in flight from the launch the frame states, with or without rounds", () => {
+    const now = T0 + 30_000;
+    const round2 = {
+      round: 2,
+      startedAt: iso(9_000),
+      durationMs: 1_000,
+      model: "m",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      toolCalls: 0,
+      stopReason: "",
+    };
+    const ended = invocation({
+      run: 1,
+      startedAt: iso(500),
+      durationMs: 2_000,
+      firstRound: 1,
+      lastRound: 1,
+    });
+    const withRound = phaseRecord({
+      live: true,
+      clockStart: iso(0),
+      runStartedAt: iso(7_000),
+      timedRounds: [round2],
+      invocations: [ended],
+    });
+    let w = buildWaterfall({ events: [], phases: [withRound], now, running: true, parked: false });
+    let inFlight = byId(w.spans, "turn-1|execute|1.i2");
+    expect([inFlight.start - T0, inFlight.end, inFlight.open]).toEqual([7_000, now, true]);
+
+    const starting = phaseRecord({
+      live: true,
+      clockStart: iso(0),
+      runStartedAt: iso(20_000),
+      invocations: [ended],
+    });
+    w = buildWaterfall({ events: [], phases: [starting], now, running: true, parked: false });
+    inFlight = byId(w.spans, "turn-1|execute|1.i2");
+    expect([inFlight.start - T0, inFlight.end, inFlight.open]).toEqual([20_000, now, true]);
+  });
+
   test("a tool the engine stamped sits at its stamp; one it only timed runs after the one before it", () => {
     const { events, phases } = settledTurn();
     const w = buildWaterfall({ events, phases, now: T0, running: false, parked: false });

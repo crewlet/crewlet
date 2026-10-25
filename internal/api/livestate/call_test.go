@@ -616,6 +616,7 @@ func TestEveryCallInFlightAppearsAndEachClears(t *testing.T) {
 	s.Apply(env("agent_turn_progress", with(base, map[string]any{
 		"round_num": 0, "max_rounds": 8, "round_ceiling": 24,
 		"round_started_at":  "2026-06-14T12:00:01Z",
+		"run_started_at":    "2026-06-14T12:00:00Z",
 		"cache_read_tokens": 900, "cache_write_tokens": 40,
 		"rounds":        []any{map[string]any{"round": 1, "duration_ms": 1200, "tool_calls": 2}},
 		"running_calls": []any{search, read},
@@ -633,7 +634,7 @@ func TestEveryCallInFlightAppearsAndEachClears(t *testing.T) {
 		t.Fatalf("running calls = %v, want both calls of the response in flight", got)
 	}
 	if call.MaxRounds != 8 || call.RoundCeiling != 24 || call.RoundStartedAt != "2026-06-14T12:00:01Z" ||
-		call.CacheReadTokens != 900 || call.CacheWriteTokens != 40 || len(call.Rounds) != 1 ||
+		call.RunStartedAt != "2026-06-14T12:00:00Z" || call.CacheReadTokens != 900 || call.CacheWriteTokens != 40 || len(call.Rounds) != 1 ||
 		call.Node != "core-1" || call.WorkItem == nil || call.WorkItem.Key != "ENG-1" ||
 		call.RoundsUsed != 1 {
 		t.Errorf("call = %+v, want every field the frame stated", call)
@@ -679,6 +680,7 @@ func TestAFrozenFailedCallHasNoCallInFlight(t *testing.T) {
 	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
 		"round_num":        0,
 		"round_started_at": "2026-06-14T12:00:01Z",
+		"run_started_at":   "2026-06-14T12:00:00Z",
 		"running_calls":    []any{map[string]any{"name": "run_sandbox"}},
 	}), streamOnly, at("2026-06-14T12:00:02Z")))
 	s.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
@@ -690,8 +692,9 @@ func TestAFrozenFailedCallHasNoCallInFlight(t *testing.T) {
 	if !call.Failed {
 		t.Fatalf("call = %+v, want it frozen as failed", call)
 	}
-	if call.RunningCalls != nil || call.RoundStartedAt != "" {
-		t.Errorf("frozen call keeps %+v in flight since %q", call.RunningCalls, call.RoundStartedAt)
+	if call.RunningCalls != nil || call.RoundStartedAt != "" || call.RunStartedAt != "" {
+		t.Errorf("frozen call keeps %+v in flight since %q, a run since %q",
+			call.RunningCalls, call.RoundStartedAt, call.RunStartedAt)
 	}
 	if len(call.Invocations) != 1 || call.Invocations[0].(map[string]any)["outcome"] != "failed" {
 		t.Errorf("frozen call's runs are %+v, want the failed run its record named", call.Invocations)

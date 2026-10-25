@@ -511,6 +511,12 @@ export interface LiveCall {
    */
   round_started_at?: string;
   /**
+   * When the CLI run in flight was launched — the run whose rounds are past
+   * every entry in `invocations`, which lists only the runs that have ended.
+   * Absent between runs.
+   */
+  run_started_at?: string;
+  /**
    * Every tool call running RIGHT NOW, in the order they arrived — a coding
    * CLI may run a response's calls at once. Absent between calls.
    */

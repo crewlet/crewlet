@@ -47,7 +47,7 @@ func TestAPhaseRecordThatMeasuredNothingSaysSoByOmission(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	blob, _ := json.Marshal(frame)
-	for _, key := range []string{`"round_started_at"`, `"running_calls"`, `"rounds"`,
+	for _, key := range []string{`"round_started_at"`, `"run_started_at"`, `"running_calls"`, `"rounds"`,
 		`"invocations"`, `"work_item"`} {
 		if strings.Contains(string(blob), key) {
 			t.Errorf("a frame with no round open states %s: %s", key, blob)
