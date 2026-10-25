@@ -22,7 +22,11 @@
 //   - NO TOOL CHANNEL. The tool loop needs tool calls back, and a CLI prints
 //     prose. The catalogue and a response contract ride in the prompt, and
 //     the reply is parsed by a deliberately forgiving parser that never
-//     errors — see prompt.go and envelope.go.
+//     errors — see prompt.go and envelope.go. A call that is watched
+//     streams only the decoded prose of the envelope's message as it
+//     arrives, and settles that view against the parser's reading once the
+//     call ends, retracting it where the two disagree; see
+//     messagestream.go and live.go.
 //
 //   - VENDOR DRIFT. These flags and JSON shapes change between releases, so
 //     every profile field is data an operator can replace from YAML rather
@@ -111,10 +115,14 @@ type Provider struct {
 	agent     string
 	agentMode bool
 	profile   cliprofile.Profile
-	ws        *Workspace
-	env       map[string]string
-	auth      Auth
-	timeout   time.Duration
+	// streamed is the profile a call that asked to be streamed runs
+	// ([cliprofile.Profile.Streamed]): the profile itself where it has no
+	// streamed variant.
+	streamed cliprofile.Profile
+	ws       *Workspace
+	env      map[string]string
+	auth     Auth
+	timeout  time.Duration
 
 	// termGrace is how long every child this provider starts has to exit once
 	// signalled — always [termGrace]. A field rather than the constant at each
@@ -187,6 +195,7 @@ func New(cfg Config) (*Provider, error) {
 		agent:            cfg.Agent,
 		agentMode:        cfg.AgentMode,
 		profile:          profile,
+		streamed:         profile.Streamed(),
 		ws:               ws,
 		env:              cfg.Env,
 		auth:             cfg.Auth,
@@ -304,6 +313,10 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
+	// THE PROFILE THIS CALL RUNS, chosen once and read by everything
+	// below, so the argv the CLI is started with and the reading of what it
+	// printed can never come from two different profiles.
+	prof := p.profileFor(req)
 
 	// THE SYSTEM PROMPT ON THE CHANNEL THIS KIND OF CALL TAKES: beside the
 	// CLI's own for a seat at work, in place of it for a text function —
@@ -374,48 +387,34 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}()
 
 	in := invocation{
-		binary:  p.profile.Binary,
-		args:    p.argv(),
+		binary:  prof.Binary,
+		args:    p.argv(prof),
 		dir:     checkout.Work,
-		env:     buildEnv(p.profile, checkout, p.env, p.auth),
+		env:     buildEnv(*prof, checkout, p.env, p.auth),
 		timeout: p.timeout,
 		grace:   p.termGrace,
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
-	// fragment of the answer. The other two output modes are extracted
-	// from the WHOLE of stdout — a fenced block, one JSON document — so
-	// there is no faithful incremental view of them, and forwarding raw
-	// lines would stream a banner and a half-written fence as though they
-	// were what the model said.
-	if req.Streaming() && p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
-		in.onLine = func(line string) {
-			doc, ok := decodeObject(strings.TrimSpace(line))
-			if !ok {
-				return
-			}
-			// The bool is deliberately dropped HERE and only here:
-			// a stream is many events and most of them carry no
-			// text path at all, so "did this one event match" is
-			// not the question. Whether the PROFILE matches is
-			// decided once, over the whole stream, by extract.
-			//
-			// The SAME event filter the extractor applies, so a
-			// stream is streamed as it will be read: a profile that
-			// takes its answer from one terminal event delivers it
-			// in one delta at the end rather than pushing a tool's
-			// output through as though the model had said it.
-			chunk, _ := textOf(p.profile, doc)
-			req.Send(llm.Delta{Content: chunk})
-		}
+	// fragment of the answer: the profile as written for Codex and the other
+	// stream CLIs, the streamed variant for a call that asked to be streamed
+	// on one that has it (see [Provider.profileFor]). The other two output
+	// modes are extracted from the WHOLE of stdout (a fenced block, one JSON
+	// document), so there is no faithful incremental view of them, and
+	// forwarding raw lines would stream a banner and a half-written fence as
+	// though they were what the model said.
+	var live *liveAnswer
+	if req.Streaming() && prof.EffectiveOutput() == cliprofile.OutputJSONL {
+		live = newLiveAnswer(req, prof, len(req.Tools) > 0)
+		in.onLine = live.line
 	}
 	// THE CALL'S OWN SESSION, named so the usage command below can ask
 	// about it afterwards — see [cliprofile.Profile.SessionArgs]. After the
 	// model arguments for the same reason they precede everything else: a
 	// CLI taking its prompt on argv reads the first non-flag argument.
 	var session string
-	if len(p.profile.SessionArgs) > 0 {
+	if len(prof.SessionArgs) > 0 {
 		session = newSessionID()
-		for _, arg := range p.profile.SessionArgs {
+		for _, arg := range prof.SessionArgs {
 			in.args = append(in.args, strings.ReplaceAll(arg, "{session}", session))
 		}
 	}
@@ -425,9 +424,9 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// a CLI taking its prompt on argv reads the first non-flag argument,
 	// so nothing may come after it.
 	var usagePath string
-	if len(p.profile.UsageFileArgs) > 0 {
+	if len(prof.UsageFileArgs) > 0 {
 		usagePath = filepath.Join(checkout.Work, usageFileName)
-		for _, arg := range p.profile.UsageFileArgs {
+		for _, arg := range prof.UsageFileArgs {
 			in.args = append(in.args, strings.ReplaceAll(arg, "{usage_file}", usagePath))
 		}
 	}
@@ -468,17 +467,17 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// profile puts the model flag before it: a CLI taking its prompt on
 	// argv reads the first non-flag argument, so anything appended after it
 	// is read as part of the prompt.
-	switch p.profile.EffectivePromptMode() {
+	switch prof.EffectivePromptMode() {
 	case cliprofile.PromptArgv:
 		// PromptArgs and then the prompt, ADJACENT and last: a CLI that
 		// takes its prompt as a flag's value needs the two together, and
 		// anything appended between them becomes the prompt instead.
-		in.args = append(in.args, p.profile.PromptArgs...)
+		in.args = append(in.args, prof.PromptArgs...)
 		in.args = append(in.args, prompt)
 	case cliprofile.PromptFile:
 		// Only the flag and the PATH go on argv; the transcript itself
 		// stays in the per-call working directory at 0600.
-		rendered, writeErr := promptArgs(p.profile.PromptArgs, prompt, checkout.Work)
+		rendered, writeErr := promptArgs(prof.PromptArgs, prompt, checkout.Work)
 		if writeErr != nil {
 			return nil, p.fail(llm.KindFatal, writeErr)
 		}
@@ -534,13 +533,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// file, a report that cannot be had leaves the counts to stdout rather
 	// than failing an answer the operator paid for. In the working directory
 	// the call ran in, before the checkout is released.
-	if len(p.profile.UsageArgs) > 0 && !res.timedOut {
-		args := make([]string, 0, len(p.profile.UsageArgs))
-		for _, arg := range p.profile.UsageArgs {
+	if len(prof.UsageArgs) > 0 && !res.timedOut {
+		args := make([]string, 0, len(prof.UsageArgs))
+		for _, arg := range prof.UsageArgs {
 			args = append(args, strings.ReplaceAll(arg, "{session}", session))
 		}
 		report, reportErr := p.runAuxiliary(ctx, args, checkout.Work,
-			buildEnv(p.profile, checkout, p.env, p.auth), "")
+			buildEnv(*prof, checkout, p.env, p.auth), "")
 		switch {
 		case reportErr != nil:
 			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
@@ -551,13 +550,31 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// — so this is the one place that can say so.
 			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
 				"agent", p.agent, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
-					p.profile.Binary, strings.Join(args, " ")))
+					prof.Binary, strings.Join(args, " ")))
 		default:
 			usageDoc = report
 		}
 	}
 
-	return p.completion(ctx, system+prompt, len(req.Tools) > 0, res, usageDoc)
+	comp, err := p.completion(ctx, prof, system+prompt, len(req.Tools) > 0, res, usageDoc)
+	if err == nil && live != nil {
+		live.settle(comp.Content)
+	}
+	return comp, err
+}
+
+// profileFor is the profile one call runs: the streamed variant for a call
+// that asked to be streamed, the profile as written for every other.
+//
+// PER CALL, as [llm.Request.OnDelta] makes streaming a property of one call:
+// a seat's round on the live view and a Dashboard Assistant answer stream,
+// and the summariser, the judges and the doctor's probes that watch nothing
+// keep the smaller output of the profile as written.
+func (p *Provider) profileFor(req llm.Request) *cliprofile.Profile {
+	if req.Streaming() {
+		return &p.streamed
+	}
+	return &p.profile
 }
 
 // newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
@@ -579,12 +596,12 @@ func newSessionID() string {
 
 // argv is the invocation's arguments: the profile's completion argv, then the
 // model, then (in argv mode) the prompt, which the caller appends.
-func (p *Provider) argv() []string {
-	args := append([]string(nil), p.profile.CompleteArgs...)
+func (p *Provider) argv(prof *cliprofile.Profile) []string {
+	args := append([]string(nil), prof.CompleteArgs...)
 	if p.model == "" {
 		return args
 	}
-	for _, arg := range p.profile.ModelArgs {
+	for _, arg := range prof.ModelArgs {
 		args = append(args, strings.ReplaceAll(arg, "{model}", p.model))
 	}
 	return args
@@ -609,7 +626,8 @@ func (p *Provider) argv() []string {
 // [RenderPrompt] appends exactly when the request offered tools. Only then is
 // the reply read as an envelope: see the read below.
 func (p *Provider) completion(
-	ctx context.Context, sent string, offeredTools bool, res *rawResult, usageDoc string,
+	ctx context.Context, prof *cliprofile.Profile, sent string, offeredTools bool,
+	res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
@@ -634,7 +652,7 @@ func (p *Provider) completion(
 			maxOutput, res.droppedStdout, p.key))
 	}
 
-	out := extract(p.profile, res.stdout)
+	out := extract(*prof, res.stdout)
 	// Whether the CLI said the run FAILED — a non-zero exit, or its own flag
 	// at the profile's error_paths. It decides where a marker may stand, and
 	// that the call is refused below rather than answered.
@@ -653,15 +671,15 @@ func (p *Provider) completion(
 	// for a refused key or a spent plan (measured on 0.21.5) — and warning
 	// of drift on every such call names the profile as broken exactly when
 	// the operator is reading the log for the refusal.
-	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
+	if outcome := out.applyUsageReport(*prof, usageDoc); outcome.unreadable() && !failed {
 		fallback := "an estimate, four characters a token"
 		if out.reported {
 			fallback = "the counts stdout reported"
 		}
 		log.WarnContext(ctx, "cli_agent_usage_report_unreadable", "provider", p.key,
-			"agent", p.agent, "source", usageSource(p.profile), "reason", outcome.String(),
-			"input_paths", cliprofile.PathList(p.profile.Usage.Input),
-			"output_paths", cliprofile.PathList(p.profile.Usage.Output),
+			"agent", p.agent, "source", usageSource(*prof), "reason", outcome.String(),
+			"input_paths", cliprofile.PathList(prof.Usage.Input),
+			"output_paths", cliprofile.PathList(prof.Usage.Output),
 			"counts_from", fallback)
 	}
 
@@ -689,7 +707,7 @@ func (p *Provider) completion(
 	// handed over too, because it decides where in what was said a
 	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
-	if hit, ok := classifyMarkers(p.profile, cliOutput{
+	if hit, ok := classifyMarkers(*prof, cliOutput{
 		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed,
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
@@ -782,7 +800,7 @@ func (p *Provider) completion(
 				"installed CLI, so nothing it printed can be read as the model's "+
 				"reply. Run `crewlet llm doctor %s` and set "+
 				"providers.llm.%s.overrides.text_paths. It printed:\n%s",
-			p.agent, cliprofile.PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
+			p.agent, cliprofile.PathList(prof.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
 	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
 	// exited 0, reported no error, and the path this profile looks in
@@ -855,7 +873,7 @@ func (p *Provider) completion(
 		// so ([cliprofile.UsagePaths.InputIncludesCache]). A model-side
 		// tool's prompt a CLI reports apart from its input is billed as
 		// input, so it is charged as input — see [cliprofile.UsagePaths].
-		comp.InputTokens = p.profile.Usage.PromptTokens(out.input, out.cacheRead, out.cacheWrite) + out.toolPrompt
+		comp.InputTokens = prof.Usage.PromptTokens(out.input, out.cacheRead, out.cacheWrite) + out.toolPrompt
 		// Reasoning a CLI reports apart from its output is billed as
 		// output, so it is charged as output — see [cliprofile.UsagePaths].
 		comp.OutputTokens = out.output + out.reasoning
@@ -874,7 +892,7 @@ func (p *Provider) completion(
 		// needs if it turns out to be profile drift after all. Same
 		// shape as agent/prefetch's own answered-nothing warning.
 		log.WarnContext(ctx, "cli_agent_answered_nothing", "provider", p.key,
-			"agent", p.agent, "model", p.model, "text_paths", cliprofile.PathList(p.profile.TextPaths),
+			"agent", p.agent, "model", p.model, "text_paths", cliprofile.PathList(prof.TextPaths),
 			"output_tokens", comp.OutputTokens, "reported_usage", out.reported)
 	}
 	return comp, nil

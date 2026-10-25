@@ -352,7 +352,7 @@ func TestTheGeminiProfileChargesEveryModelACallUsed(t *testing.T) {
 			got.input, got.cacheRead, got.output, got.reasoning, got.toolPrompt)
 	}
 	prov := &Provider{profile: p, model: "gemini-2.5-pro", now: time.Now}
-	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: geminiAnswer}, "")
+	comp, err := prov.completion(t.Context(), &prov.profile, "prompt", true, &rawResult{stdout: geminiAnswer}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}

@@ -342,6 +342,11 @@ func TestTheSmokeTestAsksTheWayAPhaseAsks(t *testing.T) {
 	if len(req.Tools) != 1 || req.Tools[0].Name != "crewlet_smoke" {
 		t.Errorf("tools = %+v, want crewlet_smoke offered", req.Tools)
 	}
+	// Streamed, as a phase's round is, so the smoke test runs the argv
+	// and the stream reading a seat runs.
+	if !req.Streaming() {
+		t.Error("the smoke request is not streamed, so it proves an argv no phase runs")
+	}
 }
 
 // The report is what an operator reads before a deploy, so every line the
