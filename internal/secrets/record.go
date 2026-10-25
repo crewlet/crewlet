@@ -9,14 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 )
 
-// Record is one stored secret's row, in whichever store holds it.
+// Record is one stored secret's row, whichever way it was reached.
 //
-// ONE SHAPE FOR BOTH STORES, and that is the point rather than a convenience.
-// A secret lives on the coordination KV, where every node reads it, and — for
-// a node that has not finished migrating off it — in that node's own database.
-// Two record types would have made the CLI, the API and the provisioning
-// sinks each pick a side, and a caller that could only speak one of them
-// would be a caller that only works on one of the two stores.
+// ONE SHAPE FOR EVERY WAY IN, and that is the point rather than a convenience.
+// A secret lives on the coordination KV, where every node reads it, and a
+// caller reaches it either through a running node's API or directly — the
+// engine, and a `crewlet` command with its node's engine stopped. One record
+// type is what lets the CLI, the API and the provisioning sinks speak to the
+// store without picking a side.
 type Record struct {
 	Name string
 

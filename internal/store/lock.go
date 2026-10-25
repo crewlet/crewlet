@@ -30,11 +30,12 @@ import (
 // collision. That is what the measurement above was originally a comparison
 // against, and it is why the answer is a lock rather than a better error.)
 //
-// That is not a theoretical shape. `crewlet secrets`, `crewlet llm export
-// -secret-store` and every provisioner's secret-store sink all open the
-// database the engine is running on, from a second OS process, as their
-// documented gesture. Before this lock the only defence was a printed
-// warning, which is a defence against an operator who reads it.
+// That is not a theoretical shape. `crewlet config`, `crewlet migrate` and
+// `crewlet search eval` open a node's database from a second OS process as
+// their documented gesture, and every command that reaches the fleet's store
+// with the engine stopped holds it ([Hold]) for as long as it works. Before
+// this lock the only defence was a printed warning, which is a defence
+// against an operator who reads it.
 //
 // # An OS lock, on a sidecar
 //
