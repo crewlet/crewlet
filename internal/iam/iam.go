@@ -218,7 +218,7 @@ func ValidMachineHandle(s string) bool {
 
 // credentialClasses are the classes a CREDENTIAL's name carries in the
 // operator column, which no login may take.
-var credentialClasses = []string{MachineTokenPrefix, SessionPrefix}
+var credentialClasses = []string{MachineTokenPrefix, SessionPrefix, AssistPrefix}
 
 // TokenLoginPrefix is the class segment a Tier A token's login carries.
 //
@@ -287,9 +287,10 @@ func SessionName(lineage string) string { return SessionPrefix + lineage }
 func ValidSessionName(s string) bool { return validCredential(s, SessionPrefix) }
 
 // ValidCredentialName reports whether s names a credential a principal may act
-// THROUGH ([Principal.Via]): a machine token or a browser session.
+// THROUGH ([Principal.Via]): a machine token, a browser session or an
+// assistant grant.
 func ValidCredentialName(s string) bool {
-	return ValidMachineTokenName(s) || ValidSessionName(s)
+	return ValidMachineTokenName(s) || ValidSessionName(s) || ValidAssistName(s)
 }
 
 // validCredential reports whether s is class followed by a canonical uuid.
