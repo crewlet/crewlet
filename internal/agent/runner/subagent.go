@@ -135,7 +135,7 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		// list, and the child's does not exist until subagent builds it.
 		Workers: r.cfg.Subagent.Workers,
 		Guard: func(child *tools.Surface) tools.Guard {
-			return r.guardFor(phase.Subagent, child, nil).tools()
+			return r.guardFor(phase.Subagent, round, child, nil).tools()
 		},
 		Telemetry: func(ctx context.Context, res subagent.Result) {
 			emit.subagentCompleted(ctx, res)

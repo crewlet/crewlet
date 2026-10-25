@@ -29,7 +29,9 @@ type reportingGuard struct {
 	guard *skills.Guard
 	emit  emitter
 	phase phase.Phase
-	round int
+	// iteration is the turn's iteration the guarded surface was built for,
+	// which every other event of the phase carries too.
+	iteration int
 }
 
 var _ tools.Guard = (*reportingGuard)(nil)
@@ -67,7 +69,7 @@ func (g *reportingGuard) report(tool string) {
 		SkillKeys: g.guard.Pending(),
 		TurnID:    g.emit.turn.RunID,
 		WorkKey:   g.emit.turn.WorkKey,
-		Iteration: g.round,
+		Iteration: g.iteration,
 	}, g.emit.turn.Trace)
 	// A BACKGROUND context, because tools.Guard has none to inherit — the
 	// interface is called from a tool dispatch that passes only names. A

@@ -209,7 +209,9 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	pub := newCapture()
 	r := guardedRunner(t, prov, pub)
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+	// A LATER ITERATION, so a refusal stamped with any other number — the
+	// zero a guard built without its iteration reported — is told apart.
+	if _, _, err := r.Execute(context.Background(), 2, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -222,6 +224,11 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	if got.ToolName != "slack_post" || got.TurnID != "t-guard" ||
 		got.Phase != types.Phase(phase.Execute) {
 		t.Fatalf("the event = %+v", got)
+	}
+	// The iteration the phase ran as, which every other event of the
+	// phase carries: a reader joining refusals to their phase needs it.
+	if got.Iteration != 2 {
+		t.Errorf("the refusal names iteration %d, want the phase's 2", got.Iteration)
 	}
 	// EVERY pending skill, not just the one that blocked: a model about to
 	// be blocked twice more is a model an operator needs to see whole.

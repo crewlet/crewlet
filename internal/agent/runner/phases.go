@@ -1454,7 +1454,7 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// what the catalogue showed cannot disagree: both match the skills
 	// against the surface's universe (catalogueSurface), and the catalogue's
 	// "required" marker is the promise this keeps.
-	guard := r.guardFor(ph, surface, loaded)
+	guard := r.guardFor(ph, round, surface, loaded)
 	// RECORDED ONLY HERE, which is what keeps it the TURN's guard: this is
 	// the funnel every phase of the turn goes through, and a sub-agent's
 	// child surface is built elsewhere. Recording inside guardFor would let
@@ -1510,7 +1510,7 @@ func (a armedGuard) tools() tools.Guard    { return a.wrap }
 // the same message history, so the bodies it read before the suspend are still
 // in front of the model and a guard rebuilt empty would block the tools that
 // session already unlocked. Empty for every other phase.
-func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []string) armedGuard {
+func (r *Runner) guardFor(ph phase.Phase, iteration int, surface *tools.Surface, loaded []string) armedGuard {
 	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
 	// matched over: a guard is armed only where the session can satisfy it,
 	// and a loader the phase never activated is one its model may not reach.
@@ -1524,7 +1524,7 @@ func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []strin
 	guard.Restore(loaded)
 	return armedGuard{
 		guard: guard,
-		wrap:  &reportingGuard{guard: guard, emit: r.emitter(), phase: ph},
+		wrap:  &reportingGuard{guard: guard, emit: r.emitter(), phase: ph, iteration: iteration},
 	}
 }
 
