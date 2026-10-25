@@ -109,7 +109,8 @@ test("the Make row's chip names the adopted brand and leads to where it is set",
 
 test("with no brand, an administrator is offered the setup and anyone else nothing", async () => {
   mount(<BrandMakeChip />, ["admin"], null);
-  expect(await screen.findByRole("link", { name: /Set up your brand/ })).toBeTruthy();
+  const setUp = await screen.findByRole("link", { name: /Set up your brand/ });
+  expect(setUp.getAttribute("href")).toBe("#/company/brand/setup");
   cleanup();
   mount(
     <>

@@ -123,6 +123,7 @@ const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
 const Principles = lazyScreen("settings", (m) => m.Principles);
 const Brand = lazyScreen("brand", (m) => m.BrandPage);
+const BrandSetup = lazyScreen("brand", (m) => m.BrandSetup);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Models = lazyScreen("settings", (m) => m.Models);
 const Tools = lazyScreen("settings", (m) => m.Tools);
@@ -233,6 +234,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Principles />;
     case "brand":
       return <Brand />;
+    case "brand-setup":
+      return <BrandSetup />;
     case "integrations":
       // ONE PAGE FOR EVERY SELECTION, never keyed on it: the directory holds
       // its place and its readings while the detail beside it changes.

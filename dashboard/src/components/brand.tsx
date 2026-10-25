@@ -26,10 +26,14 @@ import { fmtDate } from "~/lib/format.ts";
 /** Where the company's brand is shown and set. */
 export const BRAND_PAGE: readonly string[] = ["company", "brand"];
 
+/** Where the company's brand is set up, step by step. */
+export const BRAND_SETUP: readonly string[] = [...BRAND_PAGE, "setup"];
+
 /**
- * The Make row's brand chip: the adopted brand's mark and name, or, for an
- * administrator while none is adopted, the way to set one up. Nothing for
- * anyone else while none is.
+ * The Make row's brand chip: the adopted brand's mark and name, leading to
+ * Company › Brand, or, for an administrator while none is adopted, the way
+ * to set one up (the setup page itself). Nothing for anyone else while none
+ * is.
  */
 export function BrandMakeChip() {
   const viewer = useViewer();
@@ -37,7 +41,7 @@ export function BrandMakeChip() {
   if (adoption === undefined) return null;
   if (adoption === null) {
     return mayAdoptBrand(viewer) ? (
-      <BrandChip href={href(BRAND_PAGE)} label="Set up your brand" />
+      <BrandChip href={href(BRAND_SETUP)} label="Set up your brand" />
     ) : null;
   }
   return (

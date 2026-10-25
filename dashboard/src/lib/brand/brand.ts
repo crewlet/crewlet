@@ -404,7 +404,10 @@ function faceOf(value: unknown): BrandFace | null {
     );
   }
   if (value.licensed === true) face.licensed = true;
-  return face.kit || face.stack || face.family ? face : null;
+  if (face.kit || face.stack || face.family) return face;
+  // AN EMPTY FACE (`{}`) is one a draft has not chosen: the kit's own, as the
+  // engine reads it at publish and at adoption.
+  return face.files?.length || face.licensed ? null : DEFAULT_FACE;
 }
 
 /**

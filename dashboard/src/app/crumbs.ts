@@ -221,15 +221,16 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       // Company heading, and the trail says both. The group is not a link: it
       // would lead to the page it is on.
       return [{ label: rootLabel(row), icon: row.icon }, { label: row.label }];
-    case "brand": {
+    case "brand":
+    case "brand-setup": {
       // THE COMPANY'S BRAND SITS BESIDE ITS PRINCIPLES, and its trail reads
       // as theirs does: Company › Brand, the group under the landing's glyph
-      // and, as there, not a link.
+      // and, as there, not a link. Its setup adds a crumb, and Brand becomes
+      // the way back.
       const landing = workspaceRow("company");
-      return [
-        { label: landing ? rootLabel(landing) : "Company", icon: landing?.icon ?? row.icon },
-        { label: row.label },
-      ];
+      const group = { label: landing ? rootLabel(landing) : "Company", icon: landing?.icon ?? row.icon };
+      if (where.screen === "brand") return [group, { label: row.label }];
+      return [group, { label: row.label, path: row.path }, { label: "Set up" }];
     }
     case "home":
     case "inbox":

@@ -199,6 +199,7 @@ export type FramedScreen =
   | { screen: "item"; id: string }
   | { screen: "principles" }
   | { screen: "brand" }
+  | { screen: "brand-setup" }
   | { screen: "org-chart" }
   | { screen: "roster" }
   | { screen: "teams"; unit?: string }
@@ -407,7 +408,11 @@ function company(rest: string[], screen: Make, under: Under): Route {
     case "principles":
       return tail.length ? none("company", "Principles") : screen({ screen: "principles" });
     case "brand":
-      return tail.length ? none("brand", "Brand") : screen({ screen: "brand" });
+      // ONE PAGE UNDER IT, the brand's setup: a full page of its own, never a
+      // dialog over the Brand page.
+      if (tail.length === 0) return screen({ screen: "brand" });
+      if (tail.length === 1 && tail[0] === "setup") return screen({ screen: "brand-setup" });
+      return none("brand", "Brand");
     case "org":
       return org(tail, screen, under);
     case "schedules":

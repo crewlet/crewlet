@@ -207,14 +207,28 @@ function namedPaths(doc: BrandDocument): string[] {
 }
 
 /**
+ * Where a draft save of a kit already published may carry files from: its
+ * latest saved version, and each file a save already brought (by the path it
+ * was saved at), so a file picked once is uploaded once.
+ */
+export interface DraftCarry {
+  version: number;
+  saved: ReadonlyMap<string, File>;
+}
+
+/**
  * The files a save of `edit` brings: every path its document names, each from
- * the edit or, untouched, from `base`. Rejects naming the first path neither
- * holds, which a save says rather than publishing a kit that misses a file.
+ * the edit or, untouched, from `base`. With `carry` (a setup's draft saves), a
+ * file the kit's latest version already holds is carried from that version
+ * (`{path, from}`), no byte moved and none read; only a file picked since the
+ * last save travels. Rejects naming the first path nothing holds, which a save
+ * says rather than publishing a kit that misses a file.
  */
 export async function saveFiles(
   base: BrandSource | null,
   edit: BrandEdit,
   signal?: AbortSignal,
+  carry?: DraftCarry,
 ): Promise<BrandSaveFile[]> {
   const out: BrandSaveFile[] = [];
   const seen = new Set<string>();
@@ -222,8 +236,13 @@ export async function saveFiles(
     if (seen.has(path)) continue;
     seen.add(path);
     const own = edit.files.get(path);
-    if (own) {
+    const kept = carry !== undefined && carry.version > 0;
+    if (own && !(kept && carry.saved.get(path) === own)) {
       out.push({ path, body: own });
+      continue;
+    }
+    if (kept) {
+      out.push({ path, from: carry.version });
       continue;
     }
     const held = base?.files.get(path);

@@ -130,6 +130,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   me: "me",
   principles: "settings",
   brand: "brand",
+  "brand-setup": "brand",
   "org-chart": "agents",
   roster: "agents",
   teams: "agents",

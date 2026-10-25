@@ -1152,6 +1152,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "shared",
   "folders",
   "new",
+  "setup",
 ];
 
 /**

@@ -1,0 +1,419 @@
+/**
+ * Company › Brand › Set up (`#/company/brand/setup`): the company's brand set
+ * up in six steps, never in a dialog.
+ *
+ * # Every Continue is a draft
+ *
+ * Continue saves the step into a draft version of the company's kit (a
+ * publish, never an adoption); the first Continue makes the kit, shared with
+ * the company to view. A setup left and opened again resumes at the first step
+ * that is not done ([resumeStep]) with everything it saved. Each save is keyed,
+ * and a save whose answer nobody knows is sent again with the same keys.
+ *
+ * # How it ends
+ *
+ * An administrator, a person, finishes with **Adopt as the company brand**
+ * (the engine asks for a recent sign-in when the proof is stale); a person the
+ * kit is shared with to edit finishes with **Save for review**, a draft an
+ * administrator adopts from the Brand page. Both ask first that every
+ * low-contrast pair is acknowledged; the one pair that blocks an adoption
+ * holds the Colours step itself.
+ *
+ * # One page of the kit's parts
+ *
+ * The steps are the Brand page's card editors (`BrandEditors.tsx`), so a
+ * value is chosen and refused the same way in both, and the preview beside
+ * them is the Brand page's, drawing the draft as it stands.
+ */
+
+import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  Button,
+  Card,
+  ConfirmModal,
+  EditingStatus,
+  EmptyState,
+  SetupWizard,
+  Skeleton,
+  useAnnouncer,
+  useToast,
+  type StepperStatus,
+} from "@crewlethq/ui";
+import { SwatchBookGlyph } from "@crewlethq/icons/glyphs";
+import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
+import { useKeyedGesture } from "~/lib/keyedWrite.ts";
+import { adoptBrand, type BrandSaveFile } from "~/lib/brand/api.ts";
+import { serializeBrandDocument, type BrandLogoSlot } from "~/lib/brand/brand.ts";
+import { draftSource, saveFiles, type BrandEdit } from "~/lib/brand/draft.ts";
+import {
+  SETUP_STEPS,
+  nextStep,
+  previousStep,
+  resumeStep,
+  stepAttention,
+  stepDone,
+  stepSpec,
+  type SetupStepId,
+} from "~/lib/brand/setup.ts";
+import { adoptionProblem, partProblem } from "~/lib/brand/validate.ts";
+import { useBrandAssets } from "~/lib/brand/useBrand.ts";
+import { useBrandDraftSave } from "~/lib/brand/useBrandSave.ts";
+import { BRAND_PAGE } from "~/components/brand.tsx";
+import { BrandPreview } from "../BrandPreview.tsx";
+import {
+  ColoursStep,
+  IdentityStep,
+  LogosStep,
+  ReviewStep,
+  TypographyStep,
+  VoiceStep,
+  setupWarnings,
+  warningKey,
+} from "./steps.tsx";
+import { useSetupTarget, type SetupTarget } from "./useSetupTarget.ts";
+
+const TITLE = "Set up your brand";
+
+export function BrandSetup() {
+  const read = useSetupTarget();
+  if (read.state === "loading") {
+    return (
+      <div aria-busy="true">
+        <Card>
+          <Skeleton variant="text" rows={8} label="Loading the brand setup" />
+        </Card>
+      </div>
+    );
+  }
+  if (read.state === "refused") {
+    return (
+      <Card>
+        <EmptyState
+          icon={<SwatchBookGlyph size="lg" />}
+          title="Only an administrator sets up the brand"
+          description="An administrator, or a person the brand kit is shared with to edit, sets up the company's brand."
+        />
+      </Card>
+    );
+  }
+  // OPENED AFRESH for another kit or version: what the setup holds is the
+  // draft it opened on.
+  return <SetupFlow key={read.target.key} target={read.target} admin={read.admin} />;
+}
+
+/** What the setup last saved: the kit, its version, the document's text, the files it brought, and when. */
+interface Saved {
+  kit: string | null;
+  version: number;
+  head: number;
+  text: string;
+  files: ReadonlyMap<string, File>;
+  at: Date | null;
+}
+
+/** The logo slots an engine refusal names, by the path each logo is saved at. */
+function refusedLogos(
+  findings: unknown,
+  doc: BrandEdit["document"],
+): Partial<Record<BrandLogoSlot, string>> {
+  const out: Partial<Record<BrandLogoSlot, string>> = {};
+  if (!Array.isArray(findings)) return out;
+  for (const f of findings as { path?: unknown; message?: unknown; line?: unknown }[]) {
+    const slot = (Object.keys(doc.logos) as BrandLogoSlot[]).find((s) => doc.logos[s] === f.path);
+    if (!slot || typeof f.message !== "string") continue;
+    out[slot] = typeof f.line === "number" ? `Line ${f.line}: ${f.message}` : f.message;
+  }
+  return out;
+}
+
+function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
+  const nav = useNavigator();
+  const toast = useToast();
+  const announce = useAnnouncer();
+  const draftSave = useBrandDraftSave();
+  const adopt = useKeyedGesture();
+  const body = useRef<HTMLDivElement>(null);
+
+  const initial: BrandEdit = useMemo(
+    () => ({ document: target.document, files: new Map() }),
+    [target.document],
+  );
+  const [edit, setEdit] = useState<BrandEdit>(initial);
+  const [step, setStep] = useState<SetupStepId>(() => resumeStep(initial));
+  const [saved, setSaved] = useState<Saved>(() => ({
+    kit: target.kit,
+    version: target.version,
+    head: target.head,
+    text: target.kit ? serializeBrandDocument(target.document) : "",
+    files: new Map(),
+    at: null,
+  }));
+  const [refused, setRefused] = useState<Partial<Record<BrandLogoSlot, string>>>({});
+  const [said, setSaid] = useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(new Set());
+  const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
+  const [finishing, setFinishing] = useState(false);
+
+  const source = useMemo(() => draftSource(target.source, edit), [target.source, edit]);
+  const assets = useBrandAssets(source);
+
+  const dirty =
+    serializeBrandDocument(edit.document) !== saved.text ||
+    [...edit.files].some(([path, file]) => saved.files.get(path) !== file);
+
+  useLeaveGuard(
+    dirty && !finishing
+      ? (_to, leave) => {
+          setLeaving({ leave });
+          return true;
+        }
+      : null,
+  );
+
+  /** Save the draft as it stands, when anything changed; true once it is saved. */
+  const save = useCallback(async (): Promise<boolean> => {
+    if (!dirty) return true;
+    setSaid(null);
+    let files: BrandSaveFile[];
+    try {
+      files = await saveFiles(target.source, edit, undefined, {
+        version: saved.kit ? saved.version : 0,
+        saved: saved.files,
+      });
+    } catch (err) {
+      setSaid(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+    const answer = await draftSave.run({
+      kit: saved.kit,
+      head: saved.head,
+      title: `${edit.document.name.trim()} brand`,
+      document: edit.document,
+      files,
+    });
+    if (!answer) return false;
+    if (answer.kind === "saved") {
+      setRefused({});
+      setSaved({
+        kit: answer.kit,
+        version: answer.version,
+        head: answer.version,
+        text: serializeBrandDocument(edit.document),
+        files: new Map(edit.files),
+        at: new Date(),
+      });
+      return true;
+    }
+    if (answer.kind === "refused") setRefused(refusedLogos(answer.error?.body.findings, edit.document));
+    setSaid(answer.text);
+    announce(answer.text);
+    return false;
+  }, [dirty, target.source, edit, saved, draftSave, announce]);
+
+  /** Hold a step that cannot be saved: focus its first refused field and say why. */
+  const hold = (problem: string) => {
+    setSaid(problem);
+    announce(problem);
+    const field =
+      body.current?.querySelector<HTMLElement>('[aria-invalid="true"]') ??
+      body.current?.querySelector<HTMLElement>("input, button");
+    field?.focus();
+  };
+
+  const go = async (to: SetupStepId) => {
+    const part = stepSpec(step).part;
+    const problem = part ? partProblem(part, edit) : undefined;
+    const forward = SETUP_STEPS.findIndex((s) => s.id === to) > SETUP_STEPS.findIndex((s) => s.id === step);
+    if (forward && problem) return hold(problem);
+    if (!problem && !(await save())) return;
+    setSaid(null);
+    setStep(to);
+  };
+
+  const warnings = setupWarnings(edit.document);
+  const unacknowledged = warnings.filter((w) => !acknowledged.has(warningKey(w))).length;
+  const ready = adoptionProblem(edit.document);
+  const finishHold =
+    ready ??
+    (unacknowledged > 0
+      ? `Confirm the ${unacknowledged === 1 ? "contrast warning" : `${unacknowledged} contrast warnings`} first.`
+      : undefined);
+
+  const finish = async () => {
+    if (finishHold) return hold(finishHold);
+    if (!(await save())) return;
+    if (!admin) {
+      setFinishing(true);
+      toast.ok("Saved for review. An administrator adopts it from the Brand page.");
+      nav.to(BRAND_PAGE);
+      return;
+    }
+    const kit = saved.kit;
+    if (!kit) return;
+    const answer = await adopt.run(adoptBrand(kit, saved.version));
+    if (answer?.kind === "done") {
+      setFinishing(true);
+      toast.ok(`The ${edit.document.name.trim()} brand is adopted`);
+      nav.to(BRAND_PAGE);
+    } else if (answer) {
+      setSaid(answer.text);
+      announce(answer.text);
+    }
+  };
+
+  const saveDraft = async () => {
+    if (await save()) toast.ok("Draft saved");
+  };
+
+  // ENTER CONTINUES from a one-line field, when the field did not take the
+  // key itself (a list's field adds a line on Enter).
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Enter" || e.defaultPrevented || e.nativeEvent.isComposing) return;
+    const field = e.target as HTMLElement;
+    if (field.tagName !== "INPUT") return;
+    const type = (field as HTMLInputElement).type;
+    if (type === "checkbox" || type === "color" || type === "file" || type === "radio") return;
+    if (step === "review") return;
+    e.preventDefault();
+    void go(nextStep(step));
+  };
+
+  const steps = SETUP_STEPS.map((s) => {
+    const status: StepperStatus =
+      s.id === step
+        ? "current"
+        : stepAttention(s.id, edit, Object.keys(refused).length > 0)
+          ? "attention"
+          : stepDone(s.id, edit)
+            ? "done"
+            : s.optional
+              ? "optional"
+              : "upcoming";
+    return { id: s.id, label: s.label, status };
+  });
+
+  const busy = draftSave.busy || adopt.busy;
+  const spec = stepSpec(step);
+  const footer =
+    step === "review" ? (
+      <>
+        <Button variant="ghost" onClick={() => void go(previousStep(step))}>
+          Back
+        </Button>
+        <Button variant="secondary" loading={draftSave.busy} onClick={() => void saveDraft()}>
+          Save as draft
+        </Button>
+        <Button variant="primary" loading={busy} onClick={() => void finish()}>
+          {admin ? "Adopt as the company brand" : "Save for review"}
+        </Button>
+      </>
+    ) : (
+      <>
+        {step !== "identity" ? (
+          <Button variant="ghost" onClick={() => void go(previousStep(step))}>
+            Back
+          </Button>
+        ) : null}
+        {spec.optional ? (
+          <Button variant="ghost" onClick={() => setStep(nextStep(step))}>
+            Skip for now
+          </Button>
+        ) : null}
+        <Button variant="primary" loading={draftSave.busy} onClick={() => void go(nextStep(step))}>
+          Continue
+        </Button>
+      </>
+    );
+
+  const editorProps = { edit, onEdit: setEdit, assets };
+  return (
+    <>
+      <SetupWizard
+        title={TITLE}
+        headingLevel={2}
+        status={
+          <EditingStatus
+            dirty={dirty}
+            saving={draftSave.busy}
+            {...(saved.at ? { savedAt: saved.at } : {})}
+            labels={{ editing: "Draft", saved: "Draft saved" }}
+          />
+        }
+        exit={
+          <Button variant="ghost" onClick={() => nav.to(BRAND_PAGE)}>
+            Exit
+          </Button>
+        }
+        steps={steps}
+        current={step}
+        onSelectStep={(id: string) => void go(id as SetupStepId)}
+        stepsLabel="Brand setup"
+        aside={
+          step === "review" ? undefined : (
+            <BrandPreview
+              document={edit.document}
+              assets={assets}
+              draft
+              title="Preview of your draft"
+            />
+          )
+        }
+        asideLabel="Preview of your draft"
+        asideToggleLabel="Preview"
+        footer={footer}
+      >
+        <div ref={body} onKeyDown={onKeyDown}>
+          {step === "identity" ? (
+            <IdentityStep edit={edit} onEdit={setEdit} />
+          ) : step === "logos" ? (
+            <LogosStep {...editorProps} refused={refused} />
+          ) : step === "colours" ? (
+            <ColoursStep edit={edit} onEdit={setEdit} />
+          ) : step === "type" ? (
+            <TypographyStep {...editorProps} />
+          ) : step === "voice" ? (
+            <VoiceStep {...editorProps} />
+          ) : (
+            <ReviewStep
+              edit={edit}
+              assets={assets}
+              onEditStep={(to) => setStep(to)}
+              acknowledged={acknowledged}
+              onAcknowledge={(key, on) =>
+                setAcknowledged((was) => {
+                  const next = new Set(was);
+                  if (on) next.add(key);
+                  else next.delete(key);
+                  return next;
+                })
+              }
+            />
+          )}
+          {said ? (
+            <p className="brand-refusal" role="alert">
+              {said}
+            </p>
+          ) : null}
+          {step === "review" && finishHold ? (
+            <p className="brand-setup-hold">{finishHold}</p>
+          ) : null}
+        </div>
+      </SetupWizard>
+      <ConfirmModal
+        open={leaving !== null}
+        onClose={() => setLeaving(null)}
+        onConfirm={() => {
+          const go = leaving?.leave;
+          setLeaving(null);
+          setFinishing(true);
+          go?.();
+        }}
+        title="Leave the setup?"
+        message="Your changes to this step are not saved. Every step you continued from is kept as a draft."
+        confirmLabel="Leave"
+        cancelLabel="Keep editing"
+        destructive
+      />
+    </>
+  );
+}

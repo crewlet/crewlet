@@ -467,7 +467,7 @@ function FaceEditor({
             </Text>
           ) : null}
           <Checkbox
-            label="The company holds a licence to embed this family in what it publishes"
+            label="We hold a licence that permits embedding this font on the web"
             checked={face.licensed === true}
             onCheckedChange={(checked) => setFace({ ...face, licensed: checked })}
           />

@@ -22,6 +22,13 @@
  * notice under the header. A reader who may not adopt is handed no control at
  * all.
  *
+ * # Setting it up
+ *
+ * The brand is set up on a page of its own (`#/company/brand/setup`, six
+ * steps), entered from the empty state, from the notice over a draft a setup
+ * left ("Continue setting up") and from the bar ("Run setup again"). A draft
+ * that lacks what an adoption requires says so wherever it is offered.
+ *
  * # Nothing is claimed before the brand arrives
  *
  * "No brand yet" is a statement about the company, so the page draws a
@@ -59,7 +66,6 @@ import { artifactPath } from "~/app/routes.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useViewer } from "~/lib/viewer.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
 import { fmtDate } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
@@ -75,6 +81,8 @@ import {
   type BrandAssets,
 } from "~/lib/brand/useBrand.ts";
 import { useBrandSave } from "~/lib/brand/useBrandSave.ts";
+import { draftReadiness } from "~/lib/brand/validate.ts";
+import { BRAND_SETUP } from "~/components/brand.tsx";
 import {
   BRAND_CARDS,
   BrandCard,
@@ -96,7 +104,7 @@ import {
 import { BrandPreview } from "./BrandPreview.tsx";
 import { AdoptDialog } from "./AdoptDialog.tsx";
 import { ReviewAdopt } from "./ReviewAdopt.tsx";
-import { SetupDialog } from "./SetupDialog.tsx";
+import { useCompanyKit, type CompanyKit } from "./useCompanyKit.ts";
 
 const DESCRIPTION = "How the company looks and sounds in every doc, deck and page its agents make.";
 
@@ -127,14 +135,20 @@ export function BrandPage() {
   const viewer = useViewer();
   const brand = useBrand();
   const adoption = brand.adoption;
-  const org = useOrg();
   const people = useArtifactPeople();
   // ADOPTING IS AN ADMINISTRATOR'S, AND A PERSON'S (`artifacts.brand.adopt`):
   // an agent never holds admin, and the page offers it no control.
   const canAdopt = mayAdoptBrand(viewer);
+  // THE DRAFT IS READ for whoever may continue it: an administrator, or with
+  // none adopted the editor whose kit it is. Anybody else is told only that a
+  // newer version exists, by the adoption itself.
+  const company = useCompanyKit(adoption, canAdopt, { read: canAdopt || adoption === null });
+  // THE DRAFT A SETUP LEFT (or an agent or an editor published), where one
+  // stands unadopted: what the notice under the header offers.
+  const draft = company?.draft ? company : null;
 
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [confirming, setConfirming] = useState<"save" | "clear" | "setup" | null>(null);
+  const [confirming, setConfirming] = useState<"save" | "clear" | null>(null);
   const [reviewing, setReviewing] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
@@ -212,22 +226,23 @@ export function BrandPage() {
           {notice}
         </Callout>
       ) : null}
-      {adoption?.newer_version ? (
-        <NewerNotice
+      {draft && adoption !== undefined ? (
+        <DraftNotice
           adoption={adoption}
-          by={adoption.newer_by ? actorName(adoption.newer_by, people.seatName) : ""}
+          draft={draft}
+          by={adoption?.newer_by ? actorName(adoption.newer_by, people.seatName) : ""}
           canAdopt={canAdopt}
-          onReview={() => setReviewing(adoption.newer_version ?? null)}
+          onReview={() => setReviewing(draft.version)}
         />
       ) : null}
-      {adoption === undefined ? (
+      {adoption === undefined || (adoption === null && company === undefined) ? (
         <div aria-busy="true">
           <Card>
             <Skeleton variant="text" rows={6} label="Loading the company's brand" />
           </Card>
         </div>
       ) : adoption === null ? (
-        <NoBrand canAdopt={canAdopt} onSetUp={() => setConfirming("setup")} />
+        <NoBrand canAdopt={canAdopt} drafting={draft !== null} />
       ) : (
         <Cards
           adoption={adoption}
@@ -239,16 +254,6 @@ export function BrandPage() {
         />
       )}
 
-      {confirming === "setup" ? (
-        <SetupDialog
-          company={org?.name ?? ""}
-          onClose={() => setConfirming(null)}
-          onAdopted={(text) => {
-            setNotice(text);
-            refreshed();
-          }}
-        />
-      ) : null}
       {confirming === "save" && editing && adoption ? (
         <SaveDialog
           adoption={adoption}
@@ -267,9 +272,9 @@ export function BrandPage() {
           onCleared={refreshed}
         />
       ) : null}
-      {reviewing !== null && adoption ? (
+      {reviewing !== null && draft && adoption !== undefined ? (
         <ReviewAdopt
-          kit={adoption.kit}
+          kit={draft.kit}
           version={reviewing}
           adoption={adoption}
           onClose={() => setReviewing(null)}
@@ -308,7 +313,16 @@ export function BrandPage() {
 function BarActions({ adoption, onClear }: { adoption: Adoption; onClear: () => void }) {
   const nav = useNavigator();
   const openKit = () => nav.to(artifactPath(adoption.kit));
+  // THE SETUP AGAIN, prefilled from the kit where it stands: every part in
+  // one walk, where a card changes one.
+  const setUp = () => nav.to(BRAND_SETUP);
   usePageMenu([
+    {
+      key: "setup",
+      label: "Run setup again",
+      icon: <WandSparklesGlyph size="sm" />,
+      onSelect: setUp,
+    },
     {
       key: "kit",
       label: "Open the brand kit",
@@ -340,6 +354,12 @@ function BarActions({ adoption, onClear }: { adoption: Adoption; onClear: () => 
           align="end"
           items={[
             {
+              key: "setup",
+              label: "Run setup again",
+              icon: <WandSparklesGlyph size="sm" />,
+              onSelect: setUp,
+            },
+            {
               key: "kit",
               label: "Open the brand kit",
               icon: <ExternalLinkGlyph size="sm" />,
@@ -360,41 +380,75 @@ function BarActions({ adoption, onClear }: { adoption: Adoption; onClear: () => 
   );
 }
 
-/** A version of the kit newer than the adopted one: who published it, and a way to review it. */
-function NewerNotice({
+/**
+ * A draft of the kit nobody adopted yet: a version newer than the adopted one,
+ * or, with none adopted, the draft a setup left. Who published it, whether it
+ * is ready to adopt, and the ways on: continuing its setup, and reviewing and
+ * adopting it for an administrator once it is ready.
+ */
+function DraftNotice({
   adoption,
+  draft,
   by,
   canAdopt,
   onReview,
 }: {
-  adoption: Adoption;
+  adoption: Adoption | null;
+  draft: CompanyKit;
   by: string;
   canAdopt: boolean;
   onReview: () => void;
 }) {
+  const doc = draft.read.document;
+  const readiness = doc ? draftReadiness(doc) : undefined;
   const who = by ? ` by ${by}` : "";
+  const what = adoption
+    ? `Version ${draft.version}${who} is newer than the adopted version ${adoption.kit_version}.`
+    : doc
+      ? `A draft of the ${doc.name.trim() || "company"} brand is in progress.`
+      : "A draft of the company's brand is in progress.";
+  // CONTINUING IS AN ADMINISTRATOR'S, or, with none adopted, the editor's
+  // whose draft this is (the company kit is found among the kits they may
+  // write); REVIEWING is held from a draft the engine would refuse.
+  const mayContinue = canAdopt || adoption === null;
+  const mayReview = canAdopt && readiness === undefined;
   return (
     <Callout
       variant="info"
+      icon={<WandSparklesGlyph size="sm" />}
       action={
-        canAdopt ? (
-          <Button size="small" variant="secondary" onClick={onReview}>
-            Review and adopt
-          </Button>
+        mayContinue || mayReview ? (
+          <>
+            {mayContinue ? (
+              <ButtonLink href={href(BRAND_SETUP)} size="small" variant="secondary">
+                Continue setting up
+              </ButtonLink>
+            ) : null}
+            {mayReview ? (
+              <Button size="small" variant="secondary" onClick={onReview}>
+                Review and adopt
+              </Button>
+            ) : null}
+          </>
         ) : undefined
       }
     >
-      {`Version ${adoption.newer_version}${who} is newer than the adopted version ${adoption.kit_version}.`}
-      {canAdopt ? "" : " An administrator can review and adopt it."}
+      {what}
+      {readiness ? ` ${readiness}` : ""}
+      {canAdopt || readiness ? "" : " An administrator can review and adopt it."}
     </Callout>
   );
 }
 
-/** No brand is adopted: the way to set one up for an administrator, and what that means for everyone else. */
-function NoBrand({ canAdopt, onSetUp }: { canAdopt: boolean; onSetUp: () => void }) {
+/**
+ * No brand is adopted: the way to set one up for an administrator, and what
+ * that means for everyone else. While a draft is in progress its notice
+ * carries the way on, and the empty state offers no second one.
+ */
+function NoBrand({ canAdopt, drafting }: { canAdopt: boolean; drafting: boolean }) {
   return (
     <>
-      {canAdopt ? (
+      {canAdopt && !drafting ? (
         <Callout variant="info" icon={<WandSparklesGlyph size="sm" />}>
           Add your logo, colours and type, and every doc, deck and page your agents make will look
           like yours.
@@ -406,10 +460,14 @@ function NoBrand({ canAdopt, onSetUp }: { canAdopt: boolean; onSetUp: () => void
           title="No brand yet"
           description="Artifacts use Crewlet's look until an administrator adds the company's logo, colours and type."
           action={
-            canAdopt ? (
-              <Button variant="primary" leadingIcon={<PlusGlyph size="sm" />} onClick={onSetUp}>
+            canAdopt && !drafting ? (
+              <ButtonLink
+                href={href(BRAND_SETUP)}
+                variant="primary"
+                leadingIcon={<PlusGlyph size="sm" />}
+              >
                 Set up your brand
-              </Button>
+              </ButtonLink>
             ) : undefined
           }
         />

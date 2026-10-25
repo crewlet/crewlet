@@ -1,12 +1,10 @@
 /**
  * Which kit, and which of its versions, the brand setup opens on.
  *
- * - With a brand adopted, the company's kit: its newest version, so a draft a
- *   setup left (or an agent or an editor published) is where the setup
- *   continues, and the adopted version otherwise ("Run setup again").
- * - With none adopted, the draft a setup left: the most recently changed brand
- *   kit the reader may write ([draftKit]).
- * - With neither, nothing yet: the first Continue makes the kit.
+ * The company's kit where it stands ([useCompanyKit]): a draft a setup left
+ * (or an agent or an editor published) is where the setup continues, the
+ * adopted version otherwise ("Run setup again"), and with no kit at all the
+ * first Continue makes one.
  *
  * WHO MAY RUN IT: an administrator, or a person the kit is shared with to
  * edit, who finishes with Save for review. A reader who is neither is told
@@ -17,14 +15,12 @@ import { useMemo } from "react";
 import type { BrandDocument } from "~/protocol/index.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useRest } from "~/lib/useRest.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { versionText } from "~/lib/artifacts/api.ts";
 import { roleIncludes } from "~/lib/artifacts/words.ts";
-import { BRAND_ENTRY } from "~/lib/brand/api.ts";
-import { mayAdoptBrand, parseBrandDocument } from "~/lib/brand/brand.ts";
-import { blankBrand, draftKit } from "~/lib/brand/setup.ts";
-import { adoptionSource, useBrand, versionSource, type BrandSource } from "~/lib/brand/useBrand.ts";
+import { mayAdoptBrand } from "~/lib/brand/brand.ts";
+import { blankBrand } from "~/lib/brand/setup.ts";
+import { adoptionSource, useBrand, type BrandSource } from "~/lib/brand/useBrand.ts";
+import { useCompanyKit } from "../useCompanyKit.ts";
 
 /** Where the setup opens: the kit, its version, the head a save is decided against, and the draft. */
 export interface SetupTarget {
@@ -46,39 +42,19 @@ export type SetupTargetRead =
   | { state: "refused" }
   | { state: "ready"; target: SetupTarget; admin: boolean };
 
-/** The brand kits a setup may continue, newest first: enough to find the draft a setup left. */
-const KITS_QUERY = { scope: "all", kind: "brand", sort: "updated", "max-keys": 20 } as const;
-
 export function useSetupTarget(): SetupTargetRead {
   const viewer = useViewer();
   const org = useOrg();
   const admin = mayAdoptBrand(viewer);
-  const brand = useBrand();
-  const adoption = brand.adoption;
-  const kits = useQuery("artifacts", { ...KITS_QUERY }, { enabled: adoption === null });
-  const draft = useMemo(
-    () => (kits.data ? draftKit(kits.data.contents, admin) : null),
-    [kits.data, admin],
-  );
-  const kit = adoption ? adoption.kit : (draft?.id ?? null);
-  const version = adoption
-    ? (adoption.newer_version ?? adoption.kit_version)
-    : (draft?.head_number ?? 0);
+  const adoption = useBrand().adoption;
+  const company = useCompanyKit(adoption, admin);
+  const kit = company?.kit ?? null;
+  const version = company?.version ?? 0;
   const detail = useQuery("artifact", { id: kit ?? "" }, { enabled: kit !== null });
-  const manifest = useQuery(
-    "artifact_version",
-    { id: kit ?? "", n: version },
-    { enabled: kit !== null && version > 0 },
-  );
-  const read = useRest(
-    kit && version > 0 ? `brand-setup:${kit}:${version}` : null,
-    async (signal) => parseBrandDocument(await versionText(kit!, version, BRAND_ENTRY, signal)),
-  );
 
   return useMemo((): SetupTargetRead => {
-    if (adoption === undefined || viewer.loading) return { state: "loading" };
-    if (adoption === null && kits.loading) return { state: "loading" };
-    if (kit === null) {
+    if (company === undefined || viewer.loading) return { state: "loading" };
+    if (company === null) {
       // NO KIT YET: making the company's first is an administrator's.
       if (!admin) return { state: "refused" };
       const document = blankBrand(org?.name ?? "");
@@ -88,25 +64,22 @@ export function useSetupTarget(): SetupTargetRead {
         target: { key: "new", kit: null, version: 0, head: 0, document, source: null },
       };
     }
-    if (detail.loading || manifest.loading || read.loading) return { state: "loading" };
+    const read = company.read;
+    if (detail.loading || read.loading) return { state: "loading" };
     const role = detail.data?.role;
     if (!admin && !roleIncludes(role, "editor")) return { state: "refused" };
     const head = detail.data?.head_number ?? version;
-    const doc = read.data;
-    if (doc) {
-      const digests = new Map(
-        (manifest.data?.manifest.files ?? []).map((f) => [f.path, f.object.hash] as const),
-      );
+    if (read.document) {
       return {
         state: "ready",
         admin,
         target: {
           key: `${kit}:${version}`,
-          kit,
+          kit: company.kit,
           version,
           head,
-          document: doc,
-          source: versionSource(kit, version, doc, digests),
+          document: read.document,
+          source: read.source,
         },
       };
     }
@@ -119,7 +92,7 @@ export function useSetupTarget(): SetupTargetRead {
       admin,
       target: {
         key: `${kit}:snapshot`,
-        kit,
+        kit: company.kit,
         version: 0,
         head,
         document,
@@ -128,17 +101,13 @@ export function useSetupTarget(): SetupTargetRead {
     };
   }, [
     adoption,
+    company,
     viewer.loading,
-    kits.loading,
-    kit,
     admin,
     org?.name,
     detail.loading,
     detail.data,
-    manifest.loading,
-    manifest.data,
-    read.loading,
-    read.data,
+    kit,
     version,
   ]);
 }

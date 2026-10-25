@@ -5,7 +5,8 @@
  * AN ADMINISTRATOR'S, A PERSON'S, WITH A RECENT PROOF. The engine asks for the
  * proof when it is stale (`StepUp.tsx`) and the adoption goes through once the
  * person confirms. A pair that refuses an adoption holds the confirm with the
- * engine's own reason; the others are listed for the person to accept.
+ * engine's own reason; the others are listed for the person to accept. A
+ * draft that lacks a primary logo or colour holds it too, saying which.
  */
 
 import type { ReactNode } from "react";
@@ -15,12 +16,11 @@ import type { BrandDocument } from "~/protocol/index.ts";
 import {
   brandChanges,
   brandContrast,
-  refusalWords,
-  refusingPair,
   warningPairs,
   warningWords,
   type LogoDigests,
 } from "~/lib/brand/brand.ts";
+import { adoptionProblem } from "~/lib/brand/validate.ts";
 
 /** What adopting makes public, said in every adopt dialog. */
 export const PUBLIC_FACE =
@@ -57,7 +57,10 @@ export function AdoptDialog({
 }: AdoptDialogProps) {
   const changes = brandChanges(before, after, digests);
   const results = brandContrast(after.colors);
-  const refusing = refusingPair(results);
+  // WHAT HOLDS THE ADOPTION, in the engine's order: a missing primary logo or
+  // colour, then the one pair that refuses.
+  const hold = adoptionProblem(after);
+  const missing = !after.logos.primary || !after.colors.primary;
   const warnings = warningPairs(results);
   return (
     <Modal
@@ -74,7 +77,7 @@ export function AdoptDialog({
             size="small"
             variant="primary"
             loading={busy}
-            disabledReason={refusing ? refusalWords(refusing) : undefined}
+            disabledReason={hold}
             onClick={onConfirm}
           >
             {confirmLabel}
@@ -106,9 +109,12 @@ export function AdoptDialog({
             Nothing changes from the adopted brand.
           </Text>
         )}
-        {refusing ? (
-          <Callout variant="danger" title="This brand cannot be adopted yet">
-            {refusalWords(refusing)}
+        {hold ? (
+          <Callout
+            variant={missing ? "warning" : "danger"}
+            title={missing ? "Draft, not ready to adopt" : "This brand cannot be adopted yet"}
+          >
+            {hold}
           </Callout>
         ) : null}
         {warnings.length > 0 ? (

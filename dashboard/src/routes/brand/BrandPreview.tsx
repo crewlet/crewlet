@@ -64,16 +64,19 @@ export function BrandPreview({
   document,
   assets,
   draft,
+  title = "Preview",
 }: {
   document: BrandDocument;
   assets: BrandAssets;
   /** The sample draws an edit not yet saved, and says so. */
   draft: boolean;
+  /** The card's title, which also names its region. */
+  title?: string;
 }) {
   const [kind, setKind] = useState<BrandSampleKind>("doc");
   const [mode, setMode] = useState<BrandSampleMode>("light");
   return (
-    <Card as="section" className="brand-preview" aria-label="Preview">
+    <Card as="section" className="brand-preview" aria-label={title}>
       <Card.Header
         actions={
           <span className="brand-preview-controls">
@@ -95,7 +98,7 @@ export function BrandPreview({
           </span>
         }
       >
-        <Card.Title>Preview</Card.Title>
+        <Card.Title>{title}</Card.Title>
       </Card.Header>
       <Card.Body>
         <BrandSampleOf document={document} assets={assets} kind={kind} mode={mode} />

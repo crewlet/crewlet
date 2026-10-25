@@ -10,13 +10,11 @@
 
 import { useMemo } from "react";
 import { Modal, Skeleton, useToast } from "@crewlethq/ui";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useRest } from "~/lib/useRest.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { versionText } from "~/lib/artifacts/api.ts";
-import { adoptBrand, BRAND_ENTRY } from "~/lib/brand/api.ts";
-import { parseBrandDocument, type Adoption } from "~/lib/brand/brand.ts";
-import { adoptionSource, logoDigests, versionSource } from "~/lib/brand/useBrand.ts";
+import { adoptBrand } from "~/lib/brand/api.ts";
+import type { Adoption } from "~/lib/brand/brand.ts";
+import { adoptionSource, logoDigests } from "~/lib/brand/useBrand.ts";
+import { useBrandVersion } from "~/lib/brand/useBrandVersion.ts";
 import { AdoptDialog } from "./AdoptDialog.tsx";
 
 export function ReviewAdopt({
@@ -35,25 +33,12 @@ export function ReviewAdopt({
 }) {
   const toast = useToast();
   const gesture = useKeyedGesture();
-  const read = useRest(`brand-review:${kit}:${version}`, async (signal) => {
-    const doc = parseBrandDocument(await versionText(kit, version, BRAND_ENTRY, signal));
-    if (!doc) throw new Error(`Version ${version} holds no brand this page can read.`);
-    return doc;
-  });
-  const manifest = useQuery("artifact_version", { id: kit, n: version });
-  const digests = useMemo(
-    () =>
-      new Map((manifest.data?.manifest.files ?? []).map((f) => [f.path, f.object.hash] as const)),
-    [manifest.data],
-  );
-  const doc = read.data;
-  const after = useMemo(
-    () => (doc ? logoDigests(versionSource(kit, version, doc, digests)) : {}),
-    [doc, kit, version, digests],
-  );
+  const read = useBrandVersion(kit, version);
+  const doc = read.document;
+  const after = useMemo(() => logoDigests(read.source), [read.source]);
   const before = useMemo(() => logoDigests(adoption ? adoptionSource(adoption) : null), [adoption]);
 
-  if (!doc || manifest.loading) {
+  if (!doc || read.loading) {
     return (
       <Modal open onClose={onClose} title={`Version ${version}`} placement="top">
         {read.error ? (

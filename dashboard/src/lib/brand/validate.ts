@@ -135,16 +135,40 @@ export function partProblem(part: BrandPart, edit: BrandEdit): string | undefine
 }
 
 /**
+ * What a draft lacks that an adoption requires, as the words after "add", or
+ * undefined when it has both: the engine accepts a draft without them and
+ * refuses to adopt one (`missing` in its answer).
+ */
+function missingWords(doc: BrandDocument): string | undefined {
+  const logo = !doc.logos.primary;
+  const colour = !doc.colors.primary;
+  if (logo && colour) return "a primary logo and colour";
+  if (logo) return "a primary logo";
+  if (colour) return "a primary colour";
+  return undefined;
+}
+
+/**
  * What a brand still needs before it can be adopted, as one sentence, or
  * undefined: the primary logo and colour a draft may lack, then the one
  * contrast pair that refuses an adoption.
  */
 export function adoptionProblem(doc: BrandDocument): string | undefined {
-  const logo = !doc.logos.primary;
-  const colour = !doc.colors.primary;
-  if (logo && colour) return "Add a primary logo and colour.";
-  if (logo) return "Add a primary logo.";
-  if (colour) return "Add a primary colour.";
+  const missing = missingWords(doc);
+  if (missing) return `Add ${missing}.`;
   const refusing = refusingPair(brandContrast(doc.colors));
   return refusing ? refusalWords(refusing) : undefined;
+}
+
+/**
+ * A draft's readiness in one sentence, for where a draft is offered: "Draft,
+ * not ready to adopt: add a primary logo and colour." for one that lacks what
+ * an adoption requires, and the refusing pair's reason for one whose text
+ * cannot be read; undefined for a draft ready to adopt.
+ */
+export function draftReadiness(doc: BrandDocument): string | undefined {
+  const missing = missingWords(doc);
+  if (missing) return `Draft, not ready to adopt: add ${missing}.`;
+  const refusing = refusingPair(brandContrast(doc.colors));
+  return refusing ? `Draft, not ready to adopt. ${refusalWords(refusing)}` : undefined;
 }
