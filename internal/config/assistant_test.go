@@ -305,3 +305,26 @@ func TestABrokenAssistantNeverStopsTheCompanyFromApplying(t *testing.T) {
 		t.Error("AssistantChain handed out a chain that keeps the web")
 	}
 }
+
+// A CANDIDATE MODEL IS JUDGED AS A CHAIN MEMBER WOULD BE, before any chain
+// names it: an entry the chain would admit passes, one whose web tools are
+// reachable is refused naming its field, and an entry that is not there is
+// refused naming the key. So `crewlet assistant eval -model` never measures
+// a model the assistant may not run on. Mutation: answer nil for every key and
+// the reachable web passes.
+func TestACandidateAssistantModelIsJudgedAsAChainMember(t *testing.T) {
+	t.Parallel()
+	open := "    open:\n      agent: claude-code\n      model: sonnet\n"
+	cfg := mustCompany(t, assistantCompany(assistantEntry+open, "  enabled: false\n"))
+	if err := cfg.AssistantEntryProblems("assistant"); err != nil {
+		t.Errorf("an entry with its web tools denied was refused: %v", err)
+	}
+	if err := cfg.AssistantEntryProblems("open"); err == nil ||
+		!strings.Contains(err.Error(), "providers.llm.open") {
+		t.Errorf("an entry with its web tools reachable answered %v", err)
+	}
+	if err := cfg.AssistantEntryProblems("missing"); !errors.Is(err, ErrUnknownValue) ||
+		!strings.Contains(err.Error(), `"missing"`) {
+		t.Errorf("an absent entry answered %v", err)
+	}
+}
