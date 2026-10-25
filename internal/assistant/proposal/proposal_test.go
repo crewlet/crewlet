@@ -231,13 +231,17 @@ func TestAProposalsStateNowIsDecidedOnRead(t *testing.T) {
 		t.Errorf("a proposal at its expiry reads %s", got)
 	}
 	for _, state := range []wire.ProposalState{wire.ProposalApproved, wire.ProposalExecuting} {
-		p := assistantdomain.Proposal{State: state, DecidedAt: noon}
+		p := assistantdomain.Proposal{Scope: wire.ScopeServer, State: state, DecidedAt: noon}
 		if got := proposal.StateNow(p, noon.Add(proposal.UnknownAfter-time.Second)); got != state {
 			t.Errorf("a %s proposal still inside its grant reads %s", state, got)
 		}
 		if got := proposal.StateNow(p, noon.Add(proposal.UnknownAfter)); got != wire.ProposalUnknown {
 			t.Errorf("a %s proposal with no settlement past UnknownAfter reads %s", state, got)
 		}
+	}
+	page := assistantdomain.Proposal{Scope: wire.ScopePage, State: wire.ProposalApproved, DecidedAt: noon}
+	if got := proposal.StateNow(page, noon.Add(time.Hour)); got != wire.ProposalApproved {
+		t.Errorf("an unclaimed page action reads %s: nothing was sent, so it is never unknown", got)
 	}
 	if got := proposal.StateNow(assistantdomain.Proposal{State: wire.ProposalApplied},
 		noon.Add(time.Hour)); got != wire.ProposalApplied {
