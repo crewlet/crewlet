@@ -159,6 +159,9 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 	opencodeSeed := func(dir string) []any {
 		return []any{map[string]any{"path": dir + "/opencode.json", "in": "work", "content": "{}"}}
 	}
+	opencodeAppend := func(dir string) map[string]any {
+		return map[string]any{"file": map[string]any{"name": dir + "/AGENTS.md", "discovered": "always"}}
+	}
 	for name, tc := range map[string]struct {
 		agent     string
 		overrides map[string]any
@@ -171,6 +174,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 				`work_config_env moves OPENCODE_CONFIG_DIR from .crewlet-config to .elsewhere`,
 				`seed_files[0].path ".crewlet-config/opencode.json"`,
 				`system_prompt.file.name ".crewlet-config/agents/crewlet-seat.md"`,
+				`append_system_prompt.file.name ".crewlet-config/AGENTS.md"`,
 				"re-root them from .crewlet-config to .elsewhere",
 			},
 		},
@@ -180,14 +184,27 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 				"work_config_env": map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
 				"system_prompt":   opencodePrompt(".elsewhere"),
 			},
+			left: []string{
+				`seed_files[0].path ".crewlet-config/opencode.json"`,
+				`append_system_prompt.file.name ".crewlet-config/AGENTS.md"`,
+			},
+		},
+		"opencode's directory moved with both prompt files but not its policy": {
+			agent: "opencode",
+			overrides: map[string]any{
+				"work_config_env":      map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
+				"system_prompt":        opencodePrompt(".elsewhere"),
+				"append_system_prompt": opencodeAppend(".elsewhere"),
+			},
 			left: []string{`seed_files[0].path ".crewlet-config/opencode.json"`},
 		},
 		"opencode's directory moved with everything under it": {
 			agent: "opencode",
 			overrides: map[string]any{
-				"work_config_env": map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
-				"system_prompt":   opencodePrompt(".elsewhere"),
-				"seed_files":      opencodeSeed(".elsewhere"),
+				"work_config_env":      map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
+				"system_prompt":        opencodePrompt(".elsewhere"),
+				"append_system_prompt": opencodeAppend(".elsewhere"),
+				"seed_files":           opencodeSeed(".elsewhere"),
 			},
 		},
 		"codex's home moved alone": {
@@ -310,7 +327,7 @@ func TestKeptUnderNamesTheFieldsThatMoveWithADirectory(t *testing.T) {
 		want            []string
 	}{
 		{"codex", "CODEX_HOME", []string{"credential_paths", "volatile_paths"}},
-		{"opencode", "OPENCODE_CONFIG_DIR", []string{"seed_files", "system_prompt.file.name"}},
+		{"opencode", "OPENCODE_CONFIG_DIR", []string{"seed_files", "system_prompt.file.name", "append_system_prompt.file.name"}},
 		{"opencode", "OPENCODE_CONFIG_PROJECT_DISABLE", nil},
 		{"codex", "HOME", nil},
 	} {

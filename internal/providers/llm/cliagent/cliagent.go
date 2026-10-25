@@ -408,8 +408,12 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// channel that is a vendor agent file declares that CLI's tool denial in
 	// the same file, so skipping it on a request with no system prompt
 	// would hand the vendor's default agent, and every tool it has, to
-	// exactly the calls that would never notice.
-	if ch := route.Channel; system != "" || ch.File != nil {
+	// exactly the calls that would never notice. A file that would hold the
+	// system prompt and nothing else is written only when there is one
+	// ([cliprofile.SystemPromptFile.CarriesPolicy]): a CLI that reads it on
+	// every run still reads an empty one, and passing no channel is what an
+	// empty system prompt means everywhere else ([SplitSystem]).
+	if ch := route.Channel; system != "" || ch.File.CarriesPolicy() {
 		// One shape or the other — the profile validator refuses a
 		// channel that declares both.
 		switch {

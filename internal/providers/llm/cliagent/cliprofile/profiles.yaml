@@ -588,7 +588,7 @@ opencode:
   # with its usage text, refuses the permissions format below ("V2
   # permissions are not supported by OpenCode V1"), cannot open a database
   # 2.0 created, and keeps its login in a file 2.0 ignores.
-  written_for: "OpenCode 2.0.x, the @opencode/cli package (`opencode --version` prints `opencode v2.0.32`)"
+  written_for: "OpenCode 2.0.x and 2.1.x, the @opencode/cli package, measured on 2.0.32 and 2.1.4 (`opencode --version` prints `opencode v2.1.4`)"
   version_args: ["--version"]
   # `--standalone` IS THE ISOLATION. Without it every `opencode` command
   # starts — or reuses — a background service, detached from the call, on a
@@ -604,14 +604,16 @@ opencode:
   # `--format json` makes failures STRUCTURED: a refused key or a spent plan
   # is an `error` event naming its class (marker_scope, below), where the
   # plain format prints the provider's own sentence, which no sentinel can
-  # match across providers. `--title` names the session, which stops 2.0
+  # match across providers. `--title` names the session, which stops OpenCode
   # making a SECOND billed model call per run to generate a title for a
-  # transcript nobody will ever list.
+  # transcript nobody will ever list: with it, every call made exactly one
+  # model request on 2.0.32 and 2.1.4.
   complete_args: ["run", "--standalone", "--print-logs=false", "--format", "json", "--title", "crewlet"]
   # THE ONLY CONFIGURATION A CALL READS IS ITS OWN. OpenCode also reads
-  # PROJECT configuration — `opencode.json`, and `.opencode/` agents, skills
-  # and plugins — from the working directory and EVERY ANCESTOR of it, and a
-  # project's permissions beat the global ones. The per-call directory is
+  # PROJECT configuration — `opencode.json`, `.opencode/` agents, skills and
+  # plugins, and the skills under `.claude/` and `.agents/` — from the working
+  # directory and EVERY ANCESTOR of it, and a project's permissions beat the
+  # global ones. The per-call directory is
   # <state_dir>/<agent>/seats/<seat>/work/<call>, and state_dir defaults to a
   # directory under the engine user's home, so whatever sits above it was
   # configuration for every seat. Measured on 2.0.32 with this profile's
@@ -626,32 +628,67 @@ opencode:
   # CALL'S OWN DIRECTORY (work_config_env). That variable REPLACES the global
   # directory under XDG_CONFIG_HOME rather than adding to it — measured: a
   # provider declared only in the seat home's opencode.json was not found —
-  # so the seed below and the seat's agent file are both written there, per
-  # call.
-  # Per call rather than per seat because the agent file is the call's own
-  # system prompt, and a seat runs calls concurrently in one home. Measured
-  # on 2.0.32 under exactly this environment, with the ancestor files above
-  # planted — each shape in each location, across two runs, beside an
-  # ancestor agent of the same name, plugins, skills, AGENTS.md and
-  # CLAUDE.md: the seat's agent is found and its body is the system message,
-  # the model is offered exactly webfetch and websearch, no ancestor file
-  # reaches the request, and no plugin loads. A command that runs outside a
-  # call — the credential store's import and export, `auth login` and `auth
-  # list`, the version probe — gets the walk switched off and no
-  # OPENCODE_CONFIG_DIR, so it reads no configuration at all. Measured so,
-  # under an ancestor holding a plugin and an allow-all opencode.json: import,
-  # export and list work and load no plugin, and `api session.get`
-  # (usage_args) runs as a call and reads the call's directory. `auth login`
-  # is the vendor's interactive picker and gets the same environment; it was
-  # not measured under it.
+  # so the seed below and the call's prompt file are both written there, per
+  # call. Per call rather than per seat because the prompt file is the call's
+  # own system prompt, and a seat runs calls concurrently in one home.
   #
-  # The tool policy is 2.0's own permissions format, an ordered list in
+  # Measured on 2.0.32 and 2.1.4 through the engine's own code path, a seat's
+  # call and a side pass each, with the state directory inside a git checkout
+  # (a commit and an origin) and both the checkout and a directory between it
+  # and the state directory holding an AGENTS.md, CLAUDE.md, CONTEXT.md,
+  # GEMINI.md, .cursorrules, Copilot's instructions file, a .mcp.json, a .env,
+  # an allow-all opencode.json naming an instructions file and an MCP server,
+  # and `.opencode/` agents (one named crewlet-seat), AGENTS.md, skills and a
+  # plugin, with skills under `.claude/` and `.agents/` as well: none of them
+  # reached a request, no plugin or MCP server ran, and the model was offered
+  # exactly webfetch and websearch. The same tree with the switch overridden
+  # to "0" loaded both plugins, started the MCP server, listed a skill and
+  # widened the tools to twelve, so it is the switch that keeps them out.
+  #
+  # The `.git` file the engine writes into every call's directory keeps out
+  # what the switch does not. OpenCode asks git where its project is, and
+  # with the state directory in a checkout and no such file (run by hand) the
+  # request named the checkout as the "Workspace root folder" and a git
+  # repository and the provider was sent an `x-opencode-project` header
+  # derived from the checkout's root commit, on both builds, and 2.0.32 ran
+  # git in the checkout (its remote, refs and default branch). Through the
+  # engine the call's own directory is the workspace root, the request says
+  # "Is directory a git repo: no", the header is a hash of that directory,
+  # and the only git command either build runs is `rev-parse`, there.
+  #
+  # No `.env` is loaded: the ones above the call reached no request on either
+  # build, and on 2.1.4 even one in the working directory itself, setting
+  # OPENCODE_CONFIG_CONTENT, changed nothing, where the same variable in the
+  # environment took effect. The one configuration outside the call
+  # OpenCode still reads is the machine's managed one, /etc/opencode on Linux,
+  # which only an administrator of the host can write and which no variable
+  # turns off (read from the 2.1.4 bundle).
+  #
+  # A command that runs outside a call — the credential store's import and
+  # export, `auth login` and `auth list`, the version probe — gets the walk
+  # switched off and no OPENCODE_CONFIG_DIR, so it reads no configuration at
+  # all. Measured so on 2.0.32, under an ancestor holding a plugin and an
+  # allow-all opencode.json: import, export and list work and load no plugin,
+  # and `api session.get` (usage_args) runs as a call and reads the call's
+  # directory. `auth login` is the vendor's interactive picker and gets the
+  # same environment; it was not measured under it.
+  #
+  # The tool policy is OpenCode's own permissions format, an ordered list in
   # which the LAST matching rule wins: deny every action, then allow the two
-  # web tools. Deny-all rather than a list of the local tools, because 2.0
-  # allows whatever is not denied, and its new tools (`execute`, Code Mode's
-  # JavaScript runtime with `fetch`, and the session and worktree tools it
-  # exposes) passed a v1-style list of denials. Never `ask`, which a
-  # headless run cannot answer.
+  # web tools — an allowlist of the web tools. Deny-all rather than a list of
+  # the local tools, because OpenCode allows whatever is not denied, and its
+  # newer tools (`execute`, Code Mode's JavaScript runtime with `fetch`, and
+  # the session and worktree tools it exposes) passed a v1-style list of
+  # denials. Never `ask`, which a headless run cannot answer. Measured on
+  # 2.0.32 and 2.1.4: every call is offered webfetch and websearch and nothing
+  # else, `question` included.
+  #
+  # `plugins: ["-opencode.tools"]` turns off the built-in plugin that adds
+  # OpenCode's own session tools, which the policy withholds anyway, and a
+  # sentence at the end of the system prompt telling the model to call one of
+  # them through `execute`, a tool no call is offered. Measured on 2.0.32 and
+  # 2.1.4: that sentence is gone from both channels' requests and nothing else
+  # in them changes.
   #
   # `update: disable` keeps a seat's call from checking for, and fetching, a
   # new release; `share: disabled` keeps it from publishing a transcript;
@@ -663,7 +700,7 @@ opencode:
   seed_files:
     - path: .crewlet-config/opencode.json
       in: work
-      content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
+      content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
   model_args: ["--model", "{model}"]
   # `--model` takes `provider/model` (2.0 adds an optional `#variant`) and
   # splits it at the FIRST slash, so `openrouter/anthropic/claude-sonnet-5`
@@ -675,16 +712,58 @@ opencode:
   # and no other: 2.0 accepts a session id it does not hold and creates the
   # session under it, and refuses one that does not begin `ses`.
   session_args: ["--session", "ses_{session}"]
-  # THE SYSTEM PROMPT AS AN AGENT OPENCODE DISCOVERS. 2.0 has no
-  # system-prompt flag and no variable naming a file; it discovers agents in
-  # its configuration directory — `agents/<name>.md`, the body being the
-  # agent's system prompt — and `--agent` selects one. That directory is the
-  # call's own `.crewlet-config` (work_config_env, above). Measured on
-  # 2.0.32: the body REPLACES OpenCode's own coding-agent prompt (2.0 then
-  # appends a short block naming the model and the date), and it is not
-  # interpolated — `{env:…}` and `{file:…}` in it reach the model as
-  # written, so nothing a seat's prompt quotes can make the CLI read a file
-  # or a variable into it.
+  # BOTH SYSTEM-PROMPT CHANNELS ARE FILES OPENCODE FINDS in its configuration
+  # directory, the call's own `.crewlet-config` (work_config_env, above):
+  # OpenCode has no system-prompt flag and no variable naming a file. Neither
+  # file is interpolated — `{env:…}`, `{file:…}` and `@path` reach the model
+  # as written — so nothing a seat's prompt quotes can make the CLI read a file
+  # or a variable into it. Measured on 2.0.32 and 2.1.4 through the engine's
+  # own code path, on the OpenAI-compatible and the Anthropic provider routes:
+  #
+  #   system_prompt         `agents/crewlet-seat.md`, selected with --agent.
+  #                         Its body REPLACES OpenCode's prompt and opens the
+  #                         system message with nothing before it; after it
+  #                         OpenCode adds the model's name and ids, the date,
+  #                         and an environment block naming the call's working
+  #                         directory. On the Anthropic route the body is a
+  #                         system block of its own with a cache breakpoint,
+  #                         so the same text on a later call is a cache read.
+  #                         For a side pass, whose system prompt is the whole
+  #                         instruction and whose answer is parsed.
+  #   append_system_prompt  `AGENTS.md`, which OpenCode reads on every run of
+  #                         its default agent, with no --agent: OpenCode's own
+  #                         prompt stays in force and the engine's text comes
+  #                         after it. For a seat at work. That prompt opens
+  #                         "You are an AI agent running in OpenCode, a coding
+  #                         agent harness." and is the vendor's per model: 732
+  #                         characters for most model ids, 1,034 for an id
+  #                         containing `claude`, and 2,548 for one containing
+  #                         `gpt`, whose own prompt replaces the default. Then
+  #                         come the model block, a line "Instructions from:
+  #                         <the file's path>", the engine's text, the date
+  #                         and the environment block.
+  #
+  # Never both files on one call: an AGENTS.md beside the selected agent is
+  # appended to that agent's prompt as well, so each call writes only its own
+  # channel's file. A seat's call with no system prompt writes no AGENTS.md,
+  # because an empty one still puts the "Instructions from:" line in.
+  #
+  # WHAT KEEPING OPENCODE'S PROMPT COSTS: the path on that line is inside the
+  # call's own directory, so it differs on every call, and it comes BEFORE the
+  # engine's text. Only OpenCode's prompt and the model block ahead of it are
+  # the same from call to call; a seat's own text — its org chart, policies
+  # and memory, the bulk of every round — is never a cached prefix on this
+  # channel. On the Anthropic route OpenCode marks its first system block (its
+  # own prompt) and its last for caching, and the last holds that line, the
+  # seat's text, the date and the working directory, so every call writes a
+  # cache entry that no later call reads. A file at a stable path outside the
+  # call would steady the line, but it would be shared by a seat's concurrent
+  # calls with different prompts, and on the Anthropic route the block would
+  # still end in the per-call working directory. The channel is kept because
+  # OpenCode's prompt is written for the loop it runs and moves with every
+  # model it ships. An operator who would rather have a seat's text cached
+  # drops the channel — `overrides: {append_system_prompt: null}` — and seats
+  # then take the agent file a side pass takes.
   system_prompt:
     args: ["--agent", "crewlet-seat"]
     file:
@@ -696,6 +775,10 @@ opencode:
         mode: primary
         ---
         {system}
+  append_system_prompt:
+    file:
+      name: .crewlet-config/AGENTS.md
+      discovered: always
   # On stdin, read verbatim. On argv 2.0 re-quotes the message, so a prompt
   # carrying quotes reached the model altered — and argv is readable by every
   # account on the machine and bounded by ARG_MAX, which a long transcript
@@ -710,7 +793,9 @@ opencode:
   # and the session the call ran in holds the
   # whole total. `output` is the visible text alone, beside `reasoning` —
   # 2.0 subtracts the one from the other — so reasoning is declared and
-  # added back, as every provider bills it.
+  # added back, as every provider bills it. Through the engine on 2.0.32 and
+  # 2.1.4, on both channels, the answer came from the `text` event and the
+  # counts the provider reported came back from the session.
   usage_args: ["api", "--standalone", "session.get", "--param", "sessionID=ses_{session}"]
   usage:
     input: [["data", "tokens", "input"]]
@@ -719,10 +804,18 @@ opencode:
     cache_write: [["data", "tokens", "cache", "write"]]
     reasoning: [["data", "tokens", "reasoning"]]
   # 2.0 keeps sessions, logs and its LOGINS in one directory: `opencode.db`
-  # holds every transcript beside the `credential` table. The whole of it is
-  # volatile — a seat starts each generation from an empty database with the
-  # shared login imported into it (credential_store), so nothing one
+  # holds every transcript beside the `credential` table, and a project row
+  # for every call, whose own directory is its project root. The whole of it
+  # is volatile — a seat starts each generation from an empty database with
+  # the shared login imported into it (credential_store), so nothing one
   # generation said reaches the next, and the login is the shared one.
+  #
+  # The home's tmp directory, where TMPDIR points, is deliberately NOT
+  # volatile: what 2.0.32 and 2.1.4 leave there is the runtime's extracted
+  # libraries (`.bun-*.so`, 18 to 19 MB, named by their content and reused
+  # by every later call) and an empty `opencode` directory — nothing a call
+  # said, and nothing that grows from call to call. Pruned, every generation
+  # would extract them again.
   volatile_paths: [".local/share/opencode", ".local/state/opencode"]
   # THE LOGIN IS 2.0's EXPORT, because there is no file to copy: the
   # database is the transcript as well, and a v1 `auth.json` copied into a
@@ -750,10 +843,10 @@ opencode:
   # env, `env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or "" — turned
   # the walk back on with nothing to say so (measured: shell, write and
   # execute offered, an ancestor agent named crewlet-seat replacing the
-  # seat's prompt, the ancestor's plugins loaded). The name is the one 2.0
-  # reads FIRST — `OPENCODE_CONFIG_PROJECT_DISABLE ??
-  # OPENCODE_DISABLE_PROJECT_CONFIG` in both the 2.0.0 and the 2.0.32
-  # bundle — so the older spelling is never read while this one is set, and
+  # seat's prompt, the ancestor's plugins loaded). The name is the one
+  # OpenCode reads FIRST — `OPENCODE_CONFIG_PROJECT_DISABLE ??
+  # OPENCODE_DISABLE_PROJECT_CONFIG` in the 2.0.0, 2.0.32 and 2.1.4
+  # bundles — so the older spelling is never read while this one is set, and
   # this one always is.
   isolation_env:
     OPENCODE_CONFIG_PROJECT_DISABLE: "1"
@@ -762,9 +855,10 @@ opencode:
     # which is empty by construction — five inotify watches per call under
     # this profile's environment on 2.0.32, none with this set (measured).
     # Off, a call took ~0.5s less, and a host running many seats is not
-    # spending inotify watches on nothing. The name 2.0 reads first
+    # spending inotify watches on nothing. The name OpenCode reads first
     # (`OPENCODE_FILEWATCHER_DISABLE ?? OPENCODE_DISABLE_FILEWATCHER`, in the
-    # 2.0.0 and 2.0.32 bundles), for the reason isolation_env gives above.
+    # 2.0.0, 2.0.32 and 2.1.4 bundles), for the reason isolation_env gives
+    # above.
     OPENCODE_FILEWATCHER_DISABLE: "1"
   login_args: ["auth", "login", "--standalone"]
   status_args: ["auth", "list", "--standalone"]

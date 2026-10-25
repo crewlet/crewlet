@@ -592,6 +592,17 @@ func (f *SystemPromptFile) ReadAlways() bool {
 	return f != nil && f.Discovered == DiscoveryAlways
 }
 
+// CarriesPolicy reports whether the file says something of its own with no
+// system prompt in it: a template beyond `{system}`, such as the frontmatter
+// that names the agent OpenCode's `--agent` selects, or Kimi Code's tool
+// allowlist. A call writes such a file whether or not the request carries a
+// system prompt; a file that would hold the prompt alone is written only when
+// there is one, because written empty it still says something — OpenCode puts
+// an "Instructions from: <path>" line in front of an empty AGENTS.md. Nil-safe.
+func (f *SystemPromptFile) CarriesPolicy() bool {
+	return f != nil && strings.TrimSpace(f.Render("")) != ""
+}
+
 // Render returns the bytes to write for one call's system prompt.
 func (f *SystemPromptFile) Render(system string) string {
 	if f == nil || f.Template == "" {

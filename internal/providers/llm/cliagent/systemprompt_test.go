@@ -172,10 +172,12 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// No channel of any kind, on either.
 		"copilot":      "", // 1.0.83
 		"cursor-agent": "", // 2026.09.02
-		// 2.0.32: no flag and no variable, but a DISCOVERED AGENT —
-		// `agents/<name>.md` in its configuration directory, which the
-		// profile points inside the per-call directory, its body replacing
-		// the CLI's own prompt — which `--agent` selects.
+		// 2.0.32 and 2.1.4: no flag and no variable, but a DISCOVERED
+		// AGENT — `agents/<name>.md` in its configuration directory, which
+		// the profile points inside the per-call directory, its body
+		// replacing the CLI's own prompt — which `--agent` selects. Its
+		// append channel is the AGENTS.md of the same directory, which the
+		// default agent reads on every run.
 		"opencode": discoveredChannel,
 		// 1.0.3: the flag set is model, reasoning effort, the
 		// permission levers, workspace and session logging, plus --json,
