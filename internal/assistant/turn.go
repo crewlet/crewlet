@@ -446,8 +446,13 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		failure := &wire.ErrorEvent{Code: wire.ErrorBudgetExhausted,
 			Message: "The company's token budget for this window is spent."}
 		var budget *toolloop.BudgetError
-		if errors.As(err, &budget) && !budget.ResetsAt.IsZero() {
-			failure.Hint = "It resets " + budget.ResetsAt.UTC().Format(time.RFC3339) + "."
+		if errors.As(err, &budget) {
+			if budget.Scope == PersonBudgetScope {
+				failure.Message = "Your own assistant token budget for this window is spent."
+			}
+			if !budget.ResetsAt.IsZero() {
+				failure.Hint = "It resets " + budget.ResetsAt.UTC().Format(time.RFC3339) + "."
+			}
 		}
 		return wire.TurnBudgetExhausted, failure
 	case errors.Is(err, errGrantEnded) || errors.Is(err, errGrantEnding):
