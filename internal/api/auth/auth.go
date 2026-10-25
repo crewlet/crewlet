@@ -37,7 +37,7 @@
 //
 // # And one derived credential that never crosses a socket
 //
-// The Dashboard Assistant's grant (assist.go, ADR-0046) is a bearer too, told
+// The Dashboard Assistant's grant (assist.go, ADR-0049) is a bearer too, told
 // apart by its shape, but it is no fourth way in: it is DERIVED from a person's
 // session, names that session rather than carrying any authority, and is
 // re-composed through [Lineages] from the identity rows on every request. It is

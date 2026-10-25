@@ -61,7 +61,7 @@ type Moved struct {
 	// Removed are the persons a committed record REMOVED, by id, each once:
 	// the subset of People whose rows are gone for good. What a person
 	// keeps in another domain that must go with them (their Dashboard
-	// Assistant conversations, ADR-0049) is erased from it, and that domain
+	// Assistant conversations, ADR-0052) is erased from it, and that domain
 	// cannot read this one, so the engine hands it these ids.
 	Removed []string
 

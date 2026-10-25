@@ -1,7 +1,7 @@
 // Package proposal is the pure logic of a Dashboard Assistant proposal: the
 // digest that binds a person's approval to the request a server-side preview
 // showed them, the legal moves between proposal states, expiry, and the change
-// rows a card is drawn with. It does no I/O (ADR-0047); the approval path that
+// rows a card is drawn with. It does no I/O (ADR-0050); the approval path that
 // carries a decision out is internal/assistant/proposal/approval.
 //
 // # The card is the server's preview, never the model's words

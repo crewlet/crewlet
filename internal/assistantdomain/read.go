@@ -28,7 +28,7 @@ import (
 // Every method takes the owner and answers [ErrNotFound] for a conversation,
 // turn, card or proposal that is not theirs, exactly as for one that does not
 // exist: a caller with no relation is told it does not exist (ADR-0034's rule,
-// ADR-0049). THE ONE EXCEPTION is [Reader.AuditTranscript], which opens
+// ADR-0052). THE ONE EXCEPTION is [Reader.AuditTranscript], which opens
 // somebody else's conversation only for the receipt of a compliance read
 // already recorded beside it ([Writer.RecordAuditRead]), so no path reads
 // another person's conversation without leaving the record they see.

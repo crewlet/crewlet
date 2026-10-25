@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE DASHBOARD ASSISTANT'S COLUMN OF THE AUTHORITY TABLE (ADR-0048).
+// THE DASHBOARD ASSISTANT'S COLUMN OF THE AUTHORITY TABLE (ADR-0051).
 //
 // An assisted principal is the person, composed from their own rows, with the
 // assistant grant named as the credential the request came through. So every
@@ -266,7 +266,7 @@ func sameDecision(a, b authz.Decision) bool {
 
 // THE ASSISTANT IS NEVER ONE STEP FROM WHAT A MODEL MUST NOT TOUCH.
 //
-// ADR-0048's never list, pinned by FAMILY rather than by verb where a family
+// ADR-0051's never list, pinned by FAMILY rather than by verb where a family
 // exists, so a verb added to it later is held without anybody remembering this
 // test: every credential, secret, setup and fleet verb, every company document
 // verb, every identity directory verb but the org chart's seat read, every

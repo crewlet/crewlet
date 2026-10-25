@@ -1,7 +1,7 @@
 // Package assistantdomain is the Dashboard Assistant's state-log domain: a
 // person's conversations, their turns, the messages, steps and cards the
 // person saw, and the proposals they decided, on the `CREWLET_ASSISTANT_LOG`
-// stream and applied into every data node's replicated estate (ADR-0049).
+// stream and applied into every data node's replicated estate (ADR-0052).
 //
 // # Who has to agree on it
 //
