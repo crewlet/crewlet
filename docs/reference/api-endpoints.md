@@ -6931,8 +6931,12 @@ when the person already has two turns running on the node, or has asked twenty
 in a minute across every node of the fleet (`429 assistant_busy` with a
 `Retry-After`; while the fleet's counter cannot be read, the node's own rate of
 twenty a minute, five at once, still holds), when the conversation already has a
-turn running or waiting on an approval (`409 assistant_turn_running`), and when
-no model in the chain can be resolved (`503 assistant_unavailable`).
+turn running (`409 assistant_turn_running`), and when no model in the chain can
+be resolved (`503 assistant_unavailable`). A question asked while the
+conversation's turn waits on an approval is taken: that turn ends as
+`superseded`, and its proposals stay approvable until they expire. One approved
+later is applied and its card updated on that turn's stream, without the
+superseded turn's answer resuming.
 
 ### The turn's stream
 
@@ -6984,7 +6988,7 @@ asked, and a card is built by the engine from the route's own answer.
 | `404` | `not_found` | No such conversation, turn or card, or another person's |
 | `409` | `assistant_protocol_mismatch` | The request speaks another protocol version; reload the dashboard |
 | `415` | `unsupported_media_type` | A body not declared `Content-Type: application/json` |
-| `409` | `assistant_turn_running` | The conversation's turn is still running or waiting on an approval |
+| `409` | `assistant_turn_running` | The conversation's turn is still running |
 | `429` | `assistant_busy` / `budget_exhausted` | Too many turns at once, or a window of the company's or the person's own budget is spent (`scope`); `Retry-After` says when |
 | `503` | `assistant_unavailable` | The assistant cannot run here now; a `Retry-After` where a wait is known to help |
 

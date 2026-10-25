@@ -16,9 +16,11 @@ var (
 	// OR IS SOMEBODY ELSE'S: a caller with no relation is told it does not
 	// exist (ADR-0052).
 	ErrNotFound = errors.New("assistant: not found")
-	// ErrTurnRunning reports a question asked in a conversation that has a
-	// turn running or waiting on an approval: one at a time.
-	ErrTurnRunning = errors.New("assistant: the conversation has a turn running or waiting on an approval")
+	// ErrTurnRunning reports a question asked in a conversation whose turn
+	// is running (one at a time; a turn waiting on an approval is asked
+	// past, and closes superseded), or a decision handed a turn that no
+	// longer waits on it.
+	ErrTurnRunning = errors.New("assistant: the conversation has a turn running")
 	// ErrBusy reports a person past their running turns or their turn rate.
 	// [Busy] carries when to try again.
 	ErrBusy = errors.New("assistant: too many turns at once")

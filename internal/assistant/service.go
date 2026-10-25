@@ -277,10 +277,19 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if err != nil {
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
+	// A PARKED TURN WAITS ON ITS CARDS, NOT ON THE CONVERSATION: a new
+	// question is taken, and the parked turn is closed superseded just
+	// before this one opens (its proposals stay approvable until they
+	// expire). A turn that is running holds the conversation.
+	var past *assistantdomain.Turn
 	if current, err := s.lapseOpen(ctx, ts.Person.ID, history); err != nil {
 		return wire.TurnAccepted{}, err
-	} else if current && history.Conversation.OpenTurn != uuid.Nil {
-		return wire.TurnAccepted{}, ErrTurnRunning
+	} else if open := history.Conversation.OpenTurn; current && open != uuid.Nil {
+		row, parked := parkedIn(history, open)
+		if !parked {
+			return wire.TurnAccepted{}, ErrTurnRunning
+		}
+		past = &row
 	}
 	acts, err := s.acts(ctx, ts.Person)
 	if err != nil {
@@ -310,6 +319,11 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
 
+	if past != nil {
+		if err := s.supersede(ctx, ts.Person, ts.Key, *past); err != nil {
+			return wire.TurnAccepted{}, err
+		}
+	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
 	var chip *wire.PageChip
 	if ts.Page != nil {
@@ -358,6 +372,53 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		tools: tools, steps: assistantCfg.Steps(), timeout: assistantCfg.TurnTimeout(),
 		fresh: history.Conversation.Title == "", question: input})
 	return accepted, nil
+}
+
+// parkedIn is the conversation's turn id when it is parked on a proposal.
+func parkedIn(t assistantdomain.Transcript, id uuid.UUID) (assistantdomain.Turn, bool) {
+	for _, row := range t.Turns {
+		if row.ID == id {
+			return row, row.State == wire.TurnWaitingForApproval
+		}
+	}
+	return assistantdomain.Turn{}, false
+}
+
+// supersede closes a parked turn the person asked past, under the asking
+// request's operation (a retried question records it once), and tells its
+// stream it ended. It withdraws nothing: the proposals it waited on stay
+// approvable until they expire, and one approved later is applied and shown
+// on its card without resuming the loop ([Service.Resume]). A turn an
+// approval resumed a moment before is running again, and holds the
+// conversation.
+func (s *Service) supersede(ctx context.Context, p iam.Principal, key string,
+	row assistantdomain.Turn) error {
+
+	// READ BEFORE THE CLOSE, which drops the parked record: the last seq its
+	// segment told, which the closing frames number after.
+	var floor uint64
+	if keep, err := s.parkedLoop(ctx, p.ID, row.ID); err == nil {
+		floor = keep.Seq
+	}
+	err := s.records.CloseTurn(ctx, Write{Owner: p.ID, By: iam.ActorFor(p), Key: key,
+		Steps: []string{"supersede"}}, row.ID, assistantdomain.TurnEnd{
+		State: wire.TurnSuperseded, Steps: row.Steps})
+	var moved *assistantdomain.TurnMoved
+	switch {
+	case errors.As(err, &moved) && moved.State.Final():
+		// Another end landed first (a second question, its expiry): the
+		// conversation is free either way.
+		return nil
+	case err != nil:
+		return s.writeFailure(err)
+	}
+	row.State = wire.TurnSuperseded
+	if _, err := s.tell(ctx, p, row, s.continuing(ctx, p.ID, row.ID, floor), nil); err != nil {
+		s.log.WarnContext(ctx, "assistant_superseded_untold", "turn", row.ID,
+			"error", redact.Secrets(err.Error()),
+			"detail", "the turn is closed; a stream of it reads the transcript")
+	}
+	return nil
 }
 
 // newTurn builds a segment's runner state.

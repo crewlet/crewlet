@@ -207,6 +207,11 @@ export function phaseOf(state: WireTurnState): TurnPhase {
       return "working";
     case "waiting_for_approval":
       return "awaiting_approval";
+    case "superseded":
+      // THE PERSON ASKED THE NEXT QUESTION while this turn waited on a card:
+      // its loop is over, and its cards keep their own states (a proposal
+      // stays approvable until it expires).
+      return "completed";
     default:
       return state;
   }

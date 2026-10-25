@@ -117,12 +117,17 @@ const (
 	// TurnBudgetExhausted was refused a round by the company's or the
 	// person's budget window.
 	TurnBudgetExhausted TurnState = "budget_exhausted"
+	// TurnSuperseded was parked on a proposal when the person asked the
+	// conversation's next question. Its loop never resumes; its proposals
+	// stay approvable until they expire, and one approved later is applied
+	// and shown on its card without the loop.
+	TurnSuperseded TurnState = "superseded"
 )
 
-// TurnStates are the eight, in declaration order.
+// TurnStates are the nine, in declaration order.
 var TurnStates = []TurnState{
 	TurnRunning, TurnWaitingForApproval, TurnCompleted, TurnStopped, TurnFailed,
-	TurnInterrupted, TurnExpired, TurnBudgetExhausted,
+	TurnInterrupted, TurnExpired, TurnBudgetExhausted, TurnSuperseded,
 }
 
 // Valid reports whether s is a state this build knows.
