@@ -535,7 +535,11 @@ What follows are the prerequisites that legitimately vary by machine.
   make test-cross
   ```
 
-Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
+Tests never call real LLM APIs — use the fakes in `internal/providers`. A
+phase that offers tools plays its model as a scripted CLI run over the real
+tool session (`internal/providers/llm/llmtest`), never by calling the
+dispatcher around it: the socket, the tool list, the withheld answers and the
+release are on the way of every real call. Test
 files sit beside what they cover, as Go expects, and a test file that is not Go
 is no exception: the dashboard's Vitest suites sit beside their modules in
 `dashboard/src`, and `internal/e2e`'s client replay is

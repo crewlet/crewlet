@@ -40,9 +40,9 @@ and how you pay for them:
 | Models | Config | Pay with | Notes |
 |---|---|---|---|
 | **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `agent` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one CLI that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs the executor itself in [box mode](../concepts/llm-backends.md#box-mode), and is a sandbox coding agent. |
-| **OpenAI's** (GPT) | `agent: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | A text model behind the engine's tool loop; a seat on it that writes code takes its sandbox work to a Claude Code or OpenCode entry. |
+| **OpenAI's** (GPT) | `agent: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | Host mode only: its own loop on this host, the seat's tools as its only working tools; a seat on it that writes code takes its sandbox work to a Claude Code or OpenCode entry. |
 | **Open models** — OpenRouter, a hosted provider, your own server | `agent: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or a login of OpenCode's own; nothing at all for a server that takes no key | OpenCode 2. Fully self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Box mode and a sandbox coding agent, like Claude Code. |
-| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `agent:` the profile's name | the vendor's login or key | Text models. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
+| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `agent:` the profile's name | the vendor's login or key | Host mode only. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
 
 Whichever you pick, the CLI's binary has to be installed on the engine host —
 the container image ships none, see [Installation](installation.md#a-coding-cli)
@@ -69,15 +69,17 @@ any backend, or via a local cell (`providers.sandbox.local` plus `run_in:
 direct`), which runs the coding agent on the engine host against the same
 login.
 
-**And the CLI can run the turn itself.** `mode: box` makes the seat's executor
-the CLI's own agentic loop — a real shell, a real editor, a real checkout — with
-the seat's tools reaching it over an MCP bridge, as a detached run that outlives
-the turn. It needs more than a sign-in: a CLI with a coding-agent runner
+**And the CLI can run the executor in a box.** In either mode the CLI drives
+its own loop and calls the seat's tools over MCP; `mode: box` moves the seat's
+executor into a sandbox box — a real shell, a real editor, a real checkout —
+with the seat's tools reaching it over an MCP bridge, as a detached run that
+outlives the turn. It needs more than a sign-in: a CLI with a coding-agent runner
 (`claude-code` or `opencode`), a `providers.sandbox` catalogue to place the run
 in, and `CREWLET_MCP_BRIDGE_URL` set to something a box can dial. `crewlet llm
 doctor` checks all three. Host mode stays the default and is the better answer
-when you want the tool log to be the engine's own. See
-[LLM Backends § Two modes](../concepts/llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
+when you want every step to be the turn's own — its rounds capped, a person's
+note reaching it between runs, no sandbox needed. See
+[LLM Backends § Two modes](../concepts/llm-backends.md#two-modes-on-this-host-or-in-a-box).
 
 **Embeddings** (`providers.embeddings`) power the semantic half of a native
 knowledge search — the company's own pages and work items, embedded once for
