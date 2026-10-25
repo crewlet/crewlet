@@ -10,11 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tabular"
@@ -30,10 +32,11 @@ import (
 // the assistant on: the service reads the company per turn, so an apply that
 // turns it on is the next question's, and `/viewer` says why it is off.
 //
-// The service is returned so the caller closes it before its listeners shut
-// down: an open stream is a request a listener's grace would otherwise wait
-// out whole.
-func mountAssistant(boot *config.Bootstrap, e *engine.Engine, opts *api.Options) (*assistant.Service, error) {
+// The service is returned, with this node's half of its fleet stream, so the
+// caller closes both before its listeners shut down: an open stream is a
+// request a listener's grace would otherwise wait out whole.
+func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
+	opts *api.Options) (*assistantNode, error) {
 	delegations, err := auth.NewDelegations(boot.Secrets.TokenMaterial(), e, nil)
 	if err != nil {
 		return nil, fmt.Errorf("assistant: grants: %w", err)
@@ -42,6 +45,17 @@ func mountAssistant(boot *config.Bootstrap, e *engine.Engine, opts *api.Options)
 	acts := noActs
 	if opts.Operator != nil {
 		acts = opts.Operator.Acts
+	}
+	// THE FLEET HALF, nil on a node with no peer: a turn running on another
+	// node is followed and stopped through it, and every frame this node
+	// appends is told to the fleet, encrypted.
+	fleet, err := engine.AssistantFleet(e)
+	if err != nil {
+		return nil, fmt.Errorf("assistant: fleet: %w", err)
+	}
+	var remote assistant.Remote
+	if fleet != nil {
+		remote = assistant.FleetRemote(fleet)
 	}
 	svc, err := assistant.New(assistant.Deps{
 		Node:        e.Node().ID(),
@@ -56,6 +70,8 @@ func mountAssistant(boot *config.Bootstrap, e *engine.Engine, opts *api.Options)
 		Revoker:     delegations,
 		Audit:       e.Backends().Queue,
 		Metrics:     e.Recorder(),
+		Remote:      remote,
+		Rate:        engine.AssistantTurnRate(e),
 	})
 	if err != nil {
 		return nil, err
@@ -100,8 +116,25 @@ func mountAssistant(boot *config.Bootstrap, e *engine.Engine, opts *api.Options)
 	if err != nil {
 		return nil, err
 	}
+	// ANSWERING PEERS LAST, once nothing left can fail: a node that serves
+	// the fleet's replays and stops has a service behind them to answer.
+	node := &assistantNode{svc: svc}
+	if fleet != nil {
+		if err := fleet.Start(ctx, svc); err != nil {
+			closeAssistant(ctx, node, logging.Get("assistant"))
+			return nil, fmt.Errorf("assistant: fleet: %w", err)
+		}
+		node.fleet = fleet
+	}
 	opts.Delegations, opts.Dispatcher, opts.Assistant = delegations, dispatcher, surface
-	return svc, nil
+	return node, nil
+}
+
+// assistantNode is the assistant's service and this node's half of its fleet
+// stream, closed together.
+type assistantNode struct {
+	svc   *assistant.Service
+	fleet *live.Fleet
 }
 
 // noActs is the verdict on a node with no operator surface: no write is
@@ -117,16 +150,26 @@ func (offeredCatalogue) Offered(p iam.Principal, acts []string) []catalog.Tool {
 }
 
 // closeAssistant stops every turn the service runs, within the API's shutdown
-// grace, saying so when one did not record its end in time. Nil-safe.
-func closeAssistant(ctx context.Context, svc *assistant.Service, log *slog.Logger) {
-	if svc == nil {
+// grace, saying so when one did not record its end in time, and then
+// withdraws this node from the fleet stream, so the frames those ends wrote
+// are told first. Nil-safe.
+func closeAssistant(ctx context.Context, n *assistantNode, log *slog.Logger) {
+	if n == nil {
 		return
 	}
 	grace, cancel := context.WithTimeout(context.WithoutCancel(ctx), apiShutdownGrace)
 	defer cancel()
-	if err := svc.Close(grace); err != nil {
+	if err := n.svc.Close(grace); err != nil {
 		log.WarnContext(ctx, "assistant_close_incomplete", "error", err,
 			"hint", "a turn this node was running may not have recorded that it was "+
 				"interrupted before the shutdown grace ran out")
+	}
+	if n.fleet == nil {
+		return
+	}
+	if err := n.fleet.Close(grace); err != nil {
+		log.WarnContext(ctx, "assistant_fleet_not_withdrawn", "error", err,
+			"hint", "this node may still be named as an answerer of the fleet's replays "+
+				"and stops until its broker connection closes")
 	}
 }

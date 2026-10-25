@@ -36,7 +36,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
-	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -1588,7 +1587,7 @@ type httpSurface struct {
 	// assistant is the Dashboard Assistant's service, nil on a node without
 	// the ingress role. Closed before any listener, so its open streams end
 	// rather than holding a listener's grace.
-	assistant *assistant.Service
+	assistant *assistantNode
 }
 
 // apiListener is one socket a node binds, the server serving it, and the slot
@@ -2433,7 +2432,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// may propose are the operator surface's verdict. Its service is closed
 	// by every path that returns from here without a surface, and by the
 	// surface's stop once there is one.
-	assistantSvc, err := mountAssistant(boot, e, &opts)
+	assistantSvc, err := mountAssistant(ctx, boot, e, &opts)
 	if err != nil {
 		return nil, err
 	}
