@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/flock"
 )
 
 // WHAT THE LOCK IS FOR.
@@ -149,36 +151,30 @@ func TestAFailedOpenDoesNotStrandTheLock(t *testing.T) {
 	lock.release()
 }
 
-// HOLDING A NODE'S DATABASE CLAIMS IT WITHOUT OPENING IT: a `crewlet` command
-// reaching the fleet's store with the engine stopped holds it so the engine
-// cannot start under it, and creates no database on a node that has never
-// booted.
+// PROBING A NODE'S DATABASE OPENS NOTHING AND KEEPS NOTHING, and still sees
+// another holder: a `crewlet` command asks it whether the engine runs, and must
+// neither create a database on a node that has never booted nor leave a claim
+// that a second command or the engine would read as a running engine.
 //
-// Mutation: make Hold open the database, and the file exists; make it skip
-// the lock, and the sidecar names no holder.
-func TestHoldingADatabaseClaimsItWithoutOpeningIt(t *testing.T) {
+// Mutation: make Probe open the database, and the file exists; make it keep
+// the claim, and the take after it is refused; make it skip the lock, and the
+// held case answers nil.
+func TestProbingADatabaseOpensNothingAndKeepsNothing(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")
 
-	release, err := Hold(path)
-	if err != nil {
-		t.Fatalf("hold: %v", err)
+	if err := Probe(path); err != nil {
+		t.Fatalf("probe a free database: %v", err)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("holding the database created it (stat: %v)", err)
+		t.Errorf("probing the database created it (stat: %v)", err)
 	}
-	raw, err := os.ReadFile(path + lockSuffix)
+	other, err := flock.Try(path + lockSuffix)
 	if err != nil {
-		t.Fatalf("no lock beside the held database: %v", err)
+		t.Fatalf("the probe kept its claim: %v", err)
 	}
-	if want := fmt.Sprintf("pid %d ", os.Getpid()); !strings.HasPrefix(string(raw), want) {
-		t.Errorf("the lock names %q, not this process (%q…)", raw, want)
+	if err := Probe(path); !errors.Is(err, ErrLocked) {
+		t.Errorf("a probe beside another holder answered %v, want ErrLocked", err)
 	}
-	// Shared in this process, as a second open is.
-	again, err := Hold(path)
-	if err != nil {
-		t.Fatalf("a second hold in this process was refused: %v", err)
-	}
-	again()
-	release()
+	other.Release()
 }

@@ -1051,8 +1051,8 @@ store:
                                     #   company's live in the fleet's store,
                                     #   and a `crewlet` command run with the
                                     #   engine stopped writes them there,
-                                    #   holding this file's lock without
-                                    #   opening it.
+                                    #   asking this file's lock whether the
+                                    #   engine runs, without opening it.
                                     #   Owned exclusively by this process. Not a
                                     #   shared database, and no DSN: two engines
                                     #   on one file corrupt it

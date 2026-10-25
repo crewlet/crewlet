@@ -325,9 +325,7 @@ The engine boots in this order:
    directory), because nats-server takes none and would accept a second
    broker writing the same store: a directory another broker holds — another
    engine's, or a `crewlet` command's reaching the fleet's store while this
-   engine was stopped — refuses the start, naming its holder. Such a command
-   holds this node's database as well, so a start meets one lock or the other:
-   the database at step 6's read, or the directory here. The broker then
+   engine was stopped — refuses the start, naming its holder. The broker then
    recovers its file store, which takes as long as the store is large. A node
    without `data` opens a scratch store, deleted at every boot, and joins the
    members' broker as a leaf

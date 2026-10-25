@@ -29,14 +29,19 @@ import (
 // engine keeps: on a solo node it starts the node's own broker on its store
 // directory, and on an external broker it dials it ([engine.OpenFleetStore]).
 //
-// # The engine is kept out for as long as the command holds the store
+// # Each lock guards what it names, and the command holds only what it uses
 //
-// Two locks, taken in that order: the node's database, which says whether the
-// engine is running ([store.ErrLocked] routes the command to its API instead)
-// and keeps it from starting, and the broker's store directory, which the
-// broker this starts holds until it stops. An engine started part way through
-// is refused at whichever it reaches first, by name, and the command finishes
-// on a store nothing else is writing.
+// The node's database is ASKED, never held ([store.Probe]): its lock says
+// whether the engine is running — [store.ErrLocked] routes the command to its
+// API instead — and the command does not use the file, so keeping the claim
+// would only make a second command read the first as a running engine, and
+// refuse an engine over a database nobody had open. What the command does use
+// is a broker on the node's store directory, and that broker holds the
+// directory's own lock ([jetstream.StoreDirLock]) until it stops: an engine
+// started part way through is refused there, naming the command, as is a
+// second command on the same node. On an external broker the command starts
+// nothing and holds nothing — an engine starting beside it is one more client
+// of a store built for many.
 //
 // # Read directly, so read only by whoever could anyway
 //
@@ -56,9 +61,8 @@ import (
 // other ([jetstream.StoreDirLock]). Counted like the node database's own claim,
 // and let go when the last of them closes.
 type fleetSession struct {
-	store   *engine.FleetStore
-	release func()
-	holds   int
+	store *engine.FleetStore
+	holds int
 }
 
 // fleetSessions is this process's open session per node database.
@@ -84,28 +88,22 @@ func openFleetStore(ctx context.Context, boot *config.Bootstrap, bootstrapPath s
 		return held.store, sync.OnceFunc(func() { leaveFleetSession(key) }), nil
 	}
 
-	// THE NODE'S DATABASE FIRST: it is what says the engine is not running,
-	// and holding it is what keeps the engine from starting while this
-	// command works. Only then the broker, whose own lock covers the moment
-	// an engine started before this one reached its database.
-	release, err := store.Hold(boot.Store.Path)
-	if err != nil {
+	// THE NODE'S DATABASE IS ASKED FIRST, and only asked: it is what says
+	// the engine is not running. The broker's own lock covers an engine that
+	// starts after the answer.
+	if err := store.Probe(boot.Store.Path); err != nil {
 		return nil, nil, err
 	}
 	fs, err := engine.OpenFleetStore(ctx, boot)
 	if err != nil {
-		release()
 		return nil, nil, fleetStoreRemedy(err, bootstrapPath)
 	}
-	fleetSessions.by[key] = &fleetSession{store: fs, release: release, holds: 1}
+	fleetSessions.by[key] = &fleetSession{store: fs, holds: 1}
 	return fs, sync.OnceFunc(func() { leaveFleetSession(key) }), nil
 }
 
-// leaveFleetSession drops one share of key's session, stopping its broker and
-// letting the node's database go with the last.
-//
-// THE BROKER BEFORE THE DATABASE: the database is what keeps the engine out,
-// so it is the last thing this process lets go of.
+// leaveFleetSession drops one share of key's session, stopping its broker —
+// and with it, letting the store directory go — with the last.
 func leaveFleetSession(key string) {
 	fleetSessions.mu.Lock()
 	defer fleetSessions.mu.Unlock()
@@ -118,7 +116,6 @@ func leaveFleetSession(key string) {
 	}
 	delete(fleetSessions.by, key)
 	held.store.Close()
-	held.release()
 }
 
 // fleetStoreRemedy answers a fleet store this node cannot reach on its own in
@@ -131,10 +128,10 @@ func fleetStoreRemedy(err error, bootstrapPath string) error {
 			"tokens in %s — or start this node's engine and re-run", err,
 			bootstrapPath, apiTokenEnv)
 	case errors.Is(err, jetstream.ErrStoreDirHeld):
-		return fmt.Errorf("%w\n\n%s's engine was not running when this began, so "+
-			"another process has started a broker on its store since: an engine "+
-			"starting, or another crewlet command reaching the store. Re-run once "+
-			"it is up, or once that command has finished", err, bootstrapPath)
+		return fmt.Errorf("%w\n\n%s's engine is not running, and the process named "+
+			"above holds its store directory: another crewlet command reaching the "+
+			"fleet's store, or an engine part way through starting. Re-run once "+
+			"that command has finished, or once the engine is up", err, bootstrapPath)
 	}
 	return err
 }

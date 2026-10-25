@@ -32,10 +32,10 @@ import (
 //
 // That is not a theoretical shape. `crewlet config`, `crewlet migrate` and
 // `crewlet search eval` open a node's database from a second OS process as
-// their documented gesture, and every command that reaches the fleet's store
-// with the engine stopped holds it ([Hold]) for as long as it works. Before
-// this lock the only defence was a printed warning, which is a defence
-// against an operator who reads it.
+// their documented gesture, and every command that reaches the company's
+// secrets asks this lock ([Probe]) whether the engine runs. Before this lock
+// the only defence was a printed warning, which is a defence against an
+// operator who reads it.
 //
 // # An OS lock, on a sidecar
 //
@@ -197,26 +197,31 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	return lock, nil
 }
 
-// Hold takes this process's claim on the node database at dbPath without
-// opening it — the claim a running engine holds for as long as it runs — and
-// hands back its release. A database another process holds is [ErrLocked],
-// naming the holder; a claim this process already holds is shared, as a
-// second open's is.
+// Probe reports whether another process holds the node database at dbPath —
+// its running engine, or an offline command working on it — as [ErrLocked]
+// naming the holder, WITHOUT OPENING THE FILE AND WITHOUT KEEPING THE CLAIM.
+// A claim this process holds already is shared for the moment, as a second
+// open's is, and answers nil.
 //
-// For a process that needs the engine NOT to be running, and not to start,
-// while it works on something else of the node's: a `crewlet` command that
-// reaches the fleet's store through this node's broker while its engine is
-// stopped. Opening the database for the lock alone would migrate a file the
-// command never reads, and on a node that has never booted create one.
+// For a process that does not use the database and needs to know whether the
+// engine runs: a `crewlet` command deciding how to reach the fleet's store.
+// Opening the file to learn it would migrate a database the command never
+// reads, and on a node that has never booted create one. And KEEPING the
+// claim would lock a file the command does not use: a second command would
+// then read the first as a running engine, and the engine would be refused
+// over a database nobody had open. What a command does use — a broker on the
+// stream's store directory — has a lock of its own, which is what keeps an
+// engine from starting under it.
 //
-// Not for a scratch store, which the engine deletes before it opens and this
-// would leave a claim on: a node that holds no data has nothing here to hold.
-func Hold(dbPath string) (release func(), err error) {
+// Not for a scratch store, which the engine deletes before it opens: a node
+// that holds no data has nothing here to ask about.
+func Probe(dbPath string) error {
 	lock, err := lockStore(dbPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return lock.release, nil
+	lock.release()
+	return nil
 }
 
 // release drops this handle's share of the claim, freeing the lock when it
