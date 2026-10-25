@@ -175,8 +175,16 @@ func TestABridgedCallIsFencedOnTheSeat(t *testing.T) {
 	if res := callTool(t, sess, "read_page", map[string]any{}); !res.IsError {
 		t.Fatal("a call ran once the fence reopened, on a run admitted under the old grant")
 	}
-	if n := len(g.ledger.rows()); n != 1 {
-		t.Errorf("%d rows recorded, want the one call that ran", n)
+	// Every call is on the run's record, the two after the fence closed
+	// refused there as not running.
+	rows := g.ledger.rows()
+	if len(rows) != 3 || rows[0].Failed {
+		t.Fatalf("%d rows recorded, want the call that ran and the two refused: %+v", len(rows), rows)
+	}
+	for _, row := range rows[1:] {
+		if !row.Failed || row.Refusal() != tools.RefusalNotRunning {
+			t.Errorf("a refused call is recorded %+v, want it failed as not running", row)
+		}
 	}
 }
 
@@ -334,8 +342,12 @@ func TestAToolThatPanicsClosesTheRunsToolsAndNotTheProcess(t *testing.T) {
 	if n := broken.calls.Load(); n != 1 {
 		t.Errorf("the broken tool ran %d times", n)
 	}
-	if rows := g.ledger.rows(); len(rows) != 1 || !rows[0].Failed || rows[0].Name != "broken" {
-		t.Errorf("the broken call is not recorded as failed: %+v", rows)
+	rows := g.ledger.rows()
+	if len(rows) != 2 || !rows[0].Failed || rows[0].Name != "broken" {
+		t.Fatalf("the broken call is not recorded as failed: %+v", rows)
+	}
+	if rows[1].Name != "read_page" || rows[1].Refusal() != tools.RefusalNotRunning {
+		t.Errorf("the call after the panic is recorded %+v, want it refused as not running", rows[1])
 	}
 }
 

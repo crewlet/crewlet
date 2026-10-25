@@ -37,8 +37,8 @@
 //   - THE SEAT'S FENCE, per call. The run outlives the turn that launched it,
 //     and the node it calls may stop holding the seat, or a person may ask
 //     the seat to stop, while it runs. A call is refused once either has
-//     happened — and every call after it — rather than made as a seat this
-//     node no longer speaks for.
+//     happened — and every call after it, each on the run's record as
+//     refused — rather than made as a seat this node no longer speaks for.
 //   - THE ORDER CALLS ARRIVED IN. A CLI makes a response's calls at once, and
 //     each is placed in the run's call log when it is admitted rather than
 //     when it returns ([tools.Surface.Admit]), so the repeat count an
@@ -159,12 +159,12 @@ type Session struct {
 	// never a value with "~" or "." in it, which delimit a token's parts.
 	Launch string
 
-	// LastSeq is the place, in its job's admission order, of the last call
-	// an EARLIER opening of the job admitted — zero for a job's first
-	// opening, and the highest [Call.Seq] the run's row records for a job
-	// opened again after a recovery. This opening numbers its calls after
-	// it, so the order a resume reads the run's calls in runs on across the
-	// recovery rather than starting again at one beside the calls before it.
+	// LastSeq is the place, in its job's order, of the last call an EARLIER
+	// opening of the job recorded — zero for a job's first opening, and the
+	// highest [Call.Seq] the run's row records for a job opened again after
+	// a recovery. This opening numbers its calls after it, so the order a
+	// resume reads the run's calls in runs on across the recovery rather
+	// than starting again at one beside the calls before it.
 	LastSeq int
 
 	// Handle and Role name the seat, for the logs and the handshake.
@@ -218,7 +218,7 @@ type Call struct {
 	// what it answered, whether it failed and why.
 	tools.Call
 
-	// Seq is the call's place in the order the session ADMITTED its calls,
+	// Seq is the call's place in the order the calls REACHED the session,
 	// from 1 — the order the CLI made them in, which is not the order they
 	// finish in when it makes several at once.
 	Seq int
@@ -226,7 +226,7 @@ type Call struct {
 	// StartedAt is when the call was handed to the surface, in UTC, and
 	// Duration how long the surface took to answer, on the monotonic clock.
 	// Both zero on a call answered without running — arguments that did not
-	// parse.
+	// parse, a call made once the run's tools had closed.
 	StartedAt time.Time
 	Duration  time.Duration
 
@@ -670,15 +670,16 @@ type binding struct {
 	// stopped is why the opening's calls are refused from here on: the
 	// seat's fence closed, or a tool panicked. Nil while it serves.
 	stopped error
-	// admitted is the place of the last call admitted in the job's order —
-	// from [Session.LastSeq] — and so the one before the next [Call.Seq].
-	admitted int
+	// arrived is the place of the last call that reached the opening, in
+	// the job's order — from [Session.LastSeq] — and so the one before the
+	// next [Call.Seq].
+	arrived int
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
 
 func newBinding(ctx context.Context, s *Session) *binding {
-	opened := &binding{id: s.Launch, session: s, ctx: context.WithoutCancel(ctx), admitted: s.LastSeq}
+	opened := &binding{id: s.Launch, session: s, ctx: context.WithoutCancel(ctx), arrived: s.LastSeq}
 	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
 	// ([toolsession.Server.HoldAnswersForRelist]): the coding CLIs that run in
@@ -776,18 +777,30 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 
 	o.mu.Lock()
 	if o.ended {
+		// NOT RECORDED: the run is over, and its record with it — the job's
+		// row is gone, or holds the job that replaced it.
 		o.mu.Unlock()
 		return refused(endedNote)
 	}
 	if o.stopped == nil && fenced != nil {
 		o.stopLocked(fenced)
 	}
+	o.arrived++
+	seq := o.arrived
+	args := in.Arguments
+	if args == nil {
+		args = map[string]any{}
+	}
 	if o.stopped != nil {
+		// REFUSED, AND RECORDED in its place: the run is live, and its box
+		// made this call after its tools closed — which a reviewer reading
+		// the run should see, and a surface that is not a model can act on
+		// only by its class.
 		o.mu.Unlock()
+		o.record(Call{Call: tools.Call{Name: in.Name, Args: args, Output: stoppedNote,
+			Failed: true, Cause: tools.RefusalNotRunning}, Seq: seq})
 		return refused(stoppedNote)
 	}
-	o.admitted++
-	seq := o.admitted
 	if in.ArgumentsError != "" {
 		// ANSWERED, NOT RUN, and recorded: the call was made, and an empty
 		// object in place of what the model wrote is a call it never made.
@@ -797,10 +810,6 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		o.record(Call{Call: tools.Call{Name: in.Name, Output: out, Failed: true,
 			Cause: tools.RefusalInvalid}, Seq: seq})
 		return refused(out)
-	}
-	args := in.Arguments
-	if args == nil {
-		args = map[string]any{}
 	}
 	// ITS PLACE IN THE RUN'S CALL LOG, fixed here, under the lock that
 	// orders admissions — see [tools.Surface.Admit].
