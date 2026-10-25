@@ -14,7 +14,11 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { repoRoot } from "~/test/engineFiles.ts";
-import type { AssistantEventKind, AssistantPageContext } from "../contract/assistant.ts";
+import {
+  ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
+  type AssistantEventKind,
+  type AssistantPageContext,
+} from "../contract/assistant.ts";
 import {
   assistantUnavailable,
   createAssistantStreamParser,
@@ -134,7 +138,12 @@ describe("the bounds a request is held to before it is sent", () => {
   test("a page context may not offer the reserved action or grow past its bytes", () => {
     expect(pageContextFits(context)).toBe(true);
     expect(pageContextFits({ ...context, accepts: ["context.invalidate"] })).toBe(false);
-    expect(pageContextFits({ ...context, query: { q: "x".repeat(9000) } })).toBe(false);
+    expect(
+      pageContextFits({
+        ...context,
+        query: { q: "x".repeat(ASSISTANT_PAGE_CONTEXT_MAX_BYTES + 1) },
+      }),
+    ).toBe(false);
   });
 
   test("a viewer answer with no assistant member reads as disabled", () => {
