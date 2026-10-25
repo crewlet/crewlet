@@ -34,6 +34,35 @@ func TestTheSmokeTestPassesWhenTheCLICallsTheTool(t *testing.T) {
 	}
 }
 
+// A RECORD THAT NEVER SHOWS THE CALL FAILS THE SMOKE TEST. The CLI reached the
+// tools and called one, but the profile's requests rules read nothing of it —
+// a CLI that changed what it writes, or one whose record no stand-in can
+// produce and only a real sign-in shows (cursor-agent's) — so a phase's
+// rounds and spend would not be read as it ran, and nothing else says so.
+//
+// Mutation: pass on the call alone, and this passes as "ok".
+func TestTheSmokeTestFailsARecordThatNeverShowsItsCall(t *testing.T) {
+	t.Parallel()
+	p := fakeClaude(t, fakeScript{Responses: []fakeResponse{
+		{Calls: []fakeCall{{Name: smokeTool, Args: map[string]any{"ok": true}}}, Usage: fakeUsage{Input: 30, Output: 6}},
+		{Text: "done", Usage: fakeUsage{Input: 40, Output: 2}},
+	}}, func(c *Config) {
+		// Rules that match nothing the CLI writes.
+		c.Overrides["requests"] = map[string]any{"events": []any{map[string]any{
+			"match": []any{map[string]any{"path": []any{"type"}, "equals": "no-such-event"}},
+			"opens": true,
+			"text":  []any{"text"},
+		}}}
+	})
+	verdict, answered := p.smokeTest(t.Context())
+	if !strings.HasPrefix(verdict, "failed") || !answered {
+		t.Fatalf("smoke = %q (answered %v), want a failure naming the record", verdict, answered)
+	}
+	if !strings.Contains(verdict, "record never showed") || !strings.Contains(verdict, "overrides.requests") {
+		t.Errorf("the smoke failure does not say the record missed the call, or what to set: %q", verdict)
+	}
+}
+
 // The one failure nothing else catches: the CLI reaches the tools, and answers
 // with PROSE. Every phase a seat runs on such a provider spends corrective
 // rounds asking again — and ends without its submission when the model never
