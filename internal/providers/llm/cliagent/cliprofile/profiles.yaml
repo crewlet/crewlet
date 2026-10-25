@@ -806,6 +806,21 @@ gemini-cli:
         toolName = ["web_fetch", "google_web_search"]
         decision = "allow"
         priority = 999
+    # THE SEAT'S OWN TOOLS ARE ALLOWED IN A FILE OF THEIR OWN, beside the
+    # denial rather than in it: every tool of the crewlet MCP server, above
+    # the deny-all. A text function has no such server, and the rule allows
+    # nothing there. Not passed with --policy: that flag REPLACES the policies
+    # directory of the home rather than adding to it (read from 0.65.0's
+    # bundle), and with it the deny-all went and the CLI offered its file,
+    # plan, sub-agent and topic tools beside the seat's (measured).
+    - path: .gemini/policies/crewlet-mcp.toml
+      content: |
+        # Written by Crewlet: the seat's own tools, served as the crewlet MCP server.
+        [[rule]]
+        mcpName = "crewlet"
+        toolName = "*"
+        decision = "allow"
+        priority = 999
     # THE CALL'S OWN ENVIRONMENT FILES, so the CLI reads none above its
     # directory. It loads ONE environment file, the first `.gemini/.env` or
     # `.env` it finds walking from its working directory to the root — not
@@ -893,6 +908,89 @@ gemini-cli:
     cache_read: [["stats", "models", "*", "tokens", "cached"]]
     reasoning: [["stats", "models", "*", "tokens", "thoughts"]]
     tool_prompt: [["stats", "models", "*", "tokens", "tool"]]
+  # The call's own session id, which names the run's chat record (requests,
+  # below). Any word of letters, digits, dashes and underscores is accepted.
+  session_args: ["--session-id", "{session}"]
+  # A POLICY FILE THE CLI CANNOT READ IS REPORTED AND SKIPPED: the CLI prints
+  # "[USER] Policy file error in <file>:" on stderr and carries on without the
+  # file's rules — the deny-all, or the seat's allow. So the run is stopped at
+  # that line and fails (measured on 0.65.0 with a broken crewlet-mcp.toml:
+  # stopped, failed, and the request it had already sent offered the web tools
+  # alone).
+  failure_markers: ["Policy file error"]
+  # THE SEAT'S TOOLS: one stdio server in the call's own workspace settings —
+  # trusted, by GEMINI_CLI_TRUST_WORKSPACE — and --allowed-mcp-server-names
+  # admitting it alone. Measured on 0.65.0 through the engine's own code path
+  # against a local stand-in, the state directory inside a checkout holding a
+  # .gemini/settings.json, an .mcp.json and every other CLI's MCP
+  # configuration at each level above the call, and an extension with a server
+  # of its own in the seat's home: the model was offered the seat's tools,
+  # web_fetch and google_web_search, and no other server started. Without the
+  # flag, the home's extension started its server. The home's settings.json is
+  # the profile's own seed, rewritten every generation.
+  #
+  # The server's `timeout` is the CLI's per-call timeout, in milliseconds
+  # (600,000 by default; 4,000 gave a slow call up at 4.0s). It re-reads the
+  # server's list when told it changed — a tool activated mid-run was offered
+  # from the request after the one the activation's result went back in — and
+  # makes one response's calls at once.
+  mcp:
+    seed:
+      - path: .gemini/settings.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"timeout":{tool_timeout_ms}}}}'
+    args: ["--allowed-mcp-server-names", "crewlet"]
+    tool_timeout_seconds: 600
+    relists: true
+    concurrency: at_once
+  # EACH REQUEST, FROM THE CHAT RECORD the CLI keeps as it goes — `json`
+  # output prints nothing until the run is over. Each response is a `gemini`
+  # entry with its id, prose, model and counts, written as the response
+  # arrives, and written WHOLE again once its calls have run, with the calls
+  # in it (whole). So the record shows a request's calls only after they ran
+  # (late_calls): a request is told once a later entry follows it — the
+  # `user` entry carrying its calls' results closes it — and its counts are
+  # charged when they are first read. The counts are the request's whole
+  # prompt (promptTokenCount), the cached part inside it.
+  #
+  # The file is named after the first eight characters of the session id,
+  # which no glob can spell, so it is told by its first line, which names
+  # the whole id (owner). The CLI sends no id of its own with a call; a call
+  # is joined to its request by name and arguments.
+  #
+  # Measured on 0.65.0: each request's counts as it was written, their sum
+  # equal to the final report's, and each call in the record once it had run.
+  requests:
+    source: file
+    in: home
+    file: ".gemini/tmp/*/chats/session-*.jsonl"
+    owner: {path: ["sessionId"], equals: "{session}"}
+    host_prefix: "mcp_crewlet_"
+    late_calls: true
+    events:
+      - match: [{path: ["type"], equals: "gemini"}]
+        whole: true
+        id: ["id"]
+        model: ["model"]
+        text: ["content"]
+        blocks:
+          path: ["toolCalls"]
+          each:
+            - call: {id: ["id"], name: ["name"], args: ["args"]}
+        usage:
+          input: [["tokens", "input"]]
+          output: [["tokens", "output"]]
+          cache_read: [["tokens", "cached"]]
+          reasoning: [["tokens", "thoughts"]]
+          tool_prompt: [["tokens", "tool"]]
+          input_includes_cache: true
+      - match: [{path: ["type"], equals: "user"}]
+        closes: true
+  # model.maxSessionTurns, where an operator sets it in the settings: the run
+  # exits 53, a FatalTurnLimitedError, the CLI's code for that one cause
+  # (measured on 0.65.0; its report is on stderr, not in the output).
+  cap:
+    exit_code: 53
   credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
   # What a call leaves in the seat's home: its transcript and temporary
   # directory under tmp/, a directory under history/, and an entry in
