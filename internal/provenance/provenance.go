@@ -76,13 +76,17 @@ const (
 	// about itself: its title, filters and selection, whose labels are names
 	// other people chose.
 	SourcePageContext Source = "page_context"
+	// SourceDeepWork is a Dashboard Assistant deep-work run's account of
+	// what it did: a coding CLI's own words, written after it read web pages
+	// and files nobody in the company wrote (ADR-0053).
+	SourceDeepWork Source = "deep_work"
 )
 
 // Sources are every surface.
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
-	SourceBrandVoice, SourceAPIAnswer, SourcePageContext,
+	SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
 }
 
 // Valid reports whether s is one of [Sources].
