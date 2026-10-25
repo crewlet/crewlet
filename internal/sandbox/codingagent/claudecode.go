@@ -46,6 +46,9 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 // Name is the coding agent's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
+// Resumes says Claude Code continues a session it reported (`--resume`).
+func (ClaudeCode) Resumes() bool { return true }
+
 // Command builds the headless `claude -p` invocation.
 //
 // Pure and deterministic so the exact flags can be pinned by a test. Budget
@@ -81,6 +84,11 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		"claude", "-p", shellQuote(req.Brief),
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
+	}
+	if req.Resume != "" {
+		// The earlier run's own session, in the same box's home where the
+		// CLI keeps it: the brief is the next message in that conversation.
+		parts = append(parts, "--resume", shellQuote(req.Resume))
 	}
 	if req.System != "" {
 		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))

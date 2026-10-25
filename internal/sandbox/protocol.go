@@ -592,6 +592,13 @@ type RunRequest struct {
 	// inside the box.
 	Model string
 
+	// Resume is the CLI session this run continues, as an earlier run in
+	// the same box reported it ([Result.SessionID]): the conversation, its
+	// tool results and its working files are where that run left them, and
+	// Brief is the next message in it. Empty starts a new session. A runner
+	// whose CLI cannot continue a session refuses a run that asks it to.
+	Resume string
+
 	// MCPServers is the scoped MCP surface, keyed by server name.
 	// SERVER-LEVEL SCOPING ONLY — there is no per-tool allowlist, because
 	// the agent inside the box negotiates its own tool list with the server
