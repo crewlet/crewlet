@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 )
 
 // `crewlet assistant eval`: what the Dashboard Assistant does with the tools
@@ -96,27 +97,14 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 		return err
 	}
 	ctx := context.Background()
+	provider, closeModel, err := evalModel(ctx, environ, *companyPath, *bootstrapPath, *model,
+		stderr)
+	if err != nil {
+		return err
+	}
+	defer closeModel()
 	opts := evals.Options{Trials: *trials}
-	if *model != "" {
-		company, keys, resolver, closeResolver, err := loadLLMConfig(ctx, environ,
-			*companyPath, *bootstrapPath, "", "eval", *model, stderr)
-		if err != nil {
-			return err
-		}
-		defer closeResolver()
-		if err := company.AssistantEntryProblems(*model); err != nil {
-			return fmt.Errorf("crewlet assistant eval: %s may not run the assistant: %w",
-				*model, err)
-		}
-		providers, err := cliAgents(company, keys, resolver)
-		if err != nil {
-			return err
-		}
-		provider, err := oneProvider(providers, *model)
-		if err != nil {
-			return err
-		}
-		restoreConfiguredBundle(ctx, provider, stderr)
+	if provider != nil {
 		fmt.Fprintf(stderr, "crewlet assistant eval: asking %s (%s), a paid model: %d "+
 			"cases, %d trials each\n", *model, provider.Model(), len(cases), *trials)
 		opts.Model, opts.ModelKey = provider, *model
@@ -138,6 +126,46 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 		return fmt.Errorf("crewlet assistant eval: %d of %d cases failed", failed, len(results))
 	}
 	return nil
+}
+
+// evalModel is the providers.llm entry key names, resolved for the assistant,
+// and the closer of the resolver it was read through. An empty key is no model
+// (each case plays its own script): a nil provider and a closer with nothing
+// to close.
+func evalModel(ctx context.Context, environ config.Source, companyPath, bootstrapPath, key string,
+	stderr io.Writer) (*cliagent.Provider, func(), error) {
+
+	if key == "" {
+		return nil, func() {}, nil
+	}
+	company, keys, resolver, closeResolver, err := loadLLMConfig(ctx, environ, companyPath,
+		bootstrapPath, "", "eval", key, stderr)
+	if err != nil {
+		return nil, nil, err
+	}
+	provider, err := assistantProvider(company, keys, resolver, key)
+	if err != nil {
+		closeResolver()
+		return nil, nil, err
+	}
+	restoreConfiguredBundle(ctx, provider, stderr)
+	return provider, closeResolver, nil
+}
+
+// assistantProvider is the CLI agent entry key names, refused when the
+// company may not run the assistant on it.
+func assistantProvider(company *config.Company, keys []string, resolver *config.Resolver,
+	key string) (*cliagent.Provider, error) {
+
+	if problem := company.AssistantEntryProblems(key); problem != nil {
+		return nil, fmt.Errorf("crewlet assistant eval: %s may not run the assistant: %w",
+			key, problem)
+	}
+	providers, err := cliAgents(company, keys, resolver)
+	if err != nil {
+		return nil, err
+	}
+	return oneProvider(providers, key)
 }
 
 // reportEval prints one line per case (its passes, and the mean rounds,
