@@ -604,6 +604,15 @@ var allowedReplicatedWriter = []allowance{
 			"record's rather than a sweep.",
 	},
 	{
+		Prefix: "internal/assistantdomain/apply", Kind: mechanism,
+		Why: "The Dashboard Assistant's applier, across a conversation, its " +
+			"turns, its proposals and an owner's erasure: every row is a pure " +
+			"function of a committed record and same-log rows, every sealed " +
+			"value is the writer's envelope written through unopened, and a " +
+			"purge or an erasure removes a conversation's rows in its own " +
+			"statement list beside the marker that keeps them gone.",
+	},
+	{
 		Prefix: "internal/artifactsdomain/apply", Kind: mechanism,
 		Why: "The artifacts domain's applier, across the artifact's own " +
 			"records, its assets and a reader's state: every row is a pure " +
