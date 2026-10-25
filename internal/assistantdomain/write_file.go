@@ -59,6 +59,19 @@ func (w *Writer) recordFile(ctx context.Context, c Call, r fileRecord) (statelog
 					"the %s a write may name an object within: upload it again", f.ID,
 					age.Truncate(time.Second), objstore.RecordWithin)
 			}
+			// AN ID NAMES ONE FILE FOR EVER: one another conversation's
+			// file already holds would apply as nothing and read back as
+			// a file that is not there.
+			var elsewhere int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistant_files
+				WHERE id = ?`, f.ID.String()).Scan(&elsewhere); err != nil {
+				return statelog.Decision{}, fmt.Errorf("assistantdomain: read file %s: %w",
+					f.ID, err)
+			}
+			if elsewhere > 0 {
+				return statelog.Decision{}, invalid("file id %s already names another "+
+					"file: mint a new id", f.ID)
+			}
 			held, err := filesHeld(ctx, tx, f.Conversation.String(), string(f.Origin))
 			if err != nil {
 				return statelog.Decision{}, err

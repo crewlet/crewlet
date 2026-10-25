@@ -565,3 +565,23 @@ func TestTheFileNameBoundIsTheSniffersOwn(t *testing.T) {
 			assistantdomain.FileNameMaxBytes, assistant.FileNameMaxBytes)
 	}
 }
+
+// A FILE ID NAMES ONE FILE FOR EVER: an id another conversation's file holds is
+// refused rather than published as a record that would apply as nothing and
+// read back as a file that is not there. Mutation: drop the writer's check and
+// the second store answers a bound it never reached.
+func TestAFileIDNamesOneFile(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	f := newFiles(t, n)
+	ada := person(uuid.New(), "ada")
+	first, second := n.conversation(ada, ""), n.conversation(ada, "")
+	kept := f.attach(ada, first, "a.png", png("a"))
+	_, _, err := f.store.Store(t.Context(), fresh(ada), assistantdomain.NewFile{
+		ID: kept.ID, Conversation: second, Origin: wire.FileAttached, Name: "b.png",
+		MediaType: "image/png", Content: png("b"),
+	})
+	if !errors.Is(err, assistantdomain.ErrInvalid) {
+		t.Errorf("a file id reused in another conversation = %v, want ErrInvalid", err)
+	}
+}
