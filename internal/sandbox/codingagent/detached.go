@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -857,10 +858,39 @@ func (r *Runner) overlayAsk(ctx context.Context, box sandbox.Sandbox, result san
 	if result.AskTo == "" {
 		result.AskTo = "requester"
 	}
-	// The branch as the ask recorded it, redacted like the question: it is
-	// a word from inside the box. Whether it is a branch at all, and short
-	// enough to be a ref, is the coordinator's to decide for every runner
-	// alike ([gitref.ValidBranch], [gitref.MaxBranchBytes]).
-	result.WIPBranch = redact.Secrets(strings.TrimSpace(ask.Branch))
+	// The branch as the ask recorded it ([askedBranch]), redacted like the
+	// question: it is a word from inside the box. Whether it is a branch at
+	// all, and short enough to be a ref, is the coordinator's to decide for
+	// every runner alike ([gitref.ValidBranch], [gitref.MaxBranchBytes]).
+	result.WIPBranch = redact.Secrets(strings.TrimSpace(askedBranch(blob, ask.Branch)))
 	return result, "", nil
+}
+
+// askedBranch is the branch an ask file records, as its bytes were written.
+// decoded is what encoding/json read for it, which is those bytes wherever
+// the file is UTF-8.
+//
+// THE DECODE RENAMES A BRANCH THAT IS NOT. encoding/json replaces each byte
+// that is not UTF-8 with U+FFFD, so a branch the agent gave as wip/\xff — a
+// name git takes, which the shim records byte for byte — decodes with U+FFFD
+// in place of its last byte: a valid name of another branch, one nobody
+// pushed, which the coordinator would keep and tell the re-seed to check out.
+// Its grammar refuses a branch that is not UTF-8 for exactly that reason
+// ([gitref.ValidBranch]), so such a branch is handed on as the file holds it,
+// undecoded between its quotes, and the coordinator drops it and says so, as
+// it does every branch a run records that no ref can be.
+func askedBranch(blob, decoded string) string {
+	if utf8.ValidString(blob) {
+		return decoded
+	}
+	var raw struct {
+		Branch json.RawMessage `json:"branch"`
+	}
+	// The blob decoded once already with the branch a string, so it decodes
+	// again, and a branch that is not UTF-8 is a string literal: its bytes
+	// lie between its quotes.
+	if json.Unmarshal([]byte(blob), &raw) != nil || utf8.Valid(raw.Branch) || len(raw.Branch) < 2 {
+		return decoded
+	}
+	return string(raw.Branch[1 : len(raw.Branch)-1])
 }

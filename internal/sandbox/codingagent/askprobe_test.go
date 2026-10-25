@@ -236,3 +236,29 @@ func TestTheAskShimRecordsTheBranchItWasRunOn(t *testing.T) {
 		})
 	}
 }
+
+// THE BRANCH IS HANDED ON AS ITS BYTES WERE WRITTEN. The shim records the
+// branch byte for byte, and a name git takes for a branch may hold bytes that
+// are not UTF-8 — which decoding the ask file replaced with U+FFFD, so the run
+// parked on another branch's name, one nobody pushed, and its re-seed was told
+// to check out a branch that does not exist. As written it is a name the
+// coordinator's grammar of a branch refuses, and the re-seed is told in
+// general terms instead.
+func TestAnAskedBranchIsHandedOnAsItsBytesWereWritten(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	inBox(t, box, `crewlet-ask "which branch?" --branch "$(printf 'wip/\377')"`)
+
+	if blob := askFile(t, box); !strings.Contains(blob, "\"branch\":\"wip/\xff\"") {
+		t.Fatalf("ask.json = %q, want the branch byte for byte as the agent gave it", blob)
+	}
+	result, err := runner.Collect(t.Context(), box, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !result.NeedsInput || result.Question != "which branch?" || result.WIPBranch != "wip/\xff" {
+		t.Fatalf("Collect = needs input %v, question %q, branch %q; want the question and the "+
+			"branch as its bytes were written, %q",
+			result.NeedsInput, result.Question, result.WIPBranch, "wip/\xff")
+	}
+}
