@@ -65,6 +65,7 @@ import {
   TableNumberCell,
   Tag,
   peekClickHandler,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -77,7 +78,7 @@ import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords, useTimeRange } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
@@ -270,7 +271,7 @@ export function Turns() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </PageActions>
 
       <Card>

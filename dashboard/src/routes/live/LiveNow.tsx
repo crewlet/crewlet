@@ -54,6 +54,7 @@ import {
   Select,
   Skeleton,
   peekClickHandler,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import {
   BrainGlyph,
@@ -83,7 +84,7 @@ import { plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { AgentRow, EventSeries, SandboxRun } from "~/protocol/index.ts";
 
 /**
@@ -252,7 +253,7 @@ export function LiveNow() {
           number twice side by side and pushed the shell's chip off a phone's
           page bar. */}
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Activity window" />
+        <TimeRangePicker {...rangePickerProps(range, "Activity window")} />
       </PageActions>
 
       <div className="live-now">

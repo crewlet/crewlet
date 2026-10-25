@@ -40,7 +40,16 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Button, Card, FilterChip, Input, Skeleton, Tag, InlineCode } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  FilterChip,
+  Input,
+  Skeleton,
+  Tag,
+  InlineCode,
+  TimeRangePicker,
+} from "@crewlethq/ui";
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -59,7 +68,7 @@ import {
   windowParam,
 } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram } from "~/ui/Histogram.tsx";
 import { FacetRail } from "~/ui/FacetRail.tsx";
 import { CATEGORIES } from "~/contract/categories.ts";
@@ -349,7 +358,7 @@ export function Activity() {
     <>
       <PageActions>
         <Tag appearance="outline">{windowLabel(range.window)}</Tag>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         {filtered ? (
           <Button
             leadingIcon={<XGlyph size="xs" />}

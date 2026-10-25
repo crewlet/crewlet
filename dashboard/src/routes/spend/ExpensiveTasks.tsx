@@ -34,6 +34,7 @@ import {
   TableKeyCell,
   TableNumberCell,
   peekRowActivation,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -49,7 +50,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { TRACKER, accessNames } from "~/lib/access.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { WorkSummary } from "~/protocol/types.ts";
 import { useMemo } from "react";
 import {
@@ -208,7 +209,7 @@ export function ExpensiveTasks() {
     return (
       <>
         <PageActions>
-          <TimeRangePicker range={range} ariaLabel="Window" />
+          <TimeRangePicker {...rangePickerProps(range, "Window")} />
         </PageActions>
         <QueryState
           error={refused}
@@ -222,7 +223,7 @@ export function ExpensiveTasks() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </PageActions>
       <Card className="spend-card spend-tasks" padding="none">
         <Card.Header
