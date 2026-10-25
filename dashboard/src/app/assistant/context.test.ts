@@ -17,10 +17,12 @@ import {
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
 } from "~/contract/assistant.ts";
 import { pageContextFits } from "~/protocol/assistantWire.ts";
+import { crumbsFor } from "../crumbs.ts";
 import { on } from "./bus.ts";
 import {
   applyPageAction,
   buildPageContext,
+  framePageOf,
   pageSnapshot,
   registerPage,
   resetPageContextForTest,
@@ -205,4 +207,25 @@ describe("applying a page action", () => {
     expect(applyPageAction(request("blocked")).outcome).toBe("applied");
     expect(applied).toEqual(["blocked"]);
   });
+});
+
+// THE CHIP NAMES THE TAB THE READER IS ON: Work's scope pages end their trail
+// in the scope and the lens is a tab, so the lens takes the scope's place
+// ("Work › Tasks", the plan's own example); elsewhere it is the trail's last
+// two crumbs.
+test("the page chip names the Work lens and its scope, and the last two crumbs elsewhere", () => {
+  const tasks = framePageOf(
+    ["work", "tasks"],
+    new URLSearchParams(),
+    crumbsFor(["work", "tasks"], {}),
+  );
+  expect(tasks?.title).toBe("Work › Tasks");
+  const projects = framePageOf(["work"], new URLSearchParams(), crumbsFor(["work"], {}));
+  expect(projects?.title).toBe("Work › Projects");
+  const spend = framePageOf(
+    ["settings", "spend"],
+    new URLSearchParams(),
+    crumbsFor(["settings", "spend"], {}),
+  );
+  expect(spend?.title).toBe("Settings › Token spend");
 });

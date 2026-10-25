@@ -49,6 +49,7 @@ import {
 import { pageContextFits } from "~/protocol/assistantWire.ts";
 import { resolve } from "../routes.ts";
 import type { Crumb } from "../crumbs.ts";
+import { LENS_LABELS, scopeAt } from "../scope.ts";
 import { parseRef, type ObjectKind, type ObjectRef } from "../frame/objects.ts";
 import { emit, on, type AssistantBusEvents, type AssistantInvalidateReason } from "./bus.ts";
 
@@ -170,7 +171,10 @@ export interface FramePage {
  * The page the frame is on, as it publishes it: the route's screen and its
  * own parameters, the address's query, and the last two crumbs as the chip's
  * title ("Work › Tasks", "Tasks › ENG-156"), the way an Open in app card names
- * a place. Null for an address the product has no framed page for.
+ * a place. On Work's scope pages the trail ends in the scope and the lens is a
+ * tab, so the lens takes the scope's place: "Work › Tasks" across all projects,
+ * "Core platform › Board" in one, and the chip on the Tasks tab never names
+ * only the scope. Null for an address the product has no framed page for.
  */
 export function framePageOf(
   path: readonly string[],
@@ -185,12 +189,17 @@ export function framePageOf(
     if (typeof value === "string") params[key] = value;
     else if (Array.isArray(value)) params[key] = value.join("/");
   }
+  const at = crumbs.at(-1)?.switch ? scopeAt([...path], query) : null;
+  const trail = crumbs.map((c) => c.label);
+  if (at) {
+    // ACROSS ALL PROJECTS the scope adds nothing the workspace does not say;
+    // in one project, the project is what the chip names the lens of.
+    const lead = at.scope.kind === "all" ? trail[0] : trail.at(-1);
+    trail.splice(0, trail.length, lead ?? "", LENS_LABELS[at.lens]);
+  }
   return {
     screen: where.screen,
-    title: crumbs
-      .slice(-2)
-      .map((c) => c.label)
-      .join(" › "),
+    title: trail.slice(-2).join(" › "),
     path,
     params,
     query: Object.fromEntries(query),
