@@ -729,6 +729,18 @@ test("the assistant's page action never widens the queue past its person", async
   expect(location.hash).not.toContain("assignee=");
   expect(ask({ status: "open" }).outcome).toBe("applied");
   await waitFor(() => expect(location.hash).toContain("status=open"));
+  // AND CLEAR TAKES THE FILTER OFF AND LEAVES THE PERSON.
+  expect(
+    applyPageAction({
+      correlation_id: "d",
+      action: "work.filters.clear",
+      payload: {},
+      source_revision: "",
+    }).outcome,
+  ).toBe("applied");
+  await waitFor(() => expect(location.hash).not.toContain("status="));
+  expect(location.hash).toContain("handle=rui");
+  expect(location.hash).not.toContain("assignee=");
   resetPageContextForTest();
 });
 
