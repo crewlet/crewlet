@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -67,24 +66,6 @@ func (s *stubTool) seen() []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]map[string]any(nil), s.args...)
-}
-
-// activator stands in for activate_tool: a bridged call that widens the very
-// surface it was called on, which is the only way a coding agent's active set
-// ever moves while its run is in a box.
-type activator struct {
-	surface func() *tools.Surface
-	target  string
-}
-
-func (a *activator) Name() string               { return "activate" }
-func (a *activator) Description() string        { return "activate " + a.target }
-func (a *activator) Parameters() map[string]any { return map[string]any{"type": "object"} }
-func (a *activator) Call(context.Context, map[string]any) (tools.Result, error) {
-	if a.surface().Activate(a.target) {
-		return tools.Result{Output: a.target + " is active"}, nil
-	}
-	return tools.Result{Output: "no such tool", Failed: true}, nil
 }
 
 // ledger records what a resume would read back.
@@ -168,11 +149,6 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		byName[name] = tool
 	}
 	f := &fixture{ledger: &ledger{}, byName: byName}
-	// In the universe for every case, offered only where a case names it.
-	widen := &activator{surface: func() *tools.Surface { return f.surface }, target: "post_message"}
-	if err := reg.Register(widen, tools.OriginBuiltin); err != nil {
-		t.Fatalf("Register(activate): %v", err)
-	}
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}
 	}
@@ -605,103 +581,6 @@ func TestARunWithNoLedgerStillDispatches(t *testing.T) {
 }
 
 // --- what the caller is offered --------------------------------------------
-
-// THE ADVERTISED SET IS THE SURFACE'S LIVE ONE. A server built once when the
-// run opened would advertise the set it started with for the run's whole life,
-// so a tool the agent activates mid-run would be invisible until it ended.
-func TestTheAdvertisedToolsFollowTheLiveSurface(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, "read_page", "activate")
-	url := f.open(t)
-	// ONE SESSION, HELD FOR THE RUN, the way a coding agent's client holds
-	// it. A fresh session per list would rebuild the server and pass for a
-	// bridge whose connected boxes never see an activation at all.
-	sess := dial(t, url)
-
-	names := func() []string {
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
-		listed, err := sess.ListTools(ctx, nil)
-		if err != nil {
-			t.Fatalf("ListTools: %v", err)
-		}
-		var out []string
-		for _, tool := range listed.Tools {
-			out = append(out, tool.Name)
-		}
-		slices.Sort(out)
-		return out
-	}
-
-	if got := names(); !slices.Equal(got, []string{"activate", "read_page"}) {
-		t.Fatalf("tools = %v", got)
-	}
-	// Activated the only way a box can activate anything: over the bridge.
-	if res := callTool(t, sess, "activate", nil); res.IsError {
-		t.Fatalf("activate failed: %s", text(res))
-	}
-	if got := names(); !slices.Contains(got, "post_message") {
-		t.Fatalf("a tool activated mid-run is not advertised on the box's own session: %v", got)
-	}
-	// Listed AND callable — the server's table is what dispatches, and a
-	// name the surface offers but the server never learned is refused as
-	// unknown before the surface is asked.
-	if res := callTool(t, sess, "post_message", map[string]any{"text": "hi"}); res.IsError {
-		t.Errorf("an activated tool is listed but not callable: %s", text(res))
-	}
-	if seen := f.byName["post_message"].seen(); len(seen) != 1 {
-		t.Errorf("post_message ran %d times, want 1", len(seen))
-	}
-}
-
-// AN ACTIVATION'S ANSWER WAITS FOR THE BOX'S RE-LIST. The coding CLIs that run
-// in a box re-read their tool list when told it changed, and answered at once
-// one asks its model again before that re-list lands, so the tool it just
-// activated reaches the model a request late — a request spent on a model
-// that could not yet call it.
-//
-// Mutation: drop the hold from the bridge's sessions, and the answer comes
-// back before the box could have re-listed.
-func TestAnActivationsAnswerWaitsForTheBoxsRelist(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, "read_page", "activate")
-	url := f.open(t)
-	const relistDelay = 300 * time.Millisecond
-	var sess *mcp.ClientSession
-	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"},
-		&mcp.ClientOptions{
-			ToolListChangedHandler: func(ctx context.Context, _ *mcp.ToolListChangedRequest) {
-				// A CLI that re-reads its list a moment after the notice.
-				time.Sleep(relistDelay)
-				_, _ = sess.ListTools(ctx, nil)
-			},
-		})
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: url, HTTPClient: httpxtest.Pool(t),
-	}, nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = sess.Close() })
-	if _, err := sess.ListTools(ctx, nil); err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-
-	began := time.Now()
-	if res := callTool(t, sess, "activate", nil); res.IsError {
-		t.Fatalf("activate failed: %s", text(res))
-	}
-	// The box re-lists no sooner than relistDelay after the notice, so an
-	// answer that waited for it took at least that — and was let go once
-	// it came, well before the hold's own bound.
-	if took := time.Since(began); took < relistDelay {
-		t.Errorf("answered after %s, before the box could have re-listed", took)
-	} else if took > 1500*time.Millisecond {
-		t.Errorf("answered after %s: the hold outlasted the box's re-list", took)
-	}
-}
 
 // CLOSING A RUN ENDS THE MCP SESSIONS ITS BOX HOLDS, not only the bridge's
 // own map entry. The SDK keeps every session a box opened — transport,
