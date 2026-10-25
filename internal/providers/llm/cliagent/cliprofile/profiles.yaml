@@ -1155,20 +1155,60 @@ opencode:
 
 cursor-agent:
   binary: cursor-agent
-  written_for: "Cursor Agent 2026.09.x (`cursor-agent --version`), which versions by DATE"
+  written_for: "Cursor Agent 2026.09.x and 2026.10.x, measured on 2026.09.10 and 2026.10.22 (`cursor-agent --version`), which versions by DATE"
   version_args: ["--version"]
-  complete_args: ["-p", "--output-format", "json"]
+  # Measured on 2026.10.22 through the engine's own code path, with the API
+  # endpoint at a local stand-in that signs a dummy key in, and the state
+  # directory inside a git checkout whose every level holds an AGENTS.md,
+  # CLAUDE.md, .cursorrules, .cursor/rules, skills, hooks and MCP
+  # configurations; 2026.09.10 measured on the trust gate and the files it
+  # opens, and read from its bundle. The model's reply streams from Cursor's
+  # own service in a protocol the stand-in does not answer, so no measured
+  # call got as far as an answer.
+  #
+  #   --trust   the call's directory is new on every call, and print mode
+  #             refuses an untrusted one: without it every call exited 1 on
+  #             "Workspace Trust Required" after signing in and before any
+  #             model request. It is written per call as a marker under
+  #             .cursor/projects in the seat's home, pruned below.
+  #   --exclude-workspace-context
+  #             a hidden flag ("Strip all workspace-sourced context (rules,
+  #             skills, transcripts, notes) from the session"), present in
+  #             both builds' bundles. Measured on 2026.10.22: it sets the run
+  #             request's exclude_workspace_context field, false without it,
+  #             and the CLI loads no skills or commands. What the service
+  #             then leaves out happens on Cursor's side and cannot be
+  #             measured here.
+  #
+  # The `.git` file the engine writes into the call's directory keeps every
+  # hook, cli.json and mcp.json above it from being read: with --trust no
+  # planted hook or MCP server ran. The CLI's rule loader does NOT stop
+  # there: both builds walk from the call's directory to the filesystem root
+  # and open every AGENTS.md, CLAUDE.md and .cursor/rules/*.mdc on the way
+  # (measured by tracing the files opened, with and without the flag above,
+  # and read from both bundles). None of them is in the run request, which
+  # carries the user message alone (measured); what the service asks the CLI
+  # for after that could not be measured. A state_dir outside any directory
+  # holding such files keeps them out entirely.
+  complete_args: ["-p", "--output-format", "json", "--trust", "--exclude-workspace-context"]
   # Cursor reads a permissions block from the project's .cursor/cli.json —
   # the per-call scratch directory IS the project, so the file is seeded there
-  # on every call. Its user-level file, cli-config.json, is the login file
-  # this profile seeds and syncs back, so the policy is kept out of it. Deny
-  # takes precedence over allow.
+  # on every call. Its user-level file, cli-config.json, is synced back with
+  # the login, so the policy is kept out of it. Deny takes precedence over
+  # allow, and the user-level default allows Shell(ls).
   local_tools: denied
   seed_files:
     - path: .cursor/cli.json
       in: work
       content: '{"permissions":{"allow":["WebFetch(*)"],"deny":["Shell(*)","Write(*)","Read(*)"]}}'
   model_args: ["--model", "{model}"]
+  # NO SYSTEM-PROMPT CHANNEL. The system prompt is assembled by Cursor's
+  # service: the run request carries the user message and no system prompt
+  # (its one field for one, set by the hidden --system-prompt, is documented
+  # as for Cursor's own team only), and an AGENTS.md or rule in the call's
+  # directory is exactly the workspace context the flag above strips. The
+  # engine's text rides the transcript, under the note that says which of the
+  # two prompts is the role.
   prompt_mode: stdin
   output: json
   text_paths: [["result"], ["response"]]
@@ -1178,7 +1218,11 @@ cursor-agent:
   config_env:
     CURSOR_CONFIG_DIR: ".cursor"
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
-  volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions"]
+  # What a call leaves in the seat's home, measured on 2026.10.22: a chat
+  # directory, and per call-directory a projects entry holding the trust
+  # marker, the call's transcript and a worker log — one more entry for every
+  # call the seat makes.
+  volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions", ".cursor/projects"]
   host_credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
   # The CLI's own authentication reference (cursor.com/docs/cli/reference/
   # authentication) gives CURSOR_API_KEY as the recommended headless sign-in,
@@ -1192,17 +1236,21 @@ cursor-agent:
   login_args: ["login"]
   logout_args: ["logout"]
   status_args: ["status"]
-  # NOT MEASURED, the markers below: generic phrases rather than this CLI's
-  # own sentences, safe to keep only because of WHERE they are matched — on
-  # stderr, in a run the CLI reported failed, or where one OPENS a clean
-  # run's answer, never inside it (cliprofile.MarkerScope). A model writing
-  # about a quota is answering. If your CLI reports these differently,
-  # override them.
+  # NOT MEASURED, the limit markers below: generic phrases rather than this
+  # CLI's own sentences, safe to keep only because of WHERE they are matched
+  # — on stderr, in a run the CLI reported failed, or where one OPENS a
+  # clean run's answer, never inside it (cliprofile.MarkerScope). A model
+  # writing about a quota is answering. If your CLI reports these
+  # differently, override them.
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "quota"
+  # The CLI's own words, which every variant in both builds opens with:
+  # signed out, 2026.10.22 exits 1 on "Error: Authentication required.
+  # Please run 'agent login' first, or set CURSOR_API_KEY environment
+  # variable." (measured).
   auth_markers:
-    - sentinel: "not logged in"
+    - sentinel: "Authentication required"
 
 copilot:
   binary: copilot

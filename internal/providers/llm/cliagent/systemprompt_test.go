@@ -172,8 +172,10 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// 1.0.103: no replacing channel; it keeps its own prompt and adds
 		// the engine's from an AGENTS.md in the call's directory
 		// (append_system_prompt).
-		"copilot":      "",
-		"cursor-agent": "", // 2026.09.02
+		"copilot": "",
+		// 2026.09.10 and 2026.10.22: Cursor's own service assembles the
+		// system prompt, and the run request carries none.
+		"cursor-agent": "",
 		// 2.0.32 and 2.1.4: no flag and no variable, but a DISCOVERED
 		// AGENT — `agents/<name>.md` in its configuration directory, which
 		// the profile points inside the per-call directory, its body
