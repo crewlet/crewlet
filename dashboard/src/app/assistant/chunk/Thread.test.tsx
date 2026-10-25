@@ -1,7 +1,8 @@
 /**
- * The thinking shimmer stands in for an answer not yet drawn: it shows while
- * the turn thinks with nothing on screen, and goes once a card a read built
- * is drawn, rather than sitting between the steps and that card.
+ * The thinking indicator is the turn's live line: the Assistant's mark after
+ * everything the turn has drawn, saying Thinking or the running step, and the
+ * mark alone while the answer's words arrive. No caret is drawn in the words,
+ * and the run chip is drawn from the first step, closed while the turn runs.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -52,8 +53,19 @@ const card: AssistantCardEvent = {
   },
 } as AssistantCardEvent;
 
-/** The shimmer, as the design system draws it: a skeleton hidden from assistive technology. */
-const SHIMMER = '[class*="crewlet-skeleton"]';
+/** The indicator, its status line, and a caret, as the design system draws them. */
+const INDICATOR = ".crewlet-thinking";
+const STATUS = ".crewlet-thinking__status";
+const CARET = ".crewlet-prose--streaming";
+
+const running = {
+  step_id: "s",
+  index: 1,
+  tool: "list_agents",
+  label: "Listing the agents",
+  state: "running" as const,
+  started_at: "2026-10-24T09:41:00Z",
+};
 
 function draw(t: TurnView, retryDisabledReason?: string) {
   return render(
@@ -71,15 +83,57 @@ function draw(t: TurnView, retryDisabledReason?: string) {
   );
 }
 
-test("the shimmer shows while the turn thinks with nothing drawn", () => {
+test("says Thinking once, with no run chip and no placeholder, before the first step", () => {
   const { container } = draw(turn);
-  expect(container.querySelector(SHIMMER)).not.toBeNull();
+  expect(container.querySelector(STATUS)!.textContent).toBe("Thinking");
+  expect(container.querySelector('[class*="crewlet-skeleton"]')).toBeNull();
+  expect(container.querySelector(".crewlet-run-chip")).toBeNull();
+  // Announced once, through the indicator's own status region.
+  expect(screen.getAllByRole("status").map((s) => s.textContent)).toEqual(["Thinking"]);
 });
 
-test("the shimmer goes once a card is drawn", () => {
+test("says the running step, under a run chip that stays closed while it runs", () => {
+  const { container } = draw({ ...turn, phase: "working", steps: [running] });
+  expect(container.querySelector(STATUS)!.textContent).toBe("Listing the agents");
+  const chip = container.querySelector(".crewlet-run-chip")!;
+  expect(chip.querySelector("[aria-expanded]")!.getAttribute("aria-expanded")).toBe("false");
+});
+
+test("stands after a card a read built, rather than going", () => {
   const { container } = draw({ ...turn, cards: [card] });
   expect(screen.getByText("Settle-up algorithm")).toBeTruthy();
-  expect(container.querySelector(SHIMMER)).toBeNull();
+  const indicator = container.querySelector(INDICATOR)!;
+  const drawn = screen.getByText("Settle-up algorithm");
+  expect(drawn.compareDocumentPosition(indicator) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// THE CARET IS GONE: it stood on a line of its own after the last block, and
+// alone above the cards of a silent round. The mark stands after the words.
+test("draws the mark alone after a streaming answer, and no caret in it", () => {
+  const { container } = draw({
+    ...turn,
+    phase: "working",
+    replies: [
+      { id: "m0", text: "" },
+      { id: "m", text: "Both of your agents are idle.\n\n- pm\n- engineer" },
+    ],
+  });
+  expect(container.querySelector(CARET)).toBeNull();
+  expect(container.querySelector(INDICATOR)).not.toBeNull();
+  expect(container.querySelector(STATUS)).toBeNull();
+  const words = screen.getByText(/Both of your agents are idle/);
+  expect(
+    words.compareDocumentPosition(container.querySelector(INDICATOR)!) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+test("goes once the turn waits on the person or has ended", () => {
+  for (const phase of ["awaiting_approval", "completed", "stopped"] as const) {
+    const { container, unmount } = draw({ ...turn, phase });
+    expect(container.querySelector(INDICATOR), phase).toBeNull();
+    unmount();
+  }
 });
 
 test("a run that took no step has no count and nothing to open", () => {

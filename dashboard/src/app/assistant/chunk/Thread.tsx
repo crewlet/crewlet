@@ -2,11 +2,21 @@
  * A conversation's turns, drawn from the reducer's state and nothing else.
  *
  * ONE TURN IS: the person's question in a bubble, with the page it carried
- * under it; the run chip, which says the turn's state in words and opens on
- * the steps it took (each with the ordinary request it made, in mono); the
- * answer as prose with no container round it; the engine's cards; and, once
- * the turn has ended, a foot with when it was and Copy. No answer rating: in
- * a self-hosted engine nothing would read one.
+ * under it; the run chip, once the turn has taken a step, which says the
+ * turn's state in words and opens on the steps it took (each with the
+ * ordinary request it made, in mono); the answer as prose with no container
+ * round it; the engine's cards; while the assistant works, the thinking
+ * indicator after all of it; and, once the turn has ended, a foot with when
+ * it was and Copy. No answer rating: in a self-hosted engine nothing would
+ * read one.
+ *
+ * THE INDICATOR IS THE LIVE LINE, AS IN CLAUDE: the Assistant's mark turning,
+ * with "Thinking" or the running step's sentence under a shimmer, and the
+ * mark alone while the answer's words arrive above it. It replaces both the
+ * skeleton that stood in for the answer (three lines that jumped to one when
+ * the first words came) and the caret, which stood on a line of its own. So
+ * the run chip says nothing the indicator already says: it is drawn from the
+ * first step, and stays closed while the turn runs, its steps one press away.
  *
  * THE THREAD IS A LOG WITH ITS LIVE REGION OFF: a streaming answer is not
  * read out token by token. What is announced, once, through the one polite
@@ -21,9 +31,9 @@ import {
   MessageBubble,
   RelativeTime,
   RunChip,
-  Skeleton,
   StepList,
   Tag,
+  ThinkingIndicator,
   VisuallyHidden,
   Button,
   Inline,
@@ -39,6 +49,7 @@ import {
   ReplyProse,
   runChipOf,
   stepsOf,
+  thinkingOf,
   type CardHandlers,
 } from "./blocks.tsx";
 import { changedNothing } from "./pageActions.ts";
@@ -114,7 +125,6 @@ function Turn({
   opened,
   onRetry,
   retryDisabledReason,
-  last,
 }: {
   turn: TurnView;
   now: number;
@@ -122,17 +132,11 @@ function Turn({
   opened: ReadonlySet<string>;
   onRetry: (text: string) => void;
   retryDisabledReason: string | undefined;
-  last: boolean;
 }) {
   const open = isOpen(turn.phase);
   const chip = runChipOf(turn, now);
   const steps = stepsOf(turn);
-  // THE SHIMMER STANDS IN FOR AN ANSWER NOT YET DRAWN, so it goes as soon as
-  // anything of the answer is on screen: a reply, or a card a read built.
-  const thinking =
-    (turn.phase === "sending" || turn.phase === "thinking") &&
-    turn.replies.length === 0 &&
-    turn.cards.length === 0;
+  const thinking = thinkingOf(turn);
   const placed = new Set(turn.replies.map((r) => r.id));
   const cardsOf = (messageId: string) => turn.cards.filter((c) => c.message_id === messageId);
   const loose = turn.cards.filter((c) => !placed.has(c.message_id));
@@ -179,19 +183,14 @@ function Turn({
               ? `You can ask again in ${turn.refusal.retryAfterSeconds} seconds, and your question is back in the box below.`
               : "Nothing changed.")}
         </Callout>
-      ) : (
-        <RunChip state={chip.state} title={chip.title} meta={chip.meta} defaultOpen={open}>
-          {steps.length > 0 ? <StepList label="Steps" steps={steps} /> : undefined}
+      ) : steps.length > 0 ? (
+        <RunChip state={chip.state} title={chip.title} meta={chip.meta} defaultOpen={false}>
+          <StepList label="Steps" steps={steps} />
         </RunChip>
-      )}
-      {thinking ? <Skeleton variant="text" rows={3} label="Thinking" /> : null}
-      {turn.replies.map((reply, i) => (
+      ) : null}
+      {turn.replies.map((reply) => (
         <Stack key={reply.id} gap={3}>
-          <ReplyProse
-            text={reply.text}
-            streaming={open && last && i === turn.replies.length - 1 && turn.phase === "working"}
-            dimmed={turn.phase === "stopped"}
-          />
+          <ReplyProse text={reply.text} dimmed={turn.phase === "stopped"} />
           {cardsOf(reply.id).map(card)}
         </Stack>
       ))}
@@ -204,6 +203,9 @@ function Turn({
           on={on}
         />
       ))}
+      {/* ONE ELEMENT FOR THE WHOLE RUN, in a slot of its own, so its status
+          region is announced once and only its words change. */}
+      {thinking ? <ThinkingIndicator status={thinking.status} /> : null}
       {turn.phase === "stopped" ? (
         <ReplyProse text={`Stopped. ${consequenceOf(turn)}`} dimmed />
       ) : null}
@@ -325,7 +327,7 @@ export function Thread({
   return (
     <>
       <AuditReads reads={view.auditReads} />
-      {view.turns.map((turn, i) => (
+      {view.turns.map((turn) => (
         <Turn
           key={turn.key}
           turn={turn}
@@ -334,7 +336,6 @@ export function Thread({
           opened={opened}
           onRetry={onRetry}
           retryDisabledReason={retryDisabledReason}
-          last={i === view.turns.length - 1}
         />
       ))}
       {reconnecting ? (

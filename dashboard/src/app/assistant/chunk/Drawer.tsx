@@ -71,7 +71,7 @@ import { ASSISTANT_INPUT_MAX_RUNES } from "~/contract/assistant.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
 import { relTime } from "~/lib/format.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
-import { matchesRow } from "../../keymap.ts";
+import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { on as onBus, emit } from "../bus.ts";
 import { usePageSnapshot } from "../context.ts";
 import {
@@ -83,7 +83,7 @@ import {
 import type { AssistantModelProblem, AssistantUnavailable } from "../availability.ts";
 import { readTab } from "../tab.ts";
 import { useToastInset } from "../../toastInset.tsx";
-import type { AssistantShape } from "../../layout.ts";
+import { useKeyHints, type AssistantShape } from "../../layout.ts";
 import type { InAppTarget } from "./openInApp.ts";
 import {
   approve,
@@ -125,6 +125,9 @@ export interface DrawerProps {
    */
   shape: AssistantShape;
 }
+
+/** Send's words, with Stop named for what it ends: the answer, not the conversation. */
+const SEND_LABELS = { send: "Send", stop: "Stop answering" } as const;
 
 /** A clock for the run chip and the message feet: each second while a turn runs, each minute otherwise. */
 function useNow(fast: boolean): number {
@@ -224,6 +227,12 @@ export function Drawer({
   const waitSeconds = Math.max(0, Math.ceil((busyUntil - now) / 1000));
   const stoppable =
     running !== null && running.phase !== "awaiting_approval" && running.phase !== "unconfirmed";
+  // STOP SAYS ITS KEY in its tooltip, as the Ask button says its own, for a
+  // reader with keys: Escape in the composer stops a running answer.
+  const keyHints = useKeyHints();
+  const stopTitle = keyHints
+    ? `${SEND_LABELS.stop} (${pressText(keyRow("layer.close").presses[0]!)})`
+    : SEND_LABELS.stop;
 
   const disabledReason = useMemo(() => {
     if (view.fault === "protocol_mismatch") return "Reload to keep asking";
@@ -465,6 +474,8 @@ export function Drawer({
                 trailing={
                   <SendButton
                     mode={stoppable ? "stop" : "send"}
+                    labels={SEND_LABELS}
+                    title={stoppable ? stopTitle : undefined}
                     onPress={stoppable ? () => void stop() : () => ask(draft)}
                     disabledReason={
                       stoppable

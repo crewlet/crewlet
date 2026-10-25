@@ -225,6 +225,29 @@ export function runChipOf(
   }
 }
 
+/** The phases in which the assistant itself is busy on a turn: not waiting on the person, not applying a change. */
+const BUSY: ReadonlySet<TurnPhase> = new Set(["sending", "thinking", "working"]);
+
+/**
+ * What the thinking indicator says under a turn, or null where it is not
+ * drawn: only while the assistant itself is busy on the turn, never while it
+ * waits on the person or applies an approved change, which their cards say.
+ *
+ * THE STATUS IS WHAT IS HAPPENING NOW: "Stopping" once a stop is on its way,
+ * the running step's own sentence while a tool runs, and "Thinking" while
+ * nothing of the answer is written yet. Once the answer's words are arriving
+ * the mark stands alone after them, with no words of its own, as a caret
+ * would have but never inside the text.
+ */
+export function thinkingOf(turn: TurnView): { status: string | undefined } | null {
+  if (!BUSY.has(turn.phase)) return null;
+  if (turn.stopping) return { status: "Stopping" };
+  const running = turn.steps.filter((step) => step.state === "running").at(-1);
+  if (running) return { status: running.label };
+  const writing = (turn.replies.at(-1)?.text.trim() ?? "") !== "";
+  return { status: writing ? undefined : "Thinking" };
+}
+
 /**
  * The shortest step whose time is said. Under it a step said "0.0s", which
  * reads as a step that did nothing rather than one that was quick, so a step
@@ -267,25 +290,23 @@ function stepDetail(step: TurnView["steps"][number]): string {
   return why ? `${why} (${request})` : request;
 }
 
-/** A model's prose, drawn inert. `streaming` while deltas arrive; `dimmed` for an abandoned attempt. */
-export function ReplyProse({
-  text,
-  streaming = false,
-  dimmed = false,
-}: {
-  text: string;
-  streaming?: boolean;
-  dimmed?: boolean;
-}) {
+/**
+ * A model's prose, drawn inert; `dimmed` for an abandoned attempt.
+ *
+ * NO CARET WHILE IT STREAMS: the turn's `ThinkingIndicator` stands after the
+ * answer instead. A caret drawn by the block landed after its last paragraph
+ * or list, on a line of its own, and on an empty reply alone above its cards.
+ */
+export function ReplyProse({ text, dimmed = false }: { text: string; dimmed?: boolean }) {
   // A SILENT ROUND IS STORED as an empty message its cards hang from, and
-  // draws nothing of its own.
-  if (!streaming && text.trim() === "") return null;
+  // draws nothing of its own, streaming or not.
+  if (text.trim() === "") return null;
   return (
     // A DIV, NOT PROSE'S DEFAULT PARAGRAPH: rendered Markdown is blocks
     // (paragraphs, lists), which a <p> may not hold. `prose md` is the class
     // pair the dashboard's Markdown rhythm is written for, as every other
     // rendered body here carries it, so the reply's paragraphs are spaced.
-    <Prose as="div" measure="narrow" streaming={streaming} dimmed={dimmed} className="prose md">
+    <Prose as="div" measure="narrow" dimmed={dimmed} className="prose md">
       {renderMarkdown(text, ASSISTANT_WORDS)}
     </Prose>
   );

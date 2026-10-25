@@ -151,7 +151,7 @@ test("a question asked while a card waits supersedes the waiting turn", async ()
   // SEND, NEVER STOP, while a card waits on the person.
   const box = screen.getByRole("textbox", { name: "Ask the assistant" });
   fireEvent.change(box, { target: { value: "And who owns it?" } });
-  expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Stop answering" })).toBeNull();
   expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).not.toBe(
     "true",
   );

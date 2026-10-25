@@ -22,6 +22,7 @@ import {
   WORD_OP,
   changeRowsOf,
   runChipOf,
+  thinkingOf,
 } from "./blocks.tsx";
 import type { TurnView } from "./turn.ts";
 
@@ -194,5 +195,91 @@ describe("a proposal's change rows", () => {
 
   test("carry no audience row where the visibility does not change", () => {
     expect(changeRowsOf(base).map((r) => r.label)).toEqual(["Artifact", "Readers"]);
+  });
+});
+
+describe("the thinking indicator says what is happening now", () => {
+  const base: TurnView = {
+    key: "k",
+    id: "t",
+    phase: "thinking",
+    seq: 0,
+    question: "q",
+    page: null,
+    askedAt: "2026-10-24T09:41:00Z",
+    stepsDone: 0,
+    steps: [],
+    replies: [],
+    cards: [],
+    proposals: {},
+    actions: [],
+    actionStates: {},
+    done: null,
+    error: null,
+    refusal: null,
+    stopping: false,
+  };
+  const step = (state: "running" | "done", label: string) => ({
+    step_id: label,
+    index: 1,
+    tool: "list_agents",
+    label,
+    state,
+    started_at: "2026-10-24T09:41:00Z",
+  });
+
+  test("Thinking while nothing of the answer is written", () => {
+    expect(thinkingOf({ ...base, phase: "sending" })).toEqual({ status: "Thinking" });
+    expect(thinkingOf(base)).toEqual({ status: "Thinking" });
+    // An empty message a silent round's cards hang from is not words.
+    expect(thinkingOf({ ...base, phase: "working", replies: [{ id: "m", text: "  " }] })).toEqual({
+      status: "Thinking",
+    });
+  });
+
+  test("the running step's own sentence while a tool runs", () => {
+    const working = {
+      ...base,
+      phase: "working" as const,
+      steps: [step("done", "Listing the agents"), step("running", "Reading Worklet")],
+    };
+    expect(thinkingOf(working)).toEqual({ status: "Reading Worklet" });
+  });
+
+  // THE MARK STANDS ALONE AFTER THE WORDS, in place of a caret. Mutation:
+  // keep saying Thinking under a streaming answer and the line repeats what
+  // the reader is watching happen.
+  test("no words of its own while the answer's words arrive", () => {
+    const streaming = {
+      ...base,
+      phase: "working" as const,
+      steps: [step("done", "Listing the agents")],
+      replies: [{ id: "m", text: "Both of your agents" }],
+    };
+    expect(thinkingOf(streaming)).toEqual({ status: undefined });
+  });
+
+  test("Stopping once a stop is on its way", () => {
+    expect(thinkingOf({ ...base, phase: "working", stopping: true })).toEqual({
+      status: "Stopping",
+    });
+  });
+
+  // NOT WHILE THE PERSON IS WAITED ON, or a change is applied: their cards say so.
+  test("nothing once the assistant is not the one busy", () => {
+    for (const phase of [
+      "awaiting_approval",
+      "applying",
+      "unconfirmed",
+      "refused",
+      "completed",
+      "stopped",
+      "failed",
+      "interrupted",
+      "expired",
+      "budget_exhausted",
+    ] as const) {
+      expect(thinkingOf({ ...base, phase }), phase).toBeNull();
+    }
   });
 });
