@@ -205,17 +205,16 @@ export function openTurnStream(
     return { close: () => outer.abort() };
   }
 
+  /** Wait `ms`, or until the stream is closed, holding nothing on the signal after. */
   const sleep = (ms: number) =>
     new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      outer.signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
+      const wake = () => {
+        clearTimeout(timer);
+        outer.signal.removeEventListener("abort", wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      outer.signal.addEventListener("abort", wake, { once: true });
     });
 
   /** One connection: true when the turn ended, false to dial again. */
@@ -275,8 +274,12 @@ export function openTurnStream(
       }
       return false;
     } finally {
+      // EVERY WAY OUT ENDS THE CONNECTION: after a fault or a refusal the
+      // body may still be open, and a body nobody reads holds the engine's
+      // handler on a write until the tab closes.
       clearTimeout(stall);
       outer.signal.removeEventListener("abort", forward);
+      own.abort();
     }
   }
 

@@ -166,6 +166,50 @@ describe("a turn's stream", () => {
     expect(sent).toHaveLength(1);
   });
 
+  // A FAULT ENDS THE CONNECTION TOO, not only the reading: a body left open
+  // and unread holds the engine's handler on a write until the tab closes.
+  test("a stream stopped by a fault aborts its connection", async () => {
+    const other = FIRST[0]!.replace('"v":1', '"v":2');
+    const sent = serve(() => sse(body([other], "hang")));
+    const w = watch(URL_);
+    await w.ended;
+    expect(w.stops[0]?.code).toBe("protocol_mismatch");
+    expect(sent[0]!.init.signal?.aborted).toBe(true);
+  });
+
+  // A LONG OUTAGE HOLDS NOTHING: each reconnect's wait and each attempt let go
+  // of the stream's own signal, the one that outlives every dial, so
+  // listeners do not pile up on it per reconnect.
+  test("reconnecting leaves no listener behind on the stream's signal", async () => {
+    const added = vi.spyOn(AbortSignal.prototype, "addEventListener");
+    const removed = vi.spyOn(AbortSignal.prototype, "removeEventListener");
+    serve(
+      () => new Response("{}", { status: 503 }),
+      () => new Response("{}", { status: 503 }),
+      () => new Response("{}", { status: 503 }),
+      () => sse(body(FIRST)),
+    );
+    const w = watch(URL_);
+    await w.ended;
+    const adds = new Map<AbortSignal, number>();
+    const held = new Map<AbortSignal, number>();
+    const count = (spy: typeof added, by: number) =>
+      spy.mock.calls.forEach(([type], i) => {
+        if (type !== "abort") return;
+        const signal = spy.mock.contexts[i] as AbortSignal;
+        if (by > 0) adds.set(signal, (adds.get(signal) ?? 0) + 1);
+        held.set(signal, (held.get(signal) ?? 0) + by);
+      });
+    count(added, 1);
+    count(removed, -1);
+    added.mockRestore();
+    removed.mockRestore();
+    // The stream's own signal is the one every dial and every wait listens on.
+    const [outer, dials] = [...adds].sort((a, b) => b[1] - a[1])[0]!;
+    expect(dials).toBeGreaterThanOrEqual(7);
+    expect(held.get(outer)).toBe(0);
+  });
+
   test("a refusal stops it with the engine's own answer; a 5xx is dialled again", async () => {
     const refused = serve(
       () =>
