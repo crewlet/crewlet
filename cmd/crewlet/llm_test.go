@@ -434,10 +434,14 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 				}
 			}
 
+			// The login's run is over before the store is read: its broker
+			// holds the store directory until it closes.
+			req.companySecrets.Close()
 			got, _, getErr := secretsCmd(t, cfg, "get", tokenVar, "-reveal")
 			switch {
-			case tc.stored == "" && getErr == nil:
-				t.Errorf("%s was stored as %q, where this run must store nothing", tokenVar, got)
+			case tc.stored == "" && !errors.Is(getErr, secrets.ErrNotFound):
+				t.Errorf("%s read back as %q (%v), where this run must store nothing",
+					tokenVar, got, getErr)
 			case tc.stored != "" && got != tc.stored:
 				t.Errorf("%s = %q (%v), want %q", tokenVar, got, getErr, tc.stored)
 			}
@@ -952,7 +956,7 @@ func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
 	for _, route := range []struct {
 		name string
 		// open is the run's store on this route for a subcommand, and held
-		// answers what it then holds under a name.
+		// answers what it then holds under a name, once the run is over.
 		open func(t *testing.T, sub string) (*companyStore, func(name string) bool)
 		note string
 	}{
@@ -963,7 +967,9 @@ func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
 		}, secretsFleetNote},
 		{"the fleet's store, with the engine stopped", func(t *testing.T, sub string) (*companyStore, func(string) bool) {
 			cfg := bootstrapWithKeyring(t, "k1")
-			return llmStoreAt(t, noEnviron, sub, "-config", cfg), func(name string) bool {
+			store := llmStoreAt(t, noEnviron, sub, "-config", cfg)
+			return store, func(name string) bool {
+				store.Close()
 				_, ok := fleetRowsOf(t, cfg)[name]
 				return ok
 			}
@@ -1039,11 +1045,11 @@ func TestATokenPipedToLoginIsBoundedBeforeItIsStored(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	endless := &endlessReader{}
+	store := llmStoreAt(t, noEnviron, "login", "-config", cfg)
 	var out, errOut bytes.Buffer
 	err := loginLLM(t.Context(), loginRequest{
 		providers: tokenLoginProvider(t, cliagent.AuthSubscription), key: "claude",
-		tokenStdin: true, companySecrets: llmStoreAt(t, noEnviron, "login", "-config", cfg),
-		stdin: endless,
+		tokenStdin: true, companySecrets: store, stdin: endless,
 	}, &out, &errOut)
 	if !errors.Is(err, secrets.ErrValueTooLarge) {
 		t.Fatalf("a token on a stream that never ends answered %v, want ErrValueTooLarge", err)
@@ -1054,8 +1060,11 @@ func TestATokenPipedToLoginIsBoundedBeforeItIsStored(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("the refused login said:\n%s", out.String())
 	}
-	if got, _, getErr := secretsCmd(t, cfg, "get", "CLAUDE_CODE_OAUTH_TOKEN", "-reveal"); getErr == nil {
-		t.Errorf("the refused token was stored, %d bytes of it", len(got))
+	store.Close()
+	if got, _, getErr := secretsCmd(t, cfg, "get", "CLAUDE_CODE_OAUTH_TOKEN",
+		"-reveal"); !errors.Is(getErr, secrets.ErrNotFound) {
+		t.Errorf("the refused token read back as %d bytes (%v), want nothing stored",
+			len(got), getErr)
 	}
 }
 
@@ -1079,7 +1088,7 @@ func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 	for _, route := range []struct {
 		name string
 		// open is the export's store on this route, and held answers whether
-		// it then holds the bundle's name.
+		// it then holds the bundle's name, once the export is over.
 		open func(t *testing.T) (*companyStore, func() bool)
 	}{
 		{"through a running node", func(t *testing.T) (*companyStore, func() bool) {
@@ -1089,7 +1098,9 @@ func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 		}},
 		{"the fleet's store, with the engine stopped", func(t *testing.T) (*companyStore, func() bool) {
 			cfg := bootstrapWithKeyring(t, "k1")
-			return llmStoreAt(t, noEnviron, "export", "-config", cfg), func() bool {
+			store := llmStoreAt(t, noEnviron, "export", "-config", cfg)
+			return store, func() bool {
+				store.Close()
 				_, ok := fleetRowsOf(t, cfg)[name]
 				return ok
 			}

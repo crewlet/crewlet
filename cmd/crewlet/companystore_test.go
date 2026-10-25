@@ -52,9 +52,12 @@ func storePathOf(t *testing.T, cfg string) string {
 
 // fleetRowsOf is every value the fleet's store holds, read straight off it the
 // way a command reaches it on the node the Tier A at cfg describes with its
-// engine stopped ([openFleetStore]) — and through this process's session, so a
-// case that still holds a route there reads beside it rather than being
-// refused a second broker on the store directory.
+// engine stopped ([openFleetStore]).
+//
+// It starts a broker of its own on the node's store directory, so a case
+// closes the run it inspects first: a second broker there is refused, in this
+// process as in any other — and a value read once the run has let the store
+// go is one that outlived the run that wrote it.
 func fleetRowsOf(t *testing.T, cfg string) map[string]string {
 	t.Helper()
 	boot, err := loadBootstrapForStore(cfg)
@@ -432,10 +435,11 @@ func TestAStoppedNodeReadsAndRecordsTheFleetsStoreItself(t *testing.T) {
 	t.Run("a -secret-store record lands on the fleet's store", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapWithKeyring(t, "k1")
-		sink := secretStoreSink(t, noEnviron, "-config", cfg)
+		sink, closeRun := secretStoreSink(t, noEnviron, "-config", cfg)
 		if err := sink.Record(t.Context(), "GITLAB_TOKEN_SWE", "glpat-minted"); err != nil {
 			t.Fatalf("record into the fleet's store: %v", err)
 		}
+		closeRun()
 		if got := fleetRowsOf(t, cfg)["GITLAB_TOKEN_SWE"]; got != "glpat-minted" {
 			t.Errorf("a -secret-store write with the engine stopped did not land on the "+
 				"fleet's store: %q", got)
@@ -444,8 +448,9 @@ func TestAStoppedNodeReadsAndRecordsTheFleetsStoreItself(t *testing.T) {
 }
 
 // secretStoreSink is a `-secret-store` sink opened as a provisioning run opens
-// it, under the store flags given.
-func secretStoreSink(t *testing.T, environ config.Source, flags ...string) provision.TokenSink {
+// it, under the store flags given, and the run's release, for a case that
+// reads the store once the run is over ([fleetRowsOf]).
+func secretStoreSink(t *testing.T, environ config.Source, flags ...string) (provision.TokenSink, func()) {
 	t.Helper()
 	fs := flag.NewFlagSet("provision", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -466,7 +471,7 @@ func secretStoreSink(t *testing.T, environ config.Source, flags ...string) provi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sink
+	return sink, companySecrets.Close
 }
 
 // A LOGIN WITH THE ENGINE STOPPED STORES ITS TOKEN ON THE FLEET'S STORE, and
@@ -500,6 +505,7 @@ func TestALoginWithTheEngineStoppedStoresOnTheFleetsStore(t *testing.T) {
 	if !strings.Contains(out.String(), secretsStoppedNote) {
 		t.Errorf("the write does not say who reads it when:\n%s", out.String())
 	}
+	store.Close()
 	if got := fleetRowsOf(t, cfg)["FAKE_CLI_TOKEN"]; got != "fake-pasted" {
 		t.Errorf("the token did not land on the fleet's store: %q", got)
 	}
@@ -914,7 +920,8 @@ func TestASecretStoreSinkReadsBackThroughTheRunsRoute(t *testing.T) {
 				t.Fatalf("seed: %v (%s)", err, errs)
 			}
 		}
-		readBack(t, secretStoreSink(t, noEnviron, "-config", cfg))
+		sink, _ := secretStoreSink(t, noEnviron, "-config", cfg)
+		readBack(t, sink)
 	})
 	for name, withTierA := range map[string]bool{
 		"a named node, with a Tier A here": true,
