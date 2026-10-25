@@ -898,24 +898,27 @@ func (l *link) freeze()     { l.up.freeze(); l.down.freeze() }
 func (l *link) freezeDown() { l.down.freeze() }
 func (l *link) thaw()       { l.up.thaw(); l.down.thaw() }
 
-// upWatch is something to do once the up direction has carried pattern.
+// upWatch is something to do as the up direction carries pattern.
 type upWatch struct {
 	pattern string
 	fire    func()
 }
 
-// onUp calls fire, once, when the up direction has carried pattern.
+// onUp calls fire, once, as the up direction carries pattern: when the bytes
+// holding it have passed the valve and before they are written on, so what
+// fire does is in place before the broker can answer them.
 func (l *link) onUp(pattern string, fire func()) {
 	l.watchMu.Lock()
 	defer l.watchMu.Unlock()
 	l.watches = append(l.watches, upWatch{pattern: pattern, fire: fire})
 }
 
-// freezeDownAfter freezes the down direction once the up direction has
-// carried pattern.
+// freezeDownAfter freezes the down direction as the up direction carries
+// pattern, so the broker's answer to it is held.
 func (l *link) freezeDownAfter(pattern string) { l.onUp(pattern, l.down.freeze) }
 
-// carried answers the instant the up direction carried pattern, once it has.
+// carried answers the instant the up direction carried pattern on, once it
+// has.
 func (l *link) carried(pattern string) <-chan time.Time {
 	at := make(chan time.Time, 1)
 	l.onUp(pattern, func() { at <- time.Now() })
@@ -990,17 +993,26 @@ func (l *link) carry(dst io.Writer, src io.Reader, v *valve, up bool) {
 			if !v.pass(l.done) {
 				return
 			}
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return
-			}
 			if up {
 				// THE TAIL KEEPS WHAT A PATTERN SPLIT ACROSS TWO READS
 				// needs: the last watchTail bytes of the read before.
+				//
+				// FIRED BEFORE THE BYTES ARE WRITTEN, never after: a watch
+				// that freezes the down direction must hold the broker's
+				// answer to what it is about to carry, and fired once the
+				// write had returned it raced that answer — on loopback
+				// the broker acknowledged the metadata a put published
+				// before this goroutine froze the link, under the race
+				// detector on a loaded runner, and the put whose
+				// acknowledgement the case had lost was told it landed.
 				tail = append(tail, buf[:n]...)
 				l.fireWatches(tail)
 				if len(tail) > watchTail {
 					tail = append(tail[:0], tail[len(tail)-watchTail:]...)
 				}
+			}
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
 			}
 		}
 		if err != nil {
