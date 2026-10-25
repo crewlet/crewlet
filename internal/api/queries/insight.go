@@ -600,7 +600,7 @@ const (
 	// optional interface rather than added to [knowledge.Searcher].
 	KnowledgeBuilding KnowledgeReason = "building"
 
-	// KnowledgeNoAccess: the caller holds Worklet and not Doclet, so no
+	// KnowledgeNoAccess means the caller holds Worklet and not Doclet, so no
 	// page was searched for them (ADR-0033).
 	//
 	// ITS OWN STATE, NOT AN EMPTY RESULT AND NOT A REFUSAL: an empty
