@@ -304,11 +304,9 @@ func sameValue(x, y any, elapsed time.Duration) bool {
 		yt, errY := time.Parse(time.RFC3339Nano, yv)
 		return errX == nil && errY == nil && yt.Sub(xt).Abs() <= elapsed
 	}
-	return reflectEqual(x, y)
+	// A number, a bool or null, as JSON decodes each: comparable.
+	return x == y
 }
-
-// reflectEqual compares two decoded JSON scalars.
-func reflectEqual(x, y any) bool { return x == y }
 
 // readTools are the catalogue's read tools.
 func readTools() []catalog.Tool {
