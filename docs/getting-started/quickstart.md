@@ -276,7 +276,7 @@ providers:
     gpt:
       agent: codex
       model: gpt-5
-      auth: { mode: api-key }           # OPENAI_API_KEY; leave it out for a ChatGPT login
+      auth: { mode: api-key }           # CODEX_API_KEY; leave it out for a ChatGPT login
 
     # Open models through OpenCode — on OpenRouter here, or any provider it speaks to
     open:

@@ -382,18 +382,22 @@ providers:
         mode: subscription              # subscription (default) | api-key | inherit-env.
                                         #   subscription: the CLI's own login, or a headless token.
                                         #   api-key: ONE key in the CLI's key variable
-                                        #   (ANTHROPIC_API_KEY for claude-code, OPENAI_API_KEY for
+                                        #   (ANTHROPIC_API_KEY for claude-code, CODEX_API_KEY for
                                         #   codex); refused for a CLI with none (hermes, pi,
-                                        #   opencode, kimi-code). inherit-env: forward the engine's
-                                        #   own value of either variable
+                                        #   opencode, kimi-code). qwen-code keeps no login, so it
+                                        #   is api-key only, with api_key named (its OPENAI_API_KEY
+                                        #   is shared with other vendors). inherit-env: forward
+                                        #   the engine's own value of either variable
         token: ""                       # optional — ${VAR} holding a headless subscription token;
                                         #   empty falls back to the profile's own variable
                                         #   (CLAUDE_CODE_OAUTH_TOKEN). subscription mode only, and
                                         #   only on a CLI that mints one (claude-code)
         api_key: ""                     # optional — ${VAR} holding the API key; empty falls back
                                         #   to the profile's own key variable, from the secret
-                                        #   store, then the environment. api-key mode only — a
-                                        #   write is refused elsewhere, where it would reach nothing
+                                        #   store, then the environment — except a shared one
+                                        #   (qwen-code's OPENAI_API_KEY), where it is required.
+                                        #   api-key mode only — a write is refused elsewhere,
+                                        #   where it would reach nothing
         credential_bundle: ""           # optional — ${VAR} holding a `crewlet llm export` blob;
                                         #   empty falls back to CREWLET_LLM_CLI_<KEY>_CREDENTIALS
       overrides: {}                     # optional — replace any profile field when a vendor
@@ -413,7 +417,7 @@ providers:
       agent: codex
       model: gpt-5
       auth:
-        mode: api-key                   # reads OPENAI_API_KEY; leave it out to run on a
+        mode: api-key                   # reads CODEX_API_KEY; leave it out to run on a
                                         #   ChatGPT login (`crewlet llm login gpt`)
 
     open:                               # open models through OpenCode
