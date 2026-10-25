@@ -162,6 +162,46 @@ type run struct {
 	released chan struct{}
 	// synthetic is the round an unobserved run's calls are placed on.
 	synthetic int
+	// ctx is the context the run was served under, whose VALUES every call
+	// of the run carries — see [callContext].
+	ctx context.Context
+}
+
+// callContext is the context one call of a run runs under: the VALUES of the
+// context the backend served the run under, and the PHASE's cancellation.
+//
+// The values, because the backend puts there what a call of ITS run needs and
+// only a call of its run may have: the CLI backend lends the run's process slot
+// to a model call made inside one of its calls (a condensing pass, a judge, on
+// the seat's own entry), which without it waits for a slot only the run can
+// free — at max_concurrent 1, a deadlock. The served context descends from the
+// phase's, so the phase's own values (the turn, the seat, its span) come with
+// it, and are read from the phase where a backend served from elsewhere.
+//
+// The phase's cancellation and never the run's: a run that ends — its CLI
+// stopped, a fallback taking over — ends nothing a tool is half-way through.
+type callContext struct {
+	served context.Context // values only: context.WithoutCancel
+	phase  context.Context
+}
+
+func newCallContext(served, phase context.Context) context.Context {
+	if served == nil {
+		return phase
+	}
+	return callContext{served: context.WithoutCancel(served), phase: phase}
+}
+
+func (c callContext) Deadline() (time.Time, bool) { return c.phase.Deadline() }
+func (c callContext) Done() <-chan struct{}       { return c.phase.Done() }
+func (c callContext) Err() error                  { return c.phase.Err() }
+func (c callContext) Value(key any) any {
+	// The served context answers no cancellation key (WithoutCancel), so
+	// context.Cause and AfterFunc find the phase's.
+	if v := c.served.Value(key); v != nil {
+		return v
+	}
+	return c.phase.Value(key)
 }
 
 // dispatcher is the loop's [llm.ToolHost] and [toolsession.Dispatcher].
@@ -245,7 +285,7 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 	if err != nil {
 		return llm.Served{}, err
 	}
-	r := &run{opts: opts, session: session, released: make(chan struct{})}
+	r := &run{opts: opts, session: session, released: make(chan struct{}), ctx: ctx}
 	d.mu.Lock()
 	d.runs = append(d.runs, r)
 	d.mu.Unlock()
@@ -440,7 +480,7 @@ func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Re
 	result := make(chan ToolResult, 1)
 	go func() {
 		defer d.unlockGate(exclusive)
-		res := d.execute(c)
+		res := d.execute(c, r)
 		// SETTLED HERE, on the call's own goroutine, whoever is still
 		// waiting for it: a call answered "still running" is recorded when
 		// it returns, and the loop reads it from the record.
@@ -690,8 +730,9 @@ func (d *dispatcher) stillOpenLocked() string {
 }
 
 // execute runs one admitted call under the PHASE's context, never the MCP
-// request's, and turns a panic into the phase's end.
-func (d *dispatcher) execute(c *callRec) (res ToolResult) {
+// request's — with the values its run was served under ([callContext]) — and
+// turns a panic into the phase's end.
+func (d *dispatcher) execute(c *callRec, r *run) (res ToolResult) {
 	c.started = time.Now()
 	defer func() {
 		if r := recover(); r != nil {
@@ -704,7 +745,11 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 		c.took = time.Since(c.started)
 	}()
 	d.frame()
-	out, err := d.cfg.Surface.Execute(withCallRound(d.ctx, c.round), llm.ToolCall{
+	ctx := d.ctx
+	if r != nil {
+		ctx = newCallContext(r.ctx, d.ctx)
+	}
+	out, err := d.cfg.Surface.Execute(withCallRound(ctx, c.round), llm.ToolCall{
 		ID: c.id, Name: c.name, Arguments: c.args,
 	})
 	if err != nil {
