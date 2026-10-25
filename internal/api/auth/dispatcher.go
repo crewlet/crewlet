@@ -131,7 +131,7 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 	}
 
 	out := newCapture()
-	if err := serve(h, out, req); err != nil {
+	if err := serve(reqCtx, h, out, req); err != nil {
 		return exec.Response{}, err
 	}
 	return out.response(), nil
@@ -152,11 +152,12 @@ func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 
 // serve runs h for one in-process request, and turns a handler's panic into an
 // error, as net/http's server turns one into a closed connection: in process,
-// a panic would otherwise end the turn's goroutine and the engine with it.
-func serve(h http.Handler, w http.ResponseWriter, r *http.Request) (err error) {
+// a panic would otherwise end the turn's goroutine and the engine with it. ctx
+// is the request's own context, the one a panic is logged under.
+func serve(ctx context.Context, h http.Handler, w http.ResponseWriter, r *http.Request) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			log.ErrorContext(r.Context(), "api_assist_handler_panicked",
+			log.ErrorContext(ctx, "api_assist_handler_panicked",
 				"route", r.URL.Path, "panic", fmt.Sprint(recovered))
 			err = fmt.Errorf("auth: the handler for %s panicked", r.URL.Path)
 		}
