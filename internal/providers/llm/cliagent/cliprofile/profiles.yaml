@@ -562,9 +562,163 @@ codex:
   # call has its own and none outlives it.
   work_config_env:
     CODEX_SQLITE_HOME: ".crewlet-sqlite"
+  # THE SEAT'S TOOLS: one stdio server, declared on argv with -c, measured on
+  # 0.164.0 through the engine's own code path against a local stand-in, the
+  # state directory inside a checkout holding a .codex/config.toml, an
+  # .mcp.json and every other CLI's MCP configuration at each level above the
+  # call, and a config.toml with a server of its own in the seat's home: the
+  # model was offered the crewlet server's tools beside web search, apply_patch
+  # and codex's three MCP-resource readers (which reach only the servers codex
+  # runs — this one, which serves no resources), and no other server started.
+  #
+  #   complete_args            the profile's own, less --ephemeral — the
+  #                            rollout file a run without it writes is the
+  #                            record below; the sessions directory is
+  #                            volatile, so it goes with the generation — and
+  #                            with --ignore-user-config, which keeps the
+  #                            home's config.toml out (its own servers
+  #                            included: without it the home's server
+  #                            started). The login is still read from
+  #                            CODEX_HOME.
+  #   tool_timeout_sec         codex's per-call timeout (300 seconds of its
+  #                            own); a 4 here gave a slow call up at 4.0s.
+  #   supports_parallel_tool_calls
+  #                            the calls of one response are made at once:
+  #                            two calls of 1.5s each overlapped. Without it,
+  #                            one after another.
+  #   default_tools_approval_mode
+  #                            "approve": a headless run asks nobody, and an
+  #                            unapproved call is refused.
+  #   omit_tools_from          ["deferred"]: without it codex offers the
+  #                            server's tools only behind its tool_search
+  #                            tool, and the model saw none of them.
+  #
+  # NO RELISTING: codex does not re-read a server's list when told it changed
+  # (its features.mcp_tool_list_changed is UnderDevelopment and not used here);
+  # a tool activated mid-run was never offered. The engine ends the run after
+  # an activation and starts the next with the new list.
+  #
+  # A failed run's stdout says why in two events, by field: an `error` with a
+  # message, and `turn.failed` with the same. The items around them carry
+  # every call and result, and are never quoted.
+  mcp:
+    complete_args:
+      - "exec"
+      - "--json"
+      - "--skip-git-repo-check"
+      - "--ignore-user-config"
+      - "--ignore-rules"
+      - "--sandbox"
+      - "read-only"
+      - "-c"
+      - 'web_search="live"'
+      - "-c"
+      - "project_root_markers=[]"
+      - "-c"
+      - "project_doc_max_bytes=9223372036854775807"
+      - "-c"
+      - "skills.include_instructions=false"
+      - "-c"
+      - "skills.bundled.enabled=false"
+      - "-c"
+      - "features.shell_tool=false"
+      - "-c"
+      - "features.unified_exec=false"
+      - "-c"
+      - "features.shell_snapshot=false"
+      - "-c"
+      - "features.view_image=false"
+      - "-c"
+      - "features.goals=false"
+      - "-c"
+      - "features.multi_agent=false"
+      - "-c"
+      - "features.image_generation=false"
+      - "-c"
+      - "features.apps=false"
+      - "-c"
+      - "features.plugins=false"
+      - "-c"
+      - "features.hooks=false"
+      - "-c"
+      - "features.memories=false"
+      - "-c"
+      - "tools.experimental_request_user_input.enabled=false"
+      - "-"
+    args:
+      - "-c"
+      - "mcp_servers.crewlet.command={relay_command_json}"
+      - "-c"
+      - "mcp_servers.crewlet.args={relay_args_json}"
+      - "-c"
+      - "mcp_servers.crewlet.tool_timeout_sec={tool_timeout_seconds}"
+      - "-c"
+      - "mcp_servers.crewlet.supports_parallel_tool_calls=true"
+      - "-c"
+      - 'mcp_servers.crewlet.default_tools_approval_mode="approve"'
+      - "-c"
+      - 'mcp_servers.crewlet.omit_tools_from=["deferred"]'
+    tool_timeout_seconds: 600
+    relists: false
+    concurrency: at_once
+    failure_events:
+      - match: [{path: ["type"], equals: "error"}]
+        fields: [["message"]]
+      - match: [{path: ["type"], equals: "turn.failed"}]
+        fields: [["error", "message"]]
+  # EACH REQUEST, FROM THE ROLLOUT FILE codex writes as it goes, under the
+  # seat's home — `exec --json` prints the items of a turn but nothing that
+  # tells one request from the next. A response's prose and calls are its
+  # response_item lines, written as the response arrives and before codex
+  # makes its calls; its usage is a token_usage_record after them, which is
+  # where one request ENDS (closes). A call carries its call_id to the server
+  # in _meta as `callId`, which is how it is joined to its request, and the
+  # rollout files the server's tools under the namespace `mcp__crewlet`.
+  #
+  # The file is named after a thread id codex mints itself, so it is told
+  # from a concurrent run's in the same home by its first line, whose
+  # session_meta names the call's working directory (owner).
+  #
+  # Measured on 0.164.0: each request's counts reported as it ended, their
+  # sum equal to turn.completed's, and each call in the record within a poll
+  # of its arriving.
+  requests:
+    source: file
+    in: home
+    file: ".codex/sessions/*/*/*/rollout-*.jsonl"
+    owner: {path: ["payload", "cwd"], equals: "{work}"}
+    call_id_meta: "callId"
+    host_namespace: "mcp__crewlet"
+    events:
+      - match:
+          - {path: ["type"], equals: "response_item"}
+          - {path: ["payload", "type"], equals: "message"}
+          - {path: ["payload", "role"], equals: "assistant"}
+        blocks:
+          path: ["payload", "content"]
+          each:
+            - match: [{path: ["type"], equals: "output_text"}]
+              text: ["text"]
+      - match:
+          - {path: ["type"], equals: "response_item"}
+          - {path: ["payload", "type"], equals: "function_call"}
+        call:
+          id: ["payload", "call_id"]
+          name: ["payload", "name"]
+          args: ["payload", "arguments"]
+          namespace: ["payload", "namespace"]
+      - match: [{path: ["type"], equals: "token_usage_record"}]
+        closes: true
+        usage:
+          input: [["payload", "usage", "input_tokens"]]
+          output: [["payload", "usage", "output_tokens"]]
+          cache_read: [["payload", "usage", "cached_input_tokens"]]
+          cache_write: [["payload", "usage", "cache_write_input_tokens"]]
+          input_includes_cache: true
   credential_paths: [".codex/auth.json"]
-  # The session store a run without --ephemeral writes. history.jsonl and log/
-  # are written by neither release.
+  # The session store a run without --ephemeral writes — a run with tools,
+  # whose rollout is its record (requests, above). history.jsonl and log/ are
+  # written by neither release.
   volatile_paths: [".codex/sessions"]
   host_credential_paths: [".codex/auth.json"]
   # CODEX_API_KEY, not OPENAI_API_KEY: `codex exec` signs its requests with the
