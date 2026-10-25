@@ -105,15 +105,15 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The artifact datastore's log | 1 GiB | `stream.artifact_data_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
-| The Dashboard Assistant's log (a fixed default) | 1 GiB | `stream.assistant_log_max_bytes` |
-| **The eight logs together** | **7.50 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.50 GiB at the minimum | `store.objects.nats_max_bytes` |
+| The Dashboard Assistant's log (a fixed default) | 512 MiB | `stream.assistant_log_max_bytes` |
+| **The eight logs together** | **7.00 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.33 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **10.00 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **13.33 GiB
-free** on the volume holding `stream.store_dir` (about 14.3 GB). With the
+So the broker needs a limit of at least **9.33 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **12.44 GiB
+free** on the volume holding `stream.store_dir` (about 13.4 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 7.50 GiB alone needs 10.00 GiB free. These are the least that **boots**:
+logs' 7.00 GiB alone needs 9.33 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -126,7 +126,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **8.50 GiB**, which three quarters of **11.33 GiB free** reaches.
+  limit of **8.00 GiB**, which three quarters of **10.67 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three

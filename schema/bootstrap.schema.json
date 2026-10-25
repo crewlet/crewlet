@@ -1150,7 +1150,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the Dashboard Assistant's log; unset takes a flat 1 GiB, 64 MiB..64 GiB."
+          "description": "Byte ceiling on the Dashboard Assistant's log; unset takes a flat 512 MiB, 64 MiB..64 GiB."
         },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
