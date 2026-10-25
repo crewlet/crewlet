@@ -339,8 +339,8 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	// before this one opens (its proposals stay approvable until they
 	// expire). A turn that is running holds the conversation.
 	var past *assistantdomain.Turn
-	if current, err := s.lapseOpen(ctx, ts.Person.ID, history); err != nil {
-		return wire.TurnAccepted{}, err
+	if current, lapseErr := s.lapseOpen(ctx, ts.Person.ID, history); lapseErr != nil {
+		return wire.TurnAccepted{}, lapseErr
 	} else if open := history.Conversation.OpenTurn; current && open != uuid.Nil {
 		row, parked := parkedIn(history, open)
 		if !parked {
@@ -903,8 +903,8 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 	if err != nil {
 		return err
 	}
-	if err := w.Frame(snap); err != nil {
-		return err
+	if frameErr := w.Frame(snap); frameErr != nil {
+		return frameErr
 	}
 	state := row.State
 	var failure *wire.ErrorEvent
