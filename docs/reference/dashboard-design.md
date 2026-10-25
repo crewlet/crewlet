@@ -3990,6 +3990,8 @@ drawn.
 **It is a panel of the frame, never of a screen.** The **Ask** button ends
 the page bar (above the panel it opens), carries the assistant's Orbit mark
 and the `Mod+.` hint, and stays inline at a phone's width as an icon button.
+An open artifact, which draws its own head, places the same button at the end
+of its bar.
 It is never hidden: where the reader may not ask it is drawn disabled with the
 engine's reason (`viewer.assistant`: turned off, no model, a session that is
 not a person's, or access that does not include it). While the panel is

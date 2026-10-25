@@ -84,6 +84,7 @@ import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { FrameNavToggle, OwnPageHeader } from "~/app/frame/OwnHeader.tsx";
+import { AssistantTrigger } from "~/app/assistant/AssistantTrigger.tsx";
 import { useOwnStar, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { utf8Bytes } from "~/lib/format.ts";
@@ -215,6 +216,7 @@ export function ArtifactPage({ id }: { id: string }) {
             never drawn for a moment and then swapped for this one. */}
         <OwnPageHeader>
           <ArtifactBar
+            end={<AssistantTrigger />}
             title=""
             kind="html"
             kindLabel="Artifact"
@@ -258,6 +260,7 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
     <>
       <OwnPageHeader>
         <ArtifactBar
+          end={<AssistantTrigger />}
           title={detail.title}
           kind={detail.kind}
           icon={detail.icon}
@@ -833,6 +836,7 @@ function Loaded({
     <div className="artifact-page">
       <OwnPageHeader>
         <ArtifactBar
+          end={<AssistantTrigger />}
           title={detail.title}
           kind={detail.kind}
           icon={detail.icon}

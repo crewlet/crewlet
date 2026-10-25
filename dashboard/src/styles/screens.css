@@ -11675,14 +11675,7 @@ a.live-row:focus-visible {
 }
 
 /* ---- The Dashboard Assistant (app/assistant) -----------------------------
-   The panel is the kit's SidePanel in the frame's aside, and its body is the
-   kit's ChatThread: the thread is the one scroller and insets its own items,
-   so the panel's body gives up its inset rather than doubling it. */
-.assistant-panel {
-  --crewlet-side-panel-inset: 0px;
-}
-
-/* The one line under the composer, centred, on one line at every width. */
+   The one line under the composer, centred, on one line at every width. */
 .assistant-disclaimer {
   margin: var(--spacing-2) 0 0;
   text-align: center;
