@@ -54,12 +54,11 @@ import { emit, type AssistantBusEvents, type AssistantInvalidateReason } from ".
 /** A resource or a selection, as the wire names it. */
 type ResourceKind = AssistantPageContext["resources"][number]["kind"];
 
-/** One thing in view, by kind and id, with the version the screen drew. */
-export interface AssistantResource {
-  kind: ResourceKind;
-  id: string;
-  version?: string;
-}
+/**
+ * One thing in view, by kind and id, with the version the screen drew: the
+ * contract's own shape (`contract/assistant.ts`), never a second copy of it.
+ */
+export type PageResource = AssistantPageContext["resources"][number];
 
 /** What a page action's parser answers: a typed value, or why it is refused. */
 export type PageActionParse<P> = { ok: true; value: P } | { ok: false; reason: string };
@@ -86,7 +85,7 @@ export interface PageActionSpec<P> {
 /** What a screen registers beyond what the frame knows. */
 export interface AssistantPageRegistration {
   /** The records in view, by kind and id. */
-  resources?: readonly AssistantResource[];
+  resources?: readonly PageResource[];
   /** What is selected, if one thing is. */
   selection?: { kind: ResourceKind; id: string } | null;
   /** The version of the data the screen drew, so a change prepared against it can be judged stale. */
