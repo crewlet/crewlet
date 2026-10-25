@@ -246,10 +246,12 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 // other: a name nothing holds is simply absent from the answer.
 //
 // It is what a reader that needs SEVERAL values at once is given — a CLI run
-// resolving the `${VAR}` references of one company document through a running
-// node — and it exists so that reader is handed exactly the credentials it
-// asks for, the variables its command reads that the store lists, rather than
-// [Store.All]'s every value, and in one round trip rather than one per name.
+// resolving the `${VAR}` references of one company document, through a running
+// node's POST /secrets/reveal or, with that node's engine stopped, directly
+// (the CLI's fleetBackend) — and it exists so that reader is handed exactly
+// the credentials it asks for, the variables its command reads that the store
+// lists, rather than [Store.All]'s every value, and in one round trip rather
+// than one per name.
 //
 // A RESERVED NAME IS REFUSED before anything is read, as [Store.Get] refuses
 // one: no reference can name an engine row, so a caller asking for one has
