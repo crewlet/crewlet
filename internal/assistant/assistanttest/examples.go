@@ -1,9 +1,5 @@
 package assistanttest
 
-import (
-	"testing"
-)
-
 // exampleValues are the values a tool's required arguments are filled with by
 // name: each of the shape its name asks for, so a request built from them is
 // one the route would parse.
@@ -29,7 +25,7 @@ var exampleValues = map[string]any{
 // every argument [exampleValues] names that the schema declares, and every
 // other required one as the first of its enum, the least of its range, or a
 // short text. For the walks that build every tool's request without a model.
-func ExampleArgs(t testing.TB, params map[string]any) map[string]any {
+func ExampleArgs(t TB, params map[string]any) map[string]any {
 	t.Helper()
 	props, _ := params["properties"].(map[string]any)
 	out := map[string]any{}
