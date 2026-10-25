@@ -282,13 +282,24 @@ type LLMProvider struct {
 	// directory of its own, and moving back finds the old one intact.
 	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login."`
 
-	// TimeoutSeconds caps one CLI invocation, wall clock: a process launch
-	// (a Node runtime costs seconds before its first byte), the model's
-	// answer, and the CLI's own internal retry and backoff. See
-	// [defaultCLITimeoutSeconds] for where the default comes from.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one CLI invocation (default 600)."`
+	// TimeoutSeconds caps one STRETCH of the CLI's own work, wall clock:
+	// from its launch, or from the end of the tool call it last waited on,
+	// to the start of its next tool call or its exit — a process launch (a
+	// Node runtime costs seconds before its first byte), its model's
+	// answers, and its own internal retry and backoff. The engine's tools
+	// are not on the clock: they hold their own bounds, and a CLI run that
+	// drives a phase through many requests and calls is never cut for its
+	// length, only for a stretch in which it made no progress the engine
+	// could see. See [defaultCLITimeoutSeconds] for where the default comes
+	// from.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of the CLI's own work with no tool call in flight (default 600)."`
 
-	// MaxConcurrent is how many CLI processes this provider runs at once.
+	// MaxConcurrent is how many CLI processes this provider runs at once. A
+	// process lives for a whole run of a phase, its requests and tool calls
+	// included; a model call made from INSIDE one of its tool calls on this
+	// same entry — a delegated worker, an auxiliary rewrite — runs in the
+	// caller's slot rather than waiting for one, which a run holding the
+	// last slot could never free.
 	//
 	// Each is a full Node or Rust runtime at roughly 200-400 MB resident,
 	// so an unbounded fleet of seats starting a turn together can exhaust
@@ -468,14 +479,15 @@ type CLIAgentAuth struct {
 // Default entry knobs. See the field comments for where the numbers come
 // from.
 const (
-	// defaultCLITimeoutSeconds is ten minutes. A text call is one model
-	// answer at the CLI's own effort, and on the current Claude models that
-	// is adaptive thinking against a 128K-token output cap: ten minutes is
-	// Anthropic's documented ceiling for such an answer in one call, and
+	// defaultCLITimeoutSeconds is ten minutes. A stretch is at least one
+	// model answer at the CLI's own effort, and on the current Claude models
+	// that is adaptive thinking against a 128K-token output cap: ten minutes
+	// is Anthropic's documented ceiling for such an answer in one call, and
 	// two minutes was measured cutting off exactly the calls doing the most
 	// work when the engine still made them itself. A CLI adds its process
-	// launch on top. A hung child holds its seat for no longer than this,
-	// and a timeout is retryable, so the seat's fallback chain moves on.
+	// launch to the first stretch. A hung child holds its seat for no longer
+	// than this, and a timeout is retryable, so the seat's fallback chain
+	// moves on.
 	defaultCLITimeoutSeconds = 600.0
 	defaultCLIMaxConcurrent  = 4
 	defaultCLIAgentName      = CLIClaudeCode
@@ -497,7 +509,8 @@ func (l *LLMProvider) AgentName() string {
 // Box reports whether this entry runs the executor as a detached run in a box.
 func (l *LLMProvider) Box() bool { return l.Mode == CLIModeBox }
 
-// Timeout is the invocation cap, applying the default.
+// Timeout is the cap on one stretch of the CLI's own work, applying the
+// default.
 func (l *LLMProvider) Timeout() float64 {
 	if l.TimeoutSeconds <= 0 {
 		return defaultCLITimeoutSeconds
