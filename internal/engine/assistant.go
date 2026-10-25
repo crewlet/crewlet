@@ -306,3 +306,12 @@ func (a assistantRecords) CloseTurn(ctx context.Context, w assistant.Write,
 	}
 	return settled(a.w.CloseTurn(ctx, c, turn, end))
 }
+
+func (a assistantRecords) CreateProposal(ctx context.Context, w assistant.Write,
+	p assistantdomain.NewProposal) error {
+	c, err := a.call(w)
+	if err != nil {
+		return err
+	}
+	return settled(a.w.CreateProposal(ctx, c, p))
+}
