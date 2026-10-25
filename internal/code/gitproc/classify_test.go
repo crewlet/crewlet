@@ -313,10 +313,22 @@ func bitmapWalk(_ *testing.T, d *damaged) gitproc.Cmd {
 }
 
 // writeMidx writes the maintainer's multi-pack-index with its bitmap over d's
-// packs.
+// packs, PREFERRING THE OLDER ONE — named, never left to the writer. With no
+// --preferred-pack, git prefers the pack whose .pack is oldest to the second
+// and, among packs of one second, whichever the directory listed first
+// (gittest.PreferredPack), and gittest.Bare writes the fixture's two packs one
+// after the other, nearly always within one second: so the preferred pack was
+// the filesystem's choice, and a case whose damage is in the newer pack met a
+// different git on another disk. The tip
+// and its blob are in the newer pack, so a clone reuses their entries through
+// their own pack's .idx and .rev (write_reuse_object) rather than send them as
+// the preferred pack's stored bytes — on a runner whose listing put the newer
+// pack first, the IO case met the bitmap's verbatim path instead, a BUG and a
+// SIGABRT, and none of the rows its want names.
 func writeMidx(t *testing.T, d *damaged) {
 	t.Helper()
-	c := maintenance(d.dir, "multi-pack-index", "write", "--bitmap", "--no-progress")
+	c := maintenance(d.dir, "multi-pack-index", "write", "--bitmap", "--no-progress",
+		"--preferred-pack="+filepath.Base(d.older)+".pack")
 	c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"},
 		{Key: "pack.writeBitmapLookupTable", Value: "true"}}
 	if _, err := d.p.Run(t.Context(), c); err != nil {
