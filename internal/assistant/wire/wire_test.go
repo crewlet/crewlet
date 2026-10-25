@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
@@ -146,7 +147,7 @@ func TestOnlyAParkedTurnEndsASegmentWithoutEndingTheTurn(t *testing.T) {
 // `.0` case parses.
 func TestAnEventIDNamesOneTurnAndOneSeq(t *testing.T) {
 	t.Parallel()
-	turn := assistanttest.ID("turn")
+	turn := evals.ID("turn")
 	id := wire.EventID(turn, 17)
 	gotTurn, gotSeq, err := wire.ParseEventID(id)
 	if err != nil || gotTurn != turn || gotSeq != 17 {
@@ -290,10 +291,10 @@ func TestAStepNamesOnlyItsOwnTurn(t *testing.T) {
 	t.Parallel()
 	turn := assistanttest.NewTurn("conversation", "turn")
 	step := wire.StepEvent{StepID: uuid.New(), Index: 1, Tool: "list_agents",
-		Label: "Read the agents", State: wire.StepDone, StartedAt: assistanttest.Epoch}
+		Label: "Read the agents", State: wire.StepDone, StartedAt: evals.Epoch}
 	own, none, other := step, step, step
 	own.TurnID = turn.ID
-	other.TurnID = assistanttest.ID("another turn")
+	other.TurnID = evals.ID("another turn")
 	for what, s := range map[string]wire.StepEvent{"its own turn": own, "no turn": none} {
 		live := turn.Frame(wire.Frame{Kind: wire.EventStep, Step: &s})
 		if err := live.Validate(); err != nil {

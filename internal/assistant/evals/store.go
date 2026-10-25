@@ -1,4 +1,4 @@
-package assistanttest
+package evals
 
 import (
 	"context"
@@ -77,7 +77,7 @@ func (s *Store) Seed(owner, id uuid.UUID, title string) {
 // keep records one write, refusing a write that names no operation.
 func (s *Store) keep(w assistant.Write, what string, v any) error {
 	if w.Key == "" && w.Derived == nil {
-		return fmt.Errorf("assistanttest: the %s record names no operation", what)
+		return fmt.Errorf("evals: the %s record names no operation", what)
 	}
 	raw, err := json.Marshal(map[string]any{"record": what, "write": w, "value": v})
 	if err != nil {
