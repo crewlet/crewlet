@@ -48,6 +48,10 @@ var log = logging.Get("agent.toolloop")
 //     or PARKS it — a terminator, a detached run — runs alone, after every
 //     other call its response declared has run, so a delivery the model made
 //     beside its submission is recorded before the submission is judged.
+//   - A CALL IS THE MODEL'S, AS IT ASKED FOR IT. The engine runs a call only
+//     under a name it offers now, and only the name the model asked for: a CLI
+//     that rewrites a name its list does not hold to one it does would
+//     otherwise run a tool nobody chose.
 //   - A CALL IS THE PHASE'S, NOT THE CONNECTION'S. It runs under the phase's
 //     context, so a CLI that gives up on it, or dies, cancels nothing a tool
 //     is half-way through writing; its result is recorded either way.
@@ -131,6 +135,13 @@ func notOffered(name string) string {
 	return name + " was NOT run: it is not one of the tools offered here."
 }
 
+// rewritten is the record of a call the CLI made under another name than the
+// one the model asked for.
+func rewritten(asked, sent string) string {
+	return fmt.Sprintf("%s was NOT run: it is not one of the tools offered here, and the call "+
+		"that reached the engine named %s instead, which was not asked for.", asked, sent)
+}
+
 // callRec is one call that reached the dispatcher.
 type callRec struct {
 	seq   int
@@ -139,6 +150,11 @@ type callRec struct {
 	args  map[string]any
 	round int
 	run   *run
+
+	// asked is the name the model asked for, where the record showed the
+	// call — what the conversation records it as; different from name only
+	// on a call the CLI rewrote.
+	asked string
 
 	// exclusive marks a call that ends or parks the phase: it runs alone.
 	exclusive bool
@@ -165,6 +181,14 @@ type callRec struct {
 	slot int
 }
 
+// recorded is the name the record carries the call under: the model's.
+func (c *callRec) recorded() string {
+	if c.asked != "" {
+		return c.asked
+	}
+	return c.name
+}
+
 // observedTurn is one model request as the CLI's record showed it.
 type observedTurn struct {
 	id    string
@@ -175,7 +199,7 @@ type observedTurn struct {
 	joined []bool
 	// expect marks a call the CLI will make to the host: one of the host's
 	// tools, offered when the response was read. A CLI refuses any other name
-	// itself, so nothing waits for it.
+	// itself — or rewrites it — so nothing waits for it.
 	expect []bool
 	model  string
 	stop   llm.StopReason
@@ -587,7 +611,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 		return c, why
 	}
 	if d.state != stateOpen {
-		return refuse(notRun(c.name))
+		return refuse(notRun(c.recorded()))
 	}
 	// THE FENCE, BEFORE ANY CALL, and the budget's standing refusal:
 	// a node whose lease moved stops at the next call, not the next
@@ -595,32 +619,42 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if d.cfg.Fence != nil {
 		if err := d.cfg.Fence(); err != nil {
 			d.cutLocked(err)
-			return refuse(notRun(c.name))
+			return refuse(notRun(c.recorded()))
 		}
 	}
 	if err := Refusal(d.ctx, d.cfg.Budget); err != nil {
 		d.cutLocked(err)
-		return refuse(notRun(c.name))
+		return refuse(notRun(c.recorded()))
 	}
 	// PAST THE ROUND BUDGET: the CLI made a request the budget did not
 	// allow — its record reached the engine after the request's calls did,
 	// or it records none. Nothing of it runs.
 	if c.round > d.cfg.MaxRounds {
 		d.exhaustLocked()
-		return refuse(notRun(c.name))
+		return refuse(notRun(c.recorded()))
 	}
 	if d.pend != stateOpen {
 		if c.round != d.pendRound {
 			// A call of a later request than the one that decided the
 			// run's end: the CLI moved on.
 			d.endLocked()
-			return refuse(notRun(c.name))
+			return refuse(notRun(c.recorded()))
 		}
 		if d.pend == stateFinished && c.exclusive {
 			// A second submission, or a park, beside a submission that
 			// already finished the phase.
-			return refuse(notRun(c.name))
+			return refuse(notRun(c.recorded()))
 		}
+	}
+	// ONLY WHAT IS OFFERED, UNDER THE NAME THE MODEL ASKED FOR. A session
+	// that listed a tool before the surface stopped offering it still
+	// routes the name here, and a CLI that rewrote a name the model wrote
+	// made a call nobody chose.
+	if c.asked != "" && c.asked != c.name {
+		return refuse(rewritten(c.asked, c.name))
+	}
+	if !d.offeredLocked(c.name) {
+		return refuse(notOffered(c.name))
 	}
 	if c.argsErr != "" {
 		// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN: running the
@@ -643,7 +677,7 @@ func (d *dispatcher) recheck(c *callRec) string {
 	if d.state == stateOpen && !(d.pend == stateFinished && c.exclusive) {
 		return ""
 	}
-	why := notRun(c.name)
+	why := notRun(c.recorded())
 	d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
 	d.endIfCompleteLocked()
 	return why
@@ -702,7 +736,9 @@ func (d *dispatcher) placeLocked(c *callRec) {
 }
 
 // findLocked is the response's call this call is, in the CLI's record: by the
-// CLI's own id where it sent one, else by name and arguments.
+// CLI's own id where it sent one; else by name and arguments; else — a CLI
+// that rewrote a name its list does not hold to one it does — the one call of
+// a name no tool here answers to, with the very same arguments.
 func (d *dispatcher) findLocked(c *callRec) (*observedTurn, int, bool) {
 	for _, t := range d.turns {
 		if i, ok := d.matchLocked(t, c); ok {
@@ -727,6 +763,14 @@ func (d *dispatcher) matchLocked(t *observedTurn, c *callRec) (int, bool) {
 			return i, true
 		}
 	}
+	for i, tc := range t.calls {
+		if t.joined[i] || !tc.Host || t.expect[i] || tc.Name == c.name || (c.id != "" && tc.ID != "") {
+			continue
+		}
+		if sameArgs(tc.Arguments, c.args) {
+			return i, true
+		}
+	}
 	return 0, false
 }
 
@@ -736,6 +780,9 @@ func (d *dispatcher) joinLocked(c *callRec, t *observedTurn, slot int) {
 	c.turn, c.slot = t, slot
 	if c.id == "" {
 		c.id = t.calls[slot].ID
+	}
+	if asked := t.calls[slot].Name; asked != c.name {
+		c.asked = asked
 	}
 }
 

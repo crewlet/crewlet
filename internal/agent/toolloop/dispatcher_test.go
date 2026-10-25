@@ -119,6 +119,72 @@ func TestACallNamingAToolNeverOfferedIsNotWaitedFor(t *testing.T) {
 	}
 }
 
+// A CALL NAMING A TOOL NO LONGER ACTIVE IS REFUSED, NOT RUN: a session that
+// listed the tool before the surface stopped offering it still routes the name
+// to the engine, and the engine runs only what it offers now.
+func TestACallNamingAnInactiveToolIsRefused(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("post", "retired")
+	prov := script(runOf(calling("", "retired"), says("done")))
+	prov.Before = func(name string) {
+		if name == "retired" {
+			surf.remove("retired")
+		}
+	}
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := surf.calls(); len(got) != 0 {
+		t.Errorf("the surface ran %v, a tool it no longer offers", got)
+	}
+	got := prov.Results()
+	if len(got) != 1 || !got[0].Failed || !strings.Contains(got[0].Output, "not one of") {
+		t.Errorf("the CLI was answered %+v, want the call refused as not offered", got)
+	}
+	if len(res.Executions) != 1 || !res.Executions[0].Failed || !res.Executions[0].StartedAt.IsZero() {
+		t.Errorf("executions %+v, want the refusal recorded, untimed", res.Executions)
+	}
+}
+
+// A CALL THE CLI REWROTE IS REFUSED: a CLI that maps a name the model wrote,
+// and its list does not hold, to one it does, then runs it with the model's
+// arguments, makes a call the model never asked for. Joined to the model's own
+// call — by the CLI's id where it sends one, by the arguments where it does
+// not — its name is not the one the model asked for, and it is not run.
+func TestACallTheCLIRewroteIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, noIDs := range []bool{false, true} {
+		surf := newSurface("post")
+		prov := script(runOf(
+			llmtest.Response{Calls: []llmtest.Call{{ID: "c1", Name: "pots", Sent: "post", Args: `{"text":"hi"}`}}},
+			says("done"),
+		))
+		prov.NoCallIDs = noIDs
+		res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
+		if err != nil {
+			t.Fatalf("no ids %v: Run: %v", noIDs, err)
+		}
+		if got := surf.calls(); len(got) != 0 {
+			t.Errorf("no ids %v: the surface ran %v, a call the model never made", noIDs, got)
+		}
+		got := prov.Results()
+		if len(got) != 1 || !got[0].Failed || !strings.Contains(got[0].Output, "pots") {
+			t.Errorf("no ids %v: the CLI was answered %+v, want the rewrite refused naming what the model asked",
+				noIDs, got)
+		}
+		var asked []string
+		for _, m := range res.Messages {
+			for _, c := range m.ToolCalls {
+				asked = append(asked, c.Name)
+			}
+		}
+		if !slices.Equal(asked, []string{"pots"}) {
+			t.Errorf("no ids %v: the record says the model asked for %v, want what it wrote", noIDs, asked)
+		}
+	}
+}
+
 // A CALL THE CLI GAVE UP ON STILL RUNS OUT UNDER THE PHASE, AND IS RECORDED. The
 // CLI's cancel abandons only the delivery: the tool is not cut short half-way
 // through a write — its context is the phase's, which the CLI cannot cancel —

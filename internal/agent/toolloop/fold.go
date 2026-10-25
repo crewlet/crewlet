@@ -168,7 +168,7 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 			continue
 		}
 		entries = append(entries, entry{
-			call:    llm.ToolCall{ID: c.id, Name: c.name, Arguments: c.args},
+			call:    llm.ToolCall{ID: c.id, Name: c.recorded(), Arguments: c.args},
 			record:  c,
 			offered: true,
 		})
@@ -356,7 +356,7 @@ func (d *dispatcher) running() []RunningCall {
 	for _, c := range d.calls {
 		if c.admitted && !c.settled && !c.started.IsZero() {
 			out = append(out, RunningCall{
-				ID: c.id, Round: c.round, Name: c.name, Args: c.args, StartedAt: c.started.UTC(),
+				ID: c.id, Round: c.round, Name: c.recorded(), Args: c.args, StartedAt: c.started.UTC(),
 			})
 		}
 	}
@@ -451,5 +451,5 @@ func (d *dispatcher) pending() (string, string) {
 	if d.suspended == nil {
 		return "", ""
 	}
-	return d.suspended.id, d.suspended.name
+	return d.suspended.id, d.suspended.recorded()
 }
