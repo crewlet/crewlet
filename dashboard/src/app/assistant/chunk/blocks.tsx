@@ -251,7 +251,11 @@ export function ReplyProse({
   dimmed?: boolean;
 }) {
   return (
-    <Prose measure="narrow" streaming={streaming} dimmed={dimmed} className="md">
+    // A DIV, NOT PROSE'S DEFAULT PARAGRAPH: rendered Markdown is blocks
+    // (paragraphs, lists), which a <p> may not hold. `prose md` is the class
+    // pair the dashboard's Markdown rhythm is written for, as every other
+    // rendered body here carries it, so the reply's paragraphs are spaced.
+    <Prose as="div" measure="narrow" streaming={streaming} dimmed={dimmed} className="prose md">
       {renderMarkdown(text, ASSISTANT_WORDS)}
     </Prose>
   );

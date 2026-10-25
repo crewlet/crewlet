@@ -13,6 +13,7 @@ import {
   CardBlock,
   factText,
   prepareAgainQuestion,
+  ReplyProse,
   runChipOf,
   stepsOf,
   type CardHandlers,
@@ -155,4 +156,12 @@ test("a failed step says why, in the engine's words", () => {
 
 test("a run that took no step carries no count", () => {
   expect(runChipOf(base, Date.parse("2026-10-24T09:41:05Z")).meta).toBeUndefined();
+});
+
+test("a reply's paragraphs are blocks in a div the Markdown rhythm spaces", () => {
+  const { container } = render(<ReplyProse text={"First paragraph.\n\nSecond paragraph."} />);
+  const root = container.firstElementChild!;
+  expect(root.tagName).toBe("DIV");
+  expect(root.classList.contains("prose") && root.classList.contains("md")).toBe(true);
+  expect(root.querySelectorAll("p")).toHaveLength(2);
 });
