@@ -75,6 +75,14 @@ type ServeOptions struct {
 	// is still running sends the model to do it again.
 	ToolTimeout time.Duration
 
+	// RecordsCallsLate says the CLI's record shows a response's calls only
+	// once they have run (Gemini CLI, OpenCode): a call always reaches the
+	// host before the record of the response that asked for it. The host
+	// places such a call at once and joins it to its response when the
+	// record arrives, rather than holding the call for a record that cannot
+	// come until the call is answered.
+	RecordsCallsLate bool
+
 	// CallIDMeta is the key of a call's `_meta` the CLI hands the server
 	// its own id for the call under — the id its record names the call by
 	// ([TurnCall.ID]), which is how the host joins a call to the request

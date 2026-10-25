@@ -92,6 +92,7 @@ func (p *Provider) serveTools(
 		OnCall:           t.onCall,
 		Concurrency:      callConcurrency(m.Concurrency),
 		CallIDMeta:       callIDMeta(p.profile.Requests),
+		RecordsCallsLate: p.profile.Requests != nil && p.profile.Requests.LateCalls,
 	})
 	if err != nil {
 		t.carry.stop()

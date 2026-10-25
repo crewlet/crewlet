@@ -140,6 +140,7 @@ func TestGeminisRunIsReadFromItsOwnChat(t *testing.T) {
 	p := fakeAs(t, "gemini-cli", script, nil)
 	host := holdsTheRoute(t, p, llm.ServeOptions{
 		Relists: true, ToolTimeout: 10 * time.Minute, ObservesRequests: true, Concurrency: llm.CallsAtOnce,
+		RecordsCallsLate: true,
 	}, llm.Usage{Input: 340, Output: 29, CacheRead: 100})
 	for _, turn := range host.latestTurns() {
 		if strings.Contains(turn.Text, "FOREIGN") {

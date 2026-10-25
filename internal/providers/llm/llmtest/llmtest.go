@@ -146,6 +146,11 @@ type Script struct {
 	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
 
+	// LateRecord makes the CLI one whose record shows a response — its prose,
+	// its calls, its cost — only once the response's calls have run, as
+	// Gemini CLI's and OpenCode's do, and says so to the host.
+	LateRecord bool
+
 	// NumberedRequests makes the CLI one whose requests are numbered from one
 	// in every run — as a backend numbers the requests of a CLI whose record
 	// carries no id — rather than given ids no other run shares.
@@ -273,7 +278,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	host := req.Tools
 	served, err := host.Serve(ctx, llm.ServeOptions{
 		Relists: !s.NoRelist, ToolTimeout: s.ToolTimeout, ObservesRequests: !s.Unobserved,
-		Concurrency: s.Concurrency, CallIDMeta: s.callIDMeta(),
+		Concurrency: s.Concurrency, CallIDMeta: s.callIDMeta(), RecordsCallsLate: s.LateRecord,
 		OnCall: func(busy bool) {
 			if s.OnCall != nil {
 				s.OnCall(n, busy)
@@ -369,7 +374,10 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		if s.NumberedRequests {
 			id = fmt.Sprintf("request-%d", i+1)
 		}
-		if !s.Unobserved {
+		observe := func() {
+			if s.Unobserved {
+				return
+			}
 			uu := u
 			host.Observe(llm.Turn{
 				ID: id, Text: r.Text, Calls: calls,
@@ -377,13 +385,21 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 			})
 			host.Spent(u)
 		}
+		late := s.LateRecord && len(r.Calls) > 0
+		if !late {
+			observe()
+		}
 		if r.Trailing != "" {
 			req.Send(llm.Delta{Content: r.Trailing, Request: id})
 		}
 		if len(r.Calls) == 0 {
 			break
 		}
-		if exited := s.call(ctx, cs, conn, r); exited != nil {
+		exited := s.call(ctx, cs, conn, r)
+		if late {
+			observe()
+		}
+		if exited != nil {
 			if s.Unobserved {
 				host.Spent(total)
 			}

@@ -273,10 +273,10 @@ func holdsTheRoute(t *testing.T, p *Provider, wantOpts llm.ServeOptions, wantSpe
 	host.mu.Unlock()
 	if opts.Relists != wantOpts.Relists || opts.ToolTimeout != wantOpts.ToolTimeout ||
 		opts.ObservesRequests != wantOpts.ObservesRequests || opts.Concurrency != wantOpts.Concurrency ||
-		opts.CallIDMeta != wantOpts.CallIDMeta {
+		opts.CallIDMeta != wantOpts.CallIDMeta || opts.RecordsCallsLate != wantOpts.RecordsCallsLate {
 		t.Errorf("the host was told relists %v, tool timeout %v, observes %v, concurrency %q, call id "+
-			"meta %q; want %+v", opts.Relists, opts.ToolTimeout, opts.ObservesRequests, opts.Concurrency,
-			opts.CallIDMeta, wantOpts)
+			"meta %q, calls recorded late %v; want %+v", opts.Relists, opts.ToolTimeout, opts.ObservesRequests,
+			opts.Concurrency, opts.CallIDMeta, opts.RecordsCallsLate, wantOpts)
 	}
 	return host
 }

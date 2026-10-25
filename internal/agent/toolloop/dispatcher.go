@@ -838,7 +838,16 @@ func (d *dispatcher) placeLocked(c *callRec) {
 		c.round = r.synthetic
 		return
 	}
-	deadline := time.Now().Add(joinWait)
+	// A CLI WHOSE RECORD SHOWS CALLS ONLY AFTER THEY RAN is never waited
+	// for: the response that asked for this call is recorded once it is
+	// answered, so a wait would hold every call for the whole of [joinWait]
+	// and gain nothing — the call is placed now, and joined when the record
+	// arrives ([dispatcher.adoptLocked]).
+	wait := joinWait
+	if r != nil && r.opts.RecordsCallsLate {
+		wait = 0
+	}
+	deadline := time.Now().Add(wait)
 	for {
 		if t, i, ok := d.findLocked(c); ok {
 			d.joinLocked(c, t, i)
