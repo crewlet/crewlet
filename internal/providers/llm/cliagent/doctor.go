@@ -732,7 +732,7 @@ func (p *Provider) smokeTest(ctx context.Context, req llm.Request) (verdict stri
 				"end without its submission whenever the model never manages one. It said: %q",
 			strings.TrimSpace(comp.Content)), true
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
+	return fmt.Sprintf("ok: %d in / %d out", comp.InputTokens, comp.OutputTokens), true
 }
 
 // probeSystemPrompt is the system prompt every probe carries.

@@ -360,7 +360,7 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
 		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
 		TokenUsage: "reported by CLI",
-		Smoke:      "ok — 812 in / 34 out", StreamSmoke: "ok, 812 in / 34 out",
+		Smoke:      "ok: 812 in / 34 out", StreamSmoke: "ok: 812 in / 34 out",
 	}
 	var out strings.Builder
 	d.Render(&out)
