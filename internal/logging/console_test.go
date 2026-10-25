@@ -354,7 +354,7 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 	byHandler := map[string]Format{}
 	for _, format := range Formats {
 		install(settings{level: slog.LevelInfo, format: format, console: io.Discard})
-		name := fmt.Sprintf("%T", root.Load().Handler())
+		name := fmt.Sprintf("%T", installed())
 		if other, dup := byHandler[name]; dup {
 			t.Errorf("formats %q and %q both install %s — install's switch "+
 				"has no case for one of them, so it renders as the fallback",
@@ -364,8 +364,8 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 	}
 
 	install(settings{level: slog.LevelInfo, format: FormatConsole, console: io.Discard})
-	if _, ok := root.Load().Handler().(*consoleHandler); !ok {
-		t.Errorf("the console format installed %T", root.Load().Handler())
+	if _, ok := installed().(*consoleHandler); !ok {
+		t.Errorf("the console format installed %T", installed())
 	}
 }
 
@@ -376,22 +376,22 @@ func TestASingleDestinationIsNotWrappedInAFanout(t *testing.T) {
 	t.Cleanup(func() { Configure(slog.LevelInfo, FormatConsole, io.Discard) })
 
 	install(settings{level: slog.LevelInfo, format: FormatJSON, console: io.Discard})
-	if _, wrapped := root.Load().Handler().(fanout); wrapped {
+	if _, wrapped := installed().(fanout); wrapped {
 		t.Error("a console-only process was wrapped in a fan-out")
 	}
 	install(settings{
 		level: slog.LevelInfo, format: FormatJSON, console: io.Discard,
 		consoleOff: true, file: FileSink{Writer: io.Discard, Format: FormatText},
 	})
-	if _, wrapped := root.Load().Handler().(fanout); wrapped {
+	if _, wrapped := installed().(fanout); wrapped {
 		t.Error("a file-only process was wrapped in a fan-out")
 	}
 	install(settings{
 		level: slog.LevelInfo, format: FormatJSON, console: io.Discard,
 		file: FileSink{Writer: io.Discard, Format: FormatText},
 	})
-	if _, wrapped := root.Load().Handler().(fanout); !wrapped {
-		t.Errorf("two destinations did not install a fan-out: %T", root.Load().Handler())
+	if _, wrapped := installed().(fanout); !wrapped {
+		t.Errorf("two destinations did not install a fan-out: %T", installed())
 	}
 }
 
@@ -447,3 +447,6 @@ func TestTheComponentColumnPadsWhatItRendered(t *testing.T) {
 		t.Fatalf("the escaped component did not pad to its rendered width: %q", buf.String())
 	}
 }
+
+// installed is the destination handler the root redacts records into.
+func installed() slog.Handler { return root.Load().Handler().(redacting).next }
