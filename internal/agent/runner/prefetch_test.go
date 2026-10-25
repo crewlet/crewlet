@@ -141,16 +141,16 @@ func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	}
 }
 
-// AND IT REACHES THE AGENT-MODE SYSTEM PROMPT TOO.
+// AND IT REACHES THE BOX-MODE SYSTEM PROMPT TOO.
 //
-// executorPrompt is ONE builder for both runtimes — a native pass sends the
-// system and user messages to the model, an agent-mode run hands them to its
+// executorPrompt is ONE builder for both runtimes — a host-mode pass sends the
+// system and user messages to the model, a box-mode run hands them to its
 // coding CLI as the system text it appends and the prompt it runs — so a block
 // that reached one and not the other would be a seat with context on the
 // engine's own loop and none on the subscription's. There is nothing in the
-// agent-mode path that could drop it today, which is exactly why the claim
+// box-mode path that could drop it today, which is exactly why the claim
 // needs a test: the two paths drift on whichever half nobody re-reads.
-func TestThePrefetchReachesTheAgentModeSystemPromptToo(t *testing.T) {
+func TestThePrefetchReachesTheBoxModeSystemPromptToo(t *testing.T) {
 	t.Parallel()
 	launcher := &recordingLauncher{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
@@ -170,7 +170,7 @@ func TestThePrefetchReachesTheAgentModeSystemPromptToo(t *testing.T) {
 		"## Personal memory", "always use semantic commits",
 	} {
 		if !strings.Contains(launcher.req.System, want) {
-			t.Errorf("the agent-mode system prompt is missing %q", want)
+			t.Errorf("the box-mode system prompt is missing %q", want)
 		}
 	}
 }

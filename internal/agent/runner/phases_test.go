@@ -311,7 +311,7 @@ func runnerWithModels(t *testing.T, entries []phase.Entry) *runner.Runner {
 }
 
 // buildOpts are the knobs a test varies on the shared fixture. Zero is the
-// native tool loop with somebody waiting, which is what most tests want.
+// host-mode executor with somebody waiting, which is what most tests want.
 type buildOpts struct {
 	reply    turn.Reply
 	agentRun runner.AgentLauncher
@@ -597,9 +597,9 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	}
 }
 
-// writtenSubmission is the measured failure: an executor on a cli-agent text
-// backend ended its turn with submit_work's ARGUMENTS typed out as a fenced
-// JSON block — the report, as prose — instead of the call.
+// writtenSubmission is a measured failure: an executor ended its turn with
+// submit_work's ARGUMENTS typed out as a fenced JSON block — the report, as
+// prose — instead of the call.
 func writtenSubmission() llmtest.Response {
 	return text("Commented on the work item.\n\n```json\n" +
 		`{"summary":"Commented on the work item","outcome":"blocked",` +

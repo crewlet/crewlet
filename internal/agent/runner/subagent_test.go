@@ -158,7 +158,7 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 		Remaining: headroom{err: errors.New("the coordination store is unreachable")},
 	}
 
-	native := func(t *testing.T, sub *runner.SubagentConfig) string {
+	hostMode := func(t *testing.T, sub *runner.SubagentConfig) string {
 		t.Helper()
 		prov := &scriptedProvider{execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool,
 			`{"outcome":"no_action","summary":"nothing to fan out"}`)}}
@@ -169,7 +169,7 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 		}
 		return systemOf(t, prov, "execute")
 	}
-	agentMode := func(t *testing.T, sub *runner.SubagentConfig) string {
+	boxMode := func(t *testing.T, sub *runner.SubagentConfig) string {
 		t.Helper()
 		launcher := &recordingLauncher{}
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
@@ -184,7 +184,7 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 	}
 
 	for name, prompt := range map[string]func(*testing.T, *runner.SubagentConfig) string{
-		"native": native, "agent mode": agentMode,
+		"host mode": hostMode, "box mode": boxMode,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

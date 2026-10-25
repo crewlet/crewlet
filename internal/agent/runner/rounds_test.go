@@ -930,7 +930,7 @@ func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 		"name": "jira_create", "arguments": `{"summary":"parked"}`, "success": true, "round": 2,
 	})
 
-	t.Run("a native run", func(t *testing.T) {
+	t.Run("a host-mode run", func(t *testing.T) {
 		t.Parallel()
 		calls := turnctx.NewCallLog()
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
@@ -996,7 +996,7 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 		{Name: "comment_on_work_item", Result: "commented"},
 	}}}
 
-	native := func(t *testing.T, history []ledger.Iteration) turn.Work {
+	hostMode := func(t *testing.T, history []ledger.Iteration) turn.Work {
 		t.Helper()
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
 			execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool, citation)},
@@ -1010,7 +1010,7 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 		}
 		return w
 	}
-	agent := func(t *testing.T, history []ledger.Iteration) turn.Work {
+	boxMode := func(t *testing.T, history []ledger.Iteration) turn.Work {
 		t.Helper()
 		var args map[string]any
 		if err := json.Unmarshal([]byte(citation), &args); err != nil {
@@ -1031,7 +1031,7 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 	}
 
 	for name, resume := range map[string]func(*testing.T, []ledger.Iteration) turn.Work{
-		"a native run": native, "a box-mode run": agent,
+		"a host-mode run": hostMode, "a box-mode run": boxMode,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
