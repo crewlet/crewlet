@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -200,6 +201,13 @@ func runFakeCLI() {
 		name := os.Getenv("FAKE_REPORT_ENV")
 		_, present := os.LookupEnv(name)
 		fmt.Printf("%s present=%v", name, present)
+	case os.Getenv("FAKE_REPORT_TMPDIR") == "1":
+		// Reports whether the TMPDIR the child was handed is a directory,
+		// FROM INSIDE it and before it writes anything: a program finds its
+		// temporary directory rather than making it, so this is what
+		// mktemp, or a CLI's own sandbox helper, would find.
+		info, err := os.Stat(os.Getenv("TMPDIR"))
+		fmt.Printf("TMPDIR dir=%v", err == nil && info.IsDir())
 	case os.Getenv("FAKE_PROMPT_FILE") != "":
 		// Answers the whole prompt-file question FROM INSIDE THE CHILD,
 		// which is the only place it can be answered honestly: the
@@ -742,6 +750,40 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 	}
 	if envValue(comp.Content, "VENDOR_API_KEY") != "sk-metered" {
 		t.Errorf("api-key mode did not deliver the key:\n%s", comp.Content)
+	}
+}
+
+// THE TEMPORARY DIRECTORY A COMMAND IS HANDED EXISTS WHEN IT STARTS, for every
+// kind of command this package runs in a home of its own: a call in a seat's
+// home, a login command in the login home, the version probe in the probe home.
+//
+// A program finds its TMPDIR rather than making it — mktemp fails on one that
+// names nothing — and a TMPDIR named and never made failed every codex call
+// from 0.164 on, whose sandbox helper resolves it before reading the call's
+// AGENTS.md. Asked of the child, before it writes anything.
+func TestEveryCommandFindsTheTemporaryDirectoryItIsHanded(t *testing.T) {
+	t.Parallel()
+	fake := []any{"-test.run=TestCLIAgentFakeCLI"}
+	p := fakeProvider(t, map[string]string{"FAKE_REPORT_TMPDIR": "1"},
+		map[string]any{"status_args": fake, "version_args": fake})
+	const want = "TMPDIR dir=true"
+
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if comp.Content != want {
+		t.Errorf("a call's child reported %q, want %q", comp.Content, want)
+	}
+	var out bytes.Buffer
+	if err := p.Status(t.Context(), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != want {
+		t.Errorf("a login command's child reported %q, want %q", got, want)
+	}
+	if got := p.probeVersion(t.Context()); got != want {
+		t.Errorf("the version probe's child reported %q, want %q", got, want)
 	}
 }
 

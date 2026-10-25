@@ -369,10 +369,11 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 	// The directories exist BEFORE the seed rather than after it, which is
 	// the order a seed that RUNS THE CLI needs: an import is a child whose
 	// HOME is this directory and whose working directory is too.
-	for _, d := range []string{home, cache, work} {
-		if err = os.MkdirAll(d, 0o700); err != nil {
-			return nil, fmt.Errorf("cli-agent: preparing %q: %w", d, err)
-		}
+	if err = prepareHome(home, cache); err != nil {
+		return nil, err
+	}
+	if err = os.MkdirAll(work, 0o700); err != nil {
+		return nil, fmt.Errorf("cli-agent: preparing %q: %w", work, err)
 	}
 	// THE CALL'S DIRECTORY IS ITS OWN PROJECT ROOT. Every vendor CLI here
 	// looks for project files — AGENTS.md, CLAUDE.md, its own rules, skills,
@@ -554,7 +555,7 @@ func (w *Workspace) prune(home string) error {
 	}
 	// MADE AGAIN, because a CLI handed a TMPDIR that does not exist fails
 	// the first temporary file it opens rather than making the directory.
-	if err := os.MkdirAll(filepath.Join(home, seatTempDir), 0o700); err != nil {
+	if err := os.MkdirAll(tempDir(home), 0o700); err != nil {
 		return fmt.Errorf("cli-agent: preparing the seat's temporary directory: %w", err)
 	}
 	return nil

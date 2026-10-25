@@ -1001,10 +1001,11 @@ func (p *Provider) runInCredentialHome(
 	home := p.ws.loginHome()
 	cache := p.ws.loginCache()
 	record := filepath.Join(p.ws.Root(), loginGenerationFile)
-	for _, dir := range []string{home, cache, p.ws.CredentialsDir()} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return false, fmt.Errorf("cliagent: preparing %q: %w", dir, err)
-		}
+	if err := prepareHome(home, cache); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(p.ws.CredentialsDir(), 0o700); err != nil {
+		return false, fmt.Errorf("cliagent: preparing %q: %w", p.ws.CredentialsDir(), err)
 	}
 	unlock, lockErr := p.ws.lockLoginHome(ctx)
 	if lockErr != nil {
