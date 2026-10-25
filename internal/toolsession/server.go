@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -97,19 +98,43 @@ type Server struct {
 	// before it can offer one to its model.
 	listed   chan struct{}
 	listOnce sync.Once
+
+	// lists counts the tool lists served, and relisted is closed and
+	// replaced as each is — what a held answer waits on
+	// ([Server.HoldAnswersForRelist]).
+	lists     uint64
+	relisted  chan struct{}
+	holdLists bool
 }
+
+// relistWait bounds how long a call that changed the tool list holds its
+// answer for the client's re-list: a CLI that re-reads its list when told it
+// changed does so within a fraction of a second of the notice (OpenCode's
+// served loop, the slowest measured, about 270 ms after it), and two seconds
+// is far past that while still short against the model request the answer
+// lets the CLI make. A client that has not listed by then is answered anyway.
+const relistWait = 2 * time.Second
 
 // NewServer builds the server for one dispatcher, named as the CLI will list
 // it. title is shown in the handshake, for a CLI's own logs.
 func NewServer(name, title string, d Dispatcher) *Server {
-	s := &Server{d: d, listed: make(chan struct{})}
+	s := &Server{d: d, listed: make(chan struct{}), relisted: make(chan struct{})}
 	s.srv = mcp.NewServer(&mcp.Implementation{Name: name, Title: title, Version: "1"}, nil)
 	s.srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-			if method == "tools/list" {
-				s.listOnce.Do(func() { close(s.listed) })
+			if method != "tools/list" {
+				return next(ctx, method, req)
 			}
-			return next(ctx, method, req)
+			s.listOnce.Do(func() { close(s.listed) })
+			res, err := next(ctx, method, req)
+			// SERVED, then counted: an answer held for the re-list goes
+			// once the client has the new list, not while it is asking.
+			s.mu.Lock()
+			s.lists++
+			close(s.relisted)
+			s.relisted = make(chan struct{})
+			s.mu.Unlock()
+			return res, err
 		}
 	})
 	s.Sync()
@@ -122,6 +147,19 @@ func (s *Server) MCP() *mcp.Server { return s.srv }
 // Listed is closed once a client has asked for the tool list.
 func (s *Server) Listed() <-chan struct{} { return s.listed }
 
+// HoldAnswersForRelist is for a client that re-reads the tool list when told
+// it changed: the answer to a call that changed the list waits until the
+// client has listed again, up to [relistWait], so the request the answer lets
+// the CLI make already offers its model the new tools. Answered at once
+// instead, the CLI asked its model again before its re-list landed — Gemini
+// CLI, Copilot and OpenCode were measured offering an activated tool one
+// request late, a request spent on a model that could not yet call it.
+func (s *Server) HoldAnswersForRelist() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holdLists = true
+}
+
 // Sync brings the advertised list up to what the dispatcher offers.
 //
 // AFTER EVERY CALL, because a call is what moves it: a CLI activates a tool by
@@ -130,11 +168,18 @@ func (s *Server) Listed() <-chan struct{} { return s.listed }
 // for the ones that do not, the dispatcher ends the run and the next one starts
 // with the new list — see the tool loop.
 func (s *Server) Sync() {
+	s.sync()
+}
+
+// sync is [Server.Sync], answering whether the advertised list changed and how
+// many lists had been served when it did.
+func (s *Server) sync() (changed bool, listsBefore uint64) {
 	rev := s.d.Revision()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	listsBefore = s.lists
 	if s.advertised != nil && s.synced == rev {
-		return
+		return false, listsBefore
 	}
 	if s.advertised == nil {
 		s.advertised = map[string]struct{}{}
@@ -154,6 +199,7 @@ func (s *Server) Sync() {
 			Annotations: crewletmcp.SDKAnnotations(tool.Annotations),
 		}, s.handler(name))
 		s.advertised[name] = struct{}{}
+		changed = true
 	}
 	var gone []string
 	for name := range s.advertised {
@@ -165,6 +211,31 @@ func (s *Server) Sync() {
 		s.srv.RemoveTools(gone...)
 		for _, name := range gone {
 			delete(s.advertised, name)
+		}
+		changed = true
+	}
+	return changed, listsBefore
+}
+
+// awaitRelist waits until the client has listed the tools more than after
+// times, for at most [relistWait] — see [Server.HoldAnswersForRelist].
+func (s *Server) awaitRelist(ctx context.Context, after uint64) {
+	timer := time.NewTimer(relistWait)
+	defer timer.Stop()
+	for {
+		s.mu.Lock()
+		if s.lists > after {
+			s.mu.Unlock()
+			return
+		}
+		next := s.relisted
+		s.mu.Unlock()
+		select {
+		case <-next:
+		case <-timer.C:
+			return
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -183,8 +254,16 @@ func (s *Server) handler(name string) mcp.ToolHandler {
 		}
 		call.Arguments = args
 		res := s.d.Call(ctx, call)
-		// THE CALL MAY HAVE BEEN AN ACTIVATION — see [Server.Sync].
-		s.Sync()
+		// THE CALL MAY HAVE BEEN AN ACTIVATION — see [Server.Sync] — and
+		// its answer then waits for the client's re-list where the client
+		// re-lists ([Server.HoldAnswersForRelist]).
+		changed, before := s.sync()
+		s.mu.Lock()
+		hold := s.holdLists
+		s.mu.Unlock()
+		if changed && hold {
+			s.awaitRelist(ctx, before)
+		}
 		return &mcp.CallToolResult{
 			IsError: res.Failed,
 			Content: []mcp.Content{&mcp.TextContent{Text: res.Output}},

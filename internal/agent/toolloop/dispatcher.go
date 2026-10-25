@@ -396,6 +396,11 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 	if err != nil {
 		return llm.Served{}, err
 	}
+	if opts.Relists {
+		// The answer to an activation waits for the CLI's re-list, so its
+		// next request offers the tool — see [toolsession.Server.HoldAnswersForRelist].
+		session.Server().HoldAnswersForRelist()
+	}
 	r := &run{opts: opts, session: session, start: time.Now(), released: make(chan struct{}), ctx: ctx}
 	d.mu.Lock()
 	d.runs = append(d.runs, r)

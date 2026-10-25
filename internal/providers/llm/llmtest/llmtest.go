@@ -95,6 +95,13 @@ type Run struct {
 	Stop llm.StopReason
 }
 
+// relist re-reads the tool list when the server says it changed, as a CLI that
+// re-lists does — and as the host waits for before it answers the call that
+// changed it.
+func relist(ctx context.Context, req *mcp.ToolListChangedRequest) {
+	_, _ = req.Session.ListTools(ctx, nil)
+}
+
 // CallIDKey is the `_meta` key the script sends a call's id under, as Codex
 // does.
 const CallIDKey = "callId"
@@ -323,7 +330,11 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	if err != nil {
 		return nil, fmt.Errorf("llmtest: reach the session: %w", err)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "llmtest", Version: "1"}, nil)
+	var copts *mcp.ClientOptions
+	if !s.NoRelist {
+		copts = &mcp.ClientOptions{ToolListChangedHandler: relist}
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "llmtest", Version: "1"}, copts)
 	cs, err := client.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("llmtest: connect: %w", err)
