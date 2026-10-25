@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -25,8 +26,8 @@ var task = assistanttest.Routes(map[string]exec.Response{
 })
 
 // readTask is a round asking for ENG-7.
-func readTask() assistanttest.Round {
-	return assistanttest.Call("c1", "get_task", map[string]any{"item": "ENG-7"})
+func readTask() evals.Round {
+	return evals.Call("c1", "get_task", map[string]any{"item": "ENG-7"})
 }
 
 // A READ IS ONE REQUEST, THROUGH THE DISPATCHER, ON THE TURN'S GRANT.
@@ -41,9 +42,9 @@ func readTask() assistanttest.Round {
 // grant) and the sent list goes wrong.
 func TestTheAssistantReachesToolsOnlyAsRequests(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
-		Rounds: []assistanttest.Round{readTask(),
-			assistanttest.Say("ENG-7 is to rotate the keys.")}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []evals.Round{readTask(),
+			evals.Say("ENG-7 is to rotate the keys.")}})
 	accepted, err := f.Ask("read", "Who works here?", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +58,7 @@ func TestTheAssistantReachesToolsOnlyAsRequests(t *testing.T) {
 		got.Grant != f.Grant("read").ID() {
 		t.Errorf("sent %+v on grant %s, want GET /work/ENG-7 on the question's grant", got.Request, got.Grant)
 	}
-	done := assistanttest.Last(frames, wire.EventDone)
+	done := evals.Last(frames, wire.EventDone)
 	if done == nil || done.Done.State != wire.TurnCompleted || done.Done.Steps != 1 {
 		t.Fatalf("done = %+v, want a completed turn of one step", done)
 	}
@@ -92,9 +93,9 @@ func TestNoTokenReachesARecordALogOrAPrompt(t *testing.T) {
 	leaky := assistanttest.Routes(map[string]exec.Response{
 		"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "token "+key),
 	})
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: leaky,
-		Rounds: []assistanttest.Round{readTask(),
-			assistanttest.Say("Here it is: " + key)}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: leaky,
+		Rounds: []evals.Round{readTask(),
+			evals.Say("Here it is: " + key)}})
 	accepted, err := f.Ask("leak", "Show me the token "+key, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -123,9 +124,9 @@ func TestNoTokenReachesARecordALogOrAPrompt(t *testing.T) {
 // Mutation: drop the budget gate in Start and the model is called.
 func TestABudgetRefusalStopsBeforeARound(t *testing.T) {
 	t.Parallel()
-	resets := assistanttest.Epoch.Add(3 * time.Hour)
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{assistanttest.Say("never")},
-		Budget: assistanttest.Budget{M: assistanttest.FullMeter{ResetsAt: resets}}})
+	resets := evals.Epoch.Add(3 * time.Hour)
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{evals.Say("never")},
+		Budget: evals.Budget{M: assistanttest.FullMeter{ResetsAt: resets}}})
 	_, err := f.Ask("budget", "How much did we spend?", nil)
 	refused, ok := errorAs[*assistant.BudgetRefused](err)
 	if !ok || !refused.ResetsAt.Equal(resets) {
@@ -148,7 +149,7 @@ func TestABudgetRefusalStopsBeforeARound(t *testing.T) {
 // first.
 func TestOneTurnRunsPerConversation(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{assistanttest.Say("done")}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{evals.Say("done")}})
 	f.Model.Gate = make(chan struct{})
 	first, err := f.Ask("first", "One?", nil)
 	if err != nil {
@@ -162,7 +163,7 @@ func TestOneTurnRunsPerConversation(t *testing.T) {
 		t.Errorf("a retry of the first question = %+v, %v; want the same turn", again, err)
 	}
 	close(f.Model.Gate)
-	if done := assistanttest.Last(f.Follow(first.TurnID, 0), wire.EventDone); done == nil ||
+	if done := evals.Last(f.Follow(first.TurnID, 0), wire.EventDone); done == nil ||
 		done.Done.State != wire.TurnCompleted {
 		t.Errorf("done = %+v", done)
 	}
@@ -175,15 +176,15 @@ func TestOneTurnRunsPerConversation(t *testing.T) {
 // its tool call.
 func TestAStoppedTurnChangesNothing(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
-		Rounds: []assistanttest.Round{readTask(),
-			assistanttest.Say("Two.")}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []evals.Round{readTask(),
+			evals.Say("Two.")}})
 	f.Model.Gate = make(chan struct{})
 	accepted, err := f.Ask("stop", "Who works here?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := f.Svc.Stop(t.Context(), f.Person.ID, accepted.TurnID, assistanttest.Key("stopping"))
+	answer, err := f.Svc.Stop(t.Context(), f.Person.ID, accepted.TurnID, evals.Key("stopping"))
 	if err != nil || answer.State != wire.TurnStopped {
 		t.Fatalf("stop = %+v, %v", answer, err)
 	}
@@ -210,15 +211,15 @@ func TestAGrantEndingMidTurnEndsTheTurn(t *testing.T) {
 		return exec.Response{Status: http.StatusUnauthorized,
 			Body: []byte(`{"error":"invalid_token","message":"Sign in again."}`)}
 	}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: signedOut,
-		Rounds: []assistanttest.Round{readTask(),
-			assistanttest.Say("never")}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: signedOut,
+		Rounds: []evals.Round{readTask(),
+			evals.Say("never")}})
 	accepted, err := f.Ask("signout", "Who works here?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	frames := f.Follow(accepted.TurnID, 0)
-	failure := assistanttest.Last(frames, wire.EventError)
+	failure := evals.Last(frames, wire.EventError)
 	if failure == nil || failure.Error.Code != wire.ErrorGrantEnded {
 		t.Fatalf("error = %+v, want grant_ended", failure)
 	}
@@ -235,16 +236,16 @@ func TestAGrantEndingMidTurnEndsTheTurn(t *testing.T) {
 // so no call rides a grant that lapses while the route serves it.
 func TestAGrantAboutToEndSendsNothing(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
-		Rounds: []assistanttest.Round{readTask()}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []evals.Round{readTask()}})
 	short := f.Grant("short")
 	short.ExpiresAt = f.Clock.Now().Add(assistant.GrantMargin / 2)
 	accepted, err := f.Svc.Start(t.Context(), assistant.TurnStart{Person: f.Person,
-		Conversation: f.Conversation, Key: assistanttest.Key("short"), Input: "Who?", Read: short})
+		Conversation: f.Conversation, Key: evals.Key("short"), Input: "Who?", Read: short})
 	if err != nil {
 		t.Fatal(err)
 	}
-	failure := assistanttest.Last(f.Follow(accepted.TurnID, 0), wire.EventError)
+	failure := evals.Last(f.Follow(accepted.TurnID, 0), wire.EventError)
 	if failure == nil || failure.Error.Code != wire.ErrorGrantEnded {
 		t.Fatalf("error = %+v, want grant_ended", failure)
 	}
@@ -256,11 +257,11 @@ func TestAGrantAboutToEndSendsNothing(t *testing.T) {
 // A PERSON'S LOAD IS BOUNDED: two turns running at once, and a turn rate.
 func TestAPersonsTurnsAreRateLimited(t *testing.T) {
 	t.Parallel()
-	var rounds []assistanttest.Round
+	var rounds []evals.Round
 	for range assistant.TurnBurst {
-		rounds = append(rounds, assistanttest.Say("ok"))
+		rounds = append(rounds, evals.Say("ok"))
 	}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: rounds})
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: rounds})
 	for i := range assistant.TurnBurst {
 		accepted, err := f.Ask("burst"+string(rune('a'+i)), "Hi", nil)
 		if err != nil {
@@ -279,16 +280,16 @@ func TestAPersonsTurnsAreRateLimited(t *testing.T) {
 // own check), and shows as a refused step.
 func TestAnIdentityArgumentIsRefusedBeforeSending(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)},
-		Handler: task, Rounds: []assistanttest.Round{
-			assistanttest.Call("c1", "get_task", map[string]any{"item": "ENG-7", "actor": "ada"}),
-			assistanttest.Say("I cannot.")}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
+		Handler: task, Rounds: []evals.Round{
+			evals.Call("c1", "get_task", map[string]any{"item": "ENG-7", "actor": "ada"}),
+			evals.Say("I cannot.")}})
 	accepted, err := f.Ask("identity", "Act as Ada", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	frames := f.Follow(accepted.TurnID, 0)
-	step := assistanttest.Last(frames, wire.EventStep)
+	step := evals.Last(frames, wire.EventStep)
 	if step == nil || step.Step.State != wire.StepRefused || step.Step.Refusal == nil ||
 		step.Step.Refusal.Code != "invalid_input" {
 		t.Errorf("step = %+v, want refused invalid_input", step)
@@ -302,16 +303,16 @@ func TestAnIdentityArgumentIsRefusedBeforeSending(t *testing.T) {
 // the reason the viewer gives, before anything else.
 func TestTheAssistantRefusesWhoItMayNotServe(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Off: true})
+	f := assistanttest.NewRig(t, evals.RigOptions{Off: true})
 	if _, err := f.Ask("off", "Hi", nil); !isReason(err, wire.ViewerDisabled) {
 		t.Errorf("an assistant that is Off: err = %v", err)
 	}
-	g := assistanttest.NewRig(t, assistanttest.RigOptions{})
-	g.Person.Via = "pat:" + assistanttest.ID("token").String()
+	g := assistanttest.NewRig(t, evals.RigOptions{})
+	g.Person.Via = "pat:" + evals.ID("token").String()
 	if _, err := g.Ask("token", "Hi", nil); !isReason(err, wire.ViewerNotAPerson) {
 		t.Errorf("a machine token: err = %v", err)
 	}
-	h := assistanttest.NewRig(t, assistanttest.RigOptions{Models: &assistanttest.Models{Err: errors.New("no model")}})
+	h := assistanttest.NewRig(t, evals.RigOptions{Models: &evals.Models{Err: errors.New("no model")}})
 	if _, err := h.Ask("model", "Hi", nil); !errors.Is(err, assistant.ErrUnavailable) {
 		t.Errorf("no model: err = %v", err)
 	}
@@ -326,9 +327,9 @@ func isReason(err error, reason wire.ViewerReason) bool {
 // is answered from the transcript.
 func TestAResumedStreamReplaysOnlyWhatItMissed(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
-		Rounds: []assistanttest.Round{readTask(),
-			assistanttest.Say("Two.")}})
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []evals.Round{readTask(),
+			evals.Say("Two.")}})
 	accepted, err := f.Ask("resume", "Who?", nil)
 	if err != nil {
 		t.Fatal(err)

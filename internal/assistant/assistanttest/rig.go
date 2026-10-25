@@ -1,239 +1,48 @@
 package assistanttest
 
 import (
-	"context"
-	"fmt"
-	"sync"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/assistant"
-	"github.com/crewlet/crewlet/internal/assistant/catalog"
-	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
-	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// Rig is one suite's assistant: a real [assistant.Service] over this
-// package's fakes, a person, and a conversation of theirs.
+// Rig is a suite's assistant: [evals.Rig], whose service the suite's end
+// closes, failing the test where the evaluation would answer an error.
 type Rig struct {
-	t            TB
-	Svc          *assistant.Service
-	Clock        *Clock
-	Store        *Store
-	Model        *Model
-	Dispatcher   *Dispatcher
-	Revoker      *Revoker
-	Audit        *Audit
-	Person       iam.Principal
-	Conversation uuid.UUID
+	*evals.Rig
+	t testing.TB
 }
 
-// RigOptions vary one rig.
-type RigOptions struct {
-	Rounds  []Round
-	Tools   []catalog.Tool
-	Handler func(exec.Request) exec.Response
-	Budget  Budget
-	Models  *Models
-	Off     bool
-	// Company replaces the rig's company, for a suite about one the
-	// assistant cannot run on.
-	Company assistant.Company
-	// Acts are the writes the rig's person may propose.
-	Acts []string
-	// Catalogue replaces the fixed Tools: catalog.Curated offers each
-	// person the curated table as a running node does.
-	Catalogue assistant.Catalogue
-	// Person replaces grace, who holds the tracker on the seat grace.
-	Person *iam.Principal
-	// Dispatcher and Revoker replace the recording fakes with the real
-	// grant machinery (internal/api/auth's Dispatcher and Delegations), for
-	// a suite that drives the App's own handler; the rig's Dispatcher and
-	// Revoker are then nil, and its questions carry a grant derived through
-	// the App's guard ([Rig.AskWith]).
-	Dispatcher exec.Dispatcher
-	Revoker    assistant.Revoker
-	// Node is the rig's node id; empty is "node-a".
-	Node string
-	// Store is shared with another rig, for a suite about two nodes of one
-	// fleet reading one replicated estate; nil is a store of the rig's own.
-	Store *Store
-	// Remote and Rate are the rig's fleet half and the fleet's turn
-	// counter; nil serves this node's own turns and counts them here.
-	Remote assistant.Remote
-	Rate   assistant.TurnRate
-}
-
-// NewRig builds a rig and closes its service when the suite ends. Its person is
-// grace, holding the tracker, on the human seat grace; ada is a second human
-// seat.
-func NewRig(t TB, o RigOptions) *Rig {
+// NewRig assembles a rig ([evals.Assemble]) and closes its service when the
+// suite ends. Its person is grace, holding the tracker, on the human seat
+// grace; ada is a second human seat of the default company.
+func NewRig(t testing.TB, o evals.RigOptions) *Rig {
 	t.Helper()
 	if o.Company == nil {
 		o.Company = Company(t, !o.Off, "grace", "ada")
 	}
-	r, err := assemble(o)
+	r, err := evals.Assemble(o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.t = t
 	t.Cleanup(func() {
-		if err := r.close(); err != nil {
+		if err := r.Close(); err != nil {
 			t.Errorf("close: %v", err)
 		}
 	})
-	return r
-}
-
-// assemble builds a rig over o, whose Company is set: the one construction
-// [NewRig] and [RunSuite] share, so an evaluation case runs on exactly the
-// service a suite does.
-func assemble(o RigOptions) (*Rig, error) {
-	clock := NewClock()
-	store := o.Store
-	if store == nil {
-		store = NewStore(clock.Now)
-	}
-	node := o.Node
-	if node == "" {
-		node = "node-a"
-	}
-	r := &Rig{Clock: clock, Store: store, Model: NewModel(o.Rounds...),
-		Audit: &Audit{}, Person: Person("grace", "grace", iam.GrantTracker),
-		Conversation: ID("conversation/one"),
-	}
-	if o.Person != nil {
-		r.Person = *o.Person
-	}
-	var dispatcher exec.Dispatcher = o.Dispatcher
-	if dispatcher == nil {
-		r.Dispatcher = &Dispatcher{Handler: o.Handler}
-		dispatcher = r.Dispatcher
-	}
-	var revoker assistant.Revoker = o.Revoker
-	if revoker == nil {
-		r.Revoker = &Revoker{}
-		revoker = r.Revoker
-	}
-	models := Models{Model: r.Model, Key: "assistant"}
-	if o.Models != nil {
-		models = *o.Models
-	}
-	var offered assistant.Catalogue = Catalogue(o.Tools)
-	if o.Catalogue != nil {
-		offered = o.Catalogue
-	}
-	svc, err := assistant.New(assistant.Deps{
-		Node: node, Company: o.Company, Remote: o.Remote, Rate: o.Rate,
-		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
-		Models: models, Budget: o.Budget, Catalogue: offered,
-		Transcripts: r.Store, Records: r.Store, Dispatcher: dispatcher, Revoker: revoker,
-		Audit: r.Audit, Metrics: Metrics{}, Now: clock.Now,
-	})
-	if err != nil {
-		return nil, err
-	}
-	r.Svc = svc
-	r.Store.Seed(r.Person.ID, r.Conversation, "")
-	return r, nil
-}
-
-// close stops every turn the rig's service runs.
-func (r *Rig) close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return r.Svc.Close(ctx)
-}
-
-// Grant is a fresh read grant for one question, valid for five minutes, with
-// a sentinel token planted to prove it never reaches anything.
-func (r *Rig) Grant(name string) Grant {
-	return Grant{GrantID: ID("grant/" + name), ExpiresAt: r.Clock.Now().Add(5 * time.Minute),
-		Token: "cwl_ast_SENTINEL_" + name}
-}
-
-// Key is a stable operation key for one question, in the shape
-// internal/api/opkey scopes one to a person.
-func Key(name string) string { return "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a12.k" + name }
-
-// Ask starts a turn of the rig's person under key name, on a fake read grant.
-func (r *Rig) Ask(name, text string, page *wire.PageContext) (wire.TurnAccepted, error) {
-	return r.AskWith(name, text, page, r.Grant(name))
-}
-
-// AskWith starts a turn of the rig's person under key name on the read grant
-// given: a real one derived through the App's guard, when the rig sends
-// through the App's own dispatcher.
-func (r *Rig) AskWith(name, text string, page *wire.PageContext, read exec.Grant) (
-	wire.TurnAccepted, error) {
-
-	return r.Svc.Start(context.Background(), assistant.TurnStart{Person: r.Person,
-		Conversation: r.Conversation, Key: Key(name), Input: text, Page: page, Read: read})
-}
-
-// Collector is a stream as a suite reads it, refusing a frame the protocol
-// would.
-type Collector struct {
-	mu     sync.Mutex
-	frames []wire.Frame
-}
-
-var _ assistant.FrameWriter = (*Collector)(nil)
-
-// Frame implements [assistant.FrameWriter].
-func (c *Collector) Frame(fr wire.Frame) error {
-	if err := fr.Validate(); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.frames = append(c.frames, fr)
-	return nil
-}
-
-// Keepalive implements [assistant.FrameWriter].
-func (c *Collector) Keepalive() error { return nil }
-
-// Frames is every frame drawn.
-func (c *Collector) Frames() []wire.Frame {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]wire.Frame(nil), c.frames...)
+	return &Rig{Rig: r, t: t}
 }
 
 // Follow reads a turn's stream from after seq after until it ends.
 func (r *Rig) Follow(turn uuid.UUID, after uint64) []wire.Frame {
 	r.t.Helper()
-	frames, err := r.follow(turn, after, 10*time.Second)
+	frames, err := r.Await(turn, after, 10*time.Second)
 	if err != nil {
 		r.t.Fatal(err)
 	}
 	return frames
-}
-
-// follow reads a turn's stream from after seq after until it ends, or fails
-// when it has not ended within patience.
-func (r *Rig) follow(turn uuid.UUID, after uint64, patience time.Duration) ([]wire.Frame, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), patience)
-	defer cancel()
-	c := &Collector{}
-	if err := r.Svc.Stream(ctx, r.Person.ID, r.Conversation, turn, after, c); err != nil {
-		return nil, fmt.Errorf("stream: %w", err)
-	}
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("the stream never ended within %s", patience)
-	}
-	return c.Frames(), nil
-}
-
-// Last is the final frame of kind in frames, or nil.
-func Last(frames []wire.Frame, kind wire.EventKind) *wire.Frame {
-	for i := len(frames) - 1; i >= 0; i-- {
-		if frames[i].Kind == kind {
-			return &frames[i]
-		}
-	}
-	return nil
 }

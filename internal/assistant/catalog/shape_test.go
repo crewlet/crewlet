@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -166,7 +167,7 @@ func TestEveryAssistantToolResultIsFenced(t *testing.T) {
 			for _, rows := range []int{1, 600} {
 				name := fmt.Sprintf("%s/%s/%d", tool.Name, variant, rows)
 				res, err := catalog.Shape(tool, args, exec.Response{Status: 200,
-					Body: hostileAnswer(spec, b, rows)}, b, assistanttest.Epoch)
+					Body: hostileAnswer(spec, b, rows)}, b, evals.Epoch)
 				if err != nil {
 					t.Errorf("%s: %v", name, err)
 					continue
@@ -223,7 +224,7 @@ func TestARefusalAndATruncatedAnswerAreNeverCardedAsData(t *testing.T) {
 	tool, _ := catalog.Lookup("list_tasks")
 	res, err := catalog.Shape(tool, nil, exec.Response{Status: 403,
 		Body: []byte(`{"error":"unauthorized","message":"You may not.","grants":["tracker"]}`)},
-		b, assistanttest.Epoch)
+		b, evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +234,7 @@ func TestARefusalAndATruncatedAnswerAreNeverCardedAsData(t *testing.T) {
 		t.Errorf("a refusal shaped as %+v", res)
 	}
 	res, err = catalog.Shape(tool, nil, exec.Response{Status: 200, Body: []byte(`{"items":[`),
-		Truncated: true}, b, assistanttest.Epoch)
+		Truncated: true}, b, evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -39,12 +40,12 @@ func TestEveryAssistantToolResultIsFenced(t *testing.T) {
 				t.Fatalf("%s cards no answer for its required arguments", tool.Name)
 			}
 			answer := answerFor(spec)
-			f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{tool},
-				Handler: func(exec.Request) exec.Response { return assistanttest.JSON(answer) },
-				Rounds: []assistanttest.Round{
-					assistanttest.Call("c1", tool.Name, requiredArgs(tool)),
-					assistanttest.Say("done")}})
-			f.Person = assistanttest.Person("grace", "grace", iam.GrantAdmin)
+			f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{tool},
+				Handler: func(exec.Request) exec.Response { return evals.JSON(answer) },
+				Rounds: []evals.Round{
+					evals.Call("c1", tool.Name, requiredArgs(tool)),
+					evals.Say("done")}})
+			f.Person = evals.Person("grace", "grace", iam.GrantAdmin)
 			accepted, err := f.Ask("fence", "Read it", nil)
 			if err != nil {
 				t.Fatal(err)

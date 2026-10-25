@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -33,7 +34,7 @@ func (p present) Present(_ context.Context, node string) (bool, error) { return 
 // fleetOf is a fleet of two rigs, node-a and node-b, on one in-memory broker
 // and one replicated store, each with its fleet half started over its service.
 // a's model is gated, so its turns run until the suite opens the gate.
-func fleetOf(t *testing.T, a assistanttest.RigOptions) (*assistanttest.Rig, *assistanttest.Rig) {
+func fleetOf(t *testing.T, a evals.RigOptions) (*assistanttest.Rig, *assistanttest.Rig) {
 	t.Helper()
 	broker := queuememory.NewBroker()
 	roster := present{"node-a": true, "node-b": true}
@@ -72,7 +73,7 @@ func fleetOf(t *testing.T, a assistanttest.RigOptions) (*assistanttest.Rig, *ass
 	a.Node, a.Remote = "node-a", assistant.FleetRemote(fa)
 	ra := assistanttest.NewRig(t, a)
 	ra.Model.Gate = make(chan struct{})
-	rb := assistanttest.NewRig(t, assistanttest.RigOptions{Node: "node-b",
+	rb := assistanttest.NewRig(t, evals.RigOptions{Node: "node-b",
 		Remote: assistant.FleetRemote(fb), Store: ra.Store})
 	for _, n := range []struct {
 		f   *live.Fleet
@@ -91,12 +92,12 @@ func fleetOf(t *testing.T, a assistanttest.RigOptions) (*assistanttest.Rig, *ass
 }
 
 // stream follows a turn on rig r from after seq after, in the background.
-func stream(t *testing.T, r *assistanttest.Rig, turn uuid.UUID, after uint64) (*assistanttest.Collector,
+func stream(t *testing.T, r *assistanttest.Rig, turn uuid.UUID, after uint64) (*evals.Collector,
 	<-chan error) {
 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	c := &assistanttest.Collector{}
+	c := &evals.Collector{}
 	done := make(chan error, 1)
 	go func() {
 		defer cancel()
@@ -128,8 +129,8 @@ func waitUntil(t *testing.T, cond func() bool) {
 // the resumed stream misses the frames appended before it followed.
 func TestAStreamResumesOnAnotherNode(t *testing.T) {
 	t.Parallel()
-	a, b := fleetOf(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{
-		assistanttest.Say("The signing keys rotate on Friday.")}})
+	a, b := fleetOf(t, evals.RigOptions{Rounds: []evals.Round{
+		evals.Say("The signing keys rotate on Friday.")}})
 	accepted, err := a.Ask("resume", "When do the keys rotate?", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +154,7 @@ func TestAStreamResumesOnAnotherNode(t *testing.T) {
 				got[i].Kind, want[i].Seq, want[i].Kind)
 		}
 	}
-	if d := assistanttest.Last(got, wire.EventDone); d == nil || d.Done.State != wire.TurnCompleted {
+	if d := evals.Last(got, wire.EventDone); d == nil || d.Done.State != wire.TurnCompleted {
 		t.Fatalf("node-b's stream ended %v, want the completed turn", kinds(got))
 	}
 }
@@ -166,15 +167,15 @@ func TestAStreamResumesOnAnotherNode(t *testing.T) {
 // stop ends the turn.
 func TestStopReachesTheRunningNode(t *testing.T) {
 	t.Parallel()
-	a, b := fleetOf(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{
-		assistanttest.Say("Never said.")}})
+	a, b := fleetOf(t, evals.RigOptions{Rounds: []evals.Round{
+		evals.Say("Never said.")}})
 	accepted, err := a.Ask("stop", "Who works here?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stranger := assistanttest.Person("ada", "ada", iam.GrantTracker)
+	stranger := evals.Person("ada", "ada", iam.GrantTracker)
 	if _, err := b.Svc.Stop(t.Context(), stranger.ID, accepted.TurnID,
-		assistanttest.Key("stranger")); !errors.Is(err, assistant.ErrNotFound) {
+		evals.Key("stranger")); !errors.Is(err, assistant.ErrNotFound) {
 		t.Fatalf("another person's stop on node-b: err = %v, want ErrNotFound", err)
 	}
 	if _, err := a.Svc.StopHere(t.Context(), stranger.ID, accepted.TurnID); !errors.Is(err,
@@ -184,7 +185,7 @@ func TestStopReachesTheRunningNode(t *testing.T) {
 	if row, _ := a.Store.Turn(t.Context(), a.Person.ID, accepted.TurnID); row.State != wire.TurnRunning {
 		t.Fatalf("another person's stop left the turn %s, want running", row.State)
 	}
-	answer, err := b.Svc.Stop(t.Context(), b.Person.ID, accepted.TurnID, assistanttest.Key("stopping"))
+	answer, err := b.Svc.Stop(t.Context(), b.Person.ID, accepted.TurnID, evals.Key("stopping"))
 	if err != nil || answer.State != wire.TurnStopped {
 		t.Fatalf("the owner's stop on node-b = %+v, %v; want stopped", answer, err)
 	}
@@ -203,16 +204,16 @@ func TestStopReachesTheRunningNode(t *testing.T) {
 // operations for one end.
 func TestAnInterruptedTurnIsClosedOnce(t *testing.T) {
 	t.Parallel()
-	a, b := fleetOf(t, assistanttest.RigOptions{})
-	turn := assistanttest.ID("turn/orphan")
+	a, b := fleetOf(t, evals.RigOptions{})
+	turn := evals.ID("turn/orphan")
 	if _, err := a.Store.OpenTurn(t.Context(), assistant.Write{Owner: a.Person.ID,
-		By: iam.ActorFor(a.Person), Key: assistanttest.Key("orphan")}, assistantdomain.NewTurn{
+		By: iam.ActorFor(a.Person), Key: evals.Key("orphan")}, assistantdomain.NewTurn{
 		Conversation: a.Conversation, Turn: turn, Node: "node-gone",
 		PromptVersion: assistant.PromptVersion}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	streams := make([]*assistanttest.Collector, 2)
+	streams := make([]*evals.Collector, 2)
 	errs := make([]error, 2)
 	for i, r := range []*assistanttest.Rig{a, b} {
 		wg.Add(1)
@@ -227,7 +228,7 @@ func TestAnInterruptedTurnIsClosedOnce(t *testing.T) {
 		if errs[i] != nil {
 			t.Fatalf("stream %d: %v", i, errs[i])
 		}
-		d := assistanttest.Last(c.Frames(), wire.EventDone)
+		d := evals.Last(c.Frames(), wire.EventDone)
 		if d == nil || d.Done.State != wire.TurnInterrupted {
 			t.Fatalf("stream %d ended %v, want the turn interrupted", i, kinds(c.Frames()))
 		}
@@ -288,9 +289,9 @@ func (c *counted) Allow(ctx context.Context, bucket string, limit int, window ti
 func TestTheTurnRateIsCountedAcrossTheFleet(t *testing.T) {
 	t.Parallel()
 	counter := &counted{Fleet: memory.NewFleet()}
-	a := assistanttest.NewRig(t, assistanttest.RigOptions{Node: "node-a", Rate: counter,
-		Rounds: []assistanttest.Round{assistanttest.Say("ok")}})
-	b := assistanttest.NewRig(t, assistanttest.RigOptions{Node: "node-b", Rate: counter,
+	a := assistanttest.NewRig(t, evals.RigOptions{Node: "node-a", Rate: counter,
+		Rounds: []evals.Round{evals.Say("ok")}})
+	b := assistanttest.NewRig(t, evals.RigOptions{Node: "node-b", Rate: counter,
 		Store: a.Store})
 	accepted, err := a.Ask("first", "Hi", nil)
 	if err != nil {
@@ -327,11 +328,11 @@ func TestTheTurnRateIsCountedAcrossTheFleet(t *testing.T) {
 func TestATurnRateTheFleetCannotCountFallsBackToTheNode(t *testing.T) {
 	t.Parallel()
 	counter := &counted{Fleet: memory.NewFleet(), err: errors.New("the store is away")}
-	var rounds []assistanttest.Round
+	var rounds []evals.Round
 	for range assistant.TurnBurst {
-		rounds = append(rounds, assistanttest.Say("ok"))
+		rounds = append(rounds, evals.Say("ok"))
 	}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rate: counter, Rounds: rounds})
+	f := assistanttest.NewRig(t, evals.RigOptions{Rate: counter, Rounds: rounds})
 	for i := range assistant.TurnBurst {
 		accepted, err := f.Ask("burst"+string(rune('a'+i)), "Hi", nil)
 		if err != nil {

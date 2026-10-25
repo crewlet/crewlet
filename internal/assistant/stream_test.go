@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -34,7 +35,7 @@ func whileWriting(t *testing.T, f *assistanttest.Rig, turn wire.TurnAccepted) []
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	c := &assistanttest.Collector{}
+	c := &evals.Collector{}
 	// The stream ends on the deadline; whatever it says about that is not
 	// what is under test, the frames it delivered before it are.
 	_ = f.Svc.Stream(ctx, f.Person.ID, f.Conversation, turn.TurnID, 0, c)
@@ -54,7 +55,7 @@ func TestAStreamedRoundShowsItsProseBeforeTheRoundEnds(t *testing.T) {
 	t.Parallel()
 	streamed, hold := make(chan struct{}), make(chan struct{})
 	answer := "The keys rotate weekly.\nThe next rotation is on Monday."
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{{
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{{
 		Text: answer, Input: 100, Output: 20, Streamed: streamed, Hold: hold,
 		Deltas: []llm.Delta{{Content: "The keys rotate weekly.\nThe next rot"}},
 	}}})
@@ -68,7 +69,7 @@ func TestAStreamedRoundShowsItsProseBeforeTheRoundEnds(t *testing.T) {
 	if text != "The keys rotate weekly." {
 		t.Errorf("while the round was written the drawer held %q, want its first settled line", text)
 	}
-	if assistanttest.Last(early, wire.EventDone) != nil {
+	if evals.Last(early, wire.EventDone) != nil {
 		t.Fatal("the turn ended before the round was released")
 	}
 	close(hold)
@@ -84,7 +85,7 @@ func TestAStreamedRoundShowsItsProseBeforeTheRoundEnds(t *testing.T) {
 // end is the committed answer alone, never the retracted draft beside it.
 func TestARetractedPartialIsErasedWithARestart(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{{
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{{
 		Text: "The keys rotate weekly.", Input: 100, Output: 20,
 		Deltas: []llm.Delta{
 			{Content: "The keys rotate daily.\n"},
@@ -111,8 +112,8 @@ func TestARetractedPartialIsErasedWithARestart(t *testing.T) {
 // a fragment: its round is drawn once, whole, when it commits.
 func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{
-		assistanttest.Say("The keys rotate weekly."),
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{
+		evals.Say("The keys rotate weekly."),
 	}})
 	accepted, err := f.Ask("whole", "When do the keys rotate?", nil)
 	if err != nil {

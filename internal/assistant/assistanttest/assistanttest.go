@@ -1,7 +1,7 @@
-// Package assistanttest is the Dashboard Assistant's test support: the golden
-// files both sides of the protocol read, deterministic ids and instants for
-// them, and a builder that numbers a turn's frames the way a running node
-// does.
+// Package assistanttest is the Dashboard Assistant's TEST support: the golden
+// files both sides of the protocol read, a builder that numbers a turn's
+// frames the way a running node does, and the suite-facing rig, which wraps
+// internal/assistant/evals' assembly with a *testing.T.
 //
 // # Golden files are the engine's own rendering
 //
@@ -12,43 +12,28 @@
 // other sends, which is how a dialog came to read a field its route had
 // stopped writing (internal/api's gate answer); so neither side types one.
 //
-// It holds the orchestrator's scripted provider ([Model]), its seams' fakes,
-// the [Rig] every suite drives a turn through, the small company every write
-// previews against ([World]) and the evaluation runner ([RunSuite]), so every
-// suite that drives a turn drives it through one harness.
+// # Test-only, over the one harness evals ships
 //
-// # It links no testing package
-//
-// `crewlet assistant eval` runs its cases through this same harness from the
-// binary, so nothing here imports `testing` (helpers take [TB], which a
-// *testing.T satisfies) or net/http/httptest, which imports it. A case runs
-// the assistant a node runs, scripted or against a real model; the API's
-// authority is never what an evaluation measures, since the deterministic
-// suites in internal/api hold it.
+// The scripted provider, the in-memory store, the seams' stand-ins and the
+// rig's assembly are internal/assistant/evals', production code the
+// `crewlet assistant eval` command runs, so there is one scripted provider and
+// one assembly for every suite and every evaluation case. This package adds
+// only what needs a test: it imports `testing`, and the binary never links it
+// (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding).
 package assistanttest
 
 import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
-
-// TB is the part of testing.TB this package's helpers call, declared here so
-// the package links no `testing`: `crewlet assistant eval` runs its cases
-// through this same harness from the binary ([RunSuite]), and a suite passes
-// its *testing.T unchanged.
-type TB interface {
-	Helper()
-	Fatal(args ...any)
-	Fatalf(format string, args ...any)
-	Errorf(format string, args ...any)
-	Cleanup(f func())
-}
 
 // RegenerateEnv is the variable that rewrites every golden file a suite
 // compares, instead of comparing it.
@@ -59,7 +44,7 @@ const RegenerateEnv = "CREWLET_REGENERATE_ASSISTANT_FIXTURES"
 //
 // A MISMATCH NAMES THE TARGET THAT REWRITES IT and prints what was rendered, so
 // the diff a reviewer reads is the one the regeneration will commit.
-func Golden(t TB, path string, got []byte) {
+func Golden(t testing.TB, path string, got []byte) {
 	t.Helper()
 	if os.Getenv(RegenerateEnv) == "1" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -81,16 +66,6 @@ func Golden(t TB, path string, got []byte) {
 	}
 }
 
-// namespace is the UUIDv5 namespace fixture ids are derived in.
-var namespace = uuid.MustParse("6f9b2c4e-5a1d-5e3f-9c8b-1a2b3c4d5e6f")
-
-// ID is a stable id for a fixture's name, so a golden file never moves
-// because an id was minted at random.
-func ID(name string) uuid.UUID { return uuid.NewSHA1(namespace, []byte(name)) }
-
-// Epoch is the instant every fixture's clock starts at.
-var Epoch = time.Date(2026, 10, 24, 9, 41, 0, 0, time.UTC)
-
 // Turn numbers one turn's frames as its running node does: seq from 1, the
 // head filled in, each frame a tenth of a second after the one before.
 type Turn struct {
@@ -101,7 +76,7 @@ type Turn struct {
 
 // NewTurn starts a turn of conversation, both named for a fixture.
 func NewTurn(conversation, turn string) *Turn {
-	return &Turn{Conversation: ID(conversation), ID: ID(turn)}
+	return &Turn{Conversation: evals.ID(conversation), ID: evals.ID(turn)}
 }
 
 // Frame stamps a frame's head and returns it. kind and exactly its payload
@@ -112,12 +87,12 @@ func (tr *Turn) Frame(f wire.Frame) wire.Frame {
 	f.ConversationID = tr.Conversation
 	f.TurnID = tr.ID
 	f.Seq = tr.seq
-	f.At = Epoch.Add(time.Duration(tr.seq) * 100 * time.Millisecond)
+	f.At = evals.Epoch.Add(time.Duration(tr.seq) * 100 * time.Millisecond)
 	return f
 }
 
 // Stream is frames encoded as one SSE body, as a stream route writes them.
-func Stream(t TB, frames ...wire.Frame) []byte {
+func Stream(t testing.TB, frames ...wire.Frame) []byte {
 	t.Helper()
 	var b bytes.Buffer
 	for _, f := range frames {

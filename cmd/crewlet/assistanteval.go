@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant"
-	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -24,7 +24,8 @@ import (
 // A case describes the company it is asked in as the answers its requests
 // receive, and runs through the assistant's real orchestrator and curated
 // catalogue over the same harness the engine's suites use
-// (internal/assistant/assistanttest). So nothing is read from or written to a
+// (internal/assistant/evals, production code the suites drive through the
+// test-only assistanttest). So nothing is read from or written to a
 // node, a case is repeatable, and the one thing that varies is the model:
 // each case's own script by default, which calls none and is how the engine's
 // tests run the shipped suite, or a `providers.llm` entry with -model, which
@@ -46,13 +47,14 @@ func runAssistant(environ config.Source, args []string, stdout, stderr io.Writer
 	}
 }
 
-const assistantUsage = `usage: crewlet assistant eval -suite DIR [-model KEY] [-trials N] [-company PATH] [-config PATH]
+const assistantUsage = `usage: crewlet assistant eval -suite DIR [-model KEY -paid] [-trials N] [-company PATH] [-config PATH]
 
   eval   Run a directory of evaluation cases through the Dashboard Assistant's
          own orchestrator and tool catalogue, in this process. Each case plays
          its own scripted rounds (no model is called) unless -model names a
-         providers.llm entry to ask instead. A case passes only when every
-         trial does; the command exits non-zero when any case fails.`
+         providers.llm entry to ask instead, which calls a paid model once per
+         round of every trial and so also needs -paid. A case passes only when
+         every trial does; the command exits non-zero when any case fails.`
 
 func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("assistant eval", flag.ContinueOnError)
@@ -60,6 +62,8 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 	suite := fs.String("suite", "", "the directory of cases: every *.yaml file in it")
 	model := fs.String("model", "",
 		"the providers.llm entry to ask; empty plays each case's own script")
+	paid := fs.Bool("paid", false,
+		"confirm that -model calls a paid model, once per round of every trial")
 	trials := fs.Int("trials", 1, "how many times each case runs; it passes only if every run does")
 	companyPath := fs.String("company", defaultCompanyPath,
 		"Tier B, read with -model for the entry to ask")
@@ -76,13 +80,23 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 		return fmt.Errorf("crewlet assistant eval: -trials %d runs nothing; pass 1 or more", *trials)
 	case fs.NArg() > 0:
 		return fmt.Errorf("crewlet assistant eval takes no arguments, got %q", fs.Args())
+	case *model != "" && !*paid:
+		// A MODEL IS NEVER CALLED BY ACCIDENT: a suite run with -model is
+		// one paid completion per round of every trial, so the spend is
+		// confirmed on the command line rather than discovered on a bill.
+		return fmt.Errorf("crewlet assistant eval: -model %s calls a paid model once per "+
+			"round of every trial; pass -paid to confirm, or drop -model to play each "+
+			"case's script", *model)
+	case *model == "" && *paid:
+		return errors.New("crewlet assistant eval: -paid confirms a -model run, and no " +
+			"-model is named")
 	}
-	cases, err := assistanttest.LoadSuite(*suite)
+	cases, err := evals.LoadSuite(*suite)
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
-	opts := assistanttest.EvalOptions{Trials: *trials}
+	opts := evals.Options{Trials: *trials}
 	if *model != "" {
 		company, keys, resolver, closeResolver, err := loadLLMConfig(ctx, environ,
 			*companyPath, *bootstrapPath, "", "eval", *model, stderr)
@@ -103,9 +117,11 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 			return err
 		}
 		restoreConfiguredBundle(ctx, provider, stderr)
+		fmt.Fprintf(stderr, "crewlet assistant eval: asking %s (%s), a paid model: %d "+
+			"cases, %d trials each\n", *model, provider.Model(), len(cases), *trials)
 		opts.Model, opts.ModelKey = provider, *model
 	}
-	results, err := assistanttest.RunSuite(ctx, cases, opts)
+	results, err := evals.RunSuite(ctx, cases, opts)
 	if err != nil {
 		return err
 	}
@@ -127,7 +143,7 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 // reportEval prints one line per case (its passes, and the mean rounds,
 // tokens and median round latency across its trials), then every failure,
 // and a footer naming the prompt version and the model.
-func reportEval(w io.Writer, results []assistanttest.Result, opts assistanttest.EvalOptions) error {
+func reportEval(w io.Writer, results []evals.Result, opts evals.Options) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "case\tpass\trounds\ttokens\tp50 round")
 	passed := 0

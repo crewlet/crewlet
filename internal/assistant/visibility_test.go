@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -31,19 +32,19 @@ func TestAVisibilityWriteIsNeverProposedWithoutItsAudience(t *testing.T) {
 		p.Audience = nil
 		return p, err
 	}
-	id := assistanttest.ID("artifact/deck").String()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{
+	id := evals.ID("artifact/deck").String()
+	f := assistanttest.NewRig(t, evals.RigOptions{
 		Tools: []catalog.Tool{share},
 		Acts:  []string{share.Act},
 		Handler: assistanttest.Routes(map[string]exec.Response{
-			"GET /artifacts/" + id: assistanttest.JSON(map[string]any{"id": id,
+			"GET /artifacts/" + id: evals.JSON(map[string]any{"id": id,
 				"title": "Q3 deck", "head_number": 5}),
 		}),
-		Rounds: []assistanttest.Round{
-			assistanttest.Call("c1", "share_artifact",
+		Rounds: []evals.Round{
+			evals.Call("c1", "share_artifact",
 				map[string]any{"artifact": id, "to": "ada", "role": "viewer"}),
-			assistanttest.Say("I could not share it.")}})
-	f.Person = assistanttest.Person("grace", "grace", iam.GrantAdmin)
+			evals.Say("I could not share it.")}})
+	f.Person = evals.Person("grace", "grace", iam.GrantAdmin)
 	accepted, err := f.Ask("share", "Share the deck with Ada", nil)
 	if err != nil {
 		t.Fatal(err)

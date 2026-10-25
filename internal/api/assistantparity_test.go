@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/config"
@@ -54,9 +56,12 @@ import (
 // this fixture forgot to mount, and the walk fails when any principal sees
 // neither an answer nor a refusal anywhere.
 //
-// The catalogue's offering is a filter and never authority, so the grant is
-// also sent every read the person was NOT offered, straight through the
-// dispatcher, and must be refused exactly as the cookie is.
+// The catalogue's offering is a filter and never authority, so every read is
+// offered to the turn, including those the curated catalogue keeps from this
+// person: a refusal must come from the API, as the same code, sentence and
+// permissions (exec.RefusalOf) the person's own request is refused with, and
+// shown so on the drawer's step. The curated catalogue must never offer a
+// read the person is refused.
 //
 // And two principals may not use the assistant at all, a session exchanged
 // from a Tier A token and a machine token: the same requests made with their
@@ -88,27 +93,26 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 			t.Parallel()
 			fx := newAssistAppWith(t, who.grants, sources.mount)
 			person := fx.principal(t)
-			offered := catalog.Offered(person, nil)
 
-			// THROUGH THE ASSISTANT: a turn per offered read, the
-			// scripted model calling it once and answering.
+			// THROUGH THE ASSISTANT: a turn per catalogue read, the
+			// scripted model calling it once and answering. EVERY read is
+			// offered to the turn, not only the ones the curated catalogue
+			// would offer this person, because the offering is a filter and
+			// never authority: a read the person may not make must be
+			// refused by the API itself, exactly as their cookie is.
 			sent := &recordingDispatcher{inner: fx.disp}
-			var rounds []assistanttest.Round
-			var asked []catalog.Tool
-			for _, tool := range offered {
-				if tool.Kind != catalog.KindRead {
-					continue
-				}
-				asked = append(asked, tool)
-				rounds = append(rounds, assistanttest.Call("c-"+tool.Name, tool.Name,
-					assistanttest.ExampleArgs(t, tool.Parameters)), assistanttest.Say("Done."))
+			var rounds []evals.Round
+			for _, tool := range reads {
+				rounds = append(rounds, evals.Call("c-"+tool.Name, tool.Name,
+					assistanttest.ExampleArgs(t, tool.Parameters)), evals.Say("Done."))
 			}
-			rig := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: rounds,
-				Person: &person, Catalogue: catalog.Curated{}, Dispatcher: sent,
+			rig := assistanttest.NewRig(t, evals.RigOptions{Rounds: rounds,
+				Person: &person, Catalogue: evals.Catalogue(reads), Dispatcher: sent,
 				Revoker: fx.d})
 			onAppClock(rig)
+			curated := catalog.Offered(person, nil)
 			answered, refused := 0, 0
-			for _, tool := range asked {
+			for _, tool := range reads {
 				began := time.Now()
 				frames := askOne(t, rig, fx, tool.Name, nil)
 				got := sent.take(t, tool.Name)
@@ -122,9 +126,26 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 				switch {
 				case status == http.StatusUnauthorized || status == http.StatusForbidden:
 					refused++
+					// THE REFUSAL IN THE ENVELOPE'S OWN TERMS: the code,
+					// the sentence and the permissions that would admit
+					// the person, as the drawer's step shows them, are the
+					// ones the person's own request is refused with.
+					want := exec.RefusalOf(exec.Response{Status: status, Body: body})
+					if step.Refusal == nil || !reflect.DeepEqual(*step.Refusal, want) {
+						t.Errorf("%s was refused to the person as %+v and the assistant's "+
+							"step shows %+v", tool.Name, want, step.Refusal)
+					}
 					if step.State != wire.StepRefused {
 						t.Errorf("%s was refused to the person (%d) and the assistant's step "+
 							"reads %s", tool.Name, status, step.State)
+					}
+					// AND THE CURATED CATALOGUE NEVER OFFERS IT, so a model
+					// is not invited to try what will be refused.
+					if slices.ContainsFunc(curated, func(o catalog.Tool) bool {
+						return o.Name == tool.Name
+					}) {
+						t.Errorf("%s is offered to %s, whose own request it refuses",
+							tool.Name, who.name)
 					}
 				case status < 300:
 					answered++
@@ -132,33 +153,6 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 						t.Errorf("%s answered the person and the assistant's step reads %s",
 							tool.Name, step.State)
 					}
-				}
-			}
-
-			// THE OFFERING IS NEVER AUTHORITY: every read this person was
-			// not offered, sent on a grant of theirs straight through the
-			// dispatcher, is refused as their cookie is.
-			grant, _ := fx.deriveWith(t, fx.withCookie, readTurn())
-			for _, tool := range reads {
-				if slices.ContainsFunc(asked, func(o catalog.Tool) bool { return o.Name == tool.Name }) {
-					continue
-				}
-				req, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
-				if err != nil {
-					t.Fatalf("%s: %v", tool.Name, err)
-				}
-				began := time.Now()
-				resp, err := fx.disp.Do(t.Context(), grant, req)
-				if err != nil {
-					t.Fatalf("Do %s: %v", tool.Name, err)
-				}
-				status, body := fx.asPerson(t, req)
-				if resp.Status != status || !sameAnswer(t, resp.Body, body, time.Since(began)) {
-					t.Errorf("%s (not offered) on the grant answered %d %s, and the person %d %s",
-						tool.Name, resp.Status, resp.Body, status, body)
-				}
-				if status == http.StatusUnauthorized || status == http.StatusForbidden {
-					refused++
 				}
 			}
 			// THE SPLIT IS REAL: everybody reads something, and everybody but
@@ -210,10 +204,10 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 			if grant != nil {
 				t.Fatalf("%s derived an assistant grant", refusedTo.name)
 			}
-			rig := assistanttest.NewRig(t, assistanttest.RigOptions{Person: &principal,
+			rig := assistanttest.NewRig(t, evals.RigOptions{Person: &principal,
 				Catalogue: catalog.Curated{}, Dispatcher: fx.disp, Revoker: fx.d})
 			_, err := rig.AskWith("refused", "What is on my plate?", nil,
-				assistanttest.Grant{GrantID: uuid.Must(uuid.NewV7()),
+				evals.Grant{GrantID: uuid.Must(uuid.NewV7()),
 					ExpiresAt: time.Now().Add(time.Minute)})
 			if !errors.Is(err, assistant.ErrNotAvailable) {
 				t.Errorf("%s was started a turn: %v", refusedTo.name, err)
@@ -232,7 +226,7 @@ func askOne(t *testing.T, rig *assistanttest.Rig, fx *assistApp, name string,
 	// ONE QUESTION EVERY THREE SECONDS, a person's sustained turn rate, so
 	// the walk is never refused as a burst.
 	rig.Clock.Advance(3 * time.Second)
-	rig.Conversation = assistanttest.ID("conversation/" + name)
+	rig.Conversation = evals.ID("conversation/" + name)
 	rig.Store.Seed(rig.Person.ID, rig.Conversation, "Asked about "+name)
 	grant, _ := fx.deriveWith(t, fx.withCookie, readTurn())
 	if grant == nil {

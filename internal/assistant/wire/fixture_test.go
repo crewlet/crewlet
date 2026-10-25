@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
@@ -23,12 +24,12 @@ const framesGolden = "testdata/frames.sse"
 // first reading, proposing and parking, the second resumed from a snapshot and
 // interrupted, so every kind appears where it would really appear.
 func vocabularyFrames() []wire.Frame {
-	id := assistanttest.ID
+	id := evals.ID
 	answer := id("message:answer")
 	proposal := id("proposal:create-task")
 	page := &wire.PageChip{Title: "Work › Tasks", Screen: "work-tasks"}
 	read := assistanttest.NewTurn("conversation", "turn:read")
-	at := assistanttest.Epoch
+	at := evals.Epoch
 	frames := []wire.Frame{
 		read.Frame(wire.Frame{Kind: wire.EventConversation, Conversation: &wire.ConversationEvent{
 			Title: "Flaky sign-in test", CreatedAt: at}}),
@@ -141,7 +142,7 @@ func vocabularyFrames() []wire.Frame {
 
 func cardFrame(message uuid.UUID, name string, card wire.Card) wire.Frame {
 	return wire.Frame{Kind: wire.EventCard, Card: &wire.CardEvent{
-		CardID: assistanttest.ID(name), MessageID: message, Card: card}}
+		CardID: evals.ID(name), MessageID: message, Card: card}}
 }
 
 // THE VOCABULARY STREAM IS THE ENCODER'S OWN, AND IT CARRIES EVERY KIND.
