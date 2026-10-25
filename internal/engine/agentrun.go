@@ -246,7 +246,7 @@ func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *a
 		return nil
 	}
 	agent, isCLI := member.Provider.(*cliagent.Provider)
-	if !isCLI || !agent.AgentMode() {
+	if !isCLI || !agent.Box() {
 		return nil
 	}
 	return &agentLauncher{

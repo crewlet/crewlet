@@ -26,7 +26,7 @@ import (
 func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placement) (*Company, *org.Role) {
 	t.Helper()
 	provider, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: agent, AgentMode: agentMode,
+		Key: "sub", Agent: agent, Box: agentMode,
 		StateDir: t.TempDir(), Timeout: time.Minute,
 	})
 	if err != nil {
@@ -37,9 +37,9 @@ func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placem
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	seat := &org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}}
-	mode := config.CLIModeText
+	mode := config.CLIModeHost
 	if agentMode {
-		mode = config.CLIModeAgent
+		mode = config.CLIModeBox
 	}
 	return &Company{
 		Models: models,
@@ -208,7 +208,7 @@ func runnerAgentRequest() runner.AgentRunRequest {
 func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	t.Parallel()
 	thinker, err := cliagent.New(cliagent.Config{
-		Key: "thinker", Agent: "claude-code", AgentMode: true, Model: "opus",
+		Key: "thinker", Agent: "claude-code", Box: true, Model: "opus",
 		StateDir: t.TempDir(), Timeout: time.Minute,
 	})
 	if err != nil {
@@ -238,7 +238,7 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 		Models: models,
 		Config: &config.Company{Providers: config.Providers{
 			LLM: map[string]config.LLMProvider{
-				"thinker": {Model: "opus", Mode: config.CLIModeAgent},
+				"thinker": {Model: "opus", Mode: config.CLIModeBox},
 				"coder":   {Model: "haiku"},
 			},
 		}},
@@ -518,7 +518,7 @@ func TestAnAgentModeRunOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing
 func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Role) {
 	t.Helper()
 	codex, err := cliagent.New(cliagent.Config{
-		Key: "codex", Agent: "codex", AgentMode: true,
+		Key: "codex", Agent: "codex", Box: true,
 		StateDir: t.TempDir(), Timeout: time.Minute,
 	})
 	if err != nil {
@@ -550,7 +550,7 @@ func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Rol
 		Config: &config.Company{Providers: config.Providers{
 			LLM: map[string]config.LLMProvider{
 				"codex": {
-					Agent: config.CLICodex, Mode: config.CLIModeAgent, RunIn: config.PlacementE2B,
+					Agent: config.CLICodex, Mode: config.CLIModeBox, RunIn: config.PlacementE2B,
 				},
 				"api": {
 					Model: "claude-golden",

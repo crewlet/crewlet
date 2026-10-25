@@ -13,7 +13,7 @@ func agentEntry(t *testing.T, agent string, mode bool) *Provider {
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
 	p, err := New(Config{
-		Key: "sub", Agent: agent, AgentMode: mode, StateDir: dir,
+		Key: "sub", Agent: agent, Box: mode, StateDir: dir,
 		Timeout: time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": "crewlet-no-such-cli-binary", "complete_args": []any{"-p"},

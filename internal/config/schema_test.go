@@ -111,7 +111,7 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		want       []string
 	}{
 		{"LLMProvider", "agent", strs(CLIAgentNames)},
-		{"LLMProvider", "mode", strs(CLIAgentModes)},
+		{"LLMProvider", "mode", strs(CLIModes)},
 		{"CLIAgentAuth", "mode", strs(CLIAgentAuthModes)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
 		// TWO DIFFERENT CLOSED SETS, deliberately. A seat may name `self`

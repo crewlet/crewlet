@@ -360,8 +360,8 @@ func TestTheAnswerNamesItsSources(t *testing.T) {
 	}
 	// The answer is the content: a tool on the surface invites a model to
 	// call it and write nothing.
-	if got := rig.model.asked[0].Tools; len(got) != 0 {
-		t.Errorf("the answer was offered %d tools", len(got))
+	if rig.model.asked[0].Tools != nil {
+		t.Error("the answer was offered tools")
 	}
 	if got := rig.search.asked[0]; got.Mode != knowledge.ModeHybrid ||
 		got.Limit != builtin.AnswerPageSources {

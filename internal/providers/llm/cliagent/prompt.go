@@ -30,27 +30,6 @@ func RenderPrompt(req llm.Request) (string, error) {
 		b.WriteString("\n")
 	}
 
-	if len(req.Tools) > 0 {
-		specs := make([]toolSpec, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			specs = append(specs, toolSpec{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  tool.Parameters,
-			})
-		}
-		catalogue, err := RenderTools(specs)
-		if err != nil {
-			return "", err
-		}
-		b.WriteString("\n")
-		b.WriteString(catalogue)
-		b.WriteString("\n")
-		// The tool loop asks again when a round of a phase that finishes
-		// by a call ends in prose; the contract itself never demands one.
-		b.WriteString(RenderContract())
-	}
-
 	return strings.TrimSpace(b.String()) + "\n", nil
 }
 
@@ -110,8 +89,8 @@ const harnessNote = "You are running inside a command-line coding tool as one se
 // harnessToolsNote follows [harnessNote] on a call that offers tools, which a
 // vendor's prompt describes as its OWN: a model told to prefer its editor and
 // its shell reaches for tools this backend denies instead of the envelope.
-const harnessToolsNote = " Act through Crewlet's tools, called with the JSON reply the " +
-	"message describes — never through the coding tool's own file, shell or task tools."
+const harnessToolsNote = " Act through Crewlet's tools, the `crewlet` MCP server's — " +
+	"never through the coding tool's own file, shell or task tools."
 
 // withHarnessNote opens the request's system prompt with [harnessNote], for a
 // call whose CLI keeps its own system prompt in force.
@@ -126,7 +105,7 @@ func withHarnessNote(req llm.Request) llm.Request {
 			continue
 		}
 		note := harnessNote
-		if len(req.Tools) > 0 {
+		if req.Tools != nil {
 			note += harnessToolsNote
 		}
 		messages := append([]llm.Message(nil), req.Messages...)

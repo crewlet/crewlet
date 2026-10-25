@@ -229,6 +229,19 @@ func (b *Box) Drain() []Note {
 	return out
 }
 
+// Waiting reports a note waiting to be read, without taking it — what ends a
+// coding CLI's run once its calls in flight are answered, so the next run
+// reads the note as a user message rather than the CLI reading it inside a
+// tool's result.
+func (b *Box) Waiting() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !b.closed && len(b.pending) > 0
+}
+
 // Close ends the box and returns the notes it took and nobody read — the ones
 // that EXPIRED, because the turn ended or parked before its next round.
 //

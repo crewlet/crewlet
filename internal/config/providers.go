@@ -249,10 +249,10 @@ type LLMProvider struct {
 	// OpenAI id for Codex, `<provider>/<model>` for OpenCode.
 	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id, in the CLI's own grammar (OpenCode: <provider>/<model>)."`
 
-	// Mode is text (the default) or agent. See [CLIAgentMode].
-	Mode CLIAgentMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=text|agent" desc:"text (a model behind the engine's tool loop) or agent (the CLI runs the executor)."`
+	// Mode is host (the default) or box. See [CLIMode].
+	Mode CLIMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=host|box" desc:"host (the CLI runs on this engine's host, turn by turn) or box (the executor runs detached in a box of providers.sandbox)."`
 
-	// RunIn is WHERE an agent-mode run happens, naming a cell of
+	// RunIn is WHERE a box-mode run happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
 	// On the entry rather than on the seat, because it is a property of
@@ -357,41 +357,44 @@ var CLIAgentNames = []CLIAgentName{
 // than meaning "any".
 func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
 
-// CLIAgentMode is HOW the engine uses a coding CLI.
+// CLIMode is WHERE a seat's executor runs its CLI.
 //
-// # Two genuinely different things wearing one entry
+// # Both run the CLI's own loop
 //
-// A coding CLI is an agent. Driving it as a text model — one prompt in, one
-// answer out, its own tools denied — spends a whole agentic runtime to get a
-// completion, and it is the right trade only because Crewlet's own tool loop
-// is doing the agency: the tools ride the prompt envelope, the engine executes
-// them, and everything an operator reads about a turn comes from that loop.
+// In either mode the CLI drives the model and calls the seat's tools as MCP
+// tools of one server, every call going through the engine's gates. What the
+// mode decides is where that loop runs and how long it lives.
 //
-// AGENT MODE gives the agency back. The CLI runs the executor itself: its loop
-// drives the model, its own shell and editor are enabled, and the seat's tools
-// reach it over the MCP bridge (internal/api/mcpbridge) so a bridged call is
-// the same frame a native loop would call. The engine's job becomes handing
-// that loop a brief and collecting what it did.
+// HOST MODE runs it on this engine's host, as a subprocess of the turn, with
+// the CLI's own shell and editor denied: its tools are the seat's alone,
+// served over a socket in this process's own directory. The turn drives it —
+// its rounds are capped, a person's note reaches it between runs, a call that
+// parks the turn ends the run — and it ends with the turn.
+//
+// BOX MODE runs the executor detached, in a box of providers.sandbox, with the
+// CLI's own shell and editor enabled and the seat's tools reached over the
+// MCP bridge (internal/api/mcpbridge). It outlives its turn, which parks until
+// the run reports, and it needs a box.
 //
 // The mode is NOT inferred, and the reason is that both are defensible for the
-// same CLI on the same seat. Text mode is predictable, its tool log is the
-// engine's own, and it needs no sandbox. Agent mode is faster on real code
-// work and gets the vendor's own harness, at the cost of a run that outlives
-// its turn and a tool surface reached over the network.
-type CLIAgentMode string
+// same CLI on the same seat. Host mode needs no sandbox and every step of it
+// is the turn's own. Box mode is faster on real code work, where the vendor's
+// own tools matter, at the cost of a run that outlives its turn and a tool
+// surface reached over the network.
+type CLIMode string
 
 const (
-	// CLIModeText drives the CLI as a text model behind the engine's own
-	// tool loop. The default.
-	CLIModeText CLIAgentMode = "text"
+	// CLIModeHost runs the CLI on this engine's host, turn by turn. The
+	// default.
+	CLIModeHost CLIMode = "host"
 
-	// CLIModeAgent runs the seat's executor AS the CLI's own agentic run,
-	// detached, with the seat's tools bridged in over MCP.
-	CLIModeAgent CLIAgentMode = "agent"
+	// CLIModeBox runs the seat's executor as a detached run of the CLI in a
+	// box, with the seat's tools bridged in over MCP.
+	CLIModeBox CLIMode = "box"
 )
 
-// CLIAgentModes is the closed set.
-var CLIAgentModes = []CLIAgentMode{CLIModeText, CLIModeAgent}
+// CLIModes is the closed set.
+var CLIModes = []CLIMode{CLIModeHost, CLIModeBox}
 
 // CLIAgentAuthMode is how a providers.llm entry's CLI authenticates.
 type CLIAgentAuthMode string
@@ -491,9 +494,8 @@ func (l *LLMProvider) AgentName() string {
 	return string(l.Agent)
 }
 
-// AgentMode reports whether this entry runs the executor as the CLI's own
-// agentic run.
-func (l *LLMProvider) AgentMode() bool { return l.Mode == CLIModeAgent }
+// Box reports whether this entry runs the executor as a detached run in a box.
+func (l *LLMProvider) Box() bool { return l.Mode == CLIModeBox }
 
 // Timeout is the invocation cap, applying the default.
 func (l *LLMProvider) Timeout() float64 {
@@ -643,19 +645,19 @@ func (l *LLMProvider) validate(path Path) error {
 			l.Auth.Mode, names(CLIAgentAuthModes))
 	}
 	switch {
-	case l.Mode != "" && !slices.Contains(CLIAgentModes, l.Mode):
+	case l.Mode != "" && !slices.Contains(CLIModes, l.Mode):
 		p.add(at(path, "mode"), ErrUnknownValue, "%q (want %s)",
-			l.Mode, names(CLIAgentModes))
-	case l.RunIn != "" && !l.AgentMode():
-		// A value that means nothing where it is written. In text mode
+			l.Mode, names(CLIModes))
+	case l.RunIn != "" && !l.Box():
+		// A value that means nothing where it is written. In host mode
 		// the CLI is a subprocess of this engine and there is no cell to
 		// choose — an operator who wrote one meant to switch modes.
 		p.add(at(path, "run_in"), ErrConflict,
-			"only agent mode runs somewhere: a text-mode CLI is a subprocess of "+
-				"this engine. Set `mode: agent`, or remove the field")
+			"only box mode runs somewhere: a host-mode CLI is a subprocess of "+
+				"this engine. Set `mode: box`, or remove the field")
 	case l.RunIn != "" && !slices.Contains(BackendPlacements(), l.RunIn):
 		// BACKEND CELLS ONLY. `self` is a seat's answer — "my code work
-		// rides my executor's run" — and an agent-mode entry IS that
+		// rides my executor's run" — and a box-mode entry IS that
 		// run, so it has no executor of its own to ride and no backend
 		// resolves it. Accepted here it validated cleanly and failed at
 		// the seat's first turn, every turn, with the manager's "no

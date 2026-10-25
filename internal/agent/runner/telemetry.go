@@ -835,7 +835,8 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		MaxRounds:        caps.max,
 		RoundCeiling:     caps.ceiling,
 		RoundStartedAt:   res.RoundStartedAt,
-		RunningCall:      runningCall(res.Running),
+		RunningCalls:     runningCalls(res.Running),
+		Invocations:      phaseInvocations(res.Invocations),
 		WorkItem:         e.workItem(),
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
@@ -1139,6 +1140,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		RoundNarration:   roundNarration(rec.Result.Narration),
 		Rounds:           phaseRounds(rec.Result.Rounds),
 		Steers:           phaseSteers(rec.Result.Steers),
+		Invocations:      phaseInvocations(rec.Result.Invocations),
 		InputTokens:      rec.Result.InputTokens,
 		OutputTokens:     rec.Result.OutputTokens,
 		TotalTokens:      rec.Result.InputTokens + rec.Result.OutputTokens,
@@ -1290,6 +1292,12 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			row["started_at"] = ex.StartedAt.UTC().Format(time.RFC3339Nano)
 			row["duration_ms"] = int(ex.Duration / time.Millisecond)
 		}
+		// The call's own id, which tells two calls of one response apart
+		// — a CLI may run them side by side — and is what a live row's
+		// running call is matched to once it settles.
+		if ex.CallID != "" {
+			row["call_id"] = ex.CallID
+		}
 		if ex.Origin != "" {
 			row["origin"] = ex.Origin
 		}
@@ -1372,14 +1380,37 @@ func (e emitter) steerEvent(n steer.Note, outcome types.SteerOutcome) types.Agen
 
 // runningCall renders the call in flight, or nil when none is — so the key is
 // absent on every frame but the one published immediately before a call.
-func runningCall(c *toolloop.RunningCall) *types.RunningCall {
-	if c == nil {
+func runningCalls(calls []toolloop.RunningCall) []types.RunningCall {
+	if len(calls) == 0 {
 		return nil
 	}
-	return &types.RunningCall{
-		Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
-		StartedAt: c.StartedAt.UTC(),
+	out := make([]types.RunningCall, len(calls))
+	for i, c := range calls {
+		out[i] = types.RunningCall{
+			ID: c.ID, Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
+			StartedAt: c.StartedAt.UTC(),
+		}
 	}
+	return out
+}
+
+// phaseInvocations renders a phase's CLI runs in their wire shape.
+func phaseInvocations(runs []toolloop.Invocation) []types.PhaseInvocation {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]types.PhaseInvocation, len(runs))
+	for i, r := range runs {
+		out[i] = types.PhaseInvocation{
+			StartedAt: utcOrZero(r.StartedAt), DurationMS: int(r.Duration.Milliseconds()),
+			ProviderKey: r.ProviderKey, Model: r.Model, Outcome: string(r.Outcome),
+			RequestsObserved: r.RequestsObserved,
+			InputTokens:      r.InputTokens, OutputTokens: r.OutputTokens,
+			CacheReadTokens: r.CacheRead, CacheWriteTokens: r.CacheWrite,
+			ToolCalls: r.Calls,
+		}
+	}
+	return out
 }
 
 // utcOrZero is t in UTC, or the zero time left zero — which `omitzero` drops,

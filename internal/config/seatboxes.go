@@ -102,7 +102,7 @@ func (c *Company) SeatBoxes() iter.Seq[SeatBox] {
 			}
 			if hasExecutor {
 				key, entry, resolved := c.executorProvider(role, fallback)
-				if resolved && entry.AgentMode() {
+				if resolved && entry.Box() {
 					if !yield(SeatBox{Seat: role, At: path, Cell: placed(entry.RunIn), Executor: key, Steps: steps}) {
 						return
 					}

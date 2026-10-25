@@ -212,6 +212,9 @@ type PhaseRound struct {
 // has answered, and a reader must be able to tell a call in flight from one
 // that returned nothing.
 type RunningCall struct {
+	// ID is the call's id, on the `tool_executions[].call_id` rule — what
+	// tells two calls of one response running side by side apart.
+	ID string `json:"id,omitempty"`
 	// Round is the round the call belongs to, on the `tool_executions`
 	// scale.
 	Round int    `json:"round"`
@@ -221,6 +224,34 @@ type RunningCall struct {
 	Arguments string `json:"arguments"`
 	// StartedAt is when the call was handed to the tool, UTC.
 	StartedAt time.Time `json:"started_at"`
+}
+
+// PhaseInvocation is one CLI run of a phase: one process driving its own loop
+// over the phase's tools, from launch to exit.
+//
+// The unit the engine observes for EVERY CLI. A [PhaseRound] is one model
+// request, which a CLI's own record shows for most CLIs and not for all; a run
+// is what the engine starts and ends itself.
+type PhaseInvocation struct {
+	StartedAt  time.Time `json:"started_at"`
+	DurationMS int       `json:"duration_ms"`
+	// ProviderKey and Model are the entry and the model that served it.
+	ProviderKey string `json:"provider_key,omitempty"`
+	Model       string `json:"model,omitempty"`
+	// Outcome is how the run ended: `end` (its model stopped), `cap` (its
+	// CLI's own turn cap), `stopped` (the engine ended it — the phase
+	// finished, parked, paused, ran out of rounds or was stopped) or
+	// `failed`.
+	Outcome string `json:"outcome"`
+	// RequestsObserved is false for a run whose CLI's record showed no
+	// model requests: the whole run is then one round.
+	RequestsObserved bool `json:"requests_observed"`
+	InputTokens      int  `json:"input_tokens"`
+	OutputTokens     int  `json:"output_tokens"`
+	CacheReadTokens  int  `json:"cache_read_tokens"`
+	CacheWriteTokens int  `json:"cache_write_tokens"`
+	// ToolCalls is how many of the phase's tools the run called.
+	ToolCalls int `json:"tool_calls"`
 }
 
 // PhaseSteer is one person's note a phase read mid-turn, and the round that
@@ -686,6 +717,9 @@ type AgentPhaseCompleted struct {
 	// round number the two lists above share — see [PhaseRound]. Absent on
 	// a phase that ran no loop in this process.
 	Rounds []PhaseRound `json:"rounds,omitempty"`
+	// Invocations are the phase's CLI runs, in order — see
+	// [PhaseInvocation]. Every phase that offered tools has at least one.
+	Invocations []PhaseInvocation `json:"invocations,omitempty"`
 	// Steers is every person's note this phase read, with the round that
 	// first read it — see [PhaseSteer]. Absent on a phase nobody steered.
 	Steers       []PhaseSteer `json:"steers,omitempty"`
@@ -935,9 +969,12 @@ type AgentTurnProgress struct {
 	// carries it, published the moment that round's provider call is made,
 	// so a start later than every entry in Rounds is a round in flight.
 	RoundStartedAt time.Time `json:"round_started_at,omitzero"`
-	// RunningCall is the tool call in flight — see [RunningCall]. Absent
-	// whenever no call is running.
-	RunningCall *RunningCall `json:"running_call,omitempty"`
+	// RunningCalls are the tool calls in flight, in the order they arrived
+	// — see [RunningCall]. A LIST because a coding CLI may run a
+	// response's calls at once. Absent whenever no call is running.
+	RunningCalls []RunningCall `json:"running_calls,omitempty"`
+	// Invocations are the phase's CLI runs so far — see [PhaseInvocation].
+	Invocations []PhaseInvocation `json:"invocations,omitempty"`
 	// WorkItem is the item the turn is charged to, as the turn knows it
 	// now — see [AgentTurnStarted.WorkItem].
 	WorkItem *WorkItem `json:"work_item,omitempty"`

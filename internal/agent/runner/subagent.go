@@ -116,6 +116,8 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		// of its own, and building a fresh check here would close on a
 		// different epoch than the turn that spawned it.
 		Fence: r.cfg.Fence,
+		// The same host the parent's tools are served from.
+		Sessions: r.cfg.Sessions,
 		// Read ONCE, here, rather than per child: the fraction has to be
 		// one number for a whole batch, or later children get a share of
 		// a total their siblings have already spent from.

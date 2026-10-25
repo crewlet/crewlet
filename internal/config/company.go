@@ -1275,7 +1275,7 @@ func (c *Company) agentModeExecutorKeys() []string {
 	seen := map[string]struct{}{}
 	for role := range c.EachRole() {
 		key, entry, resolved := c.executorProvider(role, fallback)
-		if !resolved || !entry.AgentMode() {
+		if !resolved || !entry.Box() {
 			continue
 		}
 		seen[key] = struct{}{}
@@ -1426,7 +1426,7 @@ func (c *Company) validateSandboxCodingAgents() error {
 		if gate == nil || !gate.Enabled || gate.RunIn == PlacementSelf {
 			continue
 		}
-		if _, executor, resolved := c.executorProvider(role, fallback); resolved && executor.AgentMode() {
+		if _, executor, resolved := c.executorProvider(role, fallback); resolved && executor.Box() {
 			// Never offered run_sandbox, so it has no code work to hand
 			// anybody: its one run is its executor's, on that entry's
 			// own CLI.
@@ -1494,7 +1494,7 @@ func (c *Company) validateSandboxGates() error {
 		where := at(path, "sandbox")
 		if hasExecutor {
 			key, entry, resolved := c.executorProvider(role, fallback)
-			if resolved && entry.AgentMode() {
+			if resolved && entry.Box() {
 				if gate.RunIn != "" && gate.RunIn != PlacementSelf {
 					p.add(at(where, "run_in"), ErrConflict,
 						"this seat's executor runs in agent mode on providers.llm.%s, "+
@@ -1544,7 +1544,7 @@ func (c *Company) validateSandboxPlacement() error {
 			continue
 		}
 		if hasExecutor {
-			if _, entry, resolved := c.executorProvider(role, fallback); resolved && entry.AgentMode() {
+			if _, entry, resolved := c.executorProvider(role, fallback); resolved && entry.Box() {
 				// AN AGENT-MODE SEAT'S GATE PLACES NOTHING: such a seat
 				// is never offered run_sandbox, and its one box is its
 				// executor's, placed by the entry and asked these same

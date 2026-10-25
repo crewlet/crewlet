@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/structured"
+	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/compact"
@@ -30,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -90,6 +92,12 @@ type Config struct {
 	// per-round charge, which is the embedded single-node case where no
 	// counter is shared with anyone.
 	Budget toolloop.BudgetMeter
+
+	// Sessions is where every phase's tools are served to its CLI — this
+	// process's one [toolsession.Host], whose directory is what admits a
+	// CLI's relay. Required: a phase that offers tools reaches its CLI
+	// through nothing else.
+	Sessions *toolsession.Host
 
 	// Fence stops a turn whose seat this node no longer holds, checked at
 	// the top of every round before any tokens are spent.
@@ -1009,6 +1017,10 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		}
 		res, err := toolloop.Run(loopCtx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
+			Host: r.cfg.Sessions, ServerTitle: sessionTitle(r.cfg.Seat, ph),
+			// A delegation waits on other model runs; the CLI that made it
+			// would sit on its slot and its memory for all of them.
+			ParkLocally: []string{subagent.ToolName},
 			// The chain's head, standing in until a completion names the
 			// member that actually served — see toolloop.Config.
 			ProviderKey: members[0].Key,
@@ -1146,13 +1158,14 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		steers[i] = m
 	}
 	res.Steers = steers
-	// The call in flight is on the same scale, or a live row names a call
+	// The calls in flight are on the same scale, or a live row names a call
 	// in round 1 of a phase that is twenty rounds in.
-	if res.Running != nil {
-		running := *res.Running
-		running.Round += prior
-		res.Running = &running
+	running := make([]toolloop.RunningCall, len(res.Running))
+	for i, c := range res.Running {
+		c.Round += prior
+		running[i] = c
 	}
+	res.Running = running
 	// The round IN FLIGHT is on the same scale as the rounds behind it, or it
 	// COLLIDES with one of them. A consumer keys the ledger on the round
 	// number — the dashboard's `rounds()` builds one block per number and the
@@ -1316,6 +1329,9 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 		append([]toolloop.Round(nil), done.Result.Rounds...), res.Rounds...)
 	res.Steers = append(
 		append([]toolloop.SteerMark(nil), done.Result.Steers...), res.Steers...)
+	// Every CLI run of the phase, the extension's after the original's.
+	res.Invocations = append(
+		append([]toolloop.Invocation(nil), done.Result.Invocations...), res.Invocations...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
 	// The cap the PHASE is under: every round already behind it plus what
 	// this invocation was granted — which is exactly how an extension
@@ -1773,6 +1789,17 @@ func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
 	}
 	return out
 }
+
+// sessionTitle is how a phase's tool session names itself to its CLI: the
+// seat and the phase, for the CLI's own logs and a person reading them.
+func sessionTitle(seat prompts.Seat, ph phase.Phase) string {
+	if seat.Role == nil {
+		return string(ph)
+	}
+	return seat.Role.Handle() + " " + string(ph)
+}
+
+func (s phaseSteer) Waiting() bool { return s.r.cfg.Steer.Waiting() }
 
 // carrySteer records a note the turn has read, for its later phases.
 func (r *Runner) carrySteer(msg string) {

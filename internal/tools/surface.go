@@ -274,6 +274,19 @@ func (s *Surface) AnnotationsOf(name string) Annotations {
 	return e.Annotations
 }
 
+// Detached reports a tool whose work outlives its call — one that may park
+// the phase with its call unanswered ([Detached]). The loop runs such a call
+// alone: two side by side would each start work a parked phase can answer for
+// only one of.
+func (s *Surface) Detached(name string) bool {
+	e, held := s.universe.Lookup(name)
+	if !held {
+		return false
+	}
+	_, detached := e.Tool.(Detached)
+	return detached
+}
+
 // ToolDefs renders what the model is offered this round.
 func (s *Surface) ToolDefs() []llm.ToolDef {
 	s.mu.Lock()

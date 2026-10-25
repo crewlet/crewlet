@@ -381,7 +381,7 @@ func (p *Provider) keyRemedy() string {
 
 // modeName is how this entry runs, for the report.
 func (p *Provider) modeName() string {
-	if p.agentMode {
+	if p.box {
 		return "agent (the CLI runs the executor)"
 	}
 	return "text (a model behind the engine's tool loop)"
@@ -400,7 +400,7 @@ func (p *Provider) modeName() string {
 // not work in a mode it is not in. It runs as a subprocess of this engine and
 // needs neither.
 func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string) {
-	if !p.agentMode {
+	if !p.box {
 		return nil, nil
 	}
 	if slices.Contains(opts.AgentRunners, p.agent) {
@@ -605,7 +605,7 @@ func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool
 	if err != nil {
 		return "failed — " + err.Error(), false
 	}
-	if len(comp.ToolCalls) == 0 {
+	if !strings.Contains(comp.Content, "crewlet_smoke") {
 		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
 		// them. A CLI that answered with prose misread the envelope
 		// contract; a CLI that answered with NOTHING spent its output on
@@ -671,15 +671,6 @@ func describeRoute(r cliprofile.Route) string {
 // tool offered, and the instruction that names it.
 func smokeRequest() llm.Request {
 	req := probeRequest(smokePrompt)
-	req.Tools = []llm.ToolDef{{
-		Name:        "crewlet_smoke",
-		Description: "Confirm the tool channel works.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
-			"required":   []any{"ok"},
-		},
-	}}
 	return req
 }
 

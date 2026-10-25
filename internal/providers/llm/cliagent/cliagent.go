@@ -72,9 +72,9 @@ type Config struct {
 	Model string
 	// Agent names the built-in profile.
 	Agent string
-	// AgentMode runs a seat's executor as the CLI's own agentic run
-	// rather than as a text completion. See [Provider.AgentMode].
-	AgentMode bool
+	// Box runs a seat's executor as a detached run of the CLI in a box of
+	// providers.sandbox rather than on this host. See [Provider.Box].
+	Box bool
 	// StateDir is the resolved state directory. The CLI keeps its login and
 	// its per-seat homes under <StateDir>/<Agent> ([Shared]), so entries on
 	// one directory share a login only when they drive one CLI.
@@ -106,15 +106,15 @@ type Config struct {
 
 // Provider is a coding CLI behind the language-model contract.
 type Provider struct {
-	key       string
-	model     string
-	agent     string
-	agentMode bool
-	profile   cliprofile.Profile
-	ws        *Workspace
-	env       map[string]string
-	auth      Auth
-	timeout   time.Duration
+	key     string
+	model   string
+	agent   string
+	box     bool
+	profile cliprofile.Profile
+	ws      *Workspace
+	env     map[string]string
+	auth    Auth
+	timeout time.Duration
 
 	// termGrace is how long every child this provider starts has to exit once
 	// signalled — always [termGrace]. A field rather than the constant at each
@@ -185,7 +185,7 @@ func New(cfg Config) (*Provider, error) {
 		bundleConfigured: cfg.CredentialBundleConfigured,
 		model:            cfg.Model,
 		agent:            cfg.Agent,
-		agentMode:        cfg.AgentMode,
+		box:              cfg.Box,
 		profile:          profile,
 		ws:               ws,
 		env:              cfg.Env,
@@ -220,15 +220,16 @@ func (p *Provider) Key() string { return p.key }
 // is handed too, so a box and a text call on one entry name one model.
 func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
 
-// AgentMode reports whether this entry runs a seat's executor as the CLI's own
-// agentic run rather than as a text completion behind the engine's tool loop.
+// Box reports whether this entry runs a seat's executor as a detached run of
+// the CLI in a box (`mode: box`) rather than on this host behind the engine's
+// tool loop.
 //
-// The provider is still a full [llm.Provider] in agent mode, and deliberately:
+// The provider is still a full [llm.Provider] in box mode, and deliberately:
 // every OTHER phase — the reviewer, a worker, the summariser, the round-cap
-// judge — is a text call, and a seat pointing `llm` at an agent-mode entry
-// must not lose them. Only the executor branches, and only the engine knows
-// where that branch is.
-func (p *Provider) AgentMode() bool { return p.agentMode }
+// judge — runs on this host, and a seat pointing `llm` at a box entry must not
+// lose them. Only the executor branches, and only the engine knows where that
+// branch is.
+func (p *Provider) Box() bool { return p.box }
 
 // CodingAgent is the sandbox runner that drives this CLI in agent mode.
 //
@@ -557,7 +558,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	return p.completion(ctx, system+prompt, len(req.Tools) > 0, res, usageDoc)
+	return p.completion(ctx, system+prompt, res, usageDoc)
 }
 
 // newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
@@ -604,12 +605,8 @@ func (p *Provider) argv() []string {
 // budget charged for the transcript alone undercounts every call by the
 // largest stable thing in it; what is NOT in it is a vendor's own system
 // prompt kept beside the engine's, which the engine never sees.
-//
-// offeredTools says whether the prompt carried the response contract, which
-// [RenderPrompt] appends exactly when the request offered tools. Only then is
-// the reply read as an envelope: see the read below.
 func (p *Provider) completion(
-	ctx context.Context, sent string, offeredTools bool, res *rawResult, usageDoc string,
+	ctx context.Context, sent string, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
@@ -808,44 +805,6 @@ func (p *Provider) completion(
 		Content:    out.text,
 		StopReason: llm.StopEnd,
 	}
-	// AN ENVELOPE ONLY WHERE ONE WAS ASKED FOR. A call that offered no tools
-	// sent no contract, so its reply is the answer verbatim — and reading it
-	// as an envelope anyway is not harmless forgiveness: the envelope reader
-	// accepts `content`, `text`, `message` and `response` as the message key,
-	// so an auxiliary answer that IS a JSON object carrying one of them
-	// (the persist decider's `{"kind": "LONG", "content": "..."}`) came back
-	// as that one field, its caller's decode failed, and the decision was
-	// silently dropped.
-	var env Envelope
-	if offeredTools {
-		env = ParseEnvelope(out.text)
-		if env.Parsed {
-			comp.Content = env.Message
-		}
-	}
-	for i, call := range env.ToolCalls {
-		comp.ToolCalls = append(comp.ToolCalls, llm.ToolCall{
-			// The CLI has no id of its own to give, and the tool loop
-			// pairs results to calls by it. Derived from the position
-			// so two calls in one answer stay distinguishable.
-			ID:        fmt.Sprintf("cli_%d", i),
-			Name:      call.Name,
-			Arguments: call.Arguments,
-			// Arguments the envelope could not read: the tool loop
-			// answers the call with this instead of running it on an
-			// empty map, as it does for every other backend.
-			ArgumentsError: call.ArgumentsError,
-		})
-	}
-	if len(comp.ToolCalls) > 0 {
-		// The CLI reports no stop reason of its own in text mode: the
-		// envelope it was asked for is either an answer or a set of
-		// calls, so those are the only two this backend can honestly
-		// name. A CLI that hit its own cap or refused returns that as
-		// prose or a failure the exit path classifies.
-		comp.StopReason = llm.StopToolUse
-	}
-
 	if out.reported {
 		// InputTokens is ALWAYS the full prompt count, cache included —
 		// the contract's rule, and what keeps it a correct budget figure
@@ -866,7 +825,7 @@ func (p *Provider) completion(
 		comp.OutputTokens = EstimateTokens(out.text)
 	}
 
-	if strings.TrimSpace(comp.Content) == "" && len(comp.ToolCalls) == 0 {
+	if strings.TrimSpace(comp.Content) == "" {
 		// Warned rather than returned, because nothing above this frame
 		// can reconstruct WHY: the output token count is the evidence
 		// that the model worked and said nothing (a thinking-only round

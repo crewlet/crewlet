@@ -112,6 +112,37 @@ func TestCloseReturnsTheUnreadNotesOnce(t *testing.T) {
 	}
 }
 
+// LOOKING DOES NOT TAKE. A run is ended when a note waits, and the run after
+// it is the one that reads the note — so the check that ends the first must
+// leave the note for the second, and a box that drained or closed has nothing
+// waiting.
+func TestWaitingLeavesTheNoteForTheNextRun(t *testing.T) {
+	t.Parallel()
+	b := steer.New()
+	if b.Waiting() {
+		t.Fatal("an empty box reported a note waiting")
+	}
+	b.Offer(note("n"))
+	if !b.Waiting() || !b.Waiting() {
+		t.Fatal("a box holding a note did not report it waiting, twice")
+	}
+	if got := b.Drain(); len(got) != 1 {
+		t.Fatalf("drain after a look took %+v, want the one note", got)
+	}
+	if b.Waiting() {
+		t.Error("a drained box still reported a note waiting")
+	}
+	b.Offer(note("late"))
+	b.Close()
+	if b.Waiting() {
+		t.Error("a closed box reported a note waiting")
+	}
+	var none *steer.Box
+	if none.Waiting() {
+		t.Error("a nil box reported a note waiting")
+	}
+}
+
 func TestANoteIsBounded(t *testing.T) {
 	t.Parallel()
 	if err := steer.Validate("  "); err == nil {

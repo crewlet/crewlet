@@ -31,7 +31,7 @@ func TestTheCLIModeIsAClosedSet(t *testing.T) {
 			"      model: sonnet\n      "+block)
 		want := mode == "agent"
 		sub := cfg.Providers.LLM["sub"]
-		if got := sub.AgentMode(); got != want {
+		if got := sub.Box(); got != want {
 			t.Errorf("mode %q reports AgentMode() = %v", mode, got)
 		}
 	}
