@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -113,6 +114,10 @@ type App struct {
 	// public is the handler of the dedicated public listener, or nil when
 	// there is none and every route is [App.ServeHTTP]'s. See [App.Public].
 	public http.Handler
+
+	// assistRoute reports whether the assistant's catalogue reads an
+	// overview route as a tool. See [App.serveFrom].
+	assistRoute func(route string) bool
 
 	// routes is every pattern mounted, in mount order. See [routeTable].
 	routes []string
@@ -816,6 +821,15 @@ func New(opts Options) (*App, error) {
 	if sources.Acts == nil && opts.Operator != nil {
 		sources.Acts = opts.Operator.Acts
 	}
+	// --- the Dashboard Assistant's catalogue (WP9) ---
+	// WHAT A PRINCIPAL ACTING THROUGH THE ASSISTANT MAY ASK, from the one
+	// catalogue the assistant's tools are built from: the questions its
+	// read tools ask, and the overview routes they read. A caller that
+	// supplied its own keeps it.
+	if sources.AssistReads == nil {
+		sources.AssistReads = catalog.ReadsQuestion
+	}
+	a.assistRoute = catalog.ReadsRoute
 	// WHO MAY CHANGE THE COMPANY DOCUMENT, from the same Tier A the config
 	// surface enforces it from, so the viewer offers exactly the edits that
 	// surface admits (ADR-0030). A caller that supplied its own keeps it.
