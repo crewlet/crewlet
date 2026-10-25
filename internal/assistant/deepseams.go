@@ -137,13 +137,16 @@ type DeepFile struct {
 
 // Files is where a conversation's files are kept: the images a person attaches
 // and the files a deep run delivers, sealed and owner-keyed like the rest of a
-// conversation (ADR-0052), and purged with it.
+// conversation (ADR-0052), and purged with it. A draft change that names a
+// file is held to it too ([turn.draftChange]).
 type Files interface {
 	// Store keeps one file, refusing one past [wire.FileMaxBytes].
 	Store(ctx context.Context, w Write, f NewFile) (wire.FileRef, error)
 	// Open is one file and its bytes, read as its owner: another person's,
 	// or one of another conversation, is [ErrNotFound].
 	Open(ctx context.Context, owner, conversation, file uuid.UUID) (StoredFile, []byte, error)
+	// Stat is one file's record without its bytes, by the same rule as Open.
+	Stat(ctx context.Context, owner, conversation, file uuid.UUID) (StoredFile, error)
 }
 
 // NewFile is one file to keep.

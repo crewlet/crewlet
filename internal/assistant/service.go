@@ -61,10 +61,16 @@ type Deps struct {
 	// Rate counts a person's turn starts across the fleet; nil counts them
 	// on this node alone.
 	Rate TurnRate
-	// Files answers whether an assistant file is the person's, in one
-	// conversation, for a draft change that names one; nil keeps no files,
-	// and every such change is refused.
+	// Files keeps a conversation's files: the images a person attaches and
+	// the files a deep-work run delivers, and answers whether a file a draft
+	// change names is the person's. Nil keeps none: a question takes no
+	// attachment, no deep work is offered, and every draft change naming a
+	// file is refused.
 	Files Files
+
+	// --- deep work (im-deep) ---
+	// Deep runs deep work; nil is a node that offers none (ADR-0053).
+	Deep DeepWork
 
 	// Now is injectable so a test pins every instant.
 	Now func() time.Time
@@ -88,6 +94,7 @@ type Service struct {
 	remote      Remote
 	rate        TurnRate
 	files       Files
+	deep        DeepWork
 	now         func() time.Time
 	log         *slog.Logger
 
@@ -158,7 +165,8 @@ func New(d Deps) (*Service, error) {
 		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
-		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files, now: now,
+		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files, deep: d.Deep,
+		now: now,
 		log: logging.Get("assistant"),
 		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL(),
 			tap),
@@ -231,6 +239,9 @@ type TurnStart struct {
 	Page *wire.PageContext
 	// Read is the read grant derived from THIS request.
 	Read exec.Grant
+	// Attachments are files the person uploaded to the conversation for
+	// this question ([wire.TurnRequest.Attachments]).
+	Attachments []uuid.UUID
 }
 
 // TurnID is the turn a question asked under the operation key starts: the

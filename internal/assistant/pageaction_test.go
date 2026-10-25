@@ -2,6 +2,7 @@ package assistant_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -92,9 +93,22 @@ func draftPage() *wire.PageContext {
 // conversation.
 type files map[uuid.UUID]struct{ owner, conversation uuid.UUID }
 
-func (f files) Owns(_ context.Context, owner, conversation, file uuid.UUID) (bool, error) {
+func (f files) Stat(_ context.Context, owner, conversation, file uuid.UUID) (assistant.StoredFile, error) {
 	held, ok := f[file]
-	return ok && held.owner == owner && held.conversation == conversation, nil
+	if !ok || held.owner != owner || held.conversation != conversation {
+		return assistant.StoredFile{}, assistant.ErrNotFound
+	}
+	return assistant.StoredFile{FileRef: wire.FileRef{FileID: file}, Owner: owner,
+		Conversation: conversation}, nil
+}
+
+func (f files) Open(ctx context.Context, owner, conversation, file uuid.UUID) (assistant.StoredFile, []byte, error) {
+	stored, err := f.Stat(ctx, owner, conversation, file)
+	return stored, nil, err
+}
+
+func (f files) Store(context.Context, assistant.Write, assistant.NewFile) (wire.FileRef, error) {
+	return wire.FileRef{}, errors.New("this store keeps no new file")
 }
 
 // grace and her conversation, as every rig has them.
