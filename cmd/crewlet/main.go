@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -145,7 +146,13 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 	// commands because it belongs to the INVOCATION rather than to any one
 	// of them — a CI step exports it once and every command it runs
 	// answers.
-	if cmd != "run" {
+	//
+	// NOR FOR THE RELAY, which sets up nothing at all. It is the process a
+	// coding CLI starts as a seat's MCP server, so its stdout IS the protocol
+	// stream and its environment is whatever the CLI chose to pass: the log
+	// level, format and file below would read variables it must not depend on.
+	// See internal/mcprelay.
+	if cmd != "run" && cmd != mcprelay.Command {
 		// THE LEVEL, NOT THE DESTINATION. This used to install `stderr`
 		// as the process-wide sink, which is wrong twice over: `run`
 		// takes that writer so it can be TESTED, and a function that
@@ -228,6 +235,12 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 		return runLLM(environ, rest, stdout, stderr)
 	case "search":
 		return runSearch(rest, stdout, stderr)
+	case "mcp-relay":
+		// The literal is mcprelay.Command, which the argv a CLI is handed is
+		// built from; a case of the switch is read as the binary's command
+		// list ([TestTheRelayIsDispatchedUnderItsOwnName] holds the two
+		// together).
+		return mcprelay.Run(rest, os.Stdin, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
 		return runIntegration(environ, cmd, rest, stdout, stderr)
 	default:
@@ -273,6 +286,8 @@ Usage:
                               runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
+  crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
+                              starts, relaying its stdio to the engine's tools
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects

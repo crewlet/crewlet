@@ -65,6 +65,7 @@ subcommand below is served by it.
 | `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config — which account each seat's own credential authenticates as — and register the inbound webhooks with a minted secret: one on the organization where the credential may, otherwise one per named repository. GitHub issues no credentials on a provisioner's behalf, so this run reports more than it changes |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). Keeps each bot's display name in step with the company document. A re-run leaves a working token alone; `-rotate` mints fresh ones, `-handles a,b` narrows the run, `-decommission` disables departed seats' bots. Runs a preflight first: system-admin role, `EnableBotAccountCreation`, `EnableUserAccessTokens`. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits (against the address people browse, given `-browser-url`), a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
+| `crewlet mcp-relay <socket>` | Not for people: the MCP server a seat's coding CLI starts. It relays the CLI's stdio to the engine's tool socket and back — see [`crewlet mcp-relay`](#crewlet-mcp-relay) |
 | `crewlet version` | Show the installed version (`--version` and `-v` too) |
 | `crewlet help` | Show the usage message (`--help` and `-h` too) |
 
@@ -73,7 +74,7 @@ subcommand below is served by it.
 > **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. **The store read is the fleet's whether or not this node's engine runs, and the engine decides only the way in**, as it does for a write ([`crewlet secrets`](#crewlet-secrets)). A **running** engine holds this node's database, and the values are read through its API, at the `api.host:port` in `-config`; `-api`, which every one of these commands takes, names the node to read through instead, whether or not this one runs. A **stopped** one leaves the store to the command, which reaches it itself: having asked the node's database lock whether the engine runs — and kept no claim on it — it starts this node's own broker on `stream.store_dir` with no listener at all — or, on `stream.type: nats`, dials the external broker with Tier A's credentials — and stops it when it is done. A member of a cluster (`stream.cluster`) is refused with its engine stopped, because started alone it cannot reach the quorum the store needs, and started beside running peers it would rejoin the cluster as this node: name a running member with `-api`, or start this node's engine and re-run. A named node is read whether or not a Tier A is at `-config`, so a command run from a machine that is not a node reads the fleet's values rather than the environment alone. A node that holds no data (`store.scratch`) holds none of the fleet's store — on the embedded topology its broker is a leaf of the members', with no store of its own to start — and is refused unless `-api` names one that does. Only the variables **that command** reads are fetched, either way in: through a node each with a reveal (`GET /secrets/{name}?reveal=true`), which the node logs by name against the caller and which takes `admin` and a person present, so `CREWLET_API_TOKEN` must hold one of Tier A's tokens, since a machine token is refused a reveal; read directly, with no line in any node's log, because the command holds this node's Tier A — its keyring, and the broker's own files or credentials — which opens every value without any API. `crewlet llm` reads the entries it works on (`login`, `status`, `logout`, `export`, `import` and `doctor KEY` the one named — and only it, whatever the other keys look like — `list` and a bare `doctor` every one); `gitlab provision` reads `integrations.gitlab.url` and `.signing_secret`; `mattermost provision` `integrations.mattermost.url`, and `mattermost doctor` that, `.team` and each agent seat's `mattermost.bot_token` that is one whole `${VAR}`; `github provision` `integrations.github.url`, `.token` and `.webhook_secret`, and the token spellings its identity scan tries in each agent seat's `mcp_env.github` (its own, or the one its unit gives it); `jira provision` `integrations.jira`'s address, account and `webhook_secret`, and the Jira token spellings and address keys in each agent seat's `mcp_env.jira` and `mcp_env.atlassian` — never a Confluence-only credential beside them; `confluence import` and `resync` `integrations.confluence`'s address and account, and `confluence provision` those, `.webhook_secret` and `.webhook_token`. With `-secret-store`, `gitlab provision` and `mattermost provision` also read back each planned seat's token through the sink, to check the credential the seat holds — the same way in as the others, and with the engine stopped over the same broker: one invocation starts one, shared by everything it reads and writes. They are read **before the command does anything**, so a refused reveal, or a value the keyring cannot open, stops it there: a stored value read as unset is what makes a provisioning run mint over a working secret. A value a command reads beyond that list is still read from the fleet's store, as it is read, and the run says so; one that cannot be read stops the run where it is. Through a node the error names the token only when the node refused it (401 or 403): a node that is down or draining answers the same for any token. The run says on its first line which way it read and how many values: `resolving ${VAR} through the running node at <url>: N of the stored values this command reads revealed there, each logged by name`, or with the engine stopped `resolving ${VAR} from the fleet's store, reached through this node's broker on <stream.store_dir> — this node's engine is stopped: N of the stored values this command reads held there` (`the external broker at <host:port>` on `stream.type: nats`). With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
-> **Every command except `crewlet run` logs at `warn`.** They open a store,
+> **Every command except `crewlet run` and `crewlet mcp-relay` logs at `warn`.** They open a store,
 > which logs a migration line per schema file and an open line per call —
 > noise on a one-shot command whose stdout is meant to be piped, read or
 > diffed. That is a default, not a ceiling: export `CREWLET_LOG_LEVEL=debug`
@@ -2253,6 +2254,31 @@ its place. A bundle that names no CLI is refused the same way: see [an entry
 moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).
 
 ---
+
+## `crewlet mcp-relay`
+
+```
+crewlet mcp-relay <absolute path of a socket>
+```
+
+**You never run this.** It is the one MCP server a seat's coding CLI is told to
+start, by the engine that runs the CLI: the CLI speaks MCP over the relay's
+stdin and stdout, and the relay copies those bytes to a unix socket the engine
+opened for that one CLI run, and the engine's answers back. Every tool the seat
+calls goes through it to the engine's own dispatch, with the permission model
+and the record a tool call always has. See [LLM Backends](../concepts/llm-backends.md).
+
+- **It reads its one argument and nothing else** — no environment, no config
+  file, no logging setting. A CLI decides what environment its MCP servers start
+  in, and the CLIs disagree, so nothing the relay depended on there could be
+  relied on. It logs nothing either: its stdout is the protocol stream.
+- **The socket path is not a credential.** The socket sits in a directory the
+  engine created for itself with mode `0700`, so only the engine's own user can
+  connect, and the engine removes it when the CLI run ends.
+- **It ends when the engine closes the socket**, and when the CLI closes its
+  stdin it half-closes, so the answer to a call already sent still arrives.
+- It cannot reach a socket? It prints one line on stderr naming the path, and
+  exits 1 — which the CLI reports as an MCP server that failed to start.
 
 ## `crewlet mattermost provision`
 

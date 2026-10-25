@@ -37,7 +37,7 @@ var goPackages = map[string]bool{
 	"jsprovision": true, "jwks": true, "knowledge": true, "kv": true,
 	"learning": true, "ledger": true, "ledgerfit": true, "ledgerstore": true,
 	"livestate": true, "llm": true, "logging": true, "maintenance": true,
-	"lint": true, "manifest": true, "mediatype": true,
+	"lint": true, "manifest": true, "mcprelay": true, "mediatype": true,
 	"mattermost": true, "mcp": true, "mcpbridge": true, "memobj": true,
 	"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true,
 	"natsobj": true, "node": true, "notify": true, "objstore": true,

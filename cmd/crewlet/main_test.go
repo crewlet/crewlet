@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -2277,5 +2278,50 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 				t.Errorf("problems = %+v, want one at %s", report.Problems, tc.path)
 			}
 		})
+	}
+}
+
+// THE RELAY IS DISPATCHED UNDER THE NAME A CLI IS HANDED. The argv the engine
+// writes into a CLI's MCP configuration is built from [mcprelay.Command], and the
+// switch names its cases as literals (which is how this suite reads the
+// binary's command list) — so a rename on one side would leave every CLI
+// starting a command the binary answers `unknown command` to, and every seat
+// without its tools.
+//
+// And run as itself: the bytes the engine's end sends reach stdout and
+// nothing else does, with no logging set up in front of it.
+func TestTheRelayIsDispatchedUnderItsOwnName(t *testing.T) {
+	t.Parallel()
+	if !slices.Contains(dispatchedCommands(t), mcprelay.Command) {
+		t.Fatalf("runIn() dispatches no %q, the command every CLI is told to start",
+			mcprelay.Command)
+	}
+
+	dir, err := os.MkdirTemp("", "relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write([]byte("from the engine\n"))
+		_ = conn.Close()
+	}()
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{mcprelay.Command, path}, &stdout, &stderr); err != nil {
+		t.Fatalf("the relay failed: %v (stderr %q)", err, stderr.String())
+	}
+	if got := stdout.String(); got != "from the engine\n" {
+		t.Errorf("stdout = %q, want exactly what the engine sent", got)
 	}
 }
