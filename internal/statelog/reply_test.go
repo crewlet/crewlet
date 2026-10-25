@@ -164,7 +164,7 @@ func TestAServedReadsBarrierEndsWhileItsAskerListens(t *testing.T) {
 // `no_quorum` sends them to look for an election.
 func TestAServedReadOnAFullLogIsToldTheLogIsFull(t *testing.T) {
 	t.Parallel()
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{},
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), fullLog(),
 		testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)

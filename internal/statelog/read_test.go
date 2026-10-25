@@ -363,9 +363,7 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Run("the broker's own answer", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		assertFullLogRead(t, h, refusingAppender{err: &jetstream.APIError{
-			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}},
-			noCeiling(t))
+		assertFullLogRead(t, h, fullLog(), noCeiling(t))
 	})
 
 	t.Run("a real log at its ceiling", func(t *testing.T) {
@@ -587,6 +585,13 @@ func (ctxStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 
 // refusingAppender is a broker that answers every append with err.
 type refusingAppender struct{ err error }
+
+// fullLog is a broker whose stream is at its byte ceiling: every append is
+// answered what JetStream answers one past it.
+func fullLog() refusingAppender {
+	return refusingAppender{err: &jetstream.APIError{
+		Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}}
+}
 
 func (a refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
 	return 0, false, a.err
