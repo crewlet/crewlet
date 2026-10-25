@@ -534,12 +534,13 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	}
 }
 
-// A NODE-LOCAL WRITE SAYS SO, and says what will carry it to the fleet.
+// A WRITE WITH THE ENGINE STOPPED SAYS WHERE IT WENT AND WHO READS IT WHEN.
 //
-// An operator who wrote a value while the engine was stopped and saw nothing
-// propagate would reasonably conclude the write failed. "This node will put
-// it on the fleet at its next start" is not guessable.
-func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
+// It went to the fleet's store, through this node's own broker, and a node
+// reads it through its snapshot: this one's engine when it starts, one already
+// running at its next apply. An operator who rotated a key and saw a peer go on
+// using the old one would otherwise conclude the write failed.
+func TestAWriteWithTheEngineStoppedSaysWhereItWentAndWhoReadsIt(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	var out, errs bytes.Buffer
@@ -549,12 +550,10 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 		t.Fatalf("set: %v\n%s", err, errs.String())
 	}
 	for _, want := range []string{
-		"index.db",        // which store
-		"no peer can see", // and what that costs
-		// The note, whose phrasing is distinct from the store's own
-		// description on purpose: dropping it while keeping the path
-		// would still leave an operator without the way forward.
-		"To reach a RUNNING fleet now",
+		filepath.Join(filepath.Dir(cfg), "stream"), // which broker
+		"engine is stopped",                        // and why this way in
+		"reads it when it starts",                  // who reads it, when
+		"POST /config/reload",                      // and how to make a running one read it now
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output omits %q: %q", want, out.String())

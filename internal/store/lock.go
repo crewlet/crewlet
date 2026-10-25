@@ -196,6 +196,28 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	return lock, nil
 }
 
+// Hold takes this process's claim on the node database at dbPath without
+// opening it — the claim a running engine holds for as long as it runs — and
+// hands back its release. A database another process holds is [ErrLocked],
+// naming the holder; a claim this process already holds is shared, as a
+// second open's is.
+//
+// For a process that needs the engine NOT to be running, and not to start,
+// while it works on something else of the node's: a `crewlet` command that
+// reaches the fleet's store through this node's broker while its engine is
+// stopped. Opening the database for the lock alone would migrate a file the
+// command never reads, and on a node that has never booted create one.
+//
+// Not for a scratch store, which the engine deletes before it opens and this
+// would leave a claim on: a node that holds no data has nothing here to hold.
+func Hold(dbPath string) (release func(), err error) {
+	lock, err := lockStore(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return lock.release, nil
+}
+
 // release drops this handle's share of the claim, freeing the lock when it
 // was the last. Safe on a nil lock, which is what an in-memory database gets,
 // so every caller can defer it unconditionally.

@@ -148,3 +148,37 @@ func TestAFailedOpenDoesNotStrandTheLock(t *testing.T) {
 	}
 	lock.release()
 }
+
+// HOLDING A NODE'S DATABASE CLAIMS IT WITHOUT OPENING IT: a `crewlet` command
+// reaching the fleet's store with the engine stopped holds it so the engine
+// cannot start under it, and creates no database on a node that has never
+// booted.
+//
+// Mutation: make Hold open the database, and the file exists; make it skip
+// the lock, and the sidecar names no holder.
+func TestHoldingADatabaseClaimsItWithoutOpeningIt(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	release, err := Hold(path)
+	if err != nil {
+		t.Fatalf("hold: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("holding the database created it (stat: %v)", err)
+	}
+	raw, err := os.ReadFile(path + lockSuffix)
+	if err != nil {
+		t.Fatalf("no lock beside the held database: %v", err)
+	}
+	if want := fmt.Sprintf("pid %d ", os.Getpid()); !strings.HasPrefix(string(raw), want) {
+		t.Errorf("the lock names %q, not this process (%q…)", raw, want)
+	}
+	// Shared in this process, as a second open is.
+	again, err := Hold(path)
+	if err != nil {
+		t.Fatalf("a second hold in this process was refused: %v", err)
+	}
+	again()
+	release()
+}

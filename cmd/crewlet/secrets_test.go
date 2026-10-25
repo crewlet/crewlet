@@ -431,9 +431,9 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a locked store was refused instead of routed: %v", err)
 	}
-	if !target.fleet {
-		t.Fatal("the target is not marked fleet-wide, so `secrets set` would " +
-			"tell an operator their rotation reached one node")
+	if !target.throughNode {
+		t.Fatal("the target is not marked as a running node's, so `secrets set` " +
+			"would tell an operator their rotation waits for this engine's start")
 	}
 	if !strings.Contains(target.where, "127.0.0.1:8000") {
 		t.Errorf("where = %q, want the node it writes through", target.where)

@@ -17,9 +17,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -40,7 +44,8 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron,
+		[]string{"GITLAB_SIGNING_SECRET"}, cfg, "", &notes)
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -50,9 +55,13 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	if got != "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ==" {
 		t.Fatalf("the stored secret did not reach the run: %q", got)
 	}
-	if notes.Len() > 0 {
-		t.Errorf("a run that DID read the store announced that it did not: %q",
-			notes.String())
+	// AND IT SAYS WHICH CHAIN RAN, as every other chain does: the store,
+	// reached with the engine stopped, and how many of the values the
+	// command reads it held.
+	for _, want := range []string{"the fleet's store", "engine is stopped", "1 of the stored values"} {
+		if !strings.Contains(notes.String(), want) {
+			t.Errorf("the note omits %q: %q", want, notes.String())
+		}
 	}
 }
 
@@ -673,64 +682,67 @@ func TestANamedNodeIsReadWithNoTierAHere(t *testing.T) {
 	}
 }
 
-// A STOPPED NODE NAMES WHAT IT CANNOT READ. Its own table holds only what
-// was stored while the engine was stopped — the engine moves those rows onto
-// the fleet at its next start — so a value the command reads that neither
-// the table nor the environment holds may be one the fleet has, and the run
-// resolves it as unset: for a signing key, the signal to mint over a working
-// one. Only what THIS command reads is named, and a run that has everything
-// it reads says nothing.
-func TestAStoppedNodeNamesTheValuesItCannotRead(t *testing.T) {
+// A STOPPED NODE READS WHAT THE FLEET HOLDS — the resolver and the sink alike.
+//
+// The bug this whole route exists for: with the engine stopped, a command read
+// the node's own table, which never held what was stored through a running
+// node, so a provisioning run read a working signing key as unset and MINTED
+// over it, and a -secret-store sink read a seat's working token as absent and
+// replaced it. The value here is put on the fleet's store the way a running
+// node puts it there, and both halves of one provisioning run must see it —
+// at once, as a run holds them: the resolver it plans from and the sink it
+// asks before minting.
+//
+// Mutation: read a table of the node's own again and both resolve unset; take
+// the store per opener rather than once per process and the sink is refused
+// a second broker on the store directory the resolver's already holds.
+func TestAStoppedNodeReadsWhatTheFleetHolds(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
-	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_URL",
-		"-value", "https://gitlab.example.com"); err != nil {
-		t.Fatalf("seed the store: %v (%s)", err, errs)
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatalf("load Tier A: %v", err)
 	}
-	t.Setenv("MATTERMOST_URL", "https://chat.example.com")
-	company, organization := scopeCompany(t)
-	integrations := company.Integrations
+	const key = "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ=="
+	onTheFleet, err := engine.OpenFleetStore(t.Context(), boot)
+	if err != nil {
+		t.Fatalf("open the fleet's store as a node does: %v", err)
+	}
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleetsecrets.New(onTheFleet.Fleet, cipher).Set(t.Context(),
+		"GITLAB_SIGNING_SECRET", key, secrets.Author{Name: "token:ops", Kind: "operator"},
+		secrets.SourceAPI, time.Now()); err != nil {
+		t.Fatalf("store the key on the fleet: %v", err)
+	}
+	onTheFleet.Close()
 
-	for _, tc := range []struct {
-		command      string
-		reads        []string
-		unread, read []string
-	}{
-		{
-			"crewlet gitlab provision", gitlabProvisionReads(integrations.GitLab),
-			[]string{"${GITLAB_SIGNING_SECRET}"},
-			[]string{"${GITLAB_URL}", "${GITLAB_READ_TOKEN}"},
-		},
-		{
-			"crewlet mattermost doctor", mattermostDoctorReads(integrations.Mattermost, organization),
-			[]string{"${MATTERMOST_BOT_CEO}", "${MATTERMOST_BOT_SWE}"},
-			[]string{"${MATTERMOST_URL}"},
-		},
-		{"crewlet mattermost provision", mattermostProvisionReads(integrations.Mattermost), nil, nil},
-	} {
-		var notes bytes.Buffer
-		_, _, closeEnv, err := companyResolver(t.Context(), noEnviron, tc.reads, cfg, "", &notes)
-		if err != nil {
-			t.Fatalf("%s: companyResolver on a stopped node: %v", tc.command, err)
-		}
-		closeEnv()
-		if len(tc.unread) == 0 {
-			if notes.Len() > 0 {
-				t.Errorf("%s reads nothing a stopped node lacks, and said %q",
-					tc.command, notes.String())
-			}
-			continue
-		}
-		for _, want := range append([]string{"-api", "index.db"}, tc.unread...) {
-			if !strings.Contains(notes.String(), want) {
-				t.Errorf("%s: the note omits %q: %q", tc.command, want, notes.String())
-			}
-		}
-		for _, answered := range tc.read {
-			if strings.Contains(notes.String(), answered) {
-				t.Errorf("%s: the note names %s, which the table, the environment or "+
-					"another command answers: %q", tc.command, answered, notes.String())
-			}
-		}
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron,
+		[]string{"GITLAB_SIGNING_SECRET"}, cfg, "", &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("companyResolver on a stopped node: %v", err)
+	}
+	defer closeEnv()
+	if got := env.Value("${GITLAB_SIGNING_SECRET}"); got != key {
+		t.Errorf("the resolver read the fleet's signing key as %q", got)
+	}
+
+	flags := flag.NewFlagSet("provision", flag.ContinueOnError)
+	sinks := addSinkFlags(flags)
+	if err := flags.Parse([]string{"-secret-store", "-config", cfg}); err != nil {
+		t.Fatal(err)
+	}
+	sink, closeSink, err := sinks.open(t.Context(), noEnviron, io.Discard)
+	if err != nil {
+		t.Fatalf("open the -secret-store sink beside the resolver: %v", err)
+	}
+	defer closeSink()
+	held, ok, err := sink.Value(t.Context(), "GITLAB_SIGNING_SECRET")
+	if err != nil || !ok || held != key {
+		t.Errorf("the sink read the fleet's key as %q (held %v, err %v): a "+
+			"provisioner asking it would mint over a working one", held, ok, err)
 	}
 }
 
