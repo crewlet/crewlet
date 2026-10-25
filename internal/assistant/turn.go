@@ -138,14 +138,20 @@ func (t *turn) taint() string {
 }
 
 // stepStart opens one tool step: numbered, labelled from the call's safe
-// fields by its descriptor, and shown as running.
-func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepRequest) stepClock {
+// fields by its descriptor, and shown as running. req is the request the step
+// shows (the path it was sent to, [catalog.Tool.StepRequest]) and pattern the
+// route pattern it matched, which is all the turn's audit record keeps of it:
+// the person reads their own request, and the company-wide trail never
+// carries a path value (a task's key, a page's id).
+func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepRequest,
+	pattern string) stepClock {
+
 	t.mu.Lock()
 	t.steps++
 	index := t.steps
 	t.mu.Unlock()
 	label := oneLine(redact.Secrets(tool.StepLabel(args)))
-	step := stepClock{started: t.svc.now(), StepEvent: wire.StepEvent{
+	step := stepClock{started: t.svc.now(), pattern: pattern, StepEvent: wire.StepEvent{
 		StepID: assistantdomain.StepID(t.id, index), TurnID: t.id, Index: index, Tool: tool.Name,
 		Label: label, Request: req, State: wire.StepRunning,
 	}}
@@ -177,7 +183,7 @@ func (t *turn) stepEnd(ctx context.Context, step stepClock, state wire.StepState
 	audit := types.AssistantAuditStep{Tool: ev.Tool, Outcome: string(state), Status: status,
 		Bytes: bytes}
 	if ev.Request != nil {
-		audit.Method, audit.Route = ev.Request.Method, ev.Request.Route
+		audit.Method, audit.Route = ev.Request.Method, step.pattern
 	}
 	if refusal != nil {
 		audit.Refusal = refusal.Code

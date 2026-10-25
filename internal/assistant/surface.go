@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -106,7 +107,7 @@ func (s *surface) refuseBefore(ctx context.Context, tool catalog.Tool, args map[
 	err error) toolloop.ToolResult {
 
 	message := redact.Secrets(err.Error())
-	step := s.t.stepStart(tool, args, nil)
+	step := s.t.stepStart(tool, args, nil, "")
 	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: codeInvalidInput,
 		Message: message}, 0, 0)
 	return failed(mcp.Classify(mcp.RefusalInvalid, err), "Refused before anything was sent: "+message)
@@ -120,7 +121,7 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 	}
 	route, _ := tool.RouteOf(req)
 	shown, _ := tool.StepRequest(req)
-	step := s.t.stepStart(tool, args, shown)
+	step := s.t.stepStart(tool, args, shown, patternOf(route))
 	resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, req)
 	if err != nil {
 		return s.unsent(ctx, step, tool, route, err)
@@ -199,7 +200,7 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 	if err := tool.Check(args); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
-	step := s.t.stepStart(tool, args, nil)
+	step := s.t.stepStart(tool, args, nil, "")
 	read := func(ctx context.Context, r exec.Request) (exec.Response, error) {
 		return s.t.svc.dispatcher.Do(ctx, s.t.read, r)
 	}
@@ -297,13 +298,15 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
 	var request *wire.StepRequest
+	pattern := ""
 	if probe != nil {
-		request = &wire.StepRequest{Method: probe.Method, Route: link.Screen}
+		request, pattern = &wire.StepRequest{Method: probe.Method, Route: link.Screen}, link.Screen
 		if shown, ok := tool.StepRequest(*probe); ok {
-			request = shown
+			route, _ := tool.RouteOf(*probe)
+			request, pattern = shown, patternOf(route)
 		}
 	}
-	step := s.t.stepStart(tool, args, request)
+	step := s.t.stepStart(tool, args, request, pattern)
 	permitted, status, size := cards.MayOpen(link.Screen, s.t.person), 0, 0
 	if probe != nil {
 		resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, *probe)
@@ -427,4 +430,14 @@ const noMatches = "No matches"
 type stepClock struct {
 	wire.StepEvent
 	started time.Time
+	// pattern is the route pattern the step's request matched, what the
+	// audit record keeps in place of the path it was sent to.
+	pattern string
+}
+
+// patternOf is a catalogue route's path pattern, without the method it opens
+// with ("GET /work/{id}" is "/work/{id}").
+func patternOf(route string) string {
+	_, path, _ := strings.Cut(route, " ")
+	return path
 }

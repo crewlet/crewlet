@@ -426,8 +426,9 @@ func TestAFinishedTurnHoldsNoRunningSlot(t *testing.T) {
 // A SEARCH THAT FINDS NOTHING DRAWS NO CARD: its step ends "No matches" and
 // shows the request it made (`GET /query/knowledge`, never the pattern
 // `/query/{what}`), no card frame is sent, and the model reads that the
-// search came back empty with the phrase it asked. Mutation: card the empty
-// answer again, or show the route's pattern, and this fails.
+// search came back empty with the phrase it asked. The turn's audit record
+// keeps the pattern alone. Mutation: card the empty answer again, show the
+// route's pattern on the step, or audit the sent path, and this fails.
 func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
 	t.Parallel()
 	empty := assistanttest.Routes(map[string]exec.Response{
@@ -451,6 +452,13 @@ func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
 	}
 	if card := evals.Last(frames, wire.EventCard); card != nil {
 		t.Errorf("an empty search drew a card: %+v", card.Card)
+	}
+	// THE AUDIT KEEPS THE PATTERN: the company-wide trail names the route the
+	// step matched, never a path value the person's own step shows.
+	audit, _ := json.Marshal(f.Audit.Events())
+	if !strings.Contains(string(audit), `/query/{what}`) ||
+		strings.Contains(string(audit), `/query/knowledge`) {
+		t.Errorf("the turn's audit records %s, want the route pattern alone", audit)
 	}
 	var tool llm.Message
 	for _, req := range f.Model.Requests() {
