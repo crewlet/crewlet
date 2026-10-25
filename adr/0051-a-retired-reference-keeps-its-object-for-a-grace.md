@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/references`
-- **Enforced-by:** `internal/objstore.TestADeclarationStatesItsStanding`, `internal/objstore.TestOnlyARequiredTableIsWalked`, `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`, `internal/objstore/collect.TestARetiredReferenceKeepsItsObjectFromCollection`, `internal/objstore/collect.TestTheAuditAsksOnlyAfterRequiredReferences`, `internal/backup.TestABackupCarriesNoRetiredReference`, `internal/backup.TestABackupRefusesADeclarationThatStatesNoStanding`
+- **Enforced-by:** `internal/objstore.TestADeclarationStatesItsStanding`, `internal/objstore.TestOnlyARequiredTableIsWalked`, `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestEveryDeclarationStatesItsStanding`, `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`, `internal/objstore/collect.TestARetiredReferenceKeepsItsObjectFromCollection`, `internal/objstore/collect.TestTheAuditAsksOnlyAfterRequiredReferences`, `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`, `internal/backup.TestABackupCarriesNoRetiredReference`, `internal/backup.TestABackupCarriesNoDerivedObject`, `internal/backup.TestABackupRefusesADeclarationThatStatesNoStanding`
 - **Cost-when-tried:** the object store's page and four comments promised a grace from un-naming that the collector never gave — "the older copy goes a day after nothing names it" — so an operator could have planned a recovery from the bucket that was not there (corrected in ce9454996). The collector's grace is an UPLOAD's; before this record the only way to keep an object past its un-naming was to keep a live row naming it, which the audit checks and every backup carries
 - **Tag-status:** unreleased
 
@@ -19,14 +19,23 @@ Every table declared in `internal/objstore/references` states a **standing**
   audit never asks after it, and a backup neither copies it, asks after it nor
   records it lost; on `nats` its bytes ride the bucket's snapshot like every
   other object the bucket holds, uncounted.
+- **`Derived`** — names an object the engine can build again from what
+  `Required` rows name, so losing one costs a rebuild and no data. It keeps its
+  object from collection while a row names it, exactly as a `Required` row
+  does, and does nothing else: the audit never asks after it, since
+  `objects_missing` is the alarm for lost data and would page somebody about a
+  loss nobody has to repair, and a backup never copies, counts or asks after
+  it — on `nats` its bytes ride the bucket's snapshot uncounted, as a retired
+  object's do — since a restore can do without it.
 
 The zero value is refused by `ReferenceTable.Validate`, so a declaration that
-says neither fails the references gate, every statement built from it, the
-collector's construction at boot and every backup handed it. The reference
-walk the audit and the backup share (`ReferenceTable.ReferencesAfter`) is
-built only for a `Required` table and refused for a retired one, so a consumer
-that forgets to leave a retired table out fails on its first pass rather than
-carrying it.
+says none of the three fails the references gate, every statement built from
+it, the collector's construction at boot and every backup handed it, and the
+gate holds each declaration's standing to a reviewed row naming why it has
+that one. The reference walk the audit and the backup share
+(`ReferenceTable.ReferencesAfter`) is built only for a `Required` table and
+refused for the other two, so a consumer that forgets to leave a retired or
+derived table out fails on its first pass rather than carrying it.
 
 The grace is the retired **row's lifetime**. Whatever retires a live row writes
 the retired one; its own domain deletes that row once the domain's grace has
@@ -40,6 +49,14 @@ its rows name and the job that sweeps them, and holds the grace above the
 longest read of that object. A restore on `s3` brings retired rows back
 without their objects, and nothing is owed them.
 
+A derived row owes **no grace**, because its domain owes every reader of the
+object a way on without it instead: a reader whose read of it fails reads the
+rows again for what replaced it, or builds it. So the domain may delete a
+derived row the moment it replaces what the row names, the collector's next
+pass deletes the object, and a derived declaration needs no reviewed entry. A
+restore on `s3` brings derived rows back without their objects, and the engine
+builds them again.
+
 Three packages carry it besides the list: `objstore` (the type, the refusal,
 the Required-only walk), `objstore/collect` (every table shields, Required
 tables are audited) and `backup` (every declaration is validated, and
@@ -49,7 +66,16 @@ Required tables are read from the copy).
 
 **A bool `Required`.** Its zero value is one of the two answers: a new live
 table whose author left the field out reads as retired, and is audited by
-nobody and accounted for by no backup with nothing failing.
+nobody and accounted for by no backup with nothing failing. Nor could it hold
+the third standing.
+
+**Declare an object the engine builds again `Required`.** A lost one would
+raise `objects_missing`, the alarm for lost data, about something nobody has
+to restore, and every backup would carry bytes a restore can do without.
+
+**…or `Retired`.** A retired row keeps its object only for a grace its domain
+must sweep, and its declaration owes a reviewed entry; a derived object is
+live for as long as a row names it, and goes the moment its row does.
 
 **Keep the replaced object named by its live row**, under a state column. It
 gives the grace and costs everything else: the audit pages somebody when a
@@ -69,7 +95,8 @@ the row's presence is the whole signal.
 ## What this does not decide
 
 How long a grace is, how a domain stamps a retired row, or who sweeps it — the
-declaring domain's. Which objects exist and where they are kept
+declaring domain's; so is what a derived object is built from, and how its
+readers go on without it. Which objects exist and where they are kept
 ([ADR-0026](0026-the-estate-names-an-object-and-a-store-keeps-its-bytes.md));
 when an unnamed object may be deleted
 ([ADR-0027](0027-a-deletion-from-the-shared-store-needs-no-lock.md)). A

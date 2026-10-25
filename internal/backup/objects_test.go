@@ -79,34 +79,39 @@ func filesNaming(t *testing.T, db *store.DB, objects ...stored) {
 	}
 }
 
-// retiredRefs declares test_retired_objects, the table [retiredNaming] writes:
-// one retired reference per object, which keeps the object from the collector
-// and names nothing the company is owed (ADR-0051). No migration creates it,
-// so it is never in references.All; a case hands it to the backup through
-// [backup.SetReferenceTables].
-var retiredRefs = objstore.ReferenceTable{Domain: "tracker", Table: "test_retired_objects",
-	Key: "object", Hash: "hash", Size: "size", Owner: []string{"owner"}, Standing: objstore.Retired}
+// retiredRefs and derivedRefs declare test_retired_objects and
+// test_derived_objects, tables [naming] writes: one row per object, which
+// keeps the object from the collector and names nothing the company is owed —
+// a replaced object, or one the engine builds again (ADR-0051). No migration
+// creates either, so neither is ever in references.All; a case hands one to
+// the backup through [backup.SetReferenceTables].
+var (
+	retiredRefs = objstore.ReferenceTable{Domain: "tracker", Table: "test_retired_objects",
+		Key: "object", Hash: "hash", Size: "size", Owner: []string{"owner"}, Standing: objstore.Retired}
+	derivedRefs = objstore.ReferenceTable{Domain: "tracker", Table: "test_derived_objects",
+		Key: "object", Hash: "hash", Size: "size", Owner: []string{"owner"}, Standing: objstore.Derived}
+)
 
-// retiredNaming creates retiredRefs' table in the replicated estate, indexed on
-// its key as the references gate requires of a declared table, and writes one
-// retired row per object, owned by `retired-<i>`.
-func retiredNaming(t *testing.T, db *store.DB, objects ...stored) {
+// naming creates ref's table in the replicated estate, indexed on its key as
+// the references gate requires of a declared table, and writes one row per
+// object, owned by `<standing>-<i>`.
+func naming(t *testing.T, db *store.DB, ref objstore.ReferenceTable, objects ...stored) {
 	t.Helper()
 	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		for _, stmt := range []string{
-			`CREATE TABLE test_retired_objects (object TEXT, hash TEXT NOT NULL,
+			`CREATE TABLE ` + ref.Table + ` (object TEXT, hash TEXT NOT NULL,
 				size INTEGER NOT NULL, owner TEXT NOT NULL)`,
-			`CREATE INDEX test_retired_objects_object_idx ON test_retired_objects (object)`,
+			`CREATE INDEX ` + ref.Table + `_object_idx ON ` + ref.Table + ` (object)`,
 		} {
 			if _, err := tx.ExecContext(t.Context(), stmt); err != nil {
 				return err
 			}
 		}
 		for i, o := range objects {
-			if _, err := tx.ExecContext(t.Context(), `INSERT INTO test_retired_objects
+			if _, err := tx.ExecContext(t.Context(), `INSERT INTO `+ref.Table+`
 				(object, hash, size, owner) VALUES (?, ?, ?, ?)`,
 				o.object.Key.String(), string(o.object.Hash), o.object.Size,
-				fmt.Sprintf("retired-%d", i)); err != nil {
+				fmt.Sprintf("%s-%d", ref.Standing, i)); err != nil {
 				return err
 			}
 		}
@@ -125,22 +130,41 @@ func retiredNaming(t *testing.T, db *store.DB, objects ...stored) {
 // objects, which nothing owes them.
 func TestABackupCarriesNoRetiredReference(t *testing.T) {
 	t.Parallel()
-	// fixture is a copy naming one live file and two retired objects — one
-	// the store still holds, one the collector has already taken.
+	carriesNoObjectOf(t, retiredRefs)
+}
+
+// A BACKUP CARRIES NO DERIVED OBJECT (ADR-0051). A derived row names an object
+// the engine can build again from what the company is owed, so the backup
+// neither copies it, asks after it nor records it lost — on S3, a GET per
+// derived object per backup for bytes a restore can do without, and every
+// backup that much larger; on the broker's bucket, an object the engine
+// rebuilds reported as a lost file. The copy's derived rows restore without
+// their objects, which the engine builds again.
+func TestABackupCarriesNoDerivedObject(t *testing.T) {
+	t.Parallel()
+	carriesNoObjectOf(t, derivedRefs)
+}
+
+// carriesNoObjectOf backs up a copy naming one live file and two objects only
+// unowed's rows name — one the store holds, one it has lost — on both object
+// backends, and holds the backup to carrying, counting and asking after the
+// live file alone.
+func carriesNoObjectOf(t *testing.T, unowed objstore.ReferenceTable) {
+	t.Helper()
 	fixture := func(t *testing.T) (*store.DB, *objstore.Store, []stored) {
 		t.Helper()
 		db := openStore(t)
 		files, _ := filesStore(t)
-		held := upload(t, files, "a live file", "a replaced object",
-			"a replaced object the collector took")
+		held := upload(t, files, "a live file", "an object only a "+string(unowed.Standing)+" row names",
+			"an object only a "+string(unowed.Standing)+" row names, which the store has lost")
 		filesNaming(t, db, held[0])
-		retiredNaming(t, db, held[1], held[2])
+		naming(t, db, unowed, held[1], held[2])
 		if err := files.Delete(t.Context(), held[2].object.Key); err != nil {
 			t.Fatal(err)
 		}
 		return db, files, held
 	}
-	declared := append(slices.Clone(references.All), retiredRefs)
+	declared := append(slices.Clone(references.All), unowed)
 
 	t.Run("copied", func(t *testing.T) {
 		t.Parallel()
@@ -151,13 +175,13 @@ func TestABackupCarriesNoRetiredReference(t *testing.T) {
 			Now: func() time.Time { return clock },
 			Objects: &backup.Objects{Open: func(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
 				if o.Key != held[0].object.Key {
-					t.Errorf("the backup read %s, which only a retired row names", o.Key)
+					t.Errorf("the backup read %s, which only a %s row names", o.Key, unowed.Standing)
 				}
 				return files.Open(ctx, o)
 			}},
 		})
 		backup.SetReferenceTables(svc, declared)
-		dir := filepath.Join(t.TempDir(), "with-retired")
+		dir := filepath.Join(t.TempDir(), "with-"+string(unowed.Standing))
 		manifest, err := svc.Take(t.Context(), dir)
 		if err != nil {
 			t.Fatalf("Take: %v", err)
@@ -186,7 +210,7 @@ func TestABackupCarriesNoRetiredReference(t *testing.T) {
 			Objects: &backup.Objects{Stream: "OBJ_crewlet_files",
 				Stat: func(ctx context.Context, k objstore.Key) (objstore.Info, error) {
 					if k != held[0].object.Key {
-						t.Errorf("the backup asked after %s, which only a retired row names", k)
+						t.Errorf("the backup asked after %s, which only a %s row names", k, unowed.Standing)
 					}
 					return files.Stat(ctx, k)
 				},
@@ -196,7 +220,7 @@ func TestABackupCarriesNoRetiredReference(t *testing.T) {
 				}},
 		})
 		backup.SetReferenceTables(svc, declared)
-		dir := filepath.Join(t.TempDir(), "in-stream-with-retired")
+		dir := filepath.Join(t.TempDir(), "in-stream-with-"+string(unowed.Standing))
 		manifest, err := svc.Take(t.Context(), dir)
 		if err != nil {
 			t.Fatalf("Take: %v", err)
@@ -229,7 +253,7 @@ func TestABackupRefusesADeclarationThatStatesNoStanding(t *testing.T) {
 			files, _ := filesStore(t)
 			held := upload(t, files, "a live file", "an object only the undeclared table names")
 			filesNaming(t, db, held[0])
-			retiredNaming(t, db, held[1])
+			naming(t, db, retiredRefs, held[1])
 			undeclared := retiredRefs
 			undeclared.Standing = standing
 			fleet := memory.NewFleet()

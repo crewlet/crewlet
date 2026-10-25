@@ -122,8 +122,8 @@ func faults(ref objstore.ReferenceTable, columns, leading map[string][]string) [
 // to an index LEADING WITH ITS KEY, because the collector seeks a batch of
 // keys and the audit and the backup page through them in key order, and
 // without one each is every row of the table. And it is held to a STANDING,
-// because either default is silent: a live table read as retired is audited
-// by nobody and accounted for by no backup.
+// because every default is silent: a live table read as retired or derived is
+// audited by nobody and accounted for by no backup.
 func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	t.Parallel()
 	columns, leading := schema(t)
@@ -143,10 +143,12 @@ func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	if got := faults(absent, columns, leading); len(got) == 0 {
 		t.Error("a declaration of a table the schema lacks drew no fault")
 	}
-	retired := tracker.FileObjectReferences
-	retired.Standing = objstore.Retired
-	if got := faults(retired, columns, leading); len(got) != 0 {
-		t.Errorf("a retired declaration of an indexed table drew %q; retiring is a standing, not a fault", got)
+	for _, s := range []objstore.Standing{objstore.Retired, objstore.Derived} {
+		unowed := tracker.FileObjectReferences
+		unowed.Standing = s
+		if got := faults(unowed, columns, leading); len(got) != 0 {
+			t.Errorf("a %s declaration of an indexed table drew %q; a standing is not a fault", s, got)
+		}
 	}
 
 	declared := map[string]bool{}
@@ -187,8 +189,8 @@ func TestEveryRequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
 	t.Parallel()
 	columns, _ := schema(t)
 
-	// CONTROLS: each half missing is refused, naming it — and a retired
-	// table, which no backup carries, needs none.
+	// CONTROLS: each half missing is refused, naming it — and a retired or
+	// derived table, which no backup carries, needs none.
 	for name, broken := range map[string]func(*objstore.ReferenceTable){
 		"Log":      func(r *objstore.ReferenceTable) { r.Log = "" },
 		"Deferred": func(r *objstore.ReferenceTable) { r.Deferred = "" },
@@ -200,10 +202,12 @@ func TestEveryRequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
 			t.Errorf("a Required declaration with no %s drew %v; want it refused naming it", name, err)
 		}
 	}
-	retired := tracker.FileObjectReferences
-	retired.Standing, retired.Log, retired.Deferred, retired.Records = objstore.Retired, "", "", nil
-	if err := retired.ValidateLog(); err != nil {
-		t.Errorf("a retired declaration naming no log was refused: %v", err)
+	for _, s := range []objstore.Standing{objstore.Retired, objstore.Derived} {
+		unowed := tracker.FileObjectReferences
+		unowed.Standing, unowed.Log, unowed.Deferred, unowed.Records = s, "", "", nil
+		if err := unowed.ValidateLog(); err != nil {
+			t.Errorf("a %s declaration naming no log was refused: %v", s, err)
+		}
 	}
 
 	for _, ref := range references.All {
@@ -221,6 +225,123 @@ func TestEveryRequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
 				ref.Table, ref.Deferred, have)
 		}
 	}
+}
+
+// standing is the standing one declaration states, as reviewed here, and why
+// it has it.
+type standing struct {
+	is     objstore.Standing
+	reason string
+}
+
+// standings is every declaration in references.All, keyed by its table: the
+// standing it states and the reason it has that one — the one place a table's
+// standing is a reviewed decision rather than a field its author filled in.
+// TWO-SIDED, as [retirements] is: a declaration with no row fails, and so does
+// a row no declaration matches.
+var standings = map[string]standing{
+	"tracker_files": {objstore.Required,
+		"a project's file: bytes a person or a seat wrote, which nothing builds again"},
+	"code_packs": {objstore.Required,
+		"a repository's history: the pack bundle a push stored, which every git node's copy is built from"},
+	"artifact_objects": {objstore.Required,
+		"an artifact version's file, which a retained version serves"},
+	"artifact_assets": {objstore.Required,
+		"an artifact's live asset, a file somebody added to it"},
+	"artifact_brand_files": {objstore.Required,
+		"the adopted brand's stylesheet, logos and faces, which a version that pinned it serves"},
+}
+
+// standingFaults is everything wrong with how declared's standings are
+// reviewed in reviewed, as messages naming the table: a declaration that does
+// not validate, one with no row, one whose standing is not its row's, a row
+// that gives no reason, and a row no declaration matches.
+func standingFaults(declared []objstore.ReferenceTable, reviewed map[string]standing) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, ref := range declared {
+		seen[ref.Table] = true
+		if err := ref.Validate(); err != nil {
+			out = append(out, fmt.Sprintf("%s: %v", ref.Table, err))
+			continue
+		}
+		r, ok := reviewed[ref.Table]
+		switch {
+		case !ok:
+			out = append(out, fmt.Sprintf("%s is declared %s and has no row in standings "+
+				"(internal/objstore/references/references_test.go) — a standing is a reviewed "+
+				"decision (ADR-0051): add the table, the standing it states and why", ref.Table,
+				ref.Standing))
+		case r.is != ref.Standing:
+			out = append(out, fmt.Sprintf("%s is declared %s and reviewed as %s (%s) — a "+
+				"standing changed is a promise changed: review the row with the declaration",
+				ref.Table, ref.Standing, r.is, r.reason))
+		case strings.TrimSpace(r.reason) == "":
+			out = append(out, fmt.Sprintf("%s is reviewed as %s and gives no reason — the "+
+				"reason is what a reviewer of the standing reads", ref.Table, r.is))
+		}
+	}
+	for table := range reviewed {
+		if !seen[table] {
+			out = append(out, fmt.Sprintf("standings reviews %s, which references.All does not "+
+				"declare — a stale row vouches for nothing", table))
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// EVERY DECLARATION STATES ITS STANDING, AND THE STANDING IS A REVIEWED
+// DECISION (ADR-0051). Validate refuses a declaration that states none, but
+// any of the three passes it, and each is a different promise: a Required
+// table's objects are audited and carried by every backup, a Retired one's are
+// kept for its domain's grace and then let go, and a Derived one's are kept
+// while named and never audited or carried, because the engine builds them
+// again. Each wrong one is silent: a live table declared derived is audited by
+// nobody and in no backup, a rebuildable one declared required pages somebody
+// about a loss nobody has to repair, and a retired one declared derived lets
+// its object go under a reader still fetching it. So every entry of the list
+// is held to a row naming its standing and why, and a new declaration lands
+// with its row.
+func TestEveryDeclarationStatesItsStanding(t *testing.T) {
+	t.Parallel()
+	// CONTROLS FIRST, for TestEveryTableThatNamesAnObjectIsDeclared's reason:
+	// every way a review can be wrong draws a fault naming it, and a sound one
+	// draws none.
+	file := tracker.FileObjectReferences
+	asDerived := file
+	asDerived.Standing = objstore.Derived
+	unstated := file
+	unstated.Standing = ""
+	reviewed := map[string]standing{file.Table: {objstore.Required, "a project's file"}}
+	for _, c := range []struct {
+		name     string
+		declared []objstore.ReferenceTable
+		reviewed map[string]standing
+		want     string // a fault naming this, or "" for none
+	}{
+		{"a declaration nobody reviewed", []objstore.ReferenceTable{file}, nil, "no row in standings"},
+		{"a row nothing declares", nil, reviewed, "stale"},
+		{"a standing its row does not hold", []objstore.ReferenceTable{asDerived}, reviewed,
+			"declared derived and reviewed as required"},
+		{"a row that gives no reason", []objstore.ReferenceTable{file},
+			map[string]standing{file.Table: {objstore.Required, " "}}, "gives no reason"},
+		{"a declaration stating no standing", []objstore.ReferenceTable{unstated}, reviewed, "Standing"},
+		{"a sound review", []objstore.ReferenceTable{file}, reviewed, ""},
+	} {
+		got := standingFaults(c.declared, c.reviewed)
+		switch {
+		case c.want == "" && len(got) != 0:
+			t.Errorf("%s drew %q; want no fault", c.name, got)
+		case c.want != "" && !strings.Contains(strings.Join(got, "\n"), c.want):
+			t.Errorf("%s drew %q; want a fault naming %q", c.name, got, c.want)
+		}
+	}
+
+	for _, fault := range standingFaults(references.All, standings) {
+		t.Error(fault)
+	}
+	t.Logf("%d declarations reviewed", len(standings))
 }
 
 // assumedClockSkew is the most the clocks of the node deciding a write and the
@@ -366,6 +487,10 @@ func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 	t.Parallel()
 	retired := tracker.FileObjectReferences
 	retired.Table, retired.Standing = "test_retired_objects", objstore.Retired
+	// A DERIVED TABLE OWES NO ENTRY: no grace protects a reader of a
+	// derived object, since its domain owes every reader a way on without it.
+	derived := retired
+	derived.Table, derived.Standing = "test_derived_objects", objstore.Derived
 	longest := objstore.ReadBudget(tracker.MaxFileBytes)
 	sound := retirement{grace: longest + assumedClockSkew + time.Minute,
 		largest: tracker.MaxFileBytes, sweep: "test_retired_objects"}
@@ -395,6 +520,10 @@ func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 		{"a grace the clocks can eat", []objstore.ReferenceTable{retired},
 			with(func(r *retirement) { r.grace = longest + assumedClockSkew }), "clock skew"},
 		{"a sound retirement", []objstore.ReferenceTable{retired}, with(func(*retirement) {}), ""},
+		{"a derived table, which owes no grace", []objstore.ReferenceTable{derived}, nil, ""},
+		{"a derived table reviewed as retired",
+			[]objstore.ReferenceTable{derived},
+			map[string]retirement{derived.Table: sound}, "stale"},
 	} {
 		got := retirementFaults(c.declared, c.reviewed)
 		switch {

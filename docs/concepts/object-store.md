@@ -595,12 +595,12 @@ it writes the row naming it: an object uploaded after a copy taken while the
 fleet still ran is named by a row and absent from the new store, and its file
 cannot be read. The copy is of the old store's whole `files/` corner, never of
 a backup's `objects/`, which holds only the objects a backup's restore point
-names — [live](#live-and-retired-references) rows of its copy and the records
-it replays — and none a retired row still keeps for a reader catching up. The
-collector's last report stays in the same bucket and describes the old store,
-so the first node to take the collector's duty
-[sets it aside](#collection-and-audit) and collects and then audits the new
-store straight away — and that audit is the check that every file's object
+names — [live](#live-retired-and-derived-references) rows of its copy and the
+records it replays — and none a retired row still keeps for a reader catching
+up, or a derived row names. The collector's last report stays in the same
+bucket and describes the old store, so the first node to take the collector's
+duty [sets it aside](#collection-and-audit) and collects and then audits the
+new store straight away — and that audit is the check that every file's object
 came across.
 
 Deleting the record reaches the broker from outside the engine, so a move in
@@ -783,8 +783,9 @@ judged against the replicated estate the data node holds:
   domain that declares a table naming objects — the tracker's and the code
   log — so it reads every row committed when it began), lists the store, and deletes
   every object **stored more than a day ago, whose key was minted more than a
-  day ago, that no row — [live or retired](#live-and-retired-references) —
-  names**. The collector reads the rows of every domain that declares a table
+  day ago, that no row —
+  [live, retired or derived](#live-retired-and-derived-references) — names**.
+  The collector reads the rows of every domain that declares a table
   naming objects, whichever of the engine's own backends the company runs — a
   company that moved its tracker off native and keeps its knowledge base here
   still holds its project files' rows, and their objects are still audited and
@@ -886,9 +887,10 @@ its leader moves, costs it nothing: no renewal waits longer than 45 seconds for
 an answer, so the next is always asked in time. A stopped pass records
 nothing: the node that holds the duty records its own.
 
-### Live and retired references
+### Live, retired and derived references
 
-Every table whose rows name objects declares which of two kinds its rows are:
+Every table whose rows name objects declares which of three kinds its rows
+are:
 
 - **Live** — the object is part of something the company holds, such as a
   file's bytes. The collector keeps it, the audit checks it, and a backup
@@ -904,6 +906,25 @@ Every table whose rows name objects declares which of two kinds its rows are:
   out of the backup's `objects/`, and on `nats` its bytes ride the bucket's
   stream snapshot, as everything the bucket holds does, uncounted and
   unchecked.
+- **Derived** — the object is one the engine can build again from what live
+  rows name, so losing it costs a rebuild and no data. A derived row keeps the
+  object from the collector for as long as the row stands, as a live row
+  does, and owes it no grace: whatever reads the object goes on without it
+  when it is gone, so the part of the engine that wrote the row may delete it
+  the moment it replaces what the object holds, and the collector deletes the
+  object at its next pass. The audit never asks after it — a derived object
+  the store lost raises no [`objects_missing`](#alarms), since nobody has to
+  restore anything — and a backup never copies, counts or asks after it,
+  exactly as a retired one's: on `s3` it stays out of the backup's `objects/`,
+  and on `nats` its bytes ride the bucket's stream snapshot uncounted and
+  unchecked. A restore brings the rows back without the objects they name,
+  and the engine builds those again.
+
+| Kind | Kept from the collector | Audited | Carried by a backup |
+|---|---|---|---|
+| Live | yes | yes | yes |
+| Retired | until its row's grace has passed | no | no |
+| Derived | for as long as its row stands | no | no |
 
 A project's files are live rows, and a file never retires one: a replaced
 file's bytes go at the first hourly pass once nothing names them and they were
@@ -1056,7 +1077,7 @@ dashboard draws the same under **Settings › File storage**.
   audit reads the live rows a page at a time, every table's merged into one
   key order, and asks the store about them outside every read, so it never
   holds a read of the estate open across the store's round trips; a retired
-  row costs it nothing, and costs a backup on `s3` no request.
+  or derived row costs it nothing, and costs a backup on `s3` no request.
 - **On `nats` an audit lists the whole store once per hundred thousand
   objects**, the window it holds in memory at 127 bytes a key. Each listing
   names every object, so the audit names N × ⌈N / 100,000⌉ of them: at the

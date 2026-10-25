@@ -67,9 +67,9 @@ const WalkPage = 500
 
 // WalkOf is t's keyset walk, each page in one read of its own through read.
 //
-// ONLY A REQUIRED TABLE IS WALKED: on a retired one the walk's first Next
-// answers [ReferenceTable.ReferencesAfter]'s refusal, so a pass that forgot to
-// leave a retired table out fails on its first page rather than paging
+// ONLY A REQUIRED TABLE IS WALKED: on a retired or derived one the walk's
+// first Next answers [ReferenceTable.ReferencesAfter]'s refusal, so a pass that
+// forgot to leave such a table out fails on its first page rather than paging
 // somebody about, or copying, an object nobody is owed (ADR-0051).
 func (t ReferenceTable) WalkOf(read RowReader) Walk {
 	return &tableWalk{table: t, read: read}

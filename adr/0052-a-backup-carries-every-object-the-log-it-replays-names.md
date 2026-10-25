@@ -50,8 +50,8 @@ out its budget.
 **The copy's set alone** — the Cost line.
 
 **Every object the store holds.** It carries the bucket's garbage and the
-retired objects ADR-0051 says no backup carries, and lists the whole namespace
-on every run.
+retired and derived objects ADR-0051 says no backup carries, and lists the
+whole namespace on every run.
 
 **Apply (P, L] into the copy.** A second applier outside the framework, and a
 copy whose position no longer describes the file the stores were verified as.
@@ -62,4 +62,4 @@ The restore procedure (`docs/guides/backup.md`). The external-NATS topology,
 where the node takes no snapshot and so has no L: its backup carries what its
 copy names, and the cluster's own backup is taken at another moment. How a
 domain encodes its records. ADR-0051's standing rule, which is unchanged — a
-retired table is neither walked nor read past its copy.
+retired or derived table is neither walked nor read past its copy.

@@ -14,8 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// liveRefs and retiredRefs are one domain's two declared tables — what a
-// domain that retires the objects it replaces declares (ADR-0051) — in a
+// liveRefs, retiredRefs and derivedRefs are one domain's declared tables, one
+// of each standing — what a domain that retires the objects it replaces, and
+// keeps objects the engine can build again, declares (ADR-0051) — in a
 // database of the test's own, read through [Sources] exactly as the engine
 // builds the collector's: the fake source the other cases use stands in for
 // the declarations, and so cannot say what a declaration's standing does.
@@ -24,6 +25,8 @@ var (
 		Hash: "hash", Size: "size", Owner: []string{"owner"}, Standing: objstore.Required}
 	retiredRefs = objstore.ReferenceTable{Domain: "files", Table: "retired_refs", Key: "object",
 		Hash: "hash", Size: "size", Owner: []string{"owner"}, Standing: objstore.Retired}
+	derivedRefs = objstore.ReferenceTable{Domain: "files", Table: "derived_refs", Key: "object",
+		Hash: "hash", Size: "size", Owner: []string{"owner"}, Standing: objstore.Derived}
 )
 
 // sqlEstate is that domain: always current, always complete.
@@ -39,20 +42,30 @@ func (e sqlEstate) Read(ctx context.Context, _ statelog.Position, fn func(*sql.T
 	return true, e.db.Read(ctx, fn)
 }
 
-// standingHarness is [harness] with its collector built over liveRefs and
-// retiredRefs rather than the fake source.
+// standingHarness is [harness] with its collector built over liveRefs,
+// retiredRefs and derivedRefs rather than the fake source.
 type standingHarness struct {
 	*harness
 	db *store.DB
 }
 
+// newStandingHarness is the standing tables over [newHarness]'s store, which
+// keeps no order, so the audit reads its listing a window at a time.
 func newStandingHarness(t *testing.T) *standingHarness {
 	t.Helper()
-	h := newHarness(t)
+	return standingOver(t, newHarness(t))
+}
+
+// standingOver is h with its collector rebuilt over the standing tables, on
+// h's own store — a [newRangedHarness]'s, for a case auditing a store that
+// lists ranges in order.
+func standingOver(t *testing.T, h *harness) *standingHarness {
+	t.Helper()
+	declared := []objstore.ReferenceTable{liveRefs, retiredRefs, derivedRefs}
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
-		for _, ref := range []objstore.ReferenceTable{liveRefs, retiredRefs} {
+		for _, ref := range declared {
 			for _, stmt := range []string{
 				`CREATE TABLE ` + ref.Table + ` (object TEXT, hash TEXT NOT NULL,
 					size INTEGER NOT NULL, owner TEXT NOT NULL)`,
@@ -67,7 +80,7 @@ func newStandingHarness(t *testing.T) *standingHarness {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	refs, err := Sources([]objstore.ReferenceTable{liveRefs, retiredRefs}, sqlEstate{db: db})
+	refs, err := Sources(declared, sqlEstate{db: db})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +104,8 @@ func (h *standingHarness) name(ref objstore.ReferenceTable, o objstore.Object, o
 }
 
 // unname deletes ref's row naming k — for a retired row, its domain sweeping
-// it once its grace has passed.
+// it once its grace has passed; for a derived one, its domain replacing what
+// the row named.
 func (h *standingHarness) unname(ref objstore.ReferenceTable, k objstore.Key) {
 	h.t.Helper()
 	if err := h.db.Tx(h.t.Context(), func(tx *sql.Tx) error {
@@ -145,10 +159,11 @@ func TestARetiredReferenceKeepsItsObjectFromCollection(t *testing.T) {
 }
 
 // THE AUDIT ASKS ONLY AFTER REQUIRED REFERENCES (ADR-0051). An object a
-// retired row keeps is one the company has let go of: a store that lost it,
-// or holds it wrong, has lost nothing anybody can miss, so it is never asked
-// after, never counted and never raises objects_missing — while a required
-// table's lost object still is.
+// retired row keeps is one the company has let go of, and one a derived row
+// names is one the engine builds again: a store that lost either, or holds it
+// wrong, has lost nothing anybody can miss, so it is never asked after, never
+// counted and never raises objects_missing — while a required table's lost
+// object still is.
 func TestTheAuditAsksOnlyAfterRequiredReferences(t *testing.T) {
 	t.Parallel()
 	h := newStandingHarness(t)
@@ -159,20 +174,108 @@ func TestTheAuditAsksOnlyAfterRequiredReferences(t *testing.T) {
 	h.name(retiredRefs, gone, "gone.md")
 	bent := h.putObject("a replaced object the store holds wrong")
 	h.name(retiredRefs, bent, "bent.md")
-	for _, k := range []objstore.Key{lost.Key, gone.Key} {
+	rebuilt := h.putObject("an index the store lost")
+	h.name(derivedRefs, rebuilt, "rebuilt")
+	warped := h.putObject("an index the store holds wrong")
+	h.name(derivedRefs, warped, "warped")
+	for _, k := range []objstore.Key{lost.Key, gone.Key, rebuilt.Key} {
 		if err := h.store.Delete(t.Context(), k); err != nil {
 			t.Fatal(err)
 		}
 	}
 	h.backend.Corrupt(bent.Key.Name(), []byte("other length"))
+	h.backend.Corrupt(warped.Key.Name(), []byte("another length"))
 
 	r, err := h.c.Audit(t.Context())
 	if err != nil || !r.Completed || r.Referenced != 2 || r.Missing != 1 || r.Damaged != 0 {
 		t.Fatalf("Audit = %+v, %v; want the two required references asked after and "+
-			"one of them missing, and neither retired one asked after", r, err)
+			"one of them missing, and no retired or derived one asked after", r, err)
 	}
 	want := []MissingFile{{Object: lost.Key, NamedBy: "lost.md", Finding: FindingMissing}}
 	if r.Found == nil || !slices.Equal(r.Found.MissingFiles, want) {
 		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+	}
+}
+
+// A DERIVED REFERENCE IS KEPT, AND NEVER AUDITED (ADR-0051). A derived row
+// names an object the engine can build again from what live rows name, so its
+// object is kept from collection for as long as the row stands, exactly as a
+// live row's is, and goes at the next pass once the row does, with no grace of
+// its own. But the audit never asks after it: a store that lost it has lost a
+// rebuild, not a file, and objects_missing would page somebody about a loss
+// nobody has to repair. In BOTH of the audit's modes, since each merges the
+// same walks: a store that keeps no order, whose whole listing is read a
+// window at a time (`nats`), and one that lists ranges in order (S3).
+func TestADerivedReferenceIsKeptAndNeverAudited(t *testing.T) {
+	t.Parallel()
+	for _, store := range []struct {
+		name string
+		// open is the case's harness, and how many listings of its audit's
+		// mode the store has answered — whole listings, or ranges.
+		open func(*testing.T) (*standingHarness, func() int)
+	}{
+		{"a store that keeps no order", func(t *testing.T) (*standingHarness, func() int) {
+			h := newStandingHarness(t)
+			return h, h.backend.listings
+		}},
+		{"a store that lists ranges in order", func(t *testing.T) (*standingHarness, func() int) {
+			base, r := newRangedHarness(t)
+			return standingOver(t, base), r.listings
+		}},
+	} {
+		t.Run(store.name, func(t *testing.T) {
+			t.Parallel()
+			h, listings := store.open(t)
+			live := h.putObject("a file's bytes")
+			h.name(liveRefs, live, "file.md")
+			kept := h.putObject("an index the engine builds again")
+			h.name(derivedRefs, kept, "index")
+			lost := h.putObject("an index the store has lost")
+			h.name(derivedRefs, lost, "lost-index")
+
+			// TWO DAYS ON every object is past the grace, so only a row
+			// keeps it.
+			h.clock.advance(2 * PendingGrace)
+			r, err := h.c.Collect(t.Context())
+			if err != nil || !r.Completed || r.Aged != 3 || r.Deleted != 0 || r.Referenced != 3 {
+				t.Fatalf("a pass past the grace = %+v, %v; want the live object and both "+
+					"derived ones kept", r, err)
+			}
+
+			// THE AUDIT ASKS AFTER THE LIVE ONE ALONE, and the derived object
+			// the store has lost raises nothing.
+			if err := h.store.Delete(t.Context(), lost.Key); err != nil {
+				t.Fatal(err)
+			}
+			before := listings()
+			a, err := h.c.Audit(t.Context())
+			if err != nil || !a.Completed || a.Referenced != 1 || a.Missing != 0 ||
+				a.Damaged != 0 || a.Unanswered != 0 {
+				t.Fatalf("Audit = %+v, %v; want the one live reference asked after and found, "+
+					"and neither derived one asked after", a, err)
+			}
+			if a.Found == nil || a.Found.Lost() != 0 || len(a.Found.MissingFiles) != 0 {
+				t.Fatalf("the findings = %+v; want nothing lost", a.Found)
+			}
+			if listings() == before {
+				t.Fatal("the audit made no listing of the kind this store answers, so this " +
+					"arm did not audit the way its store is audited")
+			}
+
+			// ONCE ITS ROW GOES, its object goes at the next pass: a derived
+			// row keeps its object for no grace.
+			h.unname(derivedRefs, kept.Key)
+			h.clock.advance(CollectInterval)
+			if r, err = h.c.Collect(t.Context()); err != nil || !r.Completed || r.Deleted != 1 {
+				t.Fatalf("the first pass after the derived row went = %+v, %v; want its "+
+					"object deleted", r, err)
+			}
+			if h.held(kept.Key) {
+				t.Fatal("an object only a removed derived row named outlived it")
+			}
+			if !h.held(live.Key) {
+				t.Fatal("the live file's object was deleted")
+			}
+		})
 	}
 }

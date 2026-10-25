@@ -22,7 +22,7 @@ import (
 
 // fakeSource is one domain's references, held in memory — all of them in a
 // required table, so its walk hands on every one (standing_test.go has what a
-// retired table does, through the real declarations).
+// retired or derived table does, through the real declarations).
 type fakeSource struct {
 	mu    sync.Mutex
 	named map[objstore.Key]objstore.Reference

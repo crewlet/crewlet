@@ -19,15 +19,17 @@
 // would be a second answer to which objects exist, and the two would drift
 // the first time a write landed in one and not the other.
 //
-// Every declared table is REQUIRED or RETIRED (ADR-0051). Both keep the
-// objects their rows name from collection; only a required table's are the
-// company's to account for, so only those are audited, and only those a backup
-// copies, counts or asks after (on `nats` a retired object's bytes still ride
-// the bucket's stream snapshot, uncounted). A retired row keeps a replaced
-// object for a grace a reader still on it needs; the grace is the row's
-// lifetime, and once its domain deletes the row the object goes at the next
-// pass like any other nobody names. Nothing here reads when a reference was
-// retired.
+// Every declared table is REQUIRED, RETIRED or DERIVED (ADR-0051). All three
+// keep the objects their rows name from collection; only a required table's
+// are the company's to account for, so only those are audited, and only those
+// a backup copies, counts or asks after (on `nats` a retired or derived
+// object's bytes still ride the bucket's stream snapshot, uncounted). A
+// retired row keeps a replaced object for a grace a reader still on it needs;
+// the grace is the row's lifetime, and once its domain deletes the row the
+// object goes at the next pass like any other nobody names. A derived row
+// keeps an object the engine can build again for as long as it stands, and
+// owes no grace when it goes. Nothing here reads when a reference was retired
+// or replaced.
 //
 // # Collection: deletion is the only dangerous thing, and it needs no lock (ADR-0027)
 //
@@ -54,7 +56,7 @@
 //     objstore.RecordWithin, which is shorter than the grace by more than
 //     any two nodes' clocks disagree — so a key past the grace is one no
 //     write can name any more, however late a record arrives.
-//   - No declared table, a retired one included, names it in an estate that
+//   - No declared table, of any standing, names it in an estate that
 //     is CURRENT — the pass first waits for everything each domain's log had
 //     committed when it started ([Source.Barrier]) — and COMPLETE: a record
 //     this node could not decode might be the one naming the object, so a
@@ -107,7 +109,8 @@
 // keys. A durable backend loses nothing, so a non-zero count is the backend
 // failing at the one thing it is for. A retired reference is never asked
 // after: the company has let its object go, and a store that lost it lost
-// nothing anybody can miss.
+// nothing anybody can miss. Nor is a derived one: a store that lost its object
+// lost a rebuild, which the engine makes, and no file a person restores.
 //
 // THE SECOND LOOK comes at the end of the pass — or sooner, once
 // [maxSuspects] others are waiting for theirs, so a store that lost everything
@@ -456,9 +459,10 @@ const rangePage = 1000
 //
 //   - Among keys older than a day — nearly all of a company's — only the
 //     objects a row stopped naming within the hour, which the next
-//     collection deletes, and those a retired row keeps for its grace: a few
-//     in a thousand, which a tenth of the page holds with an order of
-//     magnitude to spare.
+//     collection deletes, those a retired row keeps for its grace, and those
+//     a derived row names, which the audit passes over as it passes over a
+//     retired one's: a few in a thousand while no declared table is derived,
+//     which a tenth of the page holds with an order of magnitude to spare.
 //   - Among the last day's keys, every upload not yet named and every version
 //     of a file rewritten during the day, kept until it is a day old ([PendingGrace]):
 //     there a chunk may take two requests, or more, and that range is a day of
@@ -567,7 +571,7 @@ type CollectionReport struct {
 	// Listed is how many objects the store held under the engine's
 	// namespace; Aged how many of them were past the grace; Deleted how
 	// many of those no row named and the pass deleted; Referenced how
-	// many a row — live or retired — still named.
+	// many a row — live, retired or derived — still named.
 	Listed     int `json:"listed"`
 	Aged       int `json:"aged"`
 	Deleted    int `json:"deleted"`

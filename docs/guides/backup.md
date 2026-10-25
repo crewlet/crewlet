@@ -173,9 +173,10 @@ What is worth knowing about it:
   a time**, in key order across every table, while the objects of the page
   before are fetched: the backup holds a page of references, never the
   company's whole inventory. An object only a
-  [retired](../concepts/object-store.md#live-and-retired-references) row names
-  is neither copied nor asked after: a restore brings the row back without it,
-  and nothing is owed it.
+  [retired or derived](../concepts/object-store.md#live-retired-and-derived-references)
+  row names is neither copied nor asked after: a restore brings the row back
+  without it, and nothing is owed it — a retired object was let go, and the
+  engine builds a derived one again.
 - **The files written while the backup ran come too.** A restore brings the
   store copy back and replays each log from the copy's position to the last
   record its snapshot captured — the snapshot is a copy of the stream as it
@@ -569,9 +570,10 @@ tool or `--endpoint-url` for a store that is not Amazon's. An object a live
 row of the restored copy names and the store does not hold is reported by the
 collector's next audit (`objects_missing`); `crewlet objects status` lists the
 files. One only a
-[retired](../concepts/object-store.md#live-and-retired-references) row names
-is never reported: the backup never carried it, nothing is owed it, and the
-row goes once its grace has passed.
+[retired or derived](../concepts/object-store.md#live-retired-and-derived-references)
+row names is never reported: the backup never carried it and nothing is owed
+it — a retired row goes once its grace has passed, and the engine builds a
+derived object again.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose — every snapshot,

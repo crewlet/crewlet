@@ -174,9 +174,10 @@ type pass struct {
 // ([collect.Source.Required]).
 //
 // THE REQUIRED TABLES, the set the audit holds the store to and the backup
-// carries: a retired table's object is one the company has let go
-// (ADR-0051), which no reader is owed on the source and so none is owed on
-// the target, and the collector there keeps it from nothing it does not hold.
+// carries: a retired table's object is one the company has let go, and a
+// derived table's one the engine builds again (ADR-0051) — neither is owed to
+// any reader on the source and so neither is on the target, and the collector
+// there keeps it from nothing it does not hold.
 func (p *pass) walk(ctx context.Context, at []statelog.Position) error {
 	for i, s := range p.opts.References {
 		for _, w := range s.Required(at[i]) {

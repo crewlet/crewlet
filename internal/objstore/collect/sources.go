@@ -26,16 +26,17 @@ type Source interface {
 	Barrier(ctx context.Context) (statelog.Position, error)
 
 	// Referenced answers which of among any of the domain's declared
-	// tables names — a retired one included, since a retired row keeps its
-	// object from collection as surely as a live one — read no earlier than
-	// at (zero: whatever this node holds), and whether the answer is
-	// COMPLETE: false while this node holds a record it could not apply
-	// that might refer to an object.
+	// tables names — a retired or derived one included, since such a row
+	// keeps its object from collection as surely as a live one — read no
+	// earlier than at (zero: whatever this node holds), and whether the
+	// answer is COMPLETE: false while this node holds a record it could not
+	// apply that might refer to an object.
 	Referenced(ctx context.Context, among []objstore.Key, at statelog.Position) (map[objstore.Key]struct{}, bool, error)
 
 	// Required is a walk of each of the domain's REQUIRED tables — never a
-	// retired one's, whose objects the company is not owed (ADR-0051) —
-	// read no earlier than at, each in KEY ORDER ([objstore.Key.Compare]).
+	// retired or derived one's, whose objects the company is not owed
+	// (ADR-0051) — read no earlier than at, each in KEY ORDER
+	// ([objstore.Key.Compare]).
 	//
 	// IN KEY ORDER because the audit merges every walk into one ordered
 	// stream of references, and a store that lists its names in order is
@@ -83,8 +84,8 @@ type Estate interface {
 //
 // Each source keeps its objects from collection through every one of its
 // tables and walks only its Required ones. A domain whose every table is
-// retired is accepted: its walk reads nothing and is complete, and nothing
-// about it is wrong.
+// retired or derived is accepted: its walk reads nothing and is complete, and
+// nothing about it is wrong.
 func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, error) {
 	if len(tables) == 0 {
 		return nil, errors.New("objstore/collect: no table is declared as naming objects — " +
@@ -114,7 +115,8 @@ func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, e
 				"as unreferenced", t.Table, t.Domain)
 		}
 		src.tables = append(src.tables, t)
-		// AFTER Validate, which has refused a standing that is neither.
+		// AFTER Validate, which has refused a standing that is none of the
+		// three: only a Required table's objects are the company's to audit.
 		if t.Standing == objstore.Required {
 			src.required = append(src.required, t)
 		}
@@ -146,8 +148,8 @@ func (s *tableSource) Barrier(ctx context.Context) (statelog.Position, error) {
 	return s.estate.Barrier(ctx)
 }
 
-// Referenced reads every declared table of the domain — required and retired
-// alike — in ONE read, so the tables are judged at one position and one
+// Referenced reads every declared table of the domain — whatever its standing
+// — in ONE read, so the tables are judged at one position and one
 // completeness.
 func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 	at statelog.Position) (map[objstore.Key]struct{}, bool, error) {

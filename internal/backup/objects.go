@@ -45,14 +45,15 @@ const objectsDirName = "objects"
 // position names, since those records write rows too (the package doc's "The
 // objects follow the log").
 //
-// A RETIRED REFERENCE IS NOT CARRIED (ADR-0051). A retired row keeps a
-// replaced object from the collector for a grace and names nothing the
-// company is owed, so it is never copied, never asked after and never
-// recorded lost: on S3 its object stays out of objects/, and on the broker's
+// A RETIRED REFERENCE IS NOT CARRIED, NOR IS A DERIVED ONE (ADR-0051). A
+// retired row keeps a replaced object from the collector for a grace, and a
+// derived row an object the engine can build again; neither names anything
+// the company is owed, so its object is never copied, never asked after and
+// never recorded lost: on S3 it stays out of objects/, and on the broker's
 // bucket the stream snapshot holds whatever the bucket holds without this
 // package counting it. A restore brings the row back without its object,
-// which nothing owes it, and its domain deletes the row once its grace has
-// passed.
+// which nothing owes it: a retired row's domain deletes it once its grace has
+// passed, and a derived row's domain builds the object again.
 //
 // WHICH OBJECTS is not an option: the copy is read against
 // internal/objstore/references, the one list its schema gate holds, and walks
@@ -283,11 +284,12 @@ type objectPass struct {
 // EVERY DECLARATION IS VALIDATED BEFORE ANY IS LEFT OUT: sorted by
 // `Standing == Required` alone, one stating no standing would be skipped as
 // though it were retired — a live table missing from the backup with nothing
-// failing, the default the standing exists to forbid. A RETIRED TABLE IS LEFT
-// OUT — see [Objects] — and its walk refuses to be read, so a pass that forgot
-// to leave it out fails rather than carrying it. And every Required one is
-// held to say how its log names objects ([objstore.ReferenceTable.ValidateLog])
-// before a byte is read, rather than once the copy has been carried.
+// failing, the default the standing exists to forbid. A RETIRED OR DERIVED
+// TABLE IS LEFT OUT — see [Objects] — and its walk refuses to be read, so a
+// pass that forgot to leave it out fails rather than carrying it. And every
+// Required one is held to say how its log names objects
+// ([objstore.ReferenceTable.ValidateLog]) before a byte is read, rather than
+// once the copy has been carried.
 func (s *Service) newObjectPass(ctx context.Context, dir, copyPath string) (*objectPass, error) {
 	p := &objectPass{objs: s.objects, copyPath: copyPath,
 		root: filepath.Join(dir, objectsDirName), pageRead: s.pageRead,
@@ -296,7 +298,8 @@ func (s *Service) newObjectPass(ctx context.Context, dir, copyPath string) (*obj
 		if err := t.Validate(); err != nil {
 			return nil, fmt.Errorf("backup: %w", err)
 		}
-		// AFTER Validate, which has refused a standing that is neither.
+		// AFTER Validate, which has refused a standing that is none of the
+		// three: only a Required table's objects are the company's to carry.
 		if t.Standing == objstore.Required {
 			p.required = append(p.required, t)
 		}

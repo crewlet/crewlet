@@ -164,17 +164,18 @@ func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 }
 
 // A DECLARATION STATES ITS STANDING, AND NONE IS A DEFAULT (ADR-0051): a live
-// table read as retired is audited by nobody and accounted for by no backup,
-// and a retired one read as live pages somebody about bytes nobody needs. So
-// the zero value — a declaration that forgot the field — is refused by name,
-// the refusal names both remedies, and no statement is built from it.
+// table read as retired or derived is audited by nobody and accounted for by
+// no backup, and a retired or derived one read as live pages somebody about
+// bytes nobody needs. So the zero value — a declaration that forgot the field —
+// is refused by name, the refusal names all three remedies, and no statement
+// is built from it; and so is every spelling that is not one of the three.
 func TestADeclarationStatesItsStanding(t *testing.T) {
 	t.Parallel()
 	declared := func(s Standing) ReferenceTable {
 		return ReferenceTable{Domain: "tracker", Table: "t", Key: "object", Hash: "hash",
 			Size: "size", Owner: []string{"path"}, Standing: s}
 	}
-	for _, s := range []Standing{"", "live", "Required", "required ", "RETIRED"} {
+	for _, s := range []Standing{"", "other", "live", "Required", "required ", "RETIRED", "Derived", " derived"} {
 		t.Run("refused "+strconv.Quote(string(s)), func(t *testing.T) {
 			t.Parallel()
 			ref := declared(s)
@@ -185,7 +186,7 @@ func TestADeclarationStatesItsStanding(t *testing.T) {
 			if err == nil {
 				t.Fatalf("a declaration with standing %q validated", s)
 			}
-			for _, remedy := range []string{"objstore.Required", "objstore.Retired"} {
+			for _, remedy := range []string{"objstore.Required", "objstore.Retired", "objstore.Derived"} {
 				if !strings.Contains(err.Error(), remedy) {
 					t.Errorf("the refusal %q does not name %s", err, remedy)
 				}
@@ -198,7 +199,7 @@ func TestADeclarationStatesItsStanding(t *testing.T) {
 			}
 		})
 	}
-	for _, s := range []Standing{Required, Retired} {
+	for _, s := range []Standing{Required, Retired, Derived} {
 		ref := declared(s)
 		if !s.Valid() {
 			t.Errorf("Standing(%q).Valid() = false", s)
@@ -212,47 +213,22 @@ func TestADeclarationStatesItsStanding(t *testing.T) {
 	}
 }
 
-// ONLY A REQUIRED TABLE IS WALKED (ADR-0051). A retired row keeps its object
-// from the collector exactly as a live one does — so the collector's batch
-// question is the same statement whatever the standing — and names nothing
-// the company is owed, so the walk the audit and the backup share is REFUSED
-// for it: a consumer that forgot to leave a retired table out fails on its
-// first pass rather than paging somebody about a replaced object or copying it
-// into every backup.
+// ONLY A REQUIRED TABLE IS WALKED (ADR-0051). A retired or derived row keeps
+// its object from the collector exactly as a live one does — so the
+// collector's batch question is the same statement whatever the standing —
+// and names nothing the company is owed: a retired one a replaced object, a
+// derived one an object the engine builds again. So the walk the audit and the
+// backup share is REFUSED for either, and so is the question about given keys
+// a backup asks past its copy: a consumer that forgot to leave such a table
+// out fails on its first pass rather than paging somebody about an object
+// nobody has to repair or copying it into every backup.
 func TestOnlyARequiredTableIsWalked(t *testing.T) {
 	t.Parallel()
 	live := ReferenceTable{Domain: "tracker", Table: "replaced_packs", Key: "object", Hash: "hash",
 		Size: "size", Owner: []string{"path"}, Standing: Required}
-	retired := live
-	retired.Standing = Retired
 
 	if _, err := live.ReferencesAfter(500); err != nil {
 		t.Fatalf("a required table cannot be walked: %v", err)
-	}
-	page, err := retired.ReferencesAfter(500)
-	if err == nil {
-		t.Fatalf("a retired table was walked: %q", page)
-	}
-	for _, named := range []string{"replaced_packs", string(Retired)} {
-		if !strings.Contains(err.Error(), named) {
-			t.Errorf("the refusal %q does not name %q", err, named)
-		}
-	}
-	// AND ITS WALK IS REFUSED THE SAME WAY, from its first page, before
-	// anything is read: a pass that forgot to leave it out fails at once.
-	read := func(context.Context, func(*sql.Tx) error) (bool, error) {
-		t.Fatal("a retired table's walk read the estate")
-		return false, nil
-	}
-	if page, _, werr := retired.WalkOf(read).Next(t.Context()); werr == nil ||
-		!strings.Contains(werr.Error(), string(Retired)) {
-		t.Fatalf("a retired table's walk = %d references, %v; want the refusal", len(page), werr)
-	}
-
-	// THE SAME FOR A QUESTION ABOUT GIVEN KEYS, which answers a walk's own
-	// columns so one decoder reads both.
-	if among, err := retired.ReferencesAmong(3); err == nil {
-		t.Fatalf("a retired table was asked which references it holds: %q", among)
 	}
 	if _, err := live.ReferencesAmong(0); err == nil {
 		t.Error("a question about no keys was asked")
@@ -266,18 +242,53 @@ func TestOnlyARequiredTableIsWalked(t *testing.T) {
 	if columns(among) != columns(walked) || !strings.HasSuffix(among, ` IN (?, ?, ?)`) {
 		t.Errorf("ReferencesAmong = %q; want the walk's columns, %q, over three keys", among, columns(walked))
 	}
-
-	shields, err := retired.ObjectsAmong(3)
-	if err != nil {
-		t.Fatalf("a retired table cannot be asked which objects it names: %v", err)
-	}
 	keeps, err := live.ObjectsAmong(3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shields != keeps {
-		t.Errorf("a retired table is asked %q and a required one %q — a row keeps its "+
-			"object from collection the same way whatever its standing", shields, keeps)
+
+	for _, s := range []Standing{Retired, Derived} {
+		t.Run(string(s), func(t *testing.T) {
+			t.Parallel()
+			unowed := live
+			unowed.Standing = s
+
+			page, err := unowed.ReferencesAfter(500)
+			if err == nil {
+				t.Fatalf("a %s table was walked: %q", s, page)
+			}
+			for _, named := range []string{"replaced_packs", string(s)} {
+				if !strings.Contains(err.Error(), named) {
+					t.Errorf("the refusal %q does not name %q", err, named)
+				}
+			}
+			// AND ITS WALK IS REFUSED THE SAME WAY, from its first page,
+			// before anything is read: a pass that forgot to leave it out
+			// fails at once.
+			read := func(context.Context, func(*sql.Tx) error) (bool, error) {
+				t.Errorf("a %s table's walk read the estate", s)
+				return false, nil
+			}
+			if page, _, werr := unowed.WalkOf(read).Next(t.Context()); werr == nil ||
+				!strings.Contains(werr.Error(), string(s)) {
+				t.Fatalf("a %s table's walk = %d references, %v; want the refusal", s, len(page), werr)
+			}
+
+			// THE SAME FOR A QUESTION ABOUT GIVEN KEYS, which answers a
+			// walk's own columns so one decoder reads both.
+			if among, err := unowed.ReferencesAmong(3); err == nil {
+				t.Fatalf("a %s table was asked which references it holds: %q", s, among)
+			}
+
+			shields, err := unowed.ObjectsAmong(3)
+			if err != nil {
+				t.Fatalf("a %s table cannot be asked which objects it names: %v", s, err)
+			}
+			if shields != keeps {
+				t.Errorf("a %s table is asked %q and a required one %q — a row keeps its "+
+					"object from collection the same way whatever its standing", s, shields, keeps)
+			}
+		})
 	}
 }
 
@@ -506,8 +517,9 @@ func TestTheDecodersReadTheStatementsColumns(t *testing.T) {
 // A REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0052): the stream, the
 // table its domain defers records into, and the domain's reader of one record
 // — each refused by name when missing, since a backup cannot carry what a
-// log it was not told about names. A retired table, which no backup carries,
-// needs none of them; and the validation every reader asks comes first.
+// log it was not told about names. A retired or derived table, which no backup
+// carries, needs none of them, and its deferred records are never read; and
+// the validation every reader asks comes first.
 func TestARequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
 	t.Parallel()
 	whole := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
@@ -535,13 +547,15 @@ func TestARequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
 	if err := unquoted.ValidateLog(); err == nil {
 		t.Error("a deferred table that is not an identifier was accepted into a statement")
 	}
-	retired := ReferenceTable{Domain: "tracker", Table: "replaced", Key: "object", Hash: "hash",
-		Size: "size", Owner: []string{"path"}, Standing: Retired}
-	if err := retired.ValidateLog(); err != nil {
-		t.Errorf("a retired declaration naming no log was refused: %v", err)
-	}
-	if _, err := retired.DeferredRecordsAfter(256); err == nil {
-		t.Error("a retired table's deferred records were read")
+	for _, s := range []Standing{Retired, Derived} {
+		unowed := ReferenceTable{Domain: "tracker", Table: "replaced", Key: "object", Hash: "hash",
+			Size: "size", Owner: []string{"path"}, Standing: s}
+		if err := unowed.ValidateLog(); err != nil {
+			t.Errorf("a %s declaration naming no log was refused: %v", s, err)
+		}
+		if _, err := unowed.DeferredRecordsAfter(256); err == nil {
+			t.Errorf("a %s table's deferred records were read", s)
+		}
 	}
 	if _, err := whole.DeferredRecordsAfter(0); err == nil {
 		t.Error("a page of no deferred records was asked for")
