@@ -64,7 +64,7 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: localWaiter{at: at},
-		Health: func() statelog.Health {
+		Health: func() (statelog.Health, error) {
 			behind, first, floor := lag, uint64(1), uint64(0)
 			return statelog.Health{
 				Position: at, AppliedThrough: at.Seq, Drained: true,
@@ -72,7 +72,7 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 				Lag:       &behind,
 				FirstSeq:  &first,
 				TrimFloor: &floor,
-			}
+			}, nil
 		},
 		// THE SHIPPED FIGURE, so a retry hint a case renders is the one an
 		// operator would see rather than a number invented here.
@@ -119,7 +119,7 @@ func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*st
 		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: waiter,
-		Health: func() statelog.Health {
+		Health: func() (statelog.Health, error) {
 			at := waiter.Committed()
 			behind, first, floor := uint64(0), uint64(1), uint64(0)
 			return statelog.Health{
@@ -128,7 +128,7 @@ func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*st
 				Lag:       &behind,
 				FirstSeq:  &first,
 				TrimFloor: &floor,
-			}
+			}, nil
 		},
 		Drain: func() float64 { return 2000 },
 	})

@@ -647,6 +647,121 @@ func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 	}
 }
 
+// THE TWO TIERS TOGETHER SAY WHAT NEITHER CAN ALONE: a company hosting code on
+// the default object store of a fleet, whose every bucket member then holds
+// every pack, and a git node whose explicit budget cannot hold a repository at
+// its size limit. Each fires on its trigger and on none of its negations, and
+// either document absent is no warning.
+//
+// Mutation: drop any one rule, and its row goes red.
+func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+	fleet := func(b *config.Bootstrap) {
+		b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+		b.Stream.StoreDir = "/var/lib/crewlet/stream"
+		b.Stream.Replicas = 3
+		b.Stream.Cluster = config.StreamCluster{Name: "acme", Port: 6222,
+			Peers: []string{"nats://b.example.com:6222", "nats://c.example.com:6222"}}
+	}
+	for name, tc := range map[string]struct {
+		boot   func(*config.Bootstrap)
+		native bool
+		path   string // "" is no warning at all
+	}{
+		"a fleet hosting code on the files bucket": {fleet, true, "store.objects.backend"},
+		"a client of an external cluster hosting code on it": {func(b *config.Bootstrap) {
+			b.Stream.Type = config.StreamNATS
+			b.Stream.URL = "nats://broker.example.com:4222"
+		}, true, "store.objects.backend"},
+		"a fleet hosting code on s3": {func(b *config.Bootstrap) {
+			fleet(b)
+			b.Store.Objects.Backend = config.ObjectBackendS3
+		}, true, ""},
+		"a solo member hosting code on the files bucket": {func(*config.Bootstrap) {}, true, ""},
+		"a fleet hosting no code":                        {fleet, false, ""},
+
+		"an explicit budget below the repository limit": {func(b *config.Bootstrap) {
+			b.Git.CacheMaxBytes = 8 * gib
+		}, true, "git.cache_max_bytes"},
+		"an explicit budget at the repository limit": {func(b *config.Bootstrap) {
+			b.Git.CacheMaxBytes = config.DefaultCodeRepoMaxBytes
+		}, true, ""},
+		"a small budget on a node that serves no git": {func(b *config.Bootstrap) {
+			b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+			b.Git.CacheMaxBytes = 8 * gib
+		}, true, ""},
+		"a small budget where no code is hosted": {func(b *config.Bootstrap) {
+			b.Git.CacheMaxBytes = 8 * gib
+		}, false, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := config.DefaultBootstrap()
+			tc.boot(&b)
+			c := config.DefaultCompany()
+			c.Name = "Acme"
+			c.Code.Native = tc.native
+			got := config.TierWarnings(&b, &c)
+			switch {
+			case tc.path == "" && len(got) != 0:
+				t.Fatalf("warned %+v", got)
+			case tc.path != "" && (len(got) != 1 || got[0].Path != tc.path ||
+				got[0].Kind != config.WarningAdvisory):
+				t.Fatalf("warnings %+v, want one advisory at %s", got, tc.path)
+			}
+		})
+	}
+	b, c := config.DefaultBootstrap(), config.DefaultCompany()
+	c.Code.Native = true
+	b.Git.CacheMaxBytes = 8 * gib
+	if got := config.TierWarnings(nil, &c); got != nil {
+		t.Errorf("no bootstrap: warned %+v", got)
+	}
+	if got := config.TierWarnings(&b, nil); got != nil {
+		t.Errorf("no company: warned %+v", got)
+	}
+}
+
+// A RUNNING NODE COMPARES THE BUDGET IT DERIVED, NOT ONLY AN EXPLICIT ONE. A
+// derived budget is the default on every git node, and one below the company's
+// repository size limit has the same consequence as an explicit one — such a
+// repository is served and evicted once idle — which the node knows the moment
+// it sizes its cache. The documents alone cannot know it, so `crewlet validate`
+// says nothing of an unset budget, and the node's warning names where its
+// budget came from.
+//
+// Mutation: compare only an explicit budget on the node too, and the derived
+// row goes red.
+func TestANodeComparesTheCacheBudgetItDerived(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+	b, c := config.DefaultBootstrap(), config.DefaultCompany()
+	c.Name, c.Code.Native = "Acme", true
+	limit := c.Code.Limits.Resolved().RepoMaxBytes
+
+	got := config.NodeTierWarnings(&b, &c, config.CacheBudget{Bytes: 6 * gib, Derived: true})
+	if len(got) != 1 || got[0].Path != "git.cache_max_bytes" ||
+		!strings.Contains(got[0].Message, "derived from git.cache_dir's volume") {
+		t.Fatalf("a derived budget below the repository limit: warnings %+v, want one at "+
+			"git.cache_max_bytes saying the budget was derived", got)
+	}
+	if got := config.NodeTierWarnings(&b, &c, config.CacheBudget{Bytes: limit, Derived: true}); len(got) != 0 {
+		t.Errorf("a derived budget at the repository limit: warned %+v", got)
+	}
+	if got := config.TierWarnings(&b, &c); len(got) != 0 {
+		t.Errorf("the documents alone, the budget unset: warned %+v — a derived budget is a "+
+			"share of a volume neither file describes", got)
+	}
+	// A NODE THAT RESOLVED NONE — it serves no git yet — falls back to the file.
+	b.Git.CacheMaxBytes = 8 * gib
+	if got := config.NodeTierWarnings(&b, &c, config.CacheBudget{}); len(got) != 1 ||
+		strings.Contains(got[0].Message, "derived") {
+		t.Errorf("no resolved budget beside an explicit one: warnings %+v, want the explicit "+
+			"budget's", got)
+	}
+}
+
 // THE PORT IS WARNED ABOUT ONLY WHERE INGRESS WAS ASKED FOR. A node without the
 // role that binds nothing is a satellite with nothing inbound, which an
 // operator chooses; an omitted role list is the single-process default before

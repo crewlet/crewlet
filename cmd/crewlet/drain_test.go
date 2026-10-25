@@ -738,8 +738,8 @@ func writeFile(t *testing.T, dir, name, body string) string {
 	return path
 }
 
-// lockedBuffer is a buffer the child's two streams write to and the test
-// reads while they do.
+// lockedBuffer is a buffer written from goroutines the test does not own — a
+// child's two streams, a server's log — and read by the test while they write.
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer

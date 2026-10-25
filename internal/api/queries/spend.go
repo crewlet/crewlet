@@ -182,11 +182,11 @@ func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, 
 		// AgentID asks for every one.
 		return s.personCells(ctx, w, q, nil, nil)
 	}
-	rows, err := usage.Spend(ctx, s.Usage, q)
+	rows, err := s.Usage.Spend(ctx, q)
 	if err != nil {
 		return nil, nil, usageErr(err)
 	}
-	turns, err := usage.SeatTurns(ctx, s.Usage, q)
+	turns, err := s.Usage.SeatTurns(ctx, q)
 	if err != nil {
 		return nil, nil, usageErr(err)
 	}
@@ -224,7 +224,7 @@ func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, 
 func (s Sources) personCells(ctx context.Context, w spendWindow, q usage.SpendQuery,
 	cells []tokens.Cell, seats []tokens.SeatDay) ([]tokens.Cell, []tokens.SeatDay, error) {
 
-	people, err := usage.PersonSpend(ctx, s.Usage, usage.PersonQuery{
+	people, err := s.Usage.PersonSpend(ctx, usage.PersonQuery{
 		From: q.From, To: q.To, Person: w.Person,
 	})
 	if err != nil {
@@ -242,6 +242,23 @@ func (s Sources) personCells(ctx context.Context, w spendWindow, q usage.SpendQu
 		})
 	}
 	return cells, seats, nil
+}
+
+// UsageReads is the usage domain's reads (ADR-0020), as the spend, activity
+// and skill-reader answers ask them: [usage.Reader] over one estate, or the
+// estate router's facade, which answers from a data node whose usage copy is
+// in service — this node's own where it is (ADR-0046). The router is what a
+// running node hands this surface, so a node whose usage copy is out of
+// service draws its screens from a peer's rather than from the copy it
+// stopped serving.
+type UsageReads interface {
+	Spend(ctx context.Context, q usage.SpendQuery) ([]usage.SpendRow, error)
+	SeatTurns(ctx context.Context, q usage.SpendQuery) ([]usage.TurnsRow, error)
+	PersonSpend(ctx context.Context, q usage.PersonQuery) ([]usage.PersonRow, error)
+	SeatDays(ctx context.Context, q usage.SpendQuery) ([]usage.SeatDay, error)
+	ScheduleRuns(ctx context.Context, q usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error)
+	PageReads(ctx context.Context, q usage.PageReadsQuery) ([]usage.PageRead, error)
+	ReadsElided(ctx context.Context, from, to string) (int64, error)
 }
 
 // usageErr is a usage read's failure as this surface reports it: an estate
@@ -377,13 +394,19 @@ func (s Sources) Seats() tokens.Seats {
 	}
 	// EVERY SEAT THE COMPANY RUNS: a walk of the document's top-level
 	// list missed every seat inside a unit.
+	//
+	// AND EVERY SEAT'S UNIT THROUGH ONE INDEX of the chart
+	// ([org.Index.UnitFor]): the chart's own [org.Organization.UnitFor]
+	// walks every unit's seats until one holds the seat, so asked of every
+	// seat it cost seats² a chart drawn.
+	homes := organization.Index()
 	for role := range organization.AllRoles() {
 		seat := tokens.Seat{Handle: role.Handle(), Name: role.Name}
 		// Only the DIRECT unit, not the chain: a band per nesting level
 		// would count the same spend once for the team and again for the
 		// department above it, and a stacked chart whose bands sum to more
 		// than the total is unreadable.
-		if unit := organization.UnitFor(role); unit != nil {
+		if unit := homes.UnitFor(role); unit != nil {
 			seat.UnitKey, seat.UnitName = unit.Key(), unit.Name
 		}
 		// A HUMAN SEAT UNDER ITS PERSON KEY: a person's spend names the

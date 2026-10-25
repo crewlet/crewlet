@@ -36,6 +36,18 @@
 // delete that cannot be undone is not idempotent in the way a range delete is,
 // so it does not lean on the duty at all. Every write is a compare-and-set,
 // and the retirement claims the seat's own lease while it deletes.
+//
+// # Never a replicated row
+//
+// Every table swept here is the NODE's own, or a broker's. The replicated
+// estate is written only by a state log's applier (ADR-0002), so a row of it
+// is never deleted here, however short its question: a sweep on each node's
+// own tick would leave two copies of one log holding different rows. The
+// state logs' arbitration anchors are the case that tested it — one row per
+// subject on every node, which a per-node job here once deleted below a
+// floor each node read for itself — and the trim now removes them with a
+// trimmed record every applier takes at one position (ADR-0047). What such a
+// table retains rides a record, never a job of this package's.
 package maintenance
 
 import (

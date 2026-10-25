@@ -75,9 +75,13 @@ it, not how the estate is divided between the nodes that hold it.
 ## Amendment — every node routes
 
 The client a node without `data` ran is now a ROUTER that every node runs,
-and the decision above holds through it unchanged: one subject per serving
-node, the asker's choice of node, the failover rule stated per operation and
-the session floor on every request. Every data node holds the whole estate, so
+and the decision above holds through it unchanged: per-node subjects, the
+asker's choice of node, the failover rule stated per operation and the session
+floor on every request. (A serving node answers a push's proposal on a subject
+of its own beside the one every other operation is asked on, because a
+proposal waits for its batch and must not hold a slot the node's reads are
+answered through — still the node the asker chose, so the retry rule stays
+with the asker.) Every data node holds the whole estate, so
 the router asks for nothing but the operation; what the amendment adds is four
 consequences of routing on every node rather than on the nodes that hold none:
 
@@ -107,3 +111,5 @@ leases, a data node's reads waiting on its floors, and the request gate asking
 whether a copy lags rather than whether it is level this instant — and choosing
 a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
+
+A copy goes out of service one DOMAIN at a time — ADR-0046.

@@ -159,27 +159,73 @@ func (f *FleetStore) PutFloor(ctx context.Context, floor coord.TrimFloor) error 
 	return nil
 }
 
-// Floors reads every domain's published floor.
+// Floor reads one domain's published floor: ONE leader read of its key, the
+// package's one single-key read ([FleetStore.get]) — no key index, no
+// consumer, and so no proposal to the metadata group, which is what a listing
+// of the class would cost every caller and what [coord.FloorRegister.Floor]
+// gives the register no way to ask for.
 //
-// A DECODE FAILURE IS RAISED, for the reason both its neighbours give and for
-// a third one of its own: this row is what every surface reports a blocked
-// trim from, so a row silently dropped renders as a domain whose trim is
-// advancing — the one answer that stops anybody looking.
-func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
-	var out []coord.TrimFloor
-	err := f.eachPositionKey(ctx, "floor", "the trim floors",
-		func(key string, value []byte) error {
-			var floor coord.TrimFloor
-			if err := json.Unmarshal(value, &floor); err != nil {
-				return fmt.Errorf("coord: the trim floor at %s does not "+
-					"decode: this row is what every surface reads a blocked trim "+
-					"from, so one skipped here renders as a trim that is "+
-					"advancing: %w", key, err)
-			}
-			out = append(out, floor)
-			return nil
-		})
-	return out, err
+// A DECODE FAILURE IS RAISED, not read as no floor: this row is what every
+// surface reports a blocked trim from and what the write fence compares a
+// cursor against, so a row skipped here renders as a domain whose trim is
+// advancing — the one answer that stops anybody looking — and clears a write
+// the trim may have left below the log. So is a row naming another domain
+// than its key: it is no domain's floor this read can vouch for.
+//
+// EITHER REFUSAL IS THAT DOMAIN'S ALONE, and the remedy it names is the true
+// one: nothing in the engine rewrites the row, because the trim carries each
+// floor forward from the row it reads and never publishes over one it cannot
+// ([unreadableFloor]).
+func (f *FleetStore) Floor(ctx context.Context, domain string) (coord.TrimFloor, bool, error) {
+	key := coord.FloorKey(domain)
+	entry, err := f.get(ctx, f.positions, key)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return coord.TrimFloor{}, false, nil
+	case err != nil:
+		return coord.TrimFloor{}, false, unavailable("read the trim floor for "+domain, err)
+	}
+	var floor coord.TrimFloor
+	if err := json.Unmarshal(entry.Value(), &floor); err != nil {
+		return coord.TrimFloor{}, false, f.unreadableFloor(key, domain,
+			fmt.Sprintf("does not decode (%v)", err))
+	}
+	if floor.Domain != domain {
+		return coord.TrimFloor{}, false, f.unreadableFloor(key, domain,
+			fmt.Sprintf("names domain %q, not %q: it is filed under one log and "+
+				"speaks for another, so a cursor compared against it would be "+
+				"compared against the other log's sequences", floor.Domain, domain))
+	}
+	return floor, true, nil
+}
+
+// unreadableFloor is the refusal of a row at key that is no floor of domain's
+// this read can vouch for, and what it takes to clear it.
+//
+// WHAT THE OPERATOR MUST DO, BECAUSE NOTHING ELSE WILL. The engine files every
+// floor under its own domain's key and in a form it decodes, so such a row was
+// written by hand or by a fault. The trim does not rewrite it: a floor never
+// moves down within a generation, so each tick carries the published one
+// forward, and over a row it cannot read it has nothing to carry — publishing
+// anyway could set the floor below a purge already licensed. Removed, the key
+// reads as a trim that has never run, and the next tick publishes the floor
+// afresh from the log's own first sequence. The refusal stops that one
+// domain's trim, its reads and its writes at an expectation of zero, and no
+// other domain's.
+//
+// [coord.ErrFloorUnreadable], never [coord.ErrUnavailable]: the store
+// answered, and a refusal built on this one must send its reader to the row
+// rather than tell them it clears when coordination answers.
+func (f *FleetStore) unreadableFloor(key, domain, why string) error {
+	bucket := f.positions.Bucket()
+	return fmt.Errorf("%w: the trim floor at %s in %s %s — refused rather than "+
+		"read as no floor, and nothing in the engine rewrites it, since the trim "+
+		"carries a floor forward from the row it reads; %s's trim, its reads and "+
+		"its writes at an expectation of zero refuse until the key is removed "+
+		"(`nats kv purge %s %s` on an external NATS cluster; docs/guides/"+
+		"retention.md, \"An unreadable trim floor\"), and the next trim then "+
+		"publishes the floor afresh", coord.ErrFloorUnreadable, key, bucket, why, domain,
+		bucket, key)
 }
 
 // ForgetFloor removes one domain's row.
@@ -491,10 +537,10 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	// coord.DocumentKey(class, id) — two segments joined by the separator,
 	// which is a dot because a key IS a subject token path — and the class
 	// segment escapes to itself, so `<class>.>` is a filter the broker can
-	// match. EIGHT classes share this register; reading all of them and
-	// discarding seven was the shape this replaced, and the state-log write
-	// fence takes this read, for the floors, on every write at an
-	// expectation of zero.
+	// match. EIGHT classes share this register, and reading all of them and
+	// discarding seven was the shape this replaced. The floors are the one
+	// class no longer listed at all: every reader names the domains it asks
+	// about, so [FleetStore.Floor] reads each by its key.
 	//
 	// `what` reaches the walk now rather than going nowhere: a store failure
 	// here used to say "read crewlet_positions" for all eight listings, which

@@ -28,7 +28,7 @@ import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
-import type { OBJECTS_STATES } from "../contract/fleet.ts";
+import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
@@ -1047,6 +1047,8 @@ export interface CompanyDocument {
   units?: ConfigUnit[];
   integrations?: Record<string, unknown>;
   providers?: Record<string, unknown>;
+  /** The native code host's block; `native: true` is a company hosting code. */
+  code?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -1097,6 +1099,11 @@ export interface ConfigRole {
   mcp_env?: Record<string, Record<string, string>>;
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
+  /**
+   * The seat's code access, `role.code.access`: the one tier every code host
+   * reads — the native host's cap and a GitHub App's permission set.
+   */
+  code?: { access?: string; [key: string]: unknown };
   integrations?: ConfigRoleIntegrations;
   /**
    * The tracker project a root-level seat owns. Vendor-neutral, so on the seat
@@ -1133,7 +1140,6 @@ export type HumanContactKey =
  */
 export interface ConfigRoleIntegrations {
   github?: {
-    tier?: string;
     repos?: string[];
     app_id?: number;
     app_slug?: string;
@@ -1725,14 +1731,20 @@ export interface ObjectCollect {
   error?: string;
 }
 
+/**
+ * One of [OBJECT_FINDINGS]: what the audit found of a file it cannot count on
+ * reading.
+ */
+export type ObjectFinding = (typeof OBJECT_FINDINGS)[number];
+
 /** One file whose bytes the store cannot give back. */
 export interface ObjectMissingFile {
   /** The object the file's row names. */
   object: string;
   /** The file, as `PROJECT/path`. */
   named_by: string;
-  /** The store holds it with the wrong bytes, rather than not at all. */
-  damaged?: boolean;
+  /** What the audit found of it. */
+  finding: ObjectFinding;
 }
 
 /** What an audit that ran to its end found. */
@@ -1743,11 +1755,15 @@ export interface ObjectFindings {
   referenced: number;
   missing: number;
   damaged: number;
-  /** The first hundred files that cannot be read; `missing` + `damaged` is the whole count. */
+  unanswered: number;
+  /**
+   * The first hundred files that cannot be read; `missing` + `damaged` +
+   * `unanswered` is the whole count.
+   */
   missing_files?: ObjectMissingFile[];
 }
 
-/** The last audit attempt: every object a row names, asked of the store. */
+/** The last audit attempt: every object a live (required) row names, asked of the store. */
 export interface ObjectAudit {
   at: string;
   /** Asked about every named object, over an estate that was complete. */
@@ -1755,6 +1771,7 @@ export interface ObjectAudit {
   referenced: number;
   missing: number;
   damaged: number;
+  unanswered: number;
   error?: string;
   /**
    * What the last audit to run to its end found — this attempt, or the one
@@ -3907,8 +3924,8 @@ export interface SetupSeatState {
    * anything yet.
    *
    * Separate from `present`, and the gap between them is a real state: a
-   * GitHub seat that names the tier it will run at and has no app yet has
-   * opted in with both of its two acts still to do.
+   * GitHub seat with a `github` block — its repositories named, or an app
+   * begun — and no working app yet has opted in with its acts still to do.
    */
   enrolled?: boolean;
   satisfied: boolean;

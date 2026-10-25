@@ -65,6 +65,27 @@ type AskView struct {
 	Decision *Decision `json:"decision,omitempty"`
 }
 
+// askViewsStatement is [readAskViews]' one statement, bound to the page's
+// comment ids as one JSON array.
+//
+// THE IDS ARE SOUGHT, NOT TESTED: `c.id IN (SELECT value FROM json_each(?))`
+// is a column of json_each on the right of IN, which the pinned driver's
+// planner cannot seek by — measured, it SCANNED tracker_comments, every
+// comment the company ever wrote, for each inbox or feed page that named one.
+// An expression over the column is seekable, and CAST(… AS TEXT) is the one
+// that changes nothing, since every id already is text
+// (TestTheAsksAPageNamesAreSoughtByID).
+const askViewsStatement = `
+	SELECT c.id, a.id, a.ask, a.resolved, a.removed,
+	       a.answered_by IS NOT NULL, a.resolved_by, a.resolved_at,
+	       a.document, ans.author, ans.created_at, ans.document
+	  FROM tracker_comments c
+	  JOIN tracker_comments a
+	    ON a.id = CASE WHEN c.ask <> '' THEN c.id ELSE c.answers END
+	  LEFT JOIN tracker_comments ans ON ans.id = a.answered_by
+	 WHERE c.id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
+	   AND a.ask <> ''`
+
 // readAskViews resolves comment ids to the asks they are about.
 //
 // ONE STATEMENT FOR A PAGE, whatever its size: the comment a row names, joined
@@ -83,16 +104,7 @@ func readAskViews(ctx context.Context, tx *sql.Tx, comments []string) (
 	if len(comments) == 0 {
 		return out, nil
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT c.id, a.id, a.ask, a.resolved, a.removed,
-		       a.answered_by IS NOT NULL, a.resolved_by, a.resolved_at,
-		       a.document, ans.author, ans.created_at, ans.document
-		  FROM tracker_comments c
-		  JOIN tracker_comments a
-		    ON a.id = CASE WHEN c.ask <> '' THEN c.id ELSE c.answers END
-		  LEFT JOIN tracker_comments ans ON ans.id = a.answered_by
-		 WHERE c.id IN (SELECT value FROM json_each(?))
-		   AND a.ask <> ''`, idList(comments))
+	rows, err := tx.QueryContext(ctx, askViewsStatement, idList(comments))
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read the asks a page is about: %w", err)
 	}

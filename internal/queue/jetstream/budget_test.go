@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -232,9 +233,14 @@ type droppedCeilingJS struct {
 	ceiling int64
 	drops   int
 
+	// mu guards what follows: a request nobody answered stays outstanding
+	// while the next is asked, so two of them can be recorded at once.
+	mu sync.Mutex
 	// terms is what each request was given to answer in, in order — or a
-	// negative duration for one handed no deadline at all.
+	// negative duration for one handed no deadline at all — and sent when
+	// each was sent.
 	terms []time.Duration
+	sent  []time.Time
 }
 
 func (f *droppedCeilingJS) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
@@ -243,8 +249,11 @@ func (f *droppedCeilingJS) Stream(ctx context.Context, _ string) (jetstream.Stre
 	if bounded {
 		left = time.Until(deadline)
 	}
-	f.terms = append(f.terms, left)
-	if f.drops >= 0 && len(f.terms) > f.drops {
+	f.mu.Lock()
+	f.terms, f.sent = append(f.terms, left), append(f.sent, time.Now())
+	answer := f.drops >= 0 && len(f.terms) > f.drops
+	f.mu.Unlock()
+	if answer {
 		return ceilingStream{maxBytes: f.ceiling}, nil
 	}
 	if !bounded {
@@ -283,19 +292,20 @@ func (s ceilingStream) CachedInfo() *jetstream.StreamInfo {
 //
 // # The two stagings
 //
-// A first request dropped, which must be asked again — at the read term, never
-// on the caller's open-ended context nor at a write's term — and then answered
-// with the ceiling. And every request dropped until the lookup ceiling is
+// A first request dropped, which must be asked again — a read term and a
+// re-ask after it, never on the caller's open-ended context nor at a write's
+// term — and then answered with the ceiling. And every request dropped until the lookup ceiling is
 // spent, which must come back as the silence it is: reported as a missing
 // stream, it would be sized as one and nothing would say so.
 func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 	t.Parallel()
 	// THE READ TERM AND THE PAUSE SCALED DOWN, and the lookup ceiling with
-	// them, because each dropped request waits out its whole term: at the
-	// production second apiece the first staging costs two seconds and the
-	// second thirty. The write's term stays production's clustered fifteen
-	// seconds, so a read asked as a write is told apart by the deadline it
-	// carried — and by a ceiling it could never fit inside.
+	// them, because each dropped request is presumed lost only once its
+	// term ends: at the production second apiece the first staging costs two
+	// seconds and the second thirty. The write's term stays production's
+	// clustered fifteen seconds, so a read asked as a write is told apart by
+	// when its next request was sent — and by a ceiling it could never fit
+	// inside.
 	timing := jsprovision.Clustered(true).Timing()
 	timing.ReadTerm, timing.ReAsk = 50*time.Millisecond, 20*time.Millisecond
 	timing.Lookup = 10 * (timing.ReadTerm + timing.ReAsk)
@@ -311,8 +321,10 @@ func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 				"(%d, true, nil) — a request nobody answered is asked again "+
 				"rather than being the answer", held, found, err, ceiling)
 		}
+		js.mu.Lock()
+		defer js.mu.Unlock()
 		if len(js.terms) != 2 {
-			t.Errorf("the ceiling was asked for %d time(s), want 2: the dropped "+
+			t.Fatalf("the ceiling was asked for %d time(s), want 2: the dropped "+
 				"request and the one that was answered", len(js.terms))
 		}
 		for i, left := range js.terms {
@@ -320,11 +332,17 @@ func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 			case left < 0:
 				t.Errorf("ask %d carried no deadline of its own, so the client's "+
 					"five-second default decided it", i+1)
-			case left > timing.ReadTerm:
-				t.Errorf("ask %d was given %v, past the %v read term — a read "+
-					"the server dropped is held for a write's term rather than "+
-					"asked again", i+1, left, timing.ReadTerm)
+			case left > timing.Lookup:
+				t.Errorf("ask %d was given %v, past the %v lookup ceiling — it is "+
+					"bounded as a write", i+1, left, timing.Lookup)
 			}
+		}
+		// A READ TERM OF SLACK for a loaded runner, against a write's term
+		// two hundred times as long.
+		if gap, limit := js.sent[1].Sub(js.sent[0]), 2*timing.ReadTerm+timing.ReAsk; gap > limit {
+			t.Errorf("the dropped request was asked again %v later, past %v — a read "+
+				"the server dropped is held for a write's %v term rather than asked "+
+				"again", gap, limit, timing.AskTerm)
 		}
 	})
 
@@ -342,6 +360,8 @@ func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 			t.Errorf("the error is not the silence itself, so the caller cannot "+
 				"tell a broker that said nothing from one that refused: %v", err)
 		}
+		js.mu.Lock()
+		defer js.mu.Unlock()
 		if len(js.terms) < 2 {
 			t.Errorf("the ceiling was asked for %d time(s) before the read gave "+
 				"up; the lookup ceiling holds several, and one means it was "+

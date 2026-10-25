@@ -12,7 +12,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -151,7 +150,18 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	defer closeResolver()
 
 	if sub == "doctor" {
-		return doctorLLM(ctx, doctorEntries(company, keys, resolver), !*noSmoke, stdout)
+		// THE NODE'S BOX URLS, read once and exactly as `crewlet run`
+		// reads them at boot (engine.ReadBoxURLs), so the doctor and the
+		// boot never disagree about a value — and from the environment
+		// this invocation was HANDED ([runIn]), which is the process's own
+		// for every run of the binary, as the engine reads its own from
+		// [engine.Options.Environment].
+		boxURLs := engine.ReadBoxURLs(func(name string) string {
+			value, _ := environ.Lookup(name)
+			return value
+		})
+		return doctorLLM(ctx, doctorEntries(company, keys, resolver, boxURLs.Bridge),
+			!*noSmoke, boxURLs, stdout)
 	}
 	providers, err := cliAgents(company, keys, resolver)
 	if err != nil {
@@ -395,7 +405,11 @@ type doctorEntry struct {
 // refuse to apply this document over it, which is precisely what an operator
 // running doctor needs to read — beside every other entry's report, rather
 // than instead of it.
-func doctorEntries(company *config.Company, keys []string, resolver *config.Resolver) []doctorEntry {
+//
+// bridge is the tool bridge's URL as the engine reads it, which an agent-mode
+// entry reports on.
+func doctorEntries(company *config.Company, keys []string, resolver *config.Resolver,
+	bridge engine.BoxURL) []doctorEntry {
 	out := make([]doctorEntry, 0, len(keys))
 	for _, key := range keys {
 		entry := doctorEntry{key: key}
@@ -413,15 +427,22 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 				!errors.Is(err, cliagent.ErrLoggedOut) {
 				return bundleFailure{key: key, err: err}
 			}
-			return built.Diagnose(ctx, cliagent.DiagnoseOptions{
+			opts := cliagent.DiagnoseOptions{
 				Smoke: smoke,
 				// THE ENGINE'S OWN ANSWERS, not the provider's guess at
 				// them: which runners this build registers and what a
 				// sandbox can dial are facts about the process, and both
-				// decide whether an agent-mode entry works at all.
+				// decide whether an agent-mode entry works at all. The
+				// bridge is READ AS THE ENGINE READS IT, so a value the
+				// engine refuses its boot on is reported refused, never
+				// printed as a working bridge.
 				AgentRunners: codingagent.Names(),
-				BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
-			})
+				BridgeURL:    bridge.URL,
+			}
+			if bridge.Refused != nil {
+				opts.BridgeRefused = bridge.Refused.Error()
+			}
+			return built.Diagnose(ctx, opts)
 		}
 		out = append(out, entry)
 	}
@@ -466,10 +487,23 @@ func (b buildFailure) Render(w io.Writer) {
 	fmt.Fprintf(w, "  - it does not build, so the engine would refuse this document: %v\n", b.err)
 }
 
-func doctorLLM(ctx context.Context, entries []doctorEntry, smoke bool, stdout io.Writer) error {
+// doctorLLM reports on the node's box URLs and then on every entry, and fails
+// when either has a problem.
+//
+// THE NODE BEFORE ITS ENTRIES. A URL a box dials back to the engine that the
+// engine refuses its boot on is no entry's problem but the node's, and it
+// fails the run WHATEVER MODE THE ENTRIES RUN IN: a node that does not boot
+// runs no seat at all. Read only for an agent-mode entry, a company of
+// text-mode entries got a clean report and a zero exit beside a value its
+// next boot refuses, and the deploy script gating on doctor passed the node.
+// The value is never printed — its user information may be a credential —
+// only the refusal, which names the variable.
+func doctorLLM(ctx context.Context, entries []doctorEntry, smoke bool,
+	boxURLs engine.BoxURLs, stdout io.Writer) error {
+	refused := renderBoxURLRefusals(stdout, boxURLs)
 	unhealthy := 0
 	for i, e := range entries {
-		if i > 0 {
+		if i > 0 || refused > 0 {
 			fmt.Fprintln(stdout)
 		}
 		d := e.diagnose(ctx, smoke)
@@ -478,13 +512,42 @@ func doctorLLM(ctx context.Context, entries []doctorEntry, smoke bool, stdout io
 			unhealthy++
 		}
 	}
+	// A non-zero exit, because `doctor` is what a deploy script runs before
+	// it lets a node take seats — a green-looking command that exited 0 with
+	// problems printed is one nobody gates on.
+	var faults []string
+	if refused > 0 {
+		faults = append(faults, fmt.Sprintf(
+			"the engine refuses to boot on %d of this node's box URLs", refused))
+	}
 	if unhealthy > 0 {
-		// A non-zero exit, because `doctor` is what a deploy script runs
-		// before it lets a node take seats — a green-looking command that
-		// exited 0 with problems printed is one nobody gates on.
-		return fmt.Errorf("%d of %d providers have problems", unhealthy, len(entries))
+		faults = append(faults, fmt.Sprintf(
+			"%d of %d providers have problems", unhealthy, len(entries)))
+	}
+	if len(faults) > 0 {
+		return errors.New(strings.Join(faults, "; "))
 	}
 	return nil
+}
+
+// renderBoxURLRefusals writes the node's report — only when the engine would
+// refuse to boot on one of its box URLs — and returns how many it would.
+func renderBoxURLRefusals(w io.Writer, urls engine.BoxURLs) int {
+	refused := 0
+	for _, url := range urls.All() {
+		if url.Refused == nil {
+			continue
+		}
+		if refused == 0 {
+			fmt.Fprintf(w, "%-14s: %s\n", "node", "this process's environment, as `crewlet run` reads it at boot")
+			fmt.Fprintln(w, "problems:")
+		}
+		refused++
+		fmt.Fprintf(w, "  - %v. The engine refuses to boot on this value, so no seat on this "+
+			"node runs, whatever mode its providers are in: set it to a URL a sandbox can "+
+			"reach, or unset it\n", url.Refused)
+	}
+	return refused
 }
 
 // loginRequest is what `crewlet llm login` was asked to do.
@@ -860,9 +923,11 @@ const maxBundleBytes = 8 << 20
 
 // isTerminal reports whether a writer is a character device.
 //
-// Used by exactly one caller, to refuse printing a credential into a
-// scrollback. A conservative answer: anything this cannot inspect is treated
-// as NOT a terminal, because the alternative refuses a legitimate pipe.
+// Used to refuse printing a credential into a scrollback, and by `crewlet code
+// import` to show git's progress to a person watching it. A conservative
+// answer: anything this cannot inspect is treated as NOT a terminal, because
+// the alternative refuses a legitimate pipe — and shows progress lines to a
+// log nobody reads live.
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {

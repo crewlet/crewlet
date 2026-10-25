@@ -188,10 +188,73 @@ func TestTheSentinelCarriesItsContainerSoAPagesDeferralIsFiledInItsSpace(t *test
 func TestABarrierIntersectsNothing(t *testing.T) {
 	t.Parallel()
 	paths := pages.ScopeSet{Subject: true}.Resolve(pages.BarrierSubject()).Paths
-	if len(paths) != 1 || paths[0] != statelog.BarrierScope {
+	if len(paths) != 1 || paths[0] != statelog.FrameworkScope {
 		t.Fatalf("a barrier's scope is %v, and it must be the framework's own "+
 			"%q — anything else serialises every read behind every other",
-			paths, statelog.BarrierScope)
+			paths, statelog.FrameworkScope)
+	}
+}
+
+// TestATrimmedRecordIntersectsNothing, for the barrier's reason: it writes no
+// row of this domain's anywhere, so a scope that intersected a page would make
+// every read and write of it wait behind a record that changed none of its
+// rows (ADR-0047).
+func TestATrimmedRecordIntersectsNothing(t *testing.T) {
+	t.Parallel()
+	paths := pages.ScopeSet{Subject: true}.Resolve(pages.TrimmedSubject(statelog.Position{
+		Stream: topics.PagesLogStream, Generation: 1, Seq: 7})).Paths
+	if len(paths) != 1 || paths[0] != statelog.FrameworkScope {
+		t.Fatalf("a trimmed record's scope is %v, and it must be the framework's "+
+			"own %q", paths, statelog.FrameworkScope)
+	}
+}
+
+// TestTheTrimmedRecordIsItsLiteral: through the encoder the trim calls, so what
+// is pinned is what is appended — the base version whatever this build reads,
+// the writer the eviction gate reads, the floor in the subject, no operation —
+// and the framework's own check of it passes.
+func TestTheTrimmedRecordIsItsLiteral(t *testing.T) {
+	t.Parallel()
+	body, err := pages.EncodeTrimmed(statelog.TrimmedEnvelope(statelog.Position{
+		Stream: topics.PagesLogStream, Generation: 3, Seq: 42}, "node-a"))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	env, err := pages.DecodeEnvelope(body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.V != 1 || env.OpID != "" || env.Writer != "node-a" || env.Gen != 3 ||
+		env.Op != pages.OpTrimmed || env.Subject != (pages.Subject{Kind: pages.KindTrimmed, ID: "3.42"}) {
+		t.Fatalf("the trimmed record decodes as %+v", env)
+	}
+	if strings.Contains(string(body), "op_id") {
+		t.Error("a trimmed record carries an operation id")
+	}
+	if err := statelog.CheckTrimmed(pages.Domain{}, pages.Domain{}.Stream(),
+		pages.EncodeTrimmed); err != nil {
+		t.Fatalf("the framework would not recognise this domain's trimmed record: %v", err)
+	}
+}
+
+// TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise, at the write —
+// never in the subject's validation, which the read path runs too.
+func TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise(t *testing.T) {
+	t.Parallel()
+	good := statelog.TrimmedEnvelope(statelog.Position{
+		Stream: topics.PagesLogStream, Generation: 1, Seq: 2}, "node-a")
+	for name, mutate := range map[string]func(*statelog.Envelope){
+		"another kind":      func(e *statelog.Envelope) { e.Kind, e.Subject.Kind = "barrier", "barrier" },
+		"an operation id":   func(e *statelog.Envelope) { e.OpID = "op-1" },
+		"no floor":          func(e *statelog.Envelope) { e.Subject.ID = "x" },
+		"half a floor":      func(e *statelog.Envelope) { e.Subject.ID = "1" },
+		"a second spelling": func(e *statelog.Envelope) { e.Subject.ID = "01.2" },
+	} {
+		env := good
+		mutate(&env)
+		if body, err := pages.EncodeTrimmed(env); err == nil {
+			t.Errorf("%s: encoded %s", name, body)
+		}
 	}
 }
 
@@ -240,9 +303,10 @@ func TestEveryKindIsClassifiedAndEveryArbitratedKindIsDeclared(t *testing.T) {
 				"a record", kind, kind.Arbitrated(), declared[string(kind)])
 		}
 	}
-	if len(declared) != len(pages.ObjectKinds)-1 {
+	if len(declared) != len(pages.ObjectKinds)-2 {
 		t.Errorf("the stream declares %d arbitrated kinds out of %d — only the "+
-			"barrier is unarbitrated", len(declared), len(pages.ObjectKinds))
+			"barrier and the trimmed record are unarbitrated",
+			len(declared), len(pages.ObjectKinds))
 	}
 }
 

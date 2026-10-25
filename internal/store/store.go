@@ -52,10 +52,11 @@
 //
 // [OpenNode] and [DB.OpenReplicated] therefore take an advisory OS lock for
 // the life of the handle and answer a second PROCESS with [ErrLocked] — before
-// any driver work, and naming the pid that holds the file. See lock.go for why
-// an OS lock rather than a pid file, and why two handles inside one process share the claim
-// instead. That is what makes the rule above true rather than merely stated:
-// the secret-store CLIs open this database from a second process as their
+// any driver work, and naming the pid that holds the file. The claim is
+// internal/filelock's, whose package doc says why an OS lock rather than a pid
+// file; lock.go says why two handles inside one process share it instead.
+// That is what makes the rule above true rather than merely stated: the
+// secret-store CLIs open this database from a second process as their
 // documented gesture, and before the lock the only defence was this comment.
 //
 // Everything that genuinely needs cross-process coordination — seat leases,
@@ -94,8 +95,8 @@
 // times beside it. Every write transaction this process begins therefore takes
 // its place in one FIFO line per file, handed from each holder to the writer
 // that asked next. A writer's wait is then bounded by the work in front of it
-// rather than by how its polls line up, which is what lets five domains'
-// appliers share the replicated estate and each still drain.
+// rather than by how its polls line up, which is what lets every domain's
+// applier share the replicated estate and each still drain.
 //
 // A writer whose line never reached the front — the holders ahead of it kept
 // the lock through every attempt its budget allows — gives up with [ErrBusy],

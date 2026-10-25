@@ -59,6 +59,21 @@ func TestARuntimeAuditRecordIsItsAuthors(t *testing.T) {
 	}
 }
 
+// A GIT PUSH IS SUMMARISED WITH ITS REPOSITORY: a refused push writes no row
+// in the code domain, so its audit record is the only one that says where it
+// was refused — a summary without the repository says somebody was refused
+// somewhere.
+func TestAGitPushIsSummarisedWithItsRepository(t *testing.T) {
+	t.Parallel()
+	payload := NewOperatorActed(OperatorActed{ActorName: "jane-founder", ActorKind: "human",
+		OperatorID: "pat:4b1e", Transport: TransportGit, Tool: "git_push", Repo: "nimbus-web",
+		Outcome: AuditRefused, Refusal: "protected_force"})
+	const want = "jane-founder ran git_push on nimbus-web: refused (protected_force)"
+	if got := summaryOf(payload, OperatorSource); got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
 // A REFUSED OR FAILED CALL IS MARKED FAILED, and nothing else is: the flag is
 // what the event store tags a row by, and the log's failure filter is how an
 // operator finds the call that did not happen. It is derived from the outcome

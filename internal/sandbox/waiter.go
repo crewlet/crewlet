@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -505,9 +506,9 @@ func (w *Waiter) order(runs []PendingRun) []task {
 }
 
 // deadline is how long the duty a claim made at asked authorises work for: the
-// claim's TTL, less one interval for the margin between this node's clock and
-// the one the store measures the lease on. Zero without a duty, where nothing
-// but [pollBound] bounds a task.
+// claim's exclusive window, with one interval as its margin
+// ([coord.ExclusiveThrough] says why). Zero without a duty, where nothing but
+// [pollBound] bounds a task.
 //
 // At the default cadence that is 30 s — a duty of three intervals, less one —
 // and a peer can hold the duty only once it has lapsed, so a task ended by
@@ -516,7 +517,7 @@ func (w *Waiter) deadline(asked time.Time) time.Time {
 	if w.claimDuty == nil {
 		return time.Time{}
 	}
-	return asked.Add(w.dutyTTL - w.interval)
+	return coord.ExclusiveThrough(asked, w.dutyTTL, w.interval)
 }
 
 // taskDeadline is one task's deadline: [pollBound] from its start, or the

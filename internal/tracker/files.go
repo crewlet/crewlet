@@ -134,10 +134,123 @@ func (f File) Content() (objstore.Object, bool) {
 // the declaration internal/objstore/references collects. See
 // [objstore.ReferenceTable] for why a table missing from that list is the
 // mistake that deletes files.
+//
+// REQUIRED: a file's bytes are the company's, so the audit asks after them
+// and a backup carries them. A file never retires its object: a replaced
+// file's object goes at the collector's first hourly pass once nothing names
+// it and it was uploaded more than a day ago, by both the store's clock and
+// its key's own (ADR-0027).
+//
+// LOG, DEFERRED AND RECORDS ARE WHAT A BACKUP READS PAST ITS COPY: a restore
+// replays the tracker's log from the copy's position — and a build that can
+// read a record this node deferred applies it — so every file a record of
+// either writes is a file the restored rows name, and its object is one the
+// backup owes (ADR-0049).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "tracker_files",
 	Key: "object", Hash: "hash", Size: "size",
-	Owner: []string{"project_key", "path"},
+	Owner:    []string{"project_key", "path"},
+	Standing: objstore.Required,
+	Log:      Domain{}.Stream().Name,
+	Deferred: Domain{}.DeferredTable(),
+	Records:  fileRecordReferences,
+}
+
+// fileRecordReferences answers the tracker_files row one record of the
+// tracker's log writes, and the object it names once the record applies —
+// [objstore.ReferenceTable.Records] for [FileObjectReferences].
+//
+// A RECORD THIS BUILD READS is answered by this build's applier: only a file
+// subject writes the table ([documentTable] maps KindFile alone to it), so
+// every other kind answers none, and a file record's post-state is read by
+// [decodeFile], the applier's own reading — a record the applier would refuse
+// is refused here rather than read another way.
+//
+// A RECORD THIS BUILD CANNOT READ — a version above [RecordVersion], or a kind
+// it has never heard of at any version, which its applier has no case for —
+// is answered from what EVERY build reads of it ([mayWriteFiles]), because
+// what this build's applier does with a kind says nothing about what a newer
+// build's does. One that may write a file row is
+// [objstore.ErrRecordUnreadable], since it may name an object nobody here can
+// tell; one whose writer's own scope reaches no file answers none.
+//
+// THE ROW IS SPELLED IN THE ORDER [FileObjectReferences] LISTS ITS OWNER
+// COLUMNS — project_key, then path — through [objstore.JoinOwner], as the walk
+// of the table spells it; the declaration itself is not read here, which would
+// be an initialisation cycle.
+func fileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
+	env, err := DecodeEnvelope(payload)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: a record no build reads: %w", err)
+	}
+	if env.V > RecordVersion || !env.Subject.Kind.Valid() {
+		if !mayWriteFiles(env) {
+			return nil, nil
+		}
+		known := "knows"
+		if !env.Subject.Kind.Valid() {
+			known = "has never heard of"
+		}
+		return nil, fmt.Errorf("%w: the record on %s is version %d of a kind this build "+
+			"%s (it reads version %d), and the scope its writer stated reaches files",
+			objstore.ErrRecordUnreadable, env.Subject, env.V, known, RecordVersion)
+	}
+	if env.Subject.Kind != KindFile {
+		return nil, nil
+	}
+	rec, err := Decode(payload)
+	if err != nil {
+		return nil, err
+	}
+	file, err := decodeFile(rec.Mutation, env.Subject.ID)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: the file record on %s: %w", env.Subject, err)
+	}
+	o, named := file.Content()
+	return []objstore.RecordReference{{
+		NamedBy: objstore.JoinOwner(file.Project, file.Path), Object: o, Names: named,
+	}}, nil
+}
+
+// mayWriteFiles reports whether a record this build cannot read may write a
+// tracker_files row, from the two things every build reads of it: its kind and
+// its scope, which its WRITER states as the complete set of objects its apply
+// may write ([RecordEnvelope.Scope]) — the one statement of what a record
+// touches that holds across versions.
+//
+// AN UNKNOWN KIND MAY, whatever its scope says: this build cannot place the
+// object a kind it has never heard of names, so even the exactly-the-subject
+// sentinel is a claim it cannot bound. A KNOWN KIND under the sentinel writes
+// its own subject's object alone, which is a file row only on a file subject.
+// AN ENUMERATION reaches a file through the domain, a container (a project's
+// files are filed under it), a family with no name (which is the domain), a
+// term kind this build cannot interpret (which [ScopeTerm.Path] reads as the
+// domain), or a file's own object term — the term [subjectPath] files a file
+// under, whose id is a file token. A task's object, a key and a named family
+// reach none.
+func mayWriteFiles(env RecordEnvelope) bool {
+	if !env.Subject.Kind.Valid() {
+		return true
+	}
+	if env.Scope.Subject || len(env.Scope.Terms) == 0 {
+		return env.Subject.Kind == KindFile
+	}
+	for _, t := range env.Scope.Terms {
+		switch t.Kind {
+		case TermObject:
+			if isFileToken(t.ID) {
+				return true
+			}
+		case TermKey:
+		case TermFamily:
+			if t.ID == "" {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // NormalizeFilePath is a path as it is stored and addressed: slash-separated

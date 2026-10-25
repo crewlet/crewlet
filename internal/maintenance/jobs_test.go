@@ -20,28 +20,28 @@ func openStore(t *testing.T) *store.DB {
 	return db
 }
 
-// TestEveryDomainGetsBothNodeLocalSweeps.
+// TestEveryDomainGetsANodeLocalLedgerSweepAndNoAnchorSweep.
 //
-// Both tables are NODE-LOCAL: each node holds its own operation rows and its
-// own anchors, so a fleet singleton would tidy one node's copies and leave
-// every other growing — which looks exactly like a sweep that works, to the
-// operator who checks the node it ran on.
+// The operation ledger is NODE-LOCAL: each node holds its own operation rows,
+// so a fleet singleton would tidy one node's copy and leave every other
+// growing — which looks exactly like a sweep that works, to the operator who
+// checks the node it ran on. Its cutoff is a CLOCK (how long a retrying
+// client may take to re-ask), so the job carries the domain's horizon.
 //
-// The two differ in what bounds them, and that is what the Horizon assertion
-// below pins: the ledger's cutoff is a CLOCK (how long a retrying client may
-// take to re-ask), while the anchors' is the domain's own published trim
-// floor, which the ledger reads for itself. A horizon on the anchor job would
-// be a second opinion about what the log still holds.
-func TestEveryDomainGetsBothNodeLocalSweeps(t *testing.T) {
+// AND NO ANCHOR SWEEP. A domain's arbitration anchors are replicated rows,
+// which only an applier writes (ADR-0002): the trim removes them with a
+// trimmed record every node applies at one position (ADR-0047), and a job here
+// deleting them below a floor each node read for itself would leave two copies
+// of one log holding different anchors.
+func TestEveryDomainGetsANodeLocalLedgerSweepAndNoAnchorSweep(t *testing.T) {
 	t.Parallel()
 	ledger := &countingLedger{}
 	jobs := maintenance.StatelogJobs(map[string]maintenance.OpsHorizon{
 		"tracker": {Ledger: ledger, Retention: 30 * 24 * time.Hour},
 		"pages":   {Ledger: ledger, Retention: 30 * 24 * time.Hour},
 	})
-	if len(jobs) != 4 {
-		t.Fatalf("two domains produced %d job(s), want one ops sweep and one anchor "+
-			"sweep each", len(jobs))
+	if len(jobs) != 2 {
+		t.Fatalf("two domains produced %d job(s), want one ops sweep each", len(jobs))
 	}
 	byName := map[string]maintenance.Job{}
 	for _, j := range jobs {
@@ -52,30 +52,29 @@ func TestEveryDomainGetsBothNodeLocalSweeps(t *testing.T) {
 				j.Name, j.Scope)
 		}
 	}
-	for _, name := range []string{"tracker_ops", "pages_ops", "tracker_anchors", "pages_anchors"} {
+	for _, name := range []string{"tracker_ops", "pages_ops"} {
 		if _, held := byName[name]; !held {
 			t.Errorf("no %s job", name)
+		}
+	}
+	for _, name := range []string{"tracker_anchors", "pages_anchors"} {
+		if _, held := byName[name]; held {
+			t.Errorf("a %s job sweeps replicated rows on this node's own clock, a second "+
+				"writer beside the trimmed record every applier takes", name)
 		}
 	}
 	if h := byName["tracker_ops"].Horizon; h == nil || h() != 30*24*time.Hour {
 		t.Error("the ops sweep carries no horizon of the domain's, so the worker has no " +
 			"cutoff to derive")
 	}
-	if byName["tracker_anchors"].Horizon != nil {
-		t.Error("the anchor sweep carries a horizon, which would be a second opinion " +
-			"about what the log still holds — its cutoff is the published trim floor")
-	}
 
-	// AND BOTH ACTUALLY RUN, so a job that was registered and wired to
+	// AND IT ACTUALLY RUNS, so a job that was registered and wired to
 	// nothing is a failure here rather than a table that quietly grows.
-	for _, name := range []string{"tracker_ops", "tracker_anchors"} {
-		if _, err := byName[name].Run(t.Context(), time.Now(), time.Now()); err != nil {
-			t.Errorf("%s: %v", name, err)
-		}
+	if _, err := byName["tracker_ops"].Run(t.Context(), time.Now(), time.Now()); err != nil {
+		t.Errorf("tracker_ops: %v", err)
 	}
-	if ledger.ops != 1 || ledger.anchors != 1 {
-		t.Errorf("the jobs called PurgeOps %d time(s) and PurgeAnchors %d, want one each",
-			ledger.ops, ledger.anchors)
+	if ledger.ops != 1 {
+		t.Errorf("the job called PurgeOps %d time(s), want one", ledger.ops)
 	}
 }
 
@@ -89,7 +88,7 @@ func horizonOf(j maintenance.Job) time.Duration {
 }
 
 type countingLedger struct {
-	ops, anchors int
+	ops int
 	// kinds is which kinds PurgeOpsOfKind was asked about.
 	kinds []string
 }
@@ -145,11 +144,6 @@ func TestASubjectKindWithItsOwnHorizonIsItsOwnSweep(t *testing.T) {
 			"the whole-ledger purge %d time(s), want the one kind and none",
 			ledger.kinds, ledger.ops)
 	}
-}
-
-func (l *countingLedger) PurgeAnchors(context.Context) (int64, error) {
-	l.anchors++
-	return 0, nil
 }
 
 // A REVISION OUTLIVES THE AUDIT ROW THAT NAMES IT.

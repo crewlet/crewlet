@@ -69,7 +69,7 @@ func runSuite(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, "api test: api.New over the embedded dashboard:", err)
 		return 2
 	}
-	defer dashboard.Stop()
+	defer dashboard.Stop(context.Background())
 	embeddedDashboard = embedded{app: dashboard, crawl: crawl(dashboard)}
 	return m.Run()
 }
@@ -155,7 +155,7 @@ func newApp(t *testing.T, opts api.Options) *api.App {
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
-	t.Cleanup(a.Stop)
+	t.Cleanup(func() { a.Stop(context.Background()) })
 	return a
 }
 
@@ -271,6 +271,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Audit == nil {
 		opts.Audit = queuememory.New()
 	}
+	if opts.Code == nil {
+		opts.Code = fixedCode{}
+	}
 	return opts
 }
 
@@ -299,7 +302,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
-		"AuthEvents", "Inbox", "Credentials", "Nodes", "Audit",
+		"AuthEvents", "Inbox", "Credentials", "Nodes", "Code", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
@@ -311,7 +314,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a complete set was refused: %v", err)
 	}
-	a.Stop()
+	a.Stop(t.Context())
 }
 
 // authed presents the fixture's credential on a request built inline.

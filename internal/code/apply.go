@@ -1,0 +1,616 @@
+package code
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// The applier, and the rules that make it a PURE FUNCTION of the log.
+//
+// N nodes derive one SQL state from one ordered stream, and the claim that
+// their tables are byte-identical survives exactly as long as these hold —
+// the tracker's rules, because they are the framework's:
+//
+//  1. IT READS NO CONFIG AND NO CLOCK. Every instant it writes is the broker's
+//     ([statelog.ApplyOptions.StoredAt]); every limit it keeps is a constant.
+//  2. IT WRITES ONLY WHAT THE RECORD SAYS. A push's commands carry their
+//     results, so the applier writes them rather than deciding them again:
+//     the broker's arbitration on the repository's subject guarantees the
+//     decide saw these rows, and a second decide here would be a second
+//     opinion the fleet could disagree about.
+//  3. EVERY GUARD IS A SKIP, NEVER AN ERROR, for ordinary traffic: a
+//     redelivered record applies as nothing, because a constraint violation
+//     inside this transaction would abort it identically on every node and
+//     stall the fleet's log. What IS an error is a record no correct writer
+//     forms — one that arbitrated one object and claims another — because
+//     applying it would be the corruption the subject exists to prevent.
+//  4. EVERY HORIZON IS A FUNCTION OF THE RECORD: the push history and the ref
+//     tombstones a push record removes are chosen by its broker instant and
+//     its own repository's rows — the tombstones also by their count against
+//     MaxTombstonesPerRepo — never by a sweep that would be a second writer
+//     of the replicated estate.
+
+// Applier writes this node's copy of the code host.
+//
+// It carries NO NODE IDENTITY, and that is the purity rule rather than an
+// omission ([statelog.Applier]): an applier that could read which node it runs
+// on could write rows its peers do not. The eviction gate needs none — it
+// compares the record's own [statelog.Record.Writer] with the eviction rows.
+type Applier struct{}
+
+// NewApplier builds the code host's applier.
+func NewApplier() *Applier { return &Applier{} }
+
+// Committed is the post-commit half, and it has nothing to do: no record of
+// this domain wakes anybody and no cache is told to sync — a git node's cache
+// converges by reading the rows when it is asked for them.
+func (*Applier) Committed(context.Context) {}
+
+// Gated reports a record that must produce no rows at all — read from this
+// same transaction, because the answer has to come from the state the record
+// would have applied against:
+//
+//  1. THE EVICTION GATE. A record written by a node the fleet evicted before
+//     the record's own position is dropped everywhere.
+//  2. THE DELETION GATE. A record about a repository a purge destroyed applies
+//     nowhere, for ever — otherwise a redelivery months later would resurrect
+//     rows an operator's configuration removed. Its hit is counted on the
+//     marker, an operator surface: a repository still catching records
+//     months after its purge is a writer nobody stopped.
+//
+// The eviction window first, the knowledge base's order: a record both gates
+// drop is dropped either way, so the order decides only which gate COUNTS it.
+func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
+	if rec.Writer != "" {
+		var from, readmitted sql.NullInt64
+		err := tx.QueryRowContext(ctx, evictionSQL, rec.Writer).Scan(&from, &readmitted)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return "", false, fmt.Errorf("code: read the eviction gate for node %s: %w", rec.Writer, err)
+		default:
+			if evictedAt(rec.Position.Packed(), from, readmitted) {
+				return statelog.ReasonEvicted, true, nil
+			}
+		}
+	}
+	repoID, ok := gatedRepo(rec.Subject)
+	if !ok {
+		return "", false, nil
+	}
+	var author sql.NullString
+	err := tx.QueryRowContext(ctx, markerSQL, repoID).Scan(&author)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("code: read the deletion gate for repository %s: %w", repoID, err)
+	}
+	// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its own id —
+	// not by its op: "any purge" would let a second purge of a repository id
+	// through, and a purge destroys rows.
+	if author.Valid && author.String == rec.OpID {
+		return "", false, nil
+	}
+	if _, err := tx.ExecContext(ctx, countRejectSQL,
+		store.EncodeTime(rec.StoredAt), repoID); err != nil {
+		return "", false, fmt.Errorf("code: count a gate hit on the purged repository %s: %w", repoID, err)
+	}
+	return statelog.ReasonDeleted, true, nil
+}
+
+// countRejectSQL counts one record a deletion marker dropped.
+const countRejectSQL = `UPDATE code_deletions SET rejects = rejects + 1, last_reject_at = ? WHERE repo_id = ?`
+
+// Apply writes one record's rows and answers how many it wrote or deleted.
+//
+// The dispatch is on the SUBJECT KIND, and every kind has a case — including
+// the two that write nothing — so a kind added later without one is an error
+// rather than a silently ignored record.
+func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+
+	record, err := Decode(rec.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("code: decode the record at %s: %w", rec.Position, err)
+	}
+	at := applyContext{
+		record:       record,
+		position:     rec.Position,
+		packed:       rec.Position.Packed(),
+		brokerAt:     opts.StoredAt,
+		maxVariables: opts.MaxVariables,
+	}
+	switch ObjectKind(rec.Subject.Kind) {
+	case KindBarrier:
+		// THE READ INDEX'S OWN APPEND: no row on any node, by design.
+		return 0, nil
+	case KindTrimmed:
+		// THE TRIM'S OWN RECORD: the framework removes this log's anchors
+		// below its floor in this same transaction (ADR-0047); this domain
+		// writes nothing for it.
+		return 0, nil
+	case KindEviction:
+		return a.applyEviction(ctx, tx, at)
+	case KindGeneration:
+		return a.applyGeneration(ctx, tx, at)
+	case KindCompany:
+		return a.applyActivation(ctx, tx, at)
+	case KindName:
+		return a.applyCreate(ctx, tx, at)
+	case KindRepo:
+		return a.applyRepo(ctx, tx, at)
+	}
+	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD AT
+	// A VERSION IT CAN READ, which is a writer publishing a kind it never
+	// declared; failing is what makes the writer's mistake visible.
+	return 0, fmt.Errorf("code: %s is not a kind this build applies, and the "+
+		"record at %s claims version %d — a kind is declared before it is published",
+		rec.Subject.Kind, rec.Position, record.V)
+}
+
+// applyContext is what every case needs, gathered once.
+type applyContext struct {
+	record   MutationRecord
+	position statelog.Position
+
+	// packed is the composed position: the version every row's guard
+	// compares against, and the position every row records.
+	packed int64
+
+	// brokerAt is the broker's own instant for this record, and the ONLY
+	// instant this domain writes from a record's own apply.
+	brokerAt time.Time
+
+	// maxVariables is the engine's probed bind-parameter limit, which sizes
+	// a multi-row INSERT and decides nothing about which rows land.
+	maxVariables int
+}
+
+// at is the broker's instant as the store encodes it.
+func (c applyContext) at() int64 { return store.EncodeTime(c.brokerAt) }
+
+// applyEviction records a node's removal from this log, or its readmission —
+// an INVERSE COMMIT rather than a delete, so an eviction's whole history
+// survives a replay.
+func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	payload, err := DecodeMutation(at.record)
+	if err != nil {
+		return 0, err
+	}
+	e, ok := payload.(Eviction)
+	if !ok {
+		return 0, fmt.Errorf("code: the eviction at %s carries a %T", at.position, payload)
+	}
+	if e.NodeID == "" {
+		return 0, fmt.Errorf("code: the eviction at %s names no node", at.position)
+	}
+	if e.Readmitted {
+		res, execErr := tx.ExecContext(ctx, readmitSQL, at.packed, at.packed, e.NodeID, at.packed)
+		if execErr != nil {
+			return 0, fmt.Errorf("code: readmit node %s at %s: %w", e.NodeID, at.position, execErr)
+		}
+		n, _ := res.RowsAffected()
+		return int(n), nil
+	}
+	// A SECOND EVICTION CLEARS THE READMISSION, so evicted-readmitted-evicted
+	// reads as three facts rather than one window with a hole in it.
+	res, err := tx.ExecContext(ctx, evictSQL,
+		e.NodeID, at.at(), e.EvictedBy, at.packed, at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("code: evict node %s at %s: %w", e.NodeID, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// The eviction statements.
+const (
+	readmitSQL = `UPDATE code_evictions SET readmitted_position = ?, version = ?
+		WHERE node_id = ? AND version < ?`
+	evictSQL = `INSERT INTO code_evictions
+			(node_id, at, by, from_position, readmitted_position, version)
+		VALUES (?, ?, ?, ?, NULL, ?)
+		ON CONFLICT (node_id) DO UPDATE SET
+			at = excluded.at, by = excluded.by,
+			from_position = excluded.from_position,
+			readmitted_position = NULL,
+			version = excluded.version
+		WHERE excluded.version > code_evictions.version`
+)
+
+// applyGeneration writes a reanchor's audit row, CREATE-ONLY: two operators
+// deriving the same number race at the broker and exactly one wins, so a
+// conflict here is a redelivery of the winner's.
+func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	payload, err := DecodeMutation(at.record)
+	if err != nil {
+		return 0, err
+	}
+	g, ok := payload.(Generation)
+	if !ok {
+		return 0, fmt.Errorf("code: the generation record at %s carries a %T", at.position, payload)
+	}
+	res, err := tx.ExecContext(ctx, generationSQL,
+		g.Generation, at.at(), g.By, store.EncodeTime(g.StreamCreatedAt),
+		int64(g.PrevHighest), at.record.OpID)
+	if err != nil {
+		return 0, fmt.Errorf("code: record generation %d at %s: %w", g.Generation, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// generationSQL is a reanchor's audit row.
+const generationSQL = `INSERT INTO code_log_generations
+		(generation, at, by, new_stream_created_at, prev_last_seq_seen, record_id)
+	VALUES (?, ?, ?, ?, ?, ?)
+	ON CONFLICT (generation) DO NOTHING`
+
+// applyActivation raises the activation fence to the record's activation,
+// never lowers it: an older activation's record applied after a newer one's
+// leaves the fence where the newer one put it, on every node alike.
+//
+// # Why the fence is safe — the argument the reconcile rests on
+//
+// A reconcile publishes its activation's fence record FIRST and decides every
+// repository from a snapshot taken after that record applied (the session
+// floor of its own append). So every config-managed record decided at an
+// OLDER activation is either EARLIER in log order than this fence — and then
+// already in the rows the newer reconcile decides from, so any difference it
+// made is written back — or LATER, and then refused by the fence on every node
+// ([Applier.fenced]). No node applying an older activation late can walk a
+// newer one back, and an activation that changes nothing writes this one
+// record rather than one per declared repository.
+func (a *Applier) applyActivation(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	if at.record.Subject.ID != activationID {
+		return 0, fmt.Errorf("code: the activation record at %s arbitrated %s, and "+
+			"the fence is %s — a record on another company subject is not one this "+
+			"build writes", at.position, at.record.Subject, CompanySubject())
+	}
+	payload, err := DecodeMutation(at.record)
+	if err != nil {
+		return 0, err
+	}
+	act, ok := payload.(Activated)
+	if !ok {
+		return 0, fmt.Errorf("code: the activation record at %s carries a %T", at.position, payload)
+	}
+	res, err := tx.ExecContext(ctx, raiseFenceSQL, activationID, act.ConfigEpoch, at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("code: raise the activation fence to %d at %s: %w",
+			act.ConfigEpoch, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// The fence's statements.
+const (
+	raiseFenceSQL = `INSERT INTO code_activation (id, fence, version) VALUES (?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			fence = MAX(code_activation.fence, excluded.fence),
+			version = excluded.version
+		WHERE excluded.version > code_activation.version`
+	fenceSQL = `SELECT fence FROM code_activation WHERE id = ?`
+)
+
+// fenced reports a config-managed record decided at an activation below the
+// fence this transaction holds: it applies as nothing, on every node, because
+// the fence is derived from the log. Only a CONFIG-MANAGED record is held to
+// it — the fence orders configuration activations, and nothing else carries
+// one.
+func fenced(ctx context.Context, tx *sql.Tx, managedBy ManagedBy, epoch int64) (bool, error) {
+	if managedBy != ManagedConfig {
+		return false, nil
+	}
+	var fence int64
+	err := tx.QueryRowContext(ctx, fenceSQL, activationID).Scan(&fence)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("code: read the activation fence: %w", err)
+	}
+	return epoch < fence, nil
+}
+
+// applyCreate makes a repository: its name claim, its row and its protection
+// rules, in one transaction.
+func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	payload, err := DecodeMutation(at.record)
+	if err != nil {
+		return 0, err
+	}
+	p, ok := payload.(CreateRepo)
+	if !ok {
+		return 0, fmt.Errorf("code: the create at %s carries a %T", at.position, payload)
+	}
+	// THE NAME IS THE ADDRESS: a record that arbitrated one name and claims
+	// another would take a name nobody contended for.
+	if token := NameToken(p.Name); token != at.record.Subject.ID {
+		return 0, fmt.Errorf("code: the create at %s arbitrated name %s and its "+
+			"payload names %q, whose token is %s", at.position, at.record.Subject.ID, p.Name, token)
+	}
+	if p.RepoID == "" || !ValidName(p.Name) {
+		return 0, fmt.Errorf("code: the create at %s names repository %q as %q, "+
+			"which no writer forms", at.position, p.RepoID, p.Name)
+	}
+	// A PURGED ID IS NEVER REUSED, so a create of one is a redelivery of the
+	// create of a repository since purged. The name subject is not under the
+	// repository's marker, so the create checks the marker itself.
+	var purged int
+	if err = tx.QueryRowContext(ctx, purgedSQL, p.RepoID).Scan(&purged); err != nil {
+		return 0, fmt.Errorf("code: read the deletion marker of %s: %w", p.RepoID, err)
+	}
+	if purged > 0 {
+		return 0, nil
+	}
+	// A HELD NAME stays held, whatever repository it names: the broker
+	// arbitrated the name, so a second create lands only as a redelivery,
+	// and refusing would stall every node.
+	var held int
+	if err = tx.QueryRowContext(ctx, guardNameSQL, at.record.Subject.ID).Scan(&held); err != nil {
+		return 0, fmt.Errorf("code: read the claim on %q: %w", p.Name, err)
+	}
+	if held > 0 {
+		return 0, nil
+	}
+	if refused, fenceErr := fenced(ctx, tx, p.Settings.ManagedBy, p.Settings.ConfigEpoch); fenceErr != nil || refused {
+		return 0, fenceErr
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO code_names (token, name, repo_id) VALUES (?, ?, ?)`,
+		at.record.Subject.ID, p.Name, p.RepoID); err != nil {
+		return 0, fmt.Errorf("code: claim %q at %s: %w", p.Name, at.position, err)
+	}
+	s := p.Settings
+	res, err := tx.ExecContext(ctx, `INSERT INTO code_repos
+			(id, name, status, managed_by, owner_kind, owner, visibility, default_branch, description,
+			 config_epoch, created_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO NOTHING`,
+		p.RepoID, p.Name, string(s.status()), string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref,
+		string(s.Visibility), s.DefaultBranch, s.Description, s.ConfigEpoch, at.at(), at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("code: create repository %s at %s: %w", p.RepoID, at.position, err)
+	}
+	created, _ := res.RowsAffected()
+	protections, err := insertProtections(ctx, tx, at.maxVariables, p.RepoID, s.Protections)
+	if err != nil {
+		return 0, fmt.Errorf("code: write %s's protections at %s: %w", p.RepoID, at.position, err)
+	}
+	return 1 + int(created) + protections, nil
+}
+
+// insertProtections writes a repository's rules in the record's order. A
+// pattern the record names twice — which no writer forms, the settings being
+// sorted and unique — keeps its first rule rather than aborting the
+// transaction on every node.
+func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
+	rules []Protection) (int, error) {
+
+	return store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO code_protections (repo_id, pattern, allow_force, allow_delete, direct_push) VALUES `,
+		`(?, ?, ?, ?, ?)`, `ON CONFLICT (repo_id, pattern) DO NOTHING`, len(rules),
+		func(i int) []any {
+			r := rules[i]
+			return []any{repoID, r.Pattern, r.AllowForce, r.AllowDelete, string(r.DirectPush)}
+		})
+}
+
+// applyRepo is every record on a repository's own subject.
+//
+// THE SUBJECT GUARD: a record on one repository's subject may change only that
+// repository — the payload's id must be the subject's — which is what makes
+// the subject the arbitration unit rather than a label.
+//
+// THE VERSION GUARD (every record but the purge, which is the marker's own):
+// under a strict replay the create is below this position, so a missing row
+// is an error; a row at or past this position is a redelivery, applied as
+// nothing.
+func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	payload, err := DecodeMutation(at.record)
+	if err != nil {
+		return 0, err
+	}
+	id := at.record.Subject.ID
+	var payloadRepo string
+	switch p := payload.(type) {
+	case PushBatch:
+		payloadRepo = p.RepoID
+	case SettingsRecord:
+		payloadRepo = p.RepoID
+	case LifecycleRecord:
+		payloadRepo = p.RepoID
+	case PurgePart:
+		payloadRepo = p.RepoID
+	case Purge:
+		payloadRepo = p.RepoID
+	default:
+		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository "+
+			"(the record at %s)", at.record.Op, at.position)
+	}
+	if payloadRepo != id {
+		return 0, fmt.Errorf("code: the record at %s arbitrated repo.%s and its payload "+
+			"names %s — a record on one repository's subject may change only that "+
+			"repository", at.position, id, payloadRepo)
+	}
+	if p, ok := payload.(Purge); ok {
+		return a.applyPurge(ctx, tx, at, p)
+	}
+	row, err := repoVersion(ctx, tx, id)
+	if err != nil {
+		return 0, fmt.Errorf("code: the %s at %s: %w", at.record.Op, at.position, err)
+	}
+	if row.version >= at.packed {
+		return 0, nil
+	}
+	switch p := payload.(type) {
+	case PushBatch:
+		return a.applyPush(ctx, tx, at, p)
+	case SettingsRecord:
+		return a.applySettings(ctx, tx, at, p)
+	case LifecycleRecord:
+		if at.record.Op == OpDelete {
+			return a.applyDelete(ctx, tx, at, p, row)
+		}
+		return a.applyRestore(ctx, tx, at, p)
+	case PurgePart:
+		return a.applyPurgePart(ctx, tx, at, p)
+	}
+	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
+}
+
+// versionRow is what the version guard reads of a repository.
+type versionRow struct {
+	version   int64
+	managedBy ManagedBy
+}
+
+// repoVersion reads a repository's guard, refusing one that has no row: under
+// a strict replay its create is below every record about it, and every record
+// about a PURGED repository was already dropped by its marker.
+func repoVersion(ctx context.Context, tx *sql.Tx, id string) (versionRow, error) {
+	var row versionRow
+	var managed string
+	err := tx.QueryRowContext(ctx, repoVersionSQL, id).Scan(&row.version, &managed)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return versionRow{}, fmt.Errorf("repository %s has no row — under a strict replay "+
+			"its create is below this record, so the log is not what this node was "+
+			"built from", id)
+	case err != nil:
+		return versionRow{}, fmt.Errorf("read repository %s: %w", id, err)
+	}
+	row.managedBy = ManagedBy(managed)
+	return row, nil
+}
+
+// applySettings replaces a repository's settings whole. A repository that is
+// deleted or purging keeps its status: settings never resurrect one, a
+// restore does.
+func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext, p SettingsRecord) (int, error) {
+	s := p.Settings
+	if refused, err := fenced(ctx, tx, s.ManagedBy, s.ConfigEpoch); err != nil || refused {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, settingsSQL,
+		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), s.DefaultBranch,
+		s.Description, string(s.status()), s.ConfigEpoch, at.packed, p.RepoID)
+	if err != nil {
+		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	replaced, err := replaceProtections(ctx, tx, at, p.RepoID, s.Protections)
+	if err != nil {
+		return 0, err
+	}
+	return int(n) + replaced, nil
+}
+
+// replaceProtections deletes a repository's rules and writes the new set.
+func replaceProtections(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
+	rules []Protection) (int, error) {
+
+	res, err := tx.ExecContext(ctx, clearProtectionsSQL, repoID)
+	if err != nil {
+		return 0, fmt.Errorf("code: clear %s's protections at %s: %w", repoID, at.position, err)
+	}
+	removed, _ := res.RowsAffected()
+	written, err := insertProtections(ctx, tx, at.maxVariables, repoID, rules)
+	if err != nil {
+		return 0, fmt.Errorf("code: write %s's protections at %s: %w", repoID, at.position, err)
+	}
+	return int(removed) + written, nil
+}
+
+// applyDelete marks a repository deleted. A delete of a repository already
+// deleted or purging changes nothing and is applied completely as a no-op.
+func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext, p LifecycleRecord,
+	row versionRow) (int, error) {
+
+	// A DELETE CARRIES NO SETTINGS, so whether the fence governs it is the
+	// repository's own: the configuration's decision to retire a repository
+	// it manages.
+	if refused, err := fenced(ctx, tx, row.managedBy, p.ConfigEpoch); err != nil || refused {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, deleteRepoSQL,
+		at.at(), p.ConfigEpoch, at.packed, p.RepoID)
+	if err != nil {
+		return 0, fmt.Errorf("code: delete %s at %s: %w", p.RepoID, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// applyRestore brings a deleted repository back with the settings the restore
+// carries. Its refs and packs were never touched, so they come back as they
+// were.
+func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext, p LifecycleRecord) (int, error) {
+	if p.Settings == nil {
+		return 0, fmt.Errorf("code: the restore at %s carries no settings — a restore "+
+			"states what the repository comes back with", at.position)
+	}
+	s := *p.Settings
+	if refused, err := fenced(ctx, tx, s.ManagedBy, p.ConfigEpoch); err != nil || refused {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, restoreRepoSQL,
+		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), s.DefaultBranch,
+		s.Description, string(s.status()), p.ConfigEpoch, at.packed, p.RepoID)
+	if err != nil {
+		return 0, fmt.Errorf("code: restore %s at %s: %w", p.RepoID, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, nil
+	}
+	replaced, err := replaceProtections(ctx, tx, at, p.RepoID, s.Protections)
+	if err != nil {
+		return 0, err
+	}
+	return int(n) + replaced, nil
+}
+
+// jsonList is a list of keys as the ONE argument an `IN (SELECT value FROM
+// json_each(?))` takes — the tracker's idiom for a set of keys, which binds
+// one parameter however many keys it names.
+func jsonList(keys []string) (string, error) {
+	if keys == nil {
+		keys = []string{}
+	}
+	b, err := json.Marshal(keys)
+	if err != nil {
+		return "", fmt.Errorf("code: encode a key list: %w", err)
+	}
+	return string(b), nil
+}
+
+// The applier's statements over a repository's own row and rules: every one
+// with a WHERE is registered in plan_test.go, so the pinned driver's planner
+// is held to the primary key each is written for.
+const (
+	purgedSQL      = `SELECT COUNT(*) FROM code_deletions WHERE repo_id = ?`
+	repoVersionSQL = `SELECT version, managed_by FROM code_repos WHERE id = ?`
+	settingsSQL    = `UPDATE code_repos SET
+			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, default_branch = ?, description = ?,
+			status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
+			config_epoch = ?, version = ?
+		WHERE id = ?`
+	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
+	deleteRepoSQL       = `UPDATE code_repos SET
+			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
+		WHERE id = ? AND status IN ('active', 'archived')`
+	restoreRepoSQL = `UPDATE code_repos SET
+			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, default_branch = ?, description = ?,
+			status = ?, deleted_at = NULL, config_epoch = ?, version = ?
+		WHERE id = ? AND status = 'deleted'`
+)

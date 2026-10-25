@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -388,5 +389,179 @@ func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 	if got := taskOf(t, r, "t-3"); got.FiledUnit != "" {
 		t.Errorf("filed_unit = %q for a project the chart gave no unit",
 			got.FiledUnit)
+	}
+}
+
+// THE UNIT A CREATE IS FILED INTO HEARS ABOUT IT FROM THE CREATE ITSELF.
+//
+// A create naming no unit is filed into its project's own by the writer,
+// inside its snapshot — after the caller built the notification, from a task
+// that had no routing unit yet. So the wake carried no unit lead: the
+// fallback that reaches a unit's lead when a change names nobody else had only
+// the project's lead to offer on the one record that files the work, while
+// every later change to the same task, snapshotted from a row that holds the
+// unit, offered the unit's lead first. Where the chart resolves the project to
+// no lead of its own — a seat's own project inside a unit, which
+// [org.Organization.LeadsBy] gives none because a member declares where it
+// writes rather than who owns it — an unassigned task filed there reached
+// nobody at all. The case is that project: the unit has a lead and the
+// project resolves to none.
+//
+// AND THE CARD SAYS SO, as the history row does: the applier writes a create's
+// row from every field the task was filed with, the unit the writer settled
+// among them, so a card built from the task the caller handed in named no
+// `routing_unit` while the row beside it did.
+func TestACreateTellsTheLeadOfTheUnitItIsFiledInto(t *testing.T) {
+	t.Parallel()
+	r := newRoundTripWithoutProject(t)
+	chart := fixedLeads{unit: "core-lead"}
+	r.ledBy(chart)
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
+		{Key: "ENG", Name: "Engineering", Unit: "core"},
+	}); err != nil {
+		t.Fatalf("ApplyChart: %v", err)
+	}
+	r.drain()
+
+	reachesTheLead := func(what, id string, wake *tracker.Notify) {
+		t.Helper()
+		if wake == nil {
+			t.Fatalf("%s published no notification, so this case tests nothing", what)
+		}
+		if wake.Snapshot.RoutingUnitLead != "core-lead" {
+			t.Errorf("%s files the work into core and its notification names %q as "+
+				"core's lead, want core-lead", what, wake.Snapshot.RoutingUnitLead)
+		}
+		if moved := wake.Fields["routing_unit"]; moved.From != "" || moved.To != "core" {
+			t.Errorf("%s files the work into core and its card's routing_unit is %+v, "+
+				"want it moved from nothing to core", what, moved)
+		}
+		r.cardIsTheHistoryRow(what, id, wake)
+		routed := tracker.Route(tracker.Candidates(wake, false),
+			func(string) bool { return true }, "ana")
+		var reached []string
+		for _, c := range routed {
+			reached = append(reached, c.Handle)
+		}
+		if len(reached) != 1 || reached[0] != "core-lead" {
+			t.Errorf("%s of unassigned work into core reached %v, want core's lead "+
+				"and nobody else", what, reached)
+		}
+	}
+
+	// AN UNASSIGNED TASK, filed by the person who watches it: the actor is
+	// dropped, so the fallback is the whole of who hears about it.
+	task := newTask("t-1")
+	task.Reporter, task.Watchers = "ana", []string{"ana"}
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", task,
+		tracker.Wake{Kind: tracker.ChangeCreated, After: task}.Notify(chart)); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	reachesTheLead("a create", "t-1", r.lastWake())
+}
+
+// cardIsTheHistoryRow holds a create's notification card to the history row
+// the applier wrote for the same create: the same fields, moved the same way.
+//
+// THE ROW IS THE REFERENCE, because it is computed from the task as it was
+// FILED, in the applier's own frame ([tracker.TaskDeltas] over nothing and the
+// stored row), while a card is built by a caller from the task it handed in —
+// before the writer settled what only it can.
+func (r *roundTrip) cardIsTheHistoryRow(what, id string, wake *tracker.Notify) {
+	r.t.Helper()
+	rows := r.strings(`SELECT fields_json FROM tracker_history
+		WHERE subject_id = ? AND kind = ? ORDER BY log_seq`, id, string(tracker.ChangeCreated))
+	if len(rows) != 1 {
+		r.t.Fatalf("%s wrote %d create rows for %s, want one", what, len(rows), id)
+	}
+	var row map[string]tracker.Delta
+	if err := json.Unmarshal([]byte(rows[0]), &row); err != nil {
+		r.t.Fatalf("decode %s's history row: %v", what, err)
+	}
+	if wake.FieldsOmitted != 0 || len(row) > tracker.MaxDeltas {
+		r.t.Fatalf("the premise: %s's card leaves %d fields off and its row holds %d, so "+
+			"the two cannot be compared whole", what, wake.FieldsOmitted, len(row))
+	}
+	for field, moved := range row {
+		if shown, held := wake.Fields[field]; !held {
+			r.t.Errorf("%s's history row says %s moved (%+v) and its card does not", what,
+				field, moved)
+		} else if !slices.Equal(shown.Added, moved.Added) ||
+			!slices.Equal(shown.Removed, moved.Removed) ||
+			shown.From != moved.From || shown.To != moved.To {
+
+			r.t.Errorf("%s's card says %s moved %+v and its history row %+v", what, field,
+				shown, moved)
+		}
+	}
+	for field, shown := range wake.Fields {
+		if _, held := row[field]; !held {
+			r.t.Errorf("%s's card says %s moved (%+v) and its history row does not", what,
+				field, shown)
+		}
+	}
+}
+
+// A CREATE'S CARD SAYS WHAT THE WRITER SETTLED, AS ITS HISTORY ROW DOES.
+//
+// A caller builds a create's notification from the task it hands in, and the
+// writer then settles what only the writer can: the tags as the slugs they
+// normalise to and the default type, before the key is minted; and inside the
+// create's own snapshot the project's default assignee and the watch they then
+// hold, the status and priority a create naming none starts at, and the
+// person a question is put to, who follows the item from its first record.
+// The applier writes the create's history row from the task as FILED, so a
+// card left at what the caller handed in disagreed with the row beside it on
+// each of them — and its snapshot routed from an assignee, a status and a
+// watcher list the record does not carry.
+func TestACreatesCardSaysWhatTheWriterSettled(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	bo := "bo"
+	if _, err := r.writer.WriteProject(t.Context(), "op-default", "ENG",
+		tracker.ProjectEdit{DefaultAssignee: &bo},
+		tracker.ProjectAuthority{Policy: true}); err != nil {
+
+		t.Fatalf("set the default assignee: %v", err)
+	}
+	r.drain()
+	r.declareTags("api")
+
+	// EVERYTHING THE WRITER SETTLES LEFT FOR IT TO SETTLE: no type, status,
+	// priority or assignee, a tag spelled as a person types it, and a
+	// question put to somebody who is not watching yet.
+	task := newTask("t-1")
+	task.Key, task.Type, task.Status, task.StatusGroup, task.Priority = "", "", "", "", ""
+	task.Tags, task.Reporter, task.Watchers = []string{"API"}, "ana", []string{"ana"}
+	ask := tracker.Comment{
+		ID: "c-1", Author: "ana", AuthorKind: tracker.AuthorHuman,
+		Body: "Which importer is this?", Ask: "cy", CreatedAt: wednesday,
+	}
+	notify := tracker.Wake{Kind: tracker.ChangeCreated, After: task, Comment: &ask}.Notify(nil)
+	if _, err := r.writer.CreateTaskAsking(t.Context(), "op-1", task, ask, notify); err != nil {
+		t.Fatalf("CreateTaskAsking: %v", err)
+	}
+	r.drain()
+
+	wake := r.lastWake()
+	r.cardIsTheHistoryRow("a create the writer settled", "t-1", wake)
+	if moved := wake.Fields["tags"]; !slices.Equal(moved.Added, []string{"api"}) {
+		t.Errorf("the card's tags are %+v, want the slug the task was filed under", moved)
+	}
+	snapshot := wake.Snapshot
+	if snapshot.Assignee != "bo" {
+		t.Errorf("the wake routes from assignee %q, want the project's default bo",
+			snapshot.Assignee)
+	}
+	if snapshot.Status != tracker.StatusTodo || snapshot.StatusGroup != tracker.GroupNotStarted {
+		t.Errorf("the wake routes from status %q in group %q, want the %q the task starts at",
+			snapshot.Status, snapshot.StatusGroup, tracker.StatusTodo)
+	}
+	for _, who := range []string{"ana", "bo", "cy"} {
+		if !slices.Contains(snapshot.Watchers, who) {
+			t.Errorf("the wake's watchers are %v, want %s among them, as the row has",
+				snapshot.Watchers, who)
+		}
 	}
 }

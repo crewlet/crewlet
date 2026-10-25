@@ -43,6 +43,10 @@ type remoteNative struct {
 	// the company runs on a vendor is not served from here at all.
 	tracker bool
 	wiki    bool
+
+	// built is the choices both are derived from, which a later activation
+	// is compared against — see [native.built].
+	built builtWith
 }
 
 // startRemote brings up a stateless node's native runtime, over the router
@@ -52,13 +56,13 @@ func (e *Engine) startRemote(c *Company) error {
 		return errors.New("engine: this node holds no data and has no router " +
 			"to reach a node that does")
 	}
+	// THE HALVES DERIVED FROM THE CHOICES, so the two cannot disagree.
+	built := builtFrom(c.Config)
 	e.remote.Store(&remoteNative{
-		tracker: c.Config.TrackerBackendFor() == config.TrackerNative,
-		wiki:    c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
+		tracker: built.runsTracker(), wiki: built.runsWiki(), built: built,
 	})
 	log.Info("native_backends_remote", "node", e.id,
-		"tracker", c.Config.TrackerBackendFor() == config.TrackerNative,
-		"knowledge", c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
+		"tracker", built.runsTracker(), "knowledge", built.runsWiki(), "code", built.runsCode(),
 		"detail", "this node holds no data: its seats read and write the "+
 			"company's tracker and knowledge base through a data node")
 	return nil
@@ -73,9 +77,12 @@ func (e *Engine) startRemote(c *Company) error {
 // lease in the fleet on every call — an O(fleet) read of the coordination
 // store, crossing the leaf link on a stateless node, per tool call and per
 // search — for an answer that changes only when a node joins, leaves or lets
-// its lease lapse. The view lists on the presence heartbeat's own cadence and
-// answers UNKNOWN rather than an old or an empty roster once its last listing
-// is older than a lease survives; see [coord.LeaseView] and [newDataView].
+// its lease lapse. The view lists on the presence heartbeat's own cadence,
+// hears every presence claim and release as it lands and lists again then —
+// so a node that joins, or leaves cleanly, is in or out of the roster within
+// about a second rather than a heartbeat later — and answers UNKNOWN rather
+// than an old or an empty roster once its last listing is older than a lease
+// survives; see [coord.LeaseView] and [newDataView].
 //
 // ONE FILTER FOR EVERY QUESTION ABOUT DATA NODES — [dataNodesOf], which the
 // trim and the eviction gate apply to a listing of their own — because a
@@ -92,6 +99,26 @@ func (e *Engine) dataRoster(context.Context) ([]string, error) {
 	return presenceRoster{view: e.dataView}.LiveDataNodes()
 }
 
+// RoutedDataNodes is every live data node this node's estate router asks, by
+// id and sorted — its placement's own answer ([Engine.estatePlacement]), so
+// the order a keyed operation is asked in (rendezvous.Order over these) is
+// computed from exactly this — or why the view it reads cannot say, never
+// "none".
+//
+// A LISTING, so a node that claimed its presence since the view last listed is
+// not in it yet: the view hears the claim and lists again within about a
+// second ([coord.LeaseView]), and until then routes without it — a push the
+// joining node's repositories would send there is committed by its runner-up,
+// which the broker's compare-and-set keeps correct and which is not the one
+// group commit the keyed order exists for. A fleet booted at once is that
+// second from each member naming the others, every first listing having been
+// taken before any presence lease existed. A caller that must see the fleet's
+// routing whole — a test asserting where pushes meet — waits for this to name
+// every member.
+func (e *Engine) RoutedDataNodes() ([]string, error) {
+	return e.estatePlacement().Holders()
+}
+
 // newDataView builds the watched view of the fleet's presence leases, or nil
 // where there is no coordination.
 //
@@ -101,7 +128,10 @@ func (e *Engine) dataRoster(context.Context) ([]string, error) {
 // new) and trusts a listing for one TTL (past which a lease it named may have
 // lapsed and one it missed may have been held all along). Neither is a knob
 // of its own: both move with `coordination.lease_ttl_seconds`, as the leases
-// do.
+// do. Between listings it WATCHES the presence leases, so a claim or a release
+// lists it again at once: what the cadence is left to catch is a lease that
+// lapsed, which is no write — a node that stopped without releasing, as it
+// leaves every roster.
 func newDataView(b *config.Bootstrap, backend coord.Backend) (*coord.LeaseView, error) {
 	if backend == nil {
 		return nil, nil
@@ -237,6 +267,12 @@ func (e *Engine) stopKeeper(ctx context.Context) {
 // slices go first: a node that has decided to go away stops being asked
 // before it stops being able to answer, and the next request goes to a peer
 // rather than waiting out its budget here.
+//
+// AND BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
+// state-log publisher: every write a peer routes here, and every
+// linearizable read's barrier, is appended through this node's publishers,
+// and one appended once the admission is gone is a write a capacity
+// coordinator was told nobody was making.
 func (e *Engine) stopServingEstate(ctx context.Context) {
 	if e.stopEstate == nil {
 		return

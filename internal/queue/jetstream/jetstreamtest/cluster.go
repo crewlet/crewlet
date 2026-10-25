@@ -37,6 +37,13 @@ type Cluster struct {
 	// on a cluster started by StartPartitionableCluster, and empty on one
 	// started by StartCluster. See partition.go.
 	forwarders []*forwarder
+
+	// life is the test the cluster was started by, which a member brought
+	// back by [Cluster.RestartMember] stops with — whatever test restarted
+	// it. A cluster outlives the cases run on it, and a member, or a client
+	// of it, stopped at the end of the case that restarted it would leave the
+	// next case a cluster with a member missing.
+	life testing.TB
 }
 
 // clusterSeq numbers the clusters this process names, so no two share one.
@@ -128,7 +135,7 @@ func startCluster(t testing.TB, n int, base js.Config, leafListeners bool) *Clus
 			routes[i] = routeURL(p)
 		}
 
-		c := &Cluster{}
+		c := &Cluster{life: t}
 		for i := range n {
 			cfg := memberConfig(base, name, i, n, ports[i], routes)
 			if leafListeners {
@@ -479,7 +486,7 @@ func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config
 	ports := freePorts(ctx, t, n+n*(n-1)+n)
 	routePorts, relays, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
-	c := &Cluster{}
+	c := &Cluster{life: t}
 	for i := range n {
 		for j := range n {
 			if i == j {
@@ -545,6 +552,66 @@ func (c *Cluster) Client(t testing.TB, i int) *js.Queue {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
 	return q
+}
+
+// StopMember stops member i as its process dying would: the server shut down
+// under whatever it held. Its peers go on dialling its route port, and
+// [Cluster.RestartMember] brings it back there. Stop every client of it
+// first — a client of a member that is gone reconnects to nothing.
+func (c *Cluster) StopMember(i int) {
+	c.Servers[i].Shutdown()
+}
+
+// RestartMember brings member i back after [Cluster.StopMember] and answers a
+// client of it, which stops with the cluster. t reports.
+//
+// THE SAME MEMBER, never a new one: its own store directory, so it rejoins
+// holding every replica it held, and its own route port, which is the one
+// address its peers know — they have dialled it since the member stopped, and
+// nats-server retries an explicit route for ever. So a port somebody else took
+// in the window is REPORTED, naming it, and never retried on another, which no
+// peer would ever dial: the run that loses that race fails saying why rather
+// than standing up a member nobody routes to.
+func (c *Cluster) RestartMember(t testing.TB, i int) *js.Queue {
+	t.Helper()
+	srv := c.restartServer(t, i)
+	q, err := srv.Client(t.Context())
+	if err != nil {
+		t.Fatalf("cluster member %d: a client of the restarted member: %v", i, err)
+	}
+	c.life.Cleanup(func() { _ = q.Stop(context.Background()) })
+	return q
+}
+
+// restartServer is [Cluster.RestartMember]'s server, with no client of it.
+func (c *Cluster) restartServer(t testing.TB, i int) *js.Server {
+	t.Helper()
+	cfg := c.Configs[i]
+	switch free, err := PortFree(t.Context(), cfg.ClusterHost, cfg.ClusterPort); {
+	case err != nil:
+		t.Fatalf("cluster member %d: its route port %d on %q cannot be probed: %v", i,
+			cfg.ClusterPort, cfg.ClusterHost, err)
+	case !free:
+		t.Fatalf("cluster member %d cannot come back: its route port %d — the one its peers dial — "+
+			"was taken while it was down", i, cfg.ClusterPort)
+	}
+	// A PORT LOST BETWEEN THE PROBE AND THE BIND IS THE SERVER'S TO REPORT, as
+	// it is for [Cluster.start]: a route listener that cannot bind is a Fatalf
+	// in nats-server, which [js.StartServer] refuses as [js.ErrRoutePortTaken]
+	// rather than starting a member that serves clients and never routes. So a
+	// member StartServer answers is listening on the port its peers dial.
+	srv, err := js.StartServer(t.Context(), cfg)
+	switch {
+	case errors.Is(err, js.ErrRoutePortTaken):
+		t.Fatalf("cluster member %d cannot come back: its route port %d — the one its peers dial — "+
+			"was taken between the probe and the bind: %v", i, cfg.ClusterPort, err)
+	case err != nil:
+		t.Fatalf("cluster member %d: restart: %v", i, err)
+	}
+	// WITH THE CLUSTER, never with the test that restarted it.
+	c.life.Cleanup(srv.Shutdown)
+	c.Servers[i] = srv
+	return srv
 }
 
 // memberConfig is member i's config: the caller's base, plus the identity and

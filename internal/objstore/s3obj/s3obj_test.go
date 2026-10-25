@@ -3,14 +3,21 @@ package s3obj_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/aws/smithy-go"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -32,17 +39,32 @@ import (
 // ([TestEveryFileTheTrackerKeepsFitsOneUploadOfPartsS3Takes]).
 const part = 64 << 10
 
+// open is the backend over srv at the parts every case here runs at.
 func open(t *testing.T, srv *s3fake.Server, prefix string) *s3obj.Backend {
 	t.Helper()
-	b, err := s3obj.Open(t.Context(), s3obj.Config{
-		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", Prefix: prefix,
-		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
-	})
+	b := openFake(t, srv, prefix)
+	s3obj.CutParts(b, part)
+	return b
+}
+
+// openFake is the backend over srv as [s3obj.Open] builds it, at the
+// production [s3obj.PartBytes] — what the benchmarks measure.
+func openFake(t testing.TB, srv *s3fake.Server, prefix string) *s3obj.Backend {
+	t.Helper()
+	b, err := s3obj.Open(t.Context(), fakeConfig(srv, prefix))
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
-	s3obj.CutParts(b, part)
 	return b
+}
+
+// fakeConfig is how a backend reaches srv: the bucket it serves, path-style,
+// at the region the fake ignores, with credentials it never checks.
+func fakeConfig(srv *s3fake.Server, prefix string) s3obj.Config {
+	return s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: srv.Bucket(), Prefix: prefix,
+		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	}
 }
 
 // EVERY FILE THE TRACKER KEEPS FITS ONE UPLOAD OF PARTS S3 TAKES — the
@@ -82,7 +104,7 @@ func TestContract(t *testing.T) {
 		b := open(t, srv, "crewlet/")
 		servers.Store(objstore.Backend(b), srv)
 		return b
-	}, objstoretest.Options{Piece: part,
+	}, objstoretest.Options{Piece: part, Ranged: true, BatchDeletes: true, Stalling: stallingBackend,
 		// A MULTIPART UPLOAD BEGUN AND NEVER COMPLETED, under the
 		// prefix: what a process killed mid-upload leaves, named by
 		// what follows the prefix.
@@ -267,18 +289,20 @@ func TestAnObjectLongerThanAPartGoesUpInParts(t *testing.T) {
 // part or the body stopped arriving — because an upload nobody completes or
 // aborts is billed for its parts and shown by no listing. A body CUT SHORT is
 // one that stopped, at a part's end or inside one: read as the end, it was
-// completed as an object of the parts that had arrived.
+// completed as an object of the parts that had arrived. The part is refused
+// the way the client takes as final — a throttle or a server error it would
+// ask again until the part's deadline.
 func TestAFailedUploadIsAbandoned(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	b := open(t, srv, "")
 	body := bytes.Repeat([]byte{7}, 3*part)
 
-	srv.FailPart(2)
+	srv.FailPart(2, http.StatusForbidden, "AccessDenied")
 	if err := b.Put(t.Context(), "refused", bytes.NewReader(body), objstore.PutMeta{}); err == nil {
 		t.Fatal("an upload whose second part was refused succeeded")
 	}
-	srv.FailPart(0)
+	srv.FailPart(0, 0, "")
 
 	for _, stop := range []struct {
 		name string
@@ -299,6 +323,228 @@ func TestAFailedUploadIsAbandoned(t *testing.T) {
 	}
 	if len(srv.Keys()) != 0 {
 		t.Fatalf("failed uploads left objects: %v", srv.Keys())
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("failed uploads kept %d of the node's spare part buffers", held)
+	}
+}
+
+// A PART IS GIVEN ITS SHARE OF THE LINK. An upload's parts in flight cross ONE
+// link to the bucket together, so each moves at a share of it, and the floor
+// every leg is held to ([objstore.MiBPace]) is the UPLOAD's: a part given only
+// its own bytes at the floor misses its deadline on a link the upload as a
+// whole crosses at the floor, where one part at a time had crossed it. So
+// every part — a short last one too — is given its request's [s3obj.CallBudget]
+// and the time its bytes take at the floor with every part an upload may keep
+// in flight sharing that link: [s3obj.PartsInFlight] of them, whenever the
+// others were sent, because an upload sends parts behind one already on its
+// way — its first part goes alone, and three more join it as fast as the body
+// arrives.
+//
+// THE ARITHMETIC RATHER THAN A THROTTLED BUCKET: the budget of a part of the
+// production size is sixteen and a half minutes, which no case can wait out.
+func TestAPartIsGivenItsShareOfTheLink(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int64{1, objstore.MiB / 3, objstore.MiB, s3obj.PartBytes - 1, s3obj.PartBytes} {
+		atFloor := time.Duration(size*s3obj.PartsInFlight) * objstore.MiBPace / objstore.MiB
+		if got, want := s3obj.PartBudget(size), s3obj.CallBudget+atFloor; got < want {
+			t.Errorf("a part of %d bytes is given %v; sharing the link with %d parts in flight "+
+				"at the floor its bytes take %v, and its request %v more", size, got,
+				s3obj.PartsInFlight, atFloor, s3obj.CallBudget)
+		}
+	}
+}
+
+// A REFUSED PART ENDS ITS UPLOAD AT ONCE: once the bucket's refusal of a part
+// reaches the upload, the upload cancels the parts still in flight, begins no
+// further read of its body and sends no other part, and fails with the refusal
+// — never a cancelled sibling's error. With parts in flight together, an
+// upload that noticed a failure only when it next needed a buffer went on
+// reading the client's body and sending parts behind it — up to three parts,
+// minutes of a slow client's body, for an upload already lost.
+//
+// THE MOMENT IS SEEN FROM THE BUCKET'S SIDE: the bucket refuses part 1 and
+// holds part 2 unanswered, so the hold reports when the upload cancels its
+// requests — which an upload does only once it has the refusal. The body hands
+// over the first two parts freely and waits at the third for that report, so
+// a read the upload begins after the report is one it began knowing it had
+// failed; and the refusal of part 1 is itself held back until the body has
+// reached its third part AND the bucket holds part 2 with its body read
+// ([s3fake.Server.PartHook]), so it arrives while the upload is reading, and
+// the cancellation it causes reaches a part the bucket is watching. Released
+// at the third part alone, the refusal now and then cancelled part 2 while
+// its body was still on its way, which no hold ever saw, and the case waited
+// out its minute (three runs in thirty). An upload that never acts on the
+// refusal is never reported, and the body gives up waiting after a minute,
+// so it fails this case rather than hanging it.
+func TestARefusedPartEndsItsUploadAtOnce(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	b := open(t, srv, "")
+	srv.FailPart(1, http.StatusForbidden, "AccessDenied")
+	reached, held := make(chan struct{}), make(chan struct{})
+	var heldOnce sync.Once
+	srv.PartHook = func(number int32) {
+		switch number {
+		case 1:
+			for _, moment := range []chan struct{}{reached, held} {
+				select {
+				case <-moment:
+				case <-time.After(time.Minute):
+				}
+			}
+		case 2:
+			heldOnce.Do(func() { close(held) })
+		}
+	}
+	body := &gatedBody{body: make([]byte, 8*part), at: 2 * part, gate: srv.HoldPart(2), reached: reached}
+
+	err := b.Put(t.Context(), "refused", body, objstore.PutMeta{})
+	if apiErr, ok := errors.AsType[smithy.APIError](err); !ok || apiErr.ErrorCode() != "AccessDenied" {
+		t.Fatalf("an upload whose first part was refused = %v; want the refusal itself", err)
+	}
+	if !body.waited {
+		t.Fatal("the upload heard of the refusal before it asked for its third part, so " +
+			"nothing staged a refusal arriving while it reads")
+	}
+	if !body.opened {
+		t.Fatalf("the upload read on for a minute after its first part was refused, " +
+			"its other parts still in flight")
+	}
+	if body.after > 0 {
+		t.Fatalf("the upload began %d reads of its body after it had cancelled its parts "+
+			"for a refusal", body.after)
+	}
+	if open := srv.Uploads(); len(open) != 0 {
+		t.Fatalf("the refused upload was left open: %v", open)
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("the refused upload kept %d of the node's spare part buffers", held)
+	}
+}
+
+// gatedBody hands over body, and at offset at closes reached — where it is
+// given one — and waits for gate to close — for a minute at most, opened
+// saying which ended the wait — before it hands over the rest, a kibibyte a
+// read. after counts the reads begun once the wait was over: the read that
+// waited was asked for before, and answers with what it was asked for.
+type gatedBody struct {
+	body           []byte
+	at             int
+	gate           <-chan struct{}
+	reached        chan struct{}
+	read           int
+	waited, opened bool
+	after          int
+}
+
+func (g *gatedBody) Read(p []byte) (int, error) {
+	if g.waited {
+		g.after++
+	}
+	if g.read == len(g.body) {
+		return 0, io.EOF
+	}
+	if g.read < g.at {
+		p = p[:min(len(p), g.at-g.read)]
+	} else {
+		if !g.waited {
+			g.waited = true
+			if g.reached != nil {
+				close(g.reached)
+			}
+			select {
+			case <-g.gate:
+				g.opened = true
+			case <-time.After(time.Minute):
+			}
+		}
+		p = p[:min(len(p), 1<<10)]
+	}
+	n := copy(p, g.body[g.read:])
+	g.read += n
+	return n, nil
+}
+
+// A LARGE UPLOAD KEEPS ITS PARTS IN FLIGHT TOGETHER — exactly
+// [s3obj.PartsInFlight] of them, never more — so a bucket a round trip away
+// costs an upload a round trip per that many parts rather than one per part,
+// and the object it assembles is the body, in order, whatever order the parts
+// landed in.
+//
+// The bucket holds every request for its latency, so the parts an upload has
+// sent overlap at the bucket for as long as the upload keeps them in flight,
+// and the most at once is what the bucket counts.
+func TestALargeUploadKeepsItsPartsInFlightTogether(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.Latency = 200 * time.Millisecond
+	b := open(t, srv, "")
+	const parts = 3 * s3obj.PartsInFlight
+	body := make([]byte, parts*part)
+	for i := range body {
+		body[i] = byte(i / part)
+	}
+	if err := b.Put(t.Context(), "wide", iotest.HalfReader(bytes.NewReader(body)), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.MostPartsAtOnce(); got != s3obj.PartsInFlight {
+		t.Fatalf("the upload had at most %d parts in flight at once, want %d", got, s3obj.PartsInFlight)
+	}
+	if got := srv.Parts("wide"); got != parts {
+		t.Fatalf("%d bytes went up in %d parts, want %d", len(body), got, parts)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	r, err := b.Get(ctx, "wide", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("the object read back %d bytes, %v, not the body in order", len(got), err)
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("a finished upload kept %d of the node's spare part buffers", held)
+	}
+}
+
+// UPLOADS SHARE THE NODE'S SPARE PART BUFFERS, and none waits for one: past
+// its own first buffer an upload takes a spare only while the node has one
+// free, so however many large uploads run at once the parts in flight never
+// exceed one per upload plus [s3obj.SpareParts] — and every upload still
+// finishes on the buffers it got.
+func TestUploadsShareTheNodesSpareParts(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.Latency = 200 * time.Millisecond
+	b := open(t, srv, "")
+	// MORE UPLOADS THAN THE SPARES CAN WIDEN, so the allowance runs out
+	// while every one of them still wants more.
+	const uploads = s3obj.SpareParts/(s3obj.PartsInFlight-1) + 2
+	body := bytes.Repeat([]byte("shared "), 2*s3obj.PartsInFlight*part/7+1)
+	errs := make([]error, uploads)
+	var wg sync.WaitGroup
+	for i := range uploads {
+		wg.Go(func() {
+			errs[i] = b.Put(t.Context(), fmt.Sprintf("shared-%d", i), bytes.NewReader(body), objstore.PutMeta{})
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	if most, limit := srv.MostPartsAtOnce(), int64(uploads+s3obj.SpareParts); most > limit || most <= uploads {
+		t.Fatalf("%d uploads had %d parts in flight at once; want more than one each and "+
+			"at most one each plus the node's %d spares, %d", uploads, most, s3obj.SpareParts, limit)
+	}
+	if held := s3obj.SparesHeld(b); held != 0 {
+		t.Fatalf("finished uploads kept %d of the node's spare part buffers", held)
+	}
+	for i := range uploads {
+		if got := srv.Parts(fmt.Sprintf("shared-%d", i)); got == 0 {
+			t.Fatalf("upload %d was not assembled from parts", i)
+		}
 	}
 }
 
@@ -393,4 +639,212 @@ func (s *secondCrossingReader) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	s.read += int64(n)
 	return n, err
+}
+
+// A BUCKET BEHIND A PRIVATE CERTIFICATE AUTHORITY IS REACHED THROUGH
+// AWS_CA_BUNDLE, and refused without it.
+//
+// What the bundle reaches is [s3obj.Open]'s own client — the engine's shared
+// transport with the bundle added to its roots for the bucket's requests only
+// — which no other case runs, because every other case reaches its fake over
+// plain http. It is also what the benchmark's https arm rests on: a bucket on
+// loopback with a certificate of its own, as real S3 is reached over TLS.
+//
+// NOT PARALLEL, because it sets the environment, and the process's
+// environment is what Open reads the bundle from.
+//
+// THE REFUSAL IS AT ONCE: a certificate the node does not trust is refused the
+// same way every time, so it is never asked again — where every other failure
+// to reach the bucket is, until the request's deadline. Asked again, the check
+// at open would end at its deadline with the refusal reduced to text beside
+// it, so the refused half runs under a deadline of a few seconds.
+func TestABucketBehindAPrivateAuthorityIsReachedThroughItsBundle(t *testing.T) {
+	srv := s3fake.StartTLS(t, "files")
+
+	t.Setenv("AWS_CA_BUNDLE", "")
+	refusedCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err := s3obj.Open(refusedCtx, fakeConfig(srv, "crewlet/"))
+	var unverified *tls.CertificateVerificationError
+	if !errors.As(err, &unverified) {
+		t.Fatalf("Open with no bundle = %v; want the bucket's certificate refused", err)
+	}
+
+	t.Setenv("AWS_CA_BUNDLE", trustBundle(t, srv))
+	b, err := s3obj.Open(t.Context(), fakeConfig(srv, "crewlet/"))
+	if err != nil {
+		t.Fatalf("Open with the bucket's authority in AWS_CA_BUNDLE: %v", err)
+	}
+	data := []byte("behind a private authority")
+	if err := b.Put(t.Context(), "files/tls", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	r, err := b.Get(ctx, "files/tls", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read back %q, %v; want %q", got, err, data)
+	}
+}
+
+// trustBundle writes srv's certificate as a PEM bundle and answers its path —
+// what an operator points AWS_CA_BUNDLE at for a bucket behind an authority of
+// their own.
+func trustBundle(t testing.TB, srv *s3fake.Server) string {
+	t.Helper()
+	bundle := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE",
+		Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return bundle
+}
+
+// A DIRECTORY BUCKET LISTS IN NO ORDER, SO ITS RANGES ARE REFUSED, unasked:
+// an S3 Express One Zone bucket — every one named `…--x-s3` — answers a
+// listing in no order and takes no StartAfter, and a range read from it would
+// have every object past the first stray read as absent. Its caller asks
+// about each object instead. The bucket is a real directory bucket to the
+// SDK, opened through the session it asks the fake for.
+func TestADirectoryBucketsRangesAreUnordered(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files--usw2-az1--x-s3")
+	b := open(t, srv, "crewlet/")
+	if n := srv.RequestsOf("CreateSession"); n < 1 {
+		t.Fatalf("opening a directory bucket asked for %d sessions; the SDK does not take it for one", n)
+	}
+	err := b.ListRange(t.Context(), "", "files/z", func(objstore.Info) error {
+		t.Error("a directory bucket's range listed an object")
+		return nil
+	})
+	if !errors.Is(err, objstore.ErrUnordered) {
+		t.Fatalf("ListRange on a directory bucket = %v, want ErrUnordered", err)
+	}
+	if n := srv.RequestsOf("ListObjectsV2"); n != 0 {
+		t.Fatalf("refusing a directory bucket's range cost %d listings, want none", n)
+	}
+}
+
+// A BATCH DELETION IS ONE DeleteObjects REQUEST, carrying the Content-MD5 the
+// API long required of it — the fake, as many gateways do, refuses one
+// without — and a key the bucket refuses is named back by the name it was
+// handed, the rest of the batch gone: the caller learns which files it could
+// not remove, never just that the request did not wholly succeed.
+func TestABatchDeletionIsOneRequestNamingWhatItCouldNotRemove(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	b := open(t, srv, "crewlet/")
+	names := []string{"files/a", "files/b", "files/c", "files/never-put"}
+	for _, name := range names[:3] {
+		if err := b.Put(t.Context(), name, bytes.NewReader([]byte(name)), objstore.PutMeta{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.RefuseDelete("crewlet/files/b", "AccessDenied")
+	// THE OPEN'S PROBE DELETES ITS OWN OBJECT, and those deletions are
+	// the open's, not the batch's.
+	batches, singles := srv.RequestsOf("DeleteObjects"), srv.RequestsOf("DeleteObject")
+	err := b.DeleteBatch(t.Context(), names)
+	var refused *objstore.DeleteBatchError
+	if !errors.As(err, &refused) || len(refused.Failed) != 1 || refused.Failed["files/b"] == nil {
+		t.Fatalf("DeleteBatch with one key refused = %v; want a DeleteBatchError naming files/b alone", err)
+	}
+	if errors.Is(err, objstore.ErrNoBatch) {
+		t.Fatalf("a batch the bucket answered key by key was read as refused whole: %v", err)
+	}
+	if got := srv.Keys(); !slices.Equal(got, []string{"crewlet/files/b"}) {
+		t.Fatalf("after the batch the bucket holds %q, want only the refused key", got)
+	}
+	if n := srv.RequestsOf("DeleteObjects") - batches; n != 1 {
+		t.Fatalf("a batch of %d names made %d DeleteObjects requests, want one", len(names), n)
+	}
+	if n := srv.RequestsOf("DeleteObject") - singles; n != 0 {
+		t.Fatalf("a batch deletion made %d single deletions, want none", n)
+	}
+	// PAST THE BATCH THE API TAKES, refused before any request.
+	if err := b.DeleteBatch(t.Context(), make([]string, objstore.MaxDeleteBatch+1)); err == nil {
+		t.Fatal("a batch past MaxDeleteBatch was accepted")
+	}
+	if n := srv.RequestsOf("DeleteObjects") - batches; n != 1 {
+		t.Fatalf("a batch past MaxDeleteBatch was sent (%d requests in all)", n)
+	}
+}
+
+// A BATCH THE BUCKET REFUSES AS A REQUEST IS ErrNoBatch, AND ONLY THAT IS: a
+// gateway that does not offer the verb answers it with a client error or 501,
+// having removed nothing, and its caller deletes each name instead. A throttle
+// — 503 SlowDown, or 429 — and a server error are the bucket SLOWING, never a
+// missing verb: the batch is asked again until the bucket answers it or the
+// caller's deadline passes, and is never ErrNoBatch — read as one, the caller
+// would send a request for every key to a prefix that has just said to slow
+// down. And a batch the bucket slowed for a while is deleted once it has
+// answered.
+func TestABatchTheBucketRefusesAsARequestIsNoBatch(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		status  int
+		code    string
+		noBatch bool
+	}{
+		{http.StatusNotImplemented, "NotImplemented", true},
+		{http.StatusBadRequest, "InvalidArgument", true},
+		{http.StatusMethodNotAllowed, "MethodNotAllowed", true},
+		{http.StatusForbidden, "AccessDenied", true},
+		{http.StatusTooManyRequests, "TooManyRequests", false},
+		{http.StatusServiceUnavailable, "SlowDown", false},
+		{http.StatusInternalServerError, "InternalError", false},
+	} {
+		t.Run(c.code, func(t *testing.T) {
+			t.Parallel()
+			srv := s3fake.Start(t, "files")
+			b := openRetrying(t, srv, "crewlet/", s3obj.Clock{})
+			if err := b.Put(t.Context(), "files/a", bytes.NewReader([]byte("a")), objstore.PutMeta{}); err != nil {
+				t.Fatal(err)
+			}
+			srv.RefuseBatches(c.status, c.code)
+			ctx := t.Context()
+			if !c.noBatch {
+				// A BUCKET SLOWING FOR GOOD is asked again until the
+				// caller's deadline, which a case cannot wait out at
+				// the production thirty seconds.
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 300*time.Millisecond)
+				defer cancel()
+			}
+			err := b.DeleteBatch(ctx, []string{"files/a"})
+			if err == nil {
+				t.Fatalf("a batch the bucket refused with %d %s succeeded", c.status, c.code)
+			}
+			if got := errors.Is(err, objstore.ErrNoBatch); got != c.noBatch {
+				t.Fatalf("DeleteBatch refused with %d %s = %v; ErrNoBatch %v, want %v",
+					c.status, c.code, err, got, c.noBatch)
+			}
+			if !c.noBatch && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("a batch the bucket kept slowing with %d %s = %v; want it asked again "+
+					"until its deadline", c.status, c.code, err)
+			}
+			if got := srv.Keys(); !slices.Equal(got, []string{"crewlet/files/a"}) {
+				t.Fatalf("a refused batch left the bucket holding %q", got)
+			}
+			if c.noBatch {
+				return
+			}
+
+			// A FRESH CLIENT, so the batch is not held behind the limiter
+			// the refusals above engaged.
+			srv.RefuseBatches(0, "")
+			srv.FailNext(1, c.status, c.code)
+			if err := openRetrying(t, srv, "crewlet/", s3obj.Clock{}).DeleteBatch(t.Context(), []string{"files/a"}); err != nil {
+				t.Fatalf("a batch the bucket slowed once with %d %s = %v; want it deleted",
+					c.status, c.code, err)
+			}
+			if got := srv.Keys(); len(got) != 0 {
+				t.Fatalf("a batch the bucket answered at last left it holding %q", got)
+			}
+		})
+	}
 }

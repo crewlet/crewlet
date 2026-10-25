@@ -57,9 +57,9 @@ var alarmMeaning = map[Kind]string{
 	KindLogHeadroom: "A log is within a tenth of the byte ceiling its " +
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
-		"rather than dropping records; on every log that claims identity (the " +
-		"tracker's, the knowledge base's and the identity estate's) an " +
-		"eviction still lands in the gate reserve above that ceiling.",
+		"rather than dropping records; on every log that claims identity " +
+		"(every log but the vectors' and the usage domain's) an eviction " +
+		"still lands in the gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup has been recorded, or the newest is " +
 		"older than the policy asks for. The trim does not advance either way, " +
 		"and the alarm names every log whose trim the backup term is holding " +
@@ -76,22 +76,30 @@ var alarmMeaning = map[Kind]string{
 		"window yet.",
 	KindDeferredOld: "This node has been holding a record it cannot apply on " +
 		"a log for longer than the thirty-minute deferral grace. One alarm " +
-		"names every log that is, leading with the one held longest. Where a " +
-		"log judges this node's copy of the estate (the tracker's and the " +
-		"knowledge base's do), the node no longer serves its copy, and its " +
-		"seats read the estate from the other data nodes.",
+		"names every log that is, leading with the one held longest. The " +
+		"node no longer serves its copy of each log named: what the estate " +
+		"routes to that log is answered by the other data nodes, and every " +
+		"other log's copy keeps serving here. The identity log is the one " +
+		"whose requests are not all routed: what this node answers from its " +
+		"own identity rows — the sign-ins, sessions and tokens of anybody the " +
+		"held record may be about, and every directory decision — has " +
+		"answered 503 here since the record was held, and goes on doing so " +
+		"until this node can read it.",
 	KindFloorUnknown: "This node has been unable to read a log's trim floor " +
 		"for four heartbeats, so every read of that log here refuses. One " +
 		"alarm names every such log, which is every log at once when " +
 		"coordination is what cannot be reached.",
-	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
-		"turn on this node pays it before its first token.",
+	KindPrefetchSlow: "The knowledge scans this node runs for turns' prefetches " +
+		"are over their budget. Every turn whose prefetch it scans waits for " +
+		"the scan before its first token.",
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
 		"outgrown what one node's share of it can scan in the budget.",
 	KindSearchDegraded: "Searches are being answered without their semantic " +
-		"half: the embeddings provider or the vector domain is failing.",
+		"half: the embeddings provider or the vector domain is failing, or a " +
+		"node's copy of the vectors is out of service.",
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
-		"because a node did not answer its bucket range.",
+		"because a node did not answer its bucket range, or its copy of what it " +
+		"scans is out of service.",
 	KindHistoryPartial: "Fleet history reads (turns, traces, the event log) " +
 		"are being answered without every node, because one did not answer " +
 		"inside the fleet read budget.",
@@ -117,17 +125,21 @@ var alarmMeaning = map[Kind]string{
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
 		"its census allows (125 a day per agent seat, at least one seat, " +
-		"plus what the object store's collector reads on its own schedule), " +
-		"so every sizing decision under it is stale.",
+		"plus what the object store's collector reads on its own schedule, " +
+		"plus, on the code log whether or not the company hosts code now, " +
+		"the git reads its ceiling was sized for: a tenth of it in barriers " +
+		"over the trim's min_age), so every sizing decision under it is stale.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +
 		"satisfied.",
 	KindObjectsMissing: "Some of the company's files cannot be read: the " +
 		"collector's last audit asked the object store for every file's bytes, " +
-		"and some were not there, or were there at the wrong size or under the " +
-		"wrong digest. Those files cannot be downloaded or read until they are " +
-		"restored.",
+		"and some were not there, or were there at the wrong size, under the " +
+		"wrong digest or as nothing the store can read, or the store failed to " +
+		"answer for them twice while it answered for the rest. Those files " +
+		"cannot be downloaded or read until they are restored, or the store " +
+		"serves them again.",
 	KindObjectsBucketNearCeiling: "The fleet's own object bucket on the broker holds " +
 		"more than four fifths of the bytes it reserves. A full bucket refuses every " +
 		"upload, though nothing else on the broker is affected.",
@@ -135,6 +147,13 @@ var alarmMeaning = map[Kind]string{
 		"document, a frame becoming ready in a viewer's browser, a datastore verdict) " +
 		"is failing fast enough to spend its month's error budget early: in both the " +
 		"long and the short window of one of the two burn-rate pairs.",
+	KindCodeMaintenanceRefused: "This node's git cache cannot write the bitmap " +
+		"of some repositories, because a bitmap over each (about 1000 bytes " +
+		"an object, with room for a clone of the repository beside it) needs " +
+		"more memory than the node can give its background work: its memory, " +
+		"or its cgroup's limit, less what it keeps for its git lanes, the " +
+		"store, the broker and the engine. Those repositories are indexed " +
+		"without a bitmap and served more slowly: a clone walks their history.",
 }
 
 const alarmHeader = `# Alarms

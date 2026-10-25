@@ -88,13 +88,19 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 	e.reconcileSeatServers(ctx)
 	steps = append(steps, "seat_tools")
 
-	// THE TRACKER'S PROJECTS AND THE KNOWLEDGE CONTAINERS, before any mail
-	// is released: the first thing the seats in a new unit do is file work
-	// into its project.
+	// THE TRACKER'S PROJECTS, THE KNOWLEDGE CONTAINERS AND THE DECLARED
+	// REPOSITORIES, before any mail is released: the first thing the seats
+	// in a new unit do is file work into its project.
 	e.applyChart(ctx, c)
 	steps = append(steps, "tracker_projects")
 	e.applyContainers(ctx, c)
 	steps = append(steps, "knowledge_containers")
+	// AND THE REPOSITORIES code.repos declares, for the containers' reason
+	// and on their terms: asked for here, stamped with the activation the
+	// company was applied from, and decided beside the apply rather than
+	// inside it — see [Engine.applyCodeRepos].
+	e.applyCodeRepos(ctx, c, c.ActivatedAt)
+	steps = append(steps, "code_repos")
 
 	if e.node != nil {
 		// A CONVERGENCE RATHER THAN A WALK, which is what makes it right

@@ -884,11 +884,14 @@ function offline(err) {
 * finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
-/** A deadline as a person would say it: seconds under two minutes, else
-*  minutes. */
+/** A deadline as a person would say it: seconds under two minutes, minutes
+*  under two hours, else hours — a backup's twelve-hour wait read as "720
+*  minutes" is a number nobody reads at a glance. */
 function waitWords(ms) {
 	const seconds = Math.round(ms / 1e3);
-	return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+	if (seconds < 120) return `${seconds} seconds`;
+	const minutes = Math.round(seconds / 60);
+	return minutes < 120 ? `${minutes} minutes` : `${Math.round(minutes / 60)} hours`;
 }
 /** Whether a rejection is the caller's own abort rather than a failure. */
 function isAbort(err) {
@@ -2469,8 +2472,8 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 /**
 * The fleet's broker and object store, as the engine bounds them: the kinds
 * a node's broker can be and the disagreements named between the two records
-* of its membership, how long a removal may take, and the states of the object
-* store's report.
+* of its membership, how long a removal may take, the states of the object
+* store's report, and what its audit finds of a file.
 *
 * Each is a COPY of something the engine owns, because this is a separate
 * build that cannot import a Go identifier — held to the engine's in both

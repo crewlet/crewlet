@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -467,7 +468,7 @@ func (e *Engine) serveFleetBroker(ctx context.Context) error {
 	}
 	// THE IDS THIS MEMBER HAS TAKEN, for as long as it serves.
 	taken := signedask.NewGuard()
-	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id),
+	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
 			return e.brokerWire.SealReply(e.answerBroker(ctx, raw, taken, time.Now()))
 		})

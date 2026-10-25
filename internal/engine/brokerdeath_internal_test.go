@@ -166,7 +166,7 @@ func runBrokerDeathChild(t *testing.T, mode, dir string) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

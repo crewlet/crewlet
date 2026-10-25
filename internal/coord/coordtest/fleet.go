@@ -36,7 +36,7 @@ import (
 // concurrent writers must agree on spread their writers across several
 // ([fleetHarness.nodes]), because a backend may serialise one handle's writes
 // before its store ever sees them — the KV store sends a node's concurrent
-// writes to one token counter as a single compare-and-swap — and a race run
+// read-modify-writes of one key as a single compare-and-swap — and a race run
 // through one handle would then certify nothing about how the store itself
 // arbitrates between nodes. A backend whose store is its handle answers the
 // same handle every time.
@@ -69,6 +69,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"maintenance", maintenanceCases},
 		{"listings", listingCases},
 		{"markers", markerCases},
+		{"floors", floorCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {

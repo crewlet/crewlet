@@ -19,10 +19,17 @@
 // kernel reports it. It is here for the same reason as the signals: the start
 // time is read differently on every platform, and a second reader is a second
 // definition of "the same process".
+//
+// And one figure about a group: the CPU its members have spent ([GroupCPU]),
+// read from the same process records, because a group signalled as one dies
+// without its leader reaping the rest, and the leader's own usage then counts
+// none of them.
 package procgroup
 
 import (
+	"fmt"
 	"os/exec"
+	"time"
 )
 
 // Set puts cmd's child in its own process group, so [Terminate] and [Kill]
@@ -72,6 +79,31 @@ func Exists(pid int) bool { return exists(pid) }
 //
 // "Nothing in the group" is not an error: it is the outcome the caller wanted.
 func Terminate(pid int) error { return signal(pid, sigTerm) }
+
+// GroupCPU is the CPU the members of the process group led by pid have spent
+// so far: every member's user and system time, and that of every child each
+// has waited for.
+//
+// It is the figure a caller reads BEFORE it signals a group whose cost it
+// counts. wait4 hands a parent the time of the children it reaped, and a
+// leader killed with its group dies without reaping the children dying beside
+// it: upload-pack's pack-objects, receive-pack's index-pack, orphaned and
+// reaped by whatever the kernel hands them to. So the leader's own usage at
+// its reap is the leader alone, and what the tree spent until the signal is
+// only to be had here, from the members while they are still members.
+//
+// Read from the kernel's own process record on Linux, the members found by a
+// scan of the process table. A record that cannot be read is reported beside
+// the sum of every one that could, so the figure is only ever short and the
+// caller may keep it as a floor. Elsewhere it is [errors.ErrUnsupported]: XNU
+// keeps a process's CPU where only libproc reads it, and the engine builds
+// without cgo.
+func GroupCPU(pid int) (time.Duration, error) {
+	if !addressable(pid) {
+		return 0, fmt.Errorf("procgroup: pid %d is not a process group this package addresses", pid)
+	}
+	return groupCPU(pid)
+}
 
 // Kill sends SIGKILL to the group led by pid.
 //

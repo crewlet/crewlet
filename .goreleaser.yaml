@@ -246,10 +246,16 @@ dockers_v2:
     # The image is a redistribution too, so it carries the same license and
     # notices the archives do. Each keeps its path in the build context,
     # which is how the Dockerfile names it.
+    #
+    # The git pin and its recipe too: the image's git stage builds git from
+    # them (the Dockerfile's `git` stage), and the build context holds only
+    # what this list names.
     extra_files:
       - LICENSE
       - build/notices/THIRD_PARTY_NOTICES.txt
       - static/dashboard/THIRD_PARTY_NOTICES.txt
+      - scripts/git-pin.env
+      - scripts/git.sh
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
       org.opencontainers.image.version: "v{{ .Version }}"

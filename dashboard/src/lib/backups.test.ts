@@ -96,6 +96,53 @@ describe("why a backup was not taken", () => {
     expect(refusal.message).toMatch(/may still finish/);
   });
 
+  // A BACKUP ALREADY RUNNING IS NOT A FAILURE: nothing was written and the
+  // engine's log has nothing wrong in it, so it is not sent there.
+  test("a backup already running is said, and not as a failed copy", () => {
+    const refusal = backupRefusal(new RestError(409, { error: "backup_running" }));
+    expect(refusal.field).toBe(false);
+    expect(refusal.message).toMatch(/already running/);
+    expect(refusal.message).not.toMatch(/api_backup_failed/);
+  });
+
+  // AN OBJECT STORE THAT DID NOT ANSWER is the fleet's state, and the engine's
+  // hint says what to check — a clause, said as a sentence of its own before
+  // the one that follows it rather than run into it.
+  test("an unreachable object store is said in the engine's hint", () => {
+    const refusal = backupRefusal(
+      new RestError(503, { error: "objects_unreachable", hint: "check the S3 bucket" }),
+    );
+    expect(refusal.field).toBe(false);
+    expect(refusal.message).toMatch(/^Check the S3 bucket\. Whatever was written there /);
+    expect(refusal.message).not.toMatch(/api_backup_failed/);
+  });
+
+  // A REFUSAL THE FLEET'S OWN STATE CAUSES — an object store that did not
+  // answer, a newer build's record on a log the backup replays, a record signed
+  // under a key this node does not hold, a copy keyed to a recreated log, a log
+  // missing records — is said in the engine's hint, as a
+  // sentence of its own, never as a copy that failed on this node.
+  test.each([
+    [503, "objects_unreachable", /did not answer/],
+    [409, "record_unreadable", /newer build/],
+    [409, "record_unverified", /does not hold/],
+    [409, "log_recreated", /recreated/],
+    [503, "log_gap", /take the backup again/],
+  ])("a %i %s is said in the engine's hint, or its own sentence", (status, code, own) => {
+    const hinted = backupRefusal(new RestError(status, { error: code, hint: "do the thing" }));
+    expect(hinted.field).toBe(false);
+    expect(hinted.message).toMatch(/^Do the thing\. Whatever was written there /);
+    expect(hinted.message).toMatch(/not a backup\.$/);
+    expect(hinted.message).not.toMatch(/api_backup_failed/);
+    // A hint already written as a sentence keeps its one full stop.
+    const stopped = backupRefusal(new RestError(status, { error: code, hint: "Do the thing." }));
+    expect(stopped.message).toMatch(/^Do the thing\. Whatever was written there /);
+    const bare = backupRefusal(new RestError(status, { error: code }));
+    expect(bare.message).toMatch(own);
+    expect(bare.message).toMatch(/[^.]\. Whatever was written there /);
+    expect(bare.message).not.toMatch(/api_backup_failed/);
+  });
+
   // A 401 accepted no credential, so the repair is signing in; a 403 named the
   // access the backup is taken under, and the sentence names it.
   test("a refused credential says what would admit it", () => {

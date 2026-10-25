@@ -99,7 +99,10 @@ type Service struct {
 	// of Tier A's `api.auth` this surface reads, through
 	// [config.APIAuth.MayWriteCompany], the one reading of it.
 	writers config.APIAuth
-	now     func() time.Time
+	// tierWarnings is what a company does beside this node's Tier A
+	// ([Options.TierWarnings]); nil answers none.
+	tierWarnings func(*config.Company) []config.Warning
+	now          func() time.Time
 }
 
 // Options wire the service.
@@ -138,6 +141,19 @@ type Options struct {
 	// deployment's is this surface's to read, and a surface handed all of
 	// it has a way to start deciding on any of it.
 	CompanyWriters []string
+
+	// TierWarnings is what a company does beside THIS NODE'S Tier A —
+	// [config.TierWarnings] over the deployment's own document, which
+	// `crewlet run` closes over — carried in a write's answer beside the
+	// company's own warnings, so a person turning code.native on reads the
+	// cross-tier consequence where they made the change rather than in a
+	// node's log.
+	//
+	// A FUNCTION, never the Tier A document, for [Options.CompanyWriters]'
+	// reason: what this surface reads of the deployment is the warnings and
+	// nothing else of it. Nil answers none, which is what a suite about
+	// something else has; it refuses nothing, since a warning never does.
+	TierWarnings func(*config.Company) []config.Warning
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -187,7 +203,8 @@ func New(opts Options) (*Service, error) {
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
-		writers: config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
+		writers:      config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
+		tierWarnings: opts.TierWarnings,
 	}, nil
 }
 

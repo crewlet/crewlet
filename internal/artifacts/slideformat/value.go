@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -26,11 +27,13 @@ func (e errValue) Error() string { return "takes " + e.want }
 
 func want(format string, args ...any) error { return errValue{want: fmt.Sprintf(format, args...)} }
 
-var numberRE = regexp.MustCompile(`^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$`)
+var numberRE = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$`)
+})
 
 // number reads a plain number.
 func number(s string) (float64, bool) {
-	if !numberRE.MatchString(s) {
+	if !numberRE().MatchString(s) {
 		return 0, false
 	}
 	f, err := strconv.ParseFloat(s, 64)
@@ -202,16 +205,18 @@ func call(s string) (string, string, bool) {
 
 // ---- colours -------------------------------------------------------------- //
 
-var hexRE = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+var hexRE = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+})
 
 // color reads COLOR: a hex colour, `rgb[a]()`, `hsl[a]()`, a CSS named colour
 // or `transparent`. Never `currentcolor` or `var()`.
 func color(s string) (string, error) {
 	low := strings.ToLower(strings.TrimSpace(s))
 	switch {
-	case hexRE.MatchString(low):
+	case hexRE().MatchString(low):
 		return low, nil
-	case low == "transparent" || namedColors[low]:
+	case low == "transparent" || namedColors()[low]:
 		return low, nil
 	}
 	name, args, ok := call(low)
@@ -481,7 +486,9 @@ func aspectRatio(v string, _ *styleCtx) (string, error) {
 
 // ---- type ----------------------------------------------------------------- //
 
-var familyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,39}$`)
+var familyRE = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 _-]{0,39}$`)
+})
 
 var genericFamilies = []string{"serif", "sans-serif", "monospace", "cursive", "system-ui"}
 
@@ -502,7 +509,7 @@ func family(v string, _ *styleCtx) (string, error) {
 			name = p[1 : len(p)-1]
 		}
 		name = strings.Join(strings.Fields(name), " ")
-		if !familyRE.MatchString(name) {
+		if !familyRE().MatchString(name) {
 			return "", want("family names of letters, digits, spaces, _ and -, a letter first, " +
 				"at most 40 characters")
 		}

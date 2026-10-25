@@ -220,7 +220,8 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 				OpID:    "op-1",
 				Pattern: pattern,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
+					return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+						statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x")}, nil
 				},
 			})
 			var refusal *statelog.Unavailable
@@ -304,7 +305,8 @@ func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 				OpID:    "op-1",
 				Pattern: pattern,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
+					return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+						statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x"), Version: 1}, nil
 				},
 			})
 			requireWrongStream(t, err)
@@ -402,7 +404,8 @@ func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 						Pattern: pattern,
 						Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 							tc.trip(h)
-							return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
+							return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+								statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x"), Version: 1}, nil
 						},
 					})
 					tc.require(t, err)
@@ -622,7 +625,8 @@ func TestACreateIsGuardedByTheRowAndByTheDeletionMarker(t *testing.T) {
 			OpID:    "op-1",
 			Pattern: statelog.PatternCreate,
 			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-				return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
+				return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x")}, nil
 			},
 		})
 	}
@@ -731,7 +735,7 @@ func TestALostRaceWaitsForTheWinnerBeforeItRedecides(t *testing.T) {
 	// anchor for the subject is empty while the subject is not — which
 	// is exactly the state a lost race leaves behind.
 	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -763,7 +767,7 @@ func TestAWriteThatKeepsLosingIsRefusedRatherThanRetriedForEver(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -801,7 +805,7 @@ func TestASequencedWriteIsOrderedByTheLogAndNeverArbitrated(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -818,7 +822,7 @@ func TestASequencedWriteIsOrderedByTheLogAndNeverArbitrated(t *testing.T) {
 		OpID:    "op-1",
 		Pattern: statelog.PatternSequenced,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "mine")}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "mine")}, nil
 		},
 	})
 	if errors.Is(err, statelog.ErrConflict) {
@@ -853,7 +857,8 @@ func TestARecordMustDeclareWhatItMakesStale(t *testing.T) {
 		Subject: probeSubject("a"),
 		OpID:    "op-1",
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"),
+				statelog.ScopeSet{}, "op-1", "x")}, nil
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "scope") {
@@ -1001,7 +1006,7 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
@@ -1024,7 +1029,8 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{
-				Payload: probeRecord(stamp, "op-1", "mine"),
+				Payload: probeRecord(stamp, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"p/a"}}, "op-1", "mine"),
 			}, nil
 		},
 	})
@@ -1157,7 +1163,7 @@ func TestTheSessionWaitIsNeverSkipped(t *testing.T) {
 		Session: ahead,
 		NoWait:  true,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "hello"), Version: 1}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "hello"), Version: 1}, nil
 		},
 	})
 	if err == nil {
@@ -1385,7 +1391,7 @@ func TestAnEvictionLandingMidWriteRefusesAsAnEviction(t *testing.T) {
 				OpID:    "op-1",
 				Pattern: statelog.PatternArbitrated,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
+					return statelog.Decision{Payload: probeRecord(stamp, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "op-1", "x"), Version: 1}, nil
 				},
 			})
 			var refusal *statelog.Unavailable
@@ -1648,5 +1654,64 @@ func TestANodeGateIsTheOneWriteAPassedNodeStillMakes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// AN AMBIGUOUS PUBLISH IS JUDGED AGAINST THIS GENERATION'S ANCHOR, never one a
+// reanchor left in the generation before.
+//
+// A restored log's reanchor opens a new generation with its checkpoint at the
+// log's end and keeps every row, so a subject's anchor can sit in the
+// generation before at a sequence ABOVE anything the restored log holds. The
+// expectation already ignores such an anchor; the ambiguous path compared the
+// subject's last sequence with it as though both were one number space, read
+// "nothing landed above the anchor" for a write whose record DID land and whose
+// acknowledgement was lost, and decided again — on a node whose applier had not
+// reached the record, every later round waited behind it, and a write that was
+// on the log came back a conflict.
+func TestAnAmbiguousPublishIsJudgedAgainstThisGenerationsAnchor(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	subject := probeSubject("a")
+	first, err := h.write(subject, "op-0", "one")
+	if err != nil {
+		t.Fatalf("the first write: %v", err)
+	}
+
+	// THE REANCHOR: generation 2, its checkpoint at the log's end, and the
+	// row's anchor left where the generation before put it — above the
+	// restored log's end.
+	h.gen.Store(2)
+	h.applier.advance(statelog.Position{Stream: probeStream, Generation: 2, Seq: first.Position.Seq})
+	h.rows.pin(subject, statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
+
+	// The record LANDS and the acknowledgement does not, and this node's
+	// applier never reaches it.
+	h.applier.mu.Lock()
+	h.applier.auto, h.applier.frozen = false, true
+	h.applier.mu.Unlock()
+	h.appends.fail(errors.New("no response from stream"), false)
+	before := h.appends.appends.Load()
+
+	res, err := h.write(subject, "op-1", "two")
+	if err != nil {
+		t.Fatalf("a write whose record landed = %v — the subject's last record "+
+			"is above this generation's anchor, so it is resolved rather than "+
+			"decided again", err)
+	}
+	if res.Outcome != statelog.OutcomePending {
+		t.Fatalf("outcome = %q, want pending: the record is on the log and this "+
+			"node has not applied it", res.Outcome)
+	}
+	if want := first.Position.Seq + 1; res.Position.Seq != want || res.Position.Generation != 2 {
+		t.Fatalf("pending named %s, want generation 2 at %d — the record this "+
+			"write appended", res.Position, want)
+	}
+	if res.Rounds != 1 {
+		t.Fatalf("the write took %d rounds, want 1 — a landed record is not a "+
+			"reason to decide again", res.Rounds)
+	}
+	if got := h.appends.appends.Load() - before; got != 1 {
+		t.Fatalf("the write appended %d time(s), want once", got)
 	}
 }

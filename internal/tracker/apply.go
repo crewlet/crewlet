@@ -35,11 +35,16 @@ import (
 //     on every node and stall the whole fleet's log.
 
 // Applier writes this node's copy of the tracker's state.
+//
+// It carries NO NODE IDENTITY, and that is the purity rule rather than an
+// omission: [statelog.Applier] forbids one, because an applier that could
+// read which node it runs on could write rows its peers do not. The eviction
+// gate needs none either — it compares the record's own
+// [statelog.Record.Writer] against the eviction rows in this transaction. What
+// it does hold of its node is a LISTENER, told after a commit whose inbox moved
+// on this node (inboxmove.go), and a listener writes no row: every node's
+// applier still writes the same rows from the same records.
 type Applier struct {
-	// NodeID is this node's own id, which the eviction gate compares a
-	// record's writer against.
-	NodeID string
-
 	// inbox is told, after a committed batch, whose inbox moved on this
 	// node — see inboxmove.go. Nil is legal and means nobody is listening.
 	inbox func([]InboxMovement)
@@ -57,8 +62,8 @@ type Applier struct {
 // After the commit and never inside the transaction: the store re-runs the
 // body of an attempt that failed transiently, and a movement announced from
 // inside it would announce a notice no row holds.
-func NewApplier(nodeID string, inbox func([]InboxMovement)) *Applier {
-	return &Applier{NodeID: nodeID, inbox: inbox}
+func NewApplier(inbox func([]InboxMovement)) *Applier {
+	return &Applier{inbox: inbox}
 }
 
 // Committed is the post-commit half.
@@ -199,6 +204,11 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// THE READ INDEX'S OWN APPEND. It writes no row on any node, and
 		// that is its entire content: it exists so a linearizable read
 		// has a quorum-committed position to wait through.
+		return 0, nil
+	case KindTrimmed:
+		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
+		// below the floor its subject names, in this same transaction
+		// (ADR-0047); this domain writes nothing for it.
 		return 0, nil
 	case KindTurn:
 		return a.applyTurn(ctx, tx, at)

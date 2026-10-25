@@ -162,9 +162,11 @@
 // two JetStream metadata proposals on a clustered bucket — and then leaves the
 // caller to spend N more round trips fetching the values it did not carry.
 // Five of this node's fifteen-second duty loops read a bucket on every tick,
-// and the state-log write fence lists the trim floors out of the positions
-// register on every write at an expectation of zero — a subject's first write
-// among them — so that cost is paid continuously rather than at the edges.
+// so that cost is paid continuously rather than at the edges — and no
+// state-log read or seat's write waits on a listing at all: the write fence's
+// trim floor is one key read ([FleetStore.Floor]), because the consumer a
+// listing creates is a metadata proposal a loaded cluster answers late. What
+// still lists does so on a loop's own clock or once per operator gesture.
 //
 // And it could not report a short answer. The client's key lister ends its
 // goroutine on a nil entry, and a receive from the channel its own
@@ -246,6 +248,39 @@
 // few percent of that ceiling. What a direct get would buy back is served by
 // nothing here, because every read in this package is one a caller acts on as
 // current — which is why none of them stays direct.
+//
+// # A fleet record's writes are coalesced per key
+//
+// Every retry of a compare-and-swap on a fleet record (fleet.go) follows a
+// LOST attempt: the store answered and somebody else's write landed — never the
+// leader declining to compare a write still in flight, which is waited out
+// before an attempt is called lost (below, and settle.go). So what
+// bounds a loop is how many writers contend its key — [casAttempts]' rule for
+// a lease, applied to the fleet's records — and a healthy contended write that
+// runs out of attempts FAILS CLOSED as an outage, never as a refusal. The bound
+// this replaced was sixteen, below the contract suite's own thirty-two
+// concurrent charges, and the org's token counter — written by every round of
+// every seat in the company — lost every one of its attempts through a leaf
+// under load: a healthy round reported as a coordination outage.
+//
+// A bound can be sized for NODES and never for ROUNDS, which is why each node
+// COALESCES the read-modify-writes it has in flight on one key into ONE
+// compare-and-swap: a group commit per key, its batch decided in arrival order
+// and each write answered exactly as a serial order would answer it alone, so
+// the key's contenders are the nodes writing it however many rounds each has
+// in flight. The creates answered by the record that won, the delivery claim
+// and the unfollow are no read-modify-write and are not coalesced; what makes
+// one of them repeat is a removal or a re-asserted follow between two of its
+// round trips, far fewer than a node count, so the same bound covers them.
+// The rate valve's bound is exact instead, where its limit is above the shared
+// one: every attempt it loses is another node's increment, so it reads its
+// window full within its limit of them ([FleetStore.Allow]).
+// Between a lost attempt and the next, a loop waits a window counted in the
+// ROUND TRIPS this node measures on the bucket rather than in a ceiling tuned
+// on one topology, so a leaf or an external cluster spreads its writers by its
+// own latency. casline.go is where each of these is argued: the line
+// ([writeLines]), the head count it is bounded for ([fleetWriters]), the window
+// ([casWindow]) and the round trip the window is counted in ([roundTrip]).
 //
 // # Every conditional write is DECIDED by the leader
 //
@@ -704,27 +739,30 @@ type bucketFacts struct {
 // RE-ASKED through [jsprovision.Settle] for the reason every other read-back on
 // this path is: a bucket handle can come back before the metadata update that
 // made it is visible here, so one lookup inside that window fails a clustered
-// boot over a bucket this node just opened. Settle owns the short deadline each
-// attempt runs under, for its own reason: an ordinary metadata read against a
+// boot over a bucket this node just opened. Settle owns the short term each
+// request runs under, for its own reason: an ordinary metadata read against a
 // group that has just proven it works.
-func readBucket(ctx context.Context, bucket jetstream.KeyValue) (bucketFacts, error) {
-	var status jetstream.KeyValueStatus
-	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
-		var e error
-		status, e = bucket.Status(ctx)
-		return e
+//
+// THROUGH A STREAM HANDLE OF EACH REQUEST'S OWN, never the bucket's Status: that
+// reads the bucket handle's stream info into the handle with no lock, and a
+// read-back keeps a request it has presumed lost outstanding while it asks the
+// next ([jsprovision.SettleWith]), so two of them can be answered at once — and
+// the bucket's handle is the one every later call on the bucket reads.
+func readBucket(ctx context.Context, js jetstream.JetStream, bucket jetstream.KeyValue) (bucketFacts, error) {
+	info, err := jsprovision.Settle(ctx, func(ctx context.Context) (*jetstream.StreamInfo, error) {
+		stream, err := js.Stream(ctx, bucketStream(bucket))
+		if err != nil {
+			return nil, err
+		}
+		return stream.CachedInfo(), nil
 	})
 	if err != nil {
 		return bucketFacts{}, fmt.Errorf("coord/kv: read %s status: %w", bucket.Bucket(), err)
 	}
-	info, ok := status.(*jetstream.KeyValueBucketStatus)
-	if !ok || info.StreamInfo() == nil {
-		return bucketFacts{}, fmt.Errorf("coord/kv: %s reported no backing stream", bucket.Bucket())
-	}
 	return bucketFacts{
-		stream:   info.StreamInfo().Config.Name,
-		age:      info.TTL(),
-		replicas: info.StreamInfo().Config.Replicas,
+		stream:   info.Config.Name,
+		age:      info.Config.MaxAge,
+		replicas: info.Config.Replicas,
 	}, nil
 }
 

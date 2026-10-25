@@ -29,9 +29,9 @@ Without `admin`, the lead of a unit edits the units they lead instead
 
 The credential is a person signed in holding `admin`, or an API token that
 carries it, exchanged for a session on the dashboard's sign-in screen.
-There is no posture in which it is not needed — `api.auth.disabled` is
-retired, and `crewlet run -dev-principal` is a flag on a node reached over
-loopback rather than a configuration a browser can meet. What the builder
+There is no posture in which it is not needed — no setting turns
+authentication off, and `crewlet run -dev-principal` is a flag on a node
+reached over loopback rather than a configuration a browser can meet. What the builder
 shows is decided from what the engine answers, never from whether somebody is
 signed in:
 
@@ -494,7 +494,7 @@ parts:
 
 | Node | Tabs |
 |---|---|
-| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
+| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (the seat's code access first, where a code host reads it, then one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
 | Human seat | **Profile** (name, email, handle and kind; the **Person** who holds the seat; and the role: goal, backstory, responsibilities), **Contact** (contact identities and availability), **Work** (manages, and Delete) |
 | Unit | **Profile** (name, key, type, purpose, goals), **Leadership** (lead and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
 
@@ -639,6 +639,20 @@ admits and injects per phase, and the learning subsystem drafts new ones from
 what turns did, so skills are managed in the knowledge base rather than on the
 seat. See [Tool Skills](../concepts/tool-skills.md).
 
+### Seat code access
+
+An agent seat's **Code** section, first on its **Integrations** tab, holds its
+code access (`code.access`): read only (the default), review or full access.
+It is one setting for every code host the company runs — on the engine's own
+[code host](code.md) it caps what the chart grants the seat, and on GitHub it
+is the permission set the seat's app is created with — so it is drawn when the
+company is connected to GitHub or sets `code.native`, and not otherwise. A human seat has none: a person acts
+as their own identity on every code host. A seat's GitHub app permissions are
+fixed when the app is created, so after changing the access of a seat whose
+app exists, raise the app's permissions at GitHub as well; the GitHub card
+below says so beside the app. The GitHub card itself carries no tier: it holds
+the seat's repositories and its app, and the access is this section's alone.
+
 ### Seat integrations
 
 Each tool the company has connected is a card with the tool's own mark, its
@@ -650,12 +664,12 @@ app is installed yet) is a row inside the card, never a second status. The
 tools the company does not use are one line under the cards, with a link to
 **Integrations**. No credential is ever shown.
 
-- **GitHub:** access tier and repositories (an empty list means every
-  repository the installation covers). Setting a tier on a seat with no GitHub
-  block enrols the seat in GitHub; create its app from Integrations. A seat's
-  app permissions are fixed when the app is created, so after changing the tier
-  of a seat whose app exists, raise the app's permissions at GitHub as well.
-- **Slack:** whether the seat speaks as its own Slack app. A seat's app has no channel of its own: it speaks in its unit's `channel`.
+- **GitHub:** the repositories the seat works in (an empty list means every
+  repository the installation covers). Naming repositories on a seat with no
+  GitHub block enrols the seat in GitHub; create its app from Integrations,
+  where it is created at the seat's code access.
+- **Slack:** whether the seat speaks as its own Slack app. A seat's app has
+  no channel of its own: the seat speaks in its unit's `channel`.
 - **Mattermost:** the default channel name, for a seat that has its own bot.
   The engine provisions a bot only where the seat's `bot_token` is a whole
   `${NAME}` reference, so for such a seat the bot username is read-only:

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // fixedRuns is a pending-run store holding exactly these runs.
@@ -259,7 +260,7 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 		{Task: "a", Kind: tracker.FeedCompleted, At: base,
 			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
 	}, Complete: true}}
-	sources := queries.Sources{Work: work, Usage: db.Replicated()}
+	sources := queries.Sources{Work: work, Usage: usage.Reader{Estate: db.Replicated()}}
 	for _, kinds := range []string{"", "schedule"} {
 		got, err := askNative(t, sources, "company_feed", map[string]any{"kinds": kinds})
 		if err != nil {
@@ -334,7 +335,7 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 			}}
 			r := queries.NewRegistry()
 			queries.Register(r, queries.Sources{Work: work, Pages: pageStore,
-				Usage: db.Replicated()})
+				Usage: usage.Reader{Estate: db.Replicated()}})
 			got, err := r.Answer(asGrants(t, "", c.holding...), "company_feed", c.params)
 			if err != nil {
 				t.Fatalf("company_feed: %v", err)

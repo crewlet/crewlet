@@ -29,6 +29,7 @@ operator credential — move to that listener and are served nowhere else:
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
 | `/mcp/{token}` | A sandbox calling its seat's tools (agent mode) | `api.port` | `api.public` only |
+| `/git/*`, `/code/*` | A person's git client, with their own token; the CLI | `api.port` | `api.port` only — never published, since the credential is a person's own token ([The code host](#the-code-host-git-and-code)) |
 | Everything else — `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/work/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
 A public route asked of `api.port` answers `404` with the code `no_route` and a
@@ -262,12 +263,15 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
+| A git fetch already begun: `POST /git/{repo}/git-upload-pack` | Served, and finished before the listener closes | The upload `POST` continues a fetch whose advertisement was answered before the drain — on this node or a peer, since git keeps no state between an exchange's requests — and refusing it would break the fetch half done. It is the one request under `/git/` a draining node serves, and like the sandbox edges above it continues work already under way. |
+| A new git fetch: `GET`/`HEAD /git/{repo}/info/refs` asking for `git-upload-pack` (or no service) | `503`, `text/plain` | The advertisement is where every fetch begins, and a fetch is not a read that starts nothing: it runs git's upload-pack on this node, after syncing the repository from the object store, which is new work the shutdown would have to wait out. Refused at its first request, a clone fails at once and is retried against a peer, rather than cut part way and begun again from nothing. |
+| A git push: `GET`/`HEAD /git/{repo}/info/refs` asking for any other service, `POST /git/{repo}/git-receive-pack`, and every other path under `/git/` | `503`, `text/plain` | Every request of a push is refused, its advertisement included, because the `GET` is where git prints the reason (`remote: this node is draining …`); on the `POST` it prints only `RPC failed; HTTP 503`. In git's own form rather than the JSON below, which git prints as nothing. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
-`/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused. It is served [statelessly](#every-call-is-decided-by-the-request-that-carries-it), so it offers no server-to-client stream and holds no session: its `GET` is served like any other read and answers the MCP transport's own `405 Allow: POST`, and its `DELETE` rides the default with the writes. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
+`/operator/mcp` serves only `POST` — it is served [statelessly](#every-call-is-decided-by-the-request-that-carries-it) and keeps no session, so there is no `GET` stream to open and no session to end — and every JSON-RPC call it carries, reads and a new listening stream included, is refused with the writes: telling a listing from a filed task would mean reading the body, which is the per-route carve-out refusing by default avoids. An assistant asking a draining node is told to retry elsewhere, like the dashboard. A stream an assistant opened BEFORE the drain is kept for the whole drain, and goes on hearing every other node's rebuild of its tools ([`/operator/mcp`](#operatormcp--your-own-assistant)): ending it at the drain's first moment would cut a client that does not open a new stream — the Go SDK's does not — off for the drain's whole length rather than for none of it. It is answered, and so ends, as the listener starts to close, so it never holds the listener's five seconds. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
-A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
+A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and — everywhere but `/git/*`, whose refusal is the one `text/plain` line `this node is draining for a shutdown and begins no new fetch or push: retry in 30 s, against another node or once it has restarted` — a body the CLI and the dashboard both render:
 
 ```json
 {
@@ -278,7 +282,9 @@ A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load ba
 }
 ```
 
-A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close.
+A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close — except an assistant's listening stream, which is answered the moment the listener starts to close, so `api_shutdown_failed` keeps meaning that a request was stuck.
+
+**A git request is finished, not cut.** A clone or a push cut part way is not resumed — git begins it again from nothing, against a peer, so every rolling restart would pay for each one twice — and five seconds is a REST read's grace, not a transfer's. So once the turns have finished, and before the listener starts to close, the node waits for every git request it is serving: a push or a fetch already running when the drain began, and a fetch's upload `POST` served during it. Because git keeps no state between an exchange's requests, it then goes on listening for five seconds after the last of them has ended — git's own keepalive interval, many times the pause between two requests of one exchange — so a fetch between two of its rounds is not left facing a closed port. The drain begins no fetch or push here, but it goes on serving every upload `POST` that reaches it — a fetch begun on a peer, which a load balancer goes on sending here until it has acted on `/ready` (or, under Kubernetes, until the pod is out of its Service's endpoints) — so what it waits for can grow while it waits, and the wait ends once that traffic has moved and what was running is done. The deployment guide's [`preStop` sleep](../guides/deployment.md#separate-processes-a-split-deployment) is how a deployment makes that window short. The node logs `git_draining` with the count when there is something to wait for and `git_drain_complete` when it is done. Like the wait for the turns, this one has no deadline of its own: what bounds it is the supervisor's kill grace or a second interrupt — see [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown) for sizing that grace.
 
 A node with a [public listener](#which-listener-serves-what) drains both by this one table — its webhooks are refused on `api.public` and its sandbox endpoints served there — and closes `api.public` first, then `api.port`, each with its own five seconds, so `/health` answers until the very end even while an open bridge session holds the public listener for its whole grace.
 
@@ -288,11 +294,15 @@ A node with a [public listener](#which-listener-serves-what) drains both by this
 
 The [envelope](#every-refusal-is-one-envelope) covers a request nothing on the
 node serves as well as one a route refuses: `404 no_route` for a path — one
-this node's build does not have, or one its configuration leaves unmounted,
-such as `POST /work/items/{key}/purge` on a company with no native tracker —
-and `405 method_not_allowed`, with an `Allow` header, for a served path under
-another method. Both carry a `detail` naming the method and the path, where the
-router's own answer was a line of plain text no client could branch on.
+this node's build does not have, or one it does not serve now, such as
+`POST /work/items/{key}/purge` on a company with no native tracker — and
+`405 method_not_allowed` for a path this build's routes take under other
+methods. Both carry a `detail` naming the method and the path, where the
+router's own answer was a line of plain text no client could branch on, and
+the 405 an `Allow` header naming the methods this build's route table holds
+for the path — which is not a promise that this node serves them now: a route
+it does not serve now still answers a wrong method `405`, and then
+`404 no_route` under the methods `Allow` named.
 
 The CLI and the dashboard rely on it. A non-2xx answer with no code was written
 by something **in front of** the node — most often a reverse proxy's read
@@ -300,6 +310,25 @@ timeout — and says nothing about what the node did, so a write that meets one
 is reported as *unknown*, with the operation id to finish it under, rather than
 as refused. An answer with a code is the node's own, and a refusal from the
 node means nothing was done.
+
+**Except under `/git/*`, where the node answers in git's form instead.** A git
+client prints a refusal's body only when it is `text/plain` — each line as
+`remote: …` — and prints the API's JSON as nothing at all, so every refusal the node
+writes there is one `text/plain` line and no envelope: the guard's `401` Basic
+challenge ([the auth note under Routes](#routes)); its `403` for a credential
+acting as a seat the org chart no longer holds as a human seat, or a session
+that may only enrol a second factor, and its `503` for a node that cannot tell
+who the credential is (`Retry-After: 2`), each the sentence the envelope
+carries on every other route; a refusal of the route's own authority verb, its
+sentence with the code in brackets after it; a node that serves no code host
+now, likewise ([git's smart HTTP](#gits-smart-http)); and the drain's `503`
+([During a drain](#during-a-drain)). So the inference above — no code means
+something in front of the node wrote it — holds on every route but
+`/git/*`. There, a refusal the node wrote is told from a proxy's by its
+`text/plain` sentence, which is the node's own (`authentication required: …`,
+`this node is draining …`), and git prints it to the person who ran the
+command. `/code/*`, the code host's REST reads, answers JSON with a code like
+every other route.
 
 ---
 
@@ -335,7 +364,7 @@ node means nothing was done.
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
-| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — the tracker's, the knowledge base's and the identity estate's — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
+| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — every log that claims identity, which is every log but the vector changelog and the usage log — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
 | `POST` | `/work/retention/readmit/{node}` | Lift it on every one of those logs — the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
 | `POST` | `/work/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
@@ -399,8 +428,16 @@ node means nothing was done.
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
-| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you — it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings a native backend up, and `404 no_route` on a company that runs neither natively |
+| `POST` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you — it files and moves work (see [below](#operatormcp--your-own-assistant)). Which tools it lists follows what the company runs, asked per request: `503 no_active_revision` until this node's first company brings a native backend up, and `404 no_route` on a company that runs neither natively. Stateless: no session, so any node answers any request and a `GET` or `DELETE` is answered `405` |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to** — the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company with no native backend |
+| `GET` `HEAD` | `/git/{repo}/info/refs` | A git client's advertisement of a repository the engine hosts, on a node whose roles name `git`. git's protocol, a person's credential as the Basic password; a push only with one that resolves to a person. **Always needs a credential**, never on `api.public` (see [The code host](#the-code-host-git-and-code)) |
+| `POST` | `/git/{repo}/git-upload-pack` | A clone's or a fetch's request (same) |
+| `POST` | `/git/{repo}/git-receive-pack` | A push (same) |
+| `GET` | `/code/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a credential** (see [The code reads](#the-code-reads)) |
+| `GET` | `/code/repos/{name}` | One repository in detail (same) |
+| `GET` | `/code/repos/{name}/pushes` | One repository's push history, newest first, each push naming the person who made it (same) |
+| `POST` | `/code/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to repair what it finds — in place, or by a rebuild: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-codereposnameverify)) |
+| `GET` | `/code/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-codereposnameverifyid)) |
 
 > **Auth.** Every route needs a credential, reads included, and three shapes
 > of one reach every route: a **session cookie** a person gets by signing in
@@ -428,6 +465,22 @@ node means nothing was done.
 > ends sessions and enrols second factors, and a prefix would put those behind
 > no credential at all. See
 > [Configuration § Auth](../concepts/configuration.md#auth).
+>
+> **A git client is answered in git's terms.** On `/git/*` only, the token may
+> also arrive as the **password** of `Authorization: Basic` — the user name is
+> ignored — because a git client presents a credential no other way without
+> configuration: it answers a Basic challenge from its credential helper or a
+> prompt. Basic is accepted on no other route, since a browser that was asked
+> for one caches it and replays it to every route of the origin. A refused git
+> request answers `401` with `WWW-Authenticate: Basic realm="crewlet",
+> charset="UTF-8"` and a `text/plain` body git prints (`authentication
+> required: use a Crewlet API token as the password (crewlet code
+> credential)` — the helper that answers git's prompt with the token, see
+> [`crewlet code credential`](cli.md#crewlet-code-credential)), never the JSON below,
+> which git shows as nothing at all. A git request that presented no
+> credential is the protocol's normal first step, so it is logged at debug as
+> `api_auth_challenge`; a credential presented and refused is
+> `api_auth_failed`, a warning, as on every route.
 >
 > **A token that is present and wrong is refused even where reads are open.**
 > Sending a credential says you meant to be somebody, so `/ws/stream` answers
@@ -488,7 +541,7 @@ node means nothing was done.
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), and `/operator/*` — [`/operator/mcp`](#operatormcp--your-own-assistant) and [`/operator/act`](#operatoract--the-dashboards-write-surface). The list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself.
+Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), `/operator/*` — [`/operator/mcp`](#operatormcp--your-own-assistant) and [`/operator/act`](#operatoract--the-dashboards-write-surface) — and the engine's own git host's `/git/*` and `/code/*`. The list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself. So is a repository, the company's source, which even a clone needs a credential to read, and so are the code reads, which name every repository and the people who pushed to it.
 
 ### Every failed sign-in is one refusal
 
@@ -1689,7 +1742,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` key it is about, empty when neither), plus `from` and `to` as display text. Three kinds:
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key), `manages` (one `manages` entry — a seat handle or a unit key — at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
-  - `advisory`: something valid and worth knowing — a human seat with no contact identity, which nobody can @-mention on a chat surface; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies. Every node also logs each one when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said.
+  - `advisory`: a setting that is valid and worth knowing before it runs — the company's own (a human seat with no contact identity, which nobody can @-mention on a chat surface; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies; a repository or a seat's `code.access` that will not do what it seems to), or what the company does together with the Tier A of the node that served the write. `path` and `message` locate and say it; `ref`, `from` and `to` are empty. Every node also logs each of the company's own when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said. The cross-tier ones are [Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers): a fleet hosting code on the default `nats` object store (`store.objects.backend`), and a git node whose explicit `git.cache_max_bytes` is below `code.limits.repo_max_bytes`. **They are judged against the Tier A of the node that answered the write**, so the same `PUT /config` can answer them on a git node and not on an ingress node without the `git` role, and a write answers a budget only where it is set explicitly — a derived one is a share of a volume the write never sees, which each git node compares itself when it applies the revision (`config_tier_warning`).
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
 **Every seat's handle and every unit's key is written into the stored
@@ -2912,9 +2965,10 @@ entry answers instead is what is still outstanding for that agent:
 
 `step` and `action_url` are the two clicks, described under
 [One agent's own GitHub App](#one-agents-own-github-app). `tier` is the seat's
-access tier, answered before the app exists because it is what the manifest
-asks for, and defaulting to `read_only` on a seat whose configuration is
-silent.
+access tier, read from its `role.code.access` — the seat's on every code host,
+so a seat with no GitHub block yet already has one — answered before the app
+exists because it is what the manifest asks for, and defaulting to `read_only`
+on a seat whose configuration is silent.
 
 **`present`** is whether the seat has an app at all, and **`satisfied`** needs
 that app installed *and* its sealed key readable by this node. A `${VAR}`
@@ -3089,9 +3143,12 @@ resolves its path values and hands them to the same answer the socket's query
 channel reaches. The generic form `GET /query/{what}?a=b` reaches the same
 answers by name and is what the socket's own frames map onto, so the two can
 never drift. A question whose source this node lacks — an event log, a
-schedule ledger — is left *unregistered* rather than answered empty, so its
-route replies `404` with `unknown_query`, which tells it apart from the
-`no_route` a path nothing serves answers.
+schedule ledger, or a native tracker the company does not run — is *unknown*
+rather than answered empty, so its route replies `404` with `unknown_query`,
+which tells it apart from the `no_route` a path nothing serves answers. The
+native tracker and knowledge base are asked of the engine per request, because
+a node that booted with no company builds them at its first revision on them —
+see [The native tracker and knowledge base](#the-native-tracker-and-knowledge-base).
 
 ### An event on the wire
 
@@ -4182,7 +4239,7 @@ Server → client kinds:
 | `org` / `tools` / `schedules` | On the same edge as `seats`: every published company. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered, a `watch` that was not installed, or an `artifact_join` refused or an artifact's room withdrawn (`what: "artifact_join"`, naming the `artifact`; see `artifact_join` below). | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `admin` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault), or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-fourteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
+| `error`    | Reply to a client `query` that could not be answered, a `watch` that was not installed, or an `artifact_join` refused or an artifact's room withdrawn (`what: "artifact_join"`, naming the `artifact`; see `artifact_join` below). | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `admin` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have now**: a question whose source is not wired here is never registered, and a question about the native tracker or knowledge base on a node whose runtime does not run that backend answers the same, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. The one change no restart is needed for is a node's FIRST revision on a native backend, which builds the tracker and knowledge base on a node that ran neither and is answered from that revision on (see [The native tracker and knowledge base](#the-native-tracker-and-knowledge-base)); a revision that switches a backend after that waits for the node's restart, as [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart) says. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault), or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-fourteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
 | `pong`     | Reply to a client `ping`. | `null` |
 | `inbox_changed` | A committed tracker batch wrote the watched seat one or more notices. Every node serving the API holds the estate — `ingress` requires `data` — and applies every tracker record, so each node pushes to its OWN sockets from its own applier after the batch commits. While a node's own copy is out of service it stays in rotation and pushes a sound data node's movements instead, relayed over the broker, and withholds its own applier's; every switch of source sends each watched seat one frame with `unread_delta: 0` and an empty `subject` and `reason`, because what moved during the switch is not replayed — read the inbox again, as on any frame. One frame per seat per batch. | `{ handle, unread_delta, subject, reason }`, and the frame itself carries `seat`. **Identifiers and a count, never content**: `subject` is the id of the object the newest of those notices was written on — the task for a task commit, and the PERSON for a `prioritised` notice, whose task `work_inbox` names as `task` — and `reason` the reason it was routed under, and what the notices say is read through `work_inbox`, the question that decides who may read them. `unread_delta` is a **hint** — the notices the batch wrote, which a redelivery the engine has already collapsed may count twice — so a client re-asks rather than adding it to a badge. **Routed by seat**: it reaches only the clients whose `watch` for that seat was allowed, never every tab. It needs `tracker`, the permission `work_inbox` takes. |
 | `artifact_changed` | A committed artifacts batch moved an artifact whose room this socket is in: a version published, its title, description, icon or a label, its shares, its assets, the trash, a restore, a transfer or a purge. Each node pushes from its own applier. | `{ artifact, what, head, position }`, where `what` is `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset` (this node cannot say which artifacts moved, so re-read). **A hint, never content**: re-read through the questions that decide what you may see. |
@@ -4262,7 +4319,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_saved_views` | `{counts}` | `GET /work/views/saved`. Every SAVED view — never a builtin — that the caller can see across every container: the shared ones, and the caller's own personal ones, pinned-for-them first and then by container (the workspace, projects, units, people) and the strip's own rank. Each row is `work_views`' row shape, so `container` says where it lives and `params` is its saved query. A sibling of `work_views` rather than a `container=` it takes, because a strip is ONE container's tabs and this is one PERSON's views — the inventory of what somebody saved and the pins a sidebar draws — which the workspace strip could not answer: a view saved on a project board appeared in neither. Whose is the caller's [own record](#whose-record-a-personal-question-answers-for), never a parameter, and `counts=true` takes the same rule as `work_views`: every pinned row's `count` is its view run IN ITS OWN CONTAINER, which is what opening it runs |
 | `work_files` | `{project, folder, removed, limit, after}` | `GET /work/files`. Answers `{project, files, next}` plus the coverage half. Each file carries its `path`, `content_type`, `size`, `hash` (the SHA-256 of its whole content), `version`, who created and last wrote it and when, and — only with `removed` — who removed it and when. `next` is absent on the last page. The listing is rows only: the bytes are read through the byte route, never through the socket |
 | `pages` | `{container, parent, roots, status, label, watcher, title, skills, onboarding, limit, after}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything. `roots=true` is the TOP of a container — the pages with no parent — and is refused beside `parent`, because an empty `parent` already means "under any parent" and the two ask opposite questions. The answer carries `total` (every page the filter matches, counted in the same transaction as the rows) and, while there is more, `after` — pass it back as `after` for the next window; a cursor this listing did not mint is `bad_params`. Each page carries `children`: how many pages sit directly under it that the SAME listing would show (its `status` and `skills` narrowing applied to them), absent when none — what a tree draws its expander off. With `skills=true` on a node that reads the replicated `usage` domain the answer also carries `skill_loaded_by`: page id → the `page` answer's `skill_loaded_by` list for that page, answered for the whole window in ONE read rather than one per row. Each page also says whether it is a `folder` (its body is empty: a page that only groups the pages under it), and its last save: `saved_at` and `saved_by`, the last create, save or rename, which a label, a watch or a move does not move. `saved_by` is the writer under the one name every row of theirs carries, as every author field on this surface is: a seat's handle, which is how a person appears since they write as the seat they hold, or the whole login of a credential bound to no seat |
-| `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title`. `children` is the first 50 by title and `children_total` all of them. `skill` says the page is a TOOL SKILL (admitted to the skills registry) and `onboarding` that it is an onboarding page. On a tool-skill page, `skill_loaded_by` is every seat it reached as a skill over the last 30 company days, most recent first — `{handle, last_at, count, loaded, offered}`, where `loaded` counts the seat asking for the body (`load_tool_skill`) and `offered` a phase's catalogue putting its summary in front of the seat; absent on a node that does not read the `usage` domain, and `[]` when nobody was. `linked_from` is who LINKS here, from this node's index: `pages` (`{id, container, title}`, published pages whose body carries this page's address) and `tasks` (`{id, key, key_collision?, title, status, via}`, where `via` is `linked_page` for a page relation and `description` for an address in the description, and `key_collision` marks a task whose key another task claimed first, so a link to it goes by its `id` — the key opens the claimant), each capped at 50 with `pages_total` / `tasks_total` beside it. A link is a page id in either address the engine reads — `/pages/<id>` or the dashboard's `#/knowledge/pages/<id>` — outside code; a title is not an address, since a rename moves it. Absent on a node with no index. A node that HAS an index and cannot answer sends `linked_from_status` instead of an empty list: `building` while its index is on its first lap over pages and tasks (a fresh or joined node's first minutes — an empty list then would claim nothing links here before every body was read), `unavailable` when the read failed; the page itself is served either way. `folder` is the listing's |
+| `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title`. `children` is the first 50 by title and `children_total` all of them. `skill` says the page is a TOOL SKILL (admitted to the skills registry) and `onboarding` that it is an onboarding page. On a tool-skill page, `skill_loaded_by` is every seat it reached as a skill over the last 30 company days, most recent first — `{handle, last_at, count, loaded, offered}`, where `loaded` counts the seat asking for the body (`load_tool_skill`) and `offered` a phase's catalogue putting its summary in front of the seat; absent on a node that does not read the `usage` domain, and `[]` when nobody was. `linked_from` is who LINKS here, from the index of a data node whose copies of both the knowledge base and the tracker serve (this node's, where its own do): `pages` (`{id, container, title}`, published pages whose body carries this page's address) and `tasks` (`{id, key, key_collision?, title, status, via}`, where `via` is `linked_page` for a page relation and `description` for an address in the description, and `key_collision` marks a task whose key another task claimed first, so a link to it goes by its `id` — the key opens the claimant), each capped at 50 with `pages_total` / `tasks_total` beside it. A link is a page id in either address the engine reads — `/pages/<id>` or the dashboard's `#/knowledge/pages/<id>` — outside code; a title is not an address, since a rename moves it. Absent on a node with no index. A node that HAS an index and cannot answer sends `linked_from_status` instead of an empty list: `building` while its index is on its first lap over pages and tasks (a fresh or joined node's first minutes — an empty list then would claim nothing links here before every body was read), `unavailable` when the read failed or no data node's copies of both serve; the page itself is served either way. `folder` is the listing's |
 | `page_reads` | `{page, days}` | Who READ a page: one row per (seat, way of reading) over `days` company days (1–30, default 30, anything else `bad_params`) from the replicated `usage` domain, so every node's reads are counted — a departed node's included — and every node answers alike. `via` is `get_page`, `search`, `prefetch` or `skill_loaded`; a skill's catalogue OFFER is deliberately not a read (it would make every skill "read by every agent today") and is what `page`'s `skill_loaded_by` counts. Each row carries `count`, `last_at`, and the newest read's `last_turn_id`, `last_work_key`, `last_query` and, where the run was charged to a task in the engine's tracker, `last_work_item{id, key, title, ordinal}` — "turn 2 on ENG-412". At most 100 rows, newest first, with `readers_total`; `distinct_seats_today` is the seats that read it since the company's midnight, and `elided` how many (page, way) entries the per-seat-day cap dropped across the window, COMPANY-WIDE rather than for this page — some may have been this page's and none may have been, so a non-zero value says the list MAY be short (0: it is certainly complete). `since`, `until` and `days` name the window. Registered only where this node reads the `usage` domain |
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not. The answer carries `log_seq` and `applied_through` as a tracker answer does — this node's checkpoint on the pages log and the prefix of it whose records it applied, read in the transaction that read the changes — so a node holding a record it cannot decode says it is behind |
@@ -4335,8 +4392,9 @@ over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
 
 **A read no data node could answer is `unavailable`, never a list.** The
-tracker and the knowledge base are answered by a data node's copy of the estate
-— this node's own where it holds one, another data node's otherwise — and a
+tracker, the knowledge base and the usage history behind the spend, activity
+and readers screens are answered by a data node whose copy of that domain
+serves — this node's own where it holds one, another data node's otherwise — and a
 read nobody answered is refused `unavailable` (REST: `503` with a
 `Retry-After`) rather than answered as an empty list, which would say the
 company has nothing in it. `knowledge` is the one exception, because a search is
@@ -5281,7 +5339,73 @@ that has not been handed a company yet answers `503 no_active_revision` with a
 15-second `Retry-After`, and serves the tools its first revision brings up with
 no restart. `search_knowledge` is the exception and is
 offered against **any** knowledge backend, Confluence included — a ranked
-search over the company's own wiki is exactly as useful to an assistant there.
+search over the company's own wiki is exactly as useful to an assistant there —
+and so is `answer_knowledge`, which answers from it.
+
+A half's **reads and writes are offered apart**. A node that serves a half's
+reads and hands out no writer for it — any node started in a
+[maintenance mode](../guides/retention.md#the-three-modes) — offers its read
+tools (`list_work_items`, `get_page`, `read_project_file` and the rest the act
+transport does not serve) and none of its write tools. What appends to no log
+stays: the four tools about the fleet's own records, `search_knowledge` and
+`answer_knowledge`.
+
+**The catalogue follows what the node runs, without a restart.** Because each
+request builds it from what the node serves at that moment, it follows the
+revision that brings the company's first native backend (a company applied
+after boot — the [live bootstrap](../getting-started/quickstart.md) — is
+offered its tracker and knowledge base tools from that revision on), a
+revision that adds or removes the company's knowledge backend, and a rename of
+the company, which titles the MCP server. A revision that reconfigures the
+knowledge backend it has — another Confluence site or space, a rotated
+credential — changes no tool: `search_knowledge` and `answer_knowledge` reach
+the backend the node holds at each call. A revision that switches a native
+half to a vendor or back changes nothing here until the node restarts, as
+[A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)
+says for every surface. Nothing is held for a client between two requests, so
+a change ends nobody's connection, and a listing is answered by the catalogue
+of whichever node it reaches — which, in a fleet, may not have applied the
+revision yet.
+
+**A listening assistant is told when its tools change, by the whole fleet.**
+The server advertises `tools.listChanged`, and a client on the 2026-07-28 MCP
+protocol that listens for it — a `subscriptions/listen` stream, which the Go
+SDK's client opens at connect whenever it is handed a tool-list handler — is
+sent `notifications/tools/list_changed` on that stream, and lists again. The
+stream is one `POST` held open until the client ends it, its connection
+drops, or the node's listener shuts down — which answers every stream it holds
+as it begins, so a listening assistant never holds a node's shutdown. It is
+told:
+
+- **once as its stream opens.** A client usually lists its tools before its
+  stream exists, and that listing can predate a change announced in the
+  meantime; told once more, it lists again with the stream in place.
+- **whenever what any ingress node's catalogue is built from changes** — this
+  node's, or any other's: each node announces the change to the fleet
+  (`operator_tools_changed`), and every node tells every stream it holds.
+  Nodes apply a revision each on their own clock — a company's first apply
+  takes seconds — and a listing reaches whichever node a load balancer picks,
+  so a listing made after the first node's announcement can be answered by a
+  node that has not applied yet. The last notification a listening client
+  receives follows the last node's change, and the listing it makes then is
+  the new catalogue wherever it lands.
+
+That holds while the client's stream is open and the broker carries the
+announcement, which, like every announcement between nodes, is best effort: a
+node that cannot be reached at that moment does not relay it. A stream ends
+when the node holding it shuts down (it is answered, not cut); whether the
+client then opens another is the client's, and the Go SDK's client does not,
+so an assistant that was listening on a node that has since stopped is told
+nothing more until it reconnects. A client on an earlier protocol has no
+stream to be told on (its `GET` is answered `405`), so it sees the new tools
+the next time it lists them, or when it reconnects: after a revision that
+brings or retires a backend, have it list its tools again or restart it.
+
+**A request body is at most 4 MiB.** Every tool's arguments fit far below it
+— the largest is a page's body — except `write_project_file`'s `content`,
+which carries the whole file in one string; a file larger than that goes up
+through [`PUT /work/files/{project}/{path...}`](#project-files), which streams
+it.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
@@ -5385,9 +5509,14 @@ point:
 
 A stateful session — the transport's default — decided every call as the
 request that *opened* it, which made both of those false. Nothing this surface
-serves needs one: its tool list is read per request rather than pushed, so
-there is nothing to notify a client about, and no tool here asks the client
-anything back.
+serves needs one: its tool list is read per request, the one thing it pushes —
+that the list changed — goes down a listen stream that is itself one `POST`
+([above](#one-catalogue-and-how-a-retry-is-the-same-call)), and no tool here
+asks the client anything back. So a fleet's ingress nodes behind a load
+balancer need no session affinity, and a client that crashed leaves nothing
+behind on the node: a session-keeping transport refused every request that
+reached a node other than the one that opened the session, and the MCP client
+the Go SDK ships treats that refusal as the end of its connection.
 
 Every call that is not a proven read also leaves one `operator_acted` event —
 the same record a dashboard press leaves, with `transport: "mcp"` — in the
@@ -5772,20 +5901,30 @@ roster is everybody's overview.
 
 ## The native tracker and knowledge base
 
-`GET /work`, `GET /pages` and their neighbours read **this node's own
-projection** of the company's tracker and knowledge base — the same copy a
-seat's tools read, so an operator and an agent looking at one item see one
-item.
+`GET /work`, `GET /pages` and their neighbours read the company's tracker and
+knowledge base **through this node's
+[estate router](../concepts/scaling.md#how-a-request-reaches-the-estate)** —
+the same seam a seat's tools read through, so an operator and an agent looking
+at one item see one item.
 
 Three properties are worth stating because each is a decision rather than an
 implementation detail.
 
-**They are registered only where the company runs that backend.** A company on
-`tracker.backend: jira` has no `work_items` question at all, and asking gets
+**They are answered only where the company runs that backend.** A company on
+`tracker.backend: jira` has no `work_items` question to answer, and asking gets
 `unknown_query` / `404`. That is deliberate: an operator who wired Jira and
 then found a blank Crewlet board would reasonably conclude their integration
 was broken. There is no native record for this node to have a copy of, and an
-empty board would claim otherwise.
+empty board would claim otherwise. Whether the backend runs is asked of the
+engine **at every request**, never once when the API starts: a node that booted
+with no company builds its tracker and knowledge base at the first revision it
+applies, so a company bootstrapped live is served from that revision on with no
+restart. After that, the halves a node serves are the ones its runtime was
+built with, until it restarts: a revision that moves the company onto Jira or
+Confluence — or turns on a half it was built without — activates normally,
+logs `native_backend_needs_restart`, and changes what these questions answer
+only at the node's next restart (see
+[A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)).
 
 **A node that has not caught up refuses.** Every one of these answers
 `unavailable` (`503`, with a `Retry-After`) while this node is behind the log,
@@ -5930,10 +6069,10 @@ make the retry a second write.
 **Each mebibyte has 30 seconds to cross**, in either direction: an upload's
 mebibyte has 30 seconds of the time the server spends waiting on the client to
 arrive, never counting the time the server spends storing what already arrived,
-and a download's next to be
-taken by the client once it has been fetched — a floor of about 35 KB/s, far
-under any real link, and the same floor the object store holds its own
-transfers to. A whole-body deadline cannot bound a stream of up to a
+and a download's mebibyte has 30 seconds of the time the server spends waiting
+on the client to take it, never counting the time the server spends fetching it
+from the store — a floor of about 35 KB/s, far under any real link, and the
+same floor the object store holds its own transfers to. A whole-body deadline cannot bound a stream of up to a
 gibibyte without capping real uploads, and none at all let a client trickle one
 a byte at a time, or open a download and never read it, holding the handler and
 its connection for as long as it liked. An upload that stops arriving — a
@@ -5959,10 +6098,18 @@ origin.
 | `409` | `upload_expired` | The upload took longer than a write may name its object after (twelve hours from when its key was minted); send it again |
 | `413` | `body_too_large` | The content is over 1 GiB — refused before reading where `Content-Length` says so, and otherwise once the body passes it |
 | `500` | `content_corrupt` | The store answered with content that is not what the file records; trying again reads the same bytes, so restore the file from a backup or upload it again |
-| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now |
+| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now — the object store's bucket failing every attempt of a request for forty seconds to a minute among them, which ends an upload or a download then rather than at its deadline, and the store taking no more of an upload and not answering it for a minute, which ends the upload then; an upload in parts is answered up to thirty seconds later, once its unfinished upload has been abandoned |
 
-The byte routes are mounted only where the tracker is native **and** the node
-runs the object store. A company on Jira has no project files to serve.
+A download is served wherever the tracker is native **and** the node runs the
+object store; the upload and the removal also need the node to hand out the
+tracker's writer, which a node in a
+[maintenance mode](../guides/retention.md#the-three-modes) does not — there they
+answer `404 no_route`, like any path the node does not serve, while a download
+is a read and is served like every other. A company on Jira has no project
+files to serve. Whether the node serves them is asked at every request rather
+than once when the API starts, so a node that booted with no company serves a
+project's files from its first revision on the native tracker, with no
+restart.
 
 ### `GET /work/retention` — what the log is holding
 
@@ -6133,7 +6280,7 @@ controls, and a caller without it is refused `403` naming it.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's, the knowledge base's and the identity estate's; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's, the knowledge base's, the identity estate's and the code log; the vector and usage logs count no node and get none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to any log, when in any one of those logs the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register or a floor unreadable, a log's first surviving sequence unreadable, or this node behind a reanchor the fleet has made. The body carries `detail`, `hint`, `actions` `["retry_same_op", "other_node"]` and, where one log could not be judged, that `log`. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
@@ -6176,7 +6323,11 @@ other. A `200` answers **per log**:
     {"domain": "iam", "stream": "CREWLET_IAM_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.iam:node-4",
      "outcome": "applied",
-     "position": {"stream": "CREWLET_IAM_LOG", "generation": 0, "seq": 58311}}
+     "position": {"stream": "CREWLET_IAM_LOG", "generation": 0, "seq": 58311}},
+    {"domain": "code", "stream": "CREWLET_CODE_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.code:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_CODE_LOG", "generation": 1, "seq": 2207}}
   ]
 }
 ```
@@ -6215,7 +6366,7 @@ a fresh one is equally safe.
 | `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched`), a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `eviction_unknown`); a gate refusal — `evicted`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged`; and `503 readmission_unjudged` (beside `other_node`) |
 | `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
 | `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
-| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown (this node's ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor` and `503 readmission_unjudged`. An `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
+| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown (this node's ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor` and `503 readmission_unjudged`. An `overtaken` or `abandoned` refusal, and an `evicted` one whose `hint` says the gesture's own record on that log applies nowhere, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first. An `evicted` refusal held at another operation's record — the newest on the log's subject when the gesture's answer was lost, which may be a healthy peer's — is this node's own eviction: send it through another node at once, and if this node's own record did land, that node's answer says so and when |
 | `reanchor` | [Re-anchor the log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log) first, then send the same request with the same `op_id` | `wrong_stream` |
 | `set_capacity` | [Raise the log's ceiling](../guides/retention.md#changing-a-logs-ceiling), then send the same request with the same `op_id` | `log_full` — a gate record is admitted into the log's [gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full to its broker ceiling past even that |
 | `wait` | Wait for what `hint` names to clear on its own, then run it again — what that is depends on the refusal, so a client reads the answer's `error` beside the action | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up), `409 not_publishing` (the fleet to leave its capacity window) |
@@ -6286,7 +6437,9 @@ Every node running the state log serves both routes, whichever backends the
 company uses: a company on an external tracker still runs every log. A
 node with no log to write a gate to answers `503` rather than `404` — the
 routes exist on this build, and telling an operator they do not sends them
-looking for a version mismatch that is not there.
+looking for a version mismatch that is not there. Whether the node runs one is asked at every request: a node that
+booted with no company starts its state log with the first revision that runs
+one, and serves both routes from then on with no restart.
 
 ### The capacity window
 
@@ -6766,6 +6919,249 @@ The API origin **never renders an artifact**:
 | `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |
 | `503` | `unavailable` | This node could not decide or reach the estate; the `Retry-After` says when to come back |
 
+## The code host: `/git` and `/code`
+
+A company that sets [`code.native`](../concepts/code-host.md) hosts its git
+repositories in the engine. A person reaches them with git's own smart HTTP
+under `/git/`, on any node whose `node.roles` name `git` (by default a node
+has every role), and anybody the guard resolves reads the rows under `/code/`
+on every node, each answer holding to the repositories they may read. Both
+prefixes are **guarded**, reads included, and **neither is ever on the
+[public listener](#which-listener-serves-what)**: a person's own credential —
+for git, a [machine token](#post-iamcredentials-mints-a-machine-token) acting
+as them — is what reaches them, and that socket serves only outside parties,
+who hold none. On `/git/` — and on no other route — the token may arrive as
+the password of a Basic credential, which is the only way a git client sends
+one ([the auth note under Routes](#routes)). Who may push is the person the
+credential resolves to: see
+[Persons and their tokens](../concepts/code-host.md#persons-and-their-tokens).
+
+**Every surface is asked of the engine on each request.** The code host is
+built with the node's native runtime — at boot, or at the first apply whose
+company sets `code.native`, which on a node that booted with no company comes
+after the API started — so the routes serve the moment it exists, with no
+restart.
+
+### git's smart HTTP
+
+| Method | Path | What it is |
+|---|---|---|
+| `GET` `HEAD` | `/git/{repo}/info/refs?service=git-upload-pack` | A clone's or a fetch's advertisement. `{repo}` is the repository's name, with or without `.git` |
+| `GET` `HEAD` | `/git/{repo}/info/refs?service=git-receive-pack` | A push's advertisement |
+| `POST` | `/git/{repo}/git-upload-pack` | A fetch's request: protocol v2's `ls-refs` and `fetch`, or v0's negotiation |
+| `POST` | `/git/{repo}/git-receive-pack` | A push |
+
+These speak git's protocol, not JSON, and a refusal on them is one
+`text/plain` line — the one form git prints — listed with what to do in [What
+git prints, and what it means](../concepts/code-host.md#what-git-prints-and-what-it-means).
+What a route answers before git is reached:
+
+- **A node without the `git` role** mounts none of them: `404 no_route`, as for
+  any route this node's configuration does not enable.
+- **A company that does not set `code.native`** (or no company yet): `404`,
+  `this company does not host code (code.native is not set)`.
+- **A company that sets it, on a node that serves none of it now** — or a
+  node that has not yet read whether it does: `503`, saying which of four it
+  is, the line ending with its code in brackets — judged from the
+  configuration the fleet activated, never from what this node last applied,
+  so a company that has just turned `code.native` on is never told it does
+  not host code, and never stating what that configuration says where the
+  node has not read it:
+  - the node is **applying** the configuration the fleet activated — its
+    first company's code host still being built among it — and answers once
+    the apply ends (`applying`): `Retry-After: 5`;
+  - its apply of a configuration that hosts code **failed**
+    (`config_apply_failed`: a code host that could not be built, a revision
+    the node refused — `GET /fleet` and its log say why): no `Retry-After`,
+    since waiting clears nothing, and another node serves it;
+  - its apply failed **before it could read** the configuration — the
+    revision could not be fetched, opened with the node's key or parsed — so
+    it cannot say whether the company hosts code, and says so
+    (`code_unknown`): no `Retry-After`, the line naming what it could not
+    read rather than that the company hosts code;
+  - its native runtime was already running when `code.native` was turned on,
+    and serves it once **restarted** (`native_backend_needs_restart`): no
+    `Retry-After`, for the same reason.
+- **No credential, or a refused one**: `401` with `WWW-Authenticate: Basic
+  realm="crewlet", charset="UTF-8"`, which is what makes git ask its credential
+  helper.
+- **Every caller the guard resolved** reaches git (`code.git`): what a fetch or
+  a push may do is the caller's grant on the repository, decided once it is
+  read — a push from a caller who may push nothing is refused at its
+  advertisement, and every command it carries is judged by the grant.
+- **A draining node** finishes a fetch already begun and refuses a new fetch
+  and every request of a push, `503` with `Retry-After: 30` ([During a
+  drain](#during-a-drain)).
+
+### The code reads
+
+Every caller the guard resolved reaches these (`code.read`): what each answers
+is the caller's grant on each repository, decided once the repository is read
+([Who may read and push](../concepts/code-host.md#who-may-read-and-push)) — so
+a repository a caller may not read is left out of a listing, and answered
+`403 not_permitted` alone.
+
+| Route | What it answers |
+|---|---|
+| `GET /code/repos` | The repositories the caller may read, by name, a page at a time: `?status=` a comma list of `active`, `archived`, `deleted` and `purging` (unset is `active,archived`), `?limit=` (1–500, unset or `0` is 100) and `?cursor=` (the `next` of the page before). Each carries its id, name, status, owner, `visibility`, default branch, protection rules, ref and pack counts and bytes, the default branch's head, how many pushes it has ever had, and `access`, what the caller may do to it (`maintain` for a person, `read` for a credential bound to nobody). A page counts the repositories it **scanned**, so one may hold fewer than its limit — even none — and still carry a `next`: page until no `next` comes back |
+| `GET /code/repos/{name}` | One repository in detail: the listing's fields, its branch, tag and ref-tombstone counts, when it was created, and the `code.limits` of the node that served the read |
+| `GET /code/repos/{name}/pushes` | Its push history, newest first: `?limit=` (1–200, unset or `0` is 50) and `?cursor=`. Each push names its id, the credential that pushed it (`actor` — `pat:<credential id>` for a machine token, `token:<id>` for a Tier A token, `session:<lineage>` for a signed-in session — as every record a write leaves names it), the human seat its principal holds (`actor_seat`: a person's own, or the seat the identity directory binds a token to), the node that received it, every ref it moved or was refused with the reason, its pack, and the position its record landed at. A ref the engine refused for being longer than 255 bytes or not UTF-8 is named in a bounded form: as much of it as fits in 255 bytes, then its length and a digest of the whole |
+
+Every answer carries the `position` and the `level` it was read at. They read
+at the REST read path's level — `stale` by default — through the same
+freshness keys as every other read: `read_level` (`linearizable`, `stale` or
+`consistent_prefix`; `session` is refused naming the three, since none of the
+caller's writes lands on the code log through this surface), `max_lag_seconds`, `max_lag_seq`
+and `min_position` ([Read Consistency](../guides/consistency.md#which-surface-reads-at-which-level)).
+A client that must not conclude a repository is undeclared from an old copy —
+a script about to create one — asks `read_level=linearizable`: at `stale`, a
+repository declared a moment ago may not have reached this node's copy, and is
+answered `404`.
+
+A refusal is the read surface's:
+
+- `404 not_found` for a repository that is not declared, with `"reason":
+  "not_declared"`, and for a company that hosts no code, with `"reason":
+  "not_hosted"` — told apart by the `reason` rather than the sentence, because
+  they are remedied differently: a repository is declared in `code.repos`, and
+  declaring one changes nothing until the company sets `code.native`;
+- `403 not_permitted` for a repository the caller's grant does not cover, the
+  `detail` naming who asked, the repository and why — for a seat a
+  `visibility: unit` repository shuts out, that visibility and who among the
+  seats does read it ([Visibility](../concepts/code-host.md#visibility)). A
+  person reads every repository, so a person is never answered it;
+- the guard's own answers for a caller it could not resolve, which a read
+  repeats rather than judge a request for nobody: `401 invalid_token` for one
+  that presented no credential the node accepts, and `503
+  identity_unavailable` with `Retry-After: 2` for one this node could not tell
+  who it is — a node that cannot read its identity estate, or a request that
+  reached the route past no guard at all;
+- `400 bad_params` naming the parameter or the level refused;
+- `503 unavailable` with `Retry-After` for what clears by waiting — this node
+  behind the code log, no quorum, no data node serving the read;
+- and `500 query_failed` for anything else.
+
+A company that hosts code on a node that serves none of it now — or a
+node that has not read whether it does — is answered `503` under the code the
+git routes name above, as the envelope's `error`, with its `message` and a
+`detail` saying what this node found: `applying` (with `Retry-After: 5`),
+`config_apply_failed` (a failed apply), `code_unknown` (an apply that failed
+before the node could read the configuration, the `detail` naming what it
+could not read) or `native_backend_needs_restart` — the last three with no
+`Retry-After`, since waiting clears none of them and another node serves the
+read. Every one of them is served through a drain.
+
+### `POST /code/repos/{name}/verify`
+
+Begins a check of **this node's** copy of one repository against its rows —
+every pack against the bytes its row names, the refs against what was written,
+and git's own connectivity check — and, with `?repair=true`, a repair of what
+it finds, after which the copy is checked the same way: **in place** where
+everything it found is the copy's own directory out of place (a file the
+engine does not write there, a fixed file edited or replaced by a link, a pack
+no row names, a shape the node refuses to run git in) — every pack and index
+kept, nothing downloaded — and a **rebuild** otherwise, or of what that leaves
+(every pack the check found whole linked rather than downloaded again).
+`repair` is `true` or `false`; anything else is `400 bad_params`.
+
+Before it checks, the node brings its copy to the **log's head**, which
+appends a barrier to the code log — or, with `min_position`, to that position
+on the code log (the `position` a code read answered with), with no barrier:
+a copy already there is checked as it is. A sweep of many repositories reads
+its listing at `read_level=linearizable` once and names that listing's
+position on every verify, so the sweep costs the code log one barrier rather
+than one a repository — the log whose census counts a day's barriers as its
+people's git reads. A position that does not parse, or one on another log, is
+`400 bad_params`.
+
+**It is the one `/code/` route whose work grows with the repository**: it reads
+every byte of the copy — measured at about nine seconds a gigabyte, git's
+connectivity check nearly all of it, minutes for a large repository, and
+about twice that with a repair — which outlives any proxy's read timeout. So
+the check runs on the node's own time — the request ending, or a proxy
+closing it, ends nothing — and the request waits for it **a quarter of a
+second at most**: a check that ends within it (a copy of up to some 25 MiB)
+is answered **`200`** with the verification ended, its report in the one
+answer, and one still running **`202 Accepted`**, with its address in
+`Location`. Read the outcome there (below) until it ends.
+
+```json
+{ "id": "0190d2f2-…", "repo": "web", "repair": false, "state": "running",
+  "started": "2026-10-14T21:30:00Z" }
+```
+
+What can be refused without reading the repository is refused at once, having
+read nothing — so a retry costs nothing either:
+
+- `404 not_found` for a repository that is not declared (`"reason":
+  "not_declared"`, its `detail` naming `code.repos`), for a company that hosts
+  no code (`"reason": "not_hosted"`, as on the reads), and for one **this node
+  holds no copy of**, which carries `"reason": "not_held"` beside it: a git node keeps a copy only of the
+  repositories it has served and not evicted, and building one to check would
+  be a download of the whole repository that then evicts a warm one. Verify the
+  git nodes that serve the repository — with requests routed by repository, one
+  or two. The two are told apart by the `reason` rather than the sentence
+  because a sweep of every repository on one node acts on them oppositely: a
+  repository the node does not keep has nothing there to be damaged, and is
+  passed over, while a name nobody declared is a mistake.
+- `503 unavailable` with `Retry-After: 10` when the node's maintenance lane has
+  no free slot or the background work in flight leaves the check no memory: a
+  check holds one slot of that lane, and its connectivity check's memory, from
+  its admission to its end — the node's background indexing keeps one slot for
+  it — so how many checks run at once is bounded by the lane.
+- `409 verify_running` when a check of the repository with the other `repair`
+  setting is running on the node, naming it as `running`. One with the same
+  setting is answered as that one: two asking share one check.
+- `503 unavailable` with `Retry-After: 30` on a node whose code host is
+  stopping, and `500 query_failed` **with its sentence** when the node's memory
+  cannot hold the check at all — the sentence says to run it on a node with
+  more.
+
+A write to the drain — a repair writes into the node's copy — so a draining
+node refuses it.
+Mounted only where git is served.
+
+**Admin's**, as the deployment's other controls are (`fleet.operate`, which
+asks a signed-in person for a recent proof; the read below is `fleet.read`): a
+caller without `admin` is refused `403 unauthorized` naming it, before the node
+is asked anything. The check reads every byte of this node's copy and holds a
+slot of its maintenance lane, and a repair rewrites what every fetch on the
+node is served from — an operation on the node, which no repository's own
+grant decides.
+
+### `GET /code/repos/{name}/verify/{id}`
+
+A verification begun by the `POST` above: `state` is `running`, `done` — with
+`report`, the node's check: `packs` and `refs` checked, as
+`repaired_by_sync` what the node's sync before the check found damaged and
+repaired in place (a file the copy no longer holds, so no problem of it and
+nothing a repair rebuilds), every `problems` sentence naming the file and both
+values (none is a copy exactly its rows), and after a repair how it was made —
+`repaired_in_place` where the copy's own directory was put right in place,
+`rebuilt` where it was rebuilt, both where a rebuild followed for what the read
+in place left — with `problems` what the check after it found and, as
+`found`, what the first check found — or
+`failed`, with `error` (`unavailable` for what a retry or a restart clears, a
+stop among them; `query_failed` otherwise), `detail`, its sentence — a pack the
+object store does not hold, the stop that cut it short — and `report`, **what
+the check found before it failed**. `ended` is set once it is not running.
+
+While it is `running` and checking the copy, `deadline` is **when the node
+ends that check by**: each check pass is bounded by what the copy holds —
+about 1.1 seconds a mebibyte, git's connectivity check given a second of it
+and the hashing a tenth, against a measured 9 ms — and a pass still running
+then is ended, `failed` saying it ran past its bound, rather than holding its
+slot. A client waits by it. It is absent while the node first brings its copy
+to the rows it checks against, and while a repair reads it whole in place or
+rebuilds it: each read of the object store those make is bounded on its own,
+as every sync's is.
+
+The node keeps a verification **an hour after it ends**, until the
+repository's next verify begins, and never across a restart: a verification it
+does not keep is `404 not_found`. A read, so a draining node still answers it.
+A client polls it — by the `deadline` the node states, at doubling waits from
+the quarter of a second the request already waited; what it costs is a lookup.
+
 ## Agent Memory
 
 ### `GET /agents/{id}/memory`
@@ -7091,8 +7487,10 @@ omits those fields entirely, and the dashboard draws an em dash. A confident
 `0` would render an idle row for a process that is simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
-their only symptom is an absence: `unmanned_roles` lists roles no live
-node performs, and `unplaceable` lists seats whose `role.placement`
+their only symptom is an absence: `unmanned_roles` lists the roles the
+company needs that no live node performs — `git` only where it sets
+`code.native`, by the same rule each node's `fleet_role_unmanned` warning
+reads — and `unplaceable` lists seats whose `role.placement`
 matches no live node. A lease table that could not be read answers `503`
 with a `Retry-After` rather than an empty fleet: "no node is live" is a
 claim, and a store blip is not evidence for it.
@@ -7139,12 +7537,14 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
       "referenced": 1828,
       "missing": 0,
       "damaged": 0,
+      "unanswered": 0,
       "found": {
         "at": "2026-09-01T09:00:00Z",
         "completed": true,
         "referenced": 1828,
         "missing": 0,
-        "damaged": 0
+        "damaged": 0,
+        "unanswered": 0
       }
     }
   }
@@ -7159,18 +7559,20 @@ reads no record.
 
 `state` names three things apart rather than drawing any of them as an empty
 report: `unavailable` (the coordination store did not answer), `not_yet` (no
-collector has finished a pass — a new fleet, or no data node running the duty)
-and `reported`. Only a report carries the other fields. The example is the
-engine's own rendering: a test holds its `objects` block to what the renderer
-writes.
+collector has finished a pass on the store the files are in — a new fleet, no
+data node running the duty, or a fleet whose files
+[moved](../concepts/object-store.md#one-store-per-fleet) since the last report,
+which describes the old store and is never shown as the new one's) and
+`reported`. Only a report carries the other fields. The example is the engine's
+own rendering: a test holds its `objects` block to what the renderer writes.
 
 | Field | What it is |
 |---|---|
 | `backend` | The store every node agreed on at boot: `nats` (the data nodes' replicated bucket) or `s3:<endpoint>/<bucket>/<prefix>` |
 | `node` | The data node holding the collector's duty when it ran the passes below |
-| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row still did) and `abandoned` (uploads begun more than a day ago and never finished, which no listing shows). `skipped` says why it stopped judging — an estate this node could not fully read — and the counts are what it did before it stopped; `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
-| `audit` | The last **audit attempt**, which asks the store about every object a row names: when it ended (`at`), `referenced`, `missing` (objects the store does not hold), `damaged` (objects it holds at another size, or under another digest where it keeps one), `completed` — false over an estate that was not complete, when the counts are floors — and `error`, what stopped it. Absent before the first one ends |
-| `audit.found` | What the last audit to **run to its end** found — the attempt above, or the one before it when that one failed, so a failed attempt never hides what was found: `at`, `completed`, `referenced`, `missing`, `damaged` and `missing_files`, the first hundred files that cannot be read, each `{"object", "named_by", "damaged"}` — the object's key, the file as `PROJECT/path`, and `true` where the store holds it wrong rather than not at all (absent when none). A non-zero `missing` plus `damaged` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
+| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row — live or retired — still did) and `abandoned` (uploads begun more than a day ago and never finished, which no listing shows). `skipped` says why it stopped judging — an estate this node could not fully read — and the counts are what it did before it stopped; `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
+| `audit` | The last **audit attempt**, which asks the store about every object a live row names — never one a [retired](../concepts/object-store.md#live-and-retired-references) row keeps for a grace: when it ended (`at`), `referenced`, `missing` (objects the store answered, twice, that it does not hold), `damaged` (objects it holds at another size, or under another digest where it keeps one, or as no object it can read at all), `unanswered` (objects the store failed to answer about twice while it answered for the rest), `completed` — false over an estate that was not complete, when the counts are floors — and `error`, what stopped it: an estate it could not read, or a store failing rather than refusing particular objects. Absent before the first one ends |
+| `audit.found` | What the last audit to **run to its end** found — the attempt above, or the one before it when that one failed, so a failed attempt never hides what was found: `at`, `completed`, `referenced`, `missing`, `damaged`, `unanswered` and `missing_files`, the first hundred files by `named_by` that cannot be read, each `{"object", "named_by", "finding"}` — the object's key, the file as `PROJECT/path`, and what was found of it, `missing`, `damaged` or `unanswered` (absent when none). A non-zero `missing`, `damaged` or `unanswered` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
 
 A collection runs hourly and an audit daily, on one data node at a time; a pass
 that fails is tried again ten minutes later.
@@ -7504,7 +7906,8 @@ ceiling by that round: the Engineer above had 99 120 of 100 000 when a
 
 Copies this node's durable state — both of its store files, every JetStream
 stream and coordination bucket, and every object holding a company file that
-the store copy names — into `?dir=`, a directory **on the engine's host**.
+a live row of the store copy names, or that a record a restore replays from
+the copy names — into `?dir=`, a directory **on the engine's host**.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
@@ -7524,7 +7927,8 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
      "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
      "migrations": ["0001_tracker.sql", "…"]}
   ],
-  "objects": {"dir": "objects", "objects": 40, "bytes": 41943040, "reused": 36,
+  "objects": {"dir": "objects", "objects": 40, "bytes": 41943040, "replayed": 2,
+              "reused": 36,
               "reused_from": "/var/backups/crewlet/2026-08-29T18-00/objects"},
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
@@ -7552,11 +7956,16 @@ being copied. The work is safe to be cut off, since the store copy is renamed
 into place only after it verifies and the manifest is written last, so a
 client that gives up leaves an unfinished directory rather than a false one.
 
-Four refusals, each pointing somewhere different:
+Eight refusals, each pointing somewhere different:
 
 - **401 without a credential, and 403 without `admin`.** This writes
   every credential the company holds to a path the caller chooses, so it is
   the deployment's own control and nothing narrower reaches it.
+- **409 `backup_running`** — a backup is already running on this node. One
+  runs at a time: the trim hold a backup takes is keyed on the node, so two at
+  once would share one pin and the first to finish would release the other's.
+  Nothing is written — not even the directory — and the request can be made
+  again once the running one finishes.
 - **400 for a destination this node cannot use** — relative, already occupied,
   one this host cannot create, read or make private (a path through a regular
   file, a parent that does not exist or is not writable, a read-only mount), or
@@ -7567,20 +7976,55 @@ Four refusals, each pointing somewhere different:
 - **503 `objects_unreachable`** — the store copy names objects holding the
   company's files that the object store did not answer for. Nothing is wrong
   with this node or the command: check that it reaches the store and take the
-  backup again. A backup without those objects is refused rather than written,
-  because they may well be intact there. An object the store *answered* it does
-  not hold, or holds as bytes other than the ones the file records, is
+  backup again — `Retry-After: 4`, the broker's own election timeout, since
+  the default store is the data nodes' NATS bucket, which answers again no
+  sooner than its group elects a leader. A backup without those objects is refused rather than written,
+  because they may well be intact there — and the first object the store still
+  does not answer for once it has been asked four times stops the copy, since
+  the backup is refused for it whatever the rest do. An object the store
+  *answered* it does not hold, or holds as bytes other than the ones the file records, is
   different — it is lost whatever the backup does — and is listed in the
   manifest's `objects.lost` (each with the file that named it, as
   `{"object", "named_by"}`) rather than refused, so one lost file never stops
   every later backup and, with them, the trim (see
-  [Backup](../guides/backup.md)). On an S3 bucket each object is copied into
-  `objects/` under the bucket's own layout and checked against its row as it
-  is written. On the default `nats` backend the objects are in a stream the
-  backup snapshots with every other (`objects.stream` names it, and no object
+  [Backup](../guides/backup.md)) — and only where the restored rows name it:
+  a file the copy names that a record after the copy replaced or removed is
+  owed by nothing a restore brings back. On an S3 bucket each object is copied
+  into `objects/` under the bucket's own layout and checked against its row as
+  it is written. On the default `nats` backend the objects are in a stream the
+  backup snapshots after every other (`objects.stream` names it, and no object
   is copied on its own); once the snapshot is taken the store is asked about
-  each object the copy names, so the same refusal and the same `lost` list
-  apply there too.
+  each object the backup owes, so the same refusal and the same `lost` list
+  apply there too. Either way the backup owes, besides the copy's own, every
+  object a record the restore replays from the copy names — a file written
+  while the backup ran — and `objects.replayed` counts those. An object only
+  a [retired](../concepts/object-store.md#live-and-retired-references) row
+  names is neither copied, asked after nor listed.
+- **409 `record_unreadable`** — a log the backup reads past its store copy
+  holds a record this node's build cannot read that may write a file: a newer
+  build's, during a rolling upgrade. It may name a file the backup would not
+  carry, so the backup is refused rather than guessed: take it from a node
+  running the build that wrote the record, or from this one once it is
+  upgraded. The `hint` says so.
+- **409 `record_unverified`** — a record the backup reads past its store copy
+  is signed under a key this node's `secrets.keys` does not hold, so the node
+  cannot vouch for what it names: add the key and restart the node, or take
+  the backup from a node that holds it. The `hint` says so. A record no key
+  of the fleet opens is not this — it is bytes no node of the fleet signed,
+  and refuses the backup as `500 backup_failed`, the reason in the node's log.
+- **409 `log_recreated`** — this node's store copy is keyed to an earlier
+  instance of a log that has since been recreated, so its position names
+  records on a log that no longer exists. Take the backup once this node has
+  re-keyed to the live log, or from a node that has.
+- **503 `log_gap`** — a log a restore replays from the store copy no longer
+  holds every record between the copy's position and its snapshot: the trim
+  ran past the copy, or the log has a hole in it. Take the backup again —
+  `Retry-After: 1`, at once, since the next take makes a fresh copy whose
+  position stands past the gap and nothing has to happen in between (a second
+  is the smallest wait the header carries, and zero would say not to come
+  back) — and if it is refused the same way, look for
+  `backup_hold_not_renewed` in the node's log: the trim hold did not cover the
+  copy.
 - **A copy without the stream estate.** A node that dialled an external NATS
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest
@@ -7589,15 +8033,18 @@ Four refusals, each pointing somewhere different:
 Every backup that began copying leaves a `backup_requested` event naming the
 caller, the node, the directory and whether it finished — a failed one
 included, since it may have left files there. A destination refused with a
-`400` wrote nothing and leaves no event — a `400` is only ever answered before
-a byte is copied; a refusal that arrives with part of the copy already in the
-directory is a failed backup and is recorded as one: see
+`400`, and a backup refused with `409 backup_running` while another runs,
+wrote nothing and leave no event — each is only ever answered before a byte is
+copied; every other refusal — `record_unreadable`, `record_unverified`, `log_recreated`, `log_gap`
+and `objects_unreachable` among them — arrives with part of the copy already
+in the directory, and is a failed backup recorded as one: see
 [the runtime audit](#the-runtime-audit-sourceoperator).
 
 The request has no deadline of its own on the engine's side, and a client
 should give it a long one: `crewlet backup` and the dashboard both wait up to
-**30 minutes** for the answer, because the copy is bounded by the size of the
-store and the stream estate and a client that gave up early would report a
+**12 hours** for the answer, because the copy is bounded by the size of the
+store, the stream estate and — on `s3` — the company's files, whose first copy
+is hours over a modest link, and a client that gave up early would report a
 failure while the engine finishes a good backup. Taking one from the dashboard
 is **Settings › Backups & retention › Take a backup**.
 

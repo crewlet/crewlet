@@ -190,10 +190,25 @@
 //
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
-// halts, health goes false immediately, and the node takes its copy of the
-// estate out of service — its seats read it from another data node that can
-// decode it. A deferred gate does not postpone one record's effect on one
-// node; it silently licenses every record above it.
+// halts, health goes false immediately, and the node takes its copy of THAT
+// DOMAIN out of service (ADR-0046) — that domain's operations go to another
+// data node that can decode it, and its seats stay. A deferred gate does not
+// postpone one record's effect on one node; it silently licenses every record
+// above it.
+//
+// # A domain's fault takes only its own copy out of service
+//
+// Every domain's copy is judged on every reading, by the one predicate that
+// judges any ([Health.Healthy]), and a copy that is WRONG — not behind — goes
+// out of service for that domain alone: the node answers none of that
+// domain's operations from it, and every other domain it holds keeps
+// answering from its own copy. Which domains a SEAT depends on is a separate
+// declaration ([Domain.GatesSeatAdmission]): admission waits for those to be
+// level, and a node whose copy of one of them is out of service routes its
+// seats through its peers. Whether a copy is judged is never declared, because
+// a domain allowed to opt out is a domain whose wrong copy is served for ever.
+// This is ADR-0046; the engine computes the verdict per domain and the
+// estate's router asks it of each operation's own domain.
 //
 // The consequence every reader of an ABSENCE inherits: the checkpoint moves
 // past a retained record, so "this node has consumed the log through here" is
@@ -360,6 +375,32 @@
 // zero is the truthful statement "this subject holds nothing", arbitrated
 // between concurrent writers exactly as a create is.
 //
+// # An anchor below the floor is removed by a record
+//
+// Below the floor an anchor names a record the log no longer holds, so all it
+// can do is send its subject's next write to be refused before the
+// discriminator takes the zero path — and kept, the table grows by every
+// subject the log ever carried. The trim removes them (ADR-0047): after each
+// tick's purge it appends a framework [TrimmedKind] record naming the log's
+// first surviving sequence ([PlanSweep], [SweepPlan.Sweep]), and every node's
+// applier removes that log's anchors below it in the transaction that applies
+// the record, at most [AnchorsPerTrimmedRecord] a record, lowest first — never
+// a sweep beside the applier, because the table is replicated state
+// (ADR-0002). The trim
+// counts them only from a copy that has applied the whole log, appends each
+// record only once its own node has applied the one before, and stops when a
+// time budget is spent: a write or a read queued behind the records waits one
+// record's apply on the node that appended them, at most about k − 1 budgets
+// on a node that applies them k times slower, and the trim's own goroutine is
+// held for at most the budget ([SweepPlan.Sweep]). A write to a subject whose
+// anchor went takes the road to zero an object never written takes — the
+// subject's last sequence from the log, then the fence — rather than the one
+// through the broker's refusal of a stale anchor, and both are the roads the
+// proof above covers: the removal moves a write between them and never off the
+// fence. That is why it is safe at any bound, and why the bound — what the log
+// no longer holds, rather than anything higher — is chosen for cost: an anchor
+// of a record the log still holds saves its next write a leader read.
+//
 // The deferral probe, the per-tick floor check and the per-write fence are
 // therefore LOAD-BEARING rather than defensive. None may be optimised away as
 // a rare case.
@@ -385,7 +426,11 @@
 // generation on the live stream and re-keys the runner to it, so every number
 // above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
-// domain's log would key it to a stream it never read.
+// domain's log would key it to a stream it never read. WHICH instant
+// identifies a stream is ADR-0050: the one its creator stamped into its
+// configuration ([CreatedAtKey]), which a snapshot restore keeps and the
+// broker's own does not, read by every consumer through [StreamCreatedAt] and
+// by nothing else.
 //
 // The instant is not the only way the premise fails. A broker restored from a
 // copy older than this node's rows keeps its stream, instant and all, and the
@@ -461,6 +506,57 @@
 // identity are keyed by the stream's name; a position row, a floor and a
 // manifest name the log by the domain's; and a barrier proves where that one
 // log ends, single-flighted per node per log ([ReadIndex]).
+//
+// # What a write costs, measured
+//
+// `make bench`'s BenchmarkArbitratedWrite runs ONE WRITE END TO END on a node
+// whose every seam a healthy write takes is real — the fence's read of this
+// node's own eviction row, the session wait for the writer's own last write,
+// one snapshot of the rows, the decision, the append the broker arbitrates,
+// this node's applier reaching it, WaitApplied — on a test domain that writes
+// one row a record, so its figures are the FRAMEWORK'S FLOOR, and a real
+// domain's decision and apply add to them. On four vCPUs of a KVM Intel Xeon
+// at 2.8 GHz, Go 1.27.2, nats-server v2.15.0, tursogo v0.8.1, 2026-10-10, at
+// `stream.sync: always` unless said, p50 / p99:
+//
+//   - SOLO, one subject's serial chain — each write arbitrated against the
+//     anchor the one before it advanced — took 3.2–3.3 / 7.1–7.2 ms, about
+//     295 writes a second; sixteen subjects written at once, 1,335–1,430 a
+//     second together. With the fsync declined, 3.0 ms and 310 a second.
+//   - AT THREE REPLICAS — the three members, their brokers, appliers and
+//     estates all on that one machine, so pessimistic per node and with no
+//     network hop — the serial chain took 7.0–7.6 / 15–18 ms from the
+//     stream's leader and from a follower alike, 124–133 writes a second on
+//     one subject; sixteen subjects, 520–570 a second. With the fsync
+//     declined the chain took 4.1–5.1 ms, 183–228 a second.
+//   - A LINEARIZABLE READ is a barrier append — 0.57–0.59 ms solo,
+//     3.5–3.9 ms at three replicas — and then this node's applier reaching
+//     it: the whole wait 1.7–1.8 / 4.3–4.6 ms solo and 4.8–5.5 / 10–12.5 ms at
+//     three, 535–555 reads a second from one reader solo and 171–197 at
+//     three.
+//   - SIXTEEN READERS AT ONCE on one node SHARE their barriers
+//     ([ReadIndex.Read]): 0.12 appends a read for the barrier alone, and
+//     0.14–0.23 for whole reads, whose waits for the applier spread their
+//     arrivals. A read may use only a barrier that started after it arrived,
+//     so readers calling back to back divide into two halves, each served by
+//     every other barrier — about eight a barrier. The node served
+//     4,600–4,700 linearizable reads a second solo and 1,120–1,610 at three
+//     replicas — eight times one reader's solo and six to eight at three —
+//     each read waiting at most two barriers: 3.3 / 8.3–8.5 ms solo and
+//     9.6–12.5 / 19–31 ms at three.
+//
+// The ranges are two runs on a VM shared with other work, where one run can
+// land a third away from another: compare two trees on one idle machine with
+// benchstat rather than against these.
+//
+// BenchmarkApplierDrain prices the apply lane every domain on a node shares:
+// it drained a burst of one-row records at about 5,900 a second — each
+// record's anchor, ledger row and checkpoint are what a small record costs —
+// and internal/store's BenchmarkLogApplyDrain prices large ones, 52,000–63,000
+// rows a second as multi-row statements and 16,000–17,400 one statement a row.
+// The serial chain on one subject is what one object, or one repository's
+// committer, can do before it batches; the drain is the node's ceiling across
+// every domain at once.
 //
 // # Who may write a log: every writer is counted by construction
 //

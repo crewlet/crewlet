@@ -324,8 +324,9 @@ func recordMAC(key []byte, domain, id string, body []byte) []byte {
 // signedAppender signs every body on its way to the log.
 //
 // WRAPPING THE APPENDER rather than signing at each call site is what makes
-// the rule impossible to forget: there are two appends in this package today
-// (a write authority's and a read index's barrier), and the third one somebody
+// the rule impossible to forget: there are three appends in this package
+// that sign their own records today (a write authority's, a read index's
+// barrier and the anchor sweep's trimmed record), and the next one somebody
 // adds is signed by construction rather than by review.
 type signedAppender struct {
 	Appender

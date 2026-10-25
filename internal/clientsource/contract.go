@@ -292,6 +292,7 @@ var contract = []Entry{
 	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},
 	{"BROKER_REMOVE_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastABrokerRemoval"},
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
+	{"OBJECT_FINDINGS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectFinding"},
 
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/pages.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},

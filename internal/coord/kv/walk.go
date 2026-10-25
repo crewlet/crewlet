@@ -6,9 +6,17 @@
 // key ON TOP of an ordered ephemeral consumer created and destroyed per call:
 // two JetStream metadata proposals on a clustered bucket, for a question that
 // is one pass over the stream. Several of a node's fifteen-second duty loops
-// read a bucket on every tick and the state-log write fence lists the trim
-// floors out of the positions register on every write at an expectation of
-// zero, so that cost is paid continuously rather than at the edges.
+// read a bucket on every tick, so that cost is paid continuously rather than
+// at the edges.
+//
+// A pass is still a consumer created and deleted, which is why no state-log
+// read and no seat's write waits on a listing: the state-log write fence
+// listed the trim floors on every write at an expectation of zero, and on a
+// loaded three-member fleet the consumer's create ran past the client's
+// five-second API timeout and refused a page create with the register
+// perfectly readable. It reads its one domain's floor by key now
+// ([FleetStore.Floor]). What still lists does so on a duty loop's own clock or
+// once per operator gesture — a readmission, the retention report, a backup.
 //
 // So the walk is ONE pass that carries each key AND its value together, and
 // the filter goes to the BROKER rather than to a client-side test.
@@ -238,9 +246,8 @@ func eachEntry(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // token path under its bucket (coord/keys.go), so a class of keys written by
 // [coord.DocumentKey] is a subject wildcard the broker can match — and the
 // shared positions register holds EIGHT classes, so a walk that read the whole
-// bucket moved all eight to use one. That read is not an edge case: the
-// state-log write fence takes it, for the floors, on every write at an
-// expectation of zero.
+// bucket moved all eight to use one, on every heartbeat, trim tick and alarm
+// evaluation that reads a class.
 //
 // The filter is in the KEY's vocabulary rather than the subject's — "floor.>"
 // and not "$KV.crewlet_x.floor.>" — because a key is what the caller holds and

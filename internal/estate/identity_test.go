@@ -82,7 +82,7 @@ func TestABindingCrossesWithoutItsCredentials(t *testing.T) {
 		now: time.Now, seen: signedask.NewGuard()}
 	req, sealed := signed(t, fleetEnvelopes, request{Op: opIdentityBinding.spec.name,
 		Args: json.RawMessage(`{"Login":"jane.doe"}`)})
-	rep, why, err := fleetEnvelopes.openReply(srv.answer(t.Context(), sealed), req.ID)
+	rep, why, err := fleetEnvelopes.openReply(srv.answer(t.Context(), laneShared, sealed), req.ID)
 	if err != nil || why != "" || rep.Err != nil || rep.Unserved != "" {
 		t.Fatalf("the binding was answered (%+v, %q, %v)", rep, why, err)
 	}
@@ -165,11 +165,11 @@ func TestADirectoryReadIsFlooredOnTheIdentityLog(t *testing.T) {
 			waited, identity)
 	}
 
-	// AND A NODE BEHIND IT SAYS SO rather than answer from before it —
-	// asked for longer than the node's floor wait, so it says so before the
-	// asker stops listening.
+	// AND A NODE BEHIND IT SAYS SO rather than answer from before it — its
+	// floor wait ends a reply's margin inside its asker's attempt
+	// (statelog.WithReplyMargin), so it says so while the asker is still
+	// listening.
 	node.set(func(n *fakeNode) { n.behindOn = identityStream })
-	f.client.readBudget = statelog.ReadBudget + time.Second
 	_, _, err := f.client.Identity().BindingByLogin(t.Context(), "jane.doe")
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "has not applied") {

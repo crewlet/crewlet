@@ -96,7 +96,7 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 	// AND THE SWEEP, rebuilt with the tracker's repairs beside the operation
 	// ledgers the core contributed from boot.
 	jobs := e.Maintenance().Jobs()
-	for _, job := range []string{"tracker_respread", "tracker_ops", "pages_ops"} {
+	for _, job := range []string{"tracker_respread", "tracker_ops", "pages_ops", "code_ops"} {
 		if !slices.Contains(jobs, job) {
 			t.Errorf("the sweep runs %v, which does not include %s", jobs, job)
 		}

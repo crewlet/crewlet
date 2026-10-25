@@ -76,6 +76,8 @@ func catalogue() []events.Payload {
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
 		OperatorActed{}, BackupRequested{},
+		// operatortools.go
+		OperatorToolsChanged{},
 		// seat.go
 		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
 	}
@@ -132,6 +134,7 @@ var wireTypes = []string{
 	"notification_skipped",
 	"notifications_coalesced",
 	"operator_acted",
+	"operator_tools_changed",
 	"org_started",
 	"org_stopped",
 	"persist_decider_completed",
@@ -321,7 +324,7 @@ var wireTags = map[string][]string{
 	"agent_spawned":                   {"agent_handle", "agent_id", "role"},
 	"agent_terminated":                {"agent_handle", "agent_id", "reason", "role"},
 	"config_revision_activated":       {"created_by", "created_by_kind", "operator_id", "revision_id", "revision_source", "revision_summary"},
-	"operator_acted":                  {"actor", "actor_kind", "failed", "operator_id", "outcome", "position", "refusal", "request_id", "tool", "transport"},
+	"operator_acted":                  {"actor", "actor_kind", "failed", "operator_id", "outcome", "position", "refusal", "repo", "request_id", "tool", "transport"},
 	"backup_requested":                {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
@@ -379,6 +382,7 @@ var wireTags = map[string][]string{
 	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_bytes", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
+	"operator_tools_changed":          {},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
 	"inbound_delivery":                {"body", "channel", "delivery_key", "label", "recipient", "replayed", "route", "summary"},
 	"iam_session_started":             {"expires_at", "lineage", "login", "method", "person", "remote", "second_factor"},

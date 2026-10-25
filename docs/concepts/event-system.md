@@ -14,7 +14,7 @@ One interface serves all inter-component communication:
 
 | Where the broker runs | What that is |
 |---|---|
-| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member — a solo node included — it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot — the **identity estate** among the state logs whose records live on that stream — and the native tracker and knowledge base put their items and pages there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf — an embedded node without `data`, joining the members over `stream.leaf.urls` — runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
+| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member — a solo node included — it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot — the **identity estate** among the state logs whose records live on that stream — and the native tracker, knowledge base and code host put their items, pages and repositories there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf — an embedded node without `data`, joining the members over `stream.leaf.urls` — runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
 | **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. One thing the operator's server has to promise that the embedded one is built with: messages of 8 MiB, the largest the engine sends — a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write (see [Deployment](../guides/deployment.md#an-external-nats-server)). |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
@@ -229,19 +229,20 @@ config_revision_applied    # one node's outcome, and how far it got
 # `operator_id` (pat:<id>, session:<lineage>, or the login). One per call,
 # whatever became of it; never the arguments. Written by the node the call
 # reached. The event store keeps the actor as the row's own column and
-# promotes actor_kind, operator_id, tool and dir to tags (beside every row's
-# `node`), so a listing — which carries no payload — can still say who,
+# promotes actor_kind, operator_id, tool, repo and dir to tags (beside every
+# row's `node`), so a listing — which carries no payload — can still say who,
 # through what, which tool, where
 operator_acted             # an operator tool call that is not a proven read,
-                           # on any of three transports — the dashboard's act
-                           # route (act), a person's assistant over MCP (mcp)
-                           # and the human write surface's routes under /work
-                           # and /pages (work), whose own refusals and
-                           # tool-less verbs are recorded too: tool,
-                           # transport, request_id (the operation the call's
-                           # key became, scoped to the caller, so a retry
-                           # carries the same one), outcome, position or
-                           # refusal
+                           # on any of four transports — the dashboard's act
+                           # route (act), a person's assistant over MCP (mcp),
+                           # the human write surface's routes under /work and
+                           # /pages (work), whose own refusals and tool-less
+                           # verbs are recorded too, and a person's git push
+                           # (/git/: transport git, tool git_push, and the
+                           # repo it named): tool, transport, request_id (the
+                           # operation the call's key became, scoped to the
+                           # caller, so a retry carries the same one),
+                           # outcome, position or refusal
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`

@@ -22,7 +22,7 @@ import (
 // source is one domain naming objects, held in memory.
 type source struct {
 	mu         sync.Mutex
-	named      map[objstore.Key]collect.Reference
+	named      map[objstore.Key]objstore.Reference
 	incomplete bool
 	barriers   int
 }
@@ -40,16 +40,30 @@ func (s *source) Referenced(context.Context, []objstore.Key, statelog.Position) 
 	return nil, false, errors.New("the migration never asks which keys are named")
 }
 
-func (s *source) Each(_ context.Context, _ statelog.Position, _ objstore.Key, visit func(collect.Reference) error) (bool, error) {
-	s.mu.Lock()
-	refs := slices.Collect(maps.Values(s.named))
-	s.mu.Unlock()
-	for _, r := range refs {
-		if err := visit(r); err != nil {
-			return false, err
-		}
+// Required is one walk over every object the source names, in key order, in
+// one page — read when the walk is asked, as an estate's is.
+func (s *source) Required(statelog.Position) []objstore.Walk {
+	return []objstore.Walk{&walk{s: s}}
+}
+
+// walk is a [source]'s one walk: every reference on its first page, none
+// after.
+type walk struct {
+	s    *source
+	done bool
+}
+
+func (w *walk) Next(context.Context) ([]objstore.Reference, bool, error) {
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	if w.done {
+		return nil, !w.s.incomplete, nil
 	}
-	return !s.incomplete, nil
+	w.done = true
+	refs := slices.SortedFunc(maps.Values(w.s.named), func(a, b objstore.Reference) int {
+		return a.Object.Key.Compare(b.Object.Key)
+	})
+	return refs, !w.s.incomplete, nil
 }
 
 // target is the twin, counting puts and able to fail them.
@@ -82,14 +96,14 @@ func newFixture(t *testing.T, files int) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{t: t, src: &source{named: map[objstore.Key]collect.Reference{}}, from: from,
+	f := &fixture{t: t, src: &source{named: map[objstore.Key]objstore.Reference{}}, from: from,
 		store: store, target: &target{Backend: memobj.New()}}
 	for i := range files {
 		o, err := store.Put(t.Context(), strings.NewReader(fmt.Sprintf("file %d", i)), 1<<20, objstore.PutMeta{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.src.named[o.Key] = collect.Reference{Object: o, NamedBy: fmt.Sprintf("ENG/f%02d.md", i)}
+		f.src.named[o.Key] = objstore.Reference{Object: o, NamedBy: fmt.Sprintf("ENG/f%02d.md", i)}
 	}
 	return f
 }

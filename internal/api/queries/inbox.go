@@ -64,7 +64,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		}
 		q.Reasons = append(q.Reasons, reason)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

@@ -345,8 +345,8 @@ type DomainGate struct {
 	// Duplicates is the log's duplicate window: how long the broker holds an
 	// operation id on the record it first landed, collapsing the same id sent
 	// again onto it. A record of this gesture's that landed and applies nowhere
-	// — refused `evicted` with a position — keeps the gesture's id spent on
-	// this log for that long, which the remedy says.
+	// — refused `evicted` naming it ([statelog.Unavailable.Landed]) — keeps
+	// the gesture's id spent on this log for that long, which the remedy says.
 	Duplicates time.Duration
 
 	// Outcome is the write's own three-valued answer — applied, pending or
@@ -444,9 +444,18 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		}
 		switch refusal.Reason {
 		case statelog.ReasonEvicted:
-			if refusal.Position.Stream != "" {
+			// THREE SHAPES, told apart by whose record the refusal names
+			// ([statelog.Unavailable.Landed]), never by whether it names a
+			// position: a position alone was read as the gesture's own
+			// record, and a refusal held at ANOTHER operation's record told
+			// the operator "the record this gesture put on the log there
+			// applies nowhere" of a record that may be a healthy peer's.
+			switch {
+			case refusal.Landed():
 				return only(statelog.GateOtherNode, "this node is evicted itself, and "+
 					d.landedNowhere(refusal.Position, "a node the fleet still counts"))
+			case !refusal.Position.IsZero():
+				return only(statelog.GateOtherNode, d.heldAt(refusal.Position))
 			}
 			return only(statelog.GateOtherNode, "this node is evicted itself and "+
 				"writes nothing to any log: run the gesture through a node the fleet "+
@@ -616,6 +625,31 @@ func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
 		"before then the id is collapsed onto that record and refused the same "+
 		"way, and a fresh id would write every log that already holds the "+
 		"gesture's record again", d.Stream, at, d.window(), who)
+}
+
+// heldAt is the remedy for a gesture refused `evicted` at ANOTHER operation's
+// record, the newest on its subject when the gesture's answer on this log was
+// lost: this node's eviction is below that record, so the refusal is about this
+// node, and the record at `at` is no record of the gesture's — it may be a
+// healthy peer's that applied on every node.
+//
+// # Why the same operation id, at once
+//
+// Whatever this node appended under the operation lies below `at` and applies
+// nowhere, if it landed at all, so the gesture is this log's to finish through
+// another node under the same id — as for an eviction found before the append.
+// If this node's record DID land, the broker collapses the same id onto it for
+// its duplicate window, and the node it is sent through answers so, naming this
+// node as the writer of the copy and saying when the id may go again
+// ([DomainGate.anotherNodesCopy]). A fresh id is never the way round it, for
+// the reason [DomainGate.landedNowhere] gives.
+func (d DomainGate) heldAt(at statelog.Position) string {
+	return fmt.Sprintf("this node is evicted itself: the newest record on %s, at %s, "+
+		"is another operation's, and whatever this node appended under this one lies "+
+		"below it and applies nowhere, if it landed at all. Run the gesture through a "+
+		"node the fleet still counts, under the same operation id — if this node's "+
+		"record did land, the broker holds the id on it for %s from then, and that "+
+		"node answers so and says when to send it again", d.Stream, at, d.window())
 }
 
 // NodeGate is the gesture, over every identity-claiming log this node runs —

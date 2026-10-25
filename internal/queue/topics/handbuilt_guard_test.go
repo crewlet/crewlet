@@ -111,6 +111,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		// hand-built subject would come from.
 		"crewlet.tracker.log.task.x", "crewlet.tracker.vectors.>",
 		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
+		"crewlet.code.log.repo.x",
 		"crewlet.iam.log.person.0f3c", "crewlet.iam.log.session.0f3c",
 		"crewlet.iam.log.>",
 	} {
@@ -124,6 +125,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	for _, built := range []string{
 		topics.TrackerLogSubject("task", "x"),
 		topics.PagesLogSubject("page", "x"),
+		topics.CodeLogSubject("repo", "x"),
 		topics.IamLogSubject("person", "x"),
 		topics.LogSubject(topics.UsageLogPrefix, "day", "x"),
 		topics.TrackerVectorsWildcard,

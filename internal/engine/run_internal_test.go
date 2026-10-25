@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Internal because these are the engine's own hooks, not its API. Exporting
@@ -62,9 +63,10 @@ func profileFor(t *testing.T, roles []string) placement.NodeProfile {
 	return boot.Profile("n1")
 }
 
-// engineOn wires just enough engine for the park and pause hooks: they reach
-// the queue and the topic grammar and nothing else.
-// engineOn is an engine with a queue and a company.
+// engineOn is an engine with a queue, a company and a mode: just enough for the
+// park and pause hooks, which reach the queue and the topic grammar, and for
+// the inbound edge's start, which also asks the node's mode — normal, which
+// [New] gives every node that names none.
 //
 // A COMPANY IS NOT SCENERY HERE. A seat's inbox is named by the seat's ID, so
 // a park or a pause has to resolve the handle through the running company —
@@ -98,7 +100,7 @@ roles:
 	if err != nil {
 		t.Fatalf("NewCompany: %v", err)
 	}
-	e := &Engine{backends: &Backends{Queue: q}}
+	e := &Engine{backends: &Backends{Queue: q}, mode: statelog.ModeNormal}
 	e.epoch.current.Store(company)
 	return e, q
 }

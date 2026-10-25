@@ -283,6 +283,32 @@ func TestBootstrapExampleLoads(t *testing.T) {
 func bootstrapExampleLoads(t *testing.T, name string) {
 	t.Helper()
 	data := readRepoFile(t, "examples", name)
+	cfg, err := ParseBootstrap(data, NewResolver(exampleAnswers(t, data)))
+	if err != nil {
+		t.Fatalf("the shipped Tier A example does not load: %v", err)
+	}
+	// The single-binary defaults it exists to demonstrate: no broker to
+	// operate and no DSN to point anywhere.
+	if cfg.Stream.Type != StreamEmbedded {
+		t.Errorf("stream = %q, want the embedded default", cfg.Stream.Type)
+	}
+	if cfg.Stream.StoreDir == "" {
+		t.Error("the embedded stream has no store_dir, so nothing published " +
+			"survives a restart — not what a shipped example should show")
+	}
+	if cfg.Store.Path == "" {
+		t.Error("no store path")
+	}
+	if cfg.Coordination.Type != CoordinationLocal {
+		t.Errorf("coordination = %q, want local for a single node", cfg.Coordination.Type)
+	}
+}
+
+// exampleAnswers answers every ${VAR} a shipped Tier A example data names, as
+// a founder's environment would: what every test loading a shipped Tier A
+// file resolves it with, so each judges the file and never its stand-ins.
+func exampleAnswers(t *testing.T, data []byte) MapSource {
+	t.Helper()
 	// EVERY REFERENCE ANSWERED, so what is under test is the SHAPE rather
 	// than whose shell happens to have the variables exported. A file that
 	// only loads on a machine with the right environment is not a shipped
@@ -317,24 +343,34 @@ func bootstrapExampleLoads(t *testing.T, name string) {
 			answers[name] = TestKeyMaterial
 		}
 	}
-	cfg, err := ParseBootstrap(data, NewResolver(answers))
-	if err != nil {
-		t.Fatalf("the shipped Tier A example does not load: %v", err)
-	}
-	// The single-binary defaults it exists to demonstrate: no broker to
-	// operate and no DSN to point anywhere.
-	if cfg.Stream.Type != StreamEmbedded {
-		t.Errorf("stream = %q, want the embedded default", cfg.Stream.Type)
-	}
-	if cfg.Stream.StoreDir == "" {
-		t.Error("the embedded stream has no store_dir, so nothing published " +
-			"survives a restart — not what a shipped example should show")
-	}
-	if cfg.Store.Path == "" {
-		t.Error("no store path")
-	}
-	if cfg.Coordination.Type != CoordinationLocal {
-		t.Errorf("coordination = %q, want local for a single node", cfg.Coordination.Type)
+	return answers
+}
+
+// THE SHIPPED PAIRS SAY NOTHING ACROSS THE TIERS: a founder copies both files
+// of a pair, so each loads, and the consequences only the two together have
+// ([TierWarnings]) are none — the reference company hosts code on one solo
+// member, where the files bucket is the one disk either way.
+func TestTheShippedPairsRaiseNoCrossTierWarning(t *testing.T) {
+	t.Parallel()
+	for boot, company := range map[string]string{
+		"nimbus.config.yaml":            "nimbus.company.yaml",
+		"nimbus-claude-cli.config.yaml": "nimbus-claude-cli.company.yaml",
+	} {
+		t.Run(boot, func(t *testing.T) {
+			t.Parallel()
+			data := readRepoFile(t, "examples", boot)
+			b, err := ParseBootstrap(data, NewResolver(exampleAnswers(t, data)))
+			if err != nil {
+				t.Fatalf("examples/%s does not load: %v", boot, err)
+			}
+			c, err := ParseCompany(readRepoFile(t, "examples", company))
+			if err != nil {
+				t.Fatalf("examples/%s does not load: %v", company, err)
+			}
+			if got := TierWarnings(b, c); len(got) != 0 {
+				t.Fatalf("the pair warns across the tiers: %+v", got)
+			}
+		})
 	}
 }
 

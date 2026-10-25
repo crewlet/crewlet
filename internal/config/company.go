@@ -67,6 +67,11 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Code is the engine's own git host: whether this company hosts its
+	// repositories in the engine, and the limits a push is held to. See
+	// [Code].
+	Code Code `yaml:"code,omitempty" json:"code,omitzero"`
+
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
 
@@ -259,9 +264,10 @@ func (c *Company) ValidateRunnable() error {
 // declared inside a unit of a different key and a schedule's cron the grammar
 // refuses (see [org.Organization.ValidateAdmission], which also says why no
 // NAME is held unique), a unit with no id, duplicate sandbox setup step names
-// within one list, a GitHub App on a human seat, an avatar the dashboard
-// cannot draw or one on a human seat ([Company.validateAvatars]), a
-// providers.llm entry's credential configured where its CLI never reads it
+// within one list, a code access tier or a GitHub App on a human seat
+// ([Company.validateHumanSeatCode]), an avatar the dashboard cannot draw or
+// one on a human seat ([Company.validateAvatars]), a providers.llm entry's
+// credential configured where its CLI never reads it
 // ([LLMProvider.validateCredentials]), a model with no provider segment on a
 // CLI that reads one ([LLMProvider.validateModel]), a seat whose code work
 // hands a providers.llm entry to another CLI's coding agent
@@ -269,11 +275,13 @@ func (c *Company) ValidateRunnable() error {
 // reads ([Company.validateSandboxGates]), a setup step writing a file a box
 // it reaches refuses ([Company.validateSetupFileHomes]), a coding run's
 // `optional_keys` entry leaving nothing out ([Company.validateRunOptionalKeys]),
-// and the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
+// the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
 // seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key.
+// handle nor a key — and the code host's two policy bounds: at most
+// [CodeMaxRepos] repositories, and a retention of at most
+// [CodeMaxDeletedRetentionDays] (see [Code.validateAdmission]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -283,10 +291,11 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
-		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
+		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateAvatars(),
 		c.validateLLMCredentials(), c.validateLLMModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateFileRules())
+		c.validateRunOptionalKeys(), c.validateFileRules(),
+		c.Code.validateAdmission(field("code")))
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -300,31 +309,51 @@ func (c *Company) validateUnitIDs() error {
 	return p.err()
 }
 
-// validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
+// validateHumanSeatCode refuses on a human seat what a seat holds on a code
+// host: its code access tier (`code`) and its own GitHub App
+// (`integrations.github`).
 //
-// A seat's `integrations.github` is the seat's OWN app: the bot identity an
-// agent acts as on GitHub. A person acts as their own login, which is
-// `contact.github_login`, and every engine path that creates, installs or
-// reconciles an app skips a human seat. The block therefore reads as a
-// working setting and does nothing, which is the silence the org model's
-// human-seat rule exists to end for every other agent-only field.
+// A person acts on every code host as their own identity — a bound token on
+// the engine's own, their login, `contact.github_login`, on GitHub — so both
+// are agent settings. A seat's `code.access` is how much of a repository the
+// seat may do, which caps nothing for a person: the native grant gives a
+// person maintain through their token, and GitHub's tokens are minted only
+// for a seat's app. A seat's `integrations.github` is the bot identity an
+// agent acts as, and every engine path that creates, installs or reconciles
+// an app skips a human seat. Either block therefore reads as a working
+// setting and does nothing, which is the silence the org model's human-seat
+// rule exists to end for every other agent-only field.
 //
 // CHECKED HERE rather than beside that rule in [org.Role.Validate], although
-// the runtime seat carries the app too ([org.Role.GitHub]): that rule is a
-// RUNNABLE one, and this is an ADMISSION rule, because nothing about running
-// depends on it — every path that would act on the block skips a human seat,
-// so a stored revision carrying one runs as it did.
-func (c *Company) validateHumanSeatApps() error {
+// the runtime seat carries both ([org.Role.CodeAccess], [org.Role.GitHub]):
+// that rule is a RUNNABLE one, and this is an ADMISSION rule, because nothing
+// about running depends on either — nothing running reads a tier off a human
+// seat, and every path that would act on an app skips one — so a stored
+// revision carrying one runs as it did. That is also what lets a later build
+// relax one — a tier that caps a person is the plausible relaxation — while
+// this build, applying the revision its newer peer admitted during a rolling
+// upgrade, runs it rather than refusing it and splitting the fleet's epoch.
+func (c *Company) validateHumanSeatCode() error {
 	var p problems
 	for role, path := range c.EachRole() {
-		if role.Kind != org.KindHuman || role.Integrations.GitHub == nil {
+		if role.Kind != org.KindHuman {
 			continue
 		}
-		p.add(at(path, "integrations.github"), ErrConflict,
-			"a human seat has no GitHub App of its own: an app is the identity "+
-				"an agent acts as, and a person acts as their own login, "+
-				"contact.github_login. Remove this block, or make the seat an "+
-				"agent seat")
+		if !role.Code.IsZero() {
+			p.add(at(path, "code"), ErrConflict,
+				"a human seat has no code access tier: a person acts on every "+
+					"code host as their own identity — their bound token on "+
+					"the engine's own, contact.github_login on GitHub — so a "+
+					"tier here would cap nothing. Remove this block, or make "+
+					"the seat an agent seat")
+		}
+		if role.Integrations.GitHub != nil {
+			p.add(at(path, "integrations.github"), ErrConflict,
+				"a human seat has no GitHub App of its own: an app is the identity "+
+					"an agent acts as, and a person acts as their own login, "+
+					"contact.github_login. Remove this block, or make the seat an "+
+					"agent seat")
+		}
 	}
 	return p.err()
 }
@@ -542,6 +571,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.Code.validate(field("code"), o))
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())

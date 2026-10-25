@@ -125,7 +125,7 @@ func dataFailure(err error) error {
 
 // docs answers one page of a collection, or a catch-up with `since=`.
 func (s artifactData) docs(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (s artifactData) docs(ctx context.Context, p Params) (any, error) {
 
 // doc answers one document.
 func (s artifactData) doc(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func (s artifactData) doc(ctx context.Context, p Params) (any, error) {
 // query answers a page of a query over a collection's field index: `q=` the
 // query as JSON ([query.Query]).
 func (s artifactData) query(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (s artifactData) query(ctx context.Context, p Params) (any, error) {
 // history answers a page of a store's history, narrowed by `collection=`,
 // `doc=`, `field=` (a cell's history) or `actor=`.
 func (s artifactData) history(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (s artifactData) schema(ctx context.Context, p Params) (any, error) {
 
 // state answers the caller's own per-viewer state keys.
 func (s artifactData) state(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

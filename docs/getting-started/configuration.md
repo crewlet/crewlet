@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file).
+- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file), and — on a node that serves git — its repository cache and git processes.
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
@@ -74,6 +74,8 @@ workers: {...}                          # optional — reusable delegate templat
 
 roles: [...]                            # optional — root-level org-wide agents (see below)
 units: [...]                            # optional — org structure tree (see below)
+
+code: {...}                             # optional — the engine's own git host (see "Code" below)
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
@@ -651,7 +653,9 @@ stream:
                                     #   in-memory, and every data node keeps
                                     #   its state logs here from boot — the
                                     #   people who can sign in, company or
-                                    #   none — so `crewlet validate` and the
+                                    #   none, and its items, pages and
+                                    #   repositories once it has them — so
+                                    #   `crewlet validate` and the
                                     #   engine both refuse it rather than
                                     #   lose them at the first restart. A
                                     #   member of a fleet's broker also holds
@@ -683,9 +687,14 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   6 GiB..64 TiB — the 4.5 GiB the five
-                                    #   state logs reserve at their smallest,
-                                    #   and about 1.5 GiB for every stream
+                                    #   6 GiB..64 TiB, and a fresh node needs
+                                    #   more than the floor: the 7.5 GiB the
+                                    #   eight state logs reserve at their
+                                    #   smallest, and room beside them for
+                                    #   every stream that reserves nothing
+                                    #   (`crewlet validate` says when a limit
+                                    #   is short of it, and the boot refuses
+                                    #   it naming both figures)
                                     #   that reserves nothing — and it must not
                                     #   be smaller than the ceilings declared
                                     #   inside it.
@@ -853,20 +862,22 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL FIVE LOGS: the broker
+                                    #   BUDGET FOR EVERY STATE LOG: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so this field and
-                                    #   the four below share half of what the
-                                    #   broker can grant them, less the ceiling
-                                    #   any of them that already exists holds.
+                                    #   the seven below share five eighths of
+                                    #   what the broker can grant them, less
+                                    #   the ceiling any of them that already
+                                    #   exists holds.
                                     #   The unset ones are scaled down together
                                     #   to fit, never below 1 GiB each — and an
                                     #   unset ask already below it (the
-                                    #   identity log's) is kept as asked. A value you set is never scaled,
-                                    #   and a boot that cannot reserve it fails
+                                    #   identity log's) is kept as asked. A
+                                    #   value you set is never scaled, and a
+                                    #   boot that cannot reserve it fails
                                     #   naming the field, the bytes it needed
                                     #   and the bytes the broker had. Every one
-                                    #   of the five is the value a stream is
+                                    #   of them is the value a stream is
                                     #   CREATED with: editing it
                                     #   later changes nothing until
                                     #   `crewlet retention set-capacity` does.
@@ -974,6 +985,41 @@ stream:
                                     #   refuses the append, and the top of it
                                     #   is kept for gate records as on the
                                     #   tracker's log
+  # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
+                                    #   the ordered stream a repository's refs,
+                                    #   packs and settings move on. It runs on
+                                    #   every node that runs a state log,
+                                    #   whether or not the company hosts code.
+                                    #   UNSET DERIVES two thirds of the
+                                    #   mutation log's ceiling, set or derived
+                                    #   (so 2⅔..42⅔ GiB from a volume alone):
+                                    #   once seats push, a company's push
+                                    #   records and its git clients' read
+                                    #   barriers take about half to seven
+                                    #   tenths of the bytes a day its tracker
+                                    #   writes and its seats' reads do, and
+                                    #   the ratio sits past the middle because
+                                    #   later releases add changes, reviews
+                                    #   and checks to this log, so a blocked
+                                    #   trim fills either one in about the
+                                    #   same time. A push record names its pack
+                                    #   and never carries it — the bytes are the
+                                    #   object store's — so how large the
+                                    #   repositories grow does not reach this
+                                    #   ceiling. Crossing it refuses the append,
+                                    #   like the mutation log's. The RESERVATION
+                                    #   IS PAID WHETHER OR NOT ANYTHING PUSHES:
+                                    #   on a volume small enough that the
+                                    #   logs' derived ceilings are scaled to
+                                    #   fit their share of the broker, this
+                                    #   one costs the others room. A company
+                                    #   that hosts no code
+                                    #   and is short of broker room sets the
+                                    #   1 GiB floor (1073741824) BEFORE the
+                                    #   first boot; a stream that exists keeps
+                                    #   its ceiling, so after it `crewlet
+                                    #   retention set-capacity` is what lowers
+                                    #   this one and raises another
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
@@ -1152,6 +1198,50 @@ store:
                                     #   instance's role. A private CA is read
                                     #   from AWS_CA_BUNDLE
 
+# git:                              # how THIS node serves the company's
+                                    #   repositories — read only where the node
+                                    #   has the `git` role and the company sets
+                                    #   code.native (concepts/code-host.md). A
+                                    #   block on a node without the role is
+                                    #   warned about: nothing reads it
+#   cache_dir: "git"                #   its disposable copies of the
+                                    #   repositories. Absolute, or relative to
+                                    #   the store's directory; unset is
+                                    #   <store dir>/git. A volume of its own is
+                                    #   the production shape. Never backed up:
+                                    #   it is rebuilt from the code log and the
+                                    #   object store, and carries a
+                                    #   CACHEDIR.TAG. A directory holding the
+                                    #   store, its snapshots or the replicated
+                                    #   estate is REFUSED: the cache empties its
+                                    #   own tmp/, scratch/ and trash/ at boot
+#   cache_max_bytes: 0              #   the budget it evicts down to, least
+                                    #   recently used first; at least 1 GiB when
+                                    #   set. UNSET is derived at every boot from
+                                    #   the ROOM the cache can use: the volume's
+                                    #   free space PLUS what the cache already
+                                    #   holds (so a warm restart derives what
+                                    #   its first boot did), LESS what a broker
+                                    #   storing its streams on that volume may
+                                    #   still write under its limit and the
+                                    #   request spools' allowance. Half of that
+                                    #   where the volume also holds the store,
+                                    #   its snapshots or the broker's streams,
+                                    #   seven eighths of a volume of its own;
+                                    #   never more, no floor, no ceiling, and
+                                    #   a volume leaving NO room refuses the
+                                    #   code host, naming what to change.
+                                    #   Logged as code_cache_sized
+#   max_processes: 0                #   git processes run at once to answer
+                                    #   reads, one core each, and half as many
+                                    #   again for background maintenance; 0 is
+                                    #   one a core
+#   max_transfers: 0                #   clones, fetches and pushes served at
+                                    #   once; 0 is four a process slot and no
+                                    #   more than one per 512 MiB of the node's
+                                    #   memory — a transfer holds memory for its
+                                    #   whole life, so size it to memory
+
 coordination:
   type: local                       # one node holding its own seat leases;
                                     #   a fleet needs `embedded-kv`. There is no
@@ -1186,7 +1276,15 @@ coordination:
                                     #   fractions of the live value too. So
                                     #   make it agree across the fleet:
                                     #   changing it requires deleting the
-                                    #   bucket while the fleet is down
+                                    #   bucket while the fleet is down.
+                                    #   A node whose uploads cross a link to
+                                    #   the files bucket (a leaf, a client of
+                                    #   an external cluster) holds fewer of
+                                    #   them out on a shorter lease, so a
+                                    #   renewal queued behind them still lands
+                                    #   in a heartbeat; under 11.25s even one
+                                    #   128 KiB message is too many at the
+                                    #   floor, and `crewlet validate` warns
 
 api:
   host: "0.0.0.0"       # what this node BINDS
@@ -1319,9 +1417,13 @@ a configuration that is valid and carries a consequence worth knowing before it
 is applied — a declined fsync's window, a trim that will never advance until
 somebody acknowledges a backup, a `stream.cluster.peers` entry left out of the
 member count because it is this node's own route or a repeat, a node that
-declares the `ingress` role and binds no port, a unit keyed on a name somebody
-will rename, a company that declares no human seat and so can admit nobody.
-
+declares the `ingress` role and binds no port, a `git` block on a node that
+serves no git, a unit keyed on a name somebody will rename, a company that
+declares no human seat and so can admit nobody. Given both files, it also
+prints the warnings neither file raises alone — a company hosting code on a
+fleet's default object store, and a git node whose cache budget cannot hold a
+repository at its size limit — and a configuration write answers them too;
+see [Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers).
 **`validate` is not the only place a warning is said.** Most deployments
 never run it — an image, a chart or an operator renders the document and
 starts the node — so `crewlet run` logs every Tier A warning at every start
@@ -1638,7 +1740,8 @@ units:
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
 | `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's project / space identity is `project` and `space` (below), not here. **Every key must name a declared [`mcp_servers`](#mcp-servers) entry**, because the engine looks credentials up per *server*: a block keyed on a name nothing declares is never read by anything, so it sits in the document looking configured while the server it was meant for starts with none. Six names are the exception and need no server, because the engine reads those blocks itself — `github`, `gitlab`, `datadog`, and Atlassian's `atlassian`, `jira` and `confluence` |
-| `integrations.github` | dict | no | This seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) — one per agent, because an app has exactly one bot identity. A person writes two fields: `tier` (`read_only`, the default, `review` or `full_access`; a hyphen is accepted for the underscore) and `repos` (the repositories it works in as `owner/name`; empty means every repository the installation covers). `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` are **written by the engine** when the app is created and installed, the last two as `${VAR}`s pointing at the [secret store](../concepts/secret-store.md) — see [What lands where](../integrations/github.md#what-lands-where) |
+| `code.access` | string | no | **Agent seats only.** How much of a repository this seat may do, on every code host the engine drives: `read_only` (the default when unset), `review` or `full_access`, each spelled exactly so — no hyphen, capital or space. On the engine's own [code host](../concepts/code-host.md) it caps what the chart grants the seat ([who may read and push](../concepts/code-host.md#who-may-read-and-push)); on GitHub it is the permission set the seat's [own app](../integrations/github.md#the-three-access-tiers) is created with and every token it mints carries. A human seat carrying it is refused, by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to): a person acts as their own identity on every host, so a tier would cap nothing. Set on an agent seat of a company that hosts no code of its own (`code.native` unset), it caps nothing either unless the seat has a GitHub App of its own (`integrations.github`) **and** the company's GitHub integration is enabled (`integrations.github.enabled`) — the engine drives a seat's app, and mints the tokens its tier scopes, only while that integration is on — and anywhere else `crewlet validate` **warns** — never fails — at the seat's `code.access` that it grants nothing, naming which of the two is missing |
+| `integrations.github` | dict | no | This seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) — one per agent, because an app has exactly one bot identity. A person writes one field, `repos` (the repositories it works in as `owner/name`; empty means every repository the installation covers); how much the app may do is the seat's `code.access`, above. `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` are **written by the engine** when the app is created and installed, the last two as `${VAR}`s pointing at the [secret store](../concepts/secret-store.md) — see [What lands where](../integrations/github.md#what-lands-where) |
 | `integrations.slack` | dict | no | This seat's own Slack app: `bot_token` and `signing_secret`, and nothing else: the seat speaks in its unit's `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on the engine's own tracker it is what an item filed with no `unit` belongs to — whoever filed it (see [the work tracker](../guides/work-tracker.md#which-team-an-item-belongs-to)). **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
@@ -1831,6 +1934,8 @@ Which **work tracker** this company runs, on exactly the terms `knowledge.backen
 
 The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
 
+**Moving either one to or from `native` takes effect when each node restarts.** A node builds the engine's own tracker and knowledge base once, from the company it started with, so a revision that switches one activates normally and the node keeps serving what it was built with, saying so with a `native_backend_needs_restart` warning at every activation until it restarts (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Moving between two vendors, or the first native backend on a node that ran none, needs no restart.
+
 The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run the native tracker has no Work or My work there, and one that does not run the native knowledge base has no Knowledge.
 
 ### The native tracker's own policy
@@ -1854,6 +1959,56 @@ Everything else a tracker could be told is either a fact about the **operator** 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
 It applies whatever backends a company names, and whether the node has a company at all. A native tracker or knowledge base puts its items and its pages there, but the **identity estate** — the people who can sign in — is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+
+---
+
+## Code
+
+```yaml
+code:
+  native: true                          # host the company's repositories in the engine
+  limits:                               # every field optional
+    max_push_bytes: 1073741824          # 1 MiB..1 GiB; the largest pack one push sends (default 1 GiB)
+    max_blob_bytes: 52428800            # 1 KiB..1 GiB, at most max_push_bytes (default 50 MiB)
+    repo_max_bytes: 21474836480         # 1 MiB..1 TiB, at least max_push_bytes (default 20 GiB)
+  deleted_retention_days: 7             # 1..365; how long a removed repository is restorable (default 7)
+  repos:                                # at most 10000
+    - name: nimbus-web                  # one host-name label: a-z, 0-9 and -, at most 63
+      owner: { unit: engineering }      # exactly one of unit (a key) and seat (a handle)
+      visibility: company               # company (default) or unit: which seats read it
+      default_branch: main              # default main
+      description: The customer-facing web app.   # at most 1024 bytes
+      archived: false                   # true: read-only, takes no push
+      protect:                          # at most 64 rules
+        - branch: main                  # exactly one of branch and tag
+        - branch: release/**
+          allow_force: false            # a push not descending from the branch (never on a tag)
+          allow_delete: true            # deleting a matching ref
+          direct_push: persons          # persons (default) or none: nothing pushes to it
+        - tag: "v*"
+```
+
+`code.native` turns on the engine's own **git host**. A repository's refs and packs are records on a log of their own — the code log, beside the tracker's and the knowledge base's — and every data node runs a **committer** that decides the pushes it is asked to commit, publishing each batch as one record. A push is asked of its repository's committer: the first data node in a rendezvous order of the repository's id, which every node computes alike, so a repository's pushes meet at one node whichever node received them, and a committer that stops, or answers nothing, hands each of its repositories to that repository's runner-up with the same push id. A node in a [maintenance mode](../guides/retention.md#the-three-modes) decides none: it refuses a push as a node that ran nothing, and the repository's next committer decides it — so while the whole fleet is in a maintenance mode, no push is committed at all. Like `tracker.backend`, it is part of a node's **native runtime**, built once per process: on a node that runs no native backend yet — a company whose tracker and knowledge base are both a vendor's — the activation that sets it starts the code host with no restart, and on a node whose native runtime is already running, a revision that turns it on or off activates normally and takes effect at each node's restart, which the node says with a `native_backend_needs_restart` warning naming `code.native` (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Its log, like every state log, runs on every data node from boot whether or not the company hosts code, on the stream that survives a restart (above).
+
+**Where git is served is Tier A's, not this file's.** A node with the `git` [role](../concepts/configuration.md#noderoles) — every node that declares no roles has it — builds the code host when its runtime is built for a company that sets `code.native`: a disposable cache of the repositories on its own disk, sized and placed by the node's [`git` block](#tier-a), and git 2.55 or newer on its `PATH` (the node floor; a client of the code host needs only 2.40), which it checks at boot (the engine image builds the newest git release from a pinned tarball). A node whose git is older refuses to start, naming the version and the path it found. The role needs `ingress`, since git is served on the API listener.
+
+`code.limits` is what one push and one repository may hold, and it is read off the **current** revision at every decision, so a change takes effect at its activation, with no restart. The three nest: a file inside a push, a push inside a repository. A revision that turns `code.native` off must drop `code.limits` with it (below), and a node that keeps serving the code host until its restart goes on holding pushes to the limits of the last revision that hosted code, not to the defaults.
+
+- **`max_push_bytes`** — the largest pack one push may send. Unset is 1 GiB, which is also the most it may be: a person's first push of an existing project is its whole history, and a larger one is imported in parts.
+- **`max_blob_bytes`** — the largest single file a push may carry. Unset is 50 MiB, and it is what sizes git's own memory on a node serving the repository, so a larger binary belongs in [tracker files](../concepts/object-store.md) rather than in a repository.
+- **`repo_max_bytes`** — the most packed bytes one repository may hold. Unset is 20 GiB. It is per **node** as much as per repository: every node that serves a repository keeps a whole copy of it. It counts the packs as the pushes stored them, so a history [imported](../reference/cli.md#crewlet-code-import) in steps counts for more than one pack of it — about twice as much in eleven steps, measured ([Limits](../concepts/code-host.md#limits)).
+
+The order is checked on what a push is actually held to, the defaults included: `max_push_bytes: 10485760` set alone is refused, because the default `max_blob_bytes` (50 MiB) is larger, and the refusal names the default it met — set both. `code.limits` on a company that does not set `code.native` is refused: it would read as live and limit nothing.
+
+`code.repos` declares the company's repositories, and **every data node reconciles it at every boot and every activation** — beside the apply, which reports the revision applied without waiting for it, so a reconcile that leaves something undone is run again by the node, on a backoff growing from five seconds to five minutes, until it applies: a name added is created, a changed entry's settings are settled, an unchanged one costs nothing, and a repository the configuration created that the document no longer declares is **deleted** — it takes no push, and its refs and packs are kept, so declaring it again under its name restores it. A repository somebody else created is never deleted for being absent here, and nothing is deleted because `code.native` was turned off. What each change does, and the activation fence that keeps a node applying an older revision late from walking a newer one back, is in [Code Host](../concepts/code-host.md#declaring-repositories).
+
+- **`name`** — the address a repository is cloned by, so renaming one deletes it and creates another. Each name is declared once; a second declaration is refused at the later entry.
+- **`owner`** — exactly one of `unit` (its key, or a name only one unit carries) and `seat` (a handle), resolved against the same document's chart; one the chart does not have refuses the revision, naming the ones it does.
+- **`visibility`** — which **seats** may read it: `company` (unset), every seat, or `unit`, only the seats the chart relates to its owner — the owning unit's members and the leads above them, or the owning seat and the leads above its unit. Every other seat reads nothing of a `unit` repository: it is absent from the seat's listing and its reads are refused. A person reads every repository whatever it says. Any other value refuses the revision, and `crewlet validate` **warns** about a `unit` repository whose owning unit has no lead, own or inherited, at its `visibility` (see [Visibility](../concepts/code-host.md#visibility)).
+- **`default_branch`** — any branch name git would take but `seats` and `seats/<one name>`, which hold the seats' own branch namespaces and which no push may create; unset is `main`.
+- **`protect`** — each rule names exactly one of a `branch` and a `tag` pattern, each pattern once. A pattern is a name in git's grammar where a component of `*` matches one component, `*` inside a component any run of characters but `/`, and a component of `**` any number of components (one or more as the last), and a pattern with no `*` matches **only itself**; a glob has at most eight components counting `refs/` and its namespace. Every rule that matches a ref holds, so `allow_force` and `allow_delete` are allowed only where every matching rule allows them, and `direct_push: none` on any of them freezes the ref. `allow_force` on a tag rule is refused: a tag never moves. A ref no rule matches may be force-pushed or deleted, so `crewlet validate` **warns** — and never fails — about each repository whose default branch no rule protects, at its `protect`, naming the rule to add — except an archived one, which takes no push at all.
+
+`code.deleted_retention_days` is how long a deleted repository stays restorable: 1 to 365 days — and, like the 10 000 repositories `code.repos` may list, an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a revision already stored past it still applies — and unset (or `0`) is 7, the trim's default `min_age`, so a deletion is undone from the same window the log can replay. Past it, the `code-retention` duty purges the repository in bounded steps and its name is free again; a longer retention set before then saves it — a purge begins only on a node that has applied the revision the fleet is on, so a node that failed to apply the longer one cannot purge by the shorter — and a purge once begun is finished whatever the retention says (see [Deletion and purge](../concepts/code-host.md#deletion-and-purge)). Like `code.limits`, `code.repos` and `code.deleted_retention_days` are refused on a company that does not set `code.native`, and a node still serving the code host after a revision turned it off keeps the last hosting revision's retention until its restart.
 
 ---
 

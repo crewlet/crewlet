@@ -986,10 +986,11 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		for _, seat := range seats {
 			// ENROLLED OR STARTED, because those are two different ways
 			// of having work outstanding and Present only catches the
-			// second. A GitHub seat whose block says which tier it runs
-			// at and which has no app yet is opted in with both acts left,
-			// and it is exactly the seat the reconcile reports on, so
-			// leaving it out put the tag and the roster on two answers.
+			// second. A GitHub seat that has a `github` block — its
+			// repositories named, or an app begun — and no working app yet
+			// is opted in with its acts still to do, and it is exactly the
+			// seat the reconcile reports on, so leaving it out put the tag
+			// and the roster on two answers.
 			if (seat.Present || seat.Enrolled) && !seat.Satisfied {
 				satisfied = false
 				break

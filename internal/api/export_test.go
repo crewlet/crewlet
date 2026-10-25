@@ -1,6 +1,23 @@
 package api
 
-import "slices"
+import (
+	"net/http"
+	"slices"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+)
+
+// CodeRead is the handler of one kind of code read with no guard in front of
+// it, for the case that holds what a request carrying no operator identity is
+// answered — a request no route the app mounts lets through, since the guard
+// stamps every caller it admits.
+func (a *App) CodeRead(kind code.ReadKind) http.Handler { return a.serveCodeRead(kind, "code read") }
+
+// GitRefusal is [gitRefusal], for the case that holds a git route's refusal to
+// git's own form: on every path the app serves, the guard in front of the
+// router answers first whatever the router could refuse.
+var GitRefusal = gitRefusal
 
 // NativeAbsent is [nativeAbsent] — why a native half is not here — for the
 // external suite, which holds both transports to one answer about it without
@@ -10,3 +27,12 @@ var NativeAbsent = nativeAbsent
 // Routes is every pattern the app mounted, in mount order, for the listener
 // cases to walk whole. See [routeTable].
 func (a *App) Routes() []string { return slices.Clone(a.routes) }
+
+// ThroughDrainGate is next behind this app's drain gate and nothing else, so a
+// case can hold a git request where the gate counts it, in a handler of its own
+// rather than the code host the app mounts behind it.
+func (a *App) ThroughDrainGate(next http.Handler) http.Handler { return a.drainGate(next) }
+
+// SetGitExchangeGap scales [gitExchangeGap] on one app, so the drain's wait
+// for an exchange's next request is a case's to measure in milliseconds.
+func SetGitExchangeGap(a *App, gap time.Duration) { a.gitGap = gap }

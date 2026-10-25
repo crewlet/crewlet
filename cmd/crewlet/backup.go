@@ -90,11 +90,12 @@ func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) e
 		} `json:"stores"`
 		Streams []streamRow `json:"streams"`
 		Objects *struct {
-			Dir     string `json:"dir"`
-			Stream  string `json:"stream"`
-			Objects int    `json:"objects"`
-			Bytes   int64  `json:"bytes"`
-			Lost    []struct {
+			Dir      string `json:"dir"`
+			Stream   string `json:"stream"`
+			Objects  int    `json:"objects"`
+			Replayed int    `json:"replayed"`
+			Bytes    int64  `json:"bytes"`
+			Lost     []struct {
 				Object  string `json:"object"`
 				NamedBy string `json:"named_by"`
 			} `json:"lost"`
@@ -120,16 +121,23 @@ func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) e
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
 			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
 	}
-	// THE OBJECTS ARE THE COMPANY'S: absent only where the copy names no
-	// file at all. On the broker's own bucket they ride that stream's
-	// snapshot, which is what the row names rather than a directory —
-	// and their bytes are that snapshot's, so they are not counted twice.
+	// THE OBJECTS ARE THE COMPANY'S: absent only where no row a restore
+	// brings back names a file at all. On the broker's own bucket they ride
+	// that stream's snapshot, which is what the row names rather than a
+	// directory — and their bytes are that snapshot's, so they are not
+	// counted twice. The ones only a replayed record names — files written
+	// while the backup ran — are said, since they are the ones a backup
+	// carrying only its copy's would have missed.
 	if o := manifest.Objects; o != nil {
+		count := fmt.Sprintf("%d objects", o.Objects)
+		if o.Replayed > 0 {
+			count += fmt.Sprintf(" (%d written during the copy)", o.Replayed)
+		}
 		switch {
 		case o.Stream != "":
-			fmt.Fprintf(w, "objects\tin %s\t—\t%d objects\n", o.Stream, o.Objects)
+			fmt.Fprintf(w, "objects\tin %s\t—\t%s\n", o.Stream, count)
 		default:
-			fmt.Fprintf(w, "objects\t%s/\t%s\t%d objects\n", o.Dir, humanBytes(o.Bytes), o.Objects)
+			fmt.Fprintf(w, "objects\t%s/\t%s\t%s\n", o.Dir, humanBytes(o.Bytes), count)
 		}
 	}
 	streams := manifest.Streams
@@ -183,14 +191,18 @@ func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) e
 
 // backupWait is how long the CLI waits for a copy.
 //
-// Thirty minutes, and the number is a ceiling rather than an expectation: a
-// backup is bounded by the size of the store and the stream estate, which is
-// tens of milliseconds on a company that has just started and minutes on a
-// large one with a full event-retention window. The cost of being too short
-// is the confusing one — the engine finishes and writes a perfectly good
-// backup that this command has already called a failure — so this is set far
-// past any plausible real duration rather than close to it.
-const backupWait = 30 * time.Minute
+// TWELVE HOURS, and the number is a ceiling rather than an expectation. What
+// bounds a backup is the size of the store, the stream estate and — on `s3` —
+// the company's files, which a backup carries too: milliseconds on a company
+// that has just started, and a FIRST copy of a large one's objects is the long
+// one, since every later backup takes what its predecessor holds from disk. The
+// design's large model holds about 1.15 TB of objects, about 2.6 hours over the
+// 1 Gbit/s a modest host has before the store and the streams are counted;
+// twelve hours is more than four times that. The cost of being too short is
+// the confusing one — the engine finishes what it started whatever this
+// command does, so a wait that expires calls a perfectly good backup a failure
+// — so this is set far past any real copy rather than close to it.
+const backupWait = 12 * time.Hour
 
 // humanBytes renders a size an operator is going to eyeball against a disk.
 func humanBytes(n int64) string {

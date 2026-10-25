@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Errors this backend reports. Callers branch on these, or on the contract's
@@ -612,6 +613,14 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		AllowRollup:       spec.allowRollup,
 		AllowDirect:       spec.allowDirect,
 		MirrorDirect:      spec.mirrorDirect,
+		// THE STREAM'S IDENTITY, stamped by the create that makes it,
+		// because the broker's own creation instant does not survive a
+		// snapshot restore and this does — see [statelog.CreatedAtKey].
+		// Minted ONCE for this ensure, so a create the placement retries
+		// asks for the same stream each time; a peer racing with its own
+		// stamp is the "name already in use" the read-back below answers,
+		// and whichever create won is the stream's identity.
+		Metadata: statelog.StampCreatedAt(nil, time.Now()),
 	}
 	if spec.maxPerSubject == 0 {
 		// The client spells "unlimited" as -1; a zero would be read as a
@@ -728,16 +737,14 @@ func (q *Queue) createOrObserveStream(
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	// THROUGH [jsprovision.Timing.Read], so a request the group never
+	// THROUGH [jsprovision.ReadWith], so a request the group never
 	// answered is re-issued inside the ceiling above rather than being the
 	// whole of it — a second after it was sent, because a read is answered
-	// when the server processes it or never ([jsprovision.ReadTerm]).
-	var info jetstream.Stream
-	err := q.provisioning().Read(lookupCtx,
-		func(ctx context.Context) error {
-			var e error
-			info, e = q.js.Stream(ctx, spec.name)
-			return e
+	// when the server processes it or never ([jsprovision.ReadTerm]) — and
+	// is still listened for, since one behind a backlog is answered late.
+	info, err := jsprovision.ReadWith(lookupCtx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Stream, error) {
+			return q.js.Stream(ctx, spec.name)
 		}, nil)
 	stopLookup()
 	cancelLookup()
@@ -821,12 +828,11 @@ func (q *Queue) createOrObserveStream(
 	// inside that window reports not-found for a stream that exists and
 	// fails the boot before [Queue.DomainLog]'s own retry could help. ON
 	// ctx AND NOT createCtx, because createCtx is the deadline that just
-	// expired — [jsprovision.Settle] owns this read's own short window.
-	err = q.provisioning().Settle(ctx, func(ctx context.Context) error {
-		var e error
-		info, e = q.js.Stream(ctx, spec.name)
-		return e
-	})
+	// expired — [jsprovision.SettleWith] owns this read's own short window.
+	info, err = jsprovision.SettleWith(ctx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Stream, error) {
+			return q.js.Stream(ctx, spec.name)
+		})
 	if err != nil {
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: "no suitable peers" or "deadline exceeded" on the
@@ -1330,10 +1336,9 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	getErr := q.provisioning().Read(lookupCtx,
-		func(ctx context.Context) error {
-			_, e := q.js.Consumer(ctx, stream, name)
-			return e
+	_, getErr := jsprovision.ReadWith(lookupCtx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Consumer, error) {
+			return q.js.Consumer(ctx, stream, name)
 		}, nil)
 	stopLookup()
 	// THE THREE ANSWERS, and only the FIRST of them ends the call here.
@@ -1504,13 +1509,12 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	// visible to this member only on its next metadata update, so one
 	// lookup answers at an arbitrary instant inside that window and fails
 	// a boot over a consumer that exists. ON ctx AND NOT createCtx, for
-	// the reason [jsprovision.Settle] gives: createCtx may be the deadline
-	// that just expired.
-	err := q.provisioning().Settle(ctx, func(ctx context.Context) error {
-		var e error
-		cons, e = q.js.Consumer(ctx, stream, cfg.Durable)
-		return e
-	})
+	// the reason [jsprovision.SettleWith] gives: createCtx may be the
+	// deadline that just expired.
+	cons, err := jsprovision.SettleWith(ctx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Consumer, error) {
+			return q.js.Consumer(ctx, stream, cfg.Durable)
+		})
 	if err != nil {
 		return nil, false, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}

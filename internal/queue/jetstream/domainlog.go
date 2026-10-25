@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsinflight"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // DomainLog is one state-log domain's append surface: a conditional publish
@@ -37,34 +37,42 @@ type DomainLog struct {
 	// See [Queue.ensureDurableConsumer].
 	q *Queue
 
-	// state is a SECOND handle, used by [DomainLog.Stats] and by nothing
-	// else, and stateMu serialises the callers that share it.
+	// info reads the stream's info — its ends, its size, its ceiling, its
+	// identity — through A HANDLE OF ITS OWN EVERY TIME it is asked
+	// ([DomainLog.stateInfo]), and is what [DomainLog.Stats] and
+	// [DomainLog.SetMaxBytes] read; nothing else here reads the info.
 	//
-	// # Why the state read cannot go through the handle above
+	// # Why a state read never goes through a handle another read holds
 	//
 	// The vendored stream handle is not safe for concurrent use, and the
 	// shared mutable state is exactly one field: `Info` caches its reply
 	// into `s.info` with no lock (stream.go:498), and `getMsg` — which is
 	// what `GetMsg` and `GetLastMsgForSubject` are — READS `s.info.Config`
 	// on the same handle (stream.go:577). So one goroutine asking for the
-	// log's size races every goroutine reading a record by sequence or by
-	// subject, on a DomainLog that is shared by design: the applier's
-	// readiness check, the publisher's expectation read and the retention
-	// tick all hold this one.
+	// log's size on the handle above would race every goroutine reading a
+	// record by sequence or by subject, on a DomainLog that is shared by
+	// design: the applier's readiness check, the publisher's expectation
+	// read and the retention tick all hold this one. Nothing calls `Info`
+	// on that handle, so its `s.info` is written once at open and read
+	// immutably thereafter, and `LastSeq` — on the WRITE path, every
+	// conditional append that loses its expectation reads it — takes no
+	// lock.
 	//
-	// A SECOND HANDLE RATHER THAN ONE MUTEX OVER ALL OF IT, because the
-	// callers are not alike. `LastSeq` is on the WRITE path — every
-	// conditional append that loses its expectation reads it — and
-	// serialising that behind a state read would put a round trip's
-	// latency on a hot path to protect a field it never touches. Nothing
-	// calls `Info` on the shared handle, so its `s.info` is written once
-	// at open and read immutably thereafter.
-	//
-	// The mutex is still needed HERE, because two state reads share this
-	// handle. Its callers are the readiness check, the trim tick and the
-	// operator report — none of them hot.
-	state   jetstream.Stream
-	stateMu sync.Mutex
+	// AND NOT A SECOND SHARED HANDLE EITHER, which is what this was: a
+	// second handle needed its callers to take turns, and a state read is
+	// asked as a hedged read ([jsprovision.ReadWith]) whose requests may be
+	// out two at a time, which on one handle is the same race. A handle a
+	// request opens for itself (one STREAM.INFO, the same request `Info`
+	// sends) is shared with nobody, so state reads take no turn and wait
+	// for nobody else's: the readiness checks, the trim tick, the operator
+	// report — and the GATE RESERVE'S USAGE READING, which is on the
+	// hottest path the log has: every ordinary append and every barrier,
+	// which is to say every linearizable read, is admitted through it
+	// ([statelog.Reserve.Admit]) and waits for a state round trip that
+	// starts after it arrives. NOT A READ'S READINESS: a read is served
+	// the log's ends from memory, refreshed from here at most once a
+	// second whatever the read rate.
+	info func(ctx context.Context) (*jetstream.StreamInfo, error)
 }
 
 // DomainLog opens the append surface for a stream this node has provisioned.
@@ -78,15 +86,39 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
-	// THE SECOND HANDLE, opened here rather than lazily: a lazy one would
-	// need its own lock to build, and the whole point of the split is that
-	// the shared handle never takes one.
-	state, err := q.openProvisioned(ctx, stream)
-	if err != nil {
-		return nil, fmt.Errorf("jetstream: open the log %q's state reader: %w",
-			stream, err)
-	}
-	return &DomainLog{js: q.js, stream: s, state: state, name: stream, q: q}, nil
+	return &DomainLog{js: q.js, stream: s, name: stream, q: q,
+		info: func(ctx context.Context) (*jetstream.StreamInfo, error) {
+			// A HANDLE OF THIS REQUEST'S OWN — see [DomainLog.info].
+			fresh, err := q.js.Stream(ctx, stream)
+			if err != nil {
+				return nil, err
+			}
+			return fresh.CachedInfo(), nil
+		}}, nil
+}
+
+// stateInfo is the stream's info, read through a handle of its own
+// ([DomainLog.info]).
+//
+// ASKED AS A READ ([jsprovision.ReadWith]): each request presumed lost after
+// the read term, and another sent while nobody answers. A stream's info is
+// answered by its LEADER, and a member that still believes in a leader the
+// cluster has just lost stays silent rather than answer — so a request sent in
+// the window after a leader died is never answered at all, the new leader's
+// election notwithstanding, and one request held for its caller's whole
+// context waited out the committer's thirty-second budget for a reply nobody
+// was going to send, where asked again it was answered by the new leader a
+// second or two later.
+//
+// AND EVERY REQUEST STAYS OUTSTANDING while the next is asked, because the
+// leader queues each for a pool of workers and a backlog answers it LATE
+// rather than never. Thrown away at the read term, a reading from a leader
+// slower than a second was never taken at all — and the reserve that admits
+// every append and every barrier through this reading failed each of them at
+// its own budget, every push batch and every linearizable read on the node
+// at once, where waiting would only have slowed them.
+func (l *DomainLog) stateInfo(ctx context.Context) (*jetstream.StreamInfo, error) {
+	return jsprovision.ReadWith(ctx, l.q.provisioning(), l.info, nil)
 }
 
 // openProvisioned resolves a stream THIS NODE HAS JUST PROVISIONED, waiting
@@ -128,13 +160,8 @@ func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.S
 	// the window this function documents and hang until the boot context
 	// expired. ctx goes in undiminished, which is what lets an operator who
 	// cancels a boot be answered at once.
-	var s jetstream.Stream
-	err := q.provisioning().Settle(ctx, func(ctx context.Context) error {
-		var e error
-		s, e = q.js.Stream(ctx, stream)
-		return e
-	})
-	return s, err
+	return jsprovision.SettleWith(ctx, q.provisioning(),
+		func(ctx context.Context) (jetstream.Stream, error) { return q.js.Stream(ctx, stream) })
 }
 
 // Append publishes one record.
@@ -196,8 +223,15 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 // broker's not-found as an error would make every caller re-derive that
 // distinction, and the first one to forget it would take the trimmed-anchor
 // branch on a broker that was merely unreachable.
+//
+// ASKED AS A READ, for [DomainLog.stateInfo]'s reasons: a domain log allows no
+// direct get, so this is answered by the stream's leader or by nobody — and
+// it is on the write path, discriminating every rejected append.
 func (l *DomainLog) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
-	msg, err := l.stream.GetLastMsgForSubject(ctx, subject)
+	msg, err := jsprovision.ReadWith(ctx, l.q.provisioning(),
+		func(ctx context.Context) (*jetstream.RawStreamMsg, error) {
+			return l.stream.GetLastMsgForSubject(ctx, subject)
+		}, nil)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrMsgNotFound) {
 			return 0, false, nil
@@ -259,10 +293,14 @@ func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) 
 // an ordinary answer rather than an error: a trimmed record is exactly what
 // the retention gate exists to produce, and a caller distinguishing "gone" from
 // "the broker is unreachable" is the whole reason it is not one error value.
+// Asked as a read, for [DomainLog.LastSeq]'s reason.
 func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 	payload []byte, storedAt time.Time, ok bool, err error) {
 
-	msg, err := l.stream.GetMsg(ctx, seq)
+	msg, err := jsprovision.ReadWith(ctx, l.q.provisioning(),
+		func(ctx context.Context) (*jetstream.RawStreamMsg, error) {
+			return l.stream.GetMsg(ctx, seq)
+		}, nil)
 	switch {
 	case errors.Is(err, jetstream.ErrMsgNotFound):
 		return "", nil, time.Time{}, false, nil
@@ -303,25 +341,30 @@ type LogStats struct {
 	// real setting rather than a full log.
 	Bytes, MaxBytes uint64
 
-	// CreatedAt is the broker's own creation instant for the stream, which
-	// is what detects a recreated one.
+	// CreatedAt is the creation instant the stream's identity is keyed to
+	// ([statelog.StreamCreatedAt]), which is what detects a recreated one.
 	CreatedAt time.Time
 }
 
 // Stats reads the log's ends, its size and its ceiling in one round trip.
 func (l *DomainLog) Stats(ctx context.Context) (LogStats, error) {
-	l.stateMu.Lock()
-	info, err := l.state.Info(ctx)
-	l.stateMu.Unlock()
+	info, err := l.stateInfo(ctx)
 	if err != nil {
 		return LogStats{}, fmt.Errorf("jetstream: read %q's state: %w", l.name, err)
+	}
+	// THE STREAM'S IDENTITY, read the one way every consumer reads it —
+	// the instant stamped at its creation, which a snapshot restore keeps
+	// and the broker's own instant does not ([statelog.StreamCreatedAt]).
+	created, err := statelog.StreamCreatedAt(info)
+	if err != nil {
+		return LogStats{}, fmt.Errorf("jetstream: read %q's identity: %w", l.name, err)
 	}
 	stats := LogStats{
 		FirstSeq:  info.State.FirstSeq,
 		LastSeq:   info.State.LastSeq,
 		Messages:  info.State.Msgs,
 		Bytes:     info.State.Bytes,
-		CreatedAt: info.Created,
+		CreatedAt: created,
 	}
 	if info.Config.MaxBytes > 0 {
 		stats.MaxBytes = uint64(info.Config.MaxBytes)
@@ -375,10 +418,7 @@ func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
 // silently reset every field an operator had set, or that the node which
 // created the stream set from its own Tier A.
 func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
-	l.stateMu.Lock()
-	defer l.stateMu.Unlock()
-
-	info, err := l.state.Info(ctx)
+	info, err := l.stateInfo(ctx)
 	if err != nil {
 		return fmt.Errorf("jetstream: read %q's configuration before changing "+
 			"its ceiling: %w", l.name, err)

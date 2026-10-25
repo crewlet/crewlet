@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 )
@@ -519,6 +521,15 @@ func (x managesIndex) managed(r *Role) map[string]struct{} {
 // [Organization.Manager] answers with the first in [Organization.AllRoles]
 // order, which puts a root seat first.
 func (o *Organization) autoManageByLead(index managesIndex) {
+	// EVERY UNIT'S LEAD THROUGH ONE INDEX of the chart as it stands — its
+	// seats attached and its leads propagated, the parts of it this pass
+	// never changes (it writes only the leads' manages) — since
+	// [Organization.EffectiveLead] asked of every unit walks the chart's
+	// every seat for each inherited lead ([Index] says what that cost).
+	// Built at the first unit that names a lead, so a chart that names none
+	// pays nothing for it.
+	leads := sync.OnceValue(o.Index)
+
 	// THE LEAD'S OWN MANAGED SET IS COMPUTED ONCE PER LEAD, not once per
 	// unit, and that is a correctness-preserving fix to a quadratic.
 	//
@@ -542,7 +553,7 @@ func (o *Organization) autoManageByLead(index managesIndex) {
 		if u.Lead == "" || len(u.Roles) == 0 {
 			continue
 		}
-		lead := o.EffectiveLead(u)
+		lead := leads().EffectiveLead(u)
 		if lead == nil {
 			continue
 		}
@@ -1133,13 +1144,23 @@ func (o *Organization) validateContactIdentities() error {
 // entities. A disabled one is fine — it is config an operator is holding.
 func (o *Organization) validateLeadSchedules() error {
 	var errs []error
+	// THE LEAD ONLY OF A UNIT WITH A SCHEDULE IT WOULD RUN, and through one
+	// index of the chart built at the first such unit, for the reason
+	// autoManageByLead gives: asked of every unit, the chart's own method
+	// walked every seat for each inherited lead on every validation, whether
+	// or not the unit had a schedule to judge.
+	leads := sync.OnceValue(o.Index)
+	runsAsLead := func(s Schedule) bool { return s.IsEnabled() && s.TargetsLead() }
 	for u := range o.AllUnits() {
-		lead := o.EffectiveLead(u)
+		if !slices.ContainsFunc(u.Schedules, runsAsLead) {
+			continue
+		}
+		lead := leads().EffectiveLead(u)
 		if lead == nil || !lead.IsHuman() {
 			continue
 		}
 		for i, s := range u.Schedules {
-			if !s.IsEnabled() || !s.TargetsLead() {
+			if !runsAsLead(s) {
 				continue
 			}
 			errs = append(errs, &UnitError{Unit: u, Field: []any{"schedules", i}, Err: fmt.Errorf(

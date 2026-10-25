@@ -359,14 +359,29 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err := s.checkHeldSeats(ctx, b.prior, company); err != nil {
 		return nil, err
 	}
+	// AND WHAT IT DOES BESIDE THIS NODE'S TIER A ([Options.TierWarnings]),
+	// in the answer that applies it: a person turning code.native on reads
+	// the cross-tier consequence where they made the change, rather than in
+	// a node's log.
 	p := &prepared{
-		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
+		document: document, warnings: s.warnings(company), derived: derived, by: d.by,
 		source: cmp.Or(d.source, revisionSource),
 	}
 	if found {
 		p.base = active.ID
 	}
 	return p, nil
+}
+
+// warnings is everything a write's answer reports as VALID and worth knowing:
+// the company's own ([config.Company.Warnings]) and what it does beside this
+// node's Tier A ([Options.TierWarnings]).
+func (s *Service) warnings(company *config.Company) []config.Warning {
+	out := company.Warnings()
+	if s.tierWarnings != nil {
+		out = append(out, s.tierWarnings(company)...)
+	}
+	return out
 }
 
 // commit seals, stores and points the fleet at a prepared write.

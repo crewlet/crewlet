@@ -566,6 +566,42 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
   expect(screen.queryByText("took it off the board")).toBeNull();
 });
 
+// A GIT PUSH IS DRAWN AGAINST ITS REPOSITORY. A refused push writes no row in
+// the code domain, so the runtime audit's repository is the only record of
+// where it was refused; every other tool call still records no subject.
+//
+// The row is the one the code host writes: the seat the person pushed as for
+// its author, kind `human`, and the machine token git presented as the
+// credential (`pat:<id>`), in the store's `actor_kind` and `operator_id` tags.
+test("a git push names its repository as what it was done to", async () => {
+  serving({
+    events: {
+      events: [
+        runtimeEvent({
+          id: "ev-push",
+          summary: "jane ran git_push on nimbus-web: refused (protected_force)",
+          tags: {
+            node: "node-a",
+            actor_kind: "human",
+            operator_id: "pat:0192f0a1",
+            tool: "git_push",
+            repo: "nimbus-web",
+          },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("git push")).toBeTruthy());
+  expect(screen.getByText("nimbus-web")).toBeTruthy();
+  expect(screen.queryByText("Not recorded")).toBeNull();
+  // WHO: the seat, and the token the push came through.
+  expect(screen.getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
+  expect(screen.getByText("pat:0192f0a1")).toBeTruthy();
+});
+
 /** One row of the company trail of every artifact, as `artifact_trail` answers it. */
 function trailRow(over: Record<string, unknown> = {}) {
   return {

@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,9 +18,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -162,6 +166,19 @@ func floorFleet(t *testing.T) *retention {
 	return &retention{fleet: coordmem.NewFleet(), nodeID: "node-a"}
 }
 
+// fleetFloors is every registered domain's published floor, read as every
+// reader in this package reads them: one key a domain.
+func fleetFloors(ctx context.Context, fleet coord.Fleet) ([]coord.TrimFloor, error) {
+	read := readFloorsOf(ctx, fleet, registeredNames())
+	var out []coord.TrimFloor
+	for _, name := range registeredNames() {
+		if row, published, err := read.row(name); err == nil && published {
+			out = append(out, row)
+		}
+	}
+	return out, read.unread()
+}
+
 // TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes is why
 // `blocked_since` is published rather than held in memory.
 //
@@ -184,7 +201,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, err := r.fleet.Floors(ctx)
+	published, err := fleetFloors(ctx, r.fleet)
 	if err != nil || len(published) != 1 {
 		t.Fatalf("floors = %v (err %v)", published, err)
 	}
@@ -201,7 +218,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish from the new holder: %v", err)
 	}
-	published, err = peer.fleet.Floors(ctx)
+	published, err = fleetFloors(ctx, peer.fleet)
 	if err != nil || len(published) != 1 {
 		t.Fatalf("floors = %v (err %v)", published, err)
 	}
@@ -245,7 +262,7 @@ func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
 	}
 	tick := func(r *retention, at time.Time, decision statelog.TrimDecision) {
 		t.Helper()
-		published, err := r.fleet.Floors(ctx)
+		published, err := fleetFloors(ctx, r.fleet)
 		if err != nil {
 			t.Fatalf("floors: %v", err)
 		}
@@ -341,7 +358,7 @@ func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, _ := r.fleet.Floors(ctx)
+	published, _ := fleetFloors(ctx, r.fleet)
 	if len(published) != 1 || published[0].Blocked() {
 		t.Fatalf("an advancing trim published %+v", published)
 	}
@@ -374,7 +391,7 @@ func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
 	}, 0, fleetInputs{at: now, previous: map[string]coord.TrimFloor{"tracker": was}}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, _ := r.fleet.Floors(ctx)
+	published, _ := fleetFloors(ctx, r.fleet)
 	if len(published) != 1 || !published[0].BlockedSince.Equal(now) {
 		t.Fatalf("blocked_since = %v after a trim that had been advancing "+
 			"blocked, want %s", published, now)
@@ -402,7 +419,7 @@ func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	published, _ := r.fleet.Floors(ctx)
+	published, _ := fleetFloors(ctx, r.fleet)
 	if len(published) != 1 || !published[0].BlockedSince.Equal(first) {
 		t.Fatalf("blocked_since = %v after the blocking term changed, want the "+
 			"original %s", published, first)
@@ -475,7 +492,7 @@ func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 	}, 1, fleetInputs{at: now, previous: map[string]coord.TrimFloor{}}); err != nil {
 		t.Fatalf("publish the advance: %v", err)
 	}
-	advanced, err := r.fleet.Floors(ctx)
+	advanced, err := fleetFloors(ctx, r.fleet)
 	if err != nil || len(advanced) != 1 {
 		t.Fatalf("floors = %v (err %v)", advanced, err)
 	}
@@ -487,7 +504,7 @@ func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish the block: %v", err)
 	}
-	floors, err := r.fleet.Floors(ctx)
+	floors, err := fleetFloors(ctx, r.fleet)
 	if err != nil || len(floors) != 1 {
 		t.Fatalf("floors = %v (err %v)", floors, err)
 	}
@@ -497,7 +514,7 @@ func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 			"that says zero clears every node to publish over them",
 			floors[0].TrimTo, floors[0].Floor)
 	}
-	if got, err := floorFor(floors, "tracker", 1); err != nil || got != 900 {
+	if got, err := readFloorsOf(ctx, r.fleet, []string{"tracker"}).floor("tracker", 1); err != nil || got != 900 {
 		t.Fatalf("the fence reads a floor of %d (err %v) after the block, want 900",
 			got, err)
 	}
@@ -544,7 +561,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -586,7 +603,7 @@ func barrierOn(t *testing.T, running *runningLog) uint64 {
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Gen:     running.runner.Committed().Generation,
-		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
@@ -625,12 +642,17 @@ func TestTheFloorIsPublishedBeforeThePurgeItLicenses(t *testing.T) {
 	r := &retention{fleet: fleet, nodeID: "node-a"}
 	name := running.domain.Name()
 	to := last
-	if err := r.apply(t.Context(), running.log, name, running.runner.Committed().Generation,
+	after, err := r.apply(t.Context(), running.log, name, running.runner.Committed().Generation,
 		statelog.TrimDecision{
 			To:    to,
 			Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: to, Known: true}},
-		}, first, fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}); err != nil {
+		}, first, fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}})
+	if err != nil {
 		t.Fatalf("apply: %v", err)
+	}
+	if after != to {
+		t.Fatalf("the tick answered %d as the log's first surviving sequence, want "+
+			"the %d it purged to — the floor the anchor sweep removes below", after, to)
 	}
 	if fleet.puts != 1 {
 		t.Fatalf("the tick published %d floor(s), want 1", fleet.puts)
@@ -641,11 +663,8 @@ func TestTheFloorIsPublishedBeforeThePurgeItLicenses(t *testing.T) {
 			"register in between cleared nodes the purge had left below the log",
 			fleet.firstAt, to)
 	}
-	floors, err := back.Fleet.Floors(t.Context())
-	if err != nil {
-		t.Fatalf("floors: %v", err)
-	}
-	published, err := floorFor(floors, name, running.runner.Committed().Generation)
+	published, err := readFloorsOf(t.Context(), back.Fleet, []string{name}).floor(name,
+		running.runner.Committed().Generation)
 	if err != nil || published < to {
 		t.Fatalf("the published floor is %d (err %v), want at least the %d it licensed",
 			published, err, to)
@@ -671,7 +690,7 @@ func TestAFloorThatCouldNotBePublishedPurgesNothing(t *testing.T) {
 	fleet := &orderFleet{fleetRegister: back.Fleet, stream: running.log,
 		refuse: errors.New("the register refuses writes")}
 	r := &retention{fleet: fleet, nodeID: "node-a"}
-	err = r.apply(t.Context(), running.log, running.domain.Name(),
+	_, err = r.apply(t.Context(), running.log, running.domain.Name(),
 		running.runner.Committed().Generation, statelog.TrimDecision{
 			To:    last,
 			Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: last, Known: true}},
@@ -739,7 +758,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 			committed := running.runner.Committed()
 			stream := running.spec.Name
 			now := time.Now().UTC()
-			floors, err := back.Fleet.Floors(t.Context())
+			floors, err := fleetFloors(t.Context(), back.Fleet)
 			if err != nil {
 				t.Fatalf("floors: %v", err)
 			}
@@ -766,10 +785,10 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 					}},
 				}},
 			}
-			if err := r.domain(t.Context(), running, shared); err != nil {
+			if err := trimLog(t.Context(), r, running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", name, err)
 			}
-			floors, err = back.Fleet.Floors(t.Context())
+			floors, err = fleetFloors(t.Context(), back.Fleet)
 			if err != nil {
 				t.Fatalf("floors: %v", err)
 			}
@@ -890,12 +909,12 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 
 	// Four answers: one over part of the corpus, one without its semantic
 	// half, two complete.
-	e.reportSearch(search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
-	e.reportSearch(search.Answer{BucketsAnswered: 64}, 12*time.Millisecond)
-	e.reportSearch(search.Answer{
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, 12*time.Millisecond)
+	e.reportSearch(search.FanQuery{}, search.Answer{
 		BucketsAnswered: 32, BucketsMissing: 32, Absent: []string{"node-b"},
 	}, 15*time.Millisecond)
-	e.reportSearch(search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
 		11*time.Millisecond)
 
 	r := &retention{metrics: recorder}
@@ -932,6 +951,164 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 	}
 }
 
+// A SLOW TURN START AND A SLOW SEARCH ARE TWO ALARMS, EACH ON ITS OWN SCANS.
+//
+// A turn's knowledge prefetch is held to statelog.PrefetchScanBudget and a
+// deliberate search to statelog.InteractiveSearchTarget, and both scans land
+// in one histogram split by path. Every scan was recorded `interactive`, so
+// `prefetch_slow` read a p95 nothing produced and could never fire on a running
+// node — and a prefetch series read into SearchP95 would have fired
+// `search_slow` for a slow turn start. Here a node whose prefetch scans run
+// past their budget while its deliberate searches are quick raises
+// `prefetch_slow` alone, and the converse raises `search_slow` alone.
+//
+// Mutation: read every scan into SearchP95 again, or record the prefetch's as
+// interactive, and the first case is silent.
+func TestASlowTurnStartAndASlowSearchAreTwoAlarms(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                 string
+		prefetch, deliberate time.Duration
+		fires, silent        statelog.Kind
+	}{
+		{"prefetch scans past their budget", statelog.PrefetchScanBudget + 100*time.Millisecond,
+			10 * time.Millisecond, statelog.KindPrefetchSlow, statelog.KindSearchSlow},
+		{"deliberate searches past their target", 10 * time.Millisecond,
+			statelog.InteractiveSearchTarget + time.Second, statelog.KindSearchSlow, statelog.KindPrefetchSlow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			recorder, err := metrics.New()
+			if err != nil {
+				t.Fatalf("recorder: %v", err)
+			}
+			e := &Engine{metrics: recorder}
+			answer := search.Answer{BucketsAnswered: 64, Served: knowledge.ModeHybrid}
+			for range 20 {
+				e.reportSearch(search.FanQuery{Prefetch: true}, answer, tc.prefetch)
+				e.reportSearch(search.FanQuery{}, answer, tc.deliberate)
+			}
+			var reading statelog.Reading
+			(&retention{metrics: recorder}).observed(&reading)
+			if reading.PrefetchP95 < tc.prefetch/2 || reading.SearchP95 < tc.deliberate/2 ||
+				reading.PrefetchP95 > 2*tc.prefetch || reading.SearchP95 > 2*tc.deliberate {
+				t.Fatalf("prefetch p95 %v and search p95 %v, want about %v and %v: each read off its "+
+					"own path", reading.PrefetchP95, reading.SearchP95, tc.prefetch, tc.deliberate)
+			}
+			fired := statelog.Evaluate(reading)
+			if !firedKind(fired, tc.fires) || firedKind(fired, tc.silent) {
+				t.Fatalf("the alarms are %v, want %s and not %s", fired, tc.fires, tc.silent)
+			}
+		})
+	}
+}
+
+// A PERCENTILE INSIDE ITS BUDGET FIRES NOTHING, AND ONE PAST IT FIRES. Every
+// percentile the reading holds is read off a histogram, and a histogram's
+// quantile is the upper boundary of the bucket it falls in — so an alarm whose
+// budget is not a boundary is decided at the boundary above it. Under
+// twenty-one powers of two that was 512 ms for the 500 ms budgets of
+// `prefetch_slow` and `barrier_slow`, 1 024 ms for `search_slow`'s second and
+// 128 ms for `pool_starved`'s 100 ms: each fired at a p95 just past the
+// boundary below — 256, 256, 512 and 64 ms — and said the p95 was the boundary
+// above. Here each instrument is recorded at four fifths of its budget, which
+// is past that boundary below, and then just past its budget, and the reading
+// assembled from the recorder is evaluated.
+//
+// Mutation: put back a boundary set without the budgets in it, and the four
+// fifths fire.
+func TestAPercentileInsideItsBudgetFiresNothing(t *testing.T) {
+	t.Parallel()
+	answer := search.Answer{BucketsAnswered: 64, Served: knowledge.ModeHybrid}
+	for _, tc := range []struct {
+		kind   statelog.Kind
+		budget time.Duration
+		record func(*Engine, *metrics.Recorder, time.Duration)
+	}{
+		{statelog.KindBarrierSlow, statelog.ReadBudget / 4, func(_ *Engine, r *metrics.Recorder, d time.Duration) {
+			r.Observe(metrics.StatelogBarrierDuration, d, metrics.Attrs{"domain": "tracker"})
+		}},
+		{statelog.KindPrefetchSlow, statelog.PrefetchScanBudget, func(e *Engine, _ *metrics.Recorder, d time.Duration) {
+			e.reportSearch(search.FanQuery{Prefetch: true}, answer, d)
+		}},
+		{statelog.KindSearchSlow, statelog.InteractiveSearchTarget, func(e *Engine, _ *metrics.Recorder, d time.Duration) {
+			e.reportSearch(search.FanQuery{}, answer, d)
+		}},
+		{statelog.KindPoolStarved, statelog.PoolWaitAlarm, func(_ *Engine, r *metrics.Recorder, d time.Duration) {
+			r.Observe(metrics.StorePoolWait, d, metrics.Attrs{"file": "node"})
+		}},
+	} {
+		for _, arm := range []struct {
+			took  time.Duration
+			fires bool
+		}{
+			{tc.budget * 4 / 5, false},
+			{tc.budget + time.Millisecond, true},
+		} {
+			t.Run(fmt.Sprintf("%s at %v", tc.kind, arm.took), func(t *testing.T) {
+				t.Parallel()
+				recorder, err := metrics.New()
+				if err != nil {
+					t.Fatalf("recorder: %v", err)
+				}
+				e := &Engine{metrics: recorder}
+				for range 20 {
+					tc.record(e, recorder, arm.took)
+				}
+				var reading statelog.Reading
+				(&retention{metrics: recorder}).observed(&reading)
+				if fired := firedKind(statelog.Evaluate(reading), tc.kind); fired != arm.fires {
+					t.Errorf("every observation at %v against a %v budget: %s fired = %v, want %v — the "+
+						"percentiles read as barrier %v, prefetch %v, search %v, pool wait %v", arm.took,
+						tc.budget, tc.kind, fired, arm.fires, reading.BarrierP95, reading.PrefetchP95,
+						reading.SearchP95, reading.PoolWaitP95)
+				}
+			})
+		}
+	}
+}
+
+// THE PROSE NAMES THE TWO BUDGETS THE SCANS ARE HELD TO: the metrics catalogue
+// (which cannot import the alarm table) and the search guide state them in
+// words, and the guide says the prefetch's is half the interactive target, so
+// a retune of either constant fails here rather than leaving an operator
+// reading a budget no alarm uses.
+//
+// Mutation: change statelog.PrefetchScanBudget or InteractiveSearchTarget, and
+// the prose no longer says what the alarms fire at.
+func TestTheScanBudgetsAreStatedAsTheAlarmsHoldThem(t *testing.T) {
+	t.Parallel()
+	if statelog.PrefetchScanBudget != 500*time.Millisecond ||
+		statelog.InteractiveSearchTarget != time.Second {
+		t.Fatalf("the prose calls the budgets half a second and a second; they are %v and %v: say "+
+			"there what they are, and here", statelog.PrefetchScanBudget, statelog.InteractiveSearchTarget)
+	}
+	var shows string
+	for _, in := range metrics.Catalogue() {
+		if in.Name == metrics.TrackerSearchScanDuration {
+			shows = in.Shows
+		}
+	}
+	for _, want := range []string{"half a second for a prefetch (`prefetch_slow`)",
+		"a second for an interactive search (`search_slow`)"} {
+		if !strings.Contains(shows, want) {
+			t.Errorf("%s's catalogue entry does not say %q: %s", metrics.TrackerSearchScanDuration, want, shows)
+		}
+	}
+	path := filepath.Join(sourcetree.Root(t), "docs", "guides", "search.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	guide := strings.Join(strings.Fields(string(raw)), " ")
+	for _, want := range []string{"over their one-second p95 target", "over their half-second p95 budget",
+		"held to half of what a person searching on purpose waits"} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("%s does not say %q", path, want)
+		}
+	}
+}
+
 // A LEXICAL-ONLY COMPANY IS NOT A DEGRADED ONE.
 //
 // A company that has configured no embeddings provider runs every search
@@ -946,7 +1123,7 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 	}
 	e := &Engine{metrics: recorder}
 	for range 5 {
-		e.reportSearch(search.Answer{BucketsAnswered: 64}, time.Millisecond)
+		e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, time.Millisecond)
 	}
 	var reading statelog.Reading
 	(&retention{metrics: recorder}).observed(&reading)
@@ -1079,10 +1256,10 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	r := &retention{metrics: recorder}
 
 	// One degraded search, and three good ones, all in one hour.
-	e.reportSearch(search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
+	e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
 		11*time.Millisecond)
 	for range 3 {
-		e.reportSearch(search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
+		e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
 	}
 
 	var lit statelog.Reading
@@ -1443,5 +1620,42 @@ func TestTheReportListsPresenceOnce(t *testing.T) {
 			t.Errorf("a live data node with no row is marked counted %v, live %v; want both",
 				node.Counted, node.Live)
 		}
+	}
+}
+
+// ONE DOMAIN'S UNREADABLE FLOOR STOPS THAT DOMAIN'S TRIM ALONE, on a real
+// node's tick.
+//
+// The trim carries each domain's floor forward from the row it reads, so a
+// domain whose row it cannot read publishes nothing and purges nothing — the
+// floor it would carry is the one the row hides. Read as one listing, that
+// row stopped the tick for EVERY log: no floor was published and no log
+// trimmed anywhere in the fleet, and every log grew toward its ceiling.
+func TestOneDomainsUnreadableFloorStopsThatDomainsTrimAlone(t *testing.T) {
+	t.Parallel()
+	e, back, _ := trimmedTracker(t)
+	unread := pages.Domain{}.Name()
+	fleet := &oneFloorUnread{fleetRegister: back.Fleet, domain: unread}
+	r := &retention{fleet: fleet, state: e.core.Load().log, nodeID: "node-a",
+		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
+	before := time.Now().UTC().Add(-time.Second)
+	r.tick(t.Context())
+
+	for _, running := range e.core.Load().log.running() {
+		name := running.domain.Name()
+		if name == unread {
+			continue
+		}
+		row, found, err := back.Fleet.Floor(t.Context(), name)
+		if err != nil || !found || row.At.Before(before) {
+			t.Fatalf("%s's trim published (%+v, found %v, %v) on a tick beside a "+
+				"knowledge base floor that does not read, want a row from this tick",
+				name, row, found, err)
+		}
+	}
+	if row, found, err := back.Fleet.Floor(t.Context(), unread); err != nil ||
+		(found && !row.At.Before(before)) {
+		t.Fatalf("the knowledge base's trim published %+v over a floor it could not "+
+			"read (%v)", row, err)
 	}
 }

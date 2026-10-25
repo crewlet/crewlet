@@ -46,6 +46,10 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 			Kinds:  suiteKinds(),
 			Rows:   iamdomain.NewRows,
 			Write:  suiteWrite,
+			// THE PRODUCTION ENCODER the engine hands the trim, so this
+			// log's anchors below the floor are removed by the same record
+			// every log that writes anchors takes (ADR-0047).
+			EncodeTrimmed: iamdomain.EncodeTrimmed,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned
 			// an evicted node had left this log.
@@ -282,6 +286,8 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 		}, iamdomain.RootScope()
 	case iamdomain.KindBarrier:
 		return iamdomain.OpBarrier, "", nil, iamdomain.RootScope()
+	case iamdomain.KindTrimmed:
+		return iamdomain.OpTrimmed, "", nil, iamdomain.RootScope()
 	}
 	return iamdomain.OpUpdate, suitePerson, nil, person
 }

@@ -95,6 +95,31 @@
 // person has no agent id, no turns and no reads ([KindPerson]). A record is
 // always the cumulative value; an apply REPLACES.
 //
+// # Reading a window, a page at a time
+//
+// The reads a window grows ([Spend], [SeatTurns], [PersonSpend], [SeatDays],
+// [PageReads]) are each the first page of a paged read asked with no budget,
+// and a peer answers the same read a page at a time ([Fill]). A page pays for
+// its own rows: the read walks its window one leading key at a time — a
+// company day, or a page id — each by a statement that seeks the key and
+// streams in the read's order, so a page stops reading where it ends.
+//
+// Measured with BenchmarkAUsageWindowInPages (ninety days, three nodes, 120
+// seats with six spend cells and four page reads a day — 194 400 spend rows —
+// on a four-vCPU 2.8 GHz Xeon), each read whole and walked at the routed
+// page's budget of 2 MiB:
+//
+//	             one statement a window          one statement a key
+//	spend        whole 4.6 s, 19 pages 11.6 s    whole 3.5 s, 19 pages 4.0 s
+//	page reads   whole 2.9 s, 16 pages  7.0 s    whole 3.0 s, 16 pages 4.1 s
+//	seat days    whole 1.0 s,  4 pages  1.3 s    whole 1.0 s,  4 pages 1.0 s
+//
+// The whole spend read got faster as well: its heads are read once a day and
+// joined in memory, where the one statement probed the head table once a
+// spend cell and sorted the window. What a page still costs beyond the whole
+// read is the encoding it measures each row by — which the wire then carries
+// rather than encoding the row again ([Page.AppendJSON]).
+//
 // # What it deliberately is not
 //
 // Not turn-level detail. A day's row cannot say which turn spent what, and

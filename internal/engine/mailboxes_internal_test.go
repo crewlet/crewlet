@@ -14,6 +14,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	qmem "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
 // rosterFleet is the fleet store the roster reads the activation pointer from,
@@ -68,7 +69,10 @@ roles:
 	}
 
 	fleet := &rosterFleet{memoryFleet: coordmem.NewFleet()}
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	// THE KEYRING every node [New] builds holds: the reconciler below opens
+	// the revisions it applies with it, and refuses an engine without one.
+	_, cipher := testKeyring(t)
+	e := &Engine{backends: &Backends{Fleet: fleet}, cipher: cipher}
 	e.epoch.current.Store(company)
 
 	// Nothing activated: not a fault, and not a roster of nobody either.
@@ -91,20 +95,54 @@ roles:
 	}
 
 	// A company no activation has named — the file a node booted with —
-	// cannot say it is the fleet's.
-	if handles, err := e.activeSeats(t.Context()); err == nil {
-		t.Fatalf("a company no activation named produced a roster %v", handles)
+	// cannot say it is the fleet's. On a node with no reconciler that is
+	// where every node starts: unknown, and the quiet kind, as a reconciler
+	// that has not ticked is.
+	if handles, err := e.activeSeats(t.Context()); err == nil ||
+		!errors.Is(err, maintenance.ErrRevisionPropagating) {
+		t.Fatalf("a company no activation named, on a node with no reconciler, produced "+
+			"(%v, %v), want ErrRevisionPropagating", handles, err)
 	}
 
-	// A company applied from an EARLIER activation is behind the fleet:
-	// its seats may be stale.
+	// THE RECONCILER THE ENGINE BUILDS is the one the roster reads, or the
+	// sweep could never judge a seat on a real node.
+	r, err := e.NewReconciler(ReconcilerOptions{
+		Store: refinementStore(t), Fleet: fleet, Queue: qmem.New(), NodeID: "node-a",
+	})
+	if err != nil {
+		t.Fatalf("NewReconciler: %v", err)
+	}
+	// A company applied from an EARLIER activation is behind the fleet: its
+	// seats may be stale. Still applying the newer one, it is unknown and
+	// the quiet kind — every node is here for the seconds of every
+	// activation.
 	company.ActivatedAt = earlier.At
-	if handles, err := e.activeSeats(t.Context()); err == nil {
-		t.Fatalf("a node behind the fleet's activation produced a roster %v; its "+
-			"seats may be stale", handles)
+	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch,
+		behindSince: time.Now()})
+	if handles, err := e.activeSeats(t.Context()); err == nil ||
+		!errors.Is(err, maintenance.ErrRevisionPropagating) {
+		t.Fatalf("a node still applying the fleet's activation produced (%v, %v), want "+
+			"ErrRevisionPropagating; its seats may be stale", handles, err)
+	}
+	// BEHIND, and its apply failed: unknown, and a fault the sweep reports.
+	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch, attempts: 1})
+	if handles, err := e.activeSeats(t.Context()); err == nil ||
+		errors.Is(err, maintenance.ErrRevisionPropagating) {
+		t.Fatalf("a node that failed the fleet's activation produced (%v, %v), want an "+
+			"unknown roster the sweep reports", handles, err)
 	}
 
+	// APPLIED FROM THE POINTER'S OWN ACTIVATION, the company is the fleet's —
+	// even while the reconciler is still inside the apply that publishes it,
+	// and has not recorded the epoch yet.
 	company.ActivatedAt = activation.At
+	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch,
+		behindSince: time.Now()})
+	if handles, err := e.activeSeats(t.Context()); err != nil || len(handles) != 2 {
+		t.Fatalf("a node publishing the company of the fleet's activation, its apply still "+
+			"in flight, produced (%v, %v), want the roster", handles, err)
+	}
+	r.publish(applyProgress{applied: activation.Epoch, target: activation.Epoch})
 	handles, err := e.activeSeats(t.Context())
 	if err != nil {
 		t.Fatalf("a node serving the fleet's activation: %v", err)
@@ -123,6 +161,14 @@ roles:
 	}
 	if !slices.Equal(named, []string{"ceo", "swe"}) {
 		t.Fatalf("roster = %v, want the agent seats", named)
+	}
+	// AHEAD of the pointer it read — the pointer moved after the read, and
+	// this node had already applied what it moved to — it serves a truer
+	// revision than the one read, as the posture reads the same race.
+	company.ActivatedAt = activation.At.Add(time.Second)
+	r.publish(applyProgress{applied: activation.Epoch + 1, target: activation.Epoch + 1})
+	if handles, err := e.activeSeats(t.Context()); err != nil || len(handles) != 2 {
+		t.Fatalf("a node ahead of the pointer it read produced (%v, %v), want the roster", handles, err)
 	}
 
 	// An unreadable pointer is unknown, never the last roster it produced.

@@ -106,8 +106,8 @@ func (frameProbeDomain) FeedGroup() string          { return "" }
 func (frameProbeDomain) Tables() map[string]TableClass {
 	return map[string]TableClass{"probe_rows": Replicated}
 }
-func (frameProbeDomain) DeferredTable() string { return "probe_log_deferred" }
-func (frameProbeDomain) ScopeIndex() string    { return "probe_deferred_scope" }
-func (frameProbeDomain) OpsTable() string      { return "probe_ops" }
-func (frameProbeDomain) ReadinessInput() bool  { return true }
-func (frameProbeDomain) ClaimsIdentity() bool  { return true }
+func (frameProbeDomain) DeferredTable() string    { return "probe_log_deferred" }
+func (frameProbeDomain) ScopeIndex() string       { return "probe_deferred_scope" }
+func (frameProbeDomain) OpsTable() string         { return "probe_ops" }
+func (frameProbeDomain) GatesSeatAdmission() bool { return true }
+func (frameProbeDomain) ClaimsIdentity() bool     { return true }

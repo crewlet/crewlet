@@ -123,18 +123,17 @@ func (f *Fleet) PutFloor(_ context.Context, floor coord.TrimFloor) error {
 	return nil
 }
 
-// Floors reads every domain's row, in domain order so two captures are
-// diffable.
-func (f *Fleet) Floors(_ context.Context) ([]coord.TrimFloor, error) {
+// Floor reads one domain's row, cloned on the way out for the reason every
+// row here is cloned on the way in.
+func (f *Fleet) Floor(_ context.Context, domain string) (coord.TrimFloor, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]coord.TrimFloor, 0, len(f.floors))
-	for _, domain := range slices.Sorted(maps.Keys(f.floors)) {
-		row := f.floors[domain]
-		row.Terms = slices.Clone(row.Terms)
-		out = append(out, row)
+	row, ok := f.floors[domain]
+	if !ok {
+		return coord.TrimFloor{}, false, nil
 	}
-	return out, nil
+	row.Terms = slices.Clone(row.Terms)
+	return row, true, nil
 }
 
 // ForgetFloor removes one domain's row.

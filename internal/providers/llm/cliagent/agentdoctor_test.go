@@ -72,6 +72,42 @@ func TestDoctorRefusesAgentModeWithNoBridge(t *testing.T) {
 	}
 }
 
+// A BRIDGE URL THE ENGINE REFUSES IS REPORTED AS REFUSED, never as the bridge.
+//
+// The engine refuses to boot on a value that is set and that no box could dial
+// (sandbox.ParseBoxURL). A doctor that printed that value as a working bridge
+// would pass a deploy script's gate that the next boot then fails, so the
+// refusal — which names the variable and never the value — is the bridge line
+// and a problem, whatever BridgeURL holds beside it.
+func TestTheDoctorReportsARefusedBridgeURL(t *testing.T) {
+	t.Parallel()
+	const (
+		refusal = bridgeURLVar + " is not an absolute URL: it does not start with a scheme and a host"
+		// What a caller that read the raw variable would have passed.
+		raw = "engine.example.com:8000"
+	)
+	p := agentEntry(t, "claude-code", true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{
+		AgentRunners:  []string{"claude-code"},
+		BridgeURL:     raw,
+		BridgeRefused: refusal,
+	})
+	lines := strings.Join(d.AgentRuntime, "\n")
+	if !strings.Contains(lines, "tool bridge: refused — "+refusal) {
+		t.Errorf("the bridge line does not carry the refusal: %v", d.AgentRuntime)
+	}
+	if strings.Contains(lines, raw) {
+		t.Errorf("the bridge line prints the refused value as the bridge: %v", d.AgentRuntime)
+	}
+	joined := strings.Join(d.Problems, "\n")
+	if !strings.Contains(joined, refusal) || !strings.Contains(joined, bridgeURLVar) {
+		t.Errorf("no problem carries the refusal naming %s:\n%s", bridgeURLVar, joined)
+	}
+	if d.Healthy() {
+		t.Error("an entry whose engine would refuse to boot reads as healthy")
+	}
+}
+
 // A COMPLETE AGENT-MODE ENTRY REPORTS BOTH HALVES AND NEITHER AS A PROBLEM.
 //
 // A probe that only ever refuses is one an operator cannot satisfy, and the

@@ -945,9 +945,51 @@ func (h *Host) placedCount() int {
 //
 // Edge-triggered. A fleet missing workers for an hour should say so once,
 // and again when it comes back — not 720 times.
+//
+// ONLY A ROLE THE COMPANY NEEDS ([Config.RoleNeeded]): git serves nothing for a
+// company that hosts no code, so a fleet that declared its roles without it is
+// not missing anything, and is neither manned nor unmanned. A role that stops
+// being needed while it was unmanned says so as THAT — fleet_role_unneeded —
+// never as fleet_role_manned: an operator who turned code off must not read
+// that a git node came back.
 func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
+	edges := h.fleetRoleEdges(live)
+	ids := map[string]struct{}{}
+	for _, node := range live {
+		ids[node.ID] = struct{}{}
+	}
+	for _, role := range edges.unmanned {
+		log.Warn("fleet_role_unmanned", "node", h.nodeID, "role", string(role),
+			"live_nodes", len(ids), "hint", unmannedHints[role])
+	}
+	for _, role := range edges.unneeded {
+		log.Info("fleet_role_unneeded", "node", h.nodeID, "role", string(role),
+			"detail", "the company no longer needs this role")
+	}
+	for _, role := range edges.manned {
+		log.Info("fleet_role_manned", "node", h.nodeID, "role", string(role))
+	}
+}
+
+// roleEdges is what one sweep of the unmanned-role check has to say, each list
+// sorted: the roles that became unmanned, the roles that were unmanned and now
+// have a node, and the roles that were unmanned and are no longer needed.
+type roleEdges struct {
+	unmanned, manned, unneeded []placement.NodeRole
+}
+
+// fleetRoleEdges is [Host.checkFleetRoles]' decision, apart from its lines: the
+// roles the company needs that no live node performs, compared with the last
+// sweep's — the edge detector's state, which it moves.
+func (h *Host) fleetRoleEdges(live []placement.NodeProfile) roleEdges {
 	unmanned := map[placement.NodeRole]struct{}{}
+	needed := map[placement.NodeRole]bool{}
 	for _, role := range placement.Vocabulary() {
+		needed[role] = h.NeedsRole(role)
+		if !needed[role] {
+			// NEITHER MANNED NOR UNMANNED: nothing is missing.
+			continue
+		}
 		manned := false
 		for _, node := range live {
 			if node.Roles.Has(role) {
@@ -960,28 +1002,27 @@ func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 		}
 	}
 
-	ids := map[string]struct{}{}
-	for _, node := range live {
-		ids[node.ID] = struct{}{}
-	}
-
 	h.mu.Lock()
 	was := h.unmannedRoles
 	h.unmannedRoles = unmanned
 	h.mu.Unlock()
 
+	var out roleEdges
 	for _, role := range slices.Sorted(maps.Keys(unmanned)) {
-		if _, known := was[role]; known {
-			continue
+		if _, known := was[role]; !known {
+			out.unmanned = append(out.unmanned, role)
 		}
-		log.Warn("fleet_role_unmanned", "node", h.nodeID, "role", string(role),
-			"live_nodes", len(ids), "hint", unmannedHints[role])
 	}
 	for _, role := range slices.Sorted(maps.Keys(was)) {
-		if _, still := unmanned[role]; !still {
-			log.Info("fleet_role_manned", "node", h.nodeID, "role", string(role))
+		switch _, still := unmanned[role]; {
+		case still:
+		case !needed[role]:
+			out.unneeded = append(out.unneeded, role)
+		default:
+			out.manned = append(out.manned, role)
 		}
 	}
+	return out
 }
 
 // presenceMeta is what this node advertises to its peers.

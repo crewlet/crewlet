@@ -185,6 +185,18 @@ type Query struct {
 	// cannot serve it says so in the [Result]'s [Outcome] rather than
 	// quietly ranking another way.
 	Mode Mode
+
+	// Prefetch says the search is a turn's knowledge prefetch, which the
+	// turn waits on before its first token; false — the zero value — is
+	// somebody's deliberate search: a seat's search_knowledge, a person's.
+	//
+	// IT CHANGES NOTHING THE SEARCH DOES, only which budget the scan's
+	// duration is held to: a prefetch's to the turn start's
+	// (statelog.PrefetchScanBudget, `prefetch_slow`), a deliberate one's to
+	// the interactive target (`search_slow`). Recorded as one series, a
+	// slow turn start hid under every quick interactive search, and the
+	// turn-start alarm had no input at all.
+	Prefetch bool
 }
 
 // Excluded is the ancestor exclusion this query asks for, applying the

@@ -32,12 +32,29 @@ func TestContractThroughALeaf(t *testing.T) {
 // AND THE FLEET'S SHARED STATE: the counters, the ledgers, the claims and the
 // secrets, whose every write is a compare-and-set a leaf's request has to
 // reach a member's stream leader to win or lose.
+//
+// EVERY NODE A LEAF OF ITS OWN, joined to one member, which is where the
+// counter failed: a round trip through a leaf is longer than one on a member,
+// so the fixed 32 ms backoff ceiling that spread a member's writers no longer
+// spread these, and the org's counter lost every one of its sixteen attempts
+// to the contract's thirty-two concurrent charges under the solo half's load.
+// The contention cases put [coordtest.ContendedCharges] charges through each of
+// [coordtest.ContendingNodes] leaves at once, so they meet that topology.
 func TestFleetContractThroughALeaf(t *testing.T) {
 	t.Parallel()
-	client := leafClient(t)
+	port := leafMember(t)
+	clients := make([]jetstream.JetStream, coordtest.ContendingNodes)
+	for i := range clients {
+		clients[i] = leafClientOf(t, port, fmt.Sprintf("leaf-%d", i))
+	}
 	coordtest.RunFleet(t, func(t *testing.T) func() coord.Fleet {
 		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		return func() coord.Fleet { return openFleetVia(t, client, prefix) }
+		opened := 0
+		return func() coord.Fleet {
+			client := clients[opened%len(clients)]
+			opened++
+			return openFleetVia(t, client, prefix)
+		}
 	})
 }
 
@@ -46,8 +63,15 @@ func TestFleetContractThroughALeaf(t *testing.T) {
 // a leaf's broker carries across its link.
 func leafClient(t *testing.T) jetstream.JetStream {
 	t.Helper()
-	port := leafMember(t)
-	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf",
+	return leafClientOf(t, leafMember(t), "leaf")
+}
+
+// leafClientOf starts a leaf named name joined to the member serving leaves on
+// port, and is a JetStream client of it — one node of a fleet of leaves, each
+// with a link of its own.
+func leafClientOf(t testing.TB, port int, name string) jetstream.JetStream {
+	t.Helper()
+	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: name,
 		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}})
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)
@@ -74,7 +98,7 @@ func leafClient(t *testing.T) jetstream.JetStream {
 // cases running beside these. It used to reserve a loopback port nothing held
 // a moment ago and name it, and to retry on another whenever the member's own
 // probe found it taken: a retry for a race this way has no window for.
-func leafMember(t *testing.T) int {
+func leafMember(t testing.TB) int {
 	t.Helper()
 	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",

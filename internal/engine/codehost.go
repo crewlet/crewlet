@@ -1,0 +1,622 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// THE CODE HOST ON A GIT NODE: the cache of the company's repositories this
+// node serves from, the git pool every process runs in, and the host — smart
+// HTTP for persons — built over them, on a node with the git role whose company
+// sets code.native. The committer and the lifecycle store are every data
+// node's (code.go); the host is only a git node's, and it reaches the code
+// log through the estate's router like every other surface, so the node it
+// asks is whichever serves the operation.
+
+// Chart is the CURRENT epoch's organization, nil before a company: a FUNCTION
+// a surface reads per call rather than a value it captures, because an apply
+// replaces the organization wholesale — the scheduler's org reads it so. Who a
+// person pushing to the code host is comes from the guard's own principal
+// (the identity directory's binding), never from this.
+func (e *Engine) Chart() *org.Organization {
+	if c := e.Company(); c != nil {
+		return c.Org
+	}
+	return nil
+}
+
+// CodeHost is this node's code host: present where this node has the git role
+// and the runtime it runs was built for a company that sets code.native. Asked
+// per request by whoever serves its routes, never captured: the runtime may be
+// built at an apply after the routes are mounted (a company applied after
+// boot), and it is the published runtime that says.
+func (e *Engine) CodeHost() (*host.Server, bool) {
+	n := e.native.Load()
+	if n == nil || n.codeHost == nil {
+		return nil, false
+	}
+	return n.codeHost, true
+}
+
+// Why this node serves none of the code host now ([Engine.CodeUnserved]).
+var (
+	// ErrCodeNotHosted: the company this node serves does not set
+	// code.native, and nor does the configuration the fleet activated, as
+	// this node last read it.
+	ErrCodeNotHosted = errors.New("engine: this company does not host code (code.native is not set)")
+	// ErrCodeApplying: this node is behind the configuration the fleet
+	// activated and is applying it — a first apply building the native
+	// runtime among them. Clears in seconds, by itself.
+	ErrCodeApplying = errors.New("engine: this node is applying the configuration the fleet activated")
+	// ErrCodeApplyFailed: the configuration the fleet activated sets
+	// code.native, as this node read it, and this node's apply of it
+	// failed (config_apply_failed): a code host that could not be built, a
+	// revision this node refused. Clears only when an apply succeeds, which
+	// a corrected revision's activation is what usually brings.
+	ErrCodeApplyFailed = errors.New("engine: this node could not apply the configuration the fleet " +
+		"activated, which hosts code (config_apply_failed)")
+	// ErrCodeUnknown: this node's apply of the configuration the fleet
+	// activated failed BEFORE it could read what that configuration says
+	// (config_apply_failed): the revision could not be read from this
+	// node's store, fetched from the coordination store, opened with this
+	// node's key or parsed. So this node cannot say whether the company
+	// hosts code at all, and says that — never [ErrCodeApplyFailed]'s
+	// "which hosts code", which would tell a company that never set
+	// code.native that it had. Clears when an attempt reads the revision:
+	// the next tick's retry where the failure was a blip, a corrected
+	// revision's activation where the revision itself is unreadable here.
+	ErrCodeUnknown = errors.New("engine: this node could not read the configuration the fleet " +
+		"activated, so cannot say whether this company hosts code (config_apply_failed)")
+	// ErrCodeNeedsRestart: the company this node serves sets code.native,
+	// and this node's native runtime was already running without the code
+	// host when it was set; it serves it once restarted
+	// (native_backend_needs_restart).
+	ErrCodeNeedsRestart = errors.New("engine: this node's native runtime was started without the code " +
+		"host, and serves it once restarted (native_backend_needs_restart)")
+)
+
+// CodeUnserved says why this node serves none of the code host — neither
+// [Engine.CodeHost] nor [OperatorCode] — as one of five sentinels, which the
+// API answers each in its own way: not hosted is a 404, the other four a
+// 503, and only an apply in flight clears by waiting.
+//
+// DECIDED FROM WHAT THE FLEET ACTIVATED, as this node's reconciler last read
+// it, and never from this node's published epoch alone: an apply publishes
+// its epoch only once the runtime it needs is built, so a node building its
+// first company's code host, or one whose apply of it failed, still serves
+// the previous epoch — and that epoch says the company hosts no code, which
+// is exactly what a person who just turned it on must not be told. Between an
+// activation and the tick that reads it — milliseconds on the nudge the
+// activation broadcasts, a reconcile interval at most — a node answers by the
+// activation it last read.
+//
+// WHAT THIS NODE HAS NOT READ IT DOES NOT CLAIM. A failed apply is
+// [ErrCodeApplyFailed] — "which hosts code" — only where the attempt decoded
+// the revision and found code.native set; one that failed before it could
+// decode it is [ErrCodeUnknown], since a revision that could not be read here
+// may host no code at all. An apply in flight, decoded or not, is
+// [ErrCodeApplying], whose sentence says only that this node is applying.
+//
+// Asked only where the code host was found absent, and answering as of now:
+// a caller that found it absent asks again after this answer, since the
+// runtime may have come up between the two (api.EngineCode).
+func (e *Engine) CodeUnserved() error {
+	if c := e.Company(); c != nil && c.Config != nil && c.Config.Code.Native {
+		// The epoch this node serves hosts code, so the runtime that serves
+		// none of it was built before code.native was set: an apply starts a
+		// runtime with the code host before it publishes the epoch.
+		return ErrCodeNeedsRestart
+	}
+	r := e.reconciler.Load()
+	if r == nil {
+		return ErrCodeNotHosted
+	}
+	p := r.snapshot()
+	switch {
+	case p.target == 0 || p.target == p.applied:
+		return ErrCodeNotHosted
+	case p.targetRead && !p.targetCode:
+		return ErrCodeNotHosted
+	case p.attempts > 0 && p.attemptStarted.IsZero() && !p.targetRead:
+		return fmt.Errorf("%w (epoch %d)", ErrCodeUnknown, p.target)
+	case p.attempts > 0 && p.attemptStarted.IsZero():
+		return fmt.Errorf("%w (epoch %d)", ErrCodeApplyFailed, p.target)
+	}
+	return fmt.Errorf("%w (epoch %d)", ErrCodeApplying, p.target)
+}
+
+// auditGit records one push onto this node's own queue, through the operator
+// surface's audit — one construction of the record's envelope, whose source is
+// the operator's, and a publish that outlives the request.
+func (e *Engine) auditGit(ctx context.Context, r types.OperatorActed) {
+	operator.Audit(ctx, e.backends.Queue, types.NewOperatorActed(r))
+}
+
+// roleNeeded is [seat.Config.RoleNeeded]: the CURRENT epoch's company's
+// answer ([config.Company.NeedsRole] — git exactly where it sets code.native,
+// every other role always), and no company's before one is applied. An atomic
+// load of the epoch — the sweep's must-not-block rule.
+func (e *Engine) roleNeeded(role placement.NodeRole) bool {
+	var cfg *config.Company
+	if c := e.Company(); c != nil {
+		cfg = c.Config
+	}
+	return cfg.NeedsRole(role)
+}
+
+// hostsGit reports whether a runtime built with built serves git on this node:
+// the company hosts code and this node has the git role. A git role on a
+// company that hosts none serves nothing, and code.native on a node without
+// the role is served by the fleet's git nodes.
+func (e *Engine) hostsGit(built builtWith) bool {
+	return built.runsCode() && e.profile.Roles.Has(placement.RoleGit)
+}
+
+// gitHook is the argv the cache's proc-receive hook execs: [Options.GitHook]
+// where it is given, and otherwise THIS binary as host.HookCommand names it —
+// `crewlet code hook proc-receive` — with its symbolic links resolved, since
+// git runs the hook with the pool's PATH and a link replaced by an upgrade
+// would start a different binary mid-push.
+func (e *Engine) gitHook() ([]string, error) {
+	if len(e.gitHookArgv) > 0 {
+		return e.gitHookArgv, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("engine: the code host's hook is this binary, and os.Executable "+
+			"could not name it: %w", err)
+	}
+	if exe, err = filepath.EvalSymlinks(exe); err != nil {
+		return nil, fmt.Errorf("engine: the code host's hook is this binary, and its path "+
+			"could not be resolved: %w", err)
+	}
+	return host.HookCommand(exe), nil
+}
+
+// buildCodeHost builds this node's code host for the runtime being started —
+// the cache's directory, the git pool, the cache's budget, the cache and the
+// host, in the order each needs the last — and starts it, answering the host,
+// the cache it serves from and the budget it sized that cache to. Called by
+// startNative only where [Engine.hostsGit]. An error fails the boot, or the
+// apply that reached [Engine.startNativeFor], which is retried like every
+// start of the runtime: a company that asked for native code on a node that
+// serves git cannot be served by it.
+//
+// A FAILURE GIVES THE DIRECTORY BACK. Prepare claims the cache's directory for
+// this process, so a retried apply in the same process would otherwise find it
+// held by its own failed attempt: before Open the layout is released, after it
+// the cache is stopped.
+//
+// nodeID is the core runtime's resolved id ([core.nodeID]), which the native
+// half no longer holds a copy of: every proposal the host makes names it as the
+// node that received the push ([host.Options.NodeID]).
+func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.Bootstrap) (codeHostParts, error) {
+	// 1. THE DIRECTORY, prepared BEFORE git's HOME exists, since it names it.
+	// Absolute: a store path written relative resolves against the working
+	// directory the store itself is opened from.
+	dir, err := filepath.Abs(boot.Git.CacheDirFor(boot.Store.Path))
+	if err != nil {
+		return codeHostParts{}, fmt.Errorf("engine: git.cache_dir: %w", err)
+	}
+	layout, err := cache.Prepare(ctx, dir)
+	if err != nil {
+		return codeHostParts{}, fmt.Errorf("engine: git.cache_dir %s: %w", dir, err)
+	}
+	defer layout.Release()
+
+	// 2. GIT, the node's own, its lanes resolved once by the pool — which
+	// logs what it found (code_git_ready) — sized by the memory it reads of
+	// the node, [Options.gitMemory] in its place in this package's tests.
+	pool, err := gitproc.New(ctx, gitproc.Options{
+		MaxProcesses: boot.Git.MaxProcesses, MaxTransfers: boot.Git.MaxTransfers,
+		Memory: e.gitMemory, Home: layout.Home, Metrics: e.metrics,
+	})
+	if err != nil {
+		return codeHostParts{}, fmt.Errorf("engine: this node has the %q role and the "+
+			"company sets code.native, so it serves git: %w", placement.RoleGit, err)
+	}
+
+	// 3. THE BUDGET, from the room the cache can use — after the pool, whose
+	// transfer lane sizes the request spools that share the cache's volume
+	// outside its budget.
+	size, err := codeCacheBudget(boot, layout, pool.Slots(gitproc.ClassTransfer), e.cacheVolume())
+	if err != nil {
+		return codeHostParts{}, err
+	}
+	size.log(ctx, layout.Dir)
+
+	// 4. THE OBJECTS a push's pack bundle is stored in and a sync reads.
+	objects := e.Objects()
+	if objects == nil {
+		return codeHostParts{}, fmt.Errorf("engine: code.native needs the object store " +
+			"(store.objects): this node has none")
+	}
+
+	// 5. THE HOOK every push's receive-pack execs.
+	hook, err := e.gitHook()
+	if err != nil {
+		return codeHostParts{}, err
+	}
+
+	// 6. THE CACHE, which takes over the layout's claim.
+	seam := e.router.Code()
+	c, err := cache.Open(ctx, cache.Options{
+		Layout: layout, MaxBytes: size.budget, Git: pool, Objects: objects, Fetch: seam,
+		Limits: e.codeLimits, HookCommand: hook, Metrics: e.metrics, Now: time.Now,
+	})
+	if err != nil {
+		return codeHostParts{}, fmt.Errorf("engine: open the code cache at %s: %w", layout.Dir, err)
+	}
+
+	// 7. THE HOST, over the engine's own seams: the router for the rows and
+	// the committer, the operator audit for every push, and the current
+	// epoch's limits and retention. Who is pushing is the API guard's answer
+	// on each request, the seat the identity directory binds its credential
+	// to included, so the host is handed no chart of its own.
+	h, err := host.New(host.Options{
+		Cache: c, Git: pool, Estate: seam, Objects: objects,
+		Audit:  e.auditGit,
+		Limits: e.codeLimits, DeletedRetention: e.codeDeletedRetention,
+		NodeID: nodeID, Timing: host.Production, Metrics: e.metrics,
+	})
+	if err != nil {
+		c.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: build the code host: %w", err)
+	}
+	// ITS OWN LIFETIME from here: the relay and the cache's background work
+	// run until the host is stopped, however long this call's caller lives.
+	if err := h.Start(ctx); err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
+	}
+	return codeHostParts{host: h, cache: c, size: size}, nil
+}
+
+// codeHostParts is what [Engine.buildCodeHost] built: the host, the cache it
+// serves from — which the host stops with itself, and which the engine holds
+// only to READ, for what no request asks (the alarm reading's code half,
+// [Engine.codeReading]) — and the budget it sized that cache to.
+type codeHostParts struct {
+	host  *host.Server
+	cache *cache.Cache
+	size  codeCacheSize
+}
+
+// codeReading fills the reading's code half from this node's git cache: how
+// many repositories its maintainer cannot write a bitmap of for memory, the
+// largest of those charges and the budget they are past
+// ([cache.Cache.AlarmReading]), which raise code_maintenance_refused.
+//
+// THE CACHE JUDGED, LOGGED, COUNTED AND GAUGED EVERY REFUSAL, AND NOTHING READ
+// IT INTO A READING, so the alarm the cache's docs, the alarm reference and
+// the concept page all promised could never fire on a running node: a node
+// with a repository past its memory said so on a line and a gauge, and its
+// alarm table — the one surface that reaches the log, the collector and the
+// health envelope at once — stayed silent. Filled on EVERY node's evaluation,
+// as every half is (an alarm describes one node), so a git node's refusals
+// fire on that git node; a node without the git role, or one whose company
+// hosts no code, holds no cache and leaves the fields zero, which the table
+// reads as nothing wrong here.
+//
+// Read from the PUBLISHED runtime at each evaluation, never captured, as every
+// surface asks for the code host ([Engine.CodeHost]); a reading taken after
+// the host stopped reads the cache's last pass, which is the truth about the
+// node until it exits.
+func (e *Engine) codeReading(out *statelog.Reading) {
+	n := e.native.Load()
+	if n == nil || n.gitCache == nil {
+		return
+	}
+	n.gitCache.AlarmReading(out)
+}
+
+// cacheVolume is what sizing the code cache reads of this node's disk: the
+// free space on a directory's volume, whether two directories draw on one pool
+// of space, and the embedded broker's claim on the volume it stores its
+// streams on — through the queue where it is the JetStream one, and none where
+// it keeps no streams on this node's disk. [Options.cacheDisk] in its place
+// where a case set one.
+func (e *Engine) cacheVolume() cacheVolume {
+	if e.cacheDisk != nil {
+		return *e.cacheDisk
+	}
+	return cacheVolume{free: volumeFree, same: sameVolume, broker: func() (jetstream.VolumeClaim, bool, error) {
+		if b, ok := e.backends.Queue.(brokerVolume); ok {
+			return b.VolumeClaim()
+		}
+		return jetstream.VolumeClaim{}, false, nil
+	}}
+}
+
+// brokerVolume is the embedded broker's claim on its store directory's volume,
+// as sizing a neighbour of it needs it — declared here, by its caller, and
+// satisfied by the JetStream queue ([jetstream.Queue.VolumeClaim]).
+type brokerVolume interface {
+	VolumeClaim() (jetstream.VolumeClaim, bool, error)
+}
+
+// cacheVolume is [Engine.cacheVolume]'s three readings, as seams a test
+// replaces.
+type cacheVolume struct {
+	free   func(dir string) (int64, error)
+	same   func(a, b string) bool
+	broker func() (jetstream.VolumeClaim, bool, error)
+}
+
+// codeCacheSize is the budget a cache is held to, where it came from, and
+// every reading it was decided from — the fields code_cache_sized logs.
+type codeCacheSize struct {
+	budget  int64
+	derived bool
+
+	// room is the space the cache can use: free plus held, less broker and
+	// spools. What a derived budget is a share of, and what an explicit one
+	// is compared with.
+	room int64
+
+	free int64
+	held int64
+
+	// broker is what the embedded broker may still write to the cache's
+	// volume — its store limit less what it stores — where it shares the
+	// volume, and 0 where it does not. brokerLimit is the limit it is held
+	// to there ([jetstream.VolumeClaim.Limit], -1 for none), which a refusal
+	// names.
+	broker      int64
+	brokerLimit int64
+
+	// spools is the code host's request-spool allowance, which lives on the
+	// cache's volume and never in its budget: [host.SpoolAllowance] of the
+	// pool's transfer lane, which git.max_transfers sizes.
+	spools    int64
+	transfers int
+
+	dedicated bool
+}
+
+// cacheBudget is the budget as [config.NodeTierWarnings] compares it with the
+// company's repository limit.
+func (s codeCacheSize) cacheBudget() config.CacheBudget {
+	return config.CacheBudget{Bytes: s.budget, Derived: s.derived}
+}
+
+// log says how the cache was sized, at code_cache_sized: at INFO where the
+// budget fits the room, and at WARN with what to change where it does not — a
+// derived share under [config.GitCacheMaxBytesFloor], the smallest budget a
+// node is ever given explicitly, so that nearly every repository is a cold sync
+// at nearly every fetch; or an explicit budget the room cannot hold beside the
+// volume's other tenants, which the cache fills before it evicts anything.
+func (s codeCacheSize) log(ctx context.Context, dir string) {
+	attrs := []any{"dir", dir, "bytes", s.budget, "derived", s.derived, "room", s.room,
+		"free", s.free, "held", s.held, "broker", s.broker, "spools", s.spools,
+		"transfers", s.transfers, "dedicated", s.dedicated}
+	switch {
+	case s.derived && s.budget < config.GitCacheMaxBytesFloor:
+		log.WarnContext(ctx, "code_cache_sized", append(attrs, "detail",
+			fmt.Sprintf("the room on the cache's volume derives a budget under %d bytes, so a "+
+				"repository is downloaded again at nearly every fetch: %s",
+				config.GitCacheMaxBytesFloor, s.remedies()))...)
+	case !s.derived && s.budget > s.room:
+		log.WarnContext(ctx, "code_cache_sized", append(attrs, "detail",
+			"git.cache_max_bytes is more than the cache's volume has room for beside what "+
+				"is already there, the broker's limit and the request spools, so the cache "+
+				"fills the volume before it evicts anything: lower git.cache_max_bytes, or "+
+				"give git.cache_dir a volume of its own")...)
+	default:
+		log.InfoContext(ctx, "code_cache_sized", attrs...)
+	}
+}
+
+// codeCacheBudget is the budget of the cache prepared at layout, beside a host
+// whose transfer lane of transfers slots may spool requests on its volume:
+// git.cache_max_bytes where it is set, and otherwise derived from the ROOM the
+// cache can use ([config.Git.CacheBudget]) —
+//
+//   - the volume's FREE space, PLUS
+//   - what the cache already HOLDS (layout.Held), since free space excludes the
+//     cache's own files and a budget derived from it alone shrank at every
+//     restart of a warm node, whose first janitor pass then evicted the
+//     difference, LESS
+//   - what an embedded BROKER storing its streams on the same volume may still
+//     write there: its store limit less what it stores. nats-server holds what
+//     its streams store to that limit, and an unset stream.store_max_bytes
+//     derives it as three quarters of the same free space — so a budget taken
+//     from the free space beside it claimed bytes the broker had already
+//     claimed, and the two together could fill the volume the store lives on.
+//     Bytes the broker STORES are not free and so not counted twice; LESS
+//   - the request SPOOLS' allowance ([host.SpoolAllowance]), which lives on
+//     this volume and never in the budget.
+//
+// DEDICATED where the cache's volume holds none of this node's other disk — the
+// store, the replicated estate, the snapshots, the broker's streams — which
+// [sameVolume] decides. A tenant that cannot be compared reads as sharing, the
+// smaller budget.
+//
+// A BROKER WHOSE CLAIM CANNOT BE READ FAILS THE BUILD where it might share the
+// volume: its limit is a struct field in this process, so a failure is a broker
+// in no state to serve anything, and a budget guessed without it is the one
+// this function exists not to make.
+//
+// A ROOM WITH NO SHARE IN IT FAILS THE BUILD TOO, by name
+// ([codeCacheSize.noRoom]). Where the broker's claim and the spools take
+// everything the volume has, any derived budget would be bytes the volume does
+// not have, and its share is nothing — which the cache would refuse as no
+// budget at all, in words naming neither the volume nor what claims it. A share
+// that is merely SMALL is served and warned about ([codeCacheSize.log]): the
+// cache works at any size, evicting what it is not serving, and a node is not
+// refused over a cold sync. But a room of nothing is not a small cache, it is
+// an overcommitted volume — the one the store and its snapshots live on, on the
+// shared layout — and only the operator can say which tenant gives way. An
+// explicit git.cache_max_bytes is that answer, and is never refused here: on a
+// volume with no room it is warned about as more than the room.
+func codeCacheBudget(boot *config.Bootstrap, layout cache.Layout, transfers int, v cacheVolume) (codeCacheSize, error) {
+	f, err := v.free(layout.Dir)
+	if err != nil {
+		return codeCacheSize{}, fmt.Errorf("engine: size the code cache at %s: %w", layout.Dir, err)
+	}
+	size := codeCacheSize{free: f, held: layout.Held, spools: host.SpoolAllowance(transfers),
+		transfers: transfers, dedicated: true}
+	for _, tenant := range cacheVolumeTenants(boot) {
+		if v.same(layout.Dir, tenant) {
+			size.dedicated = false
+			break
+		}
+	}
+	claim, stores, err := v.broker()
+	if err != nil {
+		return codeCacheSize{}, fmt.Errorf("engine: size the code cache at %s: read what the "+
+			"embedded broker may still store on its volume: %w", layout.Dir, err)
+	}
+	if stores && v.same(layout.Dir, claim.Dir) {
+		size.dedicated = false
+		size.broker, size.brokerLimit = claim.Unclaimed(), claim.Limit
+		if size.broker < 0 {
+			// A SERVER HOLDING TO NO LIMIT may take every free byte.
+			size.broker = f
+		}
+	}
+	size.room = f + layout.Held - size.broker - size.spools
+	size.budget, size.derived = boot.Git.CacheBudget(size.room, size.dedicated)
+	if size.derived && size.budget <= 0 {
+		return codeCacheSize{}, size.noRoom(layout.Dir, boot.Stream.StoreMaxBytes)
+	}
+	return size, nil
+}
+
+// noRoom is the refusal of a derived budget of nothing: every figure the room
+// was made of, and each setting that changes one — a volume of the cache's own
+// (whose room is its free space less the spools), an explicit budget, the
+// broker's limit where a broker shares the volume, and the transfer lane that
+// sizes the spools. declared is stream.store_max_bytes as written, 0 where the
+// broker derived its own limit.
+func (s codeCacheSize) noRoom(dir string, declared int64) error {
+	tenants := fmt.Sprintf("its %d transfers' request spools may hold %d bytes", s.transfers, s.spools)
+	if s.broker > 0 {
+		var limit string
+		switch {
+		case s.brokerLimit < 0:
+			limit = "no limit at all, so every free byte"
+		case declared > 0:
+			limit = fmt.Sprintf("stream.store_max_bytes, %d", declared)
+		default:
+			limit = fmt.Sprintf("its own limit of %d, derived from the volume's free space "+
+				"when it started since stream.store_max_bytes is unset", s.brokerLimit)
+		}
+		tenants = fmt.Sprintf("the embedded broker storing its streams there may still write "+
+			"%d bytes under %s, and %s", s.broker, limit, tenants)
+	}
+	remedies := s.remedies()
+	return fmt.Errorf("engine: git.cache_dir %s has no room for the code cache: its volume has "+
+		"%d bytes free and the cache holds %d, %s, which leaves a room of %d bytes and no "+
+		"share of it to derive a budget from. %s%s", dir, s.free, s.held, tenants, s.room,
+		strings.ToUpper(remedies[:1]), remedies[1:])
+}
+
+// remedies is every setting that gives the cache more room, any one of them
+// enough — what a refusal of no room and a warning of little both end with:
+// a volume of the cache's own (a larger one where it already has one), an
+// explicit budget, the broker's limit where a broker shares the volume, and
+// the transfer lane, which sizes the spools.
+func (s codeCacheSize) remedies() string {
+	out := "give git.cache_dir a volume of its own — its own filesystem with its own " +
+		"space — or set git.cache_max_bytes to the budget the cache may fill"
+	if s.dedicated {
+		out = "give git.cache_dir a larger volume, or set git.cache_max_bytes to the " +
+			"budget the cache may fill"
+	}
+	if s.broker > 0 {
+		out += ", or set stream.store_max_bytes lower, since the broker beside the cache " +
+			"on this volume may fill what it allows"
+	}
+	return out + fmt.Sprintf(", or lower git.max_transfers, whose every transfer may spool "+
+		"%d MiB of request on this volume", host.SpoolPerTransfer>>20)
+}
+
+// cacheVolumeTenants is every directory of this node's other disk the cache's
+// volume may share, beside the broker's store directory, which its claim
+// names ([codeCacheBudget]): the store's, the replicated estate's where it
+// lives apart, and the snapshots'.
+func cacheVolumeTenants(boot *config.Bootstrap) []string {
+	dirs := []string{filepath.Dir(boot.Store.Path), boot.Store.SnapshotDirFor()}
+	if p := strings.TrimSpace(boot.Store.ReplicatedPath); p != "" {
+		dirs = append(dirs, filepath.Dir(p))
+	}
+	return dirs
+}
+
+// stopCodeHost ends this node's code host: it refuses every new git request,
+// cancels the ones in flight — a receive-pack is killed through its context,
+// its hook's connection with it — closes the hook relay and stops the cache.
+// Nil-safe, which is a node that serves no git.
+//
+// IN THE TEARDOWN BEFORE THE COMMITTER ([Engine.stopCommitter]) AND BEFORE THE
+// ADMISSION IS WITHDRAWN: a push in flight proposes through the estate, and a
+// sync's linearizable read appends a barrier to the code log — an append once
+// the admission is gone is a write a capacity coordinator was told nobody was
+// making. A push cancelled here that a committer had already appended is
+// answered `unknown` to a client that is gone; its row lands or not by the
+// log, never by the host. By then the API's listener is closed, and every git
+// request it let through has finished (cmd/crewlet's shutdown order).
+func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHost(ctx) }
+
+// stopCodeHost is [Engine.stopCodeHost] on this runtime, and the stop its own
+// failure path takes ([native.shutdown]).
+//
+// ONCE, AND BOUNDED ONCE, by [host.StopBudget]: everything the host waits
+// for has already been cancelled by the time it waits, so what is left is
+// git's own exit and the handlers' answers to clients that are gone. Both the
+// teardown and the runtime's shutdown ask for it, and [host.Server.Stop] is
+// idempotent only in EFFECT — a second call waits again for the same work — so
+// a stop cut short by its bound would have spent a second budget of the
+// process's termination grace on the shutdown's call. The second caller
+// returns once the first has: a wait cut short leaves the cache's claim held
+// until the last of that work ends, so no other process can open the directory
+// while something of this one still writes in it, and waiting for it again
+// changes nothing.
+func (n *native) stopCodeHost(ctx context.Context) {
+	if n == nil || n.codeHost == nil {
+		return
+	}
+	n.codeHostStop.stop(ctx, n.codeHost.Stop)
+}
+
+// boundedStop runs a stop ONCE, its wait bounded by budget, however many
+// callers ask for it: every caller returns once that one stop has, and none
+// waits a second budget. Its zero value bounds by [host.StopBudget].
+type boundedStop struct {
+	once   sync.Once
+	budget time.Duration
+}
+
+// stop runs stop under the bound, the first time it is asked; a later call
+// waits for that one to return and runs nothing. The bound is detached from
+// ctx's cancellation for [Engine.stopCommitter]'s reason: the stop is often
+// asked for because ctx ended.
+func (b *boundedStop) stop(ctx context.Context, stop func(context.Context)) {
+	b.once.Do(func() {
+		budget := b.budget
+		if budget <= 0 {
+			budget = host.StopBudget
+		}
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
+		defer cancel()
+		stop(bounded)
+	})
+}

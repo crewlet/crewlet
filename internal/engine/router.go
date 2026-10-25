@@ -7,11 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // THE ESTATE'S ROUTER, ON EVERY NODE.
@@ -40,8 +42,8 @@ import (
 // within the snapshot slack) is asked only once every data node whose copy
 // does not has run nothing, by this node's router and by every other node's
 // alike: a worse node to ask, never no node (estate's [estate.Router] doc). A
-// copy that is WRONG is out of service ([localEstate.For]), and the node keeps
-// its seats.
+// domain's copy that is WRONG is out of service for that domain's operations
+// alone ([localEstate.For], ADR-0046), and the node keeps its seats.
 
 // The placement the router is handed.
 var _ estate.Placement = wholeEstate{}
@@ -50,10 +52,10 @@ var _ estate.Placement = wholeEstate{}
 // whether it answers requests — is trusted by the request gate
 // ([localEstate.For]) before it is read again.
 //
-// ONE SECOND. The verdict reads the broker for every log whose health judges a
-// copy — a JetStream API request per log at least — and a gate that asked per
-// request would put those round trips in front of every tool call a data node
-// answers. Refreshed
+// ONE SECOND. The verdict reads the broker for every log — a JetStream API
+// request per log at least — and the published floors once
+// ([stateLog.readFloors]), and a gate that asked per request would put those
+// round trips in front of every tool call a data node answers. Refreshed
 // at most once a second, and never on a request's own path once it has been
 // read — see [localEstate.verdict] — a node pays at most one verdict's reads a
 // second however many requests it answers; and a verdict a second old errs
@@ -84,6 +86,7 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string,
 	opts := estate.RouterOptions{
 		Self: nodeID, Queue: q, Placement: e.estatePlacement(),
 		Session: estate.NewSession(), Seams: e.serverSeams(),
+		Timing:    estate.Production(),
 		Envelopes: envelopes,
 	}
 	if e.local != nil {
@@ -198,40 +201,76 @@ type heldVerdict struct {
 	copyVerdict
 }
 
-// For implements [estate.LocalBackends]: the backend over this node's copy,
-// or false while the copy is out of service.
+// For implements [estate.LocalBackends]: the backend over this node's copy of
+// domain — or of the seat copy, for [estate.SeatCopy] — or false while that
+// copy is out of service.
 //
-// A COPY THAT IS WRONG IS NOT SERVED. An applier halted at a record it cannot
-// decode or held one past the deferral grace, an eviction, rows below the
-// log's first record, a checkpoint on another stream, a stalled prefix: a copy
-// in any of those states goes OUT OF SERVICE — this node's router sends its
-// own seats' calls to the other data nodes, and another node asking is told
-// `out_of_service` — and never sheds the node's seats, which read the estate
-// from a data node whose copy is sound. That is the whole of the remedy a
-// fault needs: the seats were never the problem, the copy was, and moving them
-// cost every one of them its processes and its memory to be served by the very
+// A DOMAIN'S COPY THAT IS WRONG IS NOT SERVED — for that domain's operations
+// alone (ADR-0046). An applier halted at a record it cannot decode or held one
+// past the deferral grace, an eviction, rows below the log's first record, a
+// checkpoint on another stream, a stalled prefix: a domain's copy in any of
+// those states goes OUT OF SERVICE — this node's router sends its own seats'
+// calls on that domain to the other data nodes, and another node asking for
+// one is told `out_of_service` — while every other domain's copy keeps
+// answering here: a tracker applier halted at a record sends the node's
+// tracker calls to a peer and its knowledge-base calls are still answered
+// from its own pages. It never sheds the node's seats, which are served by a
+// data node whose copy is sound. That is the whole of the remedy a fault
+// needs: the seats were never the problem, the copy was, and moving them cost
+// every one of them its processes and its memory to be served by the very
 // same peers.
 //
 // THE COPY IS THE CORE'S, judged from boot: a data node runs every log from
-// its first second, company or none, so its copy is judged — and its identity
-// directory served — before its first company arrives. Only the native halves
-// wait for one: a data node that booted with no company is served with the
-// directory and no halves, so a tracker or page operation on it is answered
-// "no native backend here" and moves on. A data node whose core is not up yet —
-// the moment between [New] building the router and starting the core — is
-// served with nothing at all, the same "not here".
-func (l *localEstate) For(ctx context.Context) (estate.Backend, bool) {
+// its first second, company or none, so each domain's copy is judged — and its
+// identity directory and its usage rows served ([Engine.estateBackend]) —
+// before its first company arrives. Only the native halves wait for one: a
+// data node that booted with no company, or whose company keeps its tracker
+// and knowledge base on vendors, is served with the core's halves alone, so a
+// tracker or page operation on it is answered "no native backend here" and
+// moves on. A data node whose core is not up yet — the moment between [New]
+// building the router and starting the core — is served with nothing at all,
+// the same "not here".
+func (l *localEstate) For(ctx context.Context, domain string) (estate.Backend, bool) {
 	c := l.e.core.Load()
 	if c == nil || c.log == nil {
 		return estate.Backend{}, true
 	}
 	v := l.verdict(ctx, c)
-	if v.fault != "" {
+	if !v.serves(domain) {
 		return estate.Backend{}, false
 	}
 	b := l.e.estateBackend(c, l.e.native.Load())
-	b.Answers = func(context.Context) bool { return v.answers }
+	b.Answers = func(context.Context) bool { return v.answers(domain) }
 	return b, true
+}
+
+// serves reports whether this node's copy of domain is in service, waiting
+// only as [localEstate.For] does — on a copy never judged, up to ctx. For a
+// reader of the copy that is not an estate operation ([searchCopies]), which
+// must not answer from a copy the router has stopped serving.
+func (l *localEstate) serves(ctx context.Context, domain string) bool {
+	c := l.e.core.Load()
+	if c == nil || c.log == nil {
+		return true
+	}
+	return l.verdict(ctx, c).serves(domain)
+}
+
+// copyOutOfService is the first of domains, in the order given, whose copy on
+// this node is out of service ([localEstate.serves], ADR-0046) — or false
+// where every one serves, or where this node holds no estate to judge. A
+// fleet duty that decides from those domains' rows asks it before it claims
+// ([dutyDecline]).
+func (e *Engine) copyOutOfService(ctx context.Context, domains ...string) (string, bool) {
+	if e == nil || e.local == nil {
+		return "", false
+	}
+	for _, domain := range domains {
+		if !e.local.serves(ctx, domain) {
+			return domain, true
+		}
+	}
+	return "", false
 }
 
 // verdict is the copy's verdict, read again once it is older than
@@ -253,10 +292,12 @@ func (l *localEstate) For(ctx context.Context) (estate.Backend, bool) {
 //
 // # A reading that could not reach the broker changes nothing it could not see
 //
-// A copy that was answering keeps answering, and one that was faulted stays so
-// unless a log that was read says otherwise — a broker blip must not send every
-// request away from a sound copy, nor bring a wrong one back into service on no
-// information. A copy never judged answers nothing: nobody has measured it.
+// A domain's copy that was answering keeps answering, and one that was wrong
+// stays so, unless its own log was read and says otherwise
+// ([copyVerdict.carried]) — a broker blip must not send every request away from
+// a sound copy, nor bring a wrong one back into service on no information, and
+// one domain's unread health says nothing about any other's. A copy never
+// judged answers nothing: nobody has measured it.
 func (l *localEstate) verdict(ctx context.Context, c *core) copyVerdict {
 	v, known, reading := l.peek(ctx, c)
 	if known {
@@ -299,9 +340,11 @@ func (l *localEstate) peek(ctx context.Context, c *core) (v copyVerdict, known b
 	return slot.held.copyVerdict, slot.known, reading
 }
 
-// servesUnasked reports whether this node answers from its own copy as far as
-// it can tell WITHOUT WAITING: it runs its core, and the last verdict read of
-// the copy — where one has been — found it sound.
+// servesUnasked reports whether this node answers its SEATS from its own copy
+// as far as it can tell WITHOUT WAITING: it runs its core, and the last
+// verdict read of the copy — where one has been — found every domain a seat
+// depends on in service ([estate.SeatCopy]). A wrong copy of any other domain
+// costs that domain's calls a peer and never the seats (ADR-0046).
 //
 // For serviceability, which asks it on every sweep and may not wait on the
 // broker. A copy nobody has judged yet is not read as a wrong one — its first
@@ -314,7 +357,7 @@ func (l *localEstate) servesUnasked(ctx context.Context) bool {
 		return false
 	}
 	v, known, _ := l.peek(ctx, c)
-	return !known || v.fault == ""
+	return !known || v.serves(estate.SeatCopy)
 }
 
 // refresh reads the copy's verdict once and stores it, stamped with the
@@ -329,41 +372,62 @@ func (l *localEstate) refresh(ctx context.Context, c *core, done chan struct{}) 
 
 	l.mu.Lock()
 	known, held := l.slot.known, l.slot.held
-	if v.refusal == statelog.RefuseBrokerUnreachable {
-		v.answers = known && held.answers
-	}
-	// A FAULT IS CARRIED ONLY WHERE ITS OWN LOG WENT UNREAD. Carried
-	// whenever any log went unread, a copy whose faulted log had just been
-	// read and found sound stayed out of service for as long as some OTHER
-	// log's health could not be read in its budget — on a loaded broker,
-	// reading after reading — which is the opposite of what an unread
-	// number may do in either direction.
-	if v.fault == "" && known && slices.Contains(v.unread, held.fault) {
-		v.fault = held.fault
-	}
+	v = v.carried(held.copyVerdict, known)
 	l.slot.held, l.slot.known, l.slot.reading = heldVerdict{at: l.now(), copyVerdict: v}, true, nil
 	l.mu.Unlock()
 
-	if v.fault != "" && (!known || held.fault == "") {
-		log.WarnContext(ctx, "estate_copy_not_served", "log", v.fault,
-			"detail", "this node's copy of the estate is wrong rather than behind, "+
-				"so it goes out of service; its seats read the estate from the "+
-				"other data nodes until the copy recovers")
+	// ONE LINE PER DOMAIN that went out of service, naming it and the fault
+	// that holds: which log's copy is wrong, and why, is what an operator
+	// acts on, and every other domain's copy is still serving.
+	for _, out := range v.newlyWrong(held.copyVerdict, known) {
+		if out.domain == shutEstate {
+			log.WarnContext(ctx, "estate_copy_not_served", "domain", out.domain,
+				"detail", "this node's copy of the estate is not open, so every "+
+					"domain's copy goes out of service: their operations go to the "+
+					"other data nodes until the file is open again, and the node's "+
+					"seats stay")
+			continue
+		}
+		log.WarnContext(ctx, "estate_copy_not_served", "domain", out.domain,
+			"reason", string(out.why),
+			"detail", "this node's copy of "+out.domain+" is wrong rather than behind, so it "+
+				"goes out of service: that domain's operations go to the other data "+
+				"nodes until the copy recovers, every other domain's copy keeps "+
+				"serving, and the node's seats stay")
 	}
 }
 
 // estateBackend is this data node's answer for its copy of the estate: the
-// core's — its logs and the identity directory, from boot — and the native
-// halves over them where the company keeps them (n, nil before the first
-// company).
+// core's — its logs, the identity directory and the usage domain's rows, from
+// boot — and the native halves over them where the company keeps them (n, nil
+// before the first company).
+//
+// THE USAGE DOMAIN'S ROWS ARE THE CORE'S, read off the file a data node holds
+// open from boot whatever its company runs ([HoldsEstate]), never the native
+// runtime's: a company on vendors for both its tracker and its knowledge base,
+// hosting no code, builds no native half, and with the reads tied to one every
+// data node answered every spend, activity and readers screen "no native
+// backend here", so the router refused each as an estate nobody served — a 503
+// asking the screen to retry what no retry could ever answer.
 //
 // WRITES ONLY WHILE THIS NODE PUBLISHES. A node restarted into a maintenance
 // mode is the evidence a capacity operation is established from, and a write
 // it took on anybody's behalf would be the publish the mode exists to rule
 // out — so its writers are absent ([Engine.writeSide] hands none out) and
 // every write is answered "not here".
+//
+// EVERY BACKEND CARRIES THE NODE'S CONFIGURATION POSTURE ([estate.Backend.
+// Current]) through the one gate this node's trigger admission, scheduler,
+// inbound consumer and integration reconcile already read ([Engine.admits],
+// which the reconciler fills): a node confirmed behind the company's
+// configuration is asked last for every estate operation, so what it supplies
+// from its own epoch — the chart, the units, the scope, the code limits —
+// answers only where no current data node does. The gate is read when an
+// operation runs, never when the backend is built, since a backend outlives
+// the posture it was built under.
 func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	b := estate.Backend{
+		Usage: usage.Reader{Estate: e.usageEstate()}, Current: e.admits,
 		Committed: e.WaitCommitted,
 		Admits: func(ctx context.Context) bool {
 			ok, refusal := c.log.Established(ctx, true)
@@ -406,8 +470,11 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if n.searcher != nil {
 		b.Knowledge = n.searcher
 	}
-	writer, store := e.writeSide()
-	if writer != nil {
+	if n.indexer != nil {
+		b.Backlinks = n.indexer
+	}
+	w := e.writeSide()
+	if writer := w.tracker; writer != nil {
 		b.Writer = func(a estate.Actor) estate.TrackerWriter {
 			// A NIL INTERFACE, never a typed nil: the server reads nil
 			// as "the tracker refused to act as this party".
@@ -417,8 +484,16 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 			return nil
 		}
 	}
-	if store != nil {
-		b.PageWriter = store
+	if w.pages != nil {
+		b.PageWriter = w.pages
+	}
+	// THE CODE HALF, where the runtime was built for it: the reader always,
+	// the committer only where this node publishes — w.committer is nil in a
+	// maintenance mode, and code.Served then refuses a proposal as a node
+	// that ran nothing, so the router asks the repository's runner-up with
+	// the same push id rather than this node appending it.
+	if n.built.runsCode() {
+		b.Code = code.Served{Committer: w.committer, Reader: n.codeReader}
 	}
 	return b
 }

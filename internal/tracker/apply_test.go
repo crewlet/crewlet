@@ -40,7 +40,7 @@ func newApplyHarness(t *testing.T) *applyHarness {
 		}
 	})
 	return &applyHarness{
-		t: t, db: db, applier: tracker.NewApplier("node-a", nil),
+		t: t, db: db, applier: tracker.NewApplier(nil),
 		maxVariables: db.Caps().MaxVariables,
 	}
 }

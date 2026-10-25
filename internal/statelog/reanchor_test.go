@@ -1236,13 +1236,13 @@ func TestAWriteAfterARestoredReanchorArbitratesOnTheRecordItsRowsHold(t *testing
 	// THE RESTORED COPY: the subject's own record, and another object's
 	// after it, so the log ends past the subject.
 	kept, _, err := h.log.Append(t.Context(), probePrefix+".object.kept", "op-old",
-		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
+		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("kept"), statelog.ScopeSet{Paths: []string{"object.kept"}},
 			"op-old", "old")))
 	if err != nil {
 		t.Fatalf("the copy's record for the subject: %v", err)
 	}
 	end, _, err := h.log.Append(t.Context(), probePrefix+".object.other", "op-other",
-		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
+		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("other"), statelog.ScopeSet{Paths: []string{"object.other"}},
 			"op-other", "other")))
 	if err != nil {
 		t.Fatalf("the copy's later record: %v", err)
@@ -1303,7 +1303,7 @@ func TestARecordTheCheckpointDoesNotCoverIsWaitedFor(t *testing.T) {
 			h := newHarness(t)
 			subject := probeSubject("a")
 			peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op",
-				nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
+				nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 			if err != nil {
 				t.Fatalf("the peer's write: %v", err)
 			}

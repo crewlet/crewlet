@@ -17,6 +17,7 @@ roles:
   - name: SRE Lead
     handle: sre-lead
     llm: primary
+    code: {access: full_access}
     integrations:
       github:
         app_id: 41
@@ -26,13 +27,59 @@ roles:
   - name: Reviewer
     handle: reviewer
     llm: primary
+    code: {access: review}
     integrations:
       github:
-        tier: review
+        repos: [acme/api]
   - name: Writer
     handle: writer
     llm: primary
 `
+
+// A SEAT'S GITHUB APP IS CREATED, AND MINTS, AT ITS CODE ACCESS.
+//
+// role.code.access is the one tier every code host reads, so the app's
+// permission set is the seat's code access and not a field of its GitHub
+// block: a seat whose access says review mints review tokens, one that says
+// full_access mints its whole set, and one that says nothing mints the least.
+// A seat with no GitHub block is no app at all, whatever its access.
+func TestASeatsGitHubAppIsCreatedAtItsCodeAccess(t *testing.T) {
+	t.Parallel()
+	c := companyWith(t, appSeatsDoc+`  - name: Builder
+    handle: builder
+    llm: primary
+    integrations:
+      github:
+        repos: [acme/web]
+`)
+	got := map[string]github.Tier{}
+	for _, app := range (&Engine{}).githubSeatApps(c, config.NewResolver(nil)) {
+		got[app.Handle] = app.Tier
+	}
+	want := map[string]github.Tier{
+		"sre-lead": github.TierFullAccess,
+		"reviewer": github.TierReview,
+		"builder":  github.TierReadOnly,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("seat apps %v, want one per seat with a GitHub block: %v", got, want)
+	}
+	for handle, tier := range want {
+		if got[handle] != tier {
+			t.Errorf("%s's app runs at %q, want its code access %q", handle, got[handle], tier)
+		}
+		// The token a seat's app mints carries exactly its tier's set.
+		if perms := got[handle].Permissions(); perms["contents"] == "" {
+			t.Errorf("%s's tier %q grants no contents permission: %v", handle, got[handle], perms)
+		}
+	}
+	if perms := got["sre-lead"].Permissions(); perms["contents"] != "write" {
+		t.Errorf("a full_access seat's app mints contents:%s, want write", perms["contents"])
+	}
+	if perms := got["reviewer"].Permissions(); perms["contents"] != "read" || perms["pull_requests"] != "write" {
+		t.Errorf("a review seat's app mints %v, want contents read and pull requests write", perms)
+	}
+}
 
 // AN AGENT'S OWN APP IS ITS IDENTITY, AND IT COSTS NO REQUEST.
 //

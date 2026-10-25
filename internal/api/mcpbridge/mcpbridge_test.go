@@ -345,12 +345,7 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // builds a bridge.
 func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 	t.Parallel()
-	env := func(name string) string {
-		if name == mcpbridge.BaseURLVar {
-			return "https://engine.example.com"
-		}
-		return ""
-	}
+	const base = "https://engine.example.com"
 	for name, material := range map[string]runtoken.Material{
 		"no keys":             {},
 		"an active id unheld": {ActiveID: "k9", Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "m"}}},
@@ -360,19 +355,19 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 			if b, err := mcpbridge.New(mcpbridge.Options{Material: material}); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("New = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
-			if b, err := mcpbridge.Build(env, material); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
+			if b, err := mcpbridge.Build(base, material); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("Build = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
 			// THE CONTROL: with no base URL nothing is built, whatever the
 			// keyring, and that is a configuration rather than a refusal.
-			if b, err := mcpbridge.Build(func(string) string { return "" }, material); err != nil || b != nil {
+			if b, err := mcpbridge.Build("", material); err != nil || b != nil {
 				t.Errorf("Build with no base URL = %v, %v, want nothing and no error", b, err)
 			}
 		})
 	}
 	// And a usable keyring builds one, so the rows above are refused for the
 	// keyring and not for something else Build dislikes.
-	if b, err := mcpbridge.Build(env, runtoken.OneKey("k1", "m")); err != nil || b == nil {
+	if b, err := mcpbridge.Build(base, runtoken.OneKey("k1", "m")); err != nil || b == nil {
 		t.Fatalf("Build with a usable keyring = %v, %v, want a bridge", b, err)
 	}
 }

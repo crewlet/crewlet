@@ -58,6 +58,9 @@ var carriedByServer = map[string]string{
 	"tracker.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
 		"answers what it committed to in reply.Written, and the router adds it there",
 
+	"usage.measured.encoded": "a usage page's rows as Fill measured them: the serving node " +
+		"writes them AS the page's Rows (usage.Page.AppendJSON), and the asker decodes Rows",
+
 	"pages.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
 		"an answer carries its result as SavedBy and SavedAt",
 }
@@ -186,22 +189,35 @@ var floorless = map[string]string{
 	"knowledge.search": "reads the indexes, as tracker.search does",
 	"knowledge.building": "asks whether the lexical index has caught up, which no " +
 		"log position describes",
-	"estate.ping": "asks whether the copy admits a seat, its own stricter gate, " +
-		"not whether it has reached the asker's writes",
+	"knowledge.linked_from": "reads the links the lexical index derives from the " +
+		"bodies it has read, which no log position describes",
+	"estate.ping": "asks whether the seat copy admits a seat, its own stricter " +
+		"gate, not whether it has reached the asker's writes",
+
+	"usage.spend": "reads the usage domain, whose log no write of the asker's lands " +
+		"on: every node publishes its own days, so there is no position to see",
+	"usage.seat_turns":    "reads the usage domain, as usage.spend does",
+	"usage.person_spend":  "reads the usage domain, as usage.spend does",
+	"usage.seat_days":     "reads the usage domain, as usage.spend does",
+	"usage.schedule_runs": "reads the usage domain, as usage.spend does",
+	"usage.page_reads":    "reads the usage domain, as usage.spend does",
+	"usage.reads_elided":  "reads the usage domain, as usage.spend does",
 }
 
 // EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a
 // floor names its domain, the domain is one whose log a floor can be on, and
 // the stream it waits on is that domain's own log — the tracker's
-// CREWLET_TRACKER_LOG or the knowledge base's CREWLET_PAGES_LOG, named as they
-// have always been. One that named none would carry no floor at all, and one
-// that named another domain's would wait on an applier it does not depend on
-// ([ready]).
+// CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, the code host's
+// CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG or the artifacts
+// estate's and its datastore's, each named as its domain declares it. One
+// that waited on none would carry no floor at all, and one that named another
+// domain's would wait on an applier it does not depend on ([ready]).
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
 		trackerDomain:      "CREWLET_TRACKER_LOG",
 		pagesDomain:        "CREWLET_PAGES_LOG",
+		codeDomain:         "CREWLET_CODE_LOG",
 		identityDomain:     "CREWLET_IAM_LOG",
 		artifactsDomain:    "CREWLET_ARTIFACTS_LOG",
 		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
@@ -210,15 +226,12 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		spec := registry[name]
 		_, listed := floorless[name]
 		switch {
-		case spec.domain == "" && !listed:
+		case spec.floorStream == "" && !listed:
 			t.Errorf("%s carries no floor: declare the domain whose log it reads, or "+
 				"name why no floor holds it in floorless", name)
-		case spec.domain != "" && listed:
-			t.Errorf("floorless lists %s, which carries a floor on the %s log", name, spec.domain)
-		case spec.domain == "":
-			if spec.floorStream != "" {
-				t.Errorf("%s carries no floor and still names the stream %q", name, spec.floorStream)
-			}
+		case spec.floorStream != "" && listed:
+			t.Errorf("floorless lists %s, which carries a floor on %s", name, spec.floorStream)
+		case listed:
 		case logs[spec.domain] == "":
 			t.Errorf("%s carries a floor on the %q domain's log, want one of %v",
 				name, spec.domain, slices.Sorted(maps.Keys(logs)))
@@ -234,8 +247,93 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	}
 }
 
-// THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, a reply that answers
-// it, admission's ping and a copy out of service. A field added to the
+// seatCopyOps is every operation that asks about the copy a SEAT is served by
+// ([SeatCopy]) rather than one domain's, and why.
+//
+// TWO-SIDED, like [floorless]: an operation naming the seat copy that is not
+// listed fails — it would run on a copy whose own domain the verdict never
+// asked about — and a listed one that names a domain fails too.
+var seatCopyOps = map[string]string{
+	"estate.ping": "asks whether the copy a seat is served by admits one — every " +
+		"domain that gates seat admission, not one domain's",
+}
+
+// EVERY OPERATION NAMES THE COPY IT READS, because that is the verdict the
+// router and the server ask before running it here: a domain's copy that is
+// wrong runs none of that domain's operations and every other domain's
+// (ADR-0046). An operation naming no domain — the search ops once did, since
+// they carry no floor — would be asked of no domain's verdict at all: run from
+// a copy out of service, or held to one it does not read.
+func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
+	t.Parallel()
+	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
+		identityDomain, artifactsDomain, artifactDataDomain}
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		_, seat := seatCopyOps[name]
+		switch {
+		case seat && spec.domain != SeatCopy:
+			t.Errorf("seatCopyOps lists %s, which reads the %q domain's copy", name, spec.domain)
+		case seat:
+		case spec.domain == SeatCopy:
+			t.Errorf("%s names the seat copy: declare the domain whose copy it reads, "+
+				"or name why it asks about the seat's in seatCopyOps", name)
+		case !slices.Contains(domains, spec.domain):
+			t.Errorf("%s reads the %q domain's copy, want one of %v", name, spec.domain, domains)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(seatCopyOps)) {
+		if _, known := registry[name]; !known {
+			t.Errorf("seatCopyOps lists %s, which is no operation", name)
+		}
+	}
+}
+
+// readsSeveral is every operation that reads another domain's rows beside its
+// own ([op.alsoReads]), with the domains it reads and why.
+//
+// TWO-SIDED, like [floorless]: an operation that declares a second domain and
+// is not listed fails, and so does a listed one that no longer declares what
+// the list says — because which copies an operation reads is what decides
+// where it may run, and a second domain an operation reads and does not
+// declare is one whose wrong copy it answers from.
+var readsSeveral = map[string][]string{
+	// The links come from both corpora's bodies, and a task names the page
+	// as a linked page in the tracker's own relation rows.
+	"knowledge.linked_from": {pagesDomain, trackerDomain},
+}
+
+// AN OPERATION THAT READS SEVERAL DOMAINS DECLARES EACH ONE, and is routed by
+// all of them: a node whose copy of any is out of service runs none of it
+// (ADR-0046), and the router's memory of where it stays is kept for that set
+// of copies rather than for one domain's.
+func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
+	t.Parallel()
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		got := append([]string{spec.domain}, spec.alsoReads...)
+		want, listed := readsSeveral[name]
+		switch {
+		case len(spec.alsoReads) > 0 && !listed:
+			t.Errorf("%s reads %v: name it and why in readsSeveral", name, got)
+		case listed && !slices.Equal(got, want):
+			t.Errorf("%s reads %v, and readsSeveral says %v", name, got, want)
+		case listed && spec.copies != strings.Join(want, "+"):
+			t.Errorf("%s is routed by %q, want every copy it reads", name, spec.copies)
+		case !listed && spec.copies != spec.domain:
+			t.Errorf("%s is routed by %q, want its domain %q", name, spec.copies, spec.domain)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(readsSeveral)) {
+		if _, known := registry[name]; !known {
+			t.Errorf("readsSeveral lists %s, which is no operation", name)
+		}
+	}
+}
+
+// THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, one asked again
+// after a node refused it, a reply that answers it, admission's ping and a
+// copy out of service. A field added to the
 // envelope, renamed or made to send its zero value changes what every node of
 // a fleet reads of every other, and this is where that shows — rather than in
 // a router that silently reads a field its peer stopped sending. What is pinned
@@ -254,6 +352,20 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 			want: `{"id":"r-1","op":"tracker.tasks","args":{"Query":{}},` +
 				`"floors":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":7}],` +
 				`"deadline":"2026-10-04T12:00:00Z","from":"agent-1"}`,
+		},
+		"a read asked after a node refused it": {
+			value: request{ID: "r-4", Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
+				Deadline: envelopeInstant,
+				Spent: &statelog.Spent{
+					Index:    []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
+					Waited:   []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
+					NoQuorum: []string{pagesStream},
+				}},
+			want: `{"id":"r-4","op":"tracker.tasks","args":{"Query":{}},` +
+				`"deadline":"2026-10-04T12:00:00Z","spent":{` +
+				`"index":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
+				`"waited":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
+				`"no_quorum":["CREWLET_PAGES_LOG"]}}`,
 		},
 		"a write's last resort": {
 			value: request{ID: "r-2", Op: opCreateTask.spec.name, Actor: &swe,
@@ -304,7 +416,7 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 		Result: json.RawMessage(`{"Tracker":true,"Pages":true}`)}}
 	r, err := NewRouter(RouterOptions{
 		Self: "agent-1", Queue: asker, Placement: &fakePlacement{nodes: []string{"data-a"}},
-		Session: NewSession(), Envelopes: fleetEnvelopes,
+		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -383,4 +495,28 @@ func (a *recordingAsker) requests() []sentRequest {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return slices.Clone(a.sent)
+}
+
+// selfEncoded is an answer that holds its own encoding, as a usage page does.
+type selfEncoded struct{ held string }
+
+func (s selfEncoded) AppendJSON(dst []byte) ([]byte, error) {
+	return append(dst, `{"held":"`+s.held+`"}`...), nil
+}
+
+// AN ANSWER THAT HOLDS ITS OWN ENCODING IS SENT AS IT IS. A usage page's rows
+// were encoded once already, to cut the page at its budget, and a reply that
+// encoded the page again with json.Marshal encoded every row twice; so the
+// serving half writes an answer's own encoding where it holds one, and the
+// ordinary encoding of everything else.
+func TestAnAnswerThatHoldsItsOwnEncodingIsSentAsItIs(t *testing.T) {
+	t.Parallel()
+	got, err := encodeResult(selfEncoded{held: "rows"})
+	if err != nil || string(got) != `{"held":"rows"}` {
+		t.Fatalf("an answer holding its encoding was sent as (%s, %v), want its own bytes", got, err)
+	}
+	got, err = encodeResult(scheduleRunsPage{More: true})
+	if err != nil || string(got) != `{"Runs":null,"More":true}` {
+		t.Fatalf("an ordinary answer was sent as (%s, %v), want its json encoding", got, err)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -80,7 +81,7 @@ func ask(t *testing.T, q interface {
 // steerServing serves desk on q's broker for the length of the case.
 func steerServing(t *testing.T, q *memory.Queue, desk *steerDesk) {
 	t.Helper()
-	stop, err := q.Serve(t.Context(), topics.SeatSteer, desk.answer)
+	stop, err := q.Serve(t.Context(), topics.SeatSteer, queue.ConcurrentAnswers, desk.answer)
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
 	}

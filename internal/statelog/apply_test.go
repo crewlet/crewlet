@@ -30,19 +30,15 @@ import (
 // probeApplier is a state machine whose whole job is to be observable: it
 // writes one row per record into a table the test can count.
 type probeApplier struct {
-	mu       sync.Mutex
-	applied  []statelog.Position
-	epochs   []map[string]any
-	commits  int
-	rows     int
-	gate     statelog.Reason
-	gated    map[uint64]bool
-	asked    map[uint64]int
-	failAt   uint64
-	rowsPer  int
-	slowFrom uint64
-	slowFor  time.Duration
-	now      func() time.Time
+	mu      sync.Mutex
+	applied []statelog.Position
+	epochs  []map[string]any
+	commits int
+	gate    statelog.Reason
+	gated   map[uint64]bool
+	asked   map[uint64]int
+	failAt  uint64
+	rowsPer int
 
 	// lockedAt is a sequence whose FIRST apply fails the way a write that
 	// lost the file's lock does, which the store answers by running the
@@ -66,7 +62,7 @@ func newProbeApplier() *probeApplier {
 
 func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
 	a.mu.Lock()
-	fail, per, slowFrom, slowFor := a.failAt, a.rowsPer, a.slowFrom, a.slowFor
+	fail, per := a.failAt, a.rowsPer
 	locked := a.lockedAt != 0 && rec.Position.Seq == a.lockedAt
 	if locked {
 		a.lockedAt = 0
@@ -78,14 +74,6 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 	if locked {
 		return 0, fmt.Errorf("the probe applier at sequence %d: database is locked",
 			rec.Position.Seq)
-	}
-	if slowFrom != 0 && rec.Position.Seq >= slowFrom && a.now != nil {
-		// The clock is injected, so "slow" is deterministic rather than
-		// a sleep the scheduler decides the length of.
-		a.mu.Lock()
-		a.rows += 0
-		a.mu.Unlock()
-		_ = slowFor
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO probe_rows (position, kind, stored_at) VALUES (?, ?, ?)
@@ -576,11 +564,21 @@ func (h *applyHarness) counter(name string) uint64 {
 	return total
 }
 
+// probeDDL is the probe domain's tables. probe_evictions is its eviction row
+// per node and log, as tracker_evictions is the tracker's — keyed so the read
+// every append makes of it is one row by its primary key.
 const probeDDL = `
 CREATE TABLE probe_rows (
     position  INTEGER NOT NULL PRIMARY KEY,
     kind      TEXT    NOT NULL,
     stored_at INTEGER NOT NULL
+);
+CREATE TABLE probe_evictions (
+    node_id             TEXT    NOT NULL,
+    log_stream          TEXT    NOT NULL,
+    from_position       INTEGER NOT NULL,
+    readmitted_position INTEGER,
+    PRIMARY KEY (node_id, log_stream)
 );
 CREATE TABLE probe_ops (
     op_id      TEXT    NOT NULL PRIMARY KEY,
@@ -2145,7 +2143,7 @@ func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
 	}
 }
 
-// A RECREATED STREAM STOPS THE APPLIER, and it is the broker's own creation
+// A RECREATED STREAM STOPS THE APPLIER, and it is the stream's own creation
 // instant that says so.
 //
 // A stream deleted and remade restarts its sequences at one. Every position
@@ -2690,248 +2688,6 @@ func probeSeal(body []byte) []byte {
 	return signer.Seal(body)
 }
 
-// THE ARBITRATION ANCHORS ARE SWEPT, and nothing swept them.
-//
-// `0001_the_state_log_lands.sql` creates `statelog_anchor_swept_idx` and says
-// in so many words that the SWEEP needs it, because without the index a range
-// delete scans every subject in the company. Then nothing anywhere in the tree
-// ever wrote that delete: one row per arbitrated subject, kept for the life of
-// the deployment, in the replicated estate and therefore in every snapshot
-// artefact and every backup.
-//
-// THE CUTOFF IS THE PUBLISHED TRIM FLOOR, never a clock. An anchor answers
-// "what does this subject's last record expect", so a row above the floor has
-// to stay however old it is — read as absent, it hands the next writer an
-// expectation of "this subject holds nothing", which the broker refuses for
-// ever against a subject that does. Below the floor there is no record left to
-// replay, so there is nothing for the anchor to be the anchor of.
-func TestTheArbitrationAnchorsAreSwept(t *testing.T) {
-	t.Parallel()
-	h := newApplyHarness(t, probeDomain{})
-	for seq := uint64(1); seq <= 6; seq++ {
-		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
-			fmt.Sprintf("op-%d", seq), 1))
-	}
-	if err := h.run(6); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-
-	floorAt := func(seq uint64) statelog.Position {
-		return statelog.Position{Stream: probeStream, Generation: 1, Seq: seq}
-	}
-
-	// A FLOOR OF ZERO SWEEPS NOTHING, which is what a log that has never
-	// trimmed publishes: a statement per tick that deletes nothing is
-	// still a statement per tick.
-	if swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(0)); err != nil || swept != 0 {
-		t.Fatalf("a floor of zero swept %d anchor(s) (%v), want none", swept, err)
-	}
-
-	// A FLOOR PART WAY UP removes only what is below it. This is the
-	// control that matters: a sweep that took everything would delete the
-	// anchors the next writer's expectation is formed from.
-	swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(4))
-	if err != nil {
-		t.Fatalf("PurgeAnchors: %v", err)
-	}
-	if swept != 3 {
-		t.Errorf("a floor at 4 swept %d anchor(s), want the 3 below it — a sweep that "+
-			"took more would remove what the next writer's expectation is formed "+
-			"from", swept)
-	}
-
-	// AND THE SURVIVORS ARE STILL THE ANCHORS. Reading one back as absent
-	// is the failure this bounds, so it is asserted rather than assumed.
-	if _, held, err := h.runner.Op(t.Context(), "op-5"); err != nil || !held {
-		t.Errorf("op-5's ledger row went with the anchors (held=%v, %v)", held, err)
-	}
-
-	// A SECOND SWEEP AT THE SAME FLOOR IS A NO-OP, so a tick on a log that
-	// has not trimmed costs one empty statement rather than repeating work.
-	if swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(4)); err != nil || swept != 0 {
-		t.Errorf("a repeated sweep at the same floor took %d more (%v), want none",
-			swept, err)
-	}
-}
-
-// THE ANCHOR SWEEP DRAINS A BACKLOG IN BATCHES, EACH ITS OWN TRANSACTION.
-//
-// Anchors are one row per arbitrated subject, so the first sweep after a trim
-// moves the floor past a busy month has the whole month's subjects to shed —
-// and the applier's connection is pinned to the same file, so one unbounded
-// DELETE holds the writer it is queued behind for as long as that takes. The
-// sweep is batched for that reason, and both ways of getting the loop wrong
-// look like a working sweep on a small table: an unbounded statement deletes
-// the right rows in one transaction, and a loop that stops after its first
-// batch leaves everything past [statelog.OpsPurgeBatch] behind. So the backlog
-// here is wider than one batch, the rows above the floor and another log's
-// rows below it must survive, and the transactions are COUNTED.
-func TestTheAnchorSweepIsBatched(t *testing.T) {
-	t.Parallel()
-	h := newApplyHarness(t, probeDomain{})
-	below := statelog.OpsPurgeBatch + 7
-	at := func(stream string, seq uint64) int64 {
-		return statelog.Position{Stream: stream, Generation: 1, Seq: seq}.Packed()
-	}
-	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: uint64(below) + 1}
-	const above, elsewhere = 5, 3
-	// Written directly: publishing enough records to cross a batch is a
-	// minute of broker round trips to test one loop.
-	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
-		insert := func(stream, subject string, anchor int64) error {
-			_, err := tx.ExecContext(t.Context(), `
-				INSERT INTO statelog_anchor (stream, subject, anchor)
-				VALUES (?, ?, ?)`, stream, subject, anchor)
-			return err
-		}
-		for i := range below {
-			if err := insert(probeStream, fmt.Sprintf("%s.object.b%d", probePrefix, i),
-				at(probeStream, uint64(i)+1)); err != nil {
-				return err
-			}
-		}
-		for i := range above {
-			if err := insert(probeStream, fmt.Sprintf("%s.object.a%d", probePrefix, i),
-				at(probeStream, floor.Seq+uint64(i))); err != nil {
-				return err
-			}
-		}
-		// ANOTHER LOG'S ANCHORS, below this floor's sequence: a floor is a
-		// position in ONE log, and a sweep that forgot the stream would
-		// take them with it.
-		for i := range elsewhere {
-			if err := insert("CREWLET_OTHER_LOG", fmt.Sprintf("other.object.%d", i),
-				at("CREWLET_OTHER_LOG", 1)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed the anchors: %v", err)
-	}
-
-	estate := &countingEstate{Estate: h.estate}
-	fetch := newProbeFetch()
-	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
-		Verifier:   testVerifier(t, probeDomain{}),
-		Applier:    newProbeApplier(),
-		Fetch:      fetch,
-		Log:        fetch,
-		Node:       h.db,
-		DB:         estate,
-		Checkpoint: statelog.Position{Generation: 1},
-	})
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-	estate.reset()
-
-	swept, err := runner.PurgeAnchors(t.Context(), floor)
-	if err != nil {
-		t.Fatalf("PurgeAnchors: %v", err)
-	}
-	if swept != int64(below) {
-		t.Errorf("the sweep took %d of the %d anchors below the floor — a loop "+
-			"that stops at its first batch leaves the backlog behind", swept, below)
-	}
-	// TWO BATCHES, each its own transaction and neither past the batch:
-	// one full and one short, and the short one ends the loop. A transaction
-	// that removed more is a statement over the whole backlog, holding the
-	// applier's writer for all of it.
-	removed := estate.removed()
-	if want := below/statelog.OpsPurgeBatch + 1; len(removed) != want {
-		t.Errorf("the sweep of %d anchors ran %d write transaction(s) %v, want %d",
-			below, len(removed), removed, want)
-	}
-	for i, n := range removed {
-		if n > statelog.OpsPurgeBatch {
-			t.Errorf("write transaction %d removed %d anchors, past the batch of %d "+
-				"— one statement over the backlog holds the writer the applier is "+
-				"queued behind", i, n, statelog.OpsPurgeBatch)
-		}
-	}
-
-	counts := map[string]int{}
-	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(),
-			`SELECT stream, COUNT(*) FROM statelog_anchor GROUP BY stream`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var stream string
-			var n int
-			if err := rows.Scan(&stream, &n); err != nil {
-				return err
-			}
-			counts[stream] = n
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("count what is left: %v", err)
-	}
-	if counts[probeStream] != above {
-		t.Errorf("%d of this log's anchors survive, want the %d at or above the "+
-			"floor — they are what the next writer's expectation is formed from",
-			counts[probeStream], above)
-	}
-	if counts["CREWLET_OTHER_LOG"] != elsewhere {
-		t.Errorf("%d of another log's %d anchors survive a sweep of this one",
-			counts["CREWLET_OTHER_LOG"], elsewhere)
-	}
-}
-
-// countingEstate records how many anchors each write transaction run through
-// it removed, which is the one thing that tells a batched sweep from a single
-// statement deleting the same rows. The count is read around the transaction
-// rather than inside it, so what it measures is what committed.
-type countingEstate struct {
-	statelog.Estate
-	mu    sync.Mutex
-	after []int
-}
-
-func (e *countingEstate) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	before, err := e.anchors(ctx)
-	if err != nil {
-		return err
-	}
-	if err := e.Estate.Tx(ctx, fn); err != nil {
-		return err
-	}
-	after, err := e.anchors(ctx)
-	if err != nil {
-		return err
-	}
-	e.mu.Lock()
-	e.after = append(e.after, before-after)
-	e.mu.Unlock()
-	return nil
-}
-
-func (e *countingEstate) anchors(ctx context.Context) (int, error) {
-	var n int
-	err := e.Estate.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM statelog_anchor`).Scan(&n)
-	})
-	return n, err
-}
-
-func (e *countingEstate) reset() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.after = nil
-}
-
-// removed is how many anchors each write transaction removed, in order.
-func (e *countingEstate) removed() []int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return append([]int(nil), e.after...)
-}
-
 // ONE SUBJECT KIND'S LEDGER ROWS CAN BE SWEPT ON THEIR OWN HORIZON — and only
 // that kind's.
 //
@@ -3064,6 +2820,89 @@ func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
 	}
 	cancel()
 	<-errs
+}
+
+// A LOG BUSIER THAN A FETCH WAIT STILL DRAINS: a run the broker had nothing
+// left behind, committed whole, is as much the end of the log as a fetch the
+// broker answers with nothing.
+//
+// On a log that gains a record more often than [statelog.FetchWait], every
+// fetch is answered with one, so a latch set only on an empty fetch was never
+// set while the company stayed busy: a data node restarted into it stayed a
+// LAGGING copy — asked last for every request, never a snapshot's donor —
+// until its company went quiet for half a second. The records here arrive five
+// to a fetch wait, and the loop must say it drained while they still do.
+func TestALogBusierThanAFetchWaitStillDrains(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	const records = 60
+	every := statelog.FetchWait / 5
+	stop, feeding := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(feeding)
+		for seq := uint64(1); seq <= records; seq++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(every):
+			}
+			h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq), fmt.Sprintf("op-%d", seq), 1))
+		}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	defer func() {
+		close(stop)
+		<-feeding
+		cancel()
+		<-errs
+	}()
+	for !h.runner.Drained() {
+		select {
+		case <-feeding:
+			t.Fatalf("the loop said it drained only once the records stopped coming, %v apart: "+
+				"a busy log's copy never drains", every)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	if h.runner.Committed().Seq == 0 {
+		t.Fatal("the loop said it drained before it had applied a record the log held")
+	}
+}
+
+// A LOOP HOLDING A RECORD ABOVE A HOLE HAS NOT DRAINED, however empty the
+// broker's answers: the record it holds is one its rows do not, waiting for the
+// one below it the broker will deliver again, so its rows are a prefix of the
+// log rather than the whole of it. The latch used to be set on any empty fetch
+// with nothing in the run, the reorder buffer's records forgotten.
+func TestALoopHoldingARecordAboveAHoleHasNotDrained(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 1)) // above a hole at 2
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-errs
+	}()
+	// EMPTY FETCHES, several: each is a FetchWait the broker answered with
+	// nothing while 3 sat in the buffer.
+	for start := time.Now(); time.Since(start) < 3*statelog.FetchWait; time.Sleep(2 * time.Millisecond) {
+		if h.runner.Drained() {
+			t.Fatalf("the loop said it drained at checkpoint %d, holding 3 above the hole at 2",
+				h.runner.Committed().Seq)
+		}
+	}
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	waitForDrain(t, h, true, "the loop to drain once the hole closed")
+	if got := h.runner.Committed().Seq; got != 3 {
+		t.Fatalf("the loop said it drained at checkpoint %d, want 3", got)
+	}
 }
 
 // THE FIRST DRAIN OF A RUN IS TOLD, ONCE, AND ONLY ONCE THE LATCH READS IT.
@@ -3228,7 +3067,7 @@ func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
 		return statelog.Envelope{
 			V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 			Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: 1,
-			Scope:  statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+			Scope:  statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 			Writer: fmt.Sprintf("node-%d", seq),
 		}
 	}

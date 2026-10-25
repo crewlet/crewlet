@@ -32,7 +32,9 @@ import (
 //   - the `page` answer's `skill_loaded_by` — the seats a TOOL-SKILL page was
 //     loaded or offered to, from the same rows.
 //   - the `page` answer's `linked_from` — the pages and tasks whose bodies
-//     carry this page's address, from this node's index ([search.Backlinks]).
+//     carry this page's address, from a data node's own index
+//     ([search.Backlinks]) — the one the estate's router picks, whose copies
+//     of both the knowledge base and the tracker serve (ADR-0046).
 //
 // ALL THREE ARE THE KNOWLEDGE BASE'S, and two of them carry the TRACKER'S rows
 // beside its own: the tasks that link a page, and the task each read happened
@@ -131,7 +133,11 @@ type SkillLoad struct {
 	Offered int64 `json:"offered"`
 }
 
-// PageBacklinks is the "linked from" reader: this node's lexical index.
+// PageBacklinks is the "linked from" reader: a data node's lexical index,
+// reached through the estate's router — answered only where that node's
+// copies of both domains the links are read from serve, since a node whose
+// copy of either had stopped serving listed links derived from rows it no
+// longer answered for, beside a page a peer had answered.
 type PageBacklinks interface {
 	LinkedFrom(ctx context.Context, pageID string) (search.Backlinks, error)
 }
@@ -178,11 +184,12 @@ const (
 	// tasks ([search.ErrIndexBuilding]).
 	LinkedFromBuilding LinkedFromStatus = "building"
 
-	// LinkedFromUnavailable is sent when the read failed — the node's own index, or
-	// the replicated estate the names are read from (closed for an
-	// adoption, say). The PAGE is still answered: the backlinks are a
-	// signal beside the document, and a document made unreadable by its
-	// rail would be the wrong way round.
+	// LinkedFromUnavailable is sent when the read failed — the answering
+	// node's index, the replicated estate the names are read from (closed
+	// for an adoption, say), or no data node whose copies of the knowledge
+	// base and the tracker both serve. The PAGE is still answered: the
+	// backlinks are a signal beside the document, and a document made
+	// unreadable by its rail would be the wrong way round.
 	LinkedFromUnavailable LinkedFromStatus = "unavailable"
 )
 
@@ -200,7 +207,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("id", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +221,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	out := PageAnswer{Detail: detail}
 	if detail.Skill && s.Usage != nil {
 		window := tokens.LastDays(PageReadsMaxDays, s.clock(), s.zone())
-		rows, err := usage.PageReads(ctx, s.Usage, usage.PageReadsQuery{
+		rows, err := s.Usage.PageReads(ctx, usage.PageReadsQuery{
 			PageIDs: []string{detail.Page.ID}, From: window.First.Label, To: window.Last.Label,
 			Vias: names(skillVias)})
 		if err != nil {
@@ -267,12 +274,12 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	}
 	now, loc := s.clock(), s.zone()
 	window := tokens.LastDays(days, now, loc)
-	rows, err := usage.PageReads(ctx, s.Usage, usage.PageReadsQuery{
+	rows, err := s.Usage.PageReads(ctx, usage.PageReadsQuery{
 		PageIDs: []string{page}, From: window.First.Label, To: window.Last.Label, Vias: names(readVias)})
 	if err != nil {
 		return nil, usageErr(err)
 	}
-	elided, err := usage.ReadsElided(ctx, s.Usage, window.First.Label, window.Last.Label)
+	elided, err := s.Usage.ReadsElided(ctx, window.First.Label, window.Last.Label)
 	if err != nil {
 		return nil, usageErr(err)
 	}
@@ -396,7 +403,7 @@ func (s Sources) skillLoads(ctx context.Context, listed []pages.Summary) (map[st
 	for i, p := range listed {
 		ids[i] = p.ID
 	}
-	rows, err := usage.PageReads(ctx, s.Usage, usage.PageReadsQuery{
+	rows, err := s.Usage.PageReads(ctx, usage.PageReadsQuery{
 		PageIDs: ids, From: window.First.Label, To: window.Last.Label, Vias: names(skillVias)})
 	if err != nil {
 		return nil, usageErr(err)

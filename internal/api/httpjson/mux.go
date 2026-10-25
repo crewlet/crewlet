@@ -79,9 +79,14 @@ func (m *muxRefusal) WriteHeader(status int) {
 	case http.StatusMethodNotAllowed:
 		m.refused = true
 		// The mux set `Allow` before it wrote the status, so it is still
-		// on the header this answer is written with.
+		// on the header this answer is written with. It names the methods
+		// the ROUTE TABLE holds for the path, which is not a promise that
+		// this node serves them now: a route mounted on every API and
+		// served only where the node holds what it needs ([NoRoute]) is
+		// in the table either way, so the sentence names the build's
+		// routes rather than claiming the node takes them.
 		FailWith(m.ResponseWriter, status, CodeMethodNotAllowed, map[string]string{
-			"detail": fmt.Sprintf("%s does not take %s on this node; it takes %s",
+			"detail": fmt.Sprintf("%s does not take %s; this build's routes for it take %s",
 				m.r.URL.Path, m.r.Method, m.Header().Get("Allow")),
 		})
 	default:
@@ -93,23 +98,31 @@ func (m *muxRefusal) WriteHeader(status int) {
 // no_route`, naming the method and the path.
 //
 // THE MUX'S OWN ANSWER, and exported for the two other answers that must be
-// INDISTINGUISHABLE from it. A route that IS registered but serves a half this
-// company does not run — the work surface on a company whose tracker is a
-// vendor's, the operator's MCP surface with no native backend — answers in
-// exactly the bytes the route's absence would have: a handler that wrote its
-// own "not served here" would be the one refusal a client told apart from a
-// missing route, and a route that is absent by configuration and one that is
-// absent by build must read the same. And the public listener's refusal of a
-// route that exists on api.port is this answer byte for byte, because a
-// different wording there would tell anybody on the internet that a private
-// admin port exists and which paths it serves.
+// INDISTINGUISHABLE from it. A route that IS registered but that this node
+// does not serve NOW — a half this company does not run (the work surface on
+// a company whose tracker is a vendor's, the operator's MCP surface with no
+// native backend), or a route over the engine's native runtime this node's
+// configuration or the mode it started in does not enable, asked at every
+// request — answers in exactly the bytes the route's absence would have: a
+// handler that wrote its own "not served here" would be the one refusal a
+// client told apart from a missing route, and a route that is absent by
+// configuration and one that is absent by build must read the same. And the
+// public listener's refusal of a route that exists on api.port is this answer
+// byte for byte, because a different wording there would tell anybody on the
+// internet that a private admin port exists and which paths it serves.
+//
+// THE HINT NAMES BOTH KINDS OF ABSENCE, because only the first is the path's
+// fault. A node whose configuration or mode does not enable a route has the
+// route and is asked at the right path; sending its operator to check only the
+// path sends them to the one place nothing is wrong.
 func NoRoute(w http.ResponseWriter, r *http.Request) {
 	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
 		"detail": fmt.Sprintf("this node serves nothing at %s %s",
 			r.Method, r.URL.Path),
-		"hint": "Check the path. A route this node's build does not have, " +
-			"or one its configuration does not enable, is absent rather " +
-			"than refused.",
+		"hint": "Check the path. A route this node's build does not have is " +
+			"absent rather than refused, and so is one this node does not " +
+			"serve now: its configuration or the mode it started in does not " +
+			"enable it.",
 	})
 }
 

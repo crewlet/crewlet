@@ -469,7 +469,8 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 // into it, which a paused container refuses, so it cannot be read as it is —
 // and Attach reads the runtime's own state rather than unpausing to find out.
 // The fake runtime here logs every call it is handed and answers `inspect` from
-// a file the test writes.
+// a file the test writes; writeRuntime's settle probe is answered ahead of the
+// log line, so the log holds only what the engine asked.
 //
 // Mutation: unpause in Attach, and the log shows it.
 func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
@@ -477,11 +478,8 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 	dir := t.TempDir()
 	calls, state := filepath.Join(dir, "calls"), filepath.Join(dir, "paused")
 	runtime := filepath.Join(dir, "runtime")
-	script := "#!/bin/sh\necho \"$@\" >> " + calls + "\n" +
-		"if [ \"$1\" = inspect ]; then read s < " + state + "; echo \"$s\"; fi\n"
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeRuntime(t, runtime, "echo \"$@\" >> "+calls+"\n"+
+		"if [ \"$1\" = inspect ]; then read s < "+state+"; echo \"$s\"; fi\n")
 	local := &Local{opts: LocalOptions{Placement: Container}, root: filepath.Join(dir, "boxes"), cli: containerCLI{path: runtime}}
 	layout, err := local.layout("box1")
 	if err != nil {
@@ -1642,11 +1640,7 @@ func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	// THE DUMP PATH IS IN THE SCRIPT, not the environment: the environment
 	// is what is under test, so nothing the case needs can travel in it.
 	runtime := filepath.Join(dir, "docker")
-	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/env > '%s'\n", dump)
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, runtime)
+	writeRuntime(t, runtime, fmt.Sprintf("/usr/bin/env > '%s'\n", dump))
 	// The rootless probe is one of the runtime calls, and it is the one every
 	// container box makes first.
 	runtimeIsRootless(t.Context(), containerCLI{path: runtime})
@@ -1690,11 +1684,7 @@ func TestTheRuntimeGetsWhatItsRuntimeEnvDeclares(t *testing.T) {
 	dir := t.TempDir()
 	dump := filepath.Join(dir, "env")
 	runtime := filepath.Join(dir, "docker")
-	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/env > '%s'\n", dump)
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, runtime)
+	writeRuntime(t, runtime, fmt.Sprintf("/usr/bin/env > '%s'\n", dump))
 	t.Setenv("PATH", dir)
 	t.Setenv("DOCKER_CONFIG", "/home/engine/.docker")
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/the-engines-own-agent.sock")

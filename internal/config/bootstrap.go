@@ -42,6 +42,11 @@ type Bootstrap struct {
 	// Store is the local database file this node materializes into.
 	Store Store `yaml:"store,omitempty" json:"store"`
 
+	// Git is how this node serves the company's repositories: its cache's
+	// directory and budget and its git processes. Read only on a node with
+	// the git role whose company sets code.native.
+	Git Git `yaml:"git,omitempty" json:"git,omitzero"`
+
 	// Stream is the durable event log — the source of truth every node
 	// writes through.
 	Stream Stream `yaml:"stream,omitempty" json:"stream"`
@@ -392,6 +397,7 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.normalize())
 	p.wrap(b.Node.validate(field("node")))
 	p.wrap(b.Store.validate(field("store")))
+	p.wrap(b.Git.validate(field("git"), b.Store))
 	p.wrap(b.Stream.validate(field("stream")))
 	p.wrap(b.Coordination.validate(field("coordination")))
 	p.wrap(b.API.validate(field("api"), b.ServesAPI(), b.Profile("").RunsIngress()))
@@ -597,7 +603,8 @@ func (b *Bootstrap) ValidateRoles() error {
 }
 
 // checkRolesAndBroker refuses the three pairings of roles and broker the
-// estate cannot run on.
+// estate cannot run on, and the one pairing of roles a git node cannot serve
+// on (git without the ingress whose listener it is served on).
 //
 // ONE PLACE FOR ALL THREE, because they are one decision rather than three:
 // every data node holds the whole estate as a MEMBER of the broker, and a node
@@ -609,6 +616,19 @@ func (b *Bootstrap) ValidateRoles() error {
 // ways out.
 func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 	data := roles.Has(placement.RoleData)
+	// GIT IS SERVED ON THE API LISTENER, which only a node with ingress
+	// mounts: a git node without it would build a cache and a host that no
+	// request can reach. Asked BEFORE the data rule below returns, so a
+	// data node is held to it too. NOT a "git needs data" rule: in this
+	// release git needs data only through ingress, and a node without data
+	// that names both is refused once, by the ingress rule below.
+	if roles.Has(placement.RoleGit) && !roles.Has(placement.RoleIngress) {
+		p.add(field("node.roles"), ErrConflict,
+			"%q needs %q: its routes are served on the API listener, which only a "+
+				"node with %q mounts. Add %q, or drop %q", placement.RoleGit,
+			placement.RoleIngress, placement.RoleIngress, placement.RoleIngress,
+			placement.RoleGit)
+	}
 	switch kind := b.BrokerKind(); {
 	case data && kind == placement.BrokerLeaf:
 		p.add(field("stream.leaf.urls"), ErrConflict,
@@ -1011,8 +1031,8 @@ type Node struct {
 	// and then DefaultNodeID, so nothing has to be set to run one engine.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0."`
 
-	// Roles is what this process is willing to do: data, ingress, seats,
-	// workers. Omit the key to run every role — the single-process
+	// Roles is what this process is willing to do: data, git, ingress,
+	// seats, workers. Omit the key to run every role — the single-process
 	// default, and the shape every company starts as.
 	//
 	// `data` is the one role that is a promise about the DISK rather than
@@ -1027,7 +1047,7 @@ type Node struct {
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, git, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. git needs ingress."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -1058,6 +1078,7 @@ type Node struct {
 // config layer and the seat host can never disagree about what a role is.
 var nodeRoleNames = []string{
 	string(placement.RoleData),
+	string(placement.RoleGit),
 	string(placement.RoleIngress),
 	string(placement.RoleSeats),
 	string(placement.RoleWorkers),
@@ -1550,9 +1571,9 @@ type Stream struct {
 	// this log asks for within it. The broker reserves each ceiling in full
 	// when it creates the stream, so the derived ceilings of every state
 	// log being created are scaled down together to fit what the logs that
-	// already exist leave of half of what the broker can grant them; a
-	// value set here is never scaled, and a boot that cannot reserve it
-	// fails naming this field.
+	// already exist leave of five eighths of what the broker can grant them
+	// (engine.StreamBudgetShare); a value set here is never scaled, and a
+	// boot that cannot reserve it fails naming this field.
 	//
 	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
 	// stream is CREATED with, and thereafter a DECLARATION the engine
@@ -1697,6 +1718,31 @@ type Stream struct {
 	// a company whose pages write heavily sets it, up to twice the
 	// artifacts log's bound.
 	ArtifactDataLogMaxBytes int64 `yaml:"artifact_data_log_max_bytes,omitempty" json:"artifact_data_log_max_bytes,omitempty" js:"min=1073741824;max=549755813888" desc:"Byte ceiling on the artifact datastore's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
+
+	// CodeLogMaxBytes is the byte ceiling on the code log — the ordered
+	// stream a repository's refs, packs and settings move on.
+	//
+	// UNSET DERIVES IT beside the mutation log's, at two thirds of that
+	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. The ratio is
+	// the byte rate: once seats push, a company's push records and the
+	// barriers its git clients' reads append take about half to seven
+	// tenths of what its tracker writes and its seats' reads take a day,
+	// and the ratio is taken past the middle of that range
+	// ([DerivedCodeLogNumerator] has the arithmetic and the reason), so a
+	// blocked trim reaches either ceiling in about the same time.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here unchanged: the value is the one the
+	// stream is CREATED with, a derived value is scaled with the others to
+	// fit the broker and a set one is not, and crossing it refuses the
+	// append rather than shedding history. The log runs on every node that
+	// runs a state log, whether or not the company hosts code, as every
+	// domain's log does — so its derived ask is paid by every company:
+	// below about 500 GiB free it comes out of the other logs' share (at
+	// 100 GiB the mutation log is created at 12.5 GiB rather than 16.2). A
+	// company that hosts no code and is short of broker room sets the floor
+	// here before the first boot, which the other logs then divide.
+	CodeLogMaxBytes int64 `yaml:"code_log_max_bytes,omitempty" json:"code_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the code log, the ordered stream a repository's refs, packs and settings move on; unset derives two thirds of the mutation log's ceiling, set or derived, 1 GiB..1 TiB. Reserved whether or not the company hosts code: one that hosts none and is short of broker room sets 1073741824 before the first boot."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -2166,6 +2212,8 @@ func (s *Stream) validate(path Path) error {
 		IamLogMaxBytesFloor, IamLogMaxBytesCeiling)
 	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
 		UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling)
+	bytesInRange(&p, path, "code_log_max_bytes", s.CodeLogMaxBytes,
+		CodeLogMaxBytesFloor, CodeLogMaxBytesCeiling)
 	bytesInRange(&p, path, "artifacts_log_max_bytes", s.ArtifactsLogMaxBytes,
 		ArtifactsLogMaxBytesFloor, ArtifactsLogMaxBytesCeiling)
 	bytesInRange(&p, path, "artifact_data_log_max_bytes", s.ArtifactDataLogMaxBytes,
@@ -2199,15 +2247,15 @@ func (s *Stream) validate(path Path) error {
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
 				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
-				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
-				"artifact_data_log_max_bytes %d = %d): the broker "+
+				"usage_log_max_bytes %d + code_log_max_bytes %d + "+
+				"artifacts_log_max_bytes %d + artifact_data_log_max_bytes %d = %d): the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
+			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes, s.CodeLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
@@ -2365,6 +2413,24 @@ func (c *Coordination) validate(path Path) error {
 func (c *Coordination) LeaseTTL() time.Duration {
 	return time.Duration(c.LeaseTTLSeconds * float64(time.Second))
 }
+
+// LinkLeaseFloor is the shortest seat lease TTL whose heartbeat covers one
+// message of an upload to the broker's object store crossing a LINK at the
+// floor every leg is promised — 11.25 seconds: three heartbeats
+// (seat.HeartbeatRatio) of one 128 KiB message (natsobj.MessageBytes) at
+// thirty seconds a mebibyte (objstore.MiBPace).
+//
+// What it bounds: a node whose uploads cross a link holds at least one
+// message out on the connection its lease renewals ride, so a renewal can
+// queue behind it. At this TTL or over, the renewal still lands with a whole
+// heartbeat of its lease to spare; under it, with less, and under half of it a
+// renewal behind one message at the floor lands after its lease and the node
+// loses its seats to its own upload (natsobj's linkWindow says why the window
+// cannot go below one message).
+//
+// A FIGURE HERE, not derived, because config imports none of the three
+// packages whose constants make it; a test in natsobj holds it to them.
+const LinkLeaseFloor = 11250 * time.Millisecond
 
 // ---- secrets --------------------------------------------------------- //
 

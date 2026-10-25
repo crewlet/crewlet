@@ -93,10 +93,10 @@ type servedQueue struct {
 // subject: a search answerer and the estate server are different claims on
 // the fleet, and a count of both together would let one leak while the other
 // was withdrawn twice.
-func (q *servedQueue) Serve(ctx context.Context, subject string,
+func (q *servedQueue) Serve(ctx context.Context, subject string, answers int,
 	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
 
-	stop, err := q.Queue.Serve(ctx, subject, fn)
+	stop, err := q.Queue.Serve(ctx, subject, answers, fn)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -172,10 +172,14 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve the node id: %v", err)
 	}
-	if got := served[estate.Subject(nodeID)]; got != 1 {
-		t.Fatalf("this node registered %d estate servers, want 1 — a data "+
-			"node registers it before the native start, so this case expects "+
-			"exactly one", got)
+	// BOTH OF ITS LANES: a node left answering proposals for repositories
+	// it commits for would decide pushes from a runtime being torn down.
+	for _, subject := range []string{estate.Subject(nodeID), estate.ProposalSubject(nodeID)} {
+		if got := served[subject]; got != 1 {
+			t.Fatalf("this node registered the estate server's %s %d time(s), "+
+				"want 1 — a data node registers both of its lanes before the "+
+				"native start, so this case expects exactly one each", subject, got)
+		}
 	}
 	// THE HISTORY ANSWERER TOO, which is armed before the native start on
 	// every node: a case that saw only the search answerer could pass with

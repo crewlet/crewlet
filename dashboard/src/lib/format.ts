@@ -607,6 +607,25 @@ export function conversationLabel(key: string): string {
 }
 
 /**
+ * A clause said as a sentence of its own: its first letter capitalised, and a
+ * full stop added where it ends without one.
+ *
+ * A HINT IS WRITTEN AS A CLAUSE — lower-case, unstopped: the engine's ("take
+ * the backup again"), because its JSON body and the CLI print it alone, and
+ * the route table's, which Not Found says. A screen that puts one before a
+ * sentence of its own ran the two together: "…or from this one once it is
+ * upgraded Whatever was written there…". A clause that already ends a
+ * sentence keeps its own mark rather than gaining a second, and one with
+ * nothing in it stays empty rather than becoming a lone full stop.
+ */
+export function sentence(clause: string): string {
+  const s = clause.trim();
+  if (!s) return "";
+  const stopped = /[.!?…]$/.test(s) ? s : `${s}.`;
+  return stopped.charAt(0).toUpperCase() + stopped.slice(1);
+}
+
+/**
  * "1 seat", "2 seats" — a count and its noun, agreeing.
  *
  * A helper rather than a ternary at every call site: the previous product

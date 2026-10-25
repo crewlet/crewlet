@@ -101,6 +101,33 @@ test("a caller with a longer path keeps the request past the ordinary deadline",
   vi.useRealTimers();
 });
 
+// A DEADLINE OF HOURS IS SAID IN HOURS: a backup waits twelve of them for a
+// first copy of a large company's files, and "720 minutes" is a number nobody
+// reads at a glance.
+test("a deadline of hours is named in hours", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    ),
+  );
+  const twelveHours = 12 * 60 * 60_000;
+  const settled = rest
+    .request("POST", "/backup", { timeoutMs: twelveHours })
+    .catch((err: unknown) => err);
+  await vi.advanceTimersByTimeAsync(twelveHours + 1);
+  const err = await settled;
+  expect((err as RestError).status).toBe(0);
+  expect((err as RestError).message).toContain("12 hours");
+  vi.useRealTimers();
+});
+
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
 //
 // The node gate takes up to fifty seconds to answer a gesture

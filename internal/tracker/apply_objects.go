@@ -250,14 +250,11 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			jsonOf(person.Favorites), person.PrioritiesSetBy,
 			store.EncodeTime(person.PrioritiesSetAt), c.packed)
 	case "tracker_files":
-		var file File
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := decodePayload(c.record.Mutation, &file); err != nil {
-			return 0, fmt.Errorf("tracker: decode the file at %s: %w", c.position, err)
-		}
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := fileMatches(c, key, file); err != nil {
-			return 0, err
+		// THE ONE READING OF A FILE RECORD, which a backup's reader of
+		// the log shares ([decodeFile]).
+		file, ferr := decodeFile(c.record.Mutation, key)
+		if ferr != nil {
+			return 0, fmt.Errorf("tracker: the file record at %s: %w", c.position, ferr)
 		}
 		var removedAt any
 		if file.RemovedAt != nil {

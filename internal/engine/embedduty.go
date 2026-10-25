@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
@@ -59,10 +60,15 @@ import (
 // minutes at the ≈ 545 000 sources a node searches inside its budget through
 // an index (BenchmarkIndexTraining, BenchmarkIVFTrainingShare,
 // [search.IVFMaxLists]). A training tick is longer than the interval and
-// within reach of the lease's TTL, so the tick RENEWS the lease on the
-// interval while it runs ([embedDuty.keepClaimed]) and is cut off the moment a
-// renewal does not confirm it: a step cut off publishes nothing, so the
-// singleton never has two writers.
+// within reach of the lease's TTL, so the tick RENEWS the lease while it runs
+// ([dutyRenewal.keep]) and is cut off the moment a renewal answers that another
+// node holds the duty, or once no renewal has confirmed it for as long as the
+// lease is sure to last; a renewal the store refuses, or holds on to while its
+// leader moves, costs it nothing, and a step cut off publishes nothing, so the
+// singleton never has two writers. Each renewal first asks whether a copy the
+// duty decides from has gone out of service since the tick began (ADR-0046):
+// if one has, the tick is cut off unrenewed, and gives the duty back once it
+// has returned ([embedDuty.declinedMidTick]).
 //
 // And every tick is bounded by [embedTickBudget], because a renewal is also
 // what would keep a WEDGED tick holding the duty for ever — a budget of
@@ -122,10 +128,11 @@ type embedDuty struct {
 	log *runningLog
 	db  *store.DB
 
-	// renewEvery is how often a running tick renews the duty's lease:
-	// [search.EmbedInterval], the cadence the lease is claimed on anyway,
-	// which leaves two renewals inside every TTL.
-	renewEvery time.Duration
+	// renewal is how a running tick keeps the duty's lease: renewed four
+	// times an [embedDutyTTL], so a renewal the store refuses or holds on to
+	// is followed by another inside the window the last confirmation bought
+	// ([keptDutyRenewals]).
+	renewal dutyRenewal
 
 	// budget is how long a tick may go without progress: [embedTickBudget],
 	// and a test's shorter one.
@@ -139,6 +146,16 @@ type embedDuty struct {
 	// built again the same keeps it. Touched only by the loop's own ticks.
 	refusals    *search.Refusals
 	refusalsFor embedConfiguration
+
+	// copies names the first of the domains given whose copy on this node is
+	// out of service ([Engine.copyOutOfService]) — nil judges no copy, and
+	// every one serves; declines is whether this node is declining the duty
+	// because a copy it decides from is ([embedDuty.decidesFrom]), and
+	// giveBack gives the duty back where this node holds it when it does
+	// ([Engine.workerGiveBack]) — nil holds no lease to give.
+	copies   func(ctx context.Context, domains ...string) (string, bool)
+	declines dutyDecline
+	giveBack func(context.Context) (bool, error)
 
 	stop context.CancelFunc
 	done chan struct{}
@@ -154,6 +171,9 @@ type tickReport struct {
 	// overran says the tick went its budget without progress and was cut
 	// off ([errTickOverran]).
 	overran bool
+	// declined names the domain whose copy, out of service on this node,
+	// made the tick decline the duty ([dutyDecline]); empty where it did not.
+	declined string
 }
 
 // startEmbedding arms the duty, or does nothing on a node that cannot run it.
@@ -192,16 +212,18 @@ func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
 		return nil
 	}
 	return &embedDuty{
-		engine:     e,
-		publisher:  running.publisher,
-		corpora:    corpora,
-		claim:      e.workerDuty(embedDutyName, embedDutyTTL),
-		metrics:    e.metrics,
-		log:        running,
-		db:         e.backends.Store,
-		renewEvery: search.EmbedInterval,
-		budget:     embedTickBudget,
-		done:       make(chan struct{}),
+		engine:    e,
+		publisher: running.publisher,
+		corpora:   corpora,
+		claim:     e.workerDuty(embedDutyName, embedDutyTTL),
+		copies:    e.copyOutOfService,
+		giveBack:  e.workerGiveBack(embedDutyName),
+		metrics:   e.metrics,
+		log:       running,
+		db:        e.backends.Store,
+		renewal:   newDutyRenewal(embedDutyName, embedDutyTTL),
+		budget:    embedTickBudget,
+		done:      make(chan struct{}),
 	}
 }
 
@@ -315,11 +337,51 @@ func (d *embedDuty) run(ctx context.Context) {
 	}
 }
 
+// decidesFrom is every domain whose rows the duty decides from: the vectors it
+// publishes and withdraws, and the domain each corpus's sources are read from
+// ([sourceDomains]) — what a tick's stale and withdrawn selections join. A
+// corpus whose source maps to no domain is named by its source, which no
+// verdict knows and a test refuses.
+func (d *embedDuty) decidesFrom() []string {
+	out := []string{search.Domain{}.Name()}
+	for _, c := range d.corpora {
+		domain, known := sourceDomains[c.Source()]
+		if !known {
+			domain = string(c.Source())
+		}
+		if !slices.Contains(out, domain) {
+			out = append(out, domain)
+		}
+	}
+	return out
+}
+
+// declinedMidTick is whether this node now declines the duty, asked before
+// every renewal of a running tick ([dutyRenewal.declining]): a training tick
+// runs for minutes, and one renewed only on whether the lease was still held
+// would carry on deciding from a copy that went out of service after it began.
+func (d *embedDuty) declinedMidTick(ctx context.Context) bool {
+	_, out := d.declines.check(ctx, embedDecline, d.copies, d.decidesFrom())
+	return out
+}
+
 // tick embeds one tick's worth of sources, if this node holds the duty, and
 // reports what it did.
+//
+// IT DECLINES FIRST, before it claims, while this node's copy of a domain it
+// decides from is out of service ([dutyDecline]): the vectors it would publish
+// and withdraw are every node's, decided from rows this node has stopped
+// serving.
 func (d *embedDuty) tick(ctx context.Context) tickReport {
 	var report tickReport
+	if domain, out := d.declines.check(ctx, embedDecline, d.copies, d.decidesFrom()); out {
+		d.declines.giveBack(ctx, embedDecline, d.giveBack)
+		report.declined = domain
+		return report
+	}
+	work := ctx
 	if d.claim != nil {
+		asked := d.renewal.clock.Now() // BEFORE the claim: what it confirms runs from here
 		mine, err := d.claim(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "embed_duty_unclaimed", "err", err)
@@ -328,6 +390,23 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 		if !mine {
 			return report
 		}
+		// FROM HERE THE TICK KEEPS THE DUTY AS IT RUNS, so a training may
+		// outlive any number of leases ([dutyRenewal.keep]), and is cut off
+		// the moment a copy it decides from goes out of service under it
+		// ([embedDuty.declinedMidTick]). Nothing else the tick ends with
+		// depends on Stop's answer: what it published the broker
+		// arbitrated, and the next tick claims afresh.
+		var kept *keptDuty
+		work, kept = d.renewal.declining(d.declinedMidTick).keep(ctx, d.claim, asked)
+		defer func() {
+			// A TICK CUT OFF BECAUSE A COPY WENT OUT OF SERVICE gives the
+			// duty back once it has RETURNED, never from the renewal that
+			// cut it off: a publish already on its way would otherwise
+			// land after another node had taken the duty.
+			if _, err := kept.Stop(); errors.Is(err, errDutyDeclined) {
+				d.declines.giveBack(ctx, embedDecline, d.giveBack)
+			}
+		}()
 	}
 	provider, model, configured := d.engine.embedModel()
 	if !configured {
@@ -339,7 +418,7 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 	if configuration := configurationOf(provider); d.refusals == nil || d.refusalsFor != configuration {
 		d.refusals, d.refusalsFor = search.NewRefusals(), configuration
 	}
-	tick, bound, release := boundTick(ctx, d.budget)
+	tick, bound, release := boundTick(work, d.budget)
 	defer release()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: d.publisher,
@@ -369,9 +448,6 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 		report.unwired = true
 		return report
 	}
-	if d.claim != nil {
-		defer d.keepClaimed(tick, release)()
-	}
 	published, err := duty.Tick(tick)
 	report.published = published
 	if err != nil {
@@ -393,42 +469,6 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 			"model", model, "width", provider.Width())
 	}
 	return report
-}
-
-// keepClaimed renews the duty's lease on the interval while a tick runs, and
-// cancels the tick the moment a renewal does not confirm it — an error
-// included, because a node that cannot say it holds the duty must not publish
-// as its holder. The returned function stops the renewals and waits for them,
-// so their goroutine never outlives the tick.
-func (d *embedDuty) keepClaimed(ctx context.Context, cancel context.CancelFunc) func() {
-	done := make(chan struct{})
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		ticker := time.NewTicker(d.renewEvery)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-			mine, err := d.claim(ctx)
-			if err != nil || !mine {
-				log.WarnContext(ctx, "embed_duty_lost_mid_tick", "err", err,
-					"held", mine, "detail", "the tick is cut off and publishes "+
-						"nothing more; the node that holds the duty now carries on")
-				cancel()
-				return
-			}
-		}
-	}()
-	return func() {
-		close(done)
-		<-stopped
-	}
 }
 
 // standing is the vector log as the index step must know it

@@ -4,11 +4,12 @@
  * # One gesture, every identity-claiming log, and each log's own answer
  *
  * The engine judges the gesture once and then writes its record to every log
- * the trim counts nodes on — the tracker's and the pages log — and each log
- * answers on its own, with the three-valued outcome every write has (D134) or
- * the refusal that stopped it. So this dialog renders ONE ROW PER LOG, and the
- * summary above them is driven by `complete` — whether every log holds the
- * record — and by what the unfinished logs say to do:
+ * the trim counts nodes on — every identity-claiming log, the code log among
+ * them, each named by its stream in the answer — and each log answers on its
+ * own, with the three-valued outcome every write has (D134) or the refusal
+ * that stopped it. So this dialog renders ONE ROW PER LOG, and the summary
+ * above them is driven by `complete` — whether every log holds the record —
+ * and by what the unfinished logs say to do:
  *
  *   - `applied` — durable at the position AND in this node's own rows.
  *   - `pending` — durable at the position, NOT applied here yet. It is not a

@@ -161,15 +161,9 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 
 	// THE SAME BLOCK, AS THE DUTY PUBLISHES IT ONCE THE LOG HAS AGED: its
 	// age term keeps nothing the log holds.
-	floors, err := r.fleet.Floors(ctx)
-	if err != nil {
-		t.Fatalf("read the published floors: %v", err)
-	}
-	var aged coord.TrimFloor
-	for _, f := range floors {
-		if f.Domain == name {
-			aged = f
-		}
+	aged, published, err := r.fleet.Floor(ctx, name)
+	if err != nil || !published {
+		t.Fatalf("read the %s log's published floor: (published %v) %v", name, published, err)
 	}
 	for i := range aged.Terms {
 		if aged.Terms[i].Name == string(statelog.TermAgeFloor) {
@@ -231,8 +225,8 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 // A RECORD FROM A NEWER BUILD, HELD PAST THE DEFERRAL GRACE, FIRES ONE
 // `deferred_old` STANDING ON EVERY LOG HOLDING ONE, each with its own
 // measurement — from a real deferral on a real applier, dated by the real
-// position heartbeat — and each log's entry says whether this node's copy of
-// the estate goes out of service for it.
+// position heartbeat — and each log's entry says that this node's copy of
+// THAT LOG goes out of service at the grace.
 //
 // The alarm could not fire before: the report stood the grace in for the age
 // whenever a record was held, and the rule fires past the grace. The records
@@ -240,11 +234,12 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 // fleet's keyring, at a record version this build does not read — so the
 // appliers retain them exactly as a rolling upgrade makes them. And the node
 // holds one on TWO logs at once, which is what a build that moved two record
-// versions leaves behind: one judges this node's copy of the estate and one
-// judges none, so the grace takes the copy out of service for the first and
-// takes nothing out for the second — the seats stay where they are for both.
-// An alarm carrying only the node's oldest record said one of those about both;
-// each log the alarm stands on now carries its own.
+// versions leaves behind. Every log's copy is judged on its own (ADR-0046), the
+// identity log's included, so the grace takes each log's copy out of service
+// and nothing else — the tracker's operations go to a peer while every other
+// log's copy keeps serving here, and the seats stay where they are for both.
+// An alarm carrying only the node's oldest record named one log for both;
+// each log the alarm stands on now carries its own position and version.
 func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -254,7 +249,6 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		domain  string
 		version int
 		record  func(generation uint32) (statelog.Subject, []byte, error)
-		says    string
 	}{
 		{
 			domain: tracker.Domain{}.Name(), version: tracker.RecordVersion,
@@ -272,7 +266,6 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
 			},
-			says: "at which this node stops serving its copy of the estate",
 		},
 		{
 			domain: iamdomain.Domain{}.Name(), version: iamdomain.RecordVersion,
@@ -291,8 +284,6 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
 			},
-			says: "this log does not judge this node's copy of the estate, " +
-				"so nothing is taken out of service",
 		},
 	} {
 		running := r.state.Domain(tc.domain)
@@ -358,11 +349,12 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		version int
 		says    string
 	}{
+		// THE SAME CONSEQUENCE ON EACH LOG, the identity log's included: the
+		// grace takes that log's copy out of service and no other.
 		{tracker.Domain{}.Name(), tracker.RecordVersion,
-			"at which this node stops serving its copy of the estate"},
+			"at which this node's copy of this log goes out of service"},
 		{iamdomain.Domain{}.Name(), iamdomain.RecordVersion,
-			"this log does not judge this node's copy of the estate, " +
-				"so nothing is taken out of service"},
+			"at which this node's copy of this log goes out of service"},
 	} {
 		fired, found := byLog[tc.domain]
 		if !found {

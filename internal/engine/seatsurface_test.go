@@ -135,9 +135,10 @@ units:
       - name: Dev
         handle: dev
         llm: zulu
+        code:
+          access: review
         integrations:
           github:
-            tier: review
             app_id: 42
             app_slug: acme-dev
             installation_id: 7

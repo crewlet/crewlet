@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -366,6 +367,20 @@ type Engine struct {
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
+
+	// gitHookArgv is Options.GitHook, kept because an apply can be what
+	// builds the code host ([Engine.gitHook]).
+	gitHookArgv []string
+
+	// cacheDisk is Options.cacheDisk, kept for the same reason: nil — every
+	// engine New builds outside this package's tests — reads the disk the
+	// node is on ([Engine.cacheVolume]).
+	cacheDisk *cacheVolume
+
+	// gitMemory is Options.gitMemory, kept for the same reason: zero — every
+	// engine New builds outside this package's tests — has the git pool read
+	// the node's own memory ([Engine.buildCodeHost]).
+	gitMemory int64
 
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
@@ -749,6 +764,18 @@ type Engine struct {
 	// chart per tick instead.
 	usage *usageLoop
 
+	// codeRetention is the code-retention duty's loop on this node: the
+	// fleet singleton that purges the repositories deleted past their
+	// retention. On the ENGINE for the embedding duty's reason, and armed
+	// only where the runtime hosts code and the node publishes; it reads
+	// the current epoch's retention per pass.
+	codeRetention *codeRetentionDuty
+
+	// codeRepos runs this node's reconciles of code.repos beside the
+	// applies that ask for them ([codeReconciler]): never nil, and idle on a
+	// node that hosts no code, which never asks.
+	codeRepos *codeReconciler
+
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
 
@@ -903,7 +930,8 @@ type Options struct {
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a seat's tools to a coding agent. Nil builds one from
-	// the environment; see [mcpbridge.Build].
+	// the environment: [mcpbridge.BaseURLVar] as [ReadBoxURLs] reads it,
+	// then [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
 	// Backends may be supplied by a caller that already opened them and
@@ -947,10 +975,20 @@ type Options struct {
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
 
+	// GitHook is the argv the code cache's proc-receive hook execs on a node
+	// that serves git. Nil — production — is THIS binary as
+	// host.HookCommand names it, `crewlet code hook proc-receive`, its path
+	// resolved through os.Executable and its symbolic links. A test binary is
+	// not crewlet, so a suite that pushes for real names one
+	// (codetest.HookCommand).
+	GitHook []string
+
 	// Environment is what a company's `${VAR}` references fall back to
 	// behind the secret store, and what the per-run endpoints' settings are
-	// read from ([sandbox.BuildOtelReceiver], [mcpbridge.Build]). Nil is
-	// the process environment, which is what `crewlet run` leaves it.
+	// read from ([ReadBoxURLs], whose refusals refuse the boot whether or
+	// not a receiver or bridge is supplied above, and
+	// [sandbox.BuildOtelReceiver]). Nil is the process environment, which
+	// is what `crewlet run` leaves it.
 	//
 	// A SOURCE RATHER THAN THE PROCESS'S OWN for the reason the org model
 	// takes a lookup ([org.HumanContact.ResolvedIdentities]): the
@@ -988,6 +1026,23 @@ type Options struct {
 	// host's decision, and the knob exists only so a case can put the next
 	// tick out of reach and see what claims a seat without one.
 	sweepEvery time.Duration
+
+	// cacheDisk is what sizing the code cache reads of this node's disk in
+	// place of the disk itself ([Engine.cacheVolume]), nil for the disk.
+	// UNEXPORTED, so nothing outside this package's tests can set it
+	// (export_test.go): a running node has only the disk it is on, and the
+	// knob exists only so a case whose subject is the budget a disk derives
+	// is not decided by the free space of whatever machine runs it.
+	cacheDisk *cacheVolume
+
+	// gitMemory is the memory, in bytes, the git pool sizes its lanes by and
+	// the code cache budgets its background work from in place of the
+	// node's own ([gitproc.Options.Memory]), zero for the node's own.
+	// UNEXPORTED for cacheDisk's reason (export_test.go): a running node has
+	// only the memory it is given, and the knob exists only so a case whose
+	// subject is what a node's memory leaves its git cache is not decided by
+	// the memory of whatever machine runs it.
+	gitMemory int64
 }
 
 // New assembles an engine.
@@ -1092,25 +1147,35 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if environ == nil {
 		environ = config.EnvSource{}
 	}
+	// EVERY URL A BOX DIALS BACK TO THE ENGINE, read once and refused
+	// together ([ReadBoxURLs] — the reading `crewlet llm doctor` reports
+	// too). One that is set and unusable is a deployment that asked for the
+	// feature and would get none, so it is refused rather than dropped: a
+	// receiver URL minted every run an endpoint its exporter could not use,
+	// and a bridge URL mounted a bridge whose every minted endpoint failed,
+	// so every agent-mode run's tool calls failed and the run was rescued as
+	// incomplete — each silently, inside a box the engine never hears from
+	// again.
+	boxURLs := ReadBoxURLs(getenv(environ))
+	if err = boxURLs.Refusal(); err != nil {
+		return nil, fmt.Errorf("engine: a URL a box dials back to the engine: %w", err)
+	}
 	otel := opts.OtelReceiver
 	if otel == nil {
 		otel, err = sandbox.BuildOtelReceiver(getenv(environ),
 			tokenMaterial(opts.Bootstrap))
 		if err != nil {
-			// A receiver URL that is set and unusable is a deployment
-			// that asked for in-box telemetry and would get none, so it
-			// is refused rather than dropped: the alternative is a
-			// config that looks complete and exports nothing.
 			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
 	}
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
 	// receiver above is built here: a fleet mints on one node and may
 	// verify on another, so every node derives its key from the fleet's
-	// keyring — which the keyring check above has already required.
+	// keyring — which the keyring check above has already required. Its
+	// base is the bridge URL as [ReadBoxURLs] read it above.
 	bridge := opts.Bridge
 	if bridge == nil {
-		if bridge, err = mcpbridge.Build(getenv(environ), tokenMaterial(opts.Bootstrap)); err != nil {
+		if bridge, err = mcpbridge.Build(boxURLs.Bridge.URL, tokenMaterial(opts.Bootstrap)); err != nil {
 			return nil, fmt.Errorf("engine: tool bridge: %w", err)
 		}
 	}
@@ -1152,7 +1217,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ASSIGNED, not declared through a temporary: `opened, err :=`
 		// shadows the err the node-id read above already declared, which is
 		// the one shape govet cannot tell from the bug that check is on for.
-		backends, err = OpenBackends(ctx, opts.Bootstrap, opts.Company)
+		backends, err = OpenBackends(ctx, opts.Bootstrap, opts.Company, opts.Metrics)
 		if err != nil {
 			return nil, err
 		}
@@ -1196,6 +1261,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
+		gitHookArgv:         slices.Clone(opts.GitHook),
+		cacheDisk:           opts.cacheDisk,
+		gitMemory:           opts.gitMemory,
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
@@ -1246,6 +1314,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// A runner per caller would give the loop, the API and a disconnect a
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
+	// BUILT BEFORE THE FIRST APPLY THAT ASKS IT, which is the boot's; it
+	// starts nothing until one does.
+	e.codeRepos = newCodeReconciler(e.decideCodeRepos)
 	// AFTER the engine exists, because what the bridge's supervision does
 	// with a changed catalogue is refile this engine's registries; BEFORE
 	// equip, which starts the company's shared servers on it.
@@ -1523,10 +1594,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
 			return nil, err
 		}
-		// NOT THE PROJECTS AND THE CONTAINERS HERE. They follow the
-		// published company through [Engine.followCompany], which the
-		// end of this constructor runs, stamped with the activation the
-		// company was applied from.
+		// NOT THE PROJECTS, THE CONTAINERS OR THE DECLARED REPOSITORIES
+		// HERE. They follow the published company through
+		// [Engine.followCompany], which the end of this constructor runs,
+		// stamped with the activation the company was applied from.
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
 		// a seat with no tools at all — a company that boots cleanly and
@@ -1608,7 +1679,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// node served the request — so behind a load balancer a refresh
 		// tells a different story each time.
 		Status: e.nodeStatus,
-		Turn:   e.Dispatch,
+		// WHICH ROLES THE COMPANY NEEDS, off the current epoch: git only
+		// where it hosts code, so a fleet that declared its roles without
+		// git is never told nobody serves it until it would matter.
+		RoleNeeded: e.roleNeeded,
+		Turn:       e.Dispatch,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
@@ -1709,7 +1784,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// fleet is in a maintenance mode. What would publish through it is
 	// withheld where it is decided rather than here: the host claims no
 	// seat unless the mode publishes ([Engine.seatsAdmitted]), and no
-	// surface is handed this node's writers ([Engine.writeSide]).
+	// surface is handed a writer — this node's own, or the router's to a
+	// data node ([Engine.writers]).
 	//
 	// ONE GATE RATHER THAN A CONDITION PER LOOP. Each of these is started
 	// by its own call and a per-call check is a list somebody maintains —
@@ -2373,10 +2449,65 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the pause watch, for the same reason: a resume landing on a
 	// client that is closing would lift a hold on nothing.
 	e.stopSeatPauses()
-	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
-	// says: the key means "this process may be publishing", so withdrawing
-	// it while a seat was still finishing a turn would tell a coordinator
-	// the opposite of the truth.
+	// AND THE CODE-RETENTION DUTY, whose every pass publishes purge steps
+	// and re-declarations on the code log: a pass still running past the
+	// withdrawal below would append to a log a capacity coordinator may
+	// already be sealing. Before [Engine.releaseDuties] too, which follows
+	// the withdrawal: its loop claims the duty afresh every turn, so one
+	// still running past the release takes it straight back.
+	e.stopCodeRetention()
+	// AND THE RECONCILE OF code.repos, which runs beside the applies that
+	// ask for it and publishes a record for every repository that changed
+	// ([codeReconciler]): the one in flight is ended, and the next boot
+	// reconciles.
+	e.stopCodeRepos()
+	// AND THE OBJECT STORE'S COLLECTOR, whose every pass pins the estate
+	// with a barrier on the log of each domain a declared table names
+	// ([Engine.startNativeCollector]), for the code-retention duty's two
+	// reasons: an append once the admission is gone, and a loop that claims
+	// its duty afresh every turn and would take it straight back past the
+	// release. AND BEFORE the native runtime below, whose tracker reader it
+	// reads the references through.
+	e.stopObjectCollector()
+	// AND THE TRASH REAPER, for the collector's two reasons: every pass
+	// purges through the domains' own publishers, and its loop claims its
+	// duty afresh every turn. AND BEFORE the native runtime below, whose
+	// knowledge store its passes purge through.
+	e.stopTrashReaper()
+	// AND WHAT THIS NODE PUBLISHES FOR ITS PEERS: the committer, which
+	// appends a record for every batch of pushes a receiving node proposes
+	// to it, and the estate subject, whose every write and linearizable read
+	// a peer routes here runs through this node's publishers.
+	//
+	// THE COMMITTER BEFORE THE ESTATE SUBJECT IT IS ASKED ON. The
+	// withdrawal of the subject cancels the answers in flight before it
+	// waits for them, so a proposal still queued would be answered with its
+	// own cancellation — a final failure its asker reports for a push its
+	// batch may yet land. Stopped first, the committer answers every queued
+	// proposal "not serving", which its asker takes to the repository's
+	// runner-up, and finishes the batch in flight with its real outcome
+	// ([Engine.stopCommitter]).
+	//
+	// AND THE CODE HOST BEFORE BOTH: every push in flight proposes through
+	// the estate to a committer, and every sync's linearizable read appends a
+	// barrier to the code log, so it is a publisher like the rest — and the
+	// requests it serves are a client's, which the API's listener, closed
+	// before this teardown began, has already finished or cut
+	// ([Engine.stopCodeHost]).
+	e.stopCodeHost(ctx)
+	e.stopCommitter(ctx)
+	e.stopServingEstate(ctx)
+	// AFTER THE DRAIN AND AFTER EVERY LOOP THAT PUBLISHES, which is what the
+	// admission says: the key means "this process may be publishing", and
+	// it is the one thing that keeps a capacity coordinator from taking its
+	// exclusion while this node runs (statelog.AdmissionBlocks). So every
+	// loop above that appends to a log — the embedding duty, the usage
+	// publisher, the trim, the identity duties, the code-retention duty, the
+	// reconcile of code.repos, the collector's barriers, the trash reaper's
+	// purges, the code host's syncs and proposals, the committer and the
+	// writes peers route here — is stopped before it is withdrawn, and
+	// withdrawing it while a seat was still finishing a turn, or a duty was
+	// still publishing, would tell a coordinator the opposite of the truth.
 	if err := e.withdraw(ctx); err != nil {
 		log.WarnContext(ctx, "admission_not_withdrawn", "err", err,
 			"detail", "a capacity operation will see this node as a possible "+
@@ -2393,15 +2524,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	// the whole one. And after the memory fill and the learning passes
 	// above, which write the memory it carries.
 	e.stopMemorySync()
-	// THE OBJECT STORE'S COLLECTOR with the other duty loops: the loop
-	// claims its duty afresh every turn, so one still running past the
-	// release below takes it straight back and the node exits holding it.
-	// AND BEFORE the native runtime below, whose tracker reader it reads
-	// the references through.
-	e.stopObjectCollector()
-	// THE TRASH REAPER for the collector's reason, and before the native
-	// runtime below, whose knowledge store its passes purge through.
-	e.stopTrashReaper()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
 	// tick of this node runs once a peer can take the duty, and no turn of
 	// this node can claim one again once it is given back.
@@ -2409,7 +2531,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	// BEFORE the native backends, whose pages its walk reads, and before
 	// backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
-	e.stopServingEstate(ctx)
 	e.stopServingFleetBroker(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the apply loops and the indexer both write, and an apply landing

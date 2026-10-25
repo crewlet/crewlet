@@ -408,6 +408,39 @@ func TestTheCredentialIsTheEnvironmentsAndNeverTheConfigs(t *testing.T) {
 	}
 }
 
+// AN EXPORTED TOKEN AND -url NEED NO CONFIG. The Tier A file is read for the
+// node's ADDRESS alone, and the token is the invocation's environment and
+// nothing else, so an operator who named the node and exported a token has
+// supplied both and can act on a node whose config this machine does not hold
+// — a laptop, a CI job. One who exported nothing reaches the node all the
+// same, sending no credential: a node that requires one answers the 401 that
+// names the variable, and a development principal on a loopback bind needs
+// none.
+//
+// Mutation: read Tier A whenever the token is absent, or before -url is
+// consulted, and the command fails on a config file nothing needed.
+func TestAnExportedTokenAndAURLNeedNoConfig(t *testing.T) {
+	t.Parallel()
+	node := newFakeNode(t)
+	missing := filepath.Join(t.TempDir(), "nowhere.yaml")
+
+	if _, _, err := cliIn(t, tokenEnviron("exported"),
+		"budgets", "show", "-config", missing, "-url", node.server.URL); err != nil {
+		t.Fatalf("budgets show with -url and an exported token = %v, want no config read", err)
+	}
+	if got := node.tokens[len(node.tokens)-1]; got != "Bearer exported" {
+		t.Errorf("Authorization = %q, want the exported token", got)
+	}
+
+	if _, _, err := cliIn(t, noEnviron,
+		"budgets", "show", "-config", missing, "-url", node.server.URL); err != nil {
+		t.Fatalf("budgets show with -url and no token = %v, want no config read", err)
+	}
+	if got := node.tokens[len(node.tokens)-1]; got != "" {
+		t.Errorf("Authorization = %q with nothing exported, want no credential sent", got)
+	}
+}
+
 // A NODE THAT IS NOT THERE says what to do about it. "connection refused"
 // alone sends an operator to the network; the actual answer is usually that
 // the engine is not running, because that is where this state lives.

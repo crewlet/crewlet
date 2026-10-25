@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,6 +190,197 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	}
 }
 
+// ANY SERVER OF THE CATALOGUE ANSWERS ANY REQUEST: a client's requests spread
+// over two servers built from the same options — two ingress nodes behind a
+// load balancer with no affinity — are each answered, and no answer names a
+// session for the client to come back to. The transport kept sessions once,
+// each held by the one handler that opened it: of two nodes, every request
+// reaching the other was refused 404 "session not found", which the MCP client
+// this repository ships reads as the end of its connection.
+func TestAnyServerOfTheCatalogueAnswersAnyRequest(t *testing.T) {
+	t.Parallel()
+	opts := operator.Options{Halves: fixed(operator.Halves{
+		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter},
+	})}
+	nodes := []*operator.Server{newSurface(t, opts), newSurface(t, opts)}
+	ops := machine("token:ops-bot", iam.Apps...)
+	var (
+		mu       sync.Mutex
+		served   [2]int
+		sessions []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		node := (served[0] + served[1]) % len(nodes)
+		served[node]++
+		mu.Unlock()
+		nodes[node].MCPHandler().ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), ops)))
+		if id := w.Header().Get("Mcp-Session-Id"); id != "" {
+			mu.Lock()
+			sessions = append(sessions, id)
+			mu.Unlock()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	sess := connectOperator(t, srv.URL)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	for i := range 4 {
+		if _, err := sess.ListTools(ctx, nil); err != nil {
+			t.Fatalf("listing %d, on whichever node it reached: %v", i, err)
+		}
+		// THE TOOL'S OWN ANSWER, whatever it says — the stub tracker holds
+		// no item, so this one is a refusal — is what being served looks
+		// like; a request no node served is an error on the transport.
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+			Name: tracker.GetWorkItemTool, Arguments: map[string]any{"item": "ENG-1"},
+		})
+		if err != nil {
+			t.Fatalf("call %d, on whichever node it reached: %v", i, err)
+		}
+		if textOf(res) == "" {
+			t.Errorf("call %d was answered nothing", i)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if served[0] == 0 || served[1] == 0 {
+		t.Errorf("the requests reached the nodes %v times; the case needs both", served)
+	}
+	if len(sessions) > 0 {
+		t.Errorf("the transport handed the client sessions %v; a session is held by "+
+			"one node, and every other node refuses it", sessions)
+	}
+}
+
+// A LISTENER IS TOLD ITS TOOLS CHANGED, ON WHATEVER CATALOGUE ITS STREAM IS.
+// With no session kept, the one way to reach a connected client between its
+// requests is the stream a client of the 2026-07-28 protocol holds open —
+// `subscriptions/listen`, on the catalogue its listen request was answered
+// from, which no later call reads. The server keeps every such stream in the
+// node's one registry, so an announcement after what the node serves has
+// moved reaches the stream, and the client's next listing is the catalogue a
+// call reads now. Nothing announced it once, and a client kept offering the
+// tools it connected to until it was reconnected.
+//
+// And the registry counts the stream while it is open and forgets it once it
+// ends, so a node holds nothing for a client that has gone.
+func TestAListenerIsToldWhicheverCatalogueItIsOn(t *testing.T) {
+	t.Parallel()
+	listeners := operator.NewListeners()
+	work := operator.Halves{Work: builtin.WorkDeps{Reader: stubWorkReader{}}}
+	withPages := work
+	withPages.Pages = builtin.PageDeps{Reader: stubPageReader{}}
+	var current atomic.Pointer[operator.Halves]
+	current.Store(&work)
+	s := newSurface(t, operator.Options{
+		Halves:    func() (operator.Halves, bool) { return *current.Load(), true },
+		Listeners: listeners,
+	})
+	ops := machine("token:ops-bot", iam.Apps...)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.MCPHandler().ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), ops)))
+	}))
+	t.Cleanup(srv.Close)
+	if n := listeners.Listening(); n != 0 {
+		t.Fatalf("the premise: a registry no client has reached holds %d streams", n)
+	}
+	sess, changed := listenOperator(t, srv.URL)
+	if n := listeners.Listening(); n != 1 {
+		t.Errorf("a registry holding one listener's stream counts %d", n)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("before the halves moved: %v", err)
+	}
+	if hasTool(listed, builtin.GetPageTool) {
+		t.Fatalf("a catalogue with no knowledge base lists %s", builtin.GetPageTool)
+	}
+
+	current.Store(&withPages)
+	listeners.Announce(t.Context())
+	select {
+	case <-changed:
+	case <-ctx.Done():
+		t.Fatal("the listener was never told the tools changed")
+	}
+	if listed, err = sess.ListTools(ctx, nil); err != nil {
+		t.Fatalf("the listing after the announcement: %v", err)
+	}
+	if !hasTool(listed, builtin.GetPageTool) {
+		t.Errorf("after the announcement the listener was listed the catalogue it "+
+			"connected to, without %s", builtin.GetPageTool)
+	}
+
+	_ = sess.Close()
+	for listeners.Listening() != 0 {
+		if ctx.Err() != nil {
+			t.Fatal("the registry still counts the stream of a listener that left")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// listenOperator connects an MCP client to an operator transport served at
+// base as the client this repository ships does when it is handed a tool-list
+// handler — at the 2026-07-28 protocol, opening a `subscriptions/listen` stream
+// at connect — and answers the session and a channel receiving once per
+// notification that the tools changed. It returns once the server has
+// acknowledged the stream and told it the once a stream is told as it opens
+// ([operator.Listeners]), so nothing a case does next races the subscription
+// and the channel starts quiet.
+func listenOperator(t *testing.T, base string) (*mcp.ClientSession, <-chan struct{}) {
+	t.Helper()
+	changed := make(chan struct{}, 16)
+	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"},
+		&mcp.ClientOptions{
+			ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+				changed <- struct{}{}
+			},
+		})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: base + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
+	}, &mcp.ClientSessionOptions{ProtocolVersion: "2026-07-28"})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	select {
+	case <-changed:
+	case <-ctx.Done():
+		t.Fatal("the listener's stream was never told the tools changed as it opened")
+	}
+	return sess, changed
+}
+
+// hasTool reports whether a listing names a tool.
+func hasTool(listed *mcp.ListToolsResult, name string) bool {
+	return slices.ContainsFunc(listed.Tools, func(tool *mcp.Tool) bool {
+		return tool.Name == name
+	})
+}
+
+// connectOperator connects an MCP client to an operator transport served at
+// base, the way an operator's assistant does.
+func connectOperator(t *testing.T, base string) *mcp.ClientSession {
+	t.Helper()
+	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: base + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	return sess
+}
+
 // dialOperator connects an MCP client to the surface as one principal.
 //
 // THE GUARD IS STOOD IN FOR by stamping the principal on the context, which is
@@ -201,17 +393,7 @@ func dialOperator(t *testing.T, s *operator.Server, p iam.Principal) *mcp.Client
 		inner.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), p)))
 	}))
 	t.Cleanup(srv.Close)
-	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: srv.URL + operator.MCPPath, HTTPClient: httpxtest.Pool(t),
-	}, nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = sess.Close() })
-	return sess
+	return connectOperator(t, srv.URL)
 }
 
 func textOf(res *mcp.CallToolResult) string {

@@ -569,7 +569,7 @@ func (e *Engine) NodeGate() *NodeGate {
 // to do. Two halves, asked in this order:
 //
 //   - THIS NODE'S OWN LOGS, on a data node: every domain whose health gates
-//     admission ([statelog.Domain.ReadinessInput]) established STRICTLY,
+//     admission ([statelog.Domain.GatesSeatAdmission]) established STRICTLY,
 //     because this is admission rather than a read — a node merely inside the
 //     trim floor still serves rows that are behind, and a seat attaching to
 //     one acts on them. The core's logs and not the native half's, because the
@@ -580,12 +580,14 @@ func (e *Engine) NodeGate() *NodeGate {
 //     estate's router ([estate.Router.Serves]): this node's own where its copy
 //     serves, and otherwise the first data node that answers, which admits
 //     only once its own copy is established — the same gate, one hop away. A
-//     node whose own copy is WRONG serves nothing ([localEstate.For]), so it
-//     is answered on a sound data node's word, like a node holding no data;
-//     both halves the company runs natively must be served there, since a
-//     seat's tools reach both. And the router's view must have listed the
-//     fleet at least once: a node that must ask a data node is refused by the
-//     router itself when its view cannot name one.
+//     node whose copy of a domain that gates seats is WRONG serves no seat
+//     copy ([estate.SeatCopy], [localEstate.For]), so it is answered on a
+//     sound data node's word, like a node holding no data, while a wrong copy
+//     of any other domain withholds nothing (ADR-0046); both halves the
+//     company runs natively must be served there, since a seat's tools reach
+//     both. And the router's view must have listed the fleet at least once: a
+//     node that must ask a data node is refused by the router itself when its
+//     view cannot name one.
 //
 // A node running no native half — no company yet, or one on Jira and
 // Confluence — has nothing for the second half to ask, and an engine with
@@ -603,8 +605,8 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 			return false
 		}
 	}
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) || e.router == nil {
+	run := e.nativeHalves()
+	if (!run.tracker && !run.wiki) || e.router == nil {
 		return true
 	}
 	if e.dataView != nil && e.dataView.ListedAt().IsZero() {
@@ -613,7 +615,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 		return false
 	}
 	trackerServed, pagesServed, err := e.router.Serves(ctx)
-	if err != nil || (runTracker && !trackerServed) || (wiki && !pagesServed) {
+	if err != nil || (run.tracker && !trackerServed) || (run.wiki && !pagesServed) {
 		detail := "no copy of the estate admits a seat yet"
 		if err != nil {
 			detail = err.Error()
@@ -636,13 +638,14 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // checkpoint on another stream, a frozen checkpoint, a record held past the
 // deferral grace — because a seat left running on one answered its own tools
 // out of a copy the fleet had abandoned. The router makes that the copy's
-// problem and not the seats': a wrong copy goes out of service
-// ([localEstate.For]), so every call this node's seats make is answered by a
-// data node whose copy is sound, exactly as a node holding no data is
-// answered. Moving the seats instead cost each of them its processes and its
-// memory to be served by the very same peers — and on a single node it stopped
-// the company, which is still what happens: an estate no data node serves
-// refuses its calls, saying so.
+// problem and not the seats': a domain's wrong copy goes out of service for
+// that domain's operations ([localEstate.For], ADR-0046), so every call this
+// node's seats make on that domain is answered by a data node whose copy is
+// sound, exactly as a node holding no data is answered. Moving the seats
+// instead cost each of them its processes and its memory to be served by the
+// very same peers — and on a single node it stopped the company, which is
+// still what happens: an estate no data node serves refuses its calls, saying
+// so.
 //
 // A LAG WAS NEVER ONE OF THEM, and it is not now: being behind is the admission
 // gate's business ([Engine.StateLogHydrated]), and when this read "has this
@@ -654,9 +657,12 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 //
 // A node that answers from its OWN copy needs nothing else to route its seats'
 // calls — the router asks this node first and asks nobody where it answers —
-// so every data node whose copy is sound keeps its seats whatever its view of
-// the fleet says. Any other node routes by the watched presence view, and a
-// view that answers unknown ([coord.LeaseView.Leases]) and last listed longer
+// so every data node whose seat copy is sound ([estate.SeatCopy]) keeps its
+// seats whatever its view of the fleet says. Only a domain that gates seats
+// makes the node's seats depend on its view: a wrong copy of any other domain
+// costs that domain's calls a peer, never the seats. Any other node routes by
+// the watched presence view, and a view that answers unknown
+// ([coord.LeaseView.Leases]) and last listed longer
 // ago than [statelog.FloorCacheStale] — the age past which nothing may decide
 // from a cached coordination fact, so no node sheds sooner than any other
 // decider stops trusting the same view — is a node that can no longer say
@@ -677,8 +683,7 @@ func (e *Engine) SeatsServiceable(ctx context.Context) (bool, string) {
 
 // serviceable is [Engine.SeatsServiceable] at now.
 func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) {
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) {
+	if run := e.nativeHalves(); !run.tracker && !run.wiki {
 		return true, ""
 	}
 	if e.local != nil && e.local.servesUnasked(ctx) {

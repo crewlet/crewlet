@@ -31,7 +31,7 @@ flowchart TB
     end
 
     subgraph proc["<b>crewlet run</b> — one process, one binary"]
-        NODE["<b>A node</b><br/>ingress · seats · workers<br/><i>embedded event stream · local store file</i>"]
+        NODE["<b>A node</b><br/>data · git · ingress · seats · workers<br/><i>embedded event stream · local store file</i>"]
     end
 
     MCPS["<b>MCP servers</b><br/>stdio children this process supervises,<br/>or remote http endpoints"]
@@ -103,9 +103,10 @@ act through, and every other one still routes end to end.
 ## 2. Inside one node
 
 `crewlet run` is *the* node, and what it does is a config value:
-`node.roles` picks from `data`, `ingress`, `seats` and `workers`. Declaring none
-means all four, which is the single-process company — one process holding the
-company's records, serving the API and the dashboard, running every agent, and
+`node.roles` picks from `data`, `git`, `ingress`, `seats` and `workers`.
+Declaring none means all five, which is the single-process company — one
+process holding the company's records, serving the API and the dashboard,
+serving its git repositories where it hosts them, running every agent, and
 performing the company-wide duties. A node without `data` holds no copy of the
 replicated estate and answers its seats' tools through a node that does; see
 [Scaling Out](scaling.md#a-node-that-holds-no-data).
@@ -113,6 +114,7 @@ replicated estate and answers its seats' tools through a node that does; see
 ```mermaid
 flowchart TB
     ING["<b>ingress</b>: terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · probes</i>"]
+    GIT["<b>git</b>: serve the company's repositories<br/><i>a disposable cache on this node's disk ·<br/>git run per request · needs ingress</i>"]
     ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>observability edge</i>"]
     SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge ·<br/>post-turn reflection</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
@@ -130,17 +132,21 @@ flowchart TB
     ALWAYS --> DB
     ING --> KV
     ING --> DB
+    ING --> GIT
+    GIT -->|"code log reads · pushes to a committer"| STREAM
 ```
 
-That is one `crewlet run` process. `node.roles` picks from `data`, `ingress`,
-`seats` and `workers` — declare none and you get all four — and the always-on
-set runs on every node whatever it says. The three backends are opened together
+That is one `crewlet run` process. `node.roles` picks from `data`, `git`,
+`ingress`, `seats` and `workers` — declare none and you get all five — and the
+always-on set runs on every node whatever it says. `git` serves anything only
+for a company that sets [`code.native`](code-host.md), and only beside
+`ingress`, whose listener its routes are on. The three backends are opened together
 and closed together; on a node without `data` the store is scratch and holds
 the node estate alone.
 
-Three of those four groups are **inventories, not pipelines**: no box inside
-`ingress`, `workers` or the always-on set hands work to another box in the same
-group. They are named here rather than drawn.
+Four of those five groups are **inventories, not pipelines**: no box inside
+`ingress`, `git`, `workers` or the always-on set hands work to another box in
+the same group. They are named here rather than drawn.
 
 **What a node holds before it serves anything.** The boot order is not a detail
 of the implementation; two of its steps exist because of what happens if they
@@ -647,6 +653,7 @@ to the adopted log.
 | **`usage_tokens`** · `usage_turns` · `usage_reads` · `usage_schedule_runs` · `usage_person_tokens` | What each node's seats, schedules and people did each company day — spend by phase, worker, model and provider slot; ended turns and how they ended; the pages seats read; every fire; and what the auxiliary model spent for a person (a question answered on the operator surface), filed under the human seat they hold rather than an agent id — derived from `CREWLET_USAGE_LOG`. Every data node publishes its own days and applies everyone's — a node holding no data has its events, and so its spend, kept by a data node through custody and counted in that node's day — so spend history is answered fleet-wide and outlives the node that spent it (ADR-0020). Kept 181 days, aged out by the applier rather than a sweep |
 | **`artifacts`** · `artifact_versions` · `artifact_objects` · `artifact_assets` · `artifact_source_claims` · `artifact_shares` · `artifact_pins` · `artifact_reads` · `artifact_history` · `artifact_usage` | The company's artifacts, derived from `CREWLET_ARTIFACTS_LOG`: each artifact's head and owner, its retained versions with their canonical manifests (a hundred unlabelled ones plus every labelled one), the objects those versions and its live assets name, its republish-in-place address, who it is shared with and at what role, each person's pins and when they last opened it, what happened to it (a year of history, refusals included) and the company's counters the stamped quotas are enforced against. The bytes are the [object store](object-store.md)'s, and `artifact_objects` and `artifact_assets` are declared in its references so the collector never deletes a file a retained version or a live asset still names |
 | **`artifact_data_stores`** · `artifact_data_collections` · `artifact_data_paths` · `artifact_data_docs` · `artifact_data_fields` · `artifact_data_writes` · `artifact_data_touches` · `artifact_data_usage` | Each artifact's datastore, derived from `CREWLET_ARTIFACT_DATA_LOG`: the store's catalogue row (its schema version, its on-disk footprint and its state digest), its collections with their columns and rules, the field paths interned to compact integers, every document as its canonical body with who created and last changed it, the field index a query is compiled against, seven days of history (at most 8 MiB per store, each row carrying who wrote, the verdict, the values each changed field held before and after, and the digest the store held after it, which is what an undo and a cell's history read), which documents each history row changed, and the company's footprint the plan quota is enforced against. Every node decides each write from the authority stamped into it and the rows alone, so a refusal is the same refusal on every data node |
+| **`code_repos`** · `code_refs` · `code_packs` · `code_pushes` · `code_protections` · … | The company's [git repositories](code-host.md) as rows, derived from `CREWLET_CODE_LOG`: each repository's settings and protection rules, its refs, the pack bundles its pushes stored and the pushes themselves. A pack's bytes are not a row: each is one object in the [object store](object-store.md), named by its `code_packs` row. `code_activation` holds the activation fence — the newest configuration activation whose reconcile of `code.repos` has published one — which refuses an older activation's decision about any repository |
 | `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` · `statelog_ops_lost_kind` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows to the sweep, so a retry older than that is answered `unknown` rather than applied twice. A ledger that sweeps one kind of operation sooner than the rest — the identity estate's sessions, after an hour — records that kind's loss on its own, so every other kind is still vouched for over the month. And any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**
@@ -687,6 +694,7 @@ to the adopted log.
 | **`CREWLET_USAGE_LOG`** | `crewlet.usage.log.>` — the state log's fifth domain, **compacted**: one message per (kind, node, company day, seat or schedule), each the object's whole cumulative value, republished by the node that owns the day whenever it moves and aged out after 181 days. The node is part of every subject, so each object has exactly one writer and nothing is arbitrated |
 | **`CREWLET_ARTIFACTS_LOG`** | `crewlet.artifacts.log.>`, the state log's sixth domain, strict and identity-claiming: every create, publish, rollback, share, transfer, trash and purge of an artifact. Every record that adds or removes an object reference arbitrates on the artifact's own subject, `…log.artifact.<id>`, so the broker orders every carry of a file against every removal; a republish-in-place address is a create-only `…log.source.<owner>.<token>`, an asset rides `…log.asset.<artifact>.<asset>` and a person's pins `…log.reader.<seat>`. A record the applier's rows refuse (a head that moved, a carried object no longer named, a quota crossed) is applied as its history row with the reason, on every node alike |
 | **`CREWLET_ARTIFACT_DATA_LOG`** | `crewlet.artifactdata.log.>`, the state log's seventh domain, strict and identity-claiming: every write, undo, schema change and purge of an artifact's datastore, on one subject per store, `…log.store.<artifact>`, because the store is the unit a batch is atomic over. A write is **sequenced**, not arbitrated: it carries no expectation, the log orders it against every other write to that store, and the applier decides it, guards and quotas included, so two people editing one sheet never contend at the broker. A schema change is arbitrated on the same subject, so it is decided against every write it migrates. A write the rows refuse is applied as its verdict, with the reason, on every node alike |
+| **`CREWLET_CODE_LOG`** | `crewlet.code.log.>` — the ordered log a repository's refs, packs and settings move on; the state log's eighth domain, strict and identity-claiming: one subject per repository and one per repository name, so two pushes to one repository contend at the broker and exactly one record lands per round, and two creates of one name contend for it. The node that commits a repository's pushes takes them in order and puts every push queued behind a record in flight into the next one (group commit, up to 64 a record), so a burst of pushes costs a record a batch rather than a record a push, and a push is reported `ok` only once the row its record wrote is read back. A push record names its pack bundle and never carries it — the bytes are the object store's — so the log grows with how often a company pushes, not with how large its repositories are |
 | `OBJ_crewlet_files` | `$O.crewlet_files.>` — the [object store](object-store.md)'s bucket, `crewlet_files`, on the default `nats` backend only: one object per upload, named `files/<key>` by a key minted for that upload and never reused, and kept as a run of 128 KiB messages in NATS's own object store format. An ordinary stream at `stream.replicas` copies, so the company's files survive what its logs survive and every backup snapshots it with the rest. Absent when `store.objects.backend` is `s3` |
 
 **Named, not replicated — the object store.** One kind of state answers "who
@@ -703,7 +711,7 @@ Every node reaches it directly, a node without `data` included. Nothing here is
 derived by replay, and the engine places nothing: the store keeps its own
 copies, and the one thing the engine runs beside it is the `object-collector`
 duty, which deletes the objects no row names, abandons uploads that never
-finished, and audits that every object a row names is there and whole. See
+finished, and audits that every object a live row names is there and whole. See
 [Object Store](object-store.md).
 
 **Mailboxes and event history are different kinds of stream.** The two
@@ -758,8 +766,8 @@ that ownership starts being contested, and there is already a lease for that.
 ```mermaid
 flowchart TB
     subgraph fleetbox["A fleet — every node is the same binary"]
-        N1["<b>node-a</b><br/><i>ingress · seats · workers</i>"]
-        N2["<b>node-b</b><br/><i>ingress · seats · workers</i>"]
+        N1["<b>node-a</b><br/><i>data · git · ingress · seats · workers</i>"]
+        N2["<b>node-b</b><br/><i>data · git · ingress · seats · workers</i>"]
         N3["<b>sat-eu</b><br/><i>seats</i> · labels: zone=eu"]
     end
 
@@ -898,6 +906,9 @@ here.
 | What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |
 | Models, each a coding CLI, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
 | Detached coding runs | `internal/sandbox`, `internal/hostbox` | [Code sandbox](code-sandbox.md) |
+| The engine's own git repositories: their rows, the committer, the activation fence, the purge | `internal/code`, `internal/engine` (the reconcile of `code.repos` and the `code-retention` duty) | [Code host](code-host.md) |
+| A git node's cache of each repository, and the git processes it runs | `internal/code/cache`, `internal/code/gitproc` | [The cache on a git node](code-host.md#the-cache-on-a-git-node) |
+| A person's git over HTTPS — fetch or push, their bound token, the receive pipeline — and the code reads | `internal/code/host`, `internal/api/auth` (which requests are pushes, the Basic credential), `internal/api` (the `/git/` and `/code/` routes) | [Persons and their tokens](code-host.md#persons-and-their-tokens) · [Hosting code](../guides/code.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |

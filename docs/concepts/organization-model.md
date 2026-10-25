@@ -94,6 +94,14 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── LearningEnabled Toggle             (per-seat override for agent learning)
 ├── Sandbox *RoleSandbox               (role.sandbox: the code-sandbox gate)
 ├── Placement                          (role.placement: which nodes may run it)
+├── CodeAccess string                  (role.code.access as written:
+│                                       read_only, review or full_access;
+│                                       empty where the document is silent,
+│                                       which reads as read_only. The one
+│                                       per-seat code tier: a GitHub app's
+│                                       permission set, and the native code
+│                                       host's cap on what the chart grants.
+│                                       Agent seats only)
 ├── Slack SlackIdentity                (role.integrations.slack: this seat's OWN
 │                                       Slack app, bot_token and signing_secret)
 ├── Mattermost MattermostIdentity      (role.integrations.mattermost: its bot)

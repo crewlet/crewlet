@@ -46,7 +46,7 @@ func TestABootThatLosesItsBrokerConnectionSaysWhy(t *testing.T) {
 	b.Stream.URL = srv.URL()
 	b.Stream.Token = token
 	b.Coordination.Type = config.CoordinationEmbeddedKV
-	back, err := OpenBackends(t.Context(), &b, nil)
+	back, err := OpenBackends(t.Context(), &b, nil, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

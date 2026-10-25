@@ -79,22 +79,26 @@ func TestBrokerMembershipComesFromTheStreamBlock(t *testing.T) {
 // outcomes. Three pairings are refused — a data node on a leaf, a member
 // without data, and ingress or workers without data — because every data node
 // holds the whole estate as a member of the broker and a node without data
-// holds none; and each refusal has to NAME the data role it turns on, or an
-// operator is told what is wrong and not which of the two ways out is theirs.
+// holds none; and a fourth on every broker alike, git without the ingress
+// whose listener it is served on. Each refusal has to NAME the role it turns
+// on, or an operator is told what is wrong and not which of the two ways out
+// is theirs.
 func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 	t.Parallel()
-	type refusal struct{ path, kind string }
+	// says is what the refusal's message must name: the role it turns on.
+	type refusal struct{ path, kind, says string }
 	var (
 		ok               []refusal
-		leafDataNode     = refusal{"stream.leaf.urls", "conflict"}
-		datalessMember   = refusal{"stream.leaf.urls", "missing"}
-		statelessIngress = refusal{"node.roles", "conflict"}
+		leafDataNode     = refusal{"stream.leaf.urls", "conflict", `"data"`}
+		datalessMember   = refusal{"stream.leaf.urls", "missing", `"data"`}
+		statelessIngress = refusal{"node.roles", "conflict", `needs "data"`}
+		gitWithout       = refusal{"node.roles", "conflict", `"git" needs "ingress"`}
 	)
 	for _, kind := range placement.BrokerKinds() {
 		for _, tc := range []struct {
 			roles string
-			// want is the refusals this pairing earns, every one of them
-			// naming the data role.
+			// want is the refusals this pairing earns, each naming the
+			// role it turns on.
 			want map[placement.BrokerKind][]refusal
 		}{
 			{"", map[placement.BrokerKind][]refusal{
@@ -106,6 +110,16 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 			{"[data, ingress, workers]", map[placement.BrokerKind][]refusal{
 				placement.BrokerLeaf: {leafDataNode},
 			}},
+			{"[data, git, ingress]", map[placement.BrokerKind][]refusal{
+				placement.BrokerLeaf: {leafDataNode},
+			}},
+			// GIT WITHOUT INGRESS, on a data node too: the rule is asked
+			// before the data rules return.
+			{"[data, git]", map[placement.BrokerKind][]refusal{
+				placement.BrokerMember: {gitWithout},
+				placement.BrokerLeaf:   {gitWithout, leafDataNode},
+				placement.BrokerClient: {gitWithout},
+			}},
 			{"[seats]", map[placement.BrokerKind][]refusal{
 				placement.BrokerMember: {datalessMember},
 			}},
@@ -113,6 +127,19 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 				placement.BrokerMember: {datalessMember, statelessIngress},
 				placement.BrokerLeaf:   {statelessIngress},
 				placement.BrokerClient: {statelessIngress},
+			}},
+			// A NODE WITHOUT DATA NAMING GIT AND INGRESS is refused once,
+			// by the ingress rule: the git rule is about ingress, which it
+			// names.
+			{"[git, ingress]", map[placement.BrokerKind][]refusal{
+				placement.BrokerMember: {datalessMember, statelessIngress},
+				placement.BrokerLeaf:   {statelessIngress},
+				placement.BrokerClient: {statelessIngress},
+			}},
+			{"[git, seats]", map[placement.BrokerKind][]refusal{
+				placement.BrokerMember: {gitWithout, datalessMember},
+				placement.BrokerLeaf:   {gitWithout},
+				placement.BrokerClient: {gitWithout},
 			}},
 			{"[workers, seats]", map[placement.BrokerKind][]refusal{
 				placement.BrokerMember: {datalessMember, statelessIngress},
@@ -135,12 +162,16 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 				t.Parallel()
 				_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 				var got []refusal
-				for _, p := range Problems(err) {
-					got = append(got, refusal{p.Path, p.Kind})
-					if !strings.Contains(p.Message, "data") {
-						t.Errorf("%s is refused without naming the data role it turns "+
-							"on: %s", p.Path, p.Message)
+				for i, p := range Problems(err) {
+					r := refusal{path: p.Path, kind: p.Kind}
+					if i < len(want) {
+						r.says = want[i].says
+						if !strings.Contains(p.Message, r.says) {
+							t.Errorf("%s is refused without naming %s, the role it "+
+								"turns on: %s", p.Path, r.says, p.Message)
+						}
 					}
+					got = append(got, r)
 				}
 				if !slices.Equal(got, want) {
 					t.Fatalf("refusals %v, want %v\n%v", got, want, err)
@@ -276,6 +307,70 @@ func TestTheBrokerWarnings(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("warnings at %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A LEASE TOO SHORT FOR AN UPLOAD ACROSS A LINK is warned of where uploads to
+// the broker's object store cross one on the connection lease renewals ride:
+// a leaf, a client of an external cluster, and a member that serves leaves,
+// whose setting is the lease its leaves renew at. Under [LinkLeaseFloor] one
+// message of an upload crosses a link at the floor in more than the lease's
+// heartbeat; at it and over, nothing is said, and nothing is said where no
+// renewal crosses a link behind an upload — a member serving no leaves, the
+// S3 store, `local` coordination.
+func TestALeaseTooShortForAnUploadAcrossALinkIsWarned(t *testing.T) {
+	t.Parallel()
+	const (
+		kv          = "coordination:\n  type: embedded-kv\n"
+		leafNode    = "node:\n  roles: [seats]\nstore:\n  scratch: true\n"
+		s3          = "  objects:\n    backend: s3\n    s3:\n      bucket: files\n      region: us-east-1\n"
+		leafStream  = "stream:\n  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n"
+		memberBlock = "stream:\n  store_dir: /var/lib/crewlet/stream\n  replicas: 3\n" +
+			"  cluster:\n    name: acme\n    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n"
+		servesLeaves = "  leaf:\n    port: 7422\n"
+	)
+	lease := func(seconds string) string { return "  lease_ttl_seconds: " + seconds + "\n" }
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want bool
+	}{
+		{"a leaf on an 8 s lease", leafNode + leafStream + kv + lease("8"), true},
+		{"a leaf on an 11 s lease", leafNode + leafStream + kv + lease("11"), true},
+		{"a leaf on the floor's own lease", leafNode + leafStream + kv + lease("11.25"), false},
+		{"a leaf on a 15 s lease", leafNode + leafStream + kv + lease("15"), false},
+		{"a leaf on the default lease", leafNode + leafStream + kv, false},
+		{"a client on an 8 s lease", brokerStreams[placement.BrokerClient] + lease("8"), true},
+		{"a member serving leaves on an 8 s lease", memberBlock + servesLeaves + kv + lease("8"), true},
+		{"a member serving no leaves on an 8 s lease", memberBlock + kv + lease("8"), false},
+		{"a leaf on an 8 s lease keeping its files in s3",
+			leafNode + s3 + leafStream + kv + lease("8"), false},
+		{"a solo node with local coordination on an 8 s lease",
+			"coordination:\n  type: local\n" + lease("8"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// RUNNABLE, so every fixture carries the keyring and — where it
+			// writes no stream block of its own — the durable stream every
+			// member needs: a warning is said of a valid document.
+			b, err := ParseRunnableBootstrap([]byte(tc.doc), EnvOnly())
+			if err != nil {
+				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
+			}
+			var got []Warning
+			for _, w := range b.Warnings() {
+				if w.Path == "coordination.lease_ttl_seconds" {
+					got = append(got, w)
+				}
+			}
+			if warned := len(got) > 0; warned != tc.want {
+				t.Fatalf("warned of the lease: %v (%v), want %v", warned, got, tc.want)
+			}
+			if tc.want && !strings.Contains(got[0].Message, LinkLeaseFloor.String()) {
+				t.Fatalf("the warning %q does not name the %v floor to raise it to", got[0].Message,
+					LinkLeaseFloor)
 			}
 		})
 	}

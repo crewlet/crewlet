@@ -100,9 +100,10 @@ const revisionColumns = `revision_id, parent_revision_id, created_at, created_by
 // it finds is older (see the boot publish in cmd/crewlet). So marking a
 // revision active here says "this is the company", and that is true for a
 // command run while the engine is stopped, which cannot move the pointer and
-// leaves the publish to the next boot. A write through a running node's API
-// has not been accepted by anybody yet when it stores its revision, and it
-// uses [Configs.Insert] instead.
+// leaves the publish to the next boot. A write through a running node — its
+// API, or the seed it imports from its company file at boot — has not been
+// accepted by anybody yet when it stores its revision, and it uses
+// [Configs.Insert] instead.
 func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, error) {
 	return c.insert(ctx, r, true)
 }
@@ -110,15 +111,17 @@ func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, error) 
 // Insert writes a new revision into the history WITHOUT making it the active
 // one, returning its id.
 //
-// The config API's write path: its revision becomes this node's active one
-// only once the FLEET has taken it, with [Configs.Activate] after the pointer
-// moved. A revision that lost the activation's compare-and-set stays here,
-// readable and revertable, and nothing on this node treats it as the
-// company. Inserted active, the loser was what GET /config served until the
-// next activation, and what this node published to the whole fleet at its
-// next start, since a locally active revision newer than the pointer is
-// exactly what the boot publish offers: a write answered with a 409 or a 412
-// landed after all, one restart later.
+// The write path of a running node — the config API's, and the boot seed's
+// from a company file: its revision becomes this node's active one only once
+// the FLEET has taken it, with [Configs.Activate] after the pointer moved. A
+// revision that lost the activation's compare-and-set stays here, readable
+// and revertable, and nothing on this node treats it as the company. Inserted
+// active, the loser was what GET /config served until the next activation,
+// and what this node published to the whole fleet at its next start, since a
+// locally active revision newer than the pointer is exactly what the boot
+// publish offers: a write answered with a 409 or a 412 landed after all, and
+// a bootstrap seed that lost to a peer's replaced the peer's company, one
+// restart later.
 func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
 	return c.insert(ctx, r, false)
 }

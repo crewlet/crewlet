@@ -481,6 +481,27 @@ func (r Reason) BlamesWriter() bool {
 	return false
 }
 
+// FromGate reports whether r is a GATE's: a rule under which a record the
+// broker ACCEPTED applies on no node — evicted, deleted, abandoned or
+// overtaken, the reasons a `statelog_record_gated` line and the records-gated
+// counter carry. Every other reason refuses a write before or instead of an
+// append. evicted and deleted are ALSO refused before an append (this node's
+// own eviction, an object's marker read in the snapshot), and after one where
+// the record a lost answer found is another operation's, at which the gate
+// holds this node — which is why a refusal says whether a record of its own
+// landed by [Unavailable.Landed], never by its reason alone.
+//
+// Decided per reason beside [Reason.BlamesWriter], whose set it contains, and
+// held by the same table ([TestOnlyAGateThatHoldsAWriterBlamesIt]), so a gate
+// added later is classified where its reason is declared.
+func (r Reason) FromGate() bool {
+	switch r {
+	case ReasonEvicted, ReasonDeleted, ReasonAbandoned, ReasonOvertaken:
+		return true
+	}
+	return false
+}
+
 // RetryAfter is how long a caller should wait before bringing the request err
 // refused back to THIS node: ZERO when waiting cannot change the answer, the
 // refusal's own derived hint where it has one, and otherwise when it is
@@ -573,6 +594,32 @@ type Unavailable struct {
 	// Detail still says whose copy the record is.
 	CopyWriter string
 
+	// Dropped says the record at Position is THIS OPERATION'S and a gate
+	// dropped it: this write's own append, or a copy of the operation the
+	// broker collapsed the append onto, or one a write whose answer was lost
+	// found newest on its subject carrying its id. So the operation's record
+	// is durable there and applies nowhere ([Unavailable.Landed]).
+	//
+	// FALSE WHEN POSITION IS ANOTHER OPERATION'S RECORD, which a gate's
+	// refusal can carry too: a write whose answer was lost found ANOTHER
+	// operation's record newest on its subject, and the gates, asked about
+	// THIS NODE there, hold it — its eviction is below that record, or the
+	// object's marker is. Position is then only where the gate was judged:
+	// the record there may be a healthy peer's that applied on every node,
+	// and whether this write's own append landed at all is not known (if it
+	// did, it lies below Position and applies nowhere, which the operation
+	// ledger's silence says). That refusal is about this node's standing,
+	// like the eviction found before an append, and read as "your record is
+	// durable at Position and applies nowhere" it told a caller something
+	// nobody here knows — and sent a write away as lost that another node
+	// could have made.
+	//
+	// A FIELD rather than a reading of Position, because a position cannot
+	// say whose record it names; set only by the resolution that read it
+	// ([Publisher.Publish]). False on every other refusal, which names no
+	// dropped record of this operation.
+	Dropped bool
+
 	// Cause is the error a refusal was concluded from, when there is one
 	// a caller may want to recognise without switching on the reason —
 	// [ErrStreamRecreated] or [ErrAheadOfLog] behind `wrong_stream`, which
@@ -589,6 +636,28 @@ func (u *Unavailable) Error() string {
 		return fmt.Sprintf("statelog: unavailable (%s)", u.Reason)
 	}
 	return fmt.Sprintf("statelog: unavailable (%s): %s", u.Reason, u.Detail)
+}
+
+// Landed reports a refusal made AFTER an append whose record is known: a gate
+// ([Reason.FromGate]) dropped THIS OPERATION'S record, durable at Position —
+// this write's own, or a copy of it the broker collapsed the append onto
+// ([Unavailable.Dropped]) — so the operation applies nowhere, and its
+// operation id is held for the log's duplicate window.
+//
+// NEVER JUDGED BY THE POSITION ALONE. Refusals made before anything was
+// appended carry positions too, each naming something other than a record of
+// this write: the point a `behind` write needs this node to have applied, the
+// record a `deferred` node cannot decode, the last sequence a `skew` found,
+// the record an `op_reused` id already names. Read as landed, each of those
+// told a caller its write was durable and lost, when nothing was sent and
+// another node could make it. A gate's reason with NO position — this node's
+// own eviction found before the append, a deletion marker read in the
+// snapshot — is a refusal before the append too. And a gate's reason WITH a
+// position is not landed either where that position is ANOTHER operation's
+// record, at which the gate holds this node ([Unavailable.Dropped]): that is
+// a refusal about this node, whose own append may never have landed.
+func (u *Unavailable) Landed() bool {
+	return u.Dropped && u.Reason.FromGate() && !u.Position.IsZero()
 }
 
 // Unwrap makes every refusal answer errors.Is(err, ErrUnavailable), and one

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -237,6 +238,69 @@ func TestABarrierIntersectsNothing(t *testing.T) {
 	if barrier.Intersects(barrier) == false {
 		t.Fatal("a barrier does not even intersect itself, so the sentinel is " +
 			"not a path at all")
+	}
+}
+
+// A TRIMMED RECORD INTERSECTS NOTHING, for the barrier's reason: it writes no
+// row of this domain's anywhere, so a scope that intersected an object would
+// make every read and write of it wait behind a record that changed none of
+// its rows.
+func TestATrimmedRecordIntersectsNothing(t *testing.T) {
+	t.Parallel()
+	trimmed := tracker.ScopeSet{Subject: true}.Resolve(tracker.TrimmedSubject(statelog.Position{
+		Stream: topics.TrackerLogStream, Generation: 1, Seq: 7}))
+	if len(trimmed.Paths) != 1 || trimmed.Paths[0] != statelog.FrameworkScope {
+		t.Fatalf("a trimmed record resolves to %v, want exactly the framework's %q",
+			trimmed.Paths, statelog.FrameworkScope)
+	}
+	task := tracker.ScopeSet{Subject: true, Container: "ENG"}.Resolve(tracker.TaskSubject("t-1"))
+	if trimmed.Intersects(task) {
+		t.Fatal("a trimmed record's scope intersects a task's")
+	}
+}
+
+// THE TRIMMED RECORD IS ITS LITERAL — through the encoder the trim calls, so
+// what is pinned is what is appended: the base version whatever this build
+// reads, the writer the eviction gate reads, the floor in the subject, and no
+// operation id.
+func TestTheTrimmedRecordIsItsLiteral(t *testing.T) {
+	t.Parallel()
+	body, err := tracker.EncodeTrimmed(statelog.TrimmedEnvelope(statelog.Position{
+		Stream: topics.TrackerLogStream, Generation: 3, Seq: 42}, "node-a"))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	const want = `{"v":1,"subject":{"kind":"trimmed","id":"3.42"},"op":"trimmed",` +
+		`"gen":3,"writer":"node-a","scope":"s"}`
+	if string(body) != want {
+		t.Fatalf("the trimmed record encodes as\n  %s\nwant\n  %s", body, want)
+	}
+	if err := statelog.CheckTrimmed(tracker.Domain{}, tracker.Domain{}.Stream(),
+		tracker.EncodeTrimmed); err != nil {
+		t.Fatalf("the framework would not recognise this domain's trimmed record: %v", err)
+	}
+}
+
+// THE TRIMMED RECORD'S ENCODER REFUSES WHAT THE FRAMEWORK WOULD NOT RECOGNISE,
+// at the write — never in the subject's validation, which runs on the read
+// path too and would turn one malformed record into an applier that stops on
+// every node.
+func TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise(t *testing.T) {
+	t.Parallel()
+	good := statelog.TrimmedEnvelope(statelog.Position{
+		Stream: topics.TrackerLogStream, Generation: 1, Seq: 2}, "node-a")
+	for name, mutate := range map[string]func(*statelog.Envelope){
+		"another kind":      func(e *statelog.Envelope) { e.Kind, e.Subject.Kind = "barrier", "barrier" },
+		"an operation id":   func(e *statelog.Envelope) { e.OpID = "op-1" },
+		"no floor":          func(e *statelog.Envelope) { e.Subject.ID = "x" },
+		"half a floor":      func(e *statelog.Envelope) { e.Subject.ID = "1" },
+		"a second spelling": func(e *statelog.Envelope) { e.Subject.ID = "01.2" },
+	} {
+		env := good
+		mutate(&env)
+		if body, err := tracker.EncodeTrimmed(env); err == nil {
+			t.Errorf("%s: encoded %s", name, body)
+		}
 	}
 }
 

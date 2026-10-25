@@ -197,7 +197,10 @@ func answerable(deps OperatorDeps) bool {
 
 // newAnswerKnowledge builds the answer tool over the node's ONE cache, which
 // [AnswerDeps.Cache] carries in: the catalogue is built per request, so a cache
-// built here would be one request's.
+// built here would be one request's. A company that moves to another
+// knowledge backend never reads the last one's answers from it, because an
+// answer is keyed on the corpus position and only a native knowledge base has
+// one ([answerKnowledge.cacheKey]).
 func newAnswerKnowledge(deps OperatorDeps) *answerKnowledge {
 	return &answerKnowledge{
 		search: deps.Knowledge, items: deps.Work.Search, org: deps.Org,

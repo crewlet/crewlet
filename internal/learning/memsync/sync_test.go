@@ -372,7 +372,7 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 // anywhere — and every seat on the node has silently lost its diary and its
 // episodes, which it reports to a colleague as never having spoken to them.
 //
-// The broker's own creation instant is the only thing that can tell the two
+// The stream's creation instant is the only thing that can tell the two
 // apart. A sequence cannot: a recreated stream's sequences are plausible. A
 // count cannot: an empty stream and an emptied one are the same count.
 func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
@@ -423,6 +423,81 @@ func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 	}
 	if carried != 0 {
 		t.Errorf("%d rows were carried from a stream that holds none", carried)
+	}
+}
+
+// A RESTORED CHANGELOG IS THE ONE THIS NODE SAW.
+//
+// A snapshot restore of the stream estate makes the changelog again from the
+// configuration its snapshot names, every row back in it — and the broker dates
+// the stream to the restore. Read off the broker, a node restored from a backup
+// refused every seat it ran as hydrating from a recreated changelog, with
+// nothing to do about it but clear its identity row by hand. The changelog
+// carries the instant the create that made it stamped, which the restore hands
+// back with the rest of its configuration.
+func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+	js := jsOn(t, conn)
+
+	// PROVISIONED AS THE QUEUE PROVISIONS IT: stamped by its create.
+	stamped := jetstream.StreamConfig{
+		Name:              topics.MemoryStream,
+		Subjects:          []string{topics.MemoryPrefix + ">"},
+		Storage:           jetstream.FileStorage,
+		Retention:         jetstream.LimitsPolicy,
+		MaxMsgsPerSubject: 1,
+		Metadata:          statelog.StampCreatedAt(nil, time.Now()),
+	}
+	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
+		t.Fatalf("clear the unstamped changelog: %v", err)
+	}
+	if _, err := js.CreateStream(ctx, stamped); err != nil {
+		t.Fatalf("provision the stamped changelog: %v", err)
+	}
+	owner := openStore(t)
+	seedMemory(t, owner)
+	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	node := openStore(t)
+	if _, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle); err != nil {
+		t.Fatalf("the first hydration failed: %v", err)
+	}
+	original, err := js.Stream(ctx, topics.MemoryStream)
+	if err != nil {
+		t.Fatalf("read the changelog: %v", err)
+	}
+
+	// RESTORED: made again from its own configuration, every row back.
+	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
+		t.Fatalf("delete the changelog: %v", err)
+	}
+	if _, err := js.CreateStream(ctx, original.CachedInfo().Config); err != nil {
+		t.Fatalf("make the changelog again from its configuration: %v", err)
+	}
+	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("put the rows back: %v", err)
+	}
+	restored, err := js.Stream(ctx, topics.MemoryStream)
+	if err != nil {
+		t.Fatalf("read the restored changelog: %v", err)
+	}
+	if statelog.IdentityOf(original.CachedInfo().Created, restored.CachedInfo().Created, true) !=
+		statelog.StreamRecreated {
+		t.Fatalf("the broker dated the restored changelog %v and the original %v — this "+
+			"case proves nothing unless the broker's own instant moved",
+			restored.CachedInfo().Created, original.CachedInfo().Created)
+	}
+
+	carried, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle)
+	if err != nil {
+		t.Fatalf("hydrating from the restored changelog was refused: %v — every seat "+
+			"of a node restored from a backup would be", err)
+	}
+	if carried != len(tables) {
+		t.Fatalf("hydrated %d rows from the restored changelog, want %d", carried, len(tables))
 	}
 }
 

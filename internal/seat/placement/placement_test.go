@@ -226,12 +226,12 @@ func TestParseRoles(t *testing.T) {
 		{
 			name:   "nil is every role",
 			values: nil,
-			want:   []string{"data", "ingress", "seats", "workers"},
+			want:   []string{"data", "git", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "empty is every role",
 			values: []string{},
-			want:   []string{"data", "ingress", "seats", "workers"},
+			want:   []string{"data", "git", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "one role is one role",

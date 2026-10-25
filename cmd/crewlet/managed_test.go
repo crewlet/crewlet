@@ -161,6 +161,40 @@ func TestABootstrapSeedIsIgnoredOnAManagedDeployment(t *testing.T) {
 	}
 }
 
+// AND THE ENGINE IS NEVER BOOTED ON THAT SEED: an empty managed store boots
+// unconfigured, waiting for the managing system's first write, and the
+// reconciler is handed the seed already dropped.
+//
+// The drop used to be made only at the import, after the engine had booted on
+// the file — so a managed deployment with a ./company.yaml beside it ran that
+// file's company, a company nobody had activated and no peer could see.
+func TestAManagedDeploymentNeverBootsOnItsBootstrapSeed(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := managedBootstrap(t, dir)
+	boot, err := config.LoadBootstrap(cfg, config.EnvOnly())
+	if err != nil {
+		t.Fatalf("load Tier A: %v", err)
+	}
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, nil))
+
+	opts, seed, err := bootOptions(t.Context(), cfg, boot, seedOf(parse(t, companyYAML)), log)
+	if err != nil {
+		t.Fatalf("bootOptions: %v", err)
+	}
+	if opts.Company != nil {
+		t.Errorf("a managed deployment's empty store boots the engine on %s, want "+
+			"no company: the seed is never imported there", companyName(opts.Company))
+	}
+	if seed.Company != nil {
+		t.Error("the reconciler is handed the seed a managed deployment never imports")
+	}
+	if !strings.Contains(logged.String(), "company_seed_ignored") {
+		t.Errorf("the dropped seed was not said: %s", logged.String())
+	}
+}
+
 // AND AN IMPORT THROUGH A NODE THAT REFUSES THE TOKEN AS NOT A WRITER says
 // who manages the document, what to do, and which token this command sent.
 func TestAManagedRefusalThroughTheAPISaysWhichTokenWasSent(t *testing.T) {

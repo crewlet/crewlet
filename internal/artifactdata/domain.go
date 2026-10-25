@@ -194,11 +194,12 @@ func (Domain) ScopeIndex() string { return "artifactdata_log_deferred_scope" }
 // OpsTable is the operation ledger.
 func (Domain) OpsTable() string { return "artifactdata_ops" }
 
-// ReadinessInput reports that this domain's health does NOT gate seat
+// GatesSeatAdmission reports that this domain's health does NOT gate seat
 // admission: a seat reads no datastore on its turn path, so a stalled copy
-// must not stop a node admitting seats. The copy still goes out of service for
-// its own readers, and the estate router decides through a peer that serves.
-func (Domain) ReadinessInput() bool { return false }
+// must not stop a node admitting seats. The copy is still judged, as every
+// domain's is (ADR-0046), and goes out of service for its own readers, and the
+// estate router decides through a peer that serves.
+func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical.

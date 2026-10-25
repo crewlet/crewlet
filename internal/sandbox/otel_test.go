@@ -435,6 +435,18 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	if !got.Forwards() {
 		t.Error("a configured upstream reports no forwarding")
 	}
+
+	// AND A SET ADDRESS NO EXPORTER CAN USE IS AN ERROR, not a receiver:
+	// built, it minted every run an endpoint with no scheme, and the run's
+	// telemetry went nowhere.
+	env[sandbox.OtelReceiverURLVar] = "engine.internal:443"
+	got, err = sandbox.BuildOtelReceiver(lookup, runtoken.OneKey("k1", "material"))
+	if err == nil || got != nil {
+		t.Fatalf("a receiver URL with no scheme built %v (%v)", got, err)
+	}
+	if !strings.Contains(err.Error(), sandbox.OtelReceiverURLVar) {
+		t.Errorf("the refusal does not name %s: %v", sandbox.OtelReceiverURLVar, err)
+	}
 }
 
 // THE OPERATOR'S OWN ENVIRONMENT WINS.

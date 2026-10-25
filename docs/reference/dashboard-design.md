@@ -8010,13 +8010,13 @@ row for each (the hourly
 collection and the daily audit) with when it ran and what it found: the
 objects a collection deleted because no file names them and the unfinished
 uploads it abandoned; the files an
-audit asked about and how many were missing or damaged. It reads
+audit asked about and how many were missing, damaged or unanswered. It reads
 the fleet's record rather than this node, so it says the same thing whichever
-node served the screen. **Files that are missing or damaged** are the one
-reading an operator opens it for: when the last audit to run to its end found any missing
-or damaged, a danger callout above the passes names the first of them — each
-file, whether it is missing or damaged, and its object — to restore from a
-backup or upload again; an audit that failed after it is said in its row and
+node served the screen. **Files that are missing, damaged or unanswered** are
+the one reading an operator opens it for: when the last audit to run to its end
+found any missing, damaged or unanswered, a danger callout above the passes
+names the first of them — each file, which of the three was found of it, and
+its object — to restore from a backup or upload again; an audit that failed after it is said in its row and
 never clears the callout. A collection that stopped judging keeps what it
 deleted first in its row, and a sweep of unfinished uploads the store refused
 is a warning naming the permissions an S3 identity needs. A record the coordination store would not give up is said as that, not
@@ -8061,8 +8061,15 @@ nothing is downloaded — and offers a fresh directory beside that node's last
 copy when it has one (stamped to the second, never one a backup already went
 to, and nothing when that copy sat directly under `/`); a relative path is
 refused before the round trip, and the engine's own refusal of a directory —
-occupied, or one its host cannot create or write — is said on the field. The request
-waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
+occupied, or one its host cannot create or write — is said on the field; a backup
+already running on that node (`409 backup_running`) is said as that rather than as a
+failed copy, and a refusal the fleet's own state causes — an object store that did
+not answer (`503 objects_unreachable`), a newer build's record on a log the backup
+replays (`409 record_unreadable`), a record signed under a key the node does not
+hold (`409 record_unverified`), a copy keyed to a recreated log (`409
+log_recreated`) or a log missing records the copy needs (`503 log_gap`) — in the
+engine's own hint. The request
+waits up to 12 hours, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Its figures are the
 newest backup the trim counts, the `backup_floor` policy, how many were
 requested and failed (over the span the event log reads, named from the
@@ -8265,7 +8272,8 @@ directory binds to the founder's seat, pins a project through
 `POST /operator/act/set_pins` under its own operation key in
 `Idempotency-Key`, exactly as the dashboard's `act` sends it. The route is the
 node's own operator surface, the one `crewlet run` builds inside
-`api.NewHumanSurfaces`, so the harness wires no second catalogue, and the
+`api.NewHumanSurfaces`, whose catalogue every call builds from what the node
+serves then, so the harness wires no second catalogue, and the
 viewer names the write among its `acts` before it is pressed. The Go
 half holds the answer to the read it promises: its `position` is in the grammar
 a read accepts back, and `GET /work/people/{handle}` at

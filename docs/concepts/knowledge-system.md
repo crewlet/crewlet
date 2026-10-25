@@ -307,7 +307,12 @@ search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
 source once and publishes a record; every data node applies it. The company pays the
-bill once and holds the answer everywhere.
+bill once and holds the answer everywhere. A node whose copy of the vectors, the
+tracker or the knowledge base is out of service does not hold the duty, since
+what it publishes and withdraws would be decided from rows it has stopped
+serving. It gives the duty back if it holds it, and a node whose copies serve
+takes it at its next tick
+([singleton duties](seat-ownership.md#singleton-duties)).
 
 The duty ticks **every minute** and embeds at most **1 024 sources in at most
 32 provider requests** per tick, 128 sources a request at most — so a tick on a
@@ -326,7 +331,16 @@ core** trains on it, as it always did, and with searches always in flight on
 that core the same training is about three and a half minutes of reading and
 seven and a half of arithmetic. The training renews the duty's lease as it
 runs, and stops publishing — handing its cores back within a fraction of a
-second — the moment it cannot. And a tick is cut off once it has gone **five
+second — the moment a renewal answers that another node holds the duty, or
+once no renewal has confirmed it for two and a quarter minutes (its
+three-minute lease less one of the four renewals it makes in a lease). It
+stops the same way at the first renewal after this node's copy of the vectors,
+the tracker or the knowledge base goes out of service — renewing nothing, and
+giving the duty back once it has stopped. A
+renewal the coordination store refuses, or holds on to while its leader moves,
+costs it nothing, since none waits longer than one renewal for its answer. And
+a tick is
+cut off once it has gone **five
 minutes without progress**, never after five minutes of running: every request
 answered, every vector published or withdrawn, every 1 024 rows a training reads
 and the end of its k-means and filing are progress, so a wedged tick never holds
@@ -623,7 +637,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 ### Native backend — the engine's own pages
 
-`internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside the tracker's and the vector index's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+`internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside every other state log's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
 A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
 
@@ -666,7 +680,9 @@ Two properties differ from the vendor path and both are visible:
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it
   and in which turn — the same answer on every node, a departed node's reads
-  included. Backlinks are this node's: the lexical indexer extracts every
+  included. Backlinks are the answering data node's — one whose copies of
+  both the knowledge base and the tracker serve, since the links are read
+  from both: the lexical indexer extracts every
   page id a body links to (`pages.Links` — `/pages/<id>` or the dashboard's
   `#/knowledge/pages/<id>`, outside code) into `page_links` in the node
   estate, beside the index it is derived with, and a task links a page either
@@ -939,6 +955,9 @@ every seat's turn. It is also why this is the native way to seed [tool
 skills](tool-skills.md) — a file with a `trigger:` in its frontmatter belongs in
 the skills container, where it is injected into a phase as an instruction
 rather than read as knowledge, and every other file belongs anywhere else.
+Which containers those are is read from the running company at each write, so
+a revision that moves `knowledge.skills_container` or `knowledge.root_space`
+moves what each write is held to with it, with no restart.
 
 ### On Confluence: the import CLI
 

@@ -599,7 +599,7 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 			Grants: []iam.Grant{e.posture.grant}}
 	}
 	data, err := e.answer(ctx, p)
-	return data, classifyFailure(err)
+	return data, ClassifyFailure(err)
 }
 
 // unresolved is the refusal for a question asked on a context whose principal
@@ -631,7 +631,7 @@ func unresolved(ctx context.Context, what string) error {
 		"read identity: %w", ErrUnavailable, what, why)
 }
 
-// classifyFailure sorts a failed answer into this registry's own vocabulary: a
+// ClassifyFailure sorts a failed answer into this registry's own vocabulary: a
 // read THIS NODE could not serve becomes [ErrUnavailable], a read whose request
 // named another log's position becomes [ErrBadParams], and every other failure
 // is left alone.
@@ -661,7 +661,12 @@ func unresolved(ctx context.Context, what string) error {
 // becomes the caller's. A floor was a `wrong_stream` refusal, answered
 // `unavailable`: a 503 telling a client to ask another node, which refused it
 // identically, and a dashboard telling a person an operator had to act.
-func classifyFailure(err error) error {
+//
+// EXPORTED for the code routes (internal/api/code.go), which answer outside
+// the registry and in its vocabulary: their "not yet" and their misnamed
+// position are this classification, never a second list of what clears by
+// waiting.
+func ClassifyFailure(err error) error {
 	switch {
 	case err == nil,
 		errors.Is(err, ErrUnavailable),

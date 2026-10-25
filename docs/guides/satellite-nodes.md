@@ -40,6 +40,12 @@ its seats need a data node to answer — see
 > broker. If that is not possible from where you want the agent, this is
 > not the mechanism you want.
 
+**A stateless satellite cannot serve git in this release.** The `git` role
+serves the company's repositories on the API listener, so it needs `ingress`,
+and `ingress` needs `data` — a node without `data` that names `git` is refused
+at validation. Serve git from the core nodes; a satellite that holds data can
+take `[data, git, ingress, seats]` like any core node.
+
 ---
 
 ## What actually moves
@@ -78,8 +84,8 @@ for either.
 ```mermaid
 flowchart LR
     subgraph core["Core network"]
-        C1["node-a<br/><i>data · ingress · seats · workers</i>"]
-        C2["node-b<br/><i>data · ingress · seats · workers</i>"]
+        C1["node-a<br/><i>data · git · ingress · seats · workers</i>"]
+        C2["node-b<br/><i>data · git · ingress · seats · workers</i>"]
         KV[("Coordination<br/>leases · ledgers")]
         MQ[("Event stream")]
     end
@@ -106,7 +112,10 @@ Three steps: say what the node is, say where the role belongs, start it.
 
 Only the Tier A file lives on the satellite. The company itself (roles,
 prompts, providers, integrations) comes from the fleet, so there is no
-company YAML to copy or keep in sync.
+company YAML to copy or keep in sync. A `company.yaml` that happens to sit in
+its working directory (the `-company` default) changes nothing: a bootstrap
+seed is never imported over the company the fleet runs, and the satellite
+boots on the fleet's company rather than on that file.
 
 A **stateless** satellite on an embedded fleet:
 

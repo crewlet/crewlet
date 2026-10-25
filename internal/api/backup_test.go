@@ -12,6 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // post runs one POST and returns the status and decoded body.
@@ -164,6 +166,68 @@ func TestUnreachableObjectsAreTheFleetsStateNotTheNodes(t *testing.T) {
 	}
 	if body["hint"] == nil {
 		t.Error("the caller was not told what to do about it")
+	}
+}
+
+// A BACKUP THE FLEET'S OWN STATE REFUSES SAYS WHAT TO DO ABOUT IT. A rolling
+// upgrade's newer record on a log the backup replays, a record signed under a
+// key this node's keyring does not hold yet, a copy keyed to a log that has
+// since been recreated, and a log missing records the copy needs are
+// each a state with a remedy the engine knows — another node, or this one
+// later, takes the backup — so each is a code and a fixed hint rather than a
+// 500 that sends an operator to a node with nothing wrong on it. And the
+// error's own text, which names positions and files, stays in the log.
+func TestABackupTheFleetsStateRefusesSaysWhatToDo(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w: version 2",
+			objstore.ErrRecordUnreadable), http.StatusConflict, "record_unreadable"},
+		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w (this node holds [k1])",
+			statelog.ErrRecordUnverified), http.StatusConflict, "record_unverified"},
+		{fmt.Errorf("backup: the copy's checkpoint on CREWLET_TRACKER_LOG: %w",
+			statelog.ErrStreamRecreated), http.StatusConflict, "log_recreated"},
+		{fmt.Errorf("%w: CREWLET_TRACKER_LOG holds no record 5", backup.ErrLogGap),
+			http.StatusServiceUnavailable, "log_gap"},
+	} {
+		t.Run(c.code, func(t *testing.T) {
+			t.Parallel()
+			a := newApp(t, api.Options{Bootstrap: guarded(), Backup: &fakeBackup{err: c.err}})
+			status, body := post(t, a, "/backup?dir=/tmp/x", "t0ken")
+			if status != c.status {
+				t.Fatalf("status = %d, want %d", status, c.status)
+			}
+			if body["error"] != c.code {
+				t.Errorf("error = %v, want %s", body["error"], c.code)
+			}
+			if hint, _ := body["hint"].(string); hint == "" {
+				t.Error("the caller was not told what to do about it")
+			}
+			if body["detail"] != nil {
+				t.Errorf("the error's own text reached the caller: %v", body["detail"])
+			}
+		})
+	}
+}
+
+// A BACKUP ASKED FOR WHILE ONE RUNS IS A 409. Nothing is wrong with the node
+// or the command — the first one is still copying — and a 500 would send an
+// operator whose cron overlapped to the engine's logs for a backup that is in
+// fact under way.
+func TestABackupWhileOneRunsAnswers409(t *testing.T) {
+	t.Parallel()
+	taker := &fakeBackup{err: backup.ErrBackupRunning}
+	a := newApp(t, api.Options{Bootstrap: guarded(), Backup: taker})
+
+	status, body := post(t, a, "/backup?dir=/tmp/x", "t0ken")
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", status)
+	}
+	if body["error"] != "backup_running" || body["hint"] == nil {
+		t.Errorf("body = %v, want backup_running with a hint", body)
 	}
 }
 

@@ -129,7 +129,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 			at[i] = p
 		}
 	}
-	p := &pass{opts: opts, refs: make(chan collect.Reference)}
+	p := &pass{opts: opts, refs: make(chan objstore.Reference)}
 	p.report.Complete = true
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -163,40 +163,50 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 // pass is one run's shared state.
 type pass struct {
 	opts Options
-	refs chan collect.Reference
+	refs chan objstore.Reference
 
 	mu     sync.Mutex
 	report Report
 }
 
-// walk hands every reference to the copiers, a domain at a time.
+// walk hands every reference a REQUIRED table names to the copiers, a domain
+// and a table at a time, a keyset page of each in a read of its own
+// ([collect.Source.Required]).
+//
+// THE REQUIRED TABLES, the set the audit holds the store to and the backup
+// carries: a retired table's object is one the company has let go
+// (ADR-0048), which no reader is owed on the source and so none is owed on
+// the target, and the collector there keeps it from nothing it does not hold.
 func (p *pass) walk(ctx context.Context, at []statelog.Position) error {
 	for i, s := range p.opts.References {
-		whole, err := s.Each(ctx, at[i], objstore.Key{}, func(ref collect.Reference) error {
-			p.mu.Lock()
-			p.report.Referenced++
-			p.mu.Unlock()
-			select {
-			case p.refs <- ref:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
+		for _, w := range s.Required(at[i]) {
+			for {
+				page, whole, err := w.Next(ctx)
+				if err != nil {
+					return fmt.Errorf("objstore/migrate: walk %s's references: %w", s.Name(), err)
+				}
+				if !whole {
+					p.count(func(r *Report) { r.Complete = false })
+				}
+				if len(page) == 0 {
+					break
+				}
+				for _, ref := range page {
+					p.count(func(r *Report) { r.Referenced++ })
+					select {
+					case p.refs <- ref:
+					case <-ctx.Done():
+						return context.Cause(ctx)
+					}
+				}
 			}
-		})
-		if err != nil {
-			return fmt.Errorf("objstore/migrate: walk %s's references: %w", s.Name(), err)
-		}
-		if !whole {
-			p.mu.Lock()
-			p.report.Complete = false
-			p.mu.Unlock()
 		}
 	}
 	return nil
 }
 
 // one makes sure the target holds ref's object.
-func (p *pass) one(ctx context.Context, ref collect.Reference) error {
+func (p *pass) one(ctx context.Context, ref objstore.Reference) error {
 	name := ref.Object.Key.Name()
 	held, err := p.holds(ctx, name, ref.Object)
 	if err != nil {
@@ -256,7 +266,7 @@ func (p *pass) count(fn func(*Report)) {
 	fn(&p.report)
 }
 
-func (p *pass) unreadable(ref collect.Reference, damaged bool) {
+func (p *pass) unreadable(ref objstore.Reference, damaged bool) {
 	p.count(func(r *Report) {
 		r.Unreadable++
 		if len(r.Files) < UnreadableShown {

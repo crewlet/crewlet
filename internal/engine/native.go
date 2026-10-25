@@ -13,10 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -60,13 +64,16 @@ import (
 // unhealthy.
 //
 // The gate is per DOMAIN rather than per node, from each domain's own
-// declaration: a compacted domain's gap is a coverage number rather than a
-// fault, so taking a copy out of service for one would be the outage the number
-// exists to avoid.
+// declaration ([statelog.Domain.GatesSeatAdmission]): a compacted domain's gap
+// is a coverage number rather than a fault, so withholding seats for one would
+// be the outage the number exists to avoid. And the copy verdict is per domain
+// too, for every domain (ADR-0046): a domain's copy that is WRONG goes out of
+// service for its own operations, whatever it declares about seats.
 
 // native holds this node's native-backend runtime: the tracker's and the
-// knowledge base's read and write sides over the core's logs, the lexical index
-// both are searched through, and the change feeds.
+// knowledge base's read and write sides over the core's logs, the code host's
+// write side and its git surface over the code log, the lexical index the
+// tracker and the knowledge base are searched through, and the change feeds.
 //
 // EVERY FIELD IS WRITTEN ONCE, by [Engine.startNative], before the struct is
 // published to [Engine.native] — which is why there is no mutex here and why
@@ -80,6 +87,12 @@ import (
 // without `data` holds neither: it runs [remoteNative] instead, and reaches the
 // halves through a data node.
 type native struct {
+	// built is the native-backend choices of the company that started this
+	// runtime, which are what it serves until the process restarts — the
+	// halves below exist exactly where it says so, and an activation that
+	// says otherwise is told so ([Engine.sayBackendSwitches]).
+	built builtWith
+
 	// indexer keeps the lexical search index behind the page projection.
 	indexer *search.Indexer
 
@@ -87,9 +100,64 @@ type native struct {
 	writer *tracker.Writer
 	pages  *pages.Store
 
-	// trackerReader and pageReader are the read paths.
+	// trackerReader and pageReader are the read paths of the tool surfaces,
+	// each nil where the company keeps that half elsewhere — which is what
+	// every question about the TOOLS reads ([Engine.nativeHalves]).
 	trackerReader *tracker.Reader
 	pageReader    *pages.Reader
+
+	// trackerObjects is the tracker's rows as the object store's passes
+	// read them, set on every runtime [Engine.startNative] publishes — the
+	// same reader as trackerReader where the company's tracker is native.
+	//
+	// ITS OWN FIELD because the question it answers is the LOG's, not the
+	// tools': the core runs the tracker's log whatever `tracker.backend`
+	// says, so a company on Jira, or on none, whose pages are the engine's
+	// own still applies every `tracker_files` row its log carries — and one
+	// that moved its tracker off native holds every project file it ever
+	// stored. Those rows name objects the collector must keep and the audit
+	// must check. Read from trackerReader, the answer was "no tracker" for
+	// exactly those companies, and their collector never started.
+	trackerObjects *tracker.Reader
+
+	// codeReader is the code log's rows as every reader reads them, set on
+	// every runtime [Engine.startNative] publishes — the code log is the
+	// core's and runs in every register, whatever the company's tools are,
+	// so its pack rows are the object store's to keep from the first push.
+	codeReader *code.Reader
+
+	// codeStore and committer are the code host's WRITE side — the
+	// lifecycle store the repositories' reconcile and retention write
+	// through, and the committer a push is decided by — built only where
+	// the company that started this runtime set `code.native`
+	// ([builtWith.runsCode]) and nil otherwise: a log runs in every
+	// register, but a committer exists only where somebody asked for pushes
+	// to be decided. Handed out only through [Engine.writeSide], so a node
+	// in a maintenance mode decides nothing.
+	codeStore *code.Store
+	committer *code.Committer
+
+	// codeHost is this node's git surface (internal/code/host) — its cache,
+	// its git pool, the hook relay — built only where the company that
+	// started this runtime set `code.native` AND this node has the git role
+	// ([Engine.hostsGit]), nil otherwise. Read per request through
+	// [Engine.CodeHost], never captured.
+	codeHost *host.Server
+
+	// gitCache is the cache codeHost serves from, built and stopped with it
+	// and nil where it is: held only to be READ, at each alarm evaluation
+	// ([Engine.codeReading]) — what a node's maintenance refused is no
+	// request's question, so no route reaches it through the host.
+	gitCache *cache.Cache
+
+	// gitCacheSize is how this node sized gitCache when it built the host —
+	// what [Engine.warnTiers] compares with each applied epoch's repository
+	// limit. Zero where there is no host.
+	gitCacheSize codeCacheSize
+
+	// codeHostStop is the one bounded stop the teardown and the shutdown
+	// share ([native.stopCodeHost]).
+	codeHostStop boundedStop
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -142,7 +210,7 @@ var errNoCore = errors.New("engine: the native tracker and knowledge base run " 
 // and container twice on a node's first company.
 //
 // A NODE WITHOUT `data` builds none of it: it holds no copy to read or write,
-// and its seats' tools reach both halves through a data node
+// and its seats' tools reach every half through a data node
 // ([Engine.startRemote]).
 //
 // The store and the fleet are not nil-checked: [New] refuses a Backends
@@ -157,16 +225,19 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if core == nil || core.log == nil {
 		return errNoCore
 	}
-	// WHICH HALVES THIS COMPANY RUNS. The logs behind both run whatever
+	// WHICH HALVES THIS COMPANY RUNS, as ONE READING of its choices kept on
+	// the runtime: the halves built below are derived from it, and so is
+	// what every later activation is compared against
+	// ([Engine.sayBackendSwitches]). The logs behind every half run whatever
 	// this says — they are the core's — so a company on Jira and Confluence
 	// still applies the tracker's and the knowledge base's logs, and simply
 	// has no writer or reader over either.
-	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
-	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
+	built := builtFrom(c.Config)
+	runTracker, wiki := built.runsTracker(), built.runsWiki()
 	nodeID, sl := core.nodeID, core.log
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	n := &native{run: runCtx, stop: cancel}
+	n := &native{run: runCtx, stop: cancel, built: built}
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down only once the half is the
 	// engine's. A slice answerer's registration is copied with
@@ -245,6 +316,74 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: tracker reader: %w", err)
 		}
 	}
+	// THE TRACKER'S ROWS FOR THE OBJECT STORE, whatever the tools are: the
+	// tool surface's own reader where there is one, and otherwise one built
+	// for the estate alone, over the log the core runs regardless — see
+	// [native.trackerObjects].
+	n.trackerObjects = n.trackerReader
+	if n.trackerObjects == nil {
+		running := sl.Domain(tracker.Domain{}.Name())
+		if running == nil {
+			return fmt.Errorf("engine: this node runs no tracker domain, so the " +
+				"object store has no estate to read project files from — the " +
+				"domain is in the register and its stream failed to come up")
+		}
+		if n.trackerObjects, err = tracker.NewReader(sl.estate().Reader(), running.reader); err != nil {
+			return fmt.Errorf("engine: tracker reader for the object store: %w", err)
+		}
+	}
+	// THE CODE LOG'S ROWS, UNCONDITIONALLY: there is no backend to choose for
+	// the code host, so every data node runs the code log in its core, and
+	// the pack bundles its rows name are kept, audited and backed up from
+	// here.
+	{
+		running := sl.Domain(code.Domain{}.Name())
+		if running == nil {
+			return fmt.Errorf("engine: this node runs no code domain, so its rows " +
+				"have no reader — the domain is in the register and its stream " +
+				"failed to come up")
+		}
+		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail
+		// reports what a push to it is held to now, which is what an
+		// import chunks its pushes by.
+		if n.codeReader, err = code.NewReader(code.ReaderOptions{Log: running.reader, Limits: e.codeLimits,
+			Roster: e.codeRoster}); err != nil {
+			return fmt.Errorf("engine: code reader: %w", err)
+		}
+		// THE CODE HOST'S WRITE SIDE, where the company hosts code. Its log
+		// runs in every register (above); its committer and its lifecycle
+		// store exist only where a push may be decided.
+		if built.runsCode() {
+			if n.codeStore, err = code.NewStore(code.StoreOptions{
+				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+			}); err != nil {
+				return fmt.Errorf("engine: code store: %w", err)
+			}
+			if n.committer, err = code.NewCommitter(code.CommitterOptions{
+				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+				// THE DECIDING NODE'S EPOCH, read per decision, so a
+				// limit an activation moves holds from that activation
+				// on — on every committer at once, since each reads its
+				// own node's current epoch.
+				Limits: e.codeLimits, Retention: e.codeDeletedRetention,
+				Metrics: e.metrics, Logger: logging.Get("code"),
+			}); err != nil {
+				return fmt.Errorf("engine: code committer: %w", err)
+			}
+		}
+		// AND ITS GIT SURFACE, on a node with the git role: the cache it
+		// serves persons' clones, fetches and pushes from, which reaches
+		// the rows and the committers through the estate's router like
+		// every other surface. Inside this function's failure path, whose
+		// shutdown stops it first.
+		if e.hostsGit(built) {
+			var parts codeHostParts
+			if parts, err = e.buildCodeHost(ctx, nodeID, boot); err != nil {
+				return err
+			}
+			n.codeHost, n.gitCache, n.gitCacheSize = parts.host, parts.cache, parts.size
+		}
+	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
 	//
@@ -268,6 +407,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// per query, because an apply replaces the provider and can turn
 	// `knowledge.vectors` off.
 	vectors := search.NewQueryVectors(e.queryModel)
+	// EVERY SCAN THIS NODE RUNS ASKS ITS COPIES' VERDICT FIRST — its own
+	// searches' range and every peer's slice alike (ADR-0046): a range
+	// over a copy out of service is counted missing, never answered from
+	// rows this node has stopped serving.
+	copies := e.copies()
 	// AND THE TRACKER'S OWN SEARCH over it, with its own fan-out rather
 	// than the knowledge searcher's: each verb's corpus filter is its own,
 	// and neither can widen into the other's.
@@ -289,7 +433,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			index: n.indexer,
 			fan: &search.FanOut{
 				Self:    nodeID,
-				Local:   search.NodeScanner{Index: n.indexer},
+				Local:   search.NodeScanner{Index: n.indexer, Copies: copies},
 				Peers:   e.searchPeers(),
 				Roster:  e.dataRoster,
 				Corpus:  n.indexer.Corpus,
@@ -305,7 +449,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// searches.
 	if e.backends.Queue != nil {
 		n.stopSlices, err = search.ServeSlices(runCtx, e.backends.Queue, nodeID,
-			search.NodeScanner{Index: n.indexer})
+			search.NodeScanner{Index: n.indexer, Copies: copies})
 		if err != nil {
 			return fmt.Errorf("engine: serve search slices: %w", err)
 		}
@@ -352,6 +496,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Report:  e.reportSearch,
 			Enter:   e.enterSearch,
 			Vectors: vectors,
+			Copies:  copies,
 		})
 	}
 
@@ -374,23 +519,46 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// built in a capacity window must not ([Engine.startNativeCollector]).
 	started = true
 	log.InfoContext(ctx, "native_backends_started",
-		"tracker", runTracker, "knowledge", wiki)
+		"tracker", runTracker, "knowledge", wiki, "code", built.runsCode(), "git", n.codeHost != nil)
 	return nil
 }
 
 // objectEstates is every domain of this runtime whose rows may name objects,
-// as the object store's passes read them — empty where it runs none.
+// as the object store's passes read them — the tracker's and the code log's,
+// beside which [objectEstatesFor] adds the core's artifacts log. Empty only on
+// a zero runtime.
 //
-// EVERY DOMAIN A DECLARATION NAMES must be here: [collect.Sources] refuses a
-// declared table whose domain has no estate, and the engine's own test builds
-// the sources from this list against internal/objstore/references, so a
-// consumer declaring a table in a new domain fails the build here rather
-// than leaving the passes unstarted in production.
+// ONE ESTATE PER DOMAIN A DECLARATION NAMES, whatever backends the company
+// chose: a domain's rows exist because its log runs, not because its tool
+// surface does, and the core runs every domain's log on every data node.
+// Offered only where the company's tools were, the tracker's estate was
+// missing on every company whose knowledge base is the engine's own and whose
+// tracker is not — Jira, or none — so the rows naming objects were read by
+// nothing, and there was no collector at all: nothing collected, nothing
+// audited, and NOTHING SAID SO. The empty list never reached
+// [collect.Sources], which would have refused it by name —
+// [Engine.startNativeCollector] returned before building the sources, with no
+// warning and no status line, and the only sign was a `crewlet objects
+// status` that never showed a pass. That early return is gone
+// ([Engine.startCollectorOver]).
+//
+// The engine's own tests build the sources from this list against
+// internal/objstore/references, so a consumer declaring a table in a new
+// domain fails the build here rather than leaving the passes unstarted in
+// production.
 func (n *native) objectEstates() []collect.Estate {
-	if n.trackerReader == nil {
+	if n.trackerObjects == nil {
+		// A ZERO RUNTIME — a test's — holds no domain's rows. Every
+		// runtime [Engine.startNative] publishes sets the field, and a
+		// collector over one that did not is refused by name
+		// ([Engine.startCollectorOver]).
 		return nil
 	}
-	return []collect.Estate{tracker.ObjectEstate{Reader: n.trackerReader}}
+	estates := []collect.Estate{tracker.ObjectEstate{Reader: n.trackerObjects}}
+	if n.codeReader != nil {
+		estates = append(estates, code.ObjectEstate{Reader: n.codeReader})
+	}
+	return estates
 }
 
 // startNativeFor brings the native halves up for the first company an APPLY
@@ -435,9 +603,10 @@ func (n *native) objectEstates() []collect.Estate {
 // The halves are NOT taken down if the apply is refused after this. They
 // follow the fleet's logs rather than the revision, so a node running them
 // with the previous epoch still serves that epoch correctly — and the retry
-// finds them already up. Which halves it has (the tracker, the knowledge base)
-// are the ones this company declared; a later revision that changes them
-// takes effect on restart, as switching a backend always has.
+// finds them already up. Which halves it has (the tracker, the knowledge base,
+// the code host) are the ones this company declared; a later revision that
+// changes them takes effect on restart, as switching a backend always has —
+// and says so at its activation ([Engine.sayBackendSwitches]).
 func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	if e.native.Load() != nil || e.remote.Load() != nil || c == nil {
 		return false, nil
@@ -455,9 +624,14 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 
 // startNativeCollector starts the object store's collector duty on this data
 // node: it deletes objects no row names and audits what the store has lost,
-// both against the files the tracker's rows name — without a tracker there are
-// no files, and nothing to collect against. ONE CALL FOR BOTH CALLERS, [New]
-// and [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
+// both against the rows of every domain a declared table names — the native
+// half's and the core's artifacts log alike. It runs wherever the node runs
+// its native half, whatever backends the company chose
+// ([native.objectEstates]): a company that moved its tracker off native still
+// holds the rows that name its project files' objects. A runtime it cannot
+// start over is logged as `object_collector_not_started`, never passed over in
+// silence ([Engine.startCollectorOver]). ONE CALL FOR BOTH CALLERS, [New] and
+// [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
 //
 // # Only where the mode publishes
 //
@@ -475,38 +649,52 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 // would free.
 //
 // THE DECLARED LIST, read through each domain's estate — never a source written
-// here — so the tables the collector keeps alive are the ones the backup
-// carries and the schema gate holds.
+// here — so the tables the collector keeps alive, and the Required ones among
+// them the audit checks and the backup carries, are the ones the schema gate
+// holds.
 func (e *Engine) startNativeCollector(ctx context.Context) {
-	n := e.native.Load()
-	if n == nil {
-		return
-	}
-	// THE NATIVE HALF'S AND THE CORE'S: the artifacts log runs on every data
-	// node, and its versions and assets name objects the same store keeps.
-	estates := objectEstatesFor(n, e.ArtifactsReader())
-	if len(estates) == 0 {
-		return
-	}
-	refs, err := collect.Sources(references.All, estates...)
-	if err == nil {
-		err = e.startObjectCollector(ctx, refs)
-	}
-	if err != nil {
+	if err := e.startCollectorOver(ctx, e.native.Load()); err != nil {
 		log.WarnContext(ctx, "object_collector_not_started", "error", err)
 	}
 }
 
+// startCollectorOver starts the collector over n's estates and the core's
+// artifacts estate ([objectEstatesFor]), and answers why it did not — which
+// [Engine.startNativeCollector] logs.
+//
+// A RUNTIME THAT OFFERS NO ESTATE IS REFUSED, NEVER SKIPPED. Every runtime
+// [Engine.startNative] publishes offers one per declaring domain
+// ([native.objectEstates]), so one that offers none is a wiring mistake, and
+// [collect.Sources] refuses it by name — the declared table no estate reads —
+// which is the line an operator can find. This step used to return early and
+// silently on an empty list, and that is how every company whose tracker was
+// not native went without a collector with nothing saying so. Only a node
+// with no native half at all starts none without a word — nil, because it has
+// met no company yet, or it holds no estate and asks a data node for every
+// row.
+func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
+	if n == nil {
+		return nil
+	}
+	refs, err := collect.Sources(references.All, objectEstatesFor(n, e.ArtifactsReader())...)
+	if err != nil {
+		return err
+	}
+	return e.startObjectCollector(ctx, refs)
+}
+
 // startNativeDuties arms the native half's fleet-singleton duties: the vector
 // domain's one writer, which turns the tracker's and the knowledge base's
-// sources into vector records, and the trash reaper, which purges what has
-// been in a trash past its term ([Engine.startTrashReaper]). ONE CALL FOR BOTH
-// CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
-// be missing a duty a boot would have armed. The trim and the identity
-// estate's duties are the core's, armed at boot by [Engine.startCoreDuties].
+// sources into vector records, the trash reaper, which purges what has been in
+// a trash past its term ([Engine.startTrashReaper]), and, where the half hosts
+// code, the purge of deleted repositories ([Engine.startCodeRetention]). ONE
+// CALL FOR BOTH CALLERS, [New] and [Engine.startNativeFor], so halves met at an
+// apply cannot be missing a duty a boot would have armed. The trim, the
+// identity estate's duties and the usage publisher are the core's, armed at
+// boot by [Engine.startCoreDuties].
 func (e *Engine) startNativeDuties(ctx context.Context) {
-	c := e.core.Load()
-	if e.native.Load() == nil || c == nil {
+	c, n := e.core.Load(), e.native.Load()
+	if n == nil || c == nil {
 		return
 	}
 	// Without it every other half of semantic search is present and
@@ -514,6 +702,10 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// rather than as a missing one.
 	e.startEmbedding(ctx, c.log)
 	e.startTrashReaper(ctx)
+	// AND THE CODE HOST'S PURGE, where the half hosts code: without it a
+	// repository removed from code.repos is deleted and never purged, and
+	// its name and its packs are held for ever.
+	e.startCodeRetention(ctx, n)
 }
 
 // stopNative ends this node's native halves. Nil-safe, which is the node that
@@ -530,7 +722,7 @@ func (e *Engine) stopNative(ctx context.Context) { e.native.Load().shutdown(ctx)
 // other.
 //
 // Nil-safe throughout, because the failure path can reach it with no answerer
-// registered and nothing in the wait group.
+// registered, no code host built and nothing in the wait group.
 //
 // IT DOES NOT STOP THE LOGS, which are the core's: see [Engine.stopCore], which
 // the teardown runs after this.
@@ -559,6 +751,16 @@ func (n *native) shutdown(ctx context.Context) {
 		// counts as answered.
 		_ = n.stopSlices(context.WithoutCancel(ctx))
 	}
+	// THE CODE HOST, THEN THE COMMITTER, BEFORE THE LOG THEY PUBLISH ON,
+	// which the core stops after this. The teardown stopped both already,
+	// the host first, ahead of the estate subject ([Engine.stopCodeHost],
+	// [Engine.stopCommitter]); these are the failure path's stops. A second
+	// one of either costs nothing: the host's stop runs once however many
+	// ask for it, so a first stop cut short by its bound is not waited for
+	// again ([native.stopCodeHost]), and the committer's first stop returns
+	// only once its batches have.
+	n.stopCodeHost(ctx)
+	n.stopCommitter(ctx)
 	n.stop()
 	n.done.Wait()
 }
@@ -577,16 +779,61 @@ func (e *Engine) NativeStarted() bool {
 	return e.native.Load() != nil || e.remote.Load() != nil
 }
 
-// nativeHalves is which halves this company runs natively here, however this
-// node reaches them — false where it runs no native runtime at all.
-func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
+// halves is which halves this company runs natively here, as one reading of
+// this node's runtime found them ([Engine.nativeHalves]).
+type halves struct {
+	// tracker and wiki say which halves the company runs natively, however
+	// this node reaches them: through its own copy on a data node, through a
+	// data node on a node without `data`. Both false on a node running no
+	// native runtime — none built yet, which is a node that booted with no
+	// company and has not applied one — and on one whose company runs both
+	// halves on vendors.
+	tracker, wiki bool
+	// code says the company hosts its repositories in the engine
+	// (`code.native`) and this node's runtime was built to serve them —
+	// through its own copy and committer on a data node, through a data node
+	// on a node without `data`. Counted by the choice the runtime was built
+	// with rather than by a reader, because the code log's reader exists in
+	// every register whatever the company hosts.
+	code bool
+	// own is this data node's own runtime, for a reader that needs more of
+	// it than which halves it runs (the ranked item search, [OperatorNative];
+	// whether a half is reached through this node's copy or a data node's,
+	// [Engine.skillSource]) — and nil on a node without `data`, which holds
+	// no runtime of its own and reaches every half through a data node, and
+	// on a node running none.
+	// Taken in the same reading as the halves, so the two never describe
+	// different runtimes.
+	own *native
+}
+
+// nativeHalves is [halves] for e at this instant: THE ONE DERIVATION of which
+// halves a node runs, read by seat admission ([Engine.StateLogHydrated]), by
+// whether a node may keep its seats ([Engine.serviceable]), by every read seam
+// the operator's surfaces are handed ([OperatorNative], [OperatorCode]), by
+// the seats' own tracker and knowledge-base seams ([Engine.trackerHalves],
+// [Engine.pageHalves]), by the inbound parsers ([Engine.nativeParsers]), by the
+// knowledge searcher ([Engine.Knowledge]) and by where the skills are read
+// ([Engine.skillSource]) — so a change to what counts as running a half (a new
+// kind of runtime, a half that needs more than its reader) is made here once
+// and cannot reach one of them and not the others. Each of those used to read
+// the two runtime pointers itself, and the parsers counted a data node's
+// halves by its WRITERS where everything else counted its readers: the same
+// fact today, because one block builds both, and two facts the first time a
+// runtime is built with one and not the other.
+//
+// One atomic load on a node without `data` and two on a data node, which holds
+// no remote runtime: the two pointers are never both set, since a node builds
+// one runtime or the other once per process.
+func (e *Engine) nativeHalves() halves {
 	if r := e.remote.Load(); r != nil {
-		return r.tracker, r.wiki, true
+		return halves{tracker: r.tracker, wiki: r.wiki, code: r.built.runsCode()}
 	}
 	if n := e.native.Load(); n != nil {
-		return n.trackerReader != nil, n.pageReader != nil, true
+		return halves{tracker: n.trackerReader != nil, wiki: n.pageReader != nil,
+			code: n.built.runsCode(), own: n}
 	}
-	return false, false, false
+	return halves{}
 }
 
 // Tracker is this node's OWN copy's tracker read side, or nil — what this
@@ -603,10 +850,7 @@ func (e *Engine) Tracker() *tracker.Reader {
 
 // TrackerWriter is this node's tracker write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
-func (e *Engine) TrackerWriter() *tracker.Writer {
-	writer, _ := e.writeSide()
-	return writer
-}
+func (e *Engine) TrackerWriter() *tracker.Writer { return e.writeSide().tracker }
 
 // Pages is this node's OWN copy's knowledge read side, or nil — see
 // [Engine.Tracker]; a surface reads through [OperatorPages].
@@ -618,24 +862,9 @@ func (e *Engine) Pages() *pages.Reader {
 	return n.pageReader
 }
 
-// Backlinks is this node's "linked from" reader — the lexical index, which
-// derives the links from the bodies it reads — or nil for a node with no
-// native backend. Nil only where the index is: a company on Jira and
-// Confluence has no body this engine indexes, so no link it could list.
-func (e *Engine) Backlinks() *search.Indexer {
-	n := e.native.Load()
-	if n == nil {
-		return nil
-	}
-	return n.indexer
-}
-
 // PagesStore is this node's knowledge write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
-func (e *Engine) PagesStore() *pages.Store {
-	_, store := e.writeSide()
-	return store
-}
+func (e *Engine) PagesStore() *pages.Store { return e.writeSide().pages }
 
 // NativeSearcher is the native knowledge searcher, or nil.
 func (e *Engine) NativeSearcher() *pages.Searcher {
@@ -737,19 +966,12 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as
 	// a data node does.
-	var runTracker, runWiki bool
-	if r := e.remote.Load(); r != nil {
-		runTracker, runWiki = r.tracker, r.wiki
-	} else if n := e.native.Load(); n != nil {
-		runTracker, runWiki = n.writer != nil, n.pages != nil
-	} else {
-		return nil, nil
-	}
+	run := e.nativeHalves()
 	var (
 		parsers []notify.Parser
 		prompts []notify.Prompt
 	)
-	if runTracker {
+	if run.tracker {
 		// NO LEAD MAP AND NO BASE URL. The tracker's own parser reads a
 		// record's routing snapshot, which the WRITER resolved at commit
 		// — a mention resolved at read time names whoever holds the role
@@ -757,7 +979,7 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		parsers = append(parsers, tracker.NewParser(tracker.ParserOptions{}))
 		prompts = append(prompts, tracker.Prompt{})
 	}
-	if runWiki {
+	if run.wiki {
 		// THE LEAD MAP, and the base its notifications link a person to —
 		// `api.external_url`, the address people reach this deployment at,
 		// since the link is opened by whoever the change woke and never by a
@@ -770,12 +992,9 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	return parsers, prompts
 }
 
-// reconcileNative swaps the native parsers for a newly applied epoch.
-//
-// The same edge every vendor reconciler sits on, and for the same reason: a
-// node that kept its boot-time parser would route the new revision's work by
-// the old company's org chart — an item filed into a project whose lead
-// moved would keep waking the seat that used to own it.
+// reconcileNative brings the native runtime to a newly applied epoch: it says
+// which of the epoch's choices wait for a restart, and swaps the native
+// parsers.
 //
 // NOT the appliers, the index, the stores or the feeds. Those follow a LOG,
 // which no company revision changes; rebuilding them here would restart this
@@ -786,11 +1005,42 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 // built once per process, with the first company that runs one — so a
 // revision that changes it takes effect on restart, and the parser staying
 // registered until then is the honest state: the records are still there
-// and still reachable.
+// and still reachable. What this does instead is SAY so, first: see
+// [Engine.sayBackendSwitches].
+//
+// # The applies are the published company's, not the inbound edge's
+//
+// The parsers ride the inbound edge ([Engine.swapNativeParsers]), and a node
+// with none has nothing to swap. The chart's projects, the knowledge
+// containers and the repositories code.repos declares do not: they are
+// derived from the org chart and the company document rather than from the
+// parsers, and are written through the runtime's own writers, so they follow
+// the PUBLISHED company — [Engine.followCompany] is where they run, after the
+// publish, whatever the edge is doing. Running them here as well would write
+// them twice per apply and once against a company that is not current yet.
 func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
-	if e.native.Load() == nil && e.remote.Load() == nil {
+	built, runs := e.runtimeBuilt()
+	if !runs {
 		return
 	}
+	// THE CHOICES THIS RUNTIME WAS NOT BUILT WITH, said once per activation:
+	// the runtime is built once per process, so a revision that moves a
+	// native backend activates cleanly here and changes nothing until a
+	// restart — and before this line nothing said so. FIRST: the line is
+	// about the runtime, and a node with no edge (one in a maintenance mode)
+	// runs one all the same.
+	e.sayBackendSwitches(ctx, built, c)
+	e.swapNativeParsers(ctx, c)
+}
+
+// swapNativeParsers swaps the native parsers on this node's inbound edge for
+// the epoch c's, and does nothing on a node whose edge is not running.
+//
+// The same edge every vendor reconciler sits on, and for the same reason: a
+// node that kept its boot-time parser would route the new revision's work by
+// the old company's org chart — an item filed into a project whose lead moved
+// would keep waking the seat that used to own it.
+func (e *Engine) swapNativeParsers(ctx context.Context, c *Company) {
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
@@ -808,12 +1058,6 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 				"detail", "the previous routing is still current")
 		}
 	}
-	// THE PROJECTS AND THE CONTAINERS ARE NOT RECONCILED HERE. They are
-	// derived from the org CHART rather than from the parsers this function
-	// swaps, so they follow the published company — [Engine.followCompany]
-	// is where they run, after the publish. Running them here as well would
-	// write them twice per apply and once against a company that is not
-	// current yet.
 }
 
 // applyContainers makes the knowledge containers this company names exist.
@@ -1053,6 +1297,12 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 	for unit := range o.AllUnits() {
 		add(unit.Project, unit.Name, unit.Purpose, unit.Key())
 	}
+	// A SEAT'S HOME UNIT THROUGH ONE INDEX of the chart ([org.Index.UnitFor]),
+	// built at the first seat that names a project of its own — most name
+	// none, and their home is never asked — because the chart's own
+	// [org.Organization.UnitFor] walks every unit's seats until one holds
+	// the seat, which asked of every seat on every apply cost seats².
+	var homes *org.Index
 	for role := range o.AllRoles() {
 		// EVERY seat, not just the root-level ones: `Organization.Roles`
 		// holds only the seats declared outside a unit, and a seat
@@ -1063,8 +1313,14 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 		// what a founder naming one on a seat meant — a project for that
 		// seat's work rather than for its unit's — and its home unit,
 		// so the project still says where in the company it sits.
+		if org.NormalizeScope(role.Project) == "" {
+			continue
+		}
+		if homes == nil {
+			homes = o.Index()
+		}
 		var home string
-		if unit := o.UnitFor(role); unit != nil {
+		if unit := homes.UnitFor(role); unit != nil {
 			home = unit.Key()
 		}
 		add(role.Project, role.Name, "", home)
@@ -1351,20 +1607,12 @@ type trackerSeams struct {
 // copy that had not seen it; one whose every call goes through the router
 // cannot.
 //
-// A data node that hands out no writer — one in a maintenance mode, which may
-// publish nothing ([Engine.writeSide]) — hands out no tracker tools either,
-// rather than tools whose every write is taken to a peer.
+// A node that hands out no tracker writer ([Engine.writers]) — any node in a
+// maintenance mode, which may publish nothing — hands out no tracker tools
+// either, rather than tools whose every write is refused.
 func (e *Engine) trackerHalves() (trackerSeams, bool) {
-	if r := e.remote.Load(); r != nil {
-		if !r.tracker {
-			return trackerSeams{}, false
-		}
-	} else {
-		n := e.native.Load()
-		writer, _ := e.writeSide()
-		if n == nil || n.trackerReader == nil || writer == nil {
-			return trackerSeams{}, false
-		}
+	if writes, _ := e.writers(e.nativeHalves()); !writes {
+		return trackerSeams{}, false
 	}
 	r := e.router
 	return trackerSeams{
@@ -1601,18 +1849,46 @@ func LiveSkillsContainer(e *Engine) func() string { return e.skillsContainer }
 // [Engine.trackerHalves] gives: the router's on every node.
 func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 	func(context.Context, statelog.Position) error, bool) {
-	if r := e.remote.Load(); r != nil {
-		if !r.wiki {
-			return nil, nil, nil, false
-		}
-	} else {
-		n := e.native.Load()
-		_, store := e.writeSide()
-		if n == nil || n.pageReader == nil || store == nil {
-			return nil, nil, nil, false
-		}
+	if _, writes := e.writers(e.nativeHalves()); !writes {
+		return nil, nil, nil, false
 	}
 	return e.router.Pages(), e.router.Pages(), e.router.Await, true
+}
+
+// writers is which of the halves one reading of this node's runtime found
+// (run) it hands a WRITER for — the tracker's and the knowledge base's. THE
+// ONE GATE every surface that writes the company's records through this node's
+// router is handed its writer behind: a seat's tools and the engine's write of
+// a turn's spend ([Engine.trackerHalves], [Engine.pageHalves]), the operator's
+// MCP and act transport, the purge and a project file's upload and removal
+// ([OperatorWorkWriter], [OperatorPageWriter]).
+//
+// NONE IN A MODE THAT PUBLISHES NOTHING, WHATEVER THE NODE HOLDS. The mode is
+// this node's promise that it starts nothing that writes
+// ([statelog.MaintenanceMode.Publishes]), and a write it routes to a data node
+// is one it starts. A node without `data` used to be exempt, on the reading
+// that the data node's mode was that node's to answer for — but a capacity
+// window puts every data node in the mode too, so the routed write was refused
+// there, and only after the request had done its work: a file's upload
+// streamed up to a gibibyte into the object store before its row was refused,
+// as `unavailable`, which a client retries, and each attempt left an object the
+// collector — which stands down in the mode — could not free until the window
+// closed. And outside a window it was a node in the mode writing into a fleet
+// that is not, which is the one thing its operator restarted it to rule out.
+//
+// AND ON A DATA NODE, ONLY THE HALVES ITS OWN WRITE SIDE HOLDS
+// ([Engine.writeSide]): a half is counted by its reader ([Engine.nativeHalves]),
+// and a writer is a fact of its own. A node without `data` holds no write side
+// and writes every half it runs through a data node.
+func (e *Engine) writers(run halves) (tracker, wiki bool) {
+	if !e.mode.Publishes() {
+		return false, false
+	}
+	if run.own == nil {
+		return run.tracker, run.wiki
+	}
+	w := e.writeSide()
+	return run.tracker && w.tracker != nil, run.wiki && w.pages != nil
 }
 
 // ---- what the operator's surfaces are given ------------------------------ //
@@ -1623,7 +1899,7 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 //
 // THE ROUTER'S, ON EVERY NODE, exactly as a seat's tools are handed it
 // ([Engine.trackerHalves]), and never this node's own copy read directly. Read
-// directly, a data node whose copy was out of service — wrong rather than
+// directly, a data node whose tracker copy was out of service — wrong rather than
 // behind, or its file shut — sent its own seats' calls to a peer's copy and
 // went on answering its operator from the one it had stopped serving: a board,
 // a person's inbox or a purge read off rows the node itself would not vouch
@@ -1631,17 +1907,75 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 // operator is answered as the seats are, from this node's copy while it serves
 // and from another data node's while it does not.
 func OperatorWork(e *Engine) (estate.Work, bool) {
-	runTracker, _, ok := e.nativeHalves()
-	if !ok || !runTracker || e.router == nil {
-		return estate.Work{}, false
+	reads := OperatorNative(e)
+	return reads.Work, reads.Tracker
+}
+
+// OperatorReads is every native read seam the operator's surfaces are handed —
+// the tracker, the knowledge base and the ranked item search — as ONE READING
+// of this node's runtime found them.
+//
+// ONE READING, because a surface that asks per request takes all three at once
+// for one answer, and three separate accessors each loaded the runtime again:
+// a node whose first apply published its runtime between two of them handed one
+// answer a view with no tracker beside a knowledge base that had one — two
+// moments in one answer. Taken here, the view describes the runtime as it was at
+// one instant, at the cost of one atomic load on a node without `data` and two
+// on a data node, and no lock, no I/O and no allocation.
+type OperatorReads struct {
+	// Work is the tracker's read side, the router's — the zero facade where
+	// Tracker is not set, for [OperatorWork]'s rule.
+	Work estate.Work
+	// Pages is the knowledge base's read side, the router's, a page's
+	// backlinks included — the zero facade where Wiki is not set, for
+	// [OperatorPages]' rule.
+	Pages estate.Pages
+	// Tracker and Wiki say which halves this company runs natively here.
+	Tracker, Wiki bool
+	// Search says the ranked item search is served — through Work, which
+	// is the seam it is. It needs the tracker AND this node's index, which
+	// is why it is a half of its own: a runtime can hold the board with no
+	// item searcher, and the index is built under either backend, so on a
+	// company whose tracker is a vendor's it holds pages and no task.
+	// [WorkSearcher]'s rule.
+	Search bool
+}
+
+// OperatorNative is [OperatorReads] for e at this instant — the one reading
+// [OperatorWork], [OperatorPages] and [WorkSearcher] are each a view of, so the
+// rule for when a seam is handed out is stated once. Which halves the company
+// runs is [Engine.nativeHalves]' answer rather than a derivation of its own, so
+// the operator is handed a half exactly where seat admission waits on it.
+func OperatorNative(e *Engine) OperatorReads {
+	if e.router == nil {
+		return OperatorReads{}
 	}
-	return e.router.Work(), true
+	run := e.nativeHalves()
+	out := OperatorReads{
+		Tracker: run.tracker,
+		Wiki:    run.wiki,
+		// THE TRACKER'S SEARCH, so the tracker as well as the index: the
+		// index is built under either backend, and on a company whose
+		// tracker is a vendor's it holds no task to rank. A NODE WITHOUT
+		// `data` holds no index of its own (`own` is nil) and asks a data
+		// node for the ranked search as it asks for everything else, so it
+		// serves one wherever it serves the board.
+		Search: run.tracker && (run.own == nil || run.own.itemSearch != nil),
+	}
+	if out.Tracker {
+		out.Work = e.router.Work()
+	}
+	if out.Wiki {
+		out.Pages = e.router.Pages()
+	}
+	return out
 }
 
 // OperatorWorkWriter is the tracker's write side for those surfaces, acting as
 // whichever party each call names — or false where this node hands out no
-// tracker writer: a company on a vendor tracker, or a data node in a
-// maintenance mode, which may publish nothing ([Engine.trackerHalves]'s rule).
+// tracker writer: a company on a vendor tracker, or any node in a maintenance
+// mode, which may publish nothing, whether or not it holds data
+// ([Engine.writers]).
 func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) {
 	if _, ok := e.trackerHalves(); !ok {
 		return nil, false
@@ -1651,17 +1985,16 @@ func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) 
 
 // OperatorPages is the knowledge base's read side as the operator's surfaces
 // reach it, through the router for [OperatorWork]'s reason — or false where
-// this company runs no native knowledge base here.
+// this company runs no native knowledge base here. A page's backlinks are read
+// through it too ([estate.Pages.LinkedFrom]): they read the tracker's copy as
+// well as the knowledge base's, and are answered only where both serve.
 func OperatorPages(e *Engine) (estate.Pages, bool) {
-	_, wiki, ok := e.nativeHalves()
-	if !ok || !wiki || e.router == nil {
-		return estate.Pages{}, false
-	}
-	return e.router.Pages(), true
+	reads := OperatorNative(e)
+	return reads.Pages, reads.Wiki
 }
 
 // OperatorPageWriter is the knowledge base's write side for those surfaces, or
-// false where this node hands out none ([Engine.pageHalves]'s rule).
+// false where this node hands out none ([Engine.writers]).
 func OperatorPageWriter(e *Engine) (estate.Pages, bool) {
 	if _, _, _, ok := e.pageHalves(); !ok {
 		return estate.Pages{}, false
@@ -1673,7 +2006,7 @@ func OperatorPageWriter(e *Engine) (estate.Pages, bool) {
 // applied at — the router's session floor, which a surface's write raises so
 // its own next read sees it ([estate.Router.Await]) — the same wait a seat's
 // tools are handed, and for the same reason: this node's own applier is not the
-// one that answers once its copy is out of service.
+// one that answers once its copy of that domain is out of service.
 func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 	if e.router == nil {
 		return nil
@@ -1737,7 +2070,7 @@ func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
 func LiveChannels(e *Engine) builtin.ChannelDirectory { return liveChannels{engine: e} }
 
 // LiveDefaultProject is [ProjectOfSeat] over the engine's CURRENT chart, read
-// per call, for the surfaces built once and never rebuilt by an apply — the
+// per call, for the surfaces an apply does not rebuild for a new chart — the
 // operator surface, whose `create_work_item` files a PERSON's work, and the
 // dashboard's `viewer`, which says where that work lands. "" before any epoch
 // is running, and for a seat whose team and every team above it own no
@@ -1761,8 +2094,8 @@ func LiveDefaultProject(e *Engine) func(handle string) string {
 // Zone is the company's clock (ADR-0018) as the CURRENT epoch sets it, or UTC
 // before any epoch is running.
 //
-// For the surfaces that OUTLIVE an epoch — the scheduler's loop and the
-// operator's MCP surface, each built once and never rebuilt by an apply — so
+// For the surfaces that OUTLIVE an epoch — the scheduler's loop, built once,
+// and the operator's surface, which no apply rebuilds for a new clock — so
 // that an apply moving the clock moves them with it on their next read. A
 // seat's own tools take the clock of the epoch their turn pinned instead; see
 // [Engine.workDeps].
@@ -1802,8 +2135,8 @@ func LiveSeatSpace(e *Engine) func(handle string) string {
 // is written, rather than the one that built the caller.
 //
 // The seat path captures its org deliberately — a seat's tools are cloned into
-// its lease and rebuilt on an apply — but a surface built once at startup has
-// no such rebuild, so it reads the engine per call. It is exported because the
+// its lease and rebuilt on an apply — but the operator surface is not rebuilt
+// for a new chart, so it reads the engine per call. It is exported because the
 // OPERATOR MCP needs the same rule and there must not be a second copy of it:
 // built without one, that surface wrote comments whose @-mentions resolved to
 // nothing and woke nobody, while its own tool description promised otherwise.
@@ -2017,24 +2350,54 @@ func (e *Engine) LiveNodes(ctx context.Context) (int, error) {
 	return len(nodes), nil
 }
 
-// reportSearch counts what one answer covered.
+// reportSearch counts what one answer covered, and what its scan cost on the
+// path it was run for.
 //
-// THE ONLY THING THAT MAKES THREE ALARMS ABLE TO FIRE. `search_slow`,
-// `search_degraded` and `search_scoped` are each a property of the answers a
-// node gave, and an alarm whose input nobody records is permanently silent —
-// which looks exactly like a system with nothing wrong.
-func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
+// THE ONLY THING THAT MAKES FOUR ALARMS ABLE TO FIRE. `search_slow`,
+// `prefetch_slow`, `search_degraded` and `search_scoped` are each a property
+// of the answers a node gave, and an alarm whose input nobody records is
+// permanently silent — which looks exactly like a system with nothing wrong.
+//
+// THE PATH IS THE QUERY'S OWN ([search.FanQuery.Prefetch]), so a turn's
+// knowledge prefetch and somebody's deliberate search are two series held to
+// two budgets. Every scan was recorded `interactive` once, the prefetch series
+// had no producer, and `prefetch_slow` read a percentile of nothing.
+func (e *Engine) reportSearch(q search.FanQuery, answer search.Answer, took time.Duration) {
 	if e.metrics == nil {
 		return
 	}
 	e.metrics.Observe(metrics.TrackerSearchScanDuration, took,
-		metrics.Attrs{"path": "interactive", "rung": searchRung(answer)})
+		metrics.Attrs{"path": string(scanPathOf(q)), "rung": searchRung(answer)})
 	coverage := "complete"
 	if answer.Partial() {
 		coverage = "scoped"
 	}
 	e.metrics.Add(metrics.TrackerSearchAnswers, 1,
 		metrics.Attrs{"coverage": coverage, "semantic": semanticState(answer)})
+}
+
+// scanPath is what a search was run for, as the scan-duration histogram's
+// `path` attribute names it — and the one name the alarm reading splits the
+// histogram by ([retention.observed]), so the label and the budget it is held
+// to are one value rather than two strings that must agree.
+type scanPath string
+
+const (
+	// scanInteractive is somebody's deliberate search — a seat's tool, a
+	// person's — held to statelog.InteractiveSearchTarget (`search_slow`).
+	scanInteractive scanPath = "interactive"
+	// scanPrefetch is a turn's knowledge prefetch, which the turn waits on
+	// before its first token, held to statelog.PrefetchScanBudget
+	// (`prefetch_slow`).
+	scanPrefetch scanPath = "prefetch"
+)
+
+// scanPathOf is the path q was run for.
+func scanPathOf(q search.FanQuery) scanPath {
+	if q.Prefetch {
+		return scanPrefetch
+	}
+	return scanInteractive
 }
 
 // searchRung is the ranking a scan actually ran, for the duration histogram.

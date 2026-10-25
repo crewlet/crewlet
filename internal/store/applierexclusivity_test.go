@@ -535,6 +535,16 @@ var allowedReplicatedWriter = []allowance{
 			"VACUUM INTO and the manifest — never to write a row.",
 	},
 	{
+		Prefix: "internal/code/codetest/datanode.go", Kind: holder,
+		Why: "THE CODE HOST SUITES' DATA NODE: StartDataNode is the engine's " +
+			"own composition of one data node's code domain, used by both " +
+			"topologies — SoloNode's one node and each member of " +
+			"internal/code/codecluster's fleet. It opens the replicated " +
+			"estate through storetest.OpenEstate and hands the write handle " +
+			"only to the framework's applier and write authority, as " +
+			"internal/engine/statelog.go does. It writes no row of its own.",
+	},
+	{
 		Prefix: "cmd/crewlet/ops.go", Kind: holder,
 		Why: "`crewlet migrate` opens the replicated estate beside the " +
 			"node's own file, which is how an operator's migration reaches " +
@@ -563,6 +573,12 @@ var allowedReplicatedWriter = []allowance{
 			"applies the history horizon from the record's own day, so every " +
 			"delete here is a pure function of a committed record rather than " +
 			"a sweep.",
+	},
+	{
+		Prefix: "internal/code/apply", Kind: mechanism,
+		Why: "The code domain's applier — the record dispatch, a repository's " +
+			"lifecycle and the activation fence, and the push with its " +
+			"horizons and the purge's parts.",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,

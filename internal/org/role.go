@@ -413,16 +413,17 @@ func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
 // the same account, and two seats resolving to one login means an @mention can
 // no longer say which agent is meant.
 //
-// EVERYTHING HERE EXCEPT THE TIER AND THE REPOSITORIES IS WRITTEN BY THE
-// ENGINE. An app is created from a manifest the engine builds, and GitHub
-// returns its id, slug, key and webhook secret exactly once, at conversion
-// time. What a person does is click through the creation and the install.
+// EVERYTHING HERE EXCEPT THE REPOSITORIES IS WRITTEN BY THE ENGINE. An app is
+// created from a manifest the engine builds, and GitHub returns its id, slug,
+// key and webhook secret exactly once, at conversion time. What a person does
+// is click through the creation and the install.
+//
+// HOW MUCH THE APP MAY DO IS NOT HERE: it is the seat's [Role.CodeAccess], the
+// one tier every code host reads. The app is created with, and every token it
+// mints carries, that tier's permission set, so a tier stated here as well
+// would be a second answer to one question — and one a company on the native
+// code host would have nowhere to write.
 type GitHubApp struct {
-	// Tier is how much of a repository this seat may do. Empty is the
-	// least this engine hands out, which is the right answer for a seat
-	// nobody has thought about yet.
-	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
-
 	// Repos are the repositories this seat works in, as owner/name. Empty
 	// means every repository the installation covers, which is what the
 	// operator chose when they installed the app.
@@ -799,6 +800,17 @@ type Role struct {
 	Project string `yaml:"project,omitempty" json:"project,omitempty"`
 	Space   string `yaml:"space,omitempty" json:"space,omitempty"`
 
+	// CodeAccess is the seat's `role.code.access` as written — read_only,
+	// review or full_access — or empty where the document says nothing.
+	//
+	// WHAT WAS WRITTEN, never a default: empty and read_only are the same
+	// tier to every code host, and each reads silence as read_only through
+	// its own reading (config.RoleCode.AccessOrDefault, the GitHub app's
+	// permission set), so a default written here would be a second
+	// statement of it. What a seat may DO is that reading, never this field
+	// read bare.
+	CodeAccess string `yaml:"code_access,omitempty" json:"code_access,omitempty"`
+
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`
@@ -900,12 +912,15 @@ func (r *Role) ResolvedEmail(lookup EnvLookup) string {
 // `integrations.confluence` sent an operator to the company's own vendor
 // blocks.
 //
-// A seat's own GitHub App ([Role.GitHub]) is refused on a human seat too,
-// but by the config layer, as an ADMISSION rule rather than one of these
-// runnable ones: nothing about running depends on the block, since every
-// path that creates, installs or reconciles an app skips a human seat, so a
-// stored revision carrying one runs as it did. Listing it here as well would
-// report one mistake twice.
+// What a seat holds on a code host — its code access tier ([Role.CodeAccess])
+// and its own GitHub App ([Role.GitHub]) — is refused on a human seat too, but
+// by the config layer, as an ADMISSION rule rather than one of these runnable
+// ones: nothing about running depends on either, since nothing running reads a
+// tier off a human seat and every path that creates, installs or reconciles an
+// app skips one, so a stored revision carrying one runs as it did — and a later
+// build may relax the rule (a tier that caps a person) without this build
+// refusing to apply what its newer peer admitted. Listing them here as well
+// would report one mistake twice.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string

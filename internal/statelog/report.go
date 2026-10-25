@@ -683,20 +683,18 @@ type DomainInputs struct {
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
 
-	// DeferredAge, DeferredRecord and DeferredJudgesCopy are the oldest
-	// record this node holds on this log and cannot decode, exactly as
-	// [Reading] defines them, and zero while it holds none.
+	// DeferredAge and DeferredRecord are the oldest record this node holds
+	// on this log and cannot decode, exactly as [Reading] defines them, and
+	// zero while it holds none.
 	//
 	// HERE RATHER THAN ON THE NODE'S READING, because what the grace does
-	// is the log's: a record held past it on a log that judges this node's
-	// copy of the estate takes the copy out of service, and one on a log
-	// that judges nothing takes nothing out. Folded into one node-wide
-	// alarm naming the oldest, an identity record two hours old was
-	// reported as consequence-free while a tracker record forty minutes
-	// old had already taken the copy out.
-	DeferredAge        time.Duration
-	DeferredRecord     string
-	DeferredJudgesCopy bool
+	// is the log's: every log's copy is judged on its own (ADR-0046), so a
+	// record held past it takes this node's copy of THAT log out of service
+	// and no other's. Folded into one node-wide alarm naming the oldest, an
+	// identity record two hours old was the only one named while a tracker
+	// record forty minutes old had taken the tracker's copy out as well.
+	DeferredAge    time.Duration
+	DeferredRecord string
 
 	// FloorUnknownFor and FloorUnknownCause are how long this node has been
 	// unable to read this log's trim floor and what the latest read said,
@@ -1206,11 +1204,10 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			// WHAT THIS NODE HOLDS AND CANNOT READ on this log, as the
 			// caller measured it from its own applier and its own
 			// observations of the floor.
-			DeferredAge:        held.DeferredAge,
-			DeferredRecord:     held.DeferredRecord,
-			DeferredJudgesCopy: held.DeferredJudgesCopy,
-			FloorUnknownFor:    held.FloorUnknownFor,
-			FloorUnknownCause:  held.FloorUnknownCause,
+			DeferredAge:       held.DeferredAge,
+			DeferredRecord:    held.DeferredRecord,
+			FloorUnknownFor:   held.FloorUnknownFor,
+			FloorUnknownCause: held.FloorUnknownCause,
 			// AND HOW FAR PAST ITS OWN CENSUS this log's reads run.
 			LinearizableReads:         held.LinearizableReads,
 			LinearizableReadsExpected: held.LinearizableReadsExpected,

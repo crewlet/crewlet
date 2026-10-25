@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -363,61 +362,27 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // The sweep judges a seat absent from the roster, and a retirement deletes mail
 // that cannot be recovered, so the roster must be the FLEET's current revision
 // rather than whatever this node happens to be running. A node that has not yet
-// applied the pointer's epoch (propagation, a refused apply, a node stuck on an
+// applied the pointer's activation (propagation, a refused apply, a node stuck on an
 // older revision) answers unknown, and the tick stamps and retires nothing. The
 // next holder of the duty, or this node once it catches up, judges instead.
 //
-// The reads are ordered so the company judged is EXACTLY the pointer's: the
-// pointer is read first, and the company this node publishes is accepted only
-// when it was applied from that very activation ([Engine.fleetCompany]).
+// That is the rule every irreversible judgement against the active revision
+// follows, read through its one helper ([Engine.servedFleetRevision]), whose
+// three answers the roster keeps: the seats, nothing activated, or unknown —
+// and an unknown that is only this node still applying the revision, or still
+// starting, is [maintenance.ErrRevisionPropagating], which the sweep judges
+// nothing on without a warning, since every activation and every boot puts
+// every node there for the seconds its apply takes.
 func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
-	if err != nil {
+	company, err := e.servedFleetRevision(ctx)
+	var behind *errBehindFleet
+	switch {
+	case errors.As(err, &behind) && behind.reconciled():
+		return nil, fmt.Errorf("%w; seats are judged once this node has applied it", err)
+	case err != nil:
 		return nil, err
 	}
 	return company.Seats(), nil
-}
-
-// fleetCompany is c when it is the company of the activation the fleet is
-// pointed at, or an error saying why that is unknown.
-//
-// THE RULE EVERY CALLER THAT JUDGES A SEAT ABSENT AND ACTS ON IT FOLLOWS — the
-// mailbox sweep, and the clearing of a removed seat's pause
-// ([Engine.clearRemovedSeatPauses]) — because both act on something no undo
-// restores: a retired mailbox's mail, a pause a person placed. A node applying
-// a revision the fleet has since replaced does not have a seat the newer one
-// added, and would judge it absent.
-//
-// COMPARED ON THE ACTIVATION'S INSTANT, which the pointer publishes strictly
-// later on every activation ([coord.ActivationAt]) and which a company carries
-// from the apply that built it ([Company.ActivatedAt]) — so a re-activation of
-// an unchanged revision, the rotation gesture, is a different activation here
-// too, and a company applied from the pointer's own activation is accepted
-// even while the reconciler is still inside the apply that publishes it. A
-// company no activation has named yet — a Tier B file a node booted with — is
-// unknown until the reconciler's first apply.
-func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
-	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
-	}
-	target, found, err := e.backends.Fleet.Target(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the activation pointer: %w", err)
-	}
-	if !found {
-		return nil, maintenance.ErrNoActiveRevision
-	}
-	switch {
-	case c == nil:
-		return nil, errors.New("engine: this node publishes no company yet; seats are " +
-			"judged once it does")
-	case store.EncodeTime(c.ActivatedAt) != store.EncodeTime(target.At):
-		return nil, fmt.Errorf("engine: this node serves the activation of %s and the "+
-			"fleet is on activation epoch %d of %s; seats are judged once this node "+
-			"has applied it", c.ActivatedAt.Format(time.RFC3339Nano), target.Epoch,
-			target.At.Format(time.RFC3339Nano))
-	}
-	return c, nil
 }
 
 // Maintenance exposes the retention sweep.

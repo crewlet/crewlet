@@ -7,11 +7,87 @@ need to get a development environment running and land a change.
 
 Prerequisites: **Go 1.27+** and
 **[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
-`make check` runs and CI's own job downloads for itself. **A current Node**
-(npm ships with it) for the dashboard — its build output is committed, so
-building and running the ENGINE needs neither, but changing the dashboard or
-running `internal/e2e`'s client replay does. Nothing in the tree pins a node
-version; CI installs the latest — see *Which node* under
+`make check` runs and CI's own job downloads for itself. **What building git
+takes** — a C compiler, `make`, `curl`, `xz`, a SHA-256 tool to check each
+tarball against its pin (coreutils' `sha256sum`, which Debian and Ubuntu ship,
+or `shasum`, which macOS ships; `make git` and `make git-test` both need
+one), and libcurl's and zlib's development files (Debian and Ubuntu:
+`build-essential curl xz-utils libcurl4-openssl-dev zlib1g-dev`, or
+`libcurl4-gnutls-dev` in place of `libcurl4-openssl-dev`, the flavour the
+image builds against — the recipe compiles nothing against OpenSSL itself, so
+libcurl's TLS is the only one it needs and OpenSSL's headers are not; macOS:
+the Xcode command line tools, which carry libcurl and zlib, and Homebrew's
+`xz`, which macOS does not ship) — because **the suite never runs the
+machine's own git** — and **GnuPG**
+(Debian and Ubuntu: `gnupg`; macOS: Homebrew's `gnupg`), which `make check`'s
+`git-test` needs to make and check the signing keys of the pin check's own
+suite (see [The git pin is checked every
+week](#the-git-pin-is-checked-every-week)). The code host
+runs real git as a subprocess, and its suites drive real git both as the engine
+and as a client, so what a case asserts is that git's behaviour as much as the
+engine's: `make git` builds the gits
+[`scripts/git-pin.env`](scripts/git-pin.env) pins — the node pin, the newest
+release, which the engine image builds too, and the newest patches of the two
+floors' series — from their checksummed release tarballs with
+[`scripts/git.sh`](scripts/git.sh), the one recipe the image and CI share,
+once, into `~/.cache/crewlet/git` (`CREWLET_GIT_CACHE` moves it; about four
+minutes on four vCPUs, and a pin bump or a change to the recipe builds beside
+what is there — and leaves the older builds where they are, about 70 MB a set,
+because another checkout still on them may be running one: `rm -rf
+~/.cache/crewlet/git` clears them, and the next `make git` builds what the tree
+pins). Every target that runs Go tests depends on it and puts the node
+pin first on `PATH`, and a one-package loop does the same by hand, as two
+statements:
+`bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/code/cache/`
+— never `PATH="$(scripts/git.sh node):$PATH" go test …`, whose substitution
+is empty when the recipe fails (a missing header, a refused download), which
+leaves `PATH` starting with an empty entry and runs the loop on whatever git
+the machine has, with only the recipe's own line above the test output to
+say so. A loop
+run on the machine's own git instead FAILS the git-driven tests where that git
+is below the floor it stands for, rather than skipping, because git is a
+prerequisite of the suite, not something a machine may lack: every pool a test
+builds needs the node floor, 2.55 (`gitproc.NodeMinVersion`, held by
+`internal/code/gitproc/gittest.RequireNode`), and the client git a test drives
+the client floor, 2.40 (`gitproc.ClientMinVersion`, `gittest.Require`). On
+macOS, Apple's bundled git is 2.39, below both, and Homebrew's is new enough for
+both — but the documented loop is the pin, the git the image ships. What the
+engine reads of a failed git is the FORMAT of each report git makes to its
+trace2 stream, checked against a table of git's own formats that is held,
+version by version, to what real git reports over real damaged repositories —
+on BOTH ends of what a pool runs, the node pin and the node floor's own build,
+each a subtest (`node pin`, `node floor`) of every gitproc case whose subject is
+what git says or does in a pool — so a pin bump re-measures it on the new git
+by itself, in `make check`, and the floor is measured on every run rather than
+by hand. A one-package loop names the floor's build the way the make targets
+do, or those cases' floor arms skip:
+`bin=$(scripts/git.sh node) && floor=$(scripts/git.sh node-floor) && PATH="$bin:$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$floor/git" go test -count=1 ./internal/code/gitproc/`
+— and a row whose range does not hold names the format and the git that
+disagreed.
+
+**The floors' arm.** Every make target that runs Go tests also names the two
+floors' own builds — `CREWLET_TEST_GIT_NODE_FLOOR` and
+`CREWLET_TEST_GIT_CLIENT_FLOOR`, each `$(scripts/git.sh <pin>)/git` for
+`node-floor` and `client-floor` — and sets `CREWLET_REQUIRE_GIT_FLOOR=1` (the
+Makefile's `GIT_ENV`), so `internal/code/host`'s
+`TestTheGitFloorsPassTheSuite` runs the code host's whole suite with every
+pool on the node floor's 2.55 and every person's git on the client floor's
+2.40 — the worst pairing the floors admit — and FAILS, naming the variable and
+`make git`, where either build is missing — as do gitproc's node-floor arms
+above. A bare `go test ./internal/code/host/` or `./internal/code/gitproc/`
+without them skips those arms, saying so, and runs everything else; export the
+three variables to run them by hand. A git named
+there must be an absolute path to a build of its floor's own series (2.55.x,
+2.40.x): a newer git in its place is a floor nobody is testing, and is refused
+naming the variable. ci.yml's `git recipe (macOS)` job runs `make
+test-gitproc` — gitproc's own suite on the three pins — on macOS for every pull
+request, so the recipe's macOS branch is built where a Mac contributor builds
+it; on Linux `make test` runs the same packages.
+
+**A current Node** (npm ships with it) for the dashboard — its build output is
+committed, so building and running the ENGINE needs neither, but changing the
+dashboard or running `internal/e2e`'s client replay does. Nothing in the tree
+pins a node version; CI installs the latest — see *Which node* under
 [A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
 loops below; the engine itself needs no services.
 
@@ -57,22 +133,25 @@ and answering it in pieces is how a push goes red on the piece you skipped.
 `make help` lists the rest.
 
 Every target runs the command [`ci.yml`](.github/workflows/ci.yml) runs, with
-the same flags. The two test jobs call `make` directly, so for those there is
-one command rather than a copy. For every other job nothing asserts the two
-have not drifted — a test did, and it was dropped — so a convenience target
-that quietly loses `-race` would report a pass CI does not honour and nothing
-else would notice. Change a target and its `ci.yml` step together, and read
-both. `make check` is:
+the same flags — `make bench` excepted, which has no CI job (see
+[Benchmarks](#benchmarks)). The two test jobs call `make` directly, so for
+those there is one command rather than a copy. For every other job nothing
+asserts the two have not drifted — a test did, and it was dropped — so a
+convenience target that quietly loses `-race` would report a pass CI does not
+honour and nothing else would notice. Change a target and its `ci.yml` step
+together, and read both. `make check` is:
 
 ```bash
 files="$(go run ./internal/sourcetree/gofiles)" && gofmt -l $files  # formatting — prints the files that need it
 go mod tidy -diff        # go.mod / go.sum are already what tidy would write
 scripts/check-signoff.sh # every commit the branch adds is signed off
 scripts/check-signoff_test.sh  # ... and that gate's own suite
+scripts/git-pin_test.sh        # the git recipe's and the pin check's own suite (git-test)
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
-make test        # the suite, minus the packages that run alone
+make git         # the pinned gits, built once a machine (both test targets need it)
+make test        # the suite, minus the packages that run alone, on the node pin
 make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
@@ -592,6 +671,80 @@ states with their reasons:
   absence read after a fixed sleep holds only for as long as the sleep
   happened to be long enough.
 
+### Benchmarks
+
+```bash
+make bench
+```
+
+runs the benchmarks the design's capacity figures come from, so each figure is
+measured rather than derived: the object store on every backend
+(`objstoretest.Bench` — the broker's bucket at three replicas, and an S3 fake
+a provider's round trip away, among them — and the SHA-256 rate under every
+verified byte), one arbitrated write end to end and the applier's drain
+(`internal/statelog`), the store's own drain (`internal/store`), the
+company's token counter charged by many nodes at once, each a leaf of its own,
+and a gated lease claim (`internal/coord/kv`), a git
+process through the pool and the index-pack a push runs
+(`internal/code/gitproc`), the git cache's cold and delta syncs and a
+bundle's own file work, its index maintenance and what a request pays across
+many packs, a node's boot of its cache and what a directory sync costs a file
+(`internal/code/cache`), the code domain's applier, decide, reconcile and
+snapshot reads and what one push's history costs every data node's disk
+(`internal/code`), the code host's commit chain on one and three members
+(`internal/code/codecluster`), a person's push, a warm fetch, and cold and
+warm clones of every shape end to end through the code host
+(`internal/code/host`), the pace a client's connection is held to, on a
+real connection (`internal/api/paced`), and what every push pays to start its
+`proc-receive` hook, which is this binary (`cmd/crewlet`).
+
+It is **not a gate, and no CI job runs it**. A benchmark on a shared runner
+measures the runner's neighbours, and a gate on figures that noisy is one
+somebody turns off. To compare two trees, run `make bench BENCH_COUNT=6` on
+each, on one idle machine, and read the two outputs with
+[benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat).
+
+| Variable | Default | What it sets |
+|---|---|---|
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
+| `BENCH_TIME` | `3s` | `-benchtime` |
+| `BENCH_COUNT` | `1` | `-count` |
+| `BENCH_TIMEOUT` | `8h` | `-timeout`, a hang detector, each package's: at six counts of every arm, the large ones included, `internal/code/cache` takes about five and three quarter hours on four vCPUs and `internal/code/host` about two and a half |
+
+The packages run one at a time (`-p 1`) and without the race detector, and the
+output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
+— the real-bucket arms of `internal/objstore/s3obj`, `internal/code/cache` and
+`internal/code/host` skip unless `CREWLET_BENCH_S3_BUCKET` names a bucket
+(`internal/objstore/s3obj`'s doc lists the variables that do), and the arms
+whose fixture takes minutes and gigabytes — in `internal/code/cache` a cold
+sync of 2 000 pushes, repositories of 10 000 packs, a 5 GB index, a gigabyte
+split into hundreds of packs; in `internal/code/host` a gigabyte history, a
+hundred thousand refs and a 100 000-file tree — skip unless
+`CREWLET_BENCH_LARGE=1`.
+
+A code host figure is the pool's git's as much as the engine's, so `make bench`
+runs the node pin — the git the engine image builds — first on `PATH`, as every
+test target does: every pool and every client a benchmark starts runs it, and
+never whichever git the machine has (`internal/code/codecluster`'s commit chain
+runs no git: its pushes carry no pack). A figure the docs quote names that
+version, and a pin bump leaves the figures taken on the git before it as what
+they are — measured on the version they name — until a change to that path
+measures again.
+
+**A figure the design argues from is recorded in the package doc of what it
+measures**, with the machine it was measured on — its CPUs and model, and
+whether it has SHA instructions, since every verified byte is hashed — the
+toolchain, the git version where the figure runs git (it is git's figure as
+much as the engine's), and the versions of the dependencies it ran through. A
+new object store backend runs `objstoretest.Bench` from a `BenchmarkBackend`
+of its own, as it runs `objstoretest.Run` from `TestContract`; its factory
+hands each case an empty store and takes away what the case put there — a
+backend the run starts goes with it, and one that outlives the run (a real
+bucket) gives each case a prefix of its own and `objstoretest.Clear`s it,
+since the suite's populations run to a hundred thousand objects and it
+deletes nothing itself.
+
 ## Project conventions
 
 - **Go 1.27+**, and the module pins its own toolchain — `GOTOOLCHAIN=auto`
@@ -653,17 +806,19 @@ that a value in it changes what the engine *does*, not merely that it parses.
 ## Dependency updates
 
 Dependabot watches every dependency manifest this repository has, and opens a
-pull request when any of them has a newer release (the tool servers the docs
-and the examples launch are not in a manifest, and a test holds them instead
-— see below):
+pull request when any of them has a newer release. The git pin is no manifest
+— a source tarball no Dependabot ecosystem reads — so a workflow of this
+repository's own watches it instead (and the tool servers the docs and the
+examples launch are not in a manifest either: a test holds them — see below):
 
-| Surface | Ecosystem | What it covers |
+| Surface | Watched by | What it covers |
 |---|---|---|
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
 | `go.mod` | `gomod` | the engine's own Go dependencies |
 | `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
+| `scripts/git-pin.env` | [`.github/workflows/git-pin.yml`](.github/workflows/git-pin.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
 
 Dependabot keeps a version moving once it is in the tree; **choosing one in
 the first place goes the same direction — take the newest release, and pin it
@@ -679,7 +834,7 @@ fetches, which runs its newest release (see below).
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Nine things are
+request, and — as below — CI is what decides whether it lands. Ten things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -757,6 +912,12 @@ worth knowing:
   with the pin: they hold the registry and the signing identity (and the
   release workflow the Releases), and a version tag is a ref its owner can move
   under them.
+- **The git pin is watched by a workflow rather than Dependabot**, and a
+  bump of it arrives as an issue rather than a pull request: every Monday
+  [`git-pin.yml`](.github/workflows/git-pin.yml) asks kernel.org whether each
+  pin is still the newest release of its series and keeps ONE issue, `git pin
+  behind upstream`, naming what moved — see [The git pin is checked every
+  week](#the-git-pin-is-checked-every-week).
 - **goreleaser itself floats within its major.** Every goreleaser step in
   `.github/workflows/release.yml` asks for `version: "~> v2"`, the newest v2
   on each run, because Dependabot bumps the action's ref but never a `with:`
@@ -1010,6 +1171,98 @@ Nothing checks any of this for you. Read which bumps it comments on, the command
 and marker it posts, the environment and the token's scope on any diff that
 touches
 [`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml).
+
+### The git pin is checked every week
+
+[`scripts/git-pin.env`](scripts/git-pin.env) pins three gits, each a kernel.org
+release tarball by version and SHA-256: the node pin, the newest release, which
+the engine image builds and every pool and client in the suite runs; and the
+newest patches of the two floors' series, which the floors' arm runs. Every git
+node runs the image's git, so a git security release reaches a deployment only
+through a bump of that pin — Debian's updates to its own git never do — and no
+Dependabot ecosystem reads a source tarball. So
+[`git-pin.yml`](.github/workflows/git-pin.yml) is the watcher. Every Monday at
+06:17 UTC (and on **Actions → git-pin → Run workflow**) it runs
+[`scripts/git-pin-check.sh`](scripts/git-pin-check.sh), which reads kernel.org's
+listing for the newest release of each pin's series — release candidates are no
+release — and, for every pin that is behind, downloads that release and its
+signature (`git-<version>.tar.sign`, over the decompressed tar) and verifies it
+against the git maintainer's key,
+[`scripts/git-signing-key.asc`](scripts/git-signing-key.asc), imported into a
+GnuPG home of its own and refused unless it holds exactly the key whose primary
+fingerprint the script pins. Then it prints the pin's two new lines — the
+SHA-256 is that of the very tarball whose signature verified, never one read
+from a listing — and the title of the pull request that moves it. Exit 1 opens
+or updates ONE issue, `git pin behind upstream` (labelled `dependencies`, found
+by that exact title), with that report as its body, and fails the run; exit 0
+closes it; exit 2 — the listing or a download refused, a signature that does not
+verify, or by a key other than the pinned one — fails the run and leaves the
+issue as it was, because nothing new is known. An issue rather than a pull
+request because a pull request opened with `GITHUB_TOKEN` leaves its checks
+waiting for a click (as under [A dashboard bump brings its own
+bundle](#a-dashboard-bump-brings-its-own-bundle)), and one whose checks run by
+themselves needs a token beside the two the Dependabot workflows hold — a new
+credential, which the workflow does not take. It holds `contents: read` and
+`issues: write` and no secret.
+
+**Making the bump** is a pull request of its own:
+
+1. Replace the pin's two lines in `scripts/git-pin.env` with the ones the issue
+   names (`scripts/git-pin-check.sh` prints them again by hand: exit 1 with the
+   report, 0 when every pin is current).
+2. `make git` — it builds the new git from the tarball the digest names, and a
+   digest that is not the tarball's refuses the build — then `make check`, the
+   suite on the new git.
+3. Title the pull request as the report does: `build(deps): bump git from <a>
+   to <b>` for the node pin, `build(deps): bump git's node floor from <a> to
+   <b>` or `… client floor …` for a floor.
+
+The pull request runs the snapshot job, which builds the engine image's git from
+the new pin on both platforms and holds it to the pin, and the suite builds the
+three gits again on CI (about four minutes) until `main` saves them. A diff to
+the pin, to [`scripts/git.sh`](scripts/git.sh) or to the key changes the git
+every git node runs, so it is read as release surface. A floor pin only ever
+moves to a newer patch of its own series; raising a floor itself is a change to
+`gitproc.NodeMinVersion` or `ClientMinVersion` and is argued in
+[ADR-0054](adr/0054-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
+pin changes the recipe too: git's own Makefile makes Rust mandatory from 3.0,
+which the report says when it names one.
+
+**The signing key is checked in the same run.** The maintainer's release-signing
+subkeys expire (the ones in the file on 2028-01-11), and once they have, no
+release can be verified and every run fails with exit 2. So the run's last step,
+`scripts/git-pin-check.sh key`, reads the latest expiry among the key's valid
+signing subkeys, bounded by the primary key's own, and fails the run from 60
+days before it — eight weekly runs to act — whether or not a pin is behind. To
+refresh it, export `keys/20D04E5A713660A7.asc` again from kernel.org's PGP
+keyring ([pgpkeys.git](https://git.kernel.org/pub/scm/docs/kernel/pgpkeys.git)),
+check that its primary fingerprint is still
+`96E07AF25771955980DAD10020D04E5A713660A7` (`gpg --show-keys
+scripts/git-signing-key.asc`), replace the file with it, and land it as
+`build(deps): refresh git's release signing key`. A file that is not that key,
+or that holds a second key beside it, is refused (exit 2) rather than trusted.
+So is a release signed by a signing subkey the file does not hold yet — one the
+maintainer added after the export, which the expiry check cannot see coming —
+and that refusal names the subkey and prints these steps, since only the
+maintainer's current export can tell it from another key's.
+
+[`scripts/git-pin_test.sh`](scripts/git-pin_test.sh) (`make git-test`, in `make
+check` and ci.yml's `build + vet`) is the own suite of the check and of the
+recipe: it runs both against a stand-in release listing, stand-in tarballs and
+signing keys it makes for itself, so it reads no network and builds no git,
+and every case it holds a mutation to — skip the fingerprint check, accept gpg's
+exit status without its `GOODSIG`, read the primary key's expiry alone — fails
+it. It reads nothing of the environment you run it in, and holds that by running
+itself a second time, by a relative path under a `CDPATH` naming another
+`scripts/`, in a hostile environment: every knob the scripts read pointed
+elsewhere, a GnuPG home of yours, and a curl configuration (`.curlrc`) refusing
+the `file://` downloads every case makes. The scripts themselves do read your
+curl configuration, so a proxy or a CA bundle there applies where they really
+download, and they send what it makes curl print (a `write-out`, say) to
+stderr: a case holds the check's report and the recipe's bin directory to
+being all either prints on stdout under such a file. Nothing holds the
+workflow file itself: read its `permissions:`, the issue title it matches and
+the step that runs the key check on any diff that touches it.
 
 ## Releasing
 

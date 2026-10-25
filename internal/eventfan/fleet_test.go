@@ -231,7 +231,7 @@ func TestAnUnreadableReplyCountsAsMissing(t *testing.T) {
 		fmt.Sprintf(`{"version":%d,"node":"node-garbled","answer":"not a page"}`, eventfan.Protocol),
 	} {
 		q := client(t, broker)
-		stop, err := q.Serve(t.Context(), eventfan.Subject,
+		stop, err := q.Serve(t.Context(), eventfan.Subject, queue.ConcurrentAnswers,
 			func(context.Context, []byte) ([]byte, error) { return []byte(answer), nil })
 		if err != nil {
 			t.Fatal(err)
@@ -485,7 +485,7 @@ func TestPhaseTokensAreEveryNodesSpendNewestFirst(t *testing.T) {
 func servesAs(t *testing.T, b *memory.Broker, node string, version int, row store.EventRecord) {
 	t.Helper()
 	q := client(t, b)
-	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
+	stop, err := q.Serve(t.Context(), eventfan.Subject, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
 		var req struct {
 			Version int `json:"version"`
 		}

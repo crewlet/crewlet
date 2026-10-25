@@ -108,7 +108,8 @@ func sessionWrite(subject statelog.Subject, opID string, session statelog.Positi
 		Session: session,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			decided()
-			return statelog.Decision{Payload: probeRecord(stamp, opID, "body"), Version: 1}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, subject,
+				statelog.ScopeSet{Paths: []string{subject.String()}}, opID, "body"), Version: 1}, nil
 		},
 	}
 }

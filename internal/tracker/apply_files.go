@@ -4,6 +4,26 @@ import (
 	"fmt"
 )
 
+// decodeFile is a file record's post-state, refused where the applier would
+// refuse to apply it: the payload decoded and held to the subject that
+// arbitrated it and to the object rule ([fileMatches]).
+//
+// ONE READING OF A FILE RECORD. The applier writes the row from it, and
+// [FileObjectReferences]' Records reads the object the row will name from it —
+// so what a backup carries past its store copy is what the applier writes
+// (ADR-0049), and a record the applier would refuse is one the backup refuses
+// too rather than reads its own way.
+func decodeFile(mutation []byte, id string) (File, error) {
+	var file File
+	if err := decodePayload(mutation, &file); err != nil {
+		return File{}, fmt.Errorf("decode the file: %w", err)
+	}
+	if err := fileMatches(id, file); err != nil {
+		return File{}, err
+	}
+	return file, nil
+}
+
 // fileMatches refuses a file record whose payload is not the file its subject
 // arbitrated, or whose object could not be read back.
 //
@@ -22,25 +42,24 @@ import (
 //
 // Every refusal here is one the writer makes first ([checkFilePut]), so a
 // record that reaches it was written by something else.
-func fileMatches(c applyContext, id string, file File) error {
+func fileMatches(id string, file File) error {
 	path, err := NormalizeFilePath(file.Path)
 	switch {
 	case err != nil:
-		return fmt.Errorf("tracker: the file record at %s: %w", c.position, err)
+		return err
 	case path != file.Path || FileSubject(file.Project, file.Path).ID != id:
-		return fmt.Errorf("tracker: the record at %s arbitrated file %s and its "+
-			"payload claims %s/%q — the subject IS the address", c.position, id,
-			file.Project, file.Path)
+		return fmt.Errorf("it arbitrated file %s and its payload claims %s/%q — the "+
+			"subject IS the address", id, file.Project, file.Path)
 	}
 	o, named := file.Content()
 	switch {
 	case !named && !file.Removed():
-		return fmt.Errorf("tracker: the file record at %s writes %s/%q live and "+
-			"names no object holding its content", c.position, file.Project, file.Path)
+		return fmt.Errorf("it writes %s/%q live and names no object holding its "+
+			"content", file.Project, file.Path)
 	case named:
 		if err := o.Validate(); err != nil {
-			return fmt.Errorf("tracker: the file record at %s names its object as "+
-				"something no reader could check: %w", c.position, err)
+			return fmt.Errorf("it names its object as something no reader could "+
+				"check: %w", err)
 		}
 	}
 	return nil

@@ -17,7 +17,7 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | Every `retention` command that talks to a node takes `admin`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's and the identity estate's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's and the code log — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of any one of those logs, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
@@ -25,7 +25,12 @@ subcommand below is served by it.
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
-| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
+| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing**, **damaged** and **unanswered** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
+| `crewlet code status [config] [-repo NAME] [-json]` | The [code host's](../concepts/code-host.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
+| `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
+| `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
+| `crewlet code import <source-url> <name> [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into a declared one, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
+| `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
@@ -146,7 +151,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | Flag | Description |
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
-| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. On a deployment whose Tier A names [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration) the seed is never imported, empty store or not, and says so the same way: the managing system writes the company. |
+| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when no company exists yet — neither in this node's store nor in the fleet it joins, so a node whose store is empty (one [without `data`](../guides/fleet.md#nodes-that-hold-no-data), at every boot, or a data node joining a running fleet) never replaces the fleet's company with its file. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn, unless the file is the fleet's own document), so a restart with a stale file never reverts a live change, and the node boots on the store's company rather than the file's; a node without `data` boots unconfigured whatever its file, and takes the fleet's company (or the one its file just bootstrapped) before it claims a seat. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. On a deployment whose Tier A names [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration) the seed is never imported, empty store or not, and says so the same way: the managing system writes the company, and an empty store boots unconfigured until it does. |
 | `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. **Refused** before the node starts when Tier A names [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration): the file presents no credential, and the managing system would replace it at its next reconcile. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
@@ -155,7 +160,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — and a seats node's agent-mode tool bridge where `api.public.port` is unset. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies all five, the identity directory included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `git` (serve the company's git repositories where it sets `code.native`; needs `ingress`), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all five — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies every one of them, the identity directory and the code log included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run". Every flag that overrides Tier A is **folded into the document** the node runs, the logging flags as much as `-roles` and the API's: the verbosity, the log file and the [advisories the start logs](#every-start-says-what-its-tier-a-is-worth-knowing) all read that one document. The run holds that document to every Tier A rule once the flags are in, and a refusal names the flags given — the file passed as it loaded, but a flag reaches every rule that reads what it moved — and the engine asks the rules again before it opens anything.
@@ -284,7 +289,7 @@ Publishing knowledge and tool skills is its own command rather than a flag on `r
 
 Press `Ctrl+C` for graceful shutdown — signals escalate in two tiers:
 
-1. **First `Ctrl+C`**: graceful. Pressed while the node is still starting, it ends the boot — once an embedded broker's store recovery in progress has finished, which cannot be cut short — with the listener answering a drain's answers, as far as a [starting node](api-endpoints.md#while-a-node-is-starting) can give them, until the boot has unwound. Once the node serves, every held seat quiesces, running LLM turns finish their rounds (there is no internal timeout, and `drain_in_progress` logs the in-flight count every 10 s), and turns still queued behind the concurrency limit are returned to the broker for prompt redelivery. The HTTP surface stays up **for the whole drain** and closes only once it completes: `/health` stays `200`, `/ready` answers `503` naming the drain, and the dashboard and every read keep answering, so the drain can be watched there as well as in the logs. What it stops doing, from the first moment, is taking work: every webhook, config, secret and setup write, operator write and backup answers `503` with `{"error": "draining"}` and a `Retry-After`, because the drain waits on in-flight turns and a surface still accepting deliveries would keep making more.
+1. **First `Ctrl+C`**: graceful. Pressed while the node is still starting, it ends the boot — once an embedded broker's store recovery in progress has finished, which cannot be cut short — with the listener answering a drain's answers, as far as a [starting node](api-endpoints.md#while-a-node-is-starting) can give them, until the boot has unwound. Once the node serves, every held seat quiesces, running LLM turns finish their rounds (there is no internal timeout, and `drain_in_progress` logs the in-flight count every 10 s), and turns still queued behind the concurrency limit are returned to the broker for prompt redelivery. The HTTP surface stays up **for the whole drain** and closes only once it completes: `/health` stays `200`, `/ready` answers `503` naming the drain, and the dashboard and every read keep answering, so the drain can be watched there as well as in the logs. What it stops doing, from the first moment, is taking work: every webhook, config, secret and setup write, operator write and backup answers `503` with `{"error": "draining"}` and a `Retry-After`, because the drain waits on in-flight turns and a surface still accepting deliveries would keep making more — and so does a new git fetch or push, in git's own `text/plain` form. A git request already running is finished rather than cut: once the turns are done, the listener stays up until the node has served none for five seconds (`git_draining`, `git_drain_complete`).
 2. **Second `Ctrl+C`**: the process exits immediately. The first signal hands signal handling back to the operating system precisely so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses.
 
 There is no third tier, because the second is already an unconditional exit rather than something the engine has to be well enough to perform.
@@ -817,8 +822,9 @@ here:
   `from` and `to` are what holds it and what it names.
 - **`advisory`** — a setting that is valid and carries a consequence: a
   declined fsync, a backup nobody owns, a human seat nobody can message, a
-  token ceiling another one leaves idle. `ref`, `from` and `to` are empty. It
-  is the only kind a Tier A document raises.
+  token ceiling another one leaves idle, a repository whose default branch no
+  protection rule covers. It is located at the field to change, and `ref`,
+  `from` and `to` are empty. It is the only kind a Tier A document raises.
 
 The third kind a `/config` answer can carry, `admission`, is a rule a stored
 revision breaks, and a document validated here cannot carry one: it is a
@@ -904,7 +910,7 @@ crewlet budgets show                       # usage per scope
 
 **The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
 command that talks to a running node — `backup`, `retention`, `work`,
-`objects`, `fleet`, `seats`, `secrets`, `config` and `iam` too. Every guarded route needs one,
+`objects`, `fleet`, `seats`, `secrets`, `config`, `iam` and `code` too. Every guarded route needs one,
 reads included. It is never a flag: a token typed as an argument is in the
 shell history, in `ps`, and in any CI log that echoes the command, so
 `-token` is refused as an unknown flag. And it is never read out of the
@@ -913,7 +919,9 @@ write authored by whichever entry came first landed under a name nobody
 chose. The one command that reads no token is `iam token -login`, which mints
 your own and so signs in as you for that request instead — a person's token is
 theirs alone to mint. A `401` therefore has one thing to check — the value exported in
-`CREWLET_API_TOKEN`.
+`CREWLET_API_TOKEN`. And the config is read for the node's address alone: with
+`-url` given none is read at all, which is how a laptop or a CI job that holds
+no Tier A file reaches a node.
 
 The **ceilings** are not stored here: they are the company document's
 `token_budget`s — the company's and each seat's — so every process derives the
@@ -1005,19 +1013,36 @@ partial copy as a backup.
 
 **The company's files come too**, as an `objects` line. On the default `nats`
 object store their objects are in the `OBJ_crewlet_files` stream the backup
-snapshots with the rest, and the line counts the objects the copy names
-that the stream holds (lost ones are listed beneath); on
-`s3` each object the copy names is read from the bucket into `objects/` and
-checked against its file's size and SHA-256 as it is written, and the line
-gives their count and size. A file whose object the store answered it does
-not hold, or holds wrong, does not fail the backup: it is listed beneath, as
-`PROJECT/path` and the object's key, to restore from an earlier backup or
-upload again. One the store could not answer about at all fails it.
+snapshots after the rest, and the line counts the objects the backup owes that
+the stream holds, asked thirty-two at a time (lost ones are listed beneath); on
+`s3` each object it owes is read from the bucket into `objects/`, thirty-two at
+a time, and checked against its file's size and SHA-256 as it is written, and the
+line gives their count and size. What it owes is every object a live row of the
+copy names and every object a record the restore replays from the copy names —
+a file written while the backup ran, counted as "(N written during the copy)".
+A file
+whose object the store answered it does not hold, or holds wrong, does not
+fail the backup: it is listed beneath, as `PROJECT/path` and the object's key,
+to restore from an earlier backup or upload again. The first one the store
+could not answer about at all fails it, and nothing more is asked.
 
-`-wait` (default 30 minutes) bounds how long the command waits for the answer,
+`-wait` (default 12 hours) bounds how long the command waits for the answer,
 not the copy: the engine finishes what it started, so a wait that expires
 leaves a good backup this command has already called a failure. It is set far
 past any plausible duration for that reason.
+
+One backup runs at a time on a node: asked for while another runs there, the
+node answers `409 backup_running` and writes nothing, and the command says so.
+A refusal the fleet's own state causes is printed with the node's hint saying
+what to do: `409 record_unreadable` (a log the backup replays holds a newer
+build's record — take it from a node running that build), `409
+record_unverified` (a record signed under a key this node does not hold — add
+the key to its `secrets.keys` and restart it, or take it from a node that
+holds the key), `409 log_recreated` (this node's copy is keyed to a log since recreated — take it
+once the node has re-keyed, or from one that has) and `503 log_gap` or `503
+objects_unreachable` (take it again: the node's `Retry-After` is one second
+for `log_gap`, since the next copy stands past the gap at once, and four for
+`objects_unreachable`, the broker's own election timeout).
 
 See [Backups & Restore](../guides/backup.md) for what the directory contains,
 what the copy is a copy *of*, and how a restore uses it.
@@ -1124,11 +1149,13 @@ for each pass:
   identity without `s3:ListBucketMultipartUploads` or
   `s3:AbortMultipartUpload` — is a line of its own beneath.
 - **Last audit** — from the last audit to run to its end: how many files the
-  company's rows name, how many the store does not hold (**missing**) and how
-  many it holds at the wrong size or digest (**damaged**). An audit that
-  failed after it is said beneath, never in its place. When any file cannot
-  be read it lists them — the file, whether it is missing or damaged, and its
-  object's key; the first hundred, and how many more — to restore from a
+  company's rows name, how many the store does not hold (**missing**), how
+  many it holds at the wrong size or digest or as nothing it can read
+  (**damaged**) and how many it failed twice to answer for while it answered
+  for the rest (**unanswered**). An audit that failed after it is said
+  beneath, never in its place. When any file cannot be read it lists them —
+  the file, which of the three was found of it, and its object's key; the
+  first hundred by name, and how many more — to restore from a
   [backup](../guides/backup.md) or upload again.
 
 Before the collector has finished a pass — on a new fleet, in the minute or so
@@ -1172,6 +1199,419 @@ can bring those back), and what to do next. `-wait` (six hours) is how long
 it waits for the answer; the node finishes the pass either way, and running
 the command again reports where the copy stands. `-json` prints the node's
 report as it answered it. The token takes `admin`.
+
+## `crewlet code`
+
+```
+crewlet code status [<config.yaml>] [-url URL] [-repo NAME] [-pushes N] [-json]
+crewlet code verify [<config.yaml>] [-url URL] [-repo NAME]... [-repair] [-json]
+crewlet code export <name> <file.bundle> [<config.yaml>] [-url URL] [-git PATH]
+crewlet code import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
+crewlet code credential [-token-env NAME] get|store|erase
+```
+
+The engine's own [git host](../concepts/code-host.md) from the command line.
+`status` and `verify` ask a **running node** through its `/code/` routes
+([API Endpoints](api-endpoints.md#the-code-host-git-and-code)), as whoever the
+token resolves to: the repositories are rows the data nodes keep, and a git
+node's cache is files only its own process touches, so nothing here opens
+either. Like every node client they take the token from `$CREWLET_API_TOKEN`
+alone and find the node from the Tier A file's `api` block — `-url` overrides
+it, and with `-url` given no Tier A file is read. `export`, `import` and `credential` are **client-side**: your own git,
+with your own environment, talks to the node's git routes exactly as anyone's
+git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
+
+`crewlet code hook` is the engine's own: git starts it inside every push. Run
+by hand it says so and exits 2.
+
+### `crewlet code status`
+
+With no `-repo`, every active and archived repository, read at the node's
+default level (`stale`), as many a page as the node serves (500), every page
+after the first at or past the first one's position, and on stderr the
+position the listing was read at, so two runs can be compared:
+
+```
+NAME        STATUS    OWNER               BRANCH  HEAD     REFS  PACKS  SIZE      LAST PUSH
+infra       archived  seat:platform-lead  main    77c0d2e  3     9      12.4 MiB  2026-09-30 08:11 UTC
+nimbus-web  active    unit:engineering    main    3f2a91c  14    212    1.9 GiB   2026-10-10 14:02 UTC
+read at CREWLET_CODE_LOG@0:4127
+```
+
+`HEAD` is the default branch's commit, `-` while it has none; `SIZE` is what
+its live packs hold. A company that declares none says `no repositories:
+code.repos declares none`, never an empty table.
+
+With `-repo NAME`, that repository in detail and its newest pushes
+(`-pushes N`, 10 by default, `0` for none). The repository is **read at
+`linearizable`** — as it is now — and every page of its history at or past the
+position it was read at, which the node serves with no barrier of its own, so
+the command costs the code log one barrier however many pages it reads, and
+asks for no more pushes than it prints:
+
+```
+web — active, owned by unit:engineering, default branch main
+  description:  The customer-facing web app.
+  visibility:   unit — only the seats the chart relates to its owner read it
+  protections:  refs/heads/main (no force, no delete), refs/heads/release/** (no direct push)
+  refs:         12 branches, 30 tags; main at 3f2a91c0e4d1b5a7f8c2e9d0a1b2c3d4e5f60718
+  packs:        212 live, 1.9 GiB, 1843021 objects
+  limits:       push 1.0 GiB, file 50.0 MiB, repository 20.0 GiB
+  pushes:       340 ever, the last 2026-10-10 14:02 UTC
+  created:      2026-09-01 10:00 UTC
+
+PUSHED AT             BY                                                  NODE    REFS  RESULT
+2026-10-10 14:02 UTC  pat:019a2f4e-5c1d-7a3b-8e2f-6d4c3b2a1908 (founder)  data-b  1     ok refs/heads/main 1a2b3c4..3f2a91c
+2026-10-10 13:40 UTC  token:ci (release-desk)                             data-a  2     ok refs/heads/x 0000000..9e8d7c6; ng refs/heads/main 1a2b3c4..77aa001 (stale)
+```
+
+`BY` is the credential that pushed, as every record a write leaves names it —
+`pat:<credential id>` for a machine token, `token:<id>` for a Tier A token —
+and, in parentheses, the human seat its principal holds: a person's own, or the
+one the identity directory binds a token to;
+each ref's result is `ok`, `noop` or `ng`, with git's own `..` for a fast
+forward and `...` for a forced move, and an `ng`'s reason. `limits` are the
+serving node's `code.limits`. A deleted repository's header says when it was
+deleted and that declaring it again in `code.repos` restores it until
+`code.deleted_retention_days` have passed.
+
+`-json` prints the node's answers as they came — one JSON document a page, the
+repository's first with `-repo` — for a script. What the command holds while it
+reads is what it prints: a page at a time with `-json`, and otherwise each
+repository's or each push's row of text. A repository nobody declared is
+refused in the node's words (`no repository named "web" is declared in
+code.repos`), and a company that hosts no code says `code.native is not set`;
+either exits non-zero.
+
+### `crewlet code verify`
+
+Checks **this node's** copy of each repository against its rows — every pack's
+bytes against the digest its row names, the refs against what was written, and
+git's own connectivity check — and with `-repair` repairs what it finds and
+checks the copy again. Where everything it found is the copy's **own directory
+out of place** — a file the engine does not write there, a fixed file edited
+or replaced by a link, a pack no row names, a shape the node refuses to run
+git in — the copy is put right **in place**: every pack, the
+multi-pack-index, its bitmap and the commit-graph kept, nothing downloaded.
+A pack missing or damaged, or an index failing its checksum, is **rebuilt**
+into a new copy (every pack found whole linked rather than downloaded again),
+and so is whatever a repair in place leaves. Every git node keeps its own cache, so **verify each** (`-url`
+names the node); with requests routed by repository, a repository is cached on
+one or two of them. A verify is one of the deployment's own controls and takes
+**`admin`**, so the token in `CREWLET_API_TOKEN` must carry it: any other is
+refused naming it, before the node checks anything.
+
+With no `-repo`, every active and archived repository, listed at
+`linearizable` so one declared a moment ago is not missed; `-repo NAME`, as
+often as you like, verifies those — a name nobody declared is refused in the
+node's words, naming `code.repos`. Each is verified in turn, **at the position
+the listing was read at** (`min_position`): the node brings its copy there with
+no barrier of its own, where a check at the log's head appends one, so a sweep
+of every repository costs the code log one barrier rather than one a
+repository:
+
+```
+web: ok (212 packs, 41 refs)
+docs: not held on this node — nothing here to check (verify the git nodes that serve it)
+api: 2 problem(s) (14 packs, 9 refs):
+  pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
+  fsck: error: inflate: data stream error (incorrect data check) (and 2 more)
+  run it again with -repair to repair this node's copy
+```
+
+and with `-repair`:
+
+```
+api: damaged, and rebuilt (14 packs, 9 refs); the check before the rebuild found:
+  pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
+api: the rebuilt copy is whole
+```
+
+or, for a copy whose directory alone was out of place:
+
+```
+web: out of place, and repaired in place (212 packs, 41 refs); the check before the repair found:
+  unexpected description
+web: the repaired copy is whole
+```
+
+A rebuilt copy has no multi-pack-index, bitmap or commit-graph until the node
+writes them again — minutes to hours for a large repository, its clones slower
+meanwhile — which is why nothing a repair in place can end is rebuilt.
+
+Damage the node had **already repaired** when the check began — its sync
+before the check held a file to its checksum and dropped or fetched it again in
+place — is told first and leaves the copy clean: the copy checked no longer
+holds it, so it is neither a problem nor a reason to `-repair`, though a disk
+that damaged one file may hold others damaged:
+
+```
+web: the sync before the check found damage on disk and repaired it in place:
+  the sync before the check found objects/pack/multi-pack-index-3f2a….bitmap failing its checksum and dropped it to be written again
+web: ok (212 packs, 41 refs)
+```
+
+A repository the node holds **no copy of** is passed over: nothing there can be
+damaged, and the node does not build a copy just to check it. A rebuild that
+leaves a problem names where it is — the object store or the rows — since a
+copy rebuilt from them can be no better than they are.
+
+**The check is the node's operation, not the request's.** It reads every byte
+of the repository — measured at about nine seconds a gigabyte, nearly all of it
+git's connectivity check — so the node runs it on its own time and a proxy's
+read timeout ends nothing. The node answers a check that ends within a quarter
+of a second — a small repository's — in the request that asked for it, and
+otherwise the command reads it, a quarter of a second later and then at
+doubling waits up to five seconds, until it ends. A refusal the node says
+clears by waiting (its verify slot or the check's memory held, a node stopping)
+is asked again after the node's own `Retry-After`, for up to five minutes, and
+then reported. While the node checks the copy it says when it ends that check
+by — a bound from what the copy holds, about 1.1 seconds a mebibyte, past
+which it ends the check itself — and the command waits by it; a node still
+saying it is checking well past that bound, or that stops answering for half a
+minute, is given up on, saying how to read the check's outcome later, and
+asking again hands back a check still running. A node that serves no verify at
+all is said once, naming `-url`, and the sweep stops: it is the address that is
+wrong, not a repository.
+
+**Exits non-zero when any copy is not clean**, after verifying every one — a
+problem found, a check that failed, a name nobody declared — and zero when all
+are clean or not held: the hook for a cron on each git node. `-json` prints
+each verification as the node answered it on stdout, and what it says in words
+on stderr — a company that declares none among them.
+
+### `crewlet code export`
+
+Writes one repository — every ref and every object behind them — to a [git
+bundle](https://git-scm.com/docs/git-bundle) on this machine:
+
+```
+$ crewlet code export web web.bundle
+exported web: 42 refs, 1.9 GiB to web.bundle
+$ git clone web.bundle web        # restores it, anywhere
+```
+
+It runs **your** git — the first on `PATH`, or `-git PATH` (a name is looked
+up on `PATH`, a relative path taken from where you run the command), which
+must be 2.40 or newer: the client floor, `gitproc.ClientMinVersion`, below
+which it is refused before anything runs, as `gitproc: <path> is git
+<version>, and a client of the code host needs git 2.40.0 or newer
+(gitproc.ClientMinVersion, the client floor): install a newer git — on macOS,
+Homebrew's: Apple's bundled git is 2.39; or name one with -git`. It runs it
+with your environment and your configuration, as a `git clone
+--mirror` through the node's git routes, then bundles the mirror, naming the
+mirror to every command (`--git-dir`), so `safe.bareRepository=explicit` in
+your configuration refuses none of them. Your token reaches git only through
+`crewlet code credential`, in the environment of that one clone and never on a
+command line, and only for the node's own URL: every credential helper your
+configuration lists is set aside for that clone, so a stored password for the
+same host is never sent instead, and a host a redirect sends git to is offered
+nothing. The bundle is written as `<file.bundle>.partial` and **checked whole
+before it is renamed into place**: its header is a bundle's with no
+prerequisite, and its pack is read from start to end and its bytes hashed
+against the trailer git wrote, so a pack cut short or with a byte changed —
+which `git bundle verify`, reading only the header, calls okay, and a clone of
+it refuses — is refused with nothing left at the path. An export that was
+interrupted leaves nothing that looks finished either; the mirror is
+made in a directory **beside the bundle** and removed when the export ends, so
+the bundle's volume needs room for the repository twice while it runs. A
+repository with no refs yet, or one deleted, is refused with nothing written.
+
+### `crewlet code import`
+
+Pushes another host's repository — anything your git clones: an HTTPS or SSH
+URL on GitHub or GitLab, another server, a path on this machine — into one the
+code host serves, **as you**: every step is an ordinary push by the person your
+token acts as, held to every rule a push is held to (`code.limits`, the
+repository's protections, the blob limit, git's own object checks), and the
+repository's push history names you for each. The engine dials nothing: your
+git reaches the source with your own credentials, proxy and network, so there
+is no fetch of a URL on the node to guard.
+
+```
+$ crewlet code import https://github.com/acme/web.git web
+skipping 412 refs outside refs/heads/ and refs/tags/ (refs/pull/*): a forge's, not the repository's
+cloning https://github.com/acme/web.git into /tmp/crewlet-import-2861
+cloned https://github.com/acme/web.git: 63 refs (4 branches, 59 tags), 2.1 GiB packed
+importing 63 refs in steps of at most 921.6 MiB (code.limits.max_push_bytes less a tenth), each measured before it is pushed
+pushing step 1: refs/heads/main → 3f2a91c (905.1 MiB)
+imported step 1: refs/heads/main → 3f2a91c (905.1 MiB)
+pushing step 2: refs/heads/main → 9e8d7c6 (911.4 MiB)
+…
+imported step 5: 62 refs, refs/heads/develop … refs/tags/v3.2.0 (48.0 MiB)
+imported web: 63 refs, 3.6 GiB sent in 5 steps, 3.6 GiB stored with the packs' indexes
+```
+
+In order:
+
+1. **The repository.** It must be declared in `code.repos` and active — read at
+   `linearizable`, so one declared a moment ago is found — and its
+   `code.limits` are the ones the node holds its pushes to. An archived or
+   deleted repository takes no push, and is refused saying how to declare it;
+   a name nobody declared is refused naming `code.repos`, and a company that
+   does not set `code.native` is refused saying so, in the node's words. The
+   import also asks the node who the token is (`GET /viewer`): every push's
+   record names that person, so it is part of what one push may carry
+   (step 6).
+2. **Before anything is downloaded**, your git (2.40 or newer, the client
+   floor, refused below it as `export` refuses it — the first on `PATH`, or
+   `-git PATH`) reads the source's own list of refs, and the import
+   refuses a ref the code host takes no push of (git's ref rules, at most 255
+   bytes of UTF-8), a branch the code host keeps for its seats' own namespaces
+   (`refs/heads/seats`, or `refs/heads/seats/<name>` as a branch itself —
+   [who may read and push](../concepts/code-host.md#who-may-read-and-push)),
+   and more refs than one repository holds (100 000), naming the refs it
+   refuses: rename them in the source. Where the
+   source asks for a user name and password none of your credential helpers
+   holds — or ssh for a host key on a first connection, or a key's passphrase
+   with no agent — your git **asks you on the terminal**, here and in the clone,
+   as a git you ran yourself would; with no terminal (a CI job) the question
+   fails and the import says so. It then asks the node what a push's first
+   request asks — a dry run of one — so a credential bound to nobody, which
+   fetches only, or a node that takes no push here, is refused now, in git's words,
+   rather than after the source has been downloaded.
+3. **The clone**: a bare clone of the source's branches and tags, into the
+   system's temporary directory — set `TMPDIR` to a volume with room for the
+   source, since a temporary directory is often small or held in memory. Refs
+   outside `refs/heads/` and `refs/tags/` — a forge's `refs/pull/*` and
+   `refs/merge-requests/*`, notes, remotes — are skipped and counted: they are
+   the forge's rather than the repository's, the code host takes no push of
+   them, and the history only they reach is never downloaded.
+4. **Every refusal the source shows, before any push**, listed together: a
+   shallow source (import from a full clone of it), a source whose objects are
+   SHA-256 (the code host keeps SHA-1 repositories), every blob past
+   `code.limits.max_blob_bytes` — by its id, its path and its size, wherever
+   it is in the history (large binaries belong in tracker files; a history
+   rewritten without them imports) — and a source whose history is past
+   `code.limits.repo_max_bytes` already as **one pack** (raise it, or import
+   less): an import stores more than that (step 6).
+5. **What the repository already holds.** A ref it holds at the source's value
+   is done; a branch it holds at an earlier commit of the source's branch is an
+   import that stopped part way — or a source that has moved on since — and is
+   continued from there, through the commits that descend from the one it
+   holds, so every step is a fast-forward even where that commit reached the
+   source's branch through a merge. A ref at any other value — something else
+   was pushed there — is refused naming the first such ref in the source's
+   order, both values and that this is not a resumed import of the same
+   history. A ref the repository holds that the source does not is left as it
+   is, and named.
+6. **The steps.** The default branch first — the source's branch of the name
+   `code.repos` gives as `default_branch`, or, where the source has none, the
+   source's own default branch under its own name (said, so you can push the
+   repository's default afterwards) — advanced along its first-parent history,
+   every step a fast-forward of the branch itself, so no temporary ref ever
+   exists. Then every other branch and tag, in name order, in batches of at
+   most 1 000 refs — fewer where the refs are long and spelled long in the
+   code log (`&`, `<` and `>` take six bytes each there): each batch holds
+   only as many as one push's record has room for, as the person the token
+   acts as, which the node refuses past before anything of the push runs
+   ([Limits](../concepts/code-host.md#limits)). Every step is **sent whole**
+   (`--no-thin`), so the pack it sends is the pack the node stores, and is
+   **measured before it is pushed**:
+   its pack is built exactly as `git push` builds it, against what the
+   repository will hold, its bytes counted and thrown away. A step is held to
+   `code.limits.max_push_bytes` less a tenth for what it sends, to the
+   1.25 GiB one push may store with its indexes, and — added to what the
+   repository holds and what the steps before it stored — to
+   `code.limits.repo_max_bytes`. Where a history is stored as a forge stores it
+   — each file's newest version whole and its older ones as deltas against it —
+   a step packs to far more than the source's own pack holds of it, so a step
+   past what it may carry is cut shorter before anything is sent, and the
+   summary says how many were. A branch no batch can carry is stepped along its
+   own history. A **merge** whose other side is more than one step — a
+   long-lived branch merged back, a subtree added, an unrelated history merged
+   in — has that side's own history stepped first, to the merged-in commit and
+   no further, on a branch of the source still to be pushed that reaches it:
+   the branch whose history it is where the source keeps one, and otherwise
+   any that reaches it, such as a branch created after the merge. That branch
+   is taken out of its turn, every step a fast-forward of it, and goes on to
+   its own value in its turn; a branch the repository holds carries it only
+   where it holds it at an earlier commit of that history. The merge, measured
+   once, then goes in a step of what is left. Where no other branch can carry
+   it, the import is refused naming the merge, the merged-in commit and what
+   its history weighs, with the remedy: a branch on that commit in a mirror of
+   the source (`git clone --mirror`, then `git branch`), imported from the
+   mirror. One commit, or one tag no branch reaches, that alone packs past the
+   limit cannot be split, and is refused naming it — raise
+   `code.limits.max_push_bytes` (at most 1 GiB). The next
+   step is measured while one is pushed, so the second build of each pack —
+   `git push` sends no pack it did not build — overlaps the upload and the
+   node's work rather than adding to them, and a push that fails ends that
+   measurement at once.
+7. **The pushes**: each step is one `git push --porcelain --atomic
+   --no-verify --no-thin`, through `crewlet code credential` exactly as
+   `export`'s clone is. `--atomic`: a step lands whole or not at all.
+   `--no-verify`: your own pre-push hooks are for your own pushes, and one that
+   uploads elsewhere — Git LFS's — would refuse every step. And each is
+   **pinned against your own push settings**, which would change what a step
+   carries or have git refuse it: `--no-follow-tags` (`push.followTags` adds
+   tags the step never planned), `--no-signed` (`push.gpgSign` asks for a push
+   certificate the code host does not take), `--no-recurse-submodules`, push
+   options cleared (`push.pushOption`: the code host takes none, and git
+   refuses a push carrying one) and `push.negotiate` off.
+8. **The proof**: every branch and tag of the source, read back from the node
+   as git lists it, at the source's value; any that differs exits 1 naming it.
+
+**A stepped history stores more than one pack of it**: every step keeps whole
+the files its deltas cannot reach in the steps before it, so each file a step
+touches is stored again in full. Measured on this project's own history,
+34.0 MB as one pack: 68.5 MB in eleven steps and 78.6 MB in forty-two. What
+the repository stores is what the object store holds and what every git node
+serving it caches, so run a large import with `code.limits.max_push_bytes` at
+its 1 GiB ceiling — the fewest, largest steps — and size
+`code.limits.repo_max_bytes` for the steps rather than for the source's own
+pack. A step that would take the repository past it is refused **before it is
+sent**, saying what the repository would hold, what is left of the source, and
+to raise the limit and run again.
+
+**A failed step is safe to run again**: the import stops at the first step git
+refuses, printing git's own line for every ref it refused — `!
+<id>:refs/heads/frozen [remote rejected] (protected_direct: …)` — and saying
+how many steps of the run landed before it. Fix the cause and run the same
+command again: step 5 finds what landed and pushes the rest. The protections
+apply to an import as to any push, so a branch whose rule says `direct_push:
+none` refuses its own import: lift the rule for the import and restore it
+after.
+
+`-dry-run` does steps 1–5 and prints the plan — every step, sized from how the
+source stores its objects (`≈`), with nothing measured and nothing pushed, and
+a step marked where its estimate passes the push limit or takes the repository
+past `code.limits.repo_max_bytes`. A merge whose estimate passes the push limit
+has its other side's history planned first, on the branch the run would carry
+it on, and the plan says so as the run does (`stepping … first`). A real run's
+steps can differ from it, since a step is cut where its measurement says.
+
+Git LFS: the import carries the pointer files a history holds, never the large
+files an LFS server keeps beside it; the code host serves no LFS.
+
+Exits 0 once every ref is proven, and 1 on any refusal, a stopped step or a
+ref that differs.
+
+### `crewlet code credential`
+
+git's [credential helper](https://git-scm.com/docs/gitcredentials) for the code
+host. Configured for the node's address:
+
+```sh
+export CREWLET_API_TOKEN=…
+git config --global credential.https://code.example.com.helper ''
+git config --global --add credential.https://code.example.com.helper '!crewlet code credential'
+```
+
+— the empty value first, so the node's address has this helper alone: git
+hands a credential it was answered to **every** helper it lists to store, and
+a storing helper your system configures (osxkeychain on macOS, the credential
+manager with Git for Windows) would otherwise keep the token, answer every
+later request with it before this helper is asked, and send a rotated token's
+old value until a refusal erased it. Configured so, it answers git's `get`
+with `username=crewlet` and the token in
+`$CREWLET_API_TOKEN` (`-token-env NAME` reads another variable) as the
+password — the user name is ignored, the token is the credential. It answers
+**only over HTTPS**, or plain http to this machine (`localhost`, `127.0.0.1`,
+`::1`): over plain http to another host it says it will not send a token in
+the clear and answers nothing, and git asks its next helper. An empty variable
+answers nothing too. `store` and `erase` read git's request and do nothing —
+the token's home is the variable, never a file this helper writes.
 
 ## `crewlet fleet broker`
 
@@ -1447,15 +1887,15 @@ generation (`GEN`), and a position from a generation the log has left prints
 `left gen N` (or `ahead gen N`) in place of a lag, since its sequence compares
 with nothing the log holds now; a node that reported its log diverged at its
 checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling every
-identity-claiming log — the tracker's, the knowledge base's and the identity
-estate's — keeps for gate records ([the gate
+identity-claiming log — the tracker's, the knowledge base's, the identity
+estate's and the code log — keeps for gate records ([the gate
 reserve](../guides/retention.md#the-gate-reserve)), `-` on the vector
-changelog, which keeps none; `HEADROOM` is what is left of the rest, the
+changelog and the usage log, which keep none; `HEADROOM` is what is left of the rest, the
 ceiling ordinary writes are refused at — so a log at `0%` still takes an
 eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
-vector log and the identity estate's have no wake feed, and an
+vector, usage and code logs and the identity estate's have no wake feed, and an
 absent term is a different fact from one that permits nothing. Where a log does
 have one, its `feed_ack_floor` is that log's own feed — never another domain's.
 `PER DAY` prints `-` for the same reason where nothing was measured — a
@@ -1510,8 +1950,8 @@ coming back; eviction is the gesture for one that is not.
 
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
-counts nodes on — the tracker's, the knowledge base's and the identity
-estate's — and each answers on its
+counts nodes on — the tracker's, the knowledge base's, the identity estate's
+and the code log — and each answers on its
 own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
 or `not written` and the reason that stopped it:
 
@@ -1521,10 +1961,12 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
   iam: applied at CREWLET_IAM_LOG 58311
+  code: applied at CREWLET_CODE_LOG 2207
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
   iam trim floor 57000 → 57000
+  code trim floor 2100 → 2100
 ```
 
 The command prints the watermark before and after and the instant the
@@ -1534,10 +1976,11 @@ one is certain to have read its own tombstone before the trim passes it.
 The node you ran it on writes every log itself: every data node holds the
 whole estate, so one command reaches every log.
 
-The gesture is **judged once, before either log is written**. A node that still
+The gesture is **judged once, before any log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
-drop everything it writes and take its copy out of service. Stop it and wait
+drop everything it writes and take its copies of the logs it is evicted from
+out of service. Stop it and wait
 for its `LIVE` column in `crewlet retention status` to read `no`, or pass
 `-force` for a node wedged in a way that still renews its lease — the refusal
 prints both. A node
@@ -1620,7 +2063,7 @@ crewlet: the node answered 409: readmission_refused
 
 The comparison is the one the node's own write fence makes: its **last
 published position** in each log that claims identity — the tracker's, the
-knowledge base's and the identity estate's — against the **higher of the published floor and the log's first
+knowledge base's, the identity estate's and the code log — against the **higher of the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
 holding nothing; one whose position is from a generation the log has since
@@ -1670,8 +2113,8 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 (`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
 `stream.pages_log_max_bytes`,
-`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
-setting, only the value its stream is created with. A resize is decided
+`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`,
+`stream.code_log_max_bytes`) is not a live setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a
 maintenance mode and costs **three fleet-wide restarts**, two more per retry. The
@@ -1701,13 +2144,13 @@ check that quietly proves nothing.
 A target whose ordinary ceiling is at or below what the log already holds is
 refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
-applied. On the three identity logs the ordinary ceiling is the target less
+applied. On every identity-claiming log the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve) — the larger of a
 sixteenth of it and seven of the log's largest records with a mebibyte beside
 them; on the vector changelog and the usage log, which hold no gate, it is the
 whole target. A target under the floor Tier A holds the log's own field to is
 refused too, naming the field — a gibibyte on the tracker's, the knowledge
-base's and the vector changelog's, 64 MiB on the identity
+base's, the code log's and the vector changelog's, 64 MiB on the identity
 estate's and the usage log's. A target under the
 current ceiling and above the usage is accepted, and is how a log gives a
 reservation back. A raise the broker cannot
@@ -1763,7 +2206,9 @@ stream's own `created_at`, and which case it is, and refuses**: the
 confirmation means *I looked at the thing I am re-anchoring*, and a verb that
 read the value and fed it straight back would be confirming against its own
 output. Paste the instant back exactly as printed — it is the same one a
-`wrong_stream` refusal names as the broker's.
+`wrong_stream` refusal names as the live stream's: the creation instant
+stamped into its configuration (`crewlet.created_at`), which a snapshot
+restore keeps.
 
 The three cases are where the log is followed **from**:
 
@@ -1802,7 +2247,7 @@ used, an evicted peer's included — every other domain's stays where it is, and
 the domain's applier resumes on the node with no restart.
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's and the identity estate's — it refuses while any peer
+base's, the identity estate's and the code log — it refuses while any peer
 has already re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
 history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first
@@ -2136,7 +2581,12 @@ by `auth.mode: inherit-env`), `environment` (a key in the entry's `env`), or `no
 not build at all (a `${VAR}` model that resolved to nothing, say) is reported
 as one beside the others rather than ending the run. A configured credential
 bundle that does not restore is a problem of its own, naming `crewlet llm
-export` as the fix, since the engine would run that entry signed out.
+export` as the fix, since the engine would run that entry signed out. It also
+reads the URLs a box dials back to the engine (`CREWLET_MCP_BRIDGE_URL`,
+`CREWLET_SANDBOX_OTEL_RECEIVER_URL`) exactly as `crewlet run` reads them at
+boot: one the engine would refuse to boot on is reported first, as the node's,
+and fails the run whatever modes the entries run in, since a node that does
+not boot runs no seat.
 
 **`login`** has four shapes because the vendors do:
 

@@ -97,17 +97,18 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 // every request reads the catalogue this node serves at that moment: a node
 // that has not met its company answers `503 no_active_revision`, and one whose
 // catalogue is empty answers as the route's absence would — an endpoint that
-// exists and lists no tools reads to an operator as broken.
+// exists and lists no tools reads to an operator as broken. The lines logged
+// here therefore name the paths and no tool.
 func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	if server == nil {
 		return
 	}
-	// EVERY METHOD, so the transport's own verbs reach the SDK: this surface
-	// is served statelessly and the SDK answers a GET for a stream and a
-	// DELETE for a session with its own `405 Allow: POST`, which a client
-	// reads as "no stream offered" — a mux 405 would read as a route
-	// registered wrong.
-	mux.Handle(operator.MCPPath, server.MCPHandler())
+	// POST ONLY, unlike the bridge, which takes every verb: this transport
+	// keeps no session, so it offers no server-to-client stream for a GET to
+	// open and no session for a DELETE to end, and the mux's own 405 naming
+	// POST is how streamable HTTP says so — see operator.MCPPattern. A
+	// listening client's stream is a POST of its own.
+	mux.Handle(operator.MCPPattern, server.MCPHandler())
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+

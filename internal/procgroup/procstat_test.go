@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // A real stat line from a process whose command name holds the two things that
@@ -152,6 +153,133 @@ func fakeTable(entries map[string]fakeProc, listErr error) procTable {
 			return []byte(entry.line), entry.err
 		},
 		boot: func() (string, error) { return "boot", nil },
+		hz:   func() (uint64, error) { return 100, nil },
+	}
+}
+
+// cpuLine is a /proc/<pid>/stat line in the kernel's layout carrying the four
+// times parseProcCPU reads — utime, stime, cutime and cstime, fields 14 to 17
+// — beside fault counts and a priority every one of which differs, so a parse
+// a field out reads a wrong figure rather than a right one.
+func cpuLine(pid int, comm, state string, pgrp int, utime, stime, cutime, cstime int64) string {
+	return fmt.Sprintf("%d (%s) %s 1 %d 31 34816 %d 4194560 118 5 2 1 %d %d %d %d 20 0 1 0 5000 "+
+		"4235264 164 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0\n",
+		pid, comm, state, pgrp, pgrp+5, utime, stime, cutime, cstime)
+}
+
+// The four times of a stat line, read from their own fields however the
+// command is spelled — a process names itself, and one naming itself as the
+// fields after it must not forge its time or its group — and a line whose
+// times are not the kernel's (short, negative, not numbers) refused.
+func TestTheCPUParseReadsItsFourTimesFromTheRightFields(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		line  string
+		group int
+		ticks uint64
+	}{
+		{"plain", cpuLine(100, "pack-objects", "R", 90, 120, 30, 400, 50), 90, 600},
+		{"all four apart", cpuLine(100, "git", "S", 90, 1, 10, 100, 1000), 90, 1111},
+		{"nothing spent", cpuLine(100, "git", "S", 90, 0, 0, 0, 0), 90, 0},
+		{"a zombie keeps its times", cpuLine(100, "git", "Z", 90, 7, 3, 0, 0), 90, 10},
+		{"a command forging the fields after it", cpuLine(100, ") R 1 7 7 0 -1 0 0 0 0 0 999 999 999 999", "S",
+			90, 1, 2, 3, 4), 90, 10},
+		{"a space and a parenthesis in the command", cpuLine(100, "a) b", "S", 90, 4, 3, 2, 1), 90, 10},
+		{"past 32 bits", cpuLine(100, "git", "R", 90, 1<<33, 0, 0, 0), 90, 1 << 33},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group, ticks, err := parseProcCPU(tc.line)
+			if err != nil {
+				t.Fatalf("parseProcCPU(%q): %v", tc.line, err)
+			}
+			if group != tc.group || ticks != tc.ticks {
+				t.Fatalf("parseProcCPU(%q) = group %d, %d ticks; want group %d, %d ticks", tc.line, group, ticks,
+					tc.group, tc.ticks)
+			}
+		})
+	}
+	for _, line := range []string{
+		"",
+		"100 no-parenthesis R 1 90",
+		"100 (short) R 1 90 31 34816 95 4194560 118 5 2 1 7 3 0",
+		cpuLine(100, "git", "R", 90, 7, 3, -4, 0),
+		cpuLine(100, "git", "R", 90, 7, 3, 0, -1),
+		"100 (git) R 1 90 31 34816 95 4194560 118 5 2 1 7 three 0 0 20 0 1 0 5000\n",
+		"100 (git) R 1 not-a-group 31 34816 95 4194560 118 5 2 1 7 3 0 0 20 0 1 0 5000\n",
+	} {
+		if group, ticks, err := parseProcCPU(line); err == nil {
+			t.Errorf("parseProcCPU(%q) = group %d, %d ticks; want a refusal", line, group, ticks)
+		}
+	}
+}
+
+// What the CPU scan makes of every kind of entry /proc can hold. Every member
+// counts — the leader, a running member, an exited one awaiting its reap —
+// and nothing else does; a process reaped between the listing and its read
+// is no member; and a record that cannot be read or parsed is reported BESIDE
+// the sum of the ones that could, since a caller keeps the most any reading
+// found and a floor is worth having. Only a table that cannot be listed, or a
+// clock with no tick rate, gives nothing.
+func TestTheGroupCPUScanSumsEveryMemberOnce(t *testing.T) {
+	const pgid = 500
+	members := map[string]fakeProc{
+		"500":  {line: cpuLine(500, "upload-pack", "S", pgid, 2, 1, 40, 7)},       // leader, a child reaped
+		"501":  {line: cpuLine(501, "pack-objects", "R", pgid, 300, 50, 0, 0)},    // running
+		"502":  {line: cpuLine(502, "index-pack", "Z", pgid, 100, 0, 0, 0)},       // exited, not reaped
+		"600":  {line: cpuLine(600, "pack-objects", "R", 600, 9000, 9000, 0, 0)},  // a stranger
+		"601":  {line: cpuLine(601, ") R 1 500 500", "R", 601, 9000, 9000, 0, 0)}, // a stranger forging the group
+		"self": {line: "garbage"},
+	}
+	const want = 500 * time.Second / 100 // 2+1+40+7 + 300+50 + 100 ticks at 100 a second
+	with := func(extra map[string]fakeProc) map[string]fakeProc {
+		out := map[string]fakeProc{}
+		for k, v := range members {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name    string
+		entries map[string]fakeProc
+		listErr error
+		hz      uint64
+		hzErr   error
+		spent   time.Duration
+		wantErr bool
+	}{
+		{name: "the members and nothing else", entries: members, hz: 100, spent: want},
+		{name: "the same ticks at another rate", entries: members, hz: 1024, spent: 500 * time.Second / 1024},
+		{name: "a group with no members", entries: map[string]fakeProc{
+			"600": members["600"],
+		}, hz: 100},
+		{name: "processes reaped between the listing and their reads", entries: with(map[string]fakeProc{
+			"7": {err: &fs.PathError{Op: "open", Path: "/proc/7/stat", Err: fs.ErrNotExist}},
+			"8": {err: &fs.PathError{Op: "read", Path: "/proc/8/stat", Err: errNoProcess}},
+		}), hz: 100, spent: want},
+		{name: "a hidden record", entries: with(map[string]fakeProc{
+			"9": {err: &fs.PathError{Op: "open", Path: "/proc/9/stat", Err: fs.ErrPermission}},
+		}), hz: 100, spent: want, wantErr: true},
+		{name: "a record that does not parse", entries: with(map[string]fakeProc{
+			"503": {line: "503 (git) R 1"},
+		}), hz: 100, spent: want, wantErr: true},
+		{name: "a record that fails for another reason", entries: with(map[string]fakeProc{
+			"503": {err: &fs.PathError{Op: "read", Path: "/proc/503/stat", Err: errors.New("input/output error")}},
+		}), hz: 100, spent: want, wantErr: true},
+		{name: "a table that cannot be listed", listErr: fs.ErrPermission, hz: 100, wantErr: true},
+		{name: "no tick rate", entries: members, hzErr: errors.New("no AT_CLKTCK"), wantErr: true},
+		{name: "a tick rate of nothing", entries: members, hz: 0, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := fakeTable(tc.entries, tc.listErr)
+			table.hz = func() (uint64, error) { return tc.hz, tc.hzErr }
+			spent, err := table.groupCPU(pgid)
+			if (err != nil) != tc.wantErr || spent != tc.spent {
+				t.Fatalf("groupCPU = %v, %v; want %v, error %v", spent, err, tc.spent, tc.wantErr)
+			}
+		})
 	}
 }
 

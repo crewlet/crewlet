@@ -213,9 +213,11 @@ type capturingServer struct {
 	handler queue.AnswerFunc
 }
 
-func (c *capturingServer) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+func (c *capturingServer) Serve(ctx context.Context, subject string, answers int,
+	h queue.AnswerFunc) (queue.Unsubscribe, error) {
+
 	c.handler = h
-	return c.TailServer.Serve(ctx, subject, h)
+	return c.TailServer.Serve(ctx, subject, answers, h)
 }
 
 // A SILENT OWNER IS NAMED, NOT EMPTY.

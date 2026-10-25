@@ -25,7 +25,7 @@ configured per node.
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"           # distinct and stable, per process
-  roles: [data, ingress, seats, workers]   # the default; omit the key
+  roles: [data, git, ingress, seats, workers]   # the default; omit the key
   labels: {zone: eu}                 # optional, matched by role.placement
   max_concurrent: 32                 # agent turns this process runs at once
 ```
@@ -33,6 +33,7 @@ node:
 | Role | What it does |
 |---|---|
 | `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker and knowledge-base routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
+| `git` | Serves the company's git repositories where it sets [`code.native`](code-host.md), from a [cache](code-host.md#the-cache-on-a-git-node) on its own disk — see [Git nodes](#git-nodes). Requires `ingress`, whose listener git is served on |
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and serves their agent-mode tool bridge when `CREWLET_MCP_BRIDGE_URL` is set |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, the learning passes (skill clustering, curation, episode compaction, promotion), the state logs' trim, the embedding duty and the identity sweep. These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node converges those, at start, on each apply and on its own seat sweep — see [What a mailbox costs](#what-a-mailbox-costs) for why running it everywhere is affordable |
@@ -40,8 +41,8 @@ node:
 ```mermaid
 flowchart TB
     subgraph fleet["The fleet"]
-        N1["node-a<br/><i>data · ingress · seats · workers</i>"]
-        N2["node-b<br/><i>data · ingress · seats · workers</i>"]
+        N1["node-a<br/><i>data · git · ingress · seats · workers</i>"]
+        N2["node-b<br/><i>data · git · ingress · seats · workers</i>"]
         N3["sat-eu<br/><i>seats</i> · zone=eu · no data"]
     end
     subgraph shared["Shared state — the company · one NATS estate"]
@@ -100,42 +101,326 @@ This is the shape for an agent host you want small and
 disposable — see [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data)
 and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
 
+### Git nodes
+
+A node with the `git` role serves the company's repositories from a cache of
+its own, and git nodes scale **reads**: each keeps its own copy of every
+repository it is asked for, synced from the code log's rows and the object
+store, so a clone or a fetch is answered by the node that received it, and a
+burst of clones of one repository costs that node one sync however many there
+are. Nothing ties a person to one git node: every answer that names a ref is
+read at the code log's head, so a push answered `ok` on one node is what every
+other node advertises next
+([A push, end to end](code-host.md#a-push-end-to-end)).
+
+**Pushes** do not scale with git nodes: a push to one repository is decided by
+that repository's one [committer](#how-a-request-reaches-the-estate), a data
+node, whichever git node received it — so a repository's pushes meet in one
+place and are committed a batch at a time, the repositories spread across the
+data nodes, and a data node that leaves hands each of its repositories to that
+repository's runner-up.
+
+```mermaid
+flowchart LR
+    pusher(["A person's git push"]) --> B
+    fetcher(["Another person's git fetch"]) --> C
+    subgraph fleet["Three nodes, each git and data"]
+        A["node-a<br/><i>the repository's committer</i>"]
+        B["node-b<br/><i>received the push</i>"]
+        C["node-c<br/><i>serves from its own cache</i>"]
+    end
+    B -- "1 · stores the push's one bundle" --> S[("object store")]
+    B -- "2 · proposes the push" --> A
+    A -- "3 · one record" --> L[["CREWLET_CODE_LOG"]]
+    L -- "4 · every data node applies it" --> A
+    L --> B
+    L --> C
+    S -- "5 · one GET of the new bundle" --> C
+    C -- "6 · upload-pack" --> fetcher
+```
+
+The figures below were measured on one machine of four vCPUs (a 2.1 GHz Xeon),
+and each paragraph names the git and the object store it was measured with;
+the measured sections of the `internal/code`, `internal/code/host`,
+`internal/code/cache` and `internal/code/codecluster` package docs carry every
+arm.
+
+**What a committer and the code log commit.** Measured on three data nodes of
+one cluster sharing that machine's cores and its one disk — so a record's three
+fsyncs queue on one device, where three machines each sync their own, and its
+copies cross loopback rather than a network — a lone push is a record's round
+trip: 10.5–11.1 ms at the median, 86–89 a second, and about a millisecond more
+when it reaches its committer through another node. Sixty-four pushes at once
+to one repository are 2 050–2 090 a second proposed at the committer itself,
+because group commit puts them in two records, and 1 270–1 390 a second
+proposed through another node's router (a push's median 38–41 ms, its p99
+94–97 ms, sixty-four proposals crossing the wire at once). That second path is
+every push whose git node is not its repository's committer, so in a fleet
+that spreads `/git/` evenly it is the burst figure to size by. Pushes to
+different repositories share no record, so what bounds a company whose pushes
+spread across many repositories is the code log's **record rate** — 201–225
+records a second for sixty-four pushes at once over sixty-four repositories,
+each proposed through one node's router to whichever node commits it — and
+neither group commit nor another data node raises it: one log has one leader.
+Each record is then applied by every data node on the write lane every domain
+shares, whose published floor is about 2 000 rows a second
+([Replication](../guides/replication.md#the-bulk-apply-degradation-priced));
+a small push is about four rows.
+
+Where requests land decides how many caches a repository costs. A fleet whose
+every node serves git, with a balancer spreading `/git/` evenly, warms every
+repository on every node — one cold sync each, one download for every push the
+repository ever took, and each node's disk and background indexing for it. A
+fleet that never wrote `node.roles` is that fleet: every node has every role,
+`git` included, the moment its company sets `code.native`. Routing
+`/git/<name>` by repository keeps each warm on one or two nodes instead, a
+node's cache a share of the company's repositories rather than all of them,
+and a push's own sync adopting the pack its node received rather than
+downloading the packs other nodes did; it is a cost decision, never a
+correctness one ([Deployment](../guides/deployment.md#the-code-host)).
+
+**What a request on a cold node costs.** A request on a node that holds no copy
+of its repository — one that just joined, or whose budget evicted it — waits for
+a cold sync before its first byte, since git's protocol has nothing to send
+earlier: measured end to end, the git nodes on git 2.47.3 (Debian trixie's,
+which the engine image installed then) against an S3-shaped fake answering every request
+100 ms after it arrives, the first clone of a repository of two hundred
+pushes begins with a 1.4 s sync and of two thousand with a 13.4–13.8 s one, and
+a balancer's idle timeout sees all of it. A cold sync is network work, not CPU:
+each push's object carries the index its receiving node's git wrote, so the
+node downloads, verifies and renames, and runs no `index-pack`.
+
+The object store sees the same multiplication. A git node reads at most 32
+bundles at once — sixteen for any one repository — and S3 answers each in
+about 100 to 200 ms, so a node syncing repositories it has never served reads
+about 150 to 290 small ones a second (about 75 to 150 for one repository,
+measured on git 2.43 against a fake answering 100 and 200 ms late, the GETs
+alone bounding it). Every bundle is named under the one `files/` prefix, so
+about 19 to 37 git nodes cold-syncing at once at their full 32 — twice as many
+syncing one repository each — reach the 5 500 reads a second S3 serves one
+prefix (a fresh fleet, or a repository imported and then fetched through every
+node), past which it answers `SlowDown` until it has partitioned the prefix.
+Each node's client then slows every request it sends to the bucket rather than
+failing it ([the object store](object-store.md#an-s3-bucket--s3)), so those syncs slow
+down and nothing they hold is wrong, and routing by repository is again what
+bounds it. What shortens a cold sync is fewer packs: at one a push, a
+repository of 10 000 pushes comes up in about 70 to 130 seconds.
+
+**A git node is sized by its memory before its disk.** Every git process a
+node runs over a whole repository holds memory in proportion to the
+repository's objects, measured on git 2.43 over a source repository's history:
+writing the bitmap of its background index takes about 1 000 bytes an object,
+and a clone beside it about 240 more — about 1 240 an object. At about three
+million objects a gigabyte of a source repository's packs, that is nearly 4 GB
+of memory for each gigabyte of packs on disk; memory follows the objects rather
+than the bytes, so a repository of large binaries, far fewer objects to the
+gigabyte, needs far less. [The cache's Memory paragraph](code-host.md#the-cache-on-a-git-node)
+has every figure, and what the node keeps back for the store, the broker and
+the engine. A repository whose bitmap the node's memory cannot hold is still
+served — without one, so each of its clones walks its history — and raises
+[`code_maintenance_refused`](../reference/alarms.md). A single repository of
+50 to 100 GB of history is past what a git node is sized for.
+
+**And by the bytes and CPU it serves, not by its requests.** Measured on git
+2.47.3 over a tree of 10 000 files in two hundred pushes, a 31.5 MB pack: from a
+node holding the repository's bitmap, a full clone costs 0.91–0.98 s of the
+node's git CPU, and a shallow clone of one commit, blobless, of the directories
+a sparse checkout's cone names 0.37–0.38 s; on a node that has not yet indexed
+the repository a full clone walks and delta-searches the whole history,
+3.7–3.9 s of CPU, against 0.38–0.40 s for the narrow clone, which moves 3.4 MB
+rather than the whole pack. Measured again at ten times the tree — 100 000
+files in two thousand pushes, a 334 MB pack — on a node that has not indexed
+it, the two cold clones cost eight to ten times as much: 35–38 s of CPU for the
+full one and 3.3–3.8 s for the narrow one.
+Identical clones share nothing: thirty-two at once cost the node thirty-two
+clones of CPU. A warm fetch of one new commit is 10–12 ms of it. So size a git
+node's cores by the clones and fetches it serves, and point CI at a blobless
+clone with a cone wherever a tree is large — shallow too, where the job reads
+no history:
+
+```sh
+git clone --depth=1 --filter=blob:none --sparse https://crewlet.example.com/git/web.git
+git -C web sparse-checkout set services/api
+```
+
+A blobless clone needs protocol v2, git's default since 2.28, and is served
+the filters a bitmap answers — `blob:none`, `blob:limit=<n>`, `tree:0`,
+`object:type=<type>` and a `combine:` of them; `sparse:oid` and `tree:<n>` past
+0 are refused ([the filters served](code-host.md#a-push-end-to-end)).
+
+**A git node's disk.** Its cache holds the repositories it serves whole — the
+sum of their `SIZE` in
+[`crewlet code status`](../reference/cli.md#crewlet-code-status), each at most
+`code.limits.repo_max_bytes` — kept under `git.cache_max_bytes` by evicting the
+least recently used, and only once the budget is reached: a repository nobody
+fetched over a weekend is still there on Monday and is brought forward by a
+delta, and one a request is reading is never evicted. Unset, the budget is
+derived from the cache's volume at every boot — half of what a shared volume
+leaves it, seven eighths of a volume of its own ([`git`](configuration.md#git))
+— so give the cache a volume of its own. The object store holds one object a
+push, and nothing compacts a repository's packs yet, so it grows by every
+push's pack.
+
+**What every data node holds for the code host.** Every data node holds the
+whole estate, and the code host's rows with it. A person's push of one commit
+leaves a push row of about 395 bytes, kept 181 days, and its pack's row of
+about 357, kept as long as the repository is; the code log, which keeps only
+the trim's window of records, takes 1 332 bytes for a push in a record of its
+own and about 740 for each of a burst group commit holds together. So:
+
+| Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
+|---|---|---|---|
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 215 MB | about 390 MB | about 28 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 17.9 GB | about 32.6 GB | 1.3 to 2.3 GB |
+
+These rows come on top of what the tracker, the knowledge base and the rest of
+the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)
+counts them on a line of their own for a company that hosts code, and every
+data node's snapshot volume holds about 4.2 times them, as it does the rest of
+its estate. The code log's column is its push records alone; each linearizable
+read a git client makes — an advertisement, a push's sync, a fetch's ls-refs —
+appends a 176-byte barrier beside them, which is why the log's ceiling is
+derived at two thirds of the mutation log's rather than from its pushes alone
+([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)).
+The push records fit the ceiling a first boot derives from 50 GiB free or more
+([the code log's reservation](../guides/replication.md#what-the-code-logs-reservation-costs)),
+and a push's bytes are never on the log — they are the object store's.
+
+**What this release does not scale yet**, stated as the product's shape:
+packs accumulate — nothing compacts a repository, so its cold sync, its
+objects and its pack rows grow with its pushes, the background index keeping
+its lookups fast — and agents do not push: the rates in the table are what the
+code host is built for, where this release's pushes are people's and their
+CI's.
+
 ### How a request reaches the estate
 
 The replicated estate is one estate, and every data node holds the whole of it.
 Every node, with `data` or without, still reaches it through one **router**,
 and a seat's tools behave the same on either kind of node. So do the operator's surfaces: the API's tracker and
-knowledge-base routes, a project's file rows and the operator's own MCP go
-through the same router, so a data node whose copy is out of service answers
-its operator from a peer's copy, exactly as it answers its seats.
+knowledge-base routes, its spend and activity reads, a project's file rows and
+the operator's own MCP go through the same router, so a data node whose copy of
+the tracker, the knowledge base or the usage log is out of service answers its
+operator from a peer's copy, exactly as it answers its seats. A peer's answer to
+a long window of usage arrives in pages of about 2 MiB, each cut only between
+two records, so a screen over ninety days is never one message; a data node
+answering from its own copy reads the window whole, in one transaction, since
+no message carries that answer.
 
 ```mermaid
 flowchart TD
-    op[A seat's tool call,<br/>or an operator's request] --> local{Is this a data node<br/>whose copy is in service?}
+    op[A seat's tool call,<br/>or an operator's request] --> local{Is this a data node whose copy of the<br/>operation's log is in service?}
     local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
-    local -- no --> order[Ask the live data nodes in order:<br/>last to answer, rendezvous, silent ones last]
-    own -- behind its floor, or lagging its logs --> order
+    local -- no --> order[Ask the live data nodes in order:<br/>last to answer that log, rendezvous,<br/>out of service for that log, silent ones last]
+    own -- behind its floor, lagging its logs,<br/>behind the company's configuration,<br/>or refusing a read about itself --> order
     order --> reply{The data node's answer}
     reply -- ran it --> done[The answer]
     reply -- ran nothing --> order
-    order -- nobody left --> lagging{Did a copy decline<br/>only for lagging?}
-    lagging -- yes --> last[Ask it again, told to take the request,<br/>held to the same floors]
+    order -- nobody left --> lagging{Did a node decline only for lagging<br/>its logs, or for being behind<br/>the configuration?}
+    lagging -- yes --> last[Ask it again, told to take the request,<br/>held to the same floors: every copy<br/>that only lags before every node<br/>behind the configuration]
     last -- ran it --> done
     lagging -- no --> unserved[Refused: no data node served it]
     last -- nobody ran it --> unserved
 ```
 
 - **This node first, where it is a data node.** A data node answers its own
-  seats' calls from its own copy, in-process, and asks nobody — unless that
-  copy is **out of service**: wrong rather than behind (an applier stopped,
-  the node evicted, its rows below the log), in which case its seats' calls
-  go to the other data nodes and it keeps every seat.
-- **Otherwise the data nodes, in order**: the node that last answered, then an
-  order that spreads askers across the data nodes the fleet's presence names,
-  with a node that went silent in the last thirty seconds asked last.
+  seats' calls from its own copy, in-process, and asks nobody — unless its
+  copy of that operation's log is **out of service**: wrong rather than behind
+  (an applier stopped, the node evicted, its rows below the log), in which case
+  only that log's calls go to the other data nodes — its other logs' copies
+  keep answering here — and it keeps every seat
+  ([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+- **Otherwise the data nodes, in order**: the node that last answered an
+  operation on that log, then a rendezvous order keyed on the asking node's own
+  id — with a node that said in the last thirty seconds that its copy of that
+  log is out of service asked after the rest, and a node that went silent in
+  the last thirty seconds asked last. Each log has its own last answerer,
+  because each has its own applier and a node can serve one log and not
+  another: one answerer for every log made an asker between a node whose
+  tracker copy was out and one whose knowledge base was swap between them on
+  every call, paying a round trip that ran nothing each time. The rendezvous order picks an
+  asker's first data node and every node it fails over to, spread evenly
+  across the data nodes the fleet's presence names however those nodes are
+  named (`node-0` … `node-4`, a StatefulSet's ordinals), so the askers of a
+  node that goes silent scatter over the others rather than all landing on
+  one. It does not decide where an asker stays: an asker keeps asking the node
+  that last answered that log until that node goes silent or says its copy of
+  the log is out of service. So the spread is where
+  askers *start*, not where they settle — a data node that joins is asked only
+  by askers with no such node yet or whose node went silent, and after a
+  rolling restart each restarted node's askers stay on the node they failed
+  over to.
+- **A push to a repository the engine hosts is the one exception**: it is
+  asked of that repository's **committer** — the first live data node in a
+  rendezvous order keyed on the repository rather than on the asking node,
+  which every node computes alike — whichever node received it, and a data
+  node's own copy is asked only at its place in that order. A repository's
+  pushes are decided against its one record of refs, so they all meet at one
+  committer, which puts a burst of them into a few records instead of two
+  committers each losing rounds to the other; the repositories spread across
+  the data nodes. *Live* is as each node's own view of the fleet's presence
+  names the data nodes, and the view hears a presence claim or release as it
+  lands, so a node that joins is in every order within about a second of its
+  claim and a fleet started all at once agrees on every committer within
+  about a second of the last claim; a push inside that second may be
+  committed by its receiver, which the broker's compare-and-set keeps correct
+  and which costs that push the group commit. A committer that is silent,
+  stopping or otherwise runs nothing hands the push, with the same push id, to
+  that repository's runner-up, and a node that said in the last thirty seconds
+  that its copy is out of service, or went silent, is asked after the rest as
+  for any other
+  operation. Nobody's last answer moves a push anywhere else. A committer
+  answers inside the minute the asking node gives it: a push still queued
+  when a whole batch and its answer would no longer fit — or one that reaches
+  the committer with too little of that minute left, spent waiting for the
+  node to take it, for the node to catch up with the asking node's own writes,
+  or under a caller's shorter deadline — is answered `busy` rather than
+  decided late — the client runs `git push` again — so an asker never hands a
+  push to the runner-up while the first committer is still deciding it, and a
+  committer behind what the receiving node showed the client catches up
+  before it decides rather than refusing the push as stale. A data node takes
+  pushes on a channel of their own, as wide as one repository's whole queue
+  (1 024 pushes and the batch ahead of them), because a push holds its place
+  there until its batch is decided: pushes waiting out a slow batch never hold
+  up the node's reads, its other writes or a git fetch's lookup of a
+  repository, and a burst to one repository is answered `busy` by the
+  committer past its queue rather than left waiting unseen for a place. The
+  node also refuses a push `busy` once the pushes it holds across all its
+  repositories weigh sixty-four records — about 64 MiB — so a burst of very
+  large pushes (an import's thousand-ref chunks) to many repositories at once
+  is bounded on every committer.
 - **A node that ran nothing is passed over, whatever the operation**: one whose
-  copy is out of service (`out_of_service`), whose copy lags its logs (asked
-  again last), or that is behind the caller's floor. What may be repeated once
+  copy of the operation's log is out of service (`out_of_service`), whose copy
+  of it lags that log or that is behind the company's configuration (each
+  asked again last — behind the configuration is a node the control plane
+  has confirmed `shed` or `stuck`, never one merely mid-rollout, whose chart,
+  units and limits are the revision the fleet replaced; see
+  [Control Plane](control-plane.md#where-the-gate-sits)), or that is behind
+  the caller's floor. Being behind the configuration lasts — until the node's
+  apply succeeds, or a person acts — so it answers `behind_config` and the
+  asking node remembers that for thirty seconds: meanwhile it skips the node,
+  asking it once, told to take the request, only when no other data node
+  runs the operation, and asks a repository's runner-up for its pushes. An
+  asker spends one refusal on such a node every thirty seconds rather than
+  one on every request. Where both kinds are left, a copy that only lags is
+  asked before a node behind the configuration, because its answer is held
+  to the current configuration — in that order whether or not the asking
+  node has heard the refusal yet, so every asker sends a repository's pushes
+  to the same node.
+  So is one that refuses a *read* for a reason about itself — its applier did
+  not reach the barrier a linearizable read appended in time (`behind`), it
+  stalled, it holds a record it cannot decode, it was evicted, or it lost its
+  broker or its quorum: the next data node is asked, and the refusal is the
+  answer only where none does better. The three refusals that hold for every
+  node alike — the log is full (`log_full`), the broker refused to store the
+  barrier on the log every node appends to (`broker_refused`: a sealed stream,
+  a store with no resources left), the fleet is in a capacity window
+  (`maintenance`) — are answered at once, from the first node that gives them.
+  Asking the next node costs a question and nothing more: it is handed what
+  the read already paid for — the barrier the first node appended, the
+  position it waited its whole read budget for — so a walk past every data
+  node appends one barrier and waits one read budget, however many there are.
+  What may be repeated once
   a node *may* have run a write is the operation's own rule: a tracker write
   moves on under the same operation id, a knowledge-base write that went
   unanswered is reported as unknown and never sent twice, and a tracker write
@@ -170,6 +455,12 @@ write up to a minute (or the caller's own deadline); none is ever longer than
 the caller's deadline. Every request carries the asking node's own writes as a
 floor, so whichever data node answers has applied them or says it is behind —
 see [Read Consistency](../guides/consistency.md#reading-your-own-write-back).
+And it says so **while the asking node is still listening**: every wait a data
+node makes before it answers another node — for that floor, for the barrier a
+`linearizable` read appends and the position it established, for a write's own
+record — ends a second before the asker stops waiting, so a node that is merely
+behind is heard saying so, and only a node that says nothing at all is asked
+last as a silent one.
 
 The knowledge index is the one place the *work* is divided, and only the work:
 every indexed document carries a
@@ -286,13 +577,13 @@ the node. "Reachable" can disagree with itself for no longer than a reconnect.
 
 **The state logs share one byte budget on that broker.** Each state log's
 stream reserves its whole byte ceiling when it is created, so the logs are
-sized together: `StreamBudgetShare` — half — of what the broker can grant,
-divided over every domain this build registers
+sized together: `StreamBudgetShare` — five eighths — of what the broker can
+grant, divided over every domain this build registers
 (`internal/engine/statelogceilings.go`) rather than over the ones a node's
 roles apply, because every node creates every log's stream and a stream keeps
-the ceiling its creator gave it. The other half is for what reserves nothing:
-every seat's mailbox, every coordination bucket and the snapshot a joining
-node reads. A log allowed the whole broker would starve the estate it is part
+the ceiling its creator gave it. The other three eighths are for what reserves
+nothing: every seat's mailbox, every coordination bucket and the snapshot a
+joining node reads. A log allowed the whole broker would starve the estate it is part
 of, and the failure would not be a full log but a company that cannot claim a
 seat. See
 [Replication § How the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized).
@@ -579,3 +870,4 @@ theoretical one:
 - [Seat Ownership](seat-ownership.md) — leases, epoch fencing, admission, the completion ledger, singleton duties
 - [Control Plane](control-plane.md) — how a config revision reaches every node, and the posture a lagging one takes
 - [Deployment](../guides/deployment.md) — processes, database, broker settings, probes
+- [Code Host](code-host.md) — a repository as rows on the code log, its committer, and the cache a git node keeps of it

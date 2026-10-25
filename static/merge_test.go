@@ -1,10 +1,10 @@
 package static_test
 
 import (
-	"bytes"
-	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 )
 
 // GIT MUST NEVER TEXT-MERGE THE COMMITTED DASHBOARD, NOR THE ARTIFACT TREE.
@@ -38,6 +38,15 @@ import (
 // working tree, index and config — and never touches history, so it answers
 // the same on the shallow clone ci.yml's test job checks out.
 //
+// THROUGH gittest's CLIENT, never the developer's own git — the one way a test
+// drives git (gitproc's TestOnlyGitprocExecsGit) — and here for this gate's own
+// reason too: the attribute stack includes the global attributes file
+// (core.attributesFile, ~/.config/git/attributes by default) and the host's
+// /etc/gitattributes, and a `* merge=union` in either answers for every path
+// below, turning the "unspecified" side red on one machine and green on the
+// next. The client has a HOME of its own and reads no system attributes, so
+// what it reads is the checkout's — what every clone gets.
+//
 // IF YOU RE-MUTATE THIS GATE, deleting `.gitattributes` from the working tree
 // is not the mutation it looks like: `check-attr` FALLS BACK TO THE INDEX, so
 // a tracked-but-deleted file still answers `unset` and this stays green. That
@@ -45,8 +54,18 @@ import (
 // honest mutations are a `#` in front of the directive, a later rule
 // overriding it, a wrong glob, or `git rm --cached` as well as the delete. All
 // four were run against this gate and all four fail it.
+//
+// THE CHECKOUT IS TRUSTED BY NAME. The client takes the developer's TRUST in
+// a checkout another user owns (safe.directory, which a container running as
+// root over a bind mount needs) from the machine no more than it takes their
+// attributes, so the gate is handed this module's checkout through gittest's
+// ModuleCheckout: that path alone is trusted, git confirms it is the working
+// tree's top level, and a tree it cannot read fails the gate rather than
+// skipping it, with an ownership refusal named apart from a tree that is no
+// checkout.
 func TestGitWillNotTextMergeTheEmbeddedTrees(t *testing.T) {
 	t.Parallel()
+	git, root := gittest.NewClient(t).ModuleCheckout(t)
 
 	// SHAPES, NOT TODAY'S NAMES. `check-attr` resolves a path STRING against
 	// the attribute stack and never stats it, so naming a file that cannot
@@ -65,7 +84,7 @@ func TestGitWillNotTextMergeTheEmbeddedTrees(t *testing.T) {
 		"static/artifacts/kit/0.18.0/fonts/geist-latin.woff2",
 	}
 	for _, path := range governed {
-		if got := mergeAttr(t, path); got != "unset" {
+		if got := mergeAttr(t, git, root, path); got != "unset" {
 			t.Errorf("git check-attr merge %s = %q, want \"unset\"\n"+
 				"a text merge of this path writes conflict markers into a "+
 				"generated file; `static/dashboard/** -merge` and "+
@@ -85,7 +104,7 @@ func TestGitWillNotTextMergeTheEmbeddedTrees(t *testing.T) {
 		"static/static.go",
 		"internal/api/dashboard.go",
 	} {
-		if got := mergeAttr(t, path); got != "unspecified" {
+		if got := mergeAttr(t, git, root, path); got != "unspecified" {
 			t.Errorf("git check-attr merge %s = %q, want \"unspecified\" — "+
 				"this path is not build output and must merge normally", path, got)
 		}
@@ -99,51 +118,13 @@ func TestGitWillNotTextMergeTheEmbeddedTrees(t *testing.T) {
 // package's own directory — so without this the gate would ask about
 // `static/static/dashboard/...` and read `unspecified` for everything, failing
 // for a reason that has nothing to do with the attribute.
-func mergeAttr(t *testing.T, path string) string {
+func mergeAttr(t *testing.T, git *gittest.Client, root, path string) string {
 	t.Helper()
-	root := repoRoot(t)
-
-	cmd := exec.Command("git", "check-attr", "merge", "--", path)
-	cmd.Dir = root
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("git check-attr merge -- %s: %v (%s)", path, err, errb.String())
-	}
 	// "<path>: merge: <value>", and a path may itself contain ": ".
-	line := strings.TrimSpace(out.String())
+	line := strings.TrimSpace(git.Run(t, root, "check-attr", "merge", "--", path))
 	idx := strings.LastIndex(line, ": ")
 	if idx < 0 {
 		t.Fatalf("git check-attr merge -- %s: unparsable answer %q", path, line)
 	}
 	return line[idx+2:]
-}
-
-// repoRoot is the working tree's top level.
-//
-// Asked of git rather than walked up from the test binary's directory: the
-// answer is the same one `check-attr` resolves paths against, so the two
-// cannot disagree about where the tree starts.
-//
-// IT REFUSES RATHER THAN SKIPS when there is no working tree, which is the
-// opposite of the reflex and is what this repository already does with its
-// other git-dependent gate: scripts/check-signoff.sh answers "not inside a git
-// repository, so there is no history to judge", and its own suite asserts that
-// as a FAILURE ("outside a git repository it refuses").
-//
-// Two reasons it is right here too. A skip would be UNDECLARED, and
-// internal/skipgate fails any skip missing from its allowlist — so the
-// friendly-looking branch turns a `make test` run red exactly where it was
-// trying to be accommodating. And an allowlist entry is the wrong answer as
-// well: that table's own doc requires a `Why` naming where the coverage lives
-// instead, and for this invariant it lives nowhere else. A gate that cannot
-// check its contract has not passed, so it says so.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		t.Fatalf("not a git working tree, so there is no attribute stack to read "+
-			"and this gate cannot check its contract: %v", err)
-	}
-	return strings.TrimSpace(string(out))
 }

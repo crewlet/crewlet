@@ -50,11 +50,25 @@ func newEngine(t *testing.T, opts engine.Options) *engine.Engine {
 // all, which newEngine cannot build: it hands a nil company the ordinary one.
 func unconfiguredEngine(t *testing.T) *engine.Engine {
 	t.Helper()
-	e, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+	return unconfiguredEngineWith(t, engine.Options{})
+}
+
+// unconfiguredEngineWith is [unconfiguredEngine] over options of the case's own
+// — its Bootstrap, or the ordinary one where it names none — for a case whose
+// first company must arrive by an apply: on a data node that is the only apply
+// that starts the native runtime, since a node booted on any company runs one
+// from boot.
+func unconfiguredEngineWith(t *testing.T, opts engine.Options) *engine.Engine {
+	t.Helper()
+	if opts.Company != nil {
+		t.Fatal("unconfiguredEngineWith boots a node with no company; the case named one")
+	}
+	if opts.Bootstrap == nil {
+		opts.Bootstrap = bootstrap(t, func(b *config.Bootstrap) {
 			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		}),
-	})
+		})
+	}
+	e, err := engine.New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("an engine with no company was refused: %v", err)
 	}
@@ -363,7 +377,7 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -399,7 +413,7 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, nil)
+	back, err := engine.OpenBackends(t.Context(), b, nil, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -435,7 +449,7 @@ func TestASecondStopTearsNothingDownAgain(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -485,7 +499,7 @@ func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

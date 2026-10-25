@@ -803,10 +803,7 @@ func (l *opsLedger) PurgeOpsOfKind(context.Context, string, time.Time) (int64, e
 	return 0, nil
 }
 
-func (l *opsLedger) PurgeAnchors(context.Context) (int64, error) { return 0, nil }
-
-// THE OPERATION-LEDGER SWEEP IS ONE NODE-LOCAL JOB PER LEDGER, beside its
-// anchor sweep.
+// THE OPERATION-LEDGER SWEEP IS ONE NODE-LOCAL JOB PER LEDGER.
 //
 // Each node owns its own copy of every ledger, so a job swept under the fleet
 // singleton would tidy one node's and let the rest grow for ever. Each job is
@@ -839,8 +836,8 @@ func TestTheOpsSweepIsOneNodeLocalJobPerLedger(t *testing.T) {
 				j.Name, j.Horizon, retention)
 		}
 	}
-	if !slices.Equal(names, []string{"pages_ops", "pages_anchors", "tracker_ops", "tracker_anchors"}) {
-		t.Fatalf("the sweep's jobs are %v, want each ledger's pair in name order", names)
+	if !slices.Equal(names, []string{"pages_ops", "tracker_ops"}) {
+		t.Fatalf("the sweep's jobs are %v, want each ledger's one in name order", names)
 	}
 	if n, err := ops["tracker_ops"].Run(t.Context(), base, base); err != nil || n != 2 {
 		t.Errorf("the tracker sweep swept %d (%v), want its ledger's 2", n, err)

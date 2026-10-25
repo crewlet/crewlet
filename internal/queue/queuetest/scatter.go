@@ -275,7 +275,7 @@ func (s *suite) runScatter(t *testing.T) {
 		q := s.start(ctx, t)
 		subject := ns(t) + ".ask"
 		serve(ctx, t, q, subject, echo("stays"))
-		stop, err := q.Serve(ctx, subject, echo("goes"))
+		stop, err := q.Serve(ctx, subject, queue.ConcurrentAnswers, echo("goes"))
 		if err != nil {
 			t.Fatalf("serve: %v", err)
 		}
@@ -379,6 +379,116 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	// THE BOUND IS THE REGISTRATION'S OWN, and so are its slots: a
+	// registration answers up to the bound it states, a request past it
+	// waits for one of ITS slots, and another registration beside it is
+	// answered at once. That is what lets a registration whose answers wait
+	// on a queue of their own — a push proposal behind its repository's
+	// earlier pushes, held for its asker's whole attempt — sit beside one
+	// whose answers do not: on one gate, sixty-four such waits hold every
+	// request the process answers.
+	t.Run("a_registration_answers_up_to_its_own_bound_and_holds_no_other", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		full := ns(t) + ".full"
+		const bound = 2
+		entered := make(chan string, bound+1)
+		release := make(chan struct{})
+		stop, err := q.Serve(ctx, full, bound, func(ctx context.Context, req []byte) ([]byte, error) {
+			entered <- string(req)
+			select {
+			case <-release:
+				return req, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		})
+		if err != nil {
+			t.Fatalf("serve: %v", err)
+		}
+		var once sync.Once
+		releaseAll := func() { once.Do(func() { close(release) }) }
+		t.Cleanup(func() {
+			// RELEASED BEFORE THE WITHDRAWAL, which waits for the
+			// answers in flight.
+			releaseAll()
+			bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			if err := stop(bounded); err != nil {
+				t.Errorf("stop serving: %v", err)
+			}
+		})
+
+		asked, cancelAsked := context.WithTimeout(ctx, 20*time.Second)
+		defer cancelAsked()
+		answered := make(chan string, bound+1)
+		for i := range bound + 1 {
+			go func() {
+				replies, err := q.Ask(asked, full, fmt.Appendf(nil, "r%d", i), 1)
+				if err == nil && len(replies) == 1 {
+					answered <- string(replies[0])
+				}
+			}()
+		}
+		for range bound {
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("fewer than %d requests reached a registration bounded at %d", bound, bound)
+			}
+		}
+		// THE ONE PAST THE BOUND WAITS for a slot of this registration.
+		select {
+		case req := <-entered:
+			t.Fatalf("%s reached the answerer with %d already in flight on a registration "+
+				"bounded at %d — the bound is the registration's to state, and one that "+
+				"ignores it gives an answerer that waits on a queue of its own as many "+
+				"waiting answers as it is sent", req, bound, bound)
+		case <-time.After(300 * time.Millisecond):
+		}
+
+		// ANOTHER REGISTRATION, beside the full one, is answered at once.
+		other := ns(t) + ".other"
+		serve(ctx, t, q, other, echo("other"))
+		if got := replyTexts(ask(ctx, t, q, other, []byte("q"), 1)); !sameSet(got, []string{"other:q"}) {
+			t.Fatalf("a request to another registration got %v while this one's slots were "+
+				"full — a registration's slots are its own, and one that shares them holds "+
+				"every other answerer's requests behind its own", got)
+		}
+
+		releaseAll()
+		var got []string
+		for range bound + 1 {
+			select {
+			case reply := <-answered:
+				got = append(got, reply)
+			case <-time.After(10 * time.Second):
+				t.Fatalf("after its slots were released the registration answered %v of %d "+
+					"requests — the one past the bound waits for a slot, it is never dropped",
+					got, bound+1)
+			}
+		}
+		if !sameSet(got, []string{"r0", "r1", "r2"}) {
+			t.Fatalf("the registration answered %v, want every request it was sent", got)
+		}
+	})
+
+	t.Run("a_bound_below_one_is_refused", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		for _, bound := range []int{0, -1} {
+			stop, err := q.Serve(ctx, ns(t)+".none", bound, echo("never"))
+			if stop != nil {
+				_ = stop(ctx)
+			}
+			if !errors.Is(err, queue.ErrAnswerBound) {
+				t.Fatalf("a registration bounded at %d was answered %v, want %v — one that may "+
+					"answer nothing holds every request it is sent until its askers give up",
+					bound, err, queue.ErrAnswerBound)
+			}
+		}
+	})
+
 	t.Run("a_withdrawal_waits_for_the_answers_in_flight", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -386,7 +496,7 @@ func (s *suite) runScatter(t *testing.T) {
 		entered := make(chan struct{})
 		release := make(chan struct{})
 		var finished atomic.Bool
-		stop, err := q.Serve(ctx, subject, func(context.Context, []byte) ([]byte, error) {
+		stop, err := q.Serve(ctx, subject, queue.ConcurrentAnswers, func(context.Context, []byte) ([]byte, error) {
 			close(entered)
 			// IGNORES ITS CONTEXT, which is what makes the wait visible:
 			// one that watched it would return the moment the withdrawal
@@ -493,7 +603,7 @@ const scatterPeerRounds = 20
 // serve registers an answerer and unregisters it at the end of the test.
 func serve(ctx context.Context, t *testing.T, q queue.EventQueue, subject string, h queue.AnswerFunc) {
 	t.Helper()
-	stop, err := q.Serve(ctx, subject, h)
+	stop, err := q.Serve(ctx, subject, queue.ConcurrentAnswers, h)
 	if err != nil {
 		t.Fatalf("serve %s: %v", subject, err)
 	}

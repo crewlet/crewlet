@@ -217,15 +217,16 @@ func (Domain) ScopeIndex() string { return "artifacts_log_deferred_scope" }
 // OpsTable is the operation ledger: what this node has already applied.
 func (Domain) OpsTable() string { return "artifacts_ops" }
 
-// ReadinessInput reports that this domain's health does NOT gate seat
+// GatesSeatAdmission reports that this domain's health does NOT gate seat
 // admission.
 //
 // FALSE, unlike the tracker's and the pages': a seat reads no artifact on its
 // turn path, so a stalled artifacts copy must not stop a node admitting seats.
-// The copy still goes out of service for its own readers (a stalled strict
-// replay is a fault, and the framework refuses every read of it), and the
-// estate router and the serving origin decide through a peer that serves.
-func (Domain) ReadinessInput() bool { return false }
+// The copy is still judged, as every domain's is (ADR-0046), and goes out of
+// service for its own readers (a stalled strict replay is a fault, and the
+// framework refuses every read of it), and the estate router and the serving
+// origin decide through a peer that serves.
+func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical: N copies of one SQL state from one ordered log.

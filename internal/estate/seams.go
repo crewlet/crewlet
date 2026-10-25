@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -12,10 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The asking half: the seams every node's tools are handed, each answered by a
-// data node whose copy of the estate serves — this one where it does.
+// data node whose copy of the operation's domain serves — this one where it
+// does (ADR-0046).
 //
 // Each method has the signature of the in-process one it stands in for, so
 // the tool layer is handed these on every node and cannot tell which node
@@ -449,6 +452,14 @@ func (p Pages) Activity(ctx context.Context, q pages.PageActivityQuery) (pages.P
 	return call(ctx, p.r, opPageActivity, nil, q)
 }
 
+// LinkedFrom answers which pages and tasks link to a page, by its id — from a
+// data node whose copies of both the knowledge base and the tracker serve —
+// or [search.ErrIndexBuilding] from one whose index has not finished its
+// first lap.
+func (p Pages) LinkedFrom(ctx context.Context, pageID string) (search.Backlinks, error) {
+	return call(ctx, p.r, opLinkedFrom, nil, linkedFromArgs{PageID: pageID})
+}
+
 // Revision answers one revision of a page's body, and false where the page
 // has none at that version.
 func (p Pages) Revision(ctx context.Context, pageID string, version int,
@@ -593,7 +604,8 @@ func (Knowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
 // the company has written nothing down, which it would act on by writing a
 // duplicate of a page that exists.
 func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
-	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode, Scoped: q.Org != nil}
+	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode, Scoped: q.Org != nil,
+		Prefetch: q.Prefetch}
 	if q.Seat != nil {
 		args.Seat = q.Seat.Handle()
 	}
@@ -627,4 +639,141 @@ func notSearched() knowledge.Result {
 func (k Knowledge) Building(ctx context.Context) bool {
 	building, err := call(ctx, k.r, opKnowledgeBuilding, nil, struct{}{})
 	return err == nil && building
+}
+
+// Usage is the usage domain's reads (ADR-0020), answered by a data node whose
+// usage copy is in service — this node's own where it is one (ADR-0046).
+type Usage struct{ r *Router }
+
+// Usage answers the usage domain.
+func (r *Router) Usage() Usage { return Usage{r: r} }
+
+// Spend answers every node's spend cells over a range of company days.
+func (u Usage) Spend(ctx context.Context, q usage.SpendQuery) ([]usage.SpendRow, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.SpendRow], error) {
+		return call(ctx, u.r, opUsageSpend, nil, usagePageArgs[usage.SpendQuery]{Query: q, After: after})
+	})
+}
+
+// SeatTurns answers every node's turn counts over a range of company days.
+func (u Usage) SeatTurns(ctx context.Context, q usage.SpendQuery) ([]usage.TurnsRow, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.TurnsRow], error) {
+		return call(ctx, u.r, opUsageSeatTurns, nil, usagePageArgs[usage.SpendQuery]{Query: q, After: after})
+	})
+}
+
+// PersonSpend answers every node's spend for people over a range of company
+// days.
+func (u Usage) PersonSpend(ctx context.Context, q usage.PersonQuery) ([]usage.PersonRow, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.PersonRow], error) {
+		return call(ctx, u.r, opUsagePersonSpend, nil, usagePageArgs[usage.PersonQuery]{Query: q, After: after})
+	})
+}
+
+// SeatDays answers every node's head rows over a range of company days.
+func (u Usage) SeatDays(ctx context.Context, q usage.SpendQuery) ([]usage.SeatDay, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.SeatDay], error) {
+		return call(ctx, u.r, opUsageSeatDays, nil, usagePageArgs[usage.SpendQuery]{Query: q, After: after})
+	})
+}
+
+// ScheduleRuns answers one page of every node's schedule fires, and whether
+// there are more.
+func (u Usage) ScheduleRuns(ctx context.Context, q usage.ScheduleRunsQuery) (
+	[]usage.ScheduleRun, bool, error) {
+	page, err := call(ctx, u.r, opUsageScheduleRuns, nil, q)
+	return page.Runs, page.More, err
+}
+
+// PageReads answers every node's reads of some pages over a range of company
+// days.
+func (u Usage) PageReads(ctx context.Context, q usage.PageReadsQuery) ([]usage.PageRead, error) {
+	return allPages(ctx, func(ctx context.Context, after usage.Group) (usage.Page[usage.PageRead], error) {
+		return call(ctx, u.r, opUsagePageReads, nil, usagePageArgs[usage.PageReadsQuery]{Query: q, After: after})
+	})
+}
+
+// allPages reads every page of one paged read, in order — each page its own
+// routed call, so a failover between pages resumes on another data node from
+// the same group, since every data node pages by the one rule ([usage.Fill]).
+// A page that does not end AFTER the one before it is refused: a node paging
+// another way would otherwise loop for ever.
+func allPages[R any](ctx context.Context,
+	page func(ctx context.Context, after usage.Group) (usage.Page[R], error)) ([]R, error) {
+
+	var out []R
+	var after usage.Group
+	for {
+		p, err := page(ctx, after)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p.Rows...)
+		if p.Done {
+			return out, nil
+		}
+		if !after.Before(p.Next) {
+			return nil, fmt.Errorf("estate: a usage page ended at %v, which is not after %v — "+
+				"the answering node pages by another rule", p.Next, after)
+		}
+		after = p.Next
+	}
+}
+
+// ReadsElided answers how many reads the per-seat-day cap dropped over a range
+// of company days, on every node.
+func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) {
+	return call(ctx, u.r, opUsageReadsElided, nil, readsElidedArgs{From: from, To: to})
+}
+
+// CodeSeam is the code host's reach into the estate, from every node: a push's
+// proposal to its repository's committer, and the reads the host's admission,
+// a cache's sync and the REST routes make — each answered by a data node whose
+// copy of the code log serves, this one where it does. Its consumers declare
+// what they call of it.
+//
+// ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed, and a
+// push this node proposed found landed. A read's position is somebody else's
+// writes, and observing it would hold every later read this node routes — a
+// `stale` one included — behind the newest linearizable read anybody on the
+// node made, which is the tracker's and the knowledge base's rule too.
+type CodeSeam struct{ r *Router }
+
+// Code answers the code host.
+func (r *Router) Code() CodeSeam { return CodeSeam{r: r} }
+
+// Propose asks the repository's committer to decide a push, and raises this
+// node's session floor past the record it landed in — this node's own write,
+// which its next read of the repository must see on whichever node answers.
+func (c CodeSeam) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+	out, err := call(ctx, c.r, opCodePropose, nil, p)
+	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.r.Observe(out.Position)
+	}
+	return out, err
+}
+
+// Resolve answers a repository by its name.
+func (c CodeSeam) Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error) {
+	return call(ctx, c.r, opCodeResolve, nil, q)
+}
+
+// RepoState answers one page of a repository's snapshot.
+func (c CodeSeam) RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+	return call(ctx, c.r, opCodeRepoState, nil, q)
+}
+
+// PushOutcome answers whether a push this node proposed landed — and, where it
+// did, raises this node's floor past it, for [CodeSeam.Propose]'s reason.
+func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
+	out, err := call(ctx, c.r, opCodePushOutcome, nil, q)
+	if out.Found {
+		c.r.Observe(out.Push.Position)
+	}
+	return out, err
+}
+
+// Read answers a person's or a surface's read of the code host.
+func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return call(ctx, c.r, opCodeRead, nil, q)
 }

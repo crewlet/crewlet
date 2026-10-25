@@ -89,8 +89,9 @@ const (
 	AlarmInterval = PositionHeartbeat
 
 	// DeferralGrace is how long a node may hold records it could not
-	// apply before it stops serving its copy of the estate — its seats
-	// stay, and read the estate from the other data nodes. The alarm and
+	// apply before its copy of that log goes out of service — its seats
+	// stay, and that log's operations go to the other data nodes
+	// (ADR-0046). The alarm and
 	// that step share the number deliberately: an operator who sees this
 	// alarm has thirty minutes, and one who sees a different number has no
 	// idea how long they have.
@@ -107,7 +108,11 @@ const (
 	// has been failing for some time.
 	ReadBudget = 2 * time.Second
 
-	// PrefetchScanBudget is what a turn's context assembly was promised.
+	// PrefetchScanBudget is what the knowledge scan a turn's prefetch runs
+	// was promised: the turn waits for it before its first token, so it is
+	// held to half of what a person searching on purpose waits
+	// ([InteractiveSearchTarget]). Read off the node that coordinates the
+	// scan — the one whose store and share of the corpus it is.
 	PrefetchScanBudget = 500 * time.Millisecond
 
 	// HeadroomAlarmFraction is how little of a log's byte ceiling may
@@ -189,8 +194,10 @@ const (
 	//
 	// It is the SEATS' term of a log's census and not the whole of it: the
 	// engine's own periodic reads append barriers too, whatever the seats
-	// do, and [Census.Background] is where they are counted. [Census]
-	// turns both into one log's figure.
+	// do, and [Census.Background] is where they are counted; and a log whose
+	// readers are not seats at all — the code log's git clients — declares
+	// them in its own sizing, which [Census.Clients] carries. [Census] turns
+	// all three into one log's figure.
 	LinearizableReadsPerSeatDay = 125
 )
 
@@ -213,6 +220,23 @@ type Census struct {
 	// log expected to take 125, and census_drift fired on companies whose
 	// sizing was right — LOUDER the smaller the company.
 	Background int
+
+	// Clients is the linearizable reads a day a log's OWN SIZING declares
+	// for readers that are NEITHER seats NOR the engine's own passes — the
+	// code log's git clients (code.GitReadsPerDay): a company's people and
+	// their CI, whose number no seat count predicts. Zero on every other
+	// log. Its caller sizes it by the ceiling the log's stream HOLDS, which
+	// every node reads alike and only a resize moves — and counts it on
+	// that log whatever the company hosts at the moment, because the log
+	// keeps its ceiling either way and the rate it is held against is
+	// every node's over the alarm's day, which outlives a switch and spans
+	// a rolling restart.
+	//
+	// It exists for Background's reason, worse: every linearizable read of
+	// the code log is a person's or a pipeline's, so held to the seats'
+	// term a five-seat company's code log alarmed past 1 300 git reads a
+	// day, which one CI polling ten repositories a minute exceeds tenfold.
+	Clients int
 }
 
 // Expected is the log's census: the linearizable reads a day it was sized to
@@ -236,11 +260,12 @@ type Census struct {
 // reads are mostly the tracker's, would fire the alarm doing exactly the work
 // it was sized for.
 //
-// # Plus what the engine reads on its own
+// # Plus what the engine reads on its own, and what the log was sized for
 //
-// [Census.Background] is added to it, for the reason it gives.
+// [Census.Background] is added to it, and [Census.Clients], each for the
+// reason it gives.
 func (c Census) Expected() int {
-	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0)
+	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0) + max(c.Clients, 0)
 }
 
 // Kind names one alarm.
@@ -288,6 +313,9 @@ const (
 
 	KindObjectsBucketNearCeiling Kind = "objects_bucket_near_ceiling"
 	KindObjectiveBurn            Kind = "objective_burn"
+
+	// The code host's: a git node's own work, beside the logs'.
+	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -313,6 +341,13 @@ type Reading struct {
 	RefusalsSince time.Duration
 
 	// BarrierP95 is the read barrier's 95th percentile.
+	//
+	// EVERY …P95 HERE IS A HISTOGRAM'S QUANTILE, the upper boundary of the
+	// bucket the percentile falls in ([metrics.Snapshot.Quantile]): "up to"
+	// this, and past the boundary below it. An alarm holds one to a budget
+	// that is itself a boundary, so it fires exactly when the percentile is
+	// past the budget (TestEveryPercentileAlarmIsDecidedAtABoundary), and its
+	// detail says "up to" rather than naming the boundary as the percentile.
 	BarrierP95 time.Duration
 
 	// HeadroomFraction is how much of the byte ceiling the log's ordinary
@@ -368,40 +403,44 @@ type Reading struct {
 
 	// DeferredAge is how long this node has held the oldest record it
 	// could not apply on one log — from the position heartbeat's first
-	// sighting of it, the instant [Health.Healthy] measures the grace that
-	// takes this node's copy out of service from, through
+	// sighting of it, the instant [Health.Fault] measures the grace that
+	// takes this node's copy of that log out of service from, through
 	// [DeferredSince.Age] — and DeferredRecord which record that is, in the
 	// words an operator upgrades by: its position and the record version it
 	// was written at against the one this build reads. Per DOMAIN, like
 	// HeadroomFraction, and filled by the report from [DomainInputs] rather
 	// than by a node-wide caller.
 	//
-	// DeferredJudgesCopy is whether that log is a [Domain.ReadinessInput] —
-	// the tracker's and the knowledge base's are; the identity estate's,
-	// the vectors' and the usage domain's are not — which is whether the
-	// grace is ALSO when this node stops serving its copy of the estate
-	// (its seats stay, and read it from the other data nodes). The alarm
-	// fires at the grace either way, because an upgrade is the remedy
-	// either way; what it may not do is tell an operator a node's copy was
-	// taken out of service over a log that judges none — or that it was
-	// not, over the one log among several that took it out, which is why
-	// the three are a LOG's rather than the node's oldest.
-	DeferredAge        time.Duration
-	DeferredRecord     string
-	DeferredJudgesCopy bool
+	// A LOG'S, never the node's oldest, because EVERY LOG'S COPY IS JUDGED
+	// on its own (ADR-0046): past the grace a held record takes this node's
+	// copy of THAT log out of service and no other's, so two logs holding
+	// records at once are two different answers, and one alarm naming the
+	// node's oldest hid every other log held beside it.
+	DeferredAge    time.Duration
+	DeferredRecord string
 
 	// FloorUnknownFor is how long one log's trim floor has been unreadable
 	// on this node — from the first alarm heartbeat that could not read it
 	// to the latest, never a persistence nobody observed — and
-	// FloorUnknownCause what the latest read said: an unreachable
-	// coordination store and a floor published at a generation this node
-	// has not reached are one refusal with two remedies. Per DOMAIN too:
-	// the refusal is that log's, and one alarm naming the node's
-	// longest-unreadable floor hid every other log re-anchored beside it.
+	// FloorUnknownCause what the latest read said: the log's floor key could
+	// not be read (coordination unreachable, or its row in the register does
+	// not read as a floor) or the floor is published at a generation this
+	// node has not reached — one refusal with different remedies.
+	//
+	// A DURATION A DOMAIN, each floor being its own key, read, refused and
+	// aged on its own: a domain that began failing a moment ago is still
+	// served from its memo ([FloorCacheStale]), and one age printed beside
+	// every failing name told an operator that domain's reads were refused,
+	// with another domain's age as the evidence — while one alarm naming the
+	// node's longest-unreadable floor hid every other log re-anchored beside
+	// it.
 	FloorUnknownFor   time.Duration
 	FloorUnknownCause string
 
-	// PrefetchP95 and SearchP95 are the two latencies a turn waits on.
+	// PrefetchP95 and SearchP95 are the knowledge scans this node
+	// coordinated, at p95: those a turn's prefetch ran, which the turn waits
+	// on before its first token, and those somebody ran on purpose. Two
+	// series, never one, since each is held to its own budget.
 	PrefetchP95, SearchP95 time.Duration
 
 	// SearchDegradedFraction and SearchScopedFraction are the fractions of
@@ -510,8 +549,9 @@ type Reading struct {
 	ReplayWindow   time.Duration
 
 	// ObjectsMissing is how many files' bytes the object store does not
-	// hold, or holds wrong — at another size, or under another digest — as
-	// the collector's last audit to run to its end found: on the node
+	// hold, or holds wrong — at another size, or under another digest, or
+	// as no object it can read — or would not answer for, as the
+	// collector's last audit to run to its end found: on the node
 	// holding the collector's duty, and zero on every other, since the
 	// store is one the whole fleet shares and one node's count of it is
 	// the fleet's. Files nobody can read. Any value above zero is an alarm,
@@ -536,6 +576,19 @@ type Reading struct {
 	// borrows the decision whole (ADR-0015) rather than restating a factor
 	// beside the one the objectives declare.
 	ObjectiveBurns []objectives.Burn
+
+	// CodeMaintenanceRefused is how many repositories this node's git cache
+	// cannot write a bitmap of, because the bitmap — charged by the
+	// repository's objects, with room beside it for one clone of the
+	// repository — needs more memory than the node can give its background
+	// work; CodeMaintenanceLargest is the largest of those charges, and
+	// CodeMaintenanceBudget what the node can give: its memory as the cache
+	// last read it, less what it keeps for its git lanes, the store, the
+	// broker and the engine (internal/code/cache). The node's own
+	// measurement, never a threshold of the table's: the alarm fires where
+	// the largest charge passes it. All zero on a node that serves no git.
+	CodeMaintenanceRefused                        int
+	CodeMaintenanceLargest, CodeMaintenanceBudget int64
 }
 
 // Alarm is one condition currently true on this node.
@@ -656,9 +709,9 @@ var table = []rule{
 			"domain and its position. A node that is behind keeps the seats it " +
 			"holds and claims no new ones. Only if its position stops moving for " +
 			"the stall grace, or it holds a record it cannot decode past the " +
-			"deferral grace, is its copy wrong rather than behind: it then stops " +
-			"serving its copy of the estate, and its seats stay and read the " +
-			"estate from the other data nodes until the copy recovers.",
+			"deferral grace, is its copy wrong rather than behind: that log's copy " +
+			"then goes out of service, and its operations go to the other data " +
+			"nodes until the copy recovers; the node's seats stay.",
 	},
 	{
 		kind: KindReadRefusals,
@@ -674,8 +727,8 @@ var table = []rule{
 	{
 		kind: KindBarrierSlow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the read barrier's p95 is %s, a quarter of the "+
-					"read budget", spoken(r.BarrierP95)),
+			return fmt.Sprintf("the read barrier's p95 is past %s, a quarter of the "+
+					"read budget: up to %s", spoken(ReadBudget/4), spoken(r.BarrierP95)),
 				r.BarrierP95 > ReadBudget/4
 		},
 		remedy: "The barrier is an append and a wait: check the broker's own " +
@@ -819,8 +872,8 @@ var table = []rule{
 	{
 		// PER LOG, like the headroom, the ceiling and the blocked trim: the
 		// report evaluates it once for each log this node holds a record on,
-		// because what the grace does is the log's — see
-		// [Reading.DeferredJudgesCopy].
+		// because what the grace does is the log's: every log's copy is
+		// judged on its own (ADR-0046), see [Reading.DeferredAge].
 		kind:   KindDeferredOld,
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
@@ -828,21 +881,19 @@ var table = []rule{
 			if r.DeferredRecord != "" {
 				what += " (" + r.DeferredRecord + ")"
 			}
-			consequence := fmt.Sprintf("past the %s deferral grace, at which "+
-				"this node stops serving its copy of the estate", spoken(DeferralGrace))
-			if !r.DeferredJudgesCopy {
-				consequence = fmt.Sprintf("past the %s deferral grace; this log "+
-					"does not judge this node's copy of the estate, so nothing is "+
-					"taken out of service", spoken(DeferralGrace))
-			}
-			return fmt.Sprintf("%s has been held for %s, %s", what,
-					spoken(r.DeferredAge), consequence),
+			return fmt.Sprintf("%s has been held for %s, past the %s deferral grace, "+
+					"at which this node's copy of this log goes out of service", what,
+					spoken(r.DeferredAge), spoken(DeferralGrace)),
 				r.DeferredAge > DeferralGrace
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
-			"are writing. Upgrade it. Where the record's log judges this node's copy " +
-			"of the estate (the detail says), the node has already stopped serving " +
-			"its copy, and its seats read the estate from the other data nodes.",
+			"are writing. Upgrade it. Its copy of each log named has already gone " +
+			"out of service, and what the estate routes to that log is answered " +
+			"by the other data nodes; every other log's copy keeps serving here. " +
+			"On the identity log, what this node answers from its own rows is " +
+			"not routed: the sign-ins, sessions and tokens of anybody the held " +
+			"record may be about, and every directory decision, answer 503 here " +
+			"until the node can read the record.",
 	},
 	{
 		// PER LOG, for the same reason: a read of one log refuses on that
@@ -859,27 +910,39 @@ var table = []rule{
 			return detail, r.FloorUnknownFor > FloorCacheStale
 		},
 		remedy: "Read the cause. An unreachable coordination store clears when " +
-			"coordination does, and every log on this node says so at once; a floor " +
-			"published at a later generation than this node's means that log was " +
-			"re-anchored and this node was not (see re-anchoring in " +
-			"docs/guides/retention.md). Every read of the log on this node is " +
-			"refused until its floor can be read.",
+			"coordination does, and every log on this node says so at once. A " +
+			"log's row in the register that does not read as its floor is named " +
+			"by the trim's `retention_trim_failed` line and by every write it " +
+			"refuses, with the key to remove. A floor published at a later " +
+			"generation than this node's means that log was re-anchored and this " +
+			"node was not (see re-anchoring in docs/guides/retention.md). Every " +
+			"read of a named log on this node, and its every write at an " +
+			"expectation of zero, is refused until its floor can be read. A log " +
+			"whose floor has gone unread for less than four heartbeats is not " +
+			"named: its reads are still served from the floor it last read, " +
+			"though its writes at an expectation of zero are already refused. See " +
+			"docs/guides/retention.md, \"An unreadable trim floor\".",
 	},
 	{
 		kind: KindPrefetchSlow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("turn-start context assembly is %s at p95, against "+
-					"a %s budget", spoken(r.PrefetchP95), spoken(PrefetchScanBudget)),
+			return fmt.Sprintf("the knowledge scans this node ran for turns' prefetches "+
+					"are past their %s budget at p95: up to %s", spoken(PrefetchScanBudget),
+					spoken(r.PrefetchP95)),
 				r.PrefetchP95 > PrefetchScanBudget
 		},
-		remedy: "Every turn on this node pays this before its first token. Check " +
-			"the store's own latency and the knowledge backend's.",
+		remedy: "Every turn whose knowledge prefetch this node scans waits for the " +
+			"scan before its first token, whichever node the turn runs on. Check " +
+			"this node's store latency (`pool_starved`, `barrier_slow`) and the " +
+			"corpus against what one node's share can scan in the budget: adding " +
+			"a data node divides the buckets again, with no configuration and no " +
+			"rebuild. See docs/guides/search.md.",
 	},
 	{
 		kind: KindSearchSlow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("interactive search is %s at p95, against a %s target",
-					spoken(r.SearchP95), spoken(InteractiveSearchTarget)),
+			return fmt.Sprintf("interactive search is past its %s target at p95: up to %s",
+					spoken(InteractiveSearchTarget), spoken(r.SearchP95)),
 				r.SearchP95 > InteractiveSearchTarget
 		},
 		remedy: "The corpus has outgrown what one node's share can scan in " +
@@ -893,8 +956,12 @@ var table = []rule{
 					"semantic half", r.SearchDegradedFraction*100),
 				r.SearchDegradedFraction > 0
 		},
-		remedy: "The embeddings provider or the vector domain is failing. Search " +
-			"still answers; it answers less well, and silently.",
+		remedy: "The embeddings provider or the vector domain is failing, or a " +
+			"node's copy of the vectors is out of service (its " +
+			"`estate_copy_not_served` line names the fault), which the asking " +
+			"node answers by giving that node's range (its own included) to " +
+			"the others for half a minute. Search still answers; it answers " +
+			"less well, and silently.",
 	},
 	{
 		kind: KindSearchScoped,
@@ -903,11 +970,18 @@ var table = []rule{
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
 		remedy: "A node did not cover its bucket range, so part of the corpus " +
-			"went unscanned: it was unreachable, or its own lexical index has " +
+			"went unscanned: it was unreachable; or its own lexical index has " +
 			"not finished its first lap, which is what a node that joined a " +
-			"few minutes ago looks like and clears itself. The answers were " +
-			"complete for what was searched and silent about what was not; the " +
-			"log line names who was absent.",
+			"few minutes ago looks like and clears itself; or its copy of what " +
+			"the search reads is out of service (its `estate_copy_not_served` " +
+			"line names the domain and the fault), which does NOT clear itself: " +
+			"it lasts until that copy recovers or the node adopts a snapshot. " +
+			"Either reply costs only the search that hears it (the asking node " +
+			"gives that node's range, its own included, to the others for " +
+			"half a minute), so a " +
+			"fraction that stays up is a node that keeps answering so. The " +
+			"answers were complete for what was searched and silent about what " +
+			"was not; the log line names who was absent.",
 	},
 	{
 		// THE BUDGET IS BORROWED (ADR-0015): what makes a history answer
@@ -1055,8 +1129,8 @@ var table = []rule{
 	{
 		kind: KindPoolStarved,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("a database connection takes %s at p95 to acquire",
-				spoken(r.PoolWaitP95)), r.PoolWaitP95 > PoolWaitAlarm
+			return fmt.Sprintf("a database connection takes past %s at p95 to acquire: up to %s",
+				spoken(PoolWaitAlarm), spoken(r.PoolWaitP95)), r.PoolWaitP95 > PoolWaitAlarm
 		},
 		remedy: "Raise `store.max_open_conns`, or find the caller holding one. " +
 			"Every read on this node is queuing before it starts.",
@@ -1083,18 +1157,23 @@ var table = []rule{
 		},
 		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
 			"rate. See `stream.tracker_retention` in " +
-			"docs/getting-started/configuration.md.",
+			"docs/getting-started/configuration.md. A code log's git census is a " +
+			"share of the ceiling its stream holds, so it moves only when the log " +
+			"is resized: `crewlet retention set-capacity CREWLET_CODE_LOG` " +
+			"(docs/guides/retention.md); `stream.code_log_max_bytes` sizes only a " +
+			"log not yet created.",
 	},
 	{
 		kind: KindObjectsMissing,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d file(s) are missing from the object store or "+
-				"damaged in it", r.ObjectsMissing), r.ObjectsMissing > 0
+			return fmt.Sprintf("%d file(s) are missing from the object store, damaged "+
+				"in it, or not answered for by it", r.ObjectsMissing), r.ObjectsMissing > 0
 		},
-		remedy: "The backend lost or changed bytes it had acknowledged: check its " +
-			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
-			"the S3 bucket) and restore those files from a backup, or upload them " +
-			"again (see docs/guides/backup.md). `crewlet objects status` names them.",
+		remedy: "The backend lost or changed bytes it had acknowledged, or will not " +
+			"serve them: check its own health (the NATS bucket OBJ_crewlet_files on " +
+			"the data nodes, or the S3 bucket) and restore those files from a backup, " +
+			"or upload them again (see docs/guides/backup.md). `crewlet objects " +
+			"status` names them, and what was found of each.",
 	},
 	{
 		kind: KindObjectsBucketNearCeiling,
@@ -1136,6 +1215,52 @@ var table = []rule{
 			"hour and needs attention now; a slow burn spends a twentieth every six hours. " +
 			"The alarm clears within minutes of the fault ending, once the short window " +
 			"is healthy again.",
+	},
+	{
+		// THE THRESHOLD IS THE NODE'S OWN BUDGET, measured rather than set:
+		// the git cache reads the node's memory and keeps back what its
+		// other work is sized to hold, and a bitmap past what is left is
+		// one the kernel kills at every duty cycle — so the number that
+		// already decides whether a bitmap is written is the number the
+		// alarm fires at. Silent at the budget, as a bitmap at it is written.
+		kind: KindCodeMaintenanceRefused,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d repository(ies) on this node are served without a bitmap: "+
+					"the largest's needs about %s, and the node can give its background "+
+					"work %s", r.CodeMaintenanceRefused,
+					bytesHuman(r.CodeMaintenanceLargest), bytesHuman(r.CodeMaintenanceBudget)),
+				r.CodeMaintenanceLargest > r.CodeMaintenanceBudget
+		},
+		remedy: "Each repository is still served and still indexed: the cache " +
+			"writes its multi-pack-index without the bitmap, so lookups stay " +
+			"fast, but a clone counts objects by walking the history rather " +
+			"than reading the bitmap: slower, never wrong. A bitmap is charged " +
+			"at 1000 bytes an object of the repository, and 240 more for room " +
+			"beside it for a clone of the repository; each " +
+			"`code_cache_maintenance_refused` line names a repository, the step " +
+			"refused and its charge (a step `index` or `graph` refused as well " +
+			"is a repository served from its packs' own indexes). The budget is " +
+			"the node's memory (its cgroup's limit where one is set, read again " +
+			"every ten seconds) less what it keeps for its git lanes, the " +
+			"store, the broker and the engine, on the `code_cache_opened` line. " +
+			"Give the node more memory; a container resized in place is held to " +
+			"its new limit within ten seconds, without a restart. Or, where " +
+			"git.max_transfers is set, give it fewer transfers. What the node " +
+			"keeps is fixed when it boots: 224 MiB for every transfer its git " +
+			"lane admits, whatever it serves, and 896 MiB for each core its " +
+			"memory backs at 2 GiB a core. An unset git.max_transfers is sized " +
+			"to the memory, no more than one for every 512 MiB, and leaves the " +
+			"background work 256 MiB for each backed core; a figure set by hand " +
+			"is kept as written, and leaves it nothing once its transfers' " +
+			"224 MiB each reach the memory less the cores' 896 MiB each: at as " +
+			"little as 56% of the transfers the memory holds at 224 MiB each, " +
+			"where the node has a core for every 2 GiB of it or more. A budget " +
+			"of zero clears when git.max_transfers is lowered or unset, or when " +
+			"the node is given memory past what it keeps, in place or at a " +
+			"boot. A restart alone keeps the same lanes over the same memory, " +
+			"and clears it only where git.max_transfers is unset and the memory " +
+			"was lowered after the node booted, since the lanes are then sized " +
+			"to what it has. See docs/concepts/code-host.md.",
 	},
 }
 

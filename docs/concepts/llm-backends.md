@@ -930,7 +930,15 @@ listener, so the node also needs `api.port`: a node that binds none
 (`api.port: 0`) refuses agent mode by naming `api.port`, rather than
 handing a box an endpoint nothing answers. With `api.public.port` set the
 bridge is served on that public listener and nowhere else, so the URL
-names it.
+names it. The value must be an absolute `http://` or `https://` URL with
+a host a URL parser accepts (a name, or an address with no zone: an
+unfilled `<host>` placeholder or a mistyped IPv4 address such as
+`10.0.0.300` is refused), a port from 1 to 65535 if it names one, and no
+user information, query or fragment: anything else refuses the node's
+boot, naming the variable, rather than handing every box an endpoint its
+CLI cannot dial. Plain `http://` is accepted; what it costs wherever the URL
+leaves the box's host is in [Code sandbox § Security
+model](code-sandbox.md#security-model).
 
 > **In a fleet, that URL must address the node itself, not a load
 > balancer in front of several.** A
@@ -2521,10 +2529,28 @@ configured provider, then refuses the moment a seat has work. The
 **tool bridge** line is `CREWLET_MCP_BRIDGE_URL`: without it every
 agent-mode launch is refused, because a coding agent with none of the
 seat's tools cannot answer anybody, touch a ticket or submit its work.
+The doctor reads the value exactly as the engine does, so one the engine
+refuses its boot on — not an absolute `http://` or `https://` URL with a
+host — is reported as `tool bridge: refused` with the reason, never
+printed as a working bridge, and is a problem.
 
-A text-mode entry reports neither, rather than reporting that it would
-not work in a mode it is not in. The full rules are in the [CLI
-reference](../reference/cli.md#crewlet-llm).
+A text-mode entry reports neither line, rather than reporting that it
+would not work in a mode it is not in. **The node's box URLs are read
+whatever the entries' modes**: both URLs a box dials back to the engine —
+`CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL` — are
+read exactly as `crewlet run` reads them at boot, and a value the engine
+refuses its boot on is reported first, as the node's, and fails the run,
+because a node that does not boot runs no seat at all — a company of
+text-mode entries included. The refusal names the variable and never
+repeats the value:
+
+```
+node          : this process's environment, as `crewlet run` reads it at boot
+problems:
+  - CREWLET_MCP_BRIDGE_URL is not an absolute URL: it does not start with a scheme and a host, and a box dials it as given; write it as https://host[:port][/path], with http or https as its scheme. The engine refuses to boot on this value, so no seat on this node runs, whatever mode its providers are in: set it to a URL a sandbox can reach, or unset it
+```
+
+The full rules are in the [CLI reference](../reference/cli.md#crewlet-llm).
 
 ### How `doctor` judges a sign-in
 

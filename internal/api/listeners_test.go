@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,8 @@ var adminRoutes = []struct{ method, path string }{
 
 // listenerApp is a configured, authenticated node with every optional surface
 // mounted — the webhook edge, the telemetry receiver, the tool bridge and the
-// operator surface — and the public listener set or not.
+// operator surface — and every code route served, and the public listener set
+// or not.
 func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	t.Helper()
 	b := closedPosture()
@@ -80,7 +82,11 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 			Material: runtoken.OneKey("k", "k"), BaseURL: "http://x",
 		}),
 		Operator: operatorSurface(t, builtin.WorkDeps{Reader: stubWorkReader{}}),
-		Sources:  queries.Sources{Company: active(t)},
+		// SERVED, not merely mounted: a git route over a node with no host
+		// answers its own 404, which the walk below could not tell from a
+		// route mounted on the wrong listener.
+		Code:    fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}},
+		Sources: queries.Sources{Company: active(t)},
 	})
 }
 
@@ -420,4 +426,48 @@ func TestEveryPublicRouteIsUnguarded(t *testing.T) {
 			t.Errorf("%s is an admin route and auth.Public calls it public", req.path)
 		}
 	}
+}
+
+// GIT AND THE CODE READS ARE NEVER PUBLISHED. A person reaches a repository
+// with their own bound token (ADR-0052), and api.public is the socket whose
+// premise is that it serves only outside parties and asks no operator token —
+// so /git/ and /code/ answer the mux's own 404 there, before any credential is
+// read, whether it arrives as git's Basic password or as a bearer, and reach
+// the code host on api.port. The published routes are unchanged:
+// [TestEveryMountedRouteIsOnTheListenerItsPathNames] holds them to
+// publishedRoutes, which names neither prefix.
+//
+// Mutation: add /git/ to the public prefixes, and the public half goes red.
+func TestGitRoutesAreNotPublished(t *testing.T) {
+	t.Parallel()
+	a := listenerApp(t, true, false)
+	for _, req := range []struct{ method, path string }{
+		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack"},
+		{http.MethodPost, "/git/r.git/git-upload-pack"},
+		{http.MethodPost, "/git/r.git/git-receive-pack"},
+		{http.MethodGet, "/code/repos"},
+		{http.MethodGet, "/code/repos/r"},
+		{http.MethodPost, "/code/repos/r/verify"},
+	} {
+		for _, credential := range []string{"Basic " + basicAuth("crewlet", "secret"), "Bearer secret"} {
+			r := httptest.NewRequest(req.method, req.path, nil)
+			r.Header.Set("Authorization", credential)
+			rec := httptest.NewRecorder()
+			a.Public().ServeHTTP(rec, r)
+			if !absent(t, rec) {
+				t.Errorf("%s %s with %s answered %d on the public listener, want the mux's own 404",
+					req.method, req.path, strings.Fields(credential)[0], rec.Code)
+			}
+		}
+		// 200, and a verify's 202: the code host's own answers.
+		if rec := sendTo(t, a, req.method, req.path); rec.Code/100 != 2 {
+			t.Errorf("%s %s answered %d %q on api.port, want the code host's own answer",
+				req.method, req.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// basicAuth is an Authorization header's Basic credential.
+func basicAuth(user, password string) string {
+	return base64.StdEncoding.EncodeToString([]byte(user + ":" + password))
 }

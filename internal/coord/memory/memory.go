@@ -54,6 +54,9 @@ type Backend struct {
 	mu    sync.Mutex
 	rows  map[string]*record
 	shift time.Duration
+	// watchers is every running [Backend.WatchLive], each told of every
+	// write to its class while mu is held — see watch.go.
+	watchers map[*watcher]struct{}
 }
 
 // New returns an empty store.
@@ -205,6 +208,7 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Le
 	if len(opts.Meta) > 0 {
 		row.meta = copyMeta(opts.Meta)
 	}
+	b.wrote(row)
 
 	lease := row.lease()
 	return &lease, ""
@@ -231,6 +235,7 @@ func (b *Backend) Renew(ctx context.Context, resource, owner string, epoch int64
 		return false, nil
 	}
 	row.expiresAt = now.Add(ttl)
+	b.wrote(row)
 	return true, nil
 }
 
@@ -271,6 +276,7 @@ func (b *Backend) release(resource, owner string, epoch int64) bool {
 	// resource back to the node whose caches and MCP children are warm.
 	row.owner = ""
 	row.expiresAt = b.now()
+	b.wrote(row)
 	return true
 }
 

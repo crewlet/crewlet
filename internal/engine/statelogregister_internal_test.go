@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -120,6 +121,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		iamdomain.Domain{}.Name(): true,
 		search.Domain{}.Name():    false,
 		usage.Domain{}.Name():     false,
+		code.Domain{}.Name():      true,
 
 		artifactsdomain.Domain{}.Name(): true,
 		artifactdata.Domain{}.Name():    true,
@@ -364,7 +366,7 @@ func TestEveryRegisteredDomainHasACeilingCase(t *testing.T) {
 // offer's terms are compared in and the order every operator surface reports.
 //
 // AND THE SET: the org chart is part of the company document, applied with
-// every revision, so the core runs exactly these seven logs.
+// every revision, so the core runs exactly these eight logs.
 func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 	want := []string{
 		tracker.Domain{}.Name(),
@@ -372,6 +374,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		pages.Domain{}.Name(),
 		iamdomain.Domain{}.Name(),
 		usage.Domain{}.Name(),
+		code.Domain{}.Name(),
 		artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name(),
 	}
@@ -442,7 +445,7 @@ func (unregisteredDomain) ScopeIndex() string { return "" }
 
 func (unregisteredDomain) OpsTable() string { return "" }
 
-func (unregisteredDomain) ReadinessInput() bool { return false }
+func (unregisteredDomain) GatesSeatAdmission() bool { return false }
 
 func (unregisteredDomain) ClaimsIdentity() bool { return false }
 

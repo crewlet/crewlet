@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -103,7 +104,7 @@ func TestAJoinShowsThePeersMembersAsTheyAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = silent.Stop(context.Background()) })
-	if _, err := silent.Serve(t.Context(), topics.ArtifactPresenceAsk,
+	if _, err := silent.Serve(t.Context(), topics.ArtifactPresenceAsk, queue.ConcurrentAnswers,
 		func(ctx context.Context, _ []byte) ([]byte, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()

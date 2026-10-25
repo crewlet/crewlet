@@ -26,8 +26,9 @@ import (
 //   - 1: every shape this domain has.
 const RecordVersion = 1
 
-// baseRecordVersion is version 1, the base format. The barrier, a reanchor's
-// generation and every gate are pinned at it for ever, for the reason
+// baseRecordVersion is version 1, the base format. The barrier, the trim's
+// trimmed record, a reanchor's generation and every gate are pinned at it for
+// ever, for the reason
 // internal/pages states at its own copy: an older node retains what it cannot
 // read, and a retained gate licenses every record above it.
 const baseRecordVersion = 1
@@ -126,13 +127,17 @@ const (
 
 	// OpBarrier is the read index's payload-free append.
 	OpBarrier OpKind = "barrier"
+
+	// OpTrimmed is the trim's payload-free record that removes the anchors
+	// below a floor (ADR-0047).
+	OpTrimmed OpKind = "trimmed"
 )
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
 	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpLinkWorkItem,
-	OpReadElevated, OpEviction, OpGeneration, OpBarrier,
+	OpReadElevated, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
 }
 
 // HistoryOps are every op an artifact's history row is filed under, in the
@@ -165,7 +170,8 @@ type RecordEnvelope struct {
 
 	// OpID is an operation id in the state log's grammar: the idempotency
 	// key, the broker's message id and the ledger's key. EMPTY on a
-	// barrier, whose acknowledgement must never come out of a dedupe cache.
+	// barrier, whose acknowledgement must never come out of a dedupe cache,
+	// and on a trimmed record, whose identical copies are each meant to land.
 	OpID string `json:"op_id,omitempty"`
 
 	// Subject is the object this record mutates and the unit the broker
@@ -198,9 +204,12 @@ func (e RecordEnvelope) InstallsGate() bool {
 }
 
 // readByEveryBuild reports a record every build must read: a gate, the
-// barrier and a reanchor's generation. None may carry a versioned field.
+// barrier, the trim's trimmed record and a reanchor's generation. None may
+// carry a versioned field: an older node retains what it cannot read, and a
+// trimmed record it retained is every anchor it names kept on that node.
 func (e RecordEnvelope) readByEveryBuild() bool {
-	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
+		e.Op == OpGeneration
 }
 
 // MutationRecord is one committed mutation: the envelope, the typed payload as

@@ -14,14 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
@@ -87,6 +90,30 @@ var sentinels = []sentinel{
 	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
+
+	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
+	{"search.ErrNoMethods", search.ErrNoMethods},
+
+	// THE CODE HOST'S, every one of them — ErrBadBundle and ErrSuperseded
+	// included, though neither is answered across the wire today (a bad
+	// bundle never leaves the receiving node; a superseded reconcile is the
+	// deciding node's own) — for the reason the list is complete at all.
+	{"code.ErrBadBundle", code.ErrBadBundle},
+	{"code.ErrBadCursor", code.ErrBadCursor},
+	{"code.ErrBadLevel", code.ErrBadLevel},
+	{"code.ErrInvalid", code.ErrInvalid},
+	{"code.ErrInvalidProposal", code.ErrInvalidProposal},
+	{"code.ErrNoActivation", code.ErrNoActivation},
+	{"code.ErrNotConfigManaged", code.ErrNotConfigManaged},
+	{"code.ErrNotDeleted", code.ErrNotDeleted},
+	{"code.ErrNotPermitted", code.ErrNotPermitted},
+	{"code.ErrNotServing", code.ErrNotServing},
+	{"code.ErrNotYet", code.ErrNotYet},
+	{"code.ErrPurging", code.ErrPurging},
+	{"code.ErrRecordCap", code.ErrRecordCap},
+	{"code.ErrRepoNotFound", code.ErrRepoNotFound},
+	{"code.ErrSnapshotMoved", code.ErrSnapshotMoved},
+	{"code.ErrSuperseded", code.ErrSuperseded},
 
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
@@ -208,6 +235,13 @@ var typedKinds = []typedKind{
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+
+	{"search.ErrFutureVersion", reflect.TypeFor[*search.ErrFutureVersion]()},
+
+	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
+
+	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
+	{"code.TooWideError", reflect.TypeFor[*code.TooWideError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},

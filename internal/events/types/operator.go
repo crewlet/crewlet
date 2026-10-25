@@ -84,10 +84,12 @@ func (o AuditOutcome) Valid() bool {
 // outcomes that are failures of the call rather than states of a write.
 func (o AuditOutcome) failed() bool { return o == AuditRefused || o == AuditFailed }
 
-// The three transports an operator tool call arrives on. Each reaches the
-// catalogue through one dispatch (internal/api/operator), which is what records
-// the call — so the transport is the ONLY thing about the record that depends
-// on which surface a person used.
+// The four transports a person's call arrives on. Three are operator tool
+// calls, and each reaches the catalogue through one dispatch
+// (internal/api/operator), which is what records the call — so the transport
+// is the ONLY thing about the record that depends on which surface a person
+// used. The fourth is a person's own git client, whose every push the code
+// host records (internal/code/host).
 const (
 	// TransportAct is the dashboard's write surface, `/operator/act`.
 	TransportAct = "act"
@@ -98,13 +100,18 @@ const (
 	// resource REST a CLI or a script writes through, which calls the
 	// same dispatch rather than the tools directly.
 	TransportWork = "work"
+	// TransportGit is a person's git client, smart HTTP at `/git/`: every
+	// push it makes is one record, whatever became of it.
+	TransportGit = "git"
 )
 
-// OperatorActed is one operator tool call that is not a proven read, on any
-// of the three transports: the dashboard's act route, an operator's assistant
+// OperatorActed is one call a person made that is not a proven read, on any
+// of the four transports: the dashboard's act route, an operator's assistant
 // over MCP and the human write surface's tool-backed routes call the same
-// catalogue, and an audit that depended on which one a person used would be
-// missing whichever surface nobody tested.
+// catalogue, and a person's git client pushes through the code host — a person
+// transport of its own (ADR-0052), one record a push (internal/code/host). An
+// audit that depended on which one a person used would be missing whichever
+// surface nobody tested.
 //
 // The ARGUMENTS ARE NEVER HERE, for the reason the act log line omits them: a
 // page body or a comment is the company's content, and it already lives in
@@ -129,10 +136,17 @@ type OperatorActed struct {
 
 	Transport string `json:"transport"`
 	Tool      string `json:"tool"`
+	// Repo is the repository a git push was made to — empty on every other
+	// transport. A refused push writes no row in the code domain, so this
+	// record is the only one that says where it was refused.
+	Repo string `json:"repo,omitempty"`
 	// RequestID is the OPERATION the call was made under: the op id
 	// internal/api/opkey derived from the caller's key, so every retry of
 	// one gesture carries the same value and the audit row joins the
-	// ledger entry the write left. Empty for a call that named none.
+	// ledger entry the write left — or, on the git transport, a push's
+	// push id: the one its row and its `code_push` line carry, and a fresh
+	// UUIDv7 for a push refused before it had one, so every git record
+	// names one. Empty for a tool call that named none.
 	RequestID string `json:"request_id,omitempty"`
 
 	Outcome AuditOutcome `json:"outcome"`
@@ -151,9 +165,14 @@ func (OperatorActed) EventType() string { return "operator_acted" }
 // Actor is the author, which is who the records the call wrote name.
 func (e OperatorActed) Actor() string { return e.ActorName }
 
-// SummaryFor names the verb and what became of it.
+// SummaryFor names the verb, the repository a git push was made to, and what
+// became of it.
 func (e OperatorActed) SummaryFor(actor string) string {
-	return lead(actor, "ran "+e.Tool+": "+outcomeWords(e.Outcome, e.Refusal))
+	verb := "ran " + e.Tool
+	if e.Repo != "" {
+		verb += " on " + e.Repo
+	}
+	return lead(actor, verb+": "+outcomeWords(e.Outcome, e.Refusal))
 }
 
 // NewOperatorActed builds the audit record for one call, with [Failed]

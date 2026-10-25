@@ -29,10 +29,19 @@ func (Domain) Name() string { return "tracker" }
 //
 // Crossing it REFUSES an append rather than dropping the oldest record —
 // nothing on this stream is derivable from anything else, so shedding history
-// is data loss with a tidy name. At the modelled growth rate a completely
-// blocked trim reaches it in five years, which is an unmistakable operator
-// failure rather than a surprise; the operator dial is real because at a
-// three-year-old company the ceiling is two years away.
+// is data loss with a tidy name.
+//
+// SIXTEEN GIBIBYTES IS FIVE YEARS OF THE REFERENCE COMPANY'S RECORDS,
+// MEASURED: its day takes 9.9 MB of this log (the package doc's "What a day
+// costs the log, measured"), which fills it in 4.7 years, and
+// TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay holds that day within a
+// tenth of this ceiling's five years — signed records included, which ADR-0031
+// made forty bytes longer each and which moved the day from 9.7 MB, inside
+// that tenth, so the ceiling stays. Its seats' linearizable reads add 2.2 MB
+// a day of barriers, so a completely blocked trim reaches it in nearly four
+// years — an unmistakable operator failure rather than a surprise — and the
+// operator dial is real because at a three-year-old company whose trim never
+// ran the ceiling is under a year away.
 const TrackerLogMaxBytes = 16 << 30
 
 // TrackerMaxRecordBytes is the largest record this domain publishes
@@ -69,16 +78,18 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: TrackerMaxRecordBytes,
 		Duplicates:     TrackerLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// EVERY KIND BUT TWO. A turn is additive and races
+		// EVERY KIND BUT THREE. A turn is additive and races
 		// nobody; a barrier shares one subject across the whole company,
 		// so an expectation there would serialise every linearizable
 		// read behind every other one and write an anchor row per read
-		// into the transaction holding this store's only writer.
+		// into the transaction holding this store's only writer; and the
+		// trim's trimmed record removes anchors, so arbitrated it would
+		// write one of its own on every apply (ADR-0047).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
 
-// arbitratedKinds is every kind but those two, derived from the enum rather
+// arbitratedKinds is every kind but those three, derived from the enum rather
 // than typed again — a list written twice is a kind that arbitrates in one
 // place and not the other, which wedges that subject the first time a gate
 // drops a record.
@@ -197,13 +208,15 @@ func (Domain) ScopeIndex() string { return "tracker_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 func (Domain) OpsTable() string { return "tracker_ops" }
 
-// ReadinessInput reports that this domain's health gates seat admission.
+// GatesSeatAdmission reports that a seat depends on this domain's copy.
 //
-// TRUE, because a strict replay's stall is a FAULT rather than a coverage
-// number: a node behind on the mutation log serves rows that are simply wrong,
-// where a node behind on a compacted domain serves an answer that is merely
-// less complete and says so.
-func (Domain) ReadinessInput() bool { return true }
+// TRUE, because every seat's tools read this log on every turn, and a strict
+// replay's stall is a FAULT rather than a coverage number: a node behind on the
+// mutation log serves rows that are simply wrong, where a node behind on a
+// compacted domain serves an answer that is merely less complete and says so.
+// Its copy is judged like every domain's, and a wrong one goes out of service
+// for the tracker's operations alone — ADR-0046.
+func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical.
@@ -236,11 +249,3 @@ func (Domain) ClaimsIdentity() bool { return true }
 // same constant the [Translator] opens, so the trim waits on the consumer the
 // wakes actually advance.
 func (Domain) FeedGroup() string { return FeedGroup }
-
-// BarrierTables is the empty set, DECLARED.
-//
-// The barrier writes no row on any node, and stating that explicitly is what
-// stops a no-op record slipping through the kind-completeness walk by writing
-// nothing: "this kind wrote nothing" and "nobody classified this kind" are the
-// same observation, and only one of them is correct.
-var BarrierTables = map[string]statelog.TableClass{}

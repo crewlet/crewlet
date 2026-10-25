@@ -364,6 +364,8 @@ func (c *Company) validateMCPEnvServers() error {
 		readable[name] = struct{}{}
 	}
 
+	servers := listOrNone(slices.Sorted(maps.Keys(declared)), "no servers at all")
+
 	var p problems
 	check := func(path Path, env org.MCPEnv) {
 		// SORTED, because a map's iteration order is random and an error
@@ -383,7 +385,7 @@ func (c *Company) validateMCPEnvServers() error {
 					"Nothing reads this block — the engine looks the "+
 					"credentials up per SERVER, so a key naming none is never "+
 					"consulted and the server it was meant for starts with "+
-					"none", key, listOrNone(declared))
+					"none", key, servers)
 		}
 	}
 
@@ -396,20 +398,19 @@ func (c *Company) validateMCPEnvServers() error {
 	return p.err()
 }
 
-// listOrNone renders a set of names for a message, or says there are none.
+// listOrNone renders names for a message, or none where there are none.
 //
-// "mcp_servers has " followed by nothing is the shape of message that makes
-// an operator think the renderer broke rather than that they declared no
-// servers.
-func listOrNone(set map[string]struct{}) string {
-	if len(set) == 0 {
-		return "no servers at all"
+// The caller states its own empty case, because a list followed by nothing —
+// "mcp_servers has ", "the units are: " — is the shape of message that makes
+// an operator think the renderer broke rather than that their document
+// declares none, and what "none" reads as differs by list. The names go in
+// the order given: a caller holding a SET sorts it first, since a map's order
+// is random and a message that changes on every run is one nobody can diff a
+// CI log against.
+func listOrNone(names []string, none string) string {
+	if len(names) == 0 {
+		return none
 	}
-	names := make([]string, 0, len(set))
-	for name := range set {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	return strings.Join(names, ", ")
 }
 

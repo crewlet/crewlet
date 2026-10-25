@@ -273,7 +273,7 @@ func applyPurgeThroughARunner(t *testing.T, r *roundTrip, purgeAt uint64,
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:   tracker.Domain{},
 		Spec:     tracker.Domain{}.Stream(),
-		Applier:  tracker.NewApplier("node-b", nil),
+		Applier:  tracker.NewApplier(nil),
 		Fetch:    fetch,
 		Log:      r.log,
 		Node:     node,

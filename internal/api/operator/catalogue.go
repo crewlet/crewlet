@@ -41,6 +41,16 @@
 // for the life of the process: none, on the node a company was bootstrapped
 // on.
 //
+// A [Server] is built ONCE per node and never changed; what changes is the
+// catalogue each call reads off it, and a call is served by the one catalogue
+// it read, never by half of two. The one thing a client can leave behind is
+// the stream a 2026-07-28 client listens on, which stays on the catalogue its
+// listen request was answered from — so the server keeps every such stream in
+// the node's one registry ([Listeners]), and the node tells every stream
+// there when what a call would be served has changed: at an apply, when a
+// shared tool server comes back with other tools, and when another node says
+// its own catalogue moved (the api package's operator listens).
+//
 // # It is the SAME TOOLS a seat holds, with a different writer
 //
 // Not a parallel implementation. Every tool here is the one from
@@ -195,6 +205,13 @@ type Options struct {
 	// call.
 	Answer builtin.AnswerDeps
 
+	// Listeners is the registry this server keeps the streams MCP clients
+	// listen on in — ONE per node, so whoever announces that the node's
+	// tools changed reaches every stream whichever catalogue answered it
+	// (see [Listeners]). Nil keeps them in a registry of this server's own,
+	// which nothing else announces through: a server built alone.
+	Listeners *Listeners
+
 	// Audit is where every call that is not a proven read publishes its
 	// runtime audit record (see [Audit]). REQUIRED: a surface that writes
 	// to the company and records nothing about who called it is the one
@@ -212,6 +229,7 @@ type Server struct {
 	steer     builtin.SteerDeps
 	answer    builtin.AnswerDeps
 	audit     AuditPublisher
+	listeners *Listeners
 }
 
 // ErrNoAudit refuses a surface that would publish no audit record of the
@@ -244,10 +262,15 @@ func New(opts Options) (*Server, error) {
 	case opts.Audit == nil:
 		return nil, ErrNoAudit
 	}
+	listeners := opts.Listeners
+	if listeners == nil {
+		listeners = NewListeners()
+	}
 	return &Server{
 		halves: opts.Halves, org: opts.Org, authorize: opts.Authorize,
 		runs: opts.Runs, pauses: opts.Pauses,
 		steer: opts.Steer, answer: opts.Answer, audit: opts.Audit,
+		listeners: listeners,
 	}, nil
 }
 

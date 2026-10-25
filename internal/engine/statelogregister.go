@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -52,6 +53,10 @@ import (
 // operator mid-incident — so each is a field [checkRegister] refuses to see
 // wrong: every entry states its generation encoder, every identity-claiming
 // entry its gate, and every entry a feed exactly when its domain declares one.
+// A FOURTH is the TRIMMED record the trim removes a log's anchors by
+// ([registration.Trimmed], ADR-0047), which fails the same silent way — a log
+// with anchors and no record keeps one for every subject it ever wrote — so
+// every entry states one exactly when its log writes anchors.
 //
 // # The order is still load-bearing
 //
@@ -91,11 +96,13 @@ import (
 // registration is one domain's complete entry in the register.
 //
 // Every field but [registration.Barrier], [registration.NoBarrier],
-// [registration.NewGate], [registration.Feed], [registration.OpsRetention] and
-// [registration.OpsKindRetention] is required, and [checkRegister] is what
-// says so: an entry that omits one is a boot failure naming the domain and the
-// field, never a node that runs a domain it cannot apply, cannot write to,
-// cannot size a stream for or cannot re-anchor. NewGate is required exactly
+// [registration.Trimmed], [registration.NewGate], [registration.Feed],
+// [registration.OpsRetention] and [registration.OpsKindRetention] is required,
+// and [checkRegister] is what says so: an entry that omits one is a boot
+// failure naming the domain and the field, never a node that runs a domain it
+// cannot apply, cannot write to, cannot size a stream for or cannot re-anchor.
+// Trimmed is required exactly when the domain's log writes anchors
+// ([statelog.WritesAnchors]), and refused when it does not; NewGate exactly
 // when the domain claims identity, and refused when it does not; Feed exactly
 // when the domain declares a wake feed ([statelog.Domain.FeedGroup]), and
 // refused when it does not; OpsRetention exactly when the domain keeps an
@@ -177,6 +184,20 @@ type registration struct {
 
 	// NoBarrier is the explicit form of a nil Barrier. See Barrier.
 	NoBarrier bool
+
+	// Trimmed encodes the trim's TRIMMED record (ADR-0047) as one of this
+	// domain's own records: what removes the log's arbitration anchors below
+	// its first surviving record on every node, in the transaction that
+	// applies it ([statelog.SweepAnchors]). Nil for a domain whose log
+	// writes no anchor — the compacted vectors and usage — and so has none
+	// to remove.
+	//
+	// REQUIRED EXACTLY WHEN THE LOG WRITES ANCHORS ([statelog.WritesAnchors])
+	// and refused when it does not, by [checkRegister]: a log with anchors
+	// and no record keeps an anchor for every subject it ever wrote, on
+	// every data node, for the life of the deployment, and a record on a log
+	// with none is one the trim appends each tick to remove nothing.
+	Trimmed func(statelog.Envelope) ([]byte, error)
 
 	// Ceiling is where Tier A puts this domain's stream ceiling, and what
 	// a refusal to reserve it names. Required: a domain Tier A declares no
@@ -261,7 +282,7 @@ func register() []registration {
 				// sockets — a node without `data` serves none, since
 				// `ingress` requires `data`. See
 				// internal/tracker/inboxmove.go.
-				return tracker.NewApplier(s.nodeID, s.inboxMoved), nil
+				return tracker.NewApplier(s.inboxMoved), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
@@ -279,6 +300,7 @@ func register() []registration {
 					Gates: tracker.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
 			Barrier:    tracker.EncodeBarrier,
+			Trimmed:    tracker.EncodeTrimmed,
 			Generation: tracker.GenerationRecord{},
 			NewGate: func(s *stateLog, running *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
@@ -370,7 +392,7 @@ func register() []registration {
 				// knowledge base's native half exists: it is a
 				// non-blocking send that returns when there is nothing
 				// to send to.
-				return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
+				return pages.NewApplier(s.skills, s.nudgeSkills), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
@@ -388,6 +410,7 @@ func register() []registration {
 					Gates: pages.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
 			Barrier:    pages.EncodeBarrier,
+			Trimmed:    pages.EncodeTrimmed,
 			Generation: pages.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
@@ -455,6 +478,7 @@ func register() []registration {
 					Gates: iamdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
 			Barrier:    iamdomain.EncodeBarrier,
+			Trimmed:    iamdomain.EncodeTrimmed,
 			Generation: iamdomain.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
@@ -542,6 +566,72 @@ func register() []registration {
 					Floor: config.UsageLogMaxBytesFloor}
 			},
 		},
+		{
+			// THE COMPANY'S GIT REPOSITORIES (ADR-0051): the eighth domain
+			// and its sixth strict, identity-claiming one — settings,
+			// protections, refs, packs and pushes as rows only its applier
+			// writes, a pack's bytes one object a push in the object store.
+			Domain: code.Domain{},
+			NewApplier: func(*stateLog) (statelog.Applier, error) {
+				return code.NewApplier(), nil
+			},
+			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
+				runner *statelog.Runner) (writeSeams, error) {
+
+				rows, err := code.NewRows(s.estate().Reader(), spec)
+				if err != nil {
+					return writeSeams{}, err
+				}
+				fence := code.NewFence(s.estate().Reader(), s.nodeID)
+				name := code.Domain{}.Name()
+				fence.Floor = s.floorOf(name)
+				fence.Ends = s.logEndsOf(name, appendTo, runner)
+				fence.Committed = runner.Committed
+				return writeSeams{Rows: rows, Fence: fence,
+					Gates: code.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
+			},
+			Barrier:    code.EncodeBarrier,
+			Trimmed:    code.EncodeTrimmed,
+			Generation: code.GenerationRecord{},
+			NewGate: func(s *stateLog, _ *runningLog,
+				publisher *statelog.Publisher) (gateWrite, error) {
+
+				host, err := code.NewStore(code.StoreOptions{Publisher: publisher,
+					DB: s.estate().Reader(), NodeID: s.nodeID})
+				if err != nil {
+					return nil, err
+				}
+				return func(ctx context.Context, by iam.Principal, opID, node string,
+					readmit bool) (statelog.Result, error) {
+
+					// THE OPERATOR AS EVERY OTHER LOG'S GATE RECORD NAMES
+					// THEM ([iam.ActorFor]) — the code record carries an
+					// author and the credential it was made through, and
+					// an operator's record always names a credential, so
+					// one with none is named by the author it was made as.
+					a := iam.ActorFor(by)
+					operator := a.OperatorID
+					if operator == "" {
+						operator = a.Name
+					}
+					actor := code.Actor{ID: a.Name, Kind: code.ActorOperator, OperatorID: operator}
+					if readmit {
+						return host.ReadmitNode(ctx, actor, opID, node)
+					}
+					return host.EvictNode(ctx, actor, opID, node)
+				}, nil
+			},
+			// NO WAKE FEED: the domain declares no feed group
+			// ([code.Domain.FeedGroup]), since nothing a repository's rows
+			// say wakes a seat yet.
+			OpsRetention: statelog.OpsRetention,
+			Ceiling: func(stream config.Stream, free int64) domainCeiling {
+				bytes, derived := stream.CodeMaxBytes(free)
+				return domainCeiling{Bytes: bytes,
+					Field: "stream.code_log_max_bytes", Explicit: !derived,
+					Floor: config.CodeLogMaxBytesFloor}
+			},
+		},
 	}, artifactsRegistrations(), artifactDataRegistrations())
 }
 
@@ -605,6 +695,13 @@ func checkRegister(entries []registration) error {
 				"that grants no linearizable read says so, because an entry that "+
 				"merely omits the encoder is indistinguishable from one that "+
 				"forgot it", name, statedBarrier(entry))
+		}
+		if anchors := statelog.WritesAnchors(entry.Domain.Stream()); anchors != (entry.Trimmed != nil) {
+			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
+				"a trimmed-record encoder=%v on a log that writes anchors=%v — a log "+
+				"with anchors and no record keeps one for every subject it ever "+
+				"wrote, and a record on a log with none removes nothing (ADR-0047)",
+				name, entry.Trimmed != nil, anchors)
 		}
 	}
 	if len(entries) == 0 {
@@ -819,3 +916,11 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 	}
 	return ring
 }
+
+// RecordKeyring is the keyring this node's state-log records are signed and
+// verified under — [recordKeyring] over its own Tier A — for the one reader
+// outside the engine that opens a log's frames itself: the backup, which reads
+// the records a restore replays past its store copy for the files they name
+// (internal/backup, ADR-0049). Handed this rather than reading Tier A again,
+// so the backup and the appliers can never open a record under two keyrings.
+func (e *Engine) RecordKeyring() statelog.Keyring { return recordKeyring(e.boot) }

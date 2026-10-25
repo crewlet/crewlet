@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 )
 
 func newStore(t *testing.T, backend objstore.Backend) *objstore.Store {
@@ -315,10 +319,14 @@ func TestAMissingObjectIsNotFoundAtOpen(t *testing.T) {
 
 // watching is a backend recording the deadline its reads were asked under,
 // whether its stream was closed, and — when block is set — a stream that
-// hands over nothing until its context ends.
+// hands over nothing until its context ends; and with openAfter set, a read
+// that begins no stream until that long has passed or its context ends — as a
+// bucket that keeps failing the request a read opens with is asked again
+// until the read's deadline.
 type watching struct {
 	objstore.Backend
-	block bool
+	block     bool
+	openAfter time.Duration
 
 	mu       sync.Mutex
 	deadline time.Time
@@ -329,6 +337,13 @@ func (b *watching) Get(ctx context.Context, name string, off, n int64) (io.ReadC
 	b.mu.Lock()
 	b.deadline, _ = ctx.Deadline()
 	b.mu.Unlock()
+	if b.openAfter > 0 {
+		select {
+		case <-time.After(b.openAfter):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	r, err := b.Backend.Get(ctx, name, off, n)
 	if err != nil {
 		return nil, err
@@ -419,6 +434,169 @@ func TestAStalledReadIsEndedAndAClosedOneStops(t *testing.T) {
 	}
 	if !backend.closed.Load() {
 		t.Fatal("closing a reader half way left the backend's stream open")
+	}
+}
+
+// A STALLED READ IS ErrStalled, AND SAYS SO IN THE SENTENCE IT ALWAYS DID: a
+// caller tells a backend that stopped moving from one that answered by the
+// kind (errors.Is), whichever wait stalled — the open of the stream or a
+// piece of it after the first — while a person reads the words they always
+// read.
+func TestAStalledReadIsErrStalled(t *testing.T) {
+	t.Parallel()
+	const stall = 50 * time.Millisecond
+	for _, read := range []struct {
+		name  string
+		words string
+		do    func(t *testing.T, backend *watching, s *objstore.Store, o objstore.Object) error
+	}{
+		{"an open that begins no stream", "stalled: the backend began no stream for 50ms",
+			func(t *testing.T, backend *watching, s *objstore.Store, o objstore.Object) error {
+				backend.openAfter = time.Hour
+				r, err := s.Open(t.Context(), o)
+				if err == nil {
+					_ = r.Close()
+				}
+				return err
+			}},
+		{"a stream that stops between two pieces", "stalled: the backend handed over nothing for 50ms",
+			func(t *testing.T, backend *watching, s *objstore.Store, o objstore.Object) error {
+				r, err := s.Open(t.Context(), o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = r.Close() }()
+				if _, err := io.ReadFull(r, make([]byte, 10)); err != nil {
+					t.Fatalf("the first piece = %v", err)
+				}
+				// Read on this goroutine, so no Read is in flight to race.
+				backend.block = true
+				_, err = io.ReadAll(r)
+				return err
+			}},
+	} {
+		t.Run(read.name, func(t *testing.T) {
+			t.Parallel()
+			backend := &watching{Backend: memobj.New()}
+			s := newStore(t, backend)
+			o := put(t, s, patterned(1000, 1))
+			objstore.SetStall(s, stall)
+			err := read.do(t, backend, s, o)
+			if !errors.Is(err, objstore.ErrStalled) {
+				t.Fatalf("%s = %v; want objstore.ErrStalled", read.name, err)
+			}
+			if !strings.Contains(err.Error(), read.words) {
+				t.Fatalf("%s = %q; want the words it always said, %q", read.name, err, read.words)
+			}
+		})
+	}
+}
+
+// A READ THAT BEGINS NOTHING IS ENDED AT THE STALL, the open of a whole read
+// and of a page alike: a backend that has handed back no stream for as long
+// as the watchdog lets a read hear nothing has its read cancelled — a bucket
+// failing the request a read opens with every time is asked again until the
+// read's deadline, which is hours for a large file, and the watchdog over the
+// stream never started. And an open that is merely slow, and begins inside
+// the stall, is read whole.
+func TestAReadThatBeginsNothingIsEndedAtTheStall(t *testing.T) {
+	t.Parallel()
+	backend := &watching{Backend: memobj.New()}
+	s := newStore(t, backend)
+	body := patterned(1000, 3)
+	o := put(t, s, body)
+	const stall = 200 * time.Millisecond
+	objstore.SetStall(s, stall)
+
+	backend.openAfter = time.Hour
+	for _, read := range []struct {
+		name string
+		do   func() error
+	}{
+		{"an open", func() error {
+			r, err := s.Open(t.Context(), o)
+			if err == nil {
+				_ = r.Close()
+			}
+			return err
+		}},
+		{"a page", func() error {
+			_, err := s.ReadAt(t.Context(), o, 10, 10)
+			return err
+		}},
+	} {
+		started := time.Now()
+		ended := make(chan error, 1)
+		go func() { ended <- read.do() }()
+		select {
+		case err := <-ended:
+			if err == nil {
+				t.Fatalf("%s whose backend began no stream succeeded", read.name)
+			}
+			if !strings.Contains(err.Error(), "stalled") {
+				t.Fatalf("%s whose backend began no stream = %v; want it ended as stalled", read.name, err)
+			}
+			if took := time.Since(started); took < stall {
+				t.Fatalf("%s whose backend began no stream ended after %v, before the %v stall",
+					read.name, took, stall)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s whose backend began no stream was still waiting after ten seconds, "+
+				"with a %v stall; want it ended at the stall, never at its budget of %v",
+				read.name, stall, objstore.ReadBudget(o.Size))
+		}
+	}
+
+	backend.openAfter = stall / 4
+	got, err := readAll(t, s, o)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("a read whose backend began its stream inside the stall = %d bytes, %v", len(got), err)
+	}
+}
+
+// A BUCKET THAT KEEPS FAILING A READ'S FIRST REQUEST ENDS IT AT THE STALL,
+// never at the read's budget, and names what the bucket answered. The S3
+// backend's client asks a request the bucket refuses again until the
+// request's deadline, with no count of attempts, and the first range of a read
+// is a request answered before Get hands a stream back — so before the store
+// watched the open, a gateway that answers one object with a server error
+// every time held each read of it, and the git cache's slot it was read in,
+// for the read's whole budget: two minutes for this object, hours for a pack
+// near its ceiling.
+func TestABucketThatKeepsFailingAReadsOpenEndsItAtTheStall(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	backend, err := s3obj.Open(t.Context(), s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+		AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newStore(t, backend)
+	o := put(t, s, patterned(3*objstore.MiB, 5))
+	const stall = 200 * time.Millisecond
+	objstore.SetStall(s, stall)
+	srv.FailNext(1_000_000, http.StatusInternalServerError, "InternalError")
+
+	ended := make(chan error, 1)
+	go func() {
+		r, err := s.Open(t.Context(), o)
+		if err == nil {
+			_ = r.Close()
+		}
+		ended <- err
+	}()
+	select {
+	case err := <-ended:
+		if err == nil || !strings.Contains(err.Error(), "stalled") || !strings.Contains(err.Error(), "500") {
+			t.Fatalf("a read of an object the bucket fails every time = %v; want it ended as "+
+				"stalled, naming the bucket's 500", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("a read of an object the bucket fails every time was still asking after ten "+
+			"seconds, with a %v stall; want it ended at the stall, never at its budget of %v",
+			stall, objstore.ReadBudget(o.Size))
 	}
 }
 

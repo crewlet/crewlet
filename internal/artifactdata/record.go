@@ -72,10 +72,16 @@ const (
 
 	// OpBarrier is the read index's payload-free append.
 	OpBarrier OpKind = "barrier"
+
+	// OpTrimmed is the trim's payload-free record that removes the anchors
+	// below a floor (ADR-0047).
+	OpTrimmed OpKind = "trimmed"
 )
 
 // OpKinds are every op.
-var OpKinds = []OpKind{OpWrite, OpUndo, OpConfigure, OpPurge, OpEviction, OpGeneration, OpBarrier}
+var OpKinds = []OpKind{
+	OpWrite, OpUndo, OpConfigure, OpPurge, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+}
 
 // Valid reports whether an op off the wire is one this build knows.
 func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }
@@ -99,9 +105,13 @@ func (e RecordEnvelope) InstallsGate() bool {
 	return e.Subject.Kind.InstallsGate() || e.Op == OpPurge
 }
 
-// readByEveryBuild reports a record every build must read.
+// readByEveryBuild reports a record every build must read: a gate, the
+// barrier, the trim's trimmed record and a reanchor's generation. An older
+// node retains what it cannot read, and a trimmed record it retained is every
+// anchor it names kept on that node.
 func (e RecordEnvelope) readByEveryBuild() bool {
-	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
+		e.Op == OpGeneration
 }
 
 // MutationRecord is one committed record: the envelope, the typed payload as

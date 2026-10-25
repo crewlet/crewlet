@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"time"
 )
 
@@ -16,6 +18,14 @@ var ErrNotFound = errors.New("objstore: no such object")
 // handed over exactly that many that hash to something other than the row's
 // digest. Never handed to a reader as the object ([Store.Open]).
 //
+// AND A NAME THE BACKEND HOLDS SOMETHING UNDER THAT IS NO OBJECT AT ALL — the
+// broker's object store holding metadata that does not decode — which its
+// stat and its get answer with this rather than with a failure: it is as
+// definite as a wrong digest, since asking again reads the same thing and no
+// get will ever hand the object's bytes back, and a failure there would have
+// every reader retry for ever, the audit stop on it every day without naming
+// the file, and a backup refuse to finish rather than record it lost.
+//
 // ONLY A DEFINITE ANSWER IS CORRUPTION. A read that FAILED before the end — a
 // deadline, a dropped link, a broker that stopped answering — is a failed
 // read and nothing more, whatever its library calls it: the object may be
@@ -23,6 +33,17 @@ var ErrNotFound = errors.New("objstore: no such object")
 // an operator to restore a file nothing is wrong with, and a backup to record
 // it as lost.
 var ErrCorrupt = errors.New("objstore: an object's bytes are not the ones it was stored with")
+
+// ErrStalled is a transfer its backend stopped moving for [Stall]: a read
+// handed nothing — no stream begun, or no piece of it — for that long, or a
+// write taken no further and not answered. The store failing, never a
+// refusal: asking again may succeed.
+//
+// THE BARE WORD, because it is spliced into the sentences that already said
+// it ("stalled: the backend began no stream for 1m0s: …"), so a caller can
+// branch on the kind with errors.Is while a person reads the sentence they
+// always read.
+var ErrStalled = errors.New("stalled")
 
 // ErrNoDeadline is a read asked for under a context with no deadline.
 var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
@@ -56,6 +77,49 @@ type Usage struct {
 // the collector would delete or abandon whatever it named the moment it was
 // listed, an upload still in flight among them.
 var ErrUndated = errors.New("objstore: the backend listed an entry with no date")
+
+// ErrUnordered is a ranged listing ([Ranged]) the backend cannot give in name
+// order: an S3 Express directory bucket, which lists its keys in no order at
+// all, or a store caught handing a name back out of order ([Store.ListKeys]).
+// The caller asks about each name instead — an answer the order was not kept
+// in would have every name past the first stray read as absent.
+var ErrUnordered = errors.New("objstore: the backend cannot list a range of names in order")
+
+// ErrNoBatch is a batch deletion ([BatchDeleter]) the store refused as a
+// request, having removed nothing: an S3-compatible gateway that does not offer
+// the verb, or a backend that has none ([Store.DeleteKeys]). The caller deletes
+// each name on its own instead.
+var ErrNoBatch = errors.New("objstore: the backend refused a batch deletion as a request")
+
+// MaxDeleteBatch is the most names one batch deletion ([BatchDeleter]) is
+// handed: S3's DeleteObjects takes at most a thousand keys a request.
+const MaxDeleteBatch = 1000
+
+// DeleteBatchError is a batch deletion the store answered name by name,
+// refusing some names: Failed holds why, for each name it did not remove. The
+// rest are gone.
+type DeleteBatchError struct {
+	Failed map[string]error
+}
+
+// Error names how many names were refused, and the first of them by name.
+func (e *DeleteBatchError) Error() string {
+	names := slices.Sorted(maps.Keys(e.Failed))
+	if len(names) == 0 {
+		return "objstore: a batch deletion refused no name"
+	}
+	return fmt.Sprintf("objstore: a batch deletion was refused for %d name(s), the first %q: %v",
+		len(names), names[0], e.Failed[names[0]])
+}
+
+// Unwrap is every refusal, so errors.Is and errors.As reach each.
+func (e *DeleteBatchError) Unwrap() []error {
+	out := make([]error, 0, len(e.Failed))
+	for _, name := range slices.Sorted(maps.Keys(e.Failed)) {
+		out = append(out, e.Failed[name])
+	}
+	return out
+}
 
 // Info is one object a backend holds, as it reports it.
 type Info struct {
@@ -164,33 +228,49 @@ type Backend interface {
 	// name a listing or a stat could find, and the put fails with the
 	// read's own error. The end is io.EOF ITSELF and nothing else — see
 	// [Fill], which every backend reading in pieces reads through.
+	//
+	// A put the backend STOPS TAKING — nothing of it accepted or answered
+	// for [Stall] — fails with [ErrStalled], whatever ctx's deadline, and
+	// leaves nothing, as any failed put: a write's deadline is sized for
+	// its bytes at the floor, minutes for a large one, and a person
+	// waiting on a store that stopped is owed the minute a read is.
 	Put(ctx context.Context, name string, r io.Reader, m PutMeta) error
 
 	// Get streams n bytes of name from offset off — to the end when n is
-	// negative — or answers [ErrNotFound]. A range that begins at or past
-	// the end is an empty stream; one that runs past it is short.
+	// negative — or answers [ErrNotFound], or [ErrCorrupt] where what the
+	// backend holds under name is no object it can read. A range that
+	// begins at or past the end is an empty stream; one that runs past it
+	// is short.
 	//
 	// ctx bounds the WHOLE read, the stream included, and must carry a
 	// deadline: a read that stops moving has to end somewhere, and a
 	// backend refuses one with none ([ErrNoDeadline]) rather than pick a
 	// bound of its own. Every backend begins with [CheckRead]. And ctx
-	// ENDING ends the stream: a Read blocked on the backend returns, with
-	// ctx's error, once ctx is done — which is how [Store]'s stall
-	// watchdog stops a read that has stopped moving.
+	// ENDING ends the read: a Get still opening the stream, and a Read
+	// blocked on the backend, each return with ctx's error once ctx is
+	// done — which is how [Store]'s stall watchdog stops a read that has
+	// stopped moving, or has never begun.
 	//
 	// The bytes are what the backend holds; checking them is [Store]'s.
 	Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error)
 
-	// Stat answers what the backend holds under name, or [ErrNotFound].
+	// Stat answers what the backend holds under name, or [ErrNotFound], or
+	// [ErrCorrupt] where what it holds there is no object it can read.
 	Stat(ctx context.Context, name string) (Info, error)
 
-	// Delete removes name. Deleting what is not there is not an error.
+	// Delete removes name — what it holds whether or not it can be read as
+	// an object. Deleting what is not there is not an error.
 	Delete(ctx context.Context, name string) error
 
 	// List hands every object the backend holds to visit, each name once
 	// and in no particular order, stopping at the first error visit
 	// returns. A visitor may be slow — it judges and deletes as it goes —
 	// and a listing does not skip or repeat a name for it.
+	//
+	// A NAME HOLDING NO OBJECT THE BACKEND CAN READ ([ErrCorrupt]) is handed
+	// on too, holding no bytes and dated by when the backend stored what it
+	// holds there: the collector judges every name it lists, and one a
+	// listing left out would be kept, and billed, for ever.
 	List(ctx context.Context, visit func(Info) error) error
 
 	// Pending hands every upload the backend began and has not finished to
@@ -210,6 +290,60 @@ type Backend interface {
 	// object it is about to complete). The collector abandons only an
 	// upload begun longer ago than any upload is allowed to take.
 	Abandon(ctx context.Context, p Pending) error
+}
+
+// Ranged is a [Backend] that can also list a RANGE of its names in order: an
+// S3 bucket, whose listing is in the byte order of its keys and answers a
+// thousand of them a request.
+//
+// AN OPTIONAL HALF OF THE CONTRACT, because only some stores keep their names
+// in order — the broker's object store lists in the order its metadata was
+// written — and it exists for one reason: the audit asks the store about every
+// object a live row names, and the rows are walked in key order, so on a store
+// that lists in order one listing of a range answers what a stat of each object
+// in it would, at a request a page of names rather than one an object.
+// Declared HERE, beside the contract, rather than by the consumer alone,
+// because two packages hold it to one meaning — the suite that certifies it
+// (objstoretest, which also refuses a backend that implements it uncertified)
+// and the store that reads it ([Store.ListKeys]) — and two declarations would
+// be two contracts nothing held together.
+type Ranged interface {
+	Backend
+
+	// ListRange hands visit every object whose name sorts, as bytes, after
+	// after and at or before through — after "" from the first — in that
+	// order, each once, stopping at the first error visit returns. What it
+	// hands on is what [Backend.List] would, an entry it cannot date
+	// included: left out, and the listing then fails with [ErrUndated]. A
+	// store this backend cannot list in order answers [ErrUnordered], before
+	// it has visited anything.
+	ListRange(ctx context.Context, after, through string, visit func(Info) error) error
+}
+
+// BatchDeleter is a [Backend] that can also delete many names in one request:
+// an S3 bucket, whose DeleteObjects takes up to [MaxDeleteBatch] keys.
+//
+// AN OPTIONAL HALF OF THE CONTRACT, as [Ranged] is, and for the same kind of
+// reason: only some stores have the verb — the broker's object store purges an
+// object's metadata and its pieces as writes of their own, which nothing
+// batches — and it exists for the collector, which deletes what no row names a
+// batch of judged keys at a time. On S3 a bulk removal — a project of a million
+// files nobody names any more — is then two thousand requests rather than a
+// million. Declared here, beside the contract, for [Ranged]'s reason: the suite
+// certifies it (objstoretest, which also refuses a backend that implements it
+// uncertified) and the store reads it ([Store.DeleteKeys]).
+type BatchDeleter interface {
+	Backend
+
+	// DeleteBatch removes every one of names — at most [MaxDeleteBatch],
+	// each what [Backend.Delete] would remove — in one request. A name that
+	// is not there is not an error. It answers nil when every name is gone;
+	// a [*DeleteBatchError] when the store answered name by name and refused
+	// some, why for each, the rest being gone; an error wrapping
+	// [ErrNoBatch] when the store refused the request itself, having
+	// removed nothing; and any other error when the request failed,
+	// whatever it may have removed.
+	DeleteBatch(ctx context.Context, names []string) error
 }
 
 // CheckRead refuses the reads every backend refuses: a negative offset, an
@@ -332,7 +466,10 @@ func PaceFor(n int64) time.Duration {
 // A MINUTE: every one of those is a round trip of milliseconds against a
 // healthy backend, and a minute is room for the leader election or the
 // reconnect that makes one of them slow — while a read that cannot even begin
-// in a minute is not going to.
+// in a minute is not going to, which [Store] holds it to: the backend's open
+// of the stream is watched by [Stall], a minute too, and a read that has
+// begun no stream by then is ended as stalled however long its budget, and
+// however often its backend would have asked again.
 const ReadBase = time.Minute
 
 // ReadBudget is the deadline [Store] reads an object of size bytes under,
@@ -344,19 +481,38 @@ const ReadBase = time.Minute
 // the floor would spend the whole budget on its own pace and leave the
 // backend a minute for a gibibyte.
 //
-// A BOUND, not a pace: [ReadStall] is what ends a read that stops moving.
+// A BOUND, not a pace: [Stall] is what ends a read that stops moving.
 // This is what ends one that trickles a byte a minute, which no stall
 // watchdog ever sees.
 func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
 
-// ReadStall is the longest one read of an object may wait on its backend
-// before the read is ended as stalled.
+// Stall is the longest one transfer of an object may wait on its backend
+// before it is ended as stalled ([ErrStalled]): for a read, the stream to
+// begin and each piece of it after; for a write, the backend to take more of
+// it or answer.
 //
 // A MINUTE — two of [MiBPace], the time a mebibyte is given: no backend
 // streaming hands over its next piece more than a mebibyte apart, the largest
 // piece any of them moves is an eight-mebibyte part read in pieces far
 // smaller, and a read that has heard nothing for a minute is waiting on a
-// broker that lost the object's pieces or a connection that has gone, either
-// of which would otherwise hold the reader until its whole budget ran out —
-// hours, for a large file.
-const ReadStall = 2 * MiBPace
+// broker that lost the object's pieces, a connection that has gone or a
+// bucket that keeps failing the request it asks again — any of which would
+// otherwise hold the reader until its whole budget ran out, hours for a large
+// file. The open is held to it as each piece is ([ReadBase]): a backend asks
+// for its first bytes before it hands a stream back, and one whose client
+// asks a failed request again until its caller's deadline, or that reaches a
+// peer which accepts the request and never answers it, would otherwise make
+// of an open it cannot get answered a wait as long as the read's whole
+// budget.
+//
+// THE SAME MINUTE FOR A WRITE, which each backend watches for itself because
+// only the backend can see a write move: the S3 backend at its socket — the
+// body taken, the bytes the bucket's side acknowledged, its answer — and the
+// broker's by its acknowledgements. A write moving at the floor moves a
+// mebibyte a half-minute, so a minute with nothing moving is a backend that
+// stopped, which a deadline sized for the write's bytes would hold for up to
+// sixteen and a half minutes; and a person reads one figure for every way the
+// store can fail a transfer — a read, a write, and a request the bucket keeps
+// failing, which the S3 backend gives up at the same minute. A constant,
+// never configuration: nothing honest differs by deployment.
+const Stall = 2 * MiBPace

@@ -153,7 +153,7 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, company)
+	back, err := OpenBackends(t.Context(), &b, company, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

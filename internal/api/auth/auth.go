@@ -52,6 +52,20 @@
 // a count on the audit trail's failure row. bearers.go carries the argument,
 // including the curve that was tried and what it cost.
 //
+// # A git client is answered in git's own terms, as a person
+//
+// git is the third person transport beside the dashboard's act route and the
+// operator's MCP (ADR-0052): a person's own token, presented by their git
+// client, pushes as that person where it is bound to their seat and fetches
+// only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
+// public listener. Which requests under /git/ are fetches and which pushes is
+// [GitAccess]'s answer and nobody else's; on a git route, and on no other, the
+// token may arrive as a Basic credential's password ([Guard.Credential]); and
+// every refusal the guard writes on a git route is in the one form git prints
+// ([GitText]): the 401 is the challenge git answers with its credential helper
+// ([GitChallenge]), and a resolved credential's 403 and a node's identity 503
+// are the same sentences the API's envelope carries, in one line.
+//
 // # And two gates beside it
 //
 // [CSRF] refuses a state change a cross-site page could have caused, and
@@ -518,11 +532,24 @@ const SocketPath = "/ws/stream"
 // constructor — no longer needs it. A browser's handshake carries its session
 // cookie like any other same-origin request, and a script that dials the
 // socket sets the header, which every WebSocket client outside a browser can.
+//
+// AND ON A GIT ROUTE ONLY ([GitAccess]), the password of a Basic credential,
+// its user name ignored: a git client has no other way to present a token
+// without configuration — it answers a Basic challenge from its credential
+// helper or a prompt. Basic is accepted nowhere else, because a browser caches
+// a Basic credential it was asked for and replays it to every route of the
+// origin: accepted beyond git, one prompt answered for a clone would be a
+// session on the whole API. The bearer header wins when both are present.
 func (g *Guard) Credential(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	const scheme = "bearer "
 	if len(header) >= len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
 		return strings.TrimSpace(header[len(scheme):])
+	}
+	if GitAccess(r) != GitNone {
+		if _, password, ok := r.BasicAuth(); ok {
+			return password
+		}
 	}
 	return ""
 }
@@ -641,6 +668,15 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			log.Info("api_auth_refused_resolved",
 				"route", path, "code", refusal.Code,
 				"detail", refusal.Detail, "remote", g.Client(r))
+			if GitAccess(r) != GitNone {
+				// A GIT CLIENT PRINTS ONLY TEXT: the JSON envelope
+				// reaches a person at a terminal as a bare "returned
+				// error: 403", which says neither that their seat is
+				// gone nor what to do. The detail is the one sentence
+				// the refusal carries, and it is one line.
+				GitText(w, refusal.Status, refusal.Detail)
+				return
+			}
 			httpjson.FailWith(w, refusal.Status, refusal.Code,
 				map[string]string{"detail": refusal.Detail})
 			return
@@ -656,6 +692,13 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			//nolint:contextcheck // r is the resolved request; see Resolve above
 			log.Log(r.Context(), UnreadLevel(r.Context()), "api_auth_unavailable",
 				"route", path, "remote", g.Client(r))
+			if GitAccess(r) != GitNone {
+				// In git's form, and still saying when to come back:
+				// git does not retry on its own, so the sentence is
+				// what tells a person a retry will do.
+				gitIdentityUnavailable(w)
+				return
+			}
 			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
 				RetryIdentitySeconds)
 			return
@@ -672,7 +715,8 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			//
 			// COUNTED HERE AND ONLY HERE: this is the one arm where a
 			// refused credential decided something. See audit.go.
-			if g.refused(r) {
+			switch {
+			case g.refused(r):
 				log.Warn("api_auth_failed",
 					"route", path,
 					"reason", "credential_refused",
@@ -684,7 +728,16 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 					// proxy, which is the one address that tells an
 					// operator nothing about who is guessing.
 					"remote", g.Client(r))
-			} else {
+			case GitAccess(r) != GitNone:
+				// A GIT CLIENT'S FIRST REQUEST PRESENTS NOTHING BY DESIGN:
+				// git asks its credential helper only once a 401 carrying
+				// a challenge arrives, so every clone and push begins
+				// here. Logged as the challenge it is answered with, at
+				// debug, so an operator reading a git node's log tells
+				// the protocol's first step from a browser signed out.
+				log.Debug("api_auth_challenge", "route", path,
+					"remote", g.Client(r))
+			default:
 				// NOTHING PRESENTED IS NOBODY, NOT A FAILURE: a signed-out
 				// tab, an invitation's page and a probe all ask without
 				// a credential, and a WARN for each was a thousand lines
@@ -700,6 +753,15 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			// code belongs to or where the sentence beside it
 			// comes from. A caller refused here and refused by a
 			// route reads one body.
+			if GitAccess(r) != GitNone {
+				// EXCEPT A GIT CLIENT, which is CHALLENGED: it asks its
+				// credential helper for a token only after a 401 carrying
+				// one, and prints nothing of a JSON body. The protocol's
+				// first request carries no credential by design, which is
+				// why nothing presented is logged at debug above.
+				GitChallenge(w)
+				return
+			}
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}

@@ -55,7 +55,7 @@ func (r *roundTrip) retainReported(reported uint64, position int64,
 		Mode:   statelog.ModeNormal,
 		DB:     r.db,
 		Waiter: r.waiter,
-		Health: func() statelog.Health {
+		Health: func() (statelog.Health, error) {
 			at := r.waiter.Committed()
 			behind, first, floor := uint64(0), uint64(1), uint64(0)
 			return statelog.Health{
@@ -65,7 +65,7 @@ func (r *roundTrip) retainReported(reported uint64, position int64,
 				FirstSeq:  &first,
 				TrimFloor: &floor,
 				Deferred:  reported,
-			}
+			}, nil
 		},
 		Drain: func() float64 { return 2000 },
 	})

@@ -709,6 +709,7 @@ func TestABrokerReplyTheAskerCannotBelieveIsNoAnswer(t *testing.T) {
 			fleet.present(t, member("node-a", placement.RoleData))
 			reply := forge(t)
 			stop, err := fleet.client(t).Serve(t.Context(), fleetBrokerSubject("node-a"),
+				queue.ConcurrentAnswers,
 				func(context.Context, []byte) ([]byte, error) { return reply, nil })
 			if err != nil {
 				t.Fatal(err)

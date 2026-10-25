@@ -186,7 +186,6 @@ func TestEveryPerLogKindLeadsWithItsMostPressingLog(t *testing.T) {
 			*strong = heldDomain(strong.Domain, heldByANodeBehind(), heldPastWindowBy(3*time.Hour))
 		},
 		statelog.KindDeferredOld: func(weak, strong *statelog.DomainInputs) {
-			weak.DeferredJudgesCopy, strong.DeferredJudgesCopy = true, true
 			weak.DeferredAge = statelog.DeferralGrace + time.Minute
 			strong.DeferredAge = statelog.DeferralGrace + time.Hour
 		},

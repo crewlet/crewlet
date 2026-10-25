@@ -302,12 +302,15 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 		if app == nil {
 			continue
 		}
-		// PARSED FROM THE RAW VALUE, not through a "or default" helper:
+		// The seat's role.code.access, the one tier every code host reads:
+		// the manifest asked GitHub for its permission set, and every token
+		// is minted with exactly that set, so the two are one reading.
+		// PARSED FROM THE RAW VALUE, not through an "or default" helper:
 		// [github.ParseTier] already answers the default for an empty
 		// string and for a typo, and it is the package that OWNS the
 		// closed set — so there is one place that decides what an
 		// unrecognised tier runs at.
-		tier, _ := github.ParseTier(app.Tier)
+		tier, _ := github.ParseTier(seat.CodeAccess)
 		out = append(out, github.SeatApp{
 			Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
 			AppID: app.AppID, Slug: app.AppSlug,

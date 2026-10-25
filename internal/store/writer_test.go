@@ -149,10 +149,10 @@ func TestAnUntrackedTypeIsNotStored(t *testing.T) {
 
 // THE RUNTIME AUDIT READS ITS ROWS FROM A LISTING, which never selects the
 // payload — so what sort of author acted, through which credential, with which
-// tool, into which directory and on which node must each survive as a tag, or
-// the Audit log and the backup history can say only the summary's prose. Built
-// from the real types, so a renamed wire field fails here rather than as a
-// blank column.
+// tool, on which repository, into which directory and on which node must each
+// survive as a tag, or the Audit log and the backup history can say only the
+// summary's prose. Built from the real types, so a renamed wire field fails
+// here rather than as a blank column.
 func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 	t.Parallel()
 	backupEvent := events.New(types.NewBackupRequested(types.BackupRequested{
@@ -166,6 +166,11 @@ func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 		Outcome: types.AuditRefused, Refusal: "conflict",
 	}), events.TraceContext{})
 	acted.Node = "node-a"
+	pushed := events.New(types.NewOperatorActed(types.OperatorActed{
+		ActorName: "maya", ActorKind: "human", OperatorID: "pat:43", Transport: types.TransportGit,
+		Tool: "git_push", Repo: "nimbus-web", Outcome: types.AuditRefused, Refusal: "protected_force",
+	}), events.TraceContext{})
+	pushed.Node = "node-c"
 
 	for _, c := range []struct {
 		event *events.Event
@@ -178,6 +183,10 @@ func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 		{acted, map[string]string{
 			"node": "node-a", "actor_kind": "human", "operator_id": "pat:42",
 			"tool": "update_work_item", "failed": "true",
+		}},
+		{pushed, map[string]string{
+			"node": "node-c", "actor_kind": "human", "operator_id": "pat:43",
+			"tool": "git_push", "repo": "nimbus-web", "failed": "true",
 		}},
 	} {
 		raw, err := json.Marshal(c.event)

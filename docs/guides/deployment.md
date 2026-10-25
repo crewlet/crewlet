@@ -63,33 +63,57 @@ webhooks have to come from the internet and the dashboard must not, give them
 a listener of their own instead: see
 [Exposing webhooks without the admin API](#exposing-webhooks-without-the-admin-api).
 
-Give that proxy a **read timeout above fifty seconds** on the API port.
-Nearly every request is answered in well under a second, but a node eviction
-or readmission ([Retention](retention.md#eviction)) may take up to fifty
-seconds — twenty to judge it and thirty to write every log — and `crewlet
-retention evict` and the dashboard's evict dialog both wait a minute for its
-answer. nginx's `proxy_read_timeout` defaults to sixty, which is enough; a
-proxy set below fifty cuts those answers off with a 504. Nothing is lost when
-it does — the node finishes the gesture whatever happens to the connection,
-and both clients read an answer the engine did not write as one that never
-arrived, keeping the operation id to finish it with — but the operator then
-has to finish it to see what it did.
+Give that proxy at least **two minutes** of silence in either direction on
+the API port's REST and file routes. Requests to `/git/` on the same port
+have a sizing of their own, which can be longer — a cold cache sync before a
+request's first byte, sized by your largest repository, and three minutes for
+a push from a client that asks for no side-band — so give `/git/` its own
+location with what [The code host](#the-code-host) asks for. Nearly every
+other request is answered in well under a second; the slowest answer a REST
+or file route gives is a file upload whose object store fails or stops
+answering — about a minute and a half: a minute, then thirty seconds
+abandoning an upload made in parts (95 s measured against an S3 fake whose
+bucket hung the abandon too) — and the node stops reading the upload's body
+while it waits, so the silence runs both ways. nginx's `proxy_read_timeout`
+and `proxy_send_timeout`, both sixty seconds by default, each cut that answer
+to a `504`; the upload is not written either way, and the object the store
+may hold is collected a day later. A store that keeps throttling an upload
+holds it to the upload's own deadline — a throttle slows a request down and
+is never given up
+([Object store](../concepts/object-store.md#an-s3-bucket--s3)) — which a
+two-minute proxy also cuts: still not written, and the person uploads again.
+A node eviction or readmission ([Retention](retention.md#eviction)) may take
+up to fifty seconds — twenty to judge it and thirty to write every log — and
+`crewlet retention evict` and the dashboard's evict dialog both wait a minute
+for its answer; a proxy set below fifty cuts those answers off with a 504.
+Nothing is lost when it does — the node finishes the gesture whatever happens
+to the connection, and both clients read an answer the engine did not write
+as one that never arrived, keeping the operation id to finish it with — but
+the operator then has to finish it to see what it did. The one route whose
+work grows with what it reads — a check of a git node's copy of a repository
+(`POST /code/repos/{name}/verify`), about nine seconds a gigabyte — needs no
+longer timeout: it runs on the node's own time and answers within a quarter
+of a second — `200` with a small copy's report, `202` for a check still
+running — and a running check's outcome is read with
+`GET /code/repos/{name}/verify/{id}` until it ends
+([API reference](../reference/api-endpoints.md#post-codereposnameverify)).
 
 ### The room the stream's volume needs
 
-The engine keeps seven ordered logs on the stream: the tracker's mutation
-log, the vector changelog, the knowledge base's log, the identity estate's
-log, the usage log, the artifacts log and the artifact datastore's log. Each
-log's byte ceiling is **reserved** on the volume holding `stream.store_dir`
-when its stream is created: the embedded broker grants a ceiling in full, up
-front, or refuses to create the stream at all. Its limit is
+The engine keeps eight ordered logs on the stream: the tracker's mutation
+log, the vector changelog, the knowledge base's log, the code host's log, the
+identity estate's log, the usage log, the artifacts log and the artifact
+datastore's log. Each log's byte ceiling is **reserved** on the volume holding
+`stream.store_dir` when its stream is created: the embedded broker grants a
+ceiling in full, up front, or refuses to create the stream at all. Its limit is
 `stream.store_max_bytes` where you set one, and otherwise three quarters of
 that volume's free space.
 
-The node sizes the ceilings together to fit half of that limit. A log derived
-from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
-and a log whose own default is smaller than that is held at what it asked
-for, so a fresh node has a floor it cannot go below.
+The node sizes the ceilings together to fit five eighths of what that limit
+leaves once the object store's `nats` bucket (below) has its reservation. A log
+derived from the disk that would be scaled below 1 GiB is **held at 1 GiB**
+instead, and a log whose own default is smaller than that is held at what it
+asked for, so a fresh node has a floor it cannot go below.
 
 #### The minimum room for a fresh node
 
@@ -102,16 +126,17 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The knowledge base's log | 1 GiB | `stream.pages_log_max_bytes` |
 | The artifacts log | 1 GiB | `stream.artifacts_log_max_bytes` |
 | The artifact datastore's log | 1 GiB | `stream.artifact_data_log_max_bytes` |
+| The code host's log | 1 GiB | `stream.code_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
-| **The seven logs together** | **6.50 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.17 GiB at the minimum | `store.objects.nats_max_bytes` |
+| **The eight logs together** | **7.50 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.50 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **8.67 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **11.56 GiB
-free** on the volume holding `stream.store_dir` (about 12.4 GB). With the
+So the broker needs a limit of at least **10.00 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **13.33 GiB
+free** on the volume holding `stream.store_dir` (about 14.3 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 6.50 GiB alone needs 8.67 GiB free. These are the least that **boots**:
+logs' 7.50 GiB alone needs 10.00 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -124,7 +149,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **7.50 GiB**, which three quarters of **10.00 GiB free** reaches.
+  limit of **8.50 GiB**, which three quarters of **11.33 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
@@ -134,7 +159,7 @@ configuration reserves, split into the logs and the bucket.
   than the minimum for its configuration.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes` and
-`stream.usage_log_max_bytes` accept 64 MiB. The other five fields accept no
+`stream.usage_log_max_bytes` accept 64 MiB. The other six fields accept no
 less than 1 GiB, so setting them only moves the figure up.
 - **A floor is per log, not universal.** The identity estate's and the
   usage log's fields go down to 64 MiB, far below the others, because the
@@ -145,24 +170,38 @@ less than 1 GiB, so setting them only moves the figure up.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
   the knowledge base's log, the artifacts log and the artifact datastore's
-  log each for a quarter of the mutation log's, the identity
-  estate's log for a flat 512 MiB and the usage log for a flat 1 GiB — neither
-  of the last two is derived from the disk at all, because the identity log
-  grows with headcount and the usage log's size is a count of node-days rather
-  than a rate, so more disk buys either nothing. They are scaled down together
-  whenever they ask for more than half the free space, which on a first boot
-  is every volume with less than about 355 GiB free (at their clamps the seven
-  ask for about 177 GiB); from there up each log gets what it asked for.
+  log each for a quarter of the mutation log's, the code log for two thirds
+  of the mutation log's, the identity estate's log for a flat 512 MiB and the
+  usage log for a flat 1 GiB — neither of the last two is derived from the
+  disk at all, because the identity log grows with headcount and the usage
+  log's size is a count of node-days rather than a rate, so more disk buys
+  either nothing. They are scaled down together whenever they ask for more
+  than the logs' share — five eighths of what the broker's limit leaves once
+  the `nats` bucket has taken its quarter of it, about 35 % of the free space
+  on a first boot — which is every volume with less than about 626 GiB
+  free (with the mutation log at its 64 GiB clamp the eight ask for about
+  220 GiB: 64 + 64 + 16 + 16 + 16 + 42⅔ + 1 + ½); from there up each log gets
+  what it asked for.
+- **The code log's ask is paid whether or not anything pushes.** Below about
+  626 GiB free it comes out of the other logs' share: at 100 GiB free the
+  mutation log and the vector changelog are created at 9.9 GiB each rather
+  than 12.2, at 256 GiB at 25.9 rather than 32.2 — windows about a fifth
+  shorter for a blocked trim — and the knowledge base's, the artifacts and
+  the artifact datastore's logs by the same proportion. A company that hosts
+  no code and is short of room sets `stream.code_log_max_bytes: 1073741824`
+  before the first boot; the
+  [replication guide](replication.md#what-the-code-logs-reservation-costs)
+  has the table and what to do once the streams exist.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-  `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
-  `stream.iam_log_max_bytes` or
+  `stream.code_log_max_bytes`, `stream.artifacts_log_max_bytes`,
+  `stream.artifact_data_log_max_bytes`, `stream.iam_log_max_bytes` or
   `stream.usage_log_max_bytes` later, changes nothing about streams that
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
   version adds — is sized from what the existing logs' ceilings leave of that
-  half, so logs that already hold all of it leave it the 1 GiB floor.
+  share, so logs that already hold all of it leave it the 1 GiB floor.
 
 [Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
 arithmetic and the refusal's text.
@@ -402,7 +441,8 @@ hold no streams of their own, so both are refused a `store_dir`; see
 Every data node keeps the company's **identity estate** — its people, their
 credentials and sessions — on a state log, and a domain's log is a stream. With
 `tracker.backend: native` or `knowledge.backend: native` (the defaults), its
-work items and its pages are there too. An unset `store_dir` means the first restart recreates those logs
+work items and its pages are there too, and so are the pushes of a company
+that hosts its repositories in the engine (`code.native`). An unset `store_dir` means the first restart recreates those logs
 empty, and a node whose rows are ahead of a log that restarted from nothing
 stops serving for good. So the engine refuses to boot without one, and
 `crewlet validate` refuses it, naming `stream.store_dir`.
@@ -439,11 +479,11 @@ stream:
 
 It is measured once, at boot, on both paths: a volume that later grows or
 shrinks does not move the limit, and a node that should see a resized disk is
-restarted. Half of whatever is in force is what the state logs' derived
-ceilings may reserve between them; the other half is for the streams that
-reserve nothing and simply grow against it — the seats' mailboxes, the event
-log, the dead-letter stream, the memory changelog and every coordination
-bucket. A refusal names the ceiling that did not fit and the Tier A field
+restarted. Five eighths of whatever is in force is what the state logs'
+derived ceilings may reserve between them; the other three eighths are for the
+streams that reserve nothing and simply grow against it — the seats'
+mailboxes, the event log, the dead-letter stream, the memory changelog and
+every coordination bucket. A refusal names the ceiling that did not fit and the Tier A field
 that sets it on either topology; it adds the limit in force and what is already
 reserved only where this node can read them, which is the standalone one. On a
 fleet the room that refused is another member's disk, and no member can read
@@ -594,10 +634,10 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the seven state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the eight state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_ARTIFACTS_LOG`,
-`CREWLET_ARTIFACT_DATA_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`,
+`CREWLET_ARTIFACTS_LOG`, `CREWLET_ARTIFACT_DATA_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), the twenty-one `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -611,9 +651,13 @@ tries to create.
 **A coordination read costs one ordered pass certified against the stream's
 key index, and an account needs the consumer, stream-info, message-get and
 purge APIs.** A node lists coordination records constantly — several
-fifteen-second duty loops on every tick, and the state-log write fence, which
-lists the published trim floors on every write at an expectation of zero, a
-subject's first write among them. Each listing is one pass over a temporary
+fifteen-second duty loops on every tick, and an operator's gestures such as a
+readmission or the retention report once each — but no state-log read and no
+seat's write waits on a listing: the state-log write fence, which reads the
+published trim floor on every write at an expectation of zero, a subject's
+first write among them, reads its own domain's floor by its key, one
+`$JS.API.STREAM.MSG.GET` to the `positions` stream's leader, and creates no
+consumer. Each listing is one pass over a temporary
 consumer, which on a replicated bucket is two metadata-raft proposals, and
 beside it one stream-info request narrowed to the listing's keys, which names
 every key that has a message. A pass alone cannot tell that it is complete — a
@@ -728,10 +772,10 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The five state logs reserve their
-byte ceilings against the account's JetStream storage limit when their streams
-are created, and the node sizes them to half of what that limit has left. An
-untiered limit counts every replica, so a `replicas: 3` fleet needs three
+**And it needs room for the state logs.** Every state log reserves its byte
+ceiling against the account's JetStream storage limit when its stream is
+created, and the node sizes them to five eighths of what that limit has left.
+An untiered limit counts every replica, so a `replicas: 3` fleet needs three
 times the bytes; a tiered one needs its `R3` tier. An account that states no
 limit leaves the node nothing to size against but its own disk, and a server's
 own cap then refuses what does not fit, by name. See
@@ -742,9 +786,10 @@ own cap then refuses what does not fit, by name. See
 **A `max_payload` of at least 8 MiB, on every server.** That is the largest
 single message the engine sends — an event, a webhook delivery, a state-log
 record at the largest its log declares (the tracker's, the knowledge base's,
-the vector changelog's and the usage log's are 8 MiB less 4 KiB, which is
-8 MiB on the wire once the record is signed) — and the embedded broker is configured at exactly
-that; nats-server's own default is 1 MiB. Set `max_payload: 8MB` in the
+the vector changelog's, the usage log's and the code log's are 8 MiB less
+4 KiB, which is 8 MiB on the wire once the record is signed) — and the
+embedded broker is configured at exactly that; nats-server's own default is
+1 MiB. Set `max_payload: 8MB` in the
 configuration of every server in the cluster (nats-server reads `MB` as
 mebibytes, so that is exactly the 8388608 bytes the engine needs). A server
 holds a connection to the **lowest** of its own `max_payload` and the payload
@@ -829,8 +874,9 @@ of **zero** under its own source — `account_no_tier` or
 two carry the same number and the opposite instruction, since one clears by
 somebody freeing room and these only by a change of configuration. A tier
 declared **unlimited** is neither again: it states its limit as a negative, the
-broker creates against it, and the engine sizes from its own free disk as it
-does for any broker that states no limit.
+broker creates against it, and the engine sizes from three quarters of its own
+free disk, the cap a server running its defaults takes, as it does for any
+broker that states no limit.
 
 The broker refuses every stream, consumer and bucket create either way, but
 **not with the same words**, so the engine's own refusal carries the ones you
@@ -1108,7 +1154,7 @@ gesture; only the timing differs.
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/llm-backends.md#agent-mode), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
-Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain unless it is serving git (a git request already running is finished first; a new one is refused). So give such a pod a `preStop` sleep of a few seconds if you need its load balancer to have stopped sending it requests before the listener goes: Kubernetes takes a terminating pod out of its Service's endpoints as the hook begins, and sends the SIGTERM that starts the drain only once the hook has ended, so the sleep is the time that change has to reach every proxy in front of the pod. (A balancer that probes `/ready` itself sees the `503` only once the drain has begun, and acts on it after its own period and threshold.) For git the same window is the one the drain waits through: a git client sent to the pod once its drain has begun is refused at its first request and retries against a peer rather than being cut part way, but the upload `POST` of a fetch begun on a peer is served there, and waited for, for as long as such requests still arrive. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV on the
 same broker — never with each other. Both accept `-debug` for verbose
@@ -1178,8 +1224,11 @@ rather than letting it take the next one down too.
 Give every pod a `terminationGracePeriodSeconds` of at least its longest turn
 plus 60 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
 countdown before the hook runs, so the sleep is spent out of the same grace.
-The drain waits for the turns already running and has no bound of the engine's
-own, so the longest turn is the part of the grace it needs; what follows the
+The drain waits for the turns already running — and, on a pod that serves the
+engine's own git host, for the clones and pushes already running, which it
+finishes rather than cuts — and has no bound of the engine's own, so the
+longest turn (or the longest clone or push the pod should finish) is the part
+of the grace it needs; what follows the
 drain — giving its leases back, closing the HTTP listeners (five seconds each,
 which an open sandbox bridge session spends whole), flushing the auxiliary
 spend and the day's usage, closing the store — takes milliseconds on a healthy
@@ -1538,6 +1587,194 @@ Everything else is either:
 - **An external tool** — task state (Jira, GitLab issues)
 - **The event stream** — routing, with a durable per-subscription backlog
 
+## The code host
+
+A node with the `git` [role](../concepts/configuration.md#noderoles), for a
+company that sets [`code.native`](../concepts/code-host.md), serves the
+company's repositories on its API listener under `/git/`, from a disposable
+cache on its own disk. What such a node needs from its host:
+
+- **git 2.55 or newer on its `PATH`** — the node floor. The node runs the
+  host's own git as a subprocess per request and checks its version at boot:
+  an older one refuses the boot, naming the version and the path it found. The
+  code host's clients — a person's git, a CI runner's, a sandbox box's — need
+  only 2.40 or newer (the client floor). The published image does
+  not install Debian's git: it builds the newest git release from a pinned,
+  checksummed tarball ([`scripts/git-pin.env`](https://github.com/crewlet/crewlet/blob/main/scripts/git-pin.env)),
+  cross-compiled for each platform, with its HTTPS transport (libcurl, the
+  GnuTLS flavour Debian's own git uses) and zlib and nothing else — no
+  OpenSSL of its own (libcurl's own libssh2 and OpenLDAP still bring
+  OpenSSL 3, Debian's `libssl3t64`, into the image and into every
+  `git-remote-https`, as they do beside Debian's git), no PCRE
+  (`git grep -P`, `git log -P`) and no Perl, Python or Tcl programs
+  (`git send-email`, `git p4`, `gitk`). So a git security fix reaches a git
+  node only as an engine image built from a bumped pin — never as an update to
+  the base image's own packages — and the project checks the pin against
+  git's releases every week, verifying each release's signature, so the
+  engine release that carries a git fix is the one to take. It reads its
+  system configuration from `/etc/gitconfig` and `/etc/gitattributes`, where
+  Debian's git did, so an image you derive configures it there (`git var
+  GIT_CONFIG_SYSTEM` prints the path); the code host's own processes read
+  neither, whatever they hold. A local sandbox box
+  that runs as the engine (`run_in: direct`) on a node from that image runs this
+  git too, so a coding agent's `git grep -P` fails there; a `container` or
+  `e2b` box runs its own image's git. The node serves a clone with git's
+  single-pack reuse — the bitmap's preferred pack sent as it is stored, every
+  other object as git packs any object, a stored delta reused and a whole copy
+  searched for a delta — rather than multi-pack reuse, which every git
+  at the node floor could serve (2.44 to 2.47 sent a pack the client
+  refuses) but which costs a clone bytes: the cache keeps a pack a push, each
+  completed by receive-pack with whole copies of the objects the push's
+  deltas were made against, and multi-pack reuse sends as they are stored the
+  whole copies the multi-pack-index keeps — 8.5–9% more over a history of
+  pushes that add files and 48–57% more over one of pushes that edit them, for
+  more of the node's CPU too (measured over copies the cache made,
+  `internal/code/cache`'s `BenchmarkPackReuse`; the spread is which copy of
+  each edited object a copy's index happened to keep).
+- **A volume for `git.cache_dir`.** The cache holds every repository the node
+  serves, whole, and a cold sync writes everything it downloads at the speed
+  the object store delivers it — so a volume of its own is worth it: its own
+  filesystem with its own space, never a btrfs subvolume or a ZFS dataset
+  drawing on the store's pool, which shares that pool's space and is read as
+  shared. Its derived budget is then seven eighths of the volume (see
+  [`git`](../concepts/configuration.md#git)). On a volume it shares, the cache
+  first leaves an embedded broker storing its streams there everything that
+  broker may still write under its limit — three quarters of the volume's free
+  space unless `stream.store_max_bytes` says otherwise — and takes half of what
+  is left, so on the single-volume layout (the store, the streams and the cache
+  under one directory, as [the example](../getting-started/configuration.md)
+  has them) a first boot gives the cache an eighth of the free space, settling
+  near a fifth as the broker re-derives its own limit from what the cache has
+  since filled. Size for that, or set `stream.store_max_bytes` and
+  `git.cache_max_bytes` to divide the volume yourself; the node says what it
+  chose, and every figure it chose from, as `code_cache_sized`, at warning
+  level when the budget comes out under 1 GiB. Where the broker's claim and the
+  request spools (64 MiB for each of `git.max_transfers`) leave no room at all
+  — on that layout, a cold cache whose quarter of the free space is no more
+  than the spools, as under 16 GiB free on a sixteen-core node — the node
+  refuses to host code rather than fill the volume the store lives on, and the
+  error names the figures and each setting that gives the cache room. Behind
+  the serving, the node also reads every byte of each repository it serves
+  against its checksums — once after it restarts, then once a day while the
+  repository is used, one repository at a time — which is what finds a pack or
+  an index the disk damaged after it was written. It reads 1.13 times the
+  repository's pack bytes — about a second a gigabyte from the page cache, and
+  at the volume's own throughput read cold — so for 1 TB of packs all used
+  every day, at most 2.5 hours of a gp3 volume's 125 MB/s baseline a day
+  (10.5% of it) for the share read cold, and nothing for a repository nobody
+  reads. It is
+  never backed up, and a backup tool of your own skips it with
+  `--exclude-caches`.
+- **A writable `$TMPDIR` short enough for a socket.** Every push's git hands its
+  ref updates back to the engine over a unix socket made under `$TMPDIR`, whose
+  path is held to 100 bytes (darwin takes 104, Linux 108): a node whose
+  `$TMPDIR` is longer refuses to start the host, and says to set a shorter one.
+  The engine passes the socket's path and a one-time token to the hook as
+  `CREWLET_HOOK_SOCKET` and `CREWLET_HOOK_TOKEN`
+  ([Environment variables](../reference/environment-variables.md#set-by-the-engine-never-by-you)).
+- **A balancer that does not cut a quiet git request.** git keeps a transfer
+  alive by itself while `upload-pack` counts, and the engine writes a
+  keepalive every 5 s on a push from its hook onward — so an idle timeout of a
+  minute or more on `/git/` is enough for both. Neither keepalive covers the
+  silence **before a request's first byte**, which has two parts. The first is
+  a cache sync: warm, a few
+  milliseconds; on a node that has never served the repository, or whose budget
+  evicted it, a **cold** sync downloads one object for every push the
+  repository ever took (about 70 to 130 s at 10 000 pushes from S3, which
+  answers each request in about 100 to 200 ms). The first sync of each
+  repository after the node restarts also holds that repository's index files
+  — about a quarter of its pack bytes — to their checksums before it answers:
+  0.2 s a gigabyte of packs from the page cache, and at the volume's own
+  throughput read cold — 39 s for the largest repository the defaults admit
+  (20 GiB) at a gp3 volume's 125 MB/s baseline, shorter in proportion on a
+  volume provisioned faster. The second is the hold on a
+  fetch's answer until its pack begins: the host holds upload-pack's answer so
+  that a cache its `pack-objects` finds damaged can be repaired and the fetch
+  served, rather than failing it past the first byte. For a client using
+  side-band (every git since 1.6) that wait is at most a progress line (about a
+  second) or one upload-pack keepalive (5 s) — pack-objects' first word, unless
+  that word is an error it reports, which holds the answer until the process
+  ends — and a client that asks for no side-band waits until the raw pack's
+  first byte.
+  Either size the idle timeout to the cold sync of your largest repository, or
+  route `/git/<name>` by repository — a balancer hashing the path to a node,
+  with the next one in line when it is down — so each repository stays warm on
+  one or two nodes. Routing by repository is never required for correctness.
+  A fetch large enough to spool — a partial clone's checkout asking for more
+  than a mebibyte of objects — that finds the node's room for such requests in
+  use is silent too: it waits up to 55 s for its turn, a keepalive interval
+  inside the minute, and is answered 503 if its turn has not come, so an idle
+  timeout of a minute lets the node's own answer through rather than cutting
+  the request with the balancer's.
+  A client that does not ask for side-band (every git since 1.6 asks, so this
+  is a hand-built client) hears nothing during a push from the end of its
+  upload to its report: git's own keepalive (`receive.keepAlive`) and the
+  engine's travel in side-band only. That stretch is receive-pack indexing and
+  checking the pack, then the engine scanning it, storing it, proposing the
+  push and waiting for its row. For such clients keep the idle timeout at 3
+  minutes or more, whatever the push's size: the proposal is given two minutes
+  — a minute's write attempt at the repository's committer and another at its
+  runner-up, should the committer stop answering — and a row that resolved
+  pending a minute more. A large push adds what its pack's own work may take
+  before the engine gives it up: 10 s and a second a mebibyte for git's
+  indexing and for each of the engine's three scans of the pack, and a minute
+  and 30 s a mebibyte (the floor every transfer is held to) for the object
+  store's put — about 34 s a mebibyte in all. A push into a large repository
+  adds what walking its history may take: a commit dated before its parent —
+  a clock that is behind — walks every commit of the repository in
+  receive-pack's own connectivity check, and, until the node has written the
+  repository's commit-graph, in each of the engine's listings and each branch
+  update's force check too, and each such walk is given 11 µs an object of the
+  repository: 33 s at three million objects, a gigabyte of source history,
+  which such a walk takes about two and a half seconds to finish.
+- **A token for each CI runner.** A fetch large enough to spool — a blobless
+  checkout's lazy fetch, past a mebibyte of wants — holds its room from its
+  first spooled byte until git has read it and started answering, its sync
+  included, and one credential's may hold a quarter of the node's room at
+  once: 256 MiB on a four-core node, each up to 64 MiB, about 1.3 million
+  objects. Fetches past that quarter wait their turn behind the token's own,
+  up to 55 s each, and a lane's width of git transfer slots of them may wait
+  at once — 16 on a four-core node, past which the excess is answered 503 at
+  once. How long they wait is how long the ones ahead of them hold their
+  room: a moment on a node that holds the repository, and the cold sync above
+  on one that does not — longer than the wait, which stays 55 s whatever idle
+  timeout the balancer is given, so on a cold node the fetches past a token's
+  quarter are answered 503, and git does not retry a lazy fetch, so those
+  checkouts fail. N runners behind one token, each asking for
+  B bytes at once, meet that once N × B passes the quarter: thirteen lazy
+  fetches of 20 MB fill a four-core node's 256 MiB, and the fourteenth and
+  every one after it fail on a cold sync. Give each runner a token of its
+  own, and the limit is the node's whole room — fifty-three such fetches on a
+  four-core node's gibibyte, which a cold sync can fill too; routing by
+  repository, above, keeps the syncs warm. A fetch whose body is still
+  arriving holds no turn: it holds what its client has sent, and the node
+  keeps one fetch's 64 MiB free of those behind the oldest still arriving, so
+  a slow client holds others up only once the fetches arriving hold all but
+  that of the room — 960 MiB of a four-core node's gibibyte, 192 MiB of a
+  token's quarter. `crewlet.code.host.spool.waits` by `outcome` shows the
+  waiting ([Metrics](../reference/metrics.md)), and a
+  `code_fetch_spool_unserved` line names the token behind any that was not
+  served and what held it back — git itself prints only
+  `error: RPC failed; HTTP 503`.
+- **Memory for its transfers, cores for its reads.** Each clone, fetch or push
+  holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
+  240 bytes for every object of a repository it clones whole) and a core only
+  now and then, so `git.max_transfers` defaults to four a core and no more than
+  one for every 512 MiB of the node's memory; reads and background indexing
+  take a core each, `git.max_processes` of them. `crewlet.code.git.wait` by
+  `class` is the signal: a `transfer` wait climbing is a node serving as many
+  transfers as its memory backs, a `read` wait one out of cores
+  ([Metrics](../reference/metrics.md)). `crewlet.code.git.cpu` by `class` is
+  what each lane's work costs — every git process's CPU, its children's
+  included, counted whole as the process ends. A clone can run for hours and
+  a background index for a quarter of an hour, each landing in the minute it
+  ends in, so read its sum over hours, as the cost of a lane's work, and
+  never as how busy the node is now: that is the container's own CPU usage.
+  A transfer lane full while the node's CPU is low is transfers waiting on
+  something other than cores — clients slow to read, pushes waiting on the
+  code log or the object store — and one full with the CPU high is a node
+  short of cores.
+
 ---
 
 ## Observability
@@ -1663,6 +1900,7 @@ decision as a value, so the rule below can be checked rather than remembered.
 | `a2a_message` | Already recorded | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `sandbox_answer_given` | Already recorded | The wake an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's inbox, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row — same reason as `a2a_request`. |
 | `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
+| `operator_tools_changed` | Already recorded | A **nudge** between nodes that what one node's [operator catalogue](../reference/api-endpoints.md#operatormcp--your-own-assistant) is built from changed, so every node tells the MCP clients listening on it to list their tools again — the listing may reach any node, and the last nudge follows the last node's change. The apply that moved the catalogue is **already** a row (`config_revision_applied`), so a durable row per node per change would record one revision once more per member of the fleet. |
 | `reflection_due` | Already recorded | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
 | `custody_batch` | Already recorded | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
 | `budget_meters` | Periodic snapshot | A **snapshot** of the shared token counters, published by every node on a 15-second tick and at once when a budget window first refuses a charge, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
@@ -2213,7 +2451,8 @@ crewlet budgets show      # the durable counters, read from a running node
 It talks to a node rather than to a file: the counters are the fleet's, and on
 the default topology they live inside the running engine. `-url` names another
 node, and without it the address is taken from the `api` block of the config
-on the command line; the credential is `CREWLET_API_TOKEN`, never a flag.
+on the command line, which is not read at all when `-url` is given; the
+credential is `CREWLET_API_TOKEN`, never a flag.
 There is no reset command: a window's allowance comes back when the window
 turns over.
 
@@ -2247,9 +2486,12 @@ the turn's own `agent_turn_completed`. The refused round is **counted all the
 same**, on the seat's counter and the company's, because the vendor has
 already billed it: the refusing window reads past its ceiling by the round that
 crossed it, and every later round is refused against that figure until the
-window turns over or the ceiling is raised. Each scope's check is atomic, and
-nothing a charge counted is taken back: a seat write that fails after the
-company's landed stops the round as an outage and leaves it on the company,
+window turns over or the ceiling is raised. Each scope's check is atomic — and
+a node's charges on one counter are one write, decided in the order they
+arrived, so the company's counter is contended by the nodes charging it rather
+than by every round in flight — and nothing a charge counted is taken back: a
+seat write that fails after the company's landed stops the round as an outage
+and leaves it on the company,
 whose record of a billed round is true, so only that seat's own counter is
 short of it — logged as `coord_kv_budget_spend_uncounted` — until the window
 turns over. In a fleet the counters live in the coordination

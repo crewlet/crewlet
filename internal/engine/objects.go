@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,29 @@ import (
 // COLLECTOR — deleting what no row names, and auditing what the backend has
 // lost — which needs the replicated estate, so it runs on a data node, as a
 // fleet duty ([objectCollectorDuty]).
+//
+// # A pass keeps the duty it runs under
+//
+// The duty's turn — the read of the fleet's record when the duty has just been
+// taken, and the pass — runs on a KEPT duty ([dutyRenewal.keep]): the lease is
+// renewed four times a [collectorDutyTTL], every 45 seconds, for as long as the
+// pass runs, so a pass may outlive any number of leases. It is stopped the
+// moment a renewal answers that another node holds the duty, and once no
+// renewal has confirmed it for two and a quarter minutes — the lease less one
+// renewal, the longest no other node can have claimed it — while a renewal the
+// store refuses, or holds on to while its leader moves, costs it nothing: the
+// call gives up within one renewal, and the next is asked inside the window.
+//
+// Renewed only between passes, as it was, the lease lapsed under any pass
+// longer than it: an audit asks the store about every object a live row
+// names, which at a large company's two million objects is longer than any
+// lease a dead holder should be allowed to keep the duty dark for. A peer took
+// the duty mid-pass and ran its own beside it, and both wrote the fleet's ONE
+// record of the collector (coord's ObjectStores.RecordObjectCollection), whose
+// contract is one writer at a time — the older pass's report, written last,
+// replacing the new holder's. So a pass that ends without the duty, or unable
+// to say it still holds it, RECORDS NOTHING: the node that holds the duty
+// records its own.
 
 // objectStore is this node's part in the object store.
 type objectStore struct {
@@ -82,19 +106,22 @@ const collectorPoll = time.Minute
 // collectorDutyTTL is how long the duty outlives a holder that stopped
 // renewing it.
 //
-// TEN MINUTES, ten polls rather than the three every other singleton uses: the
-// lease is renewed between passes, never during one, and a collection lists
-// the whole store — a pass that outlived a three-poll lease would hand the
-// duty to a peer mid-pass. Two collectors at once are safe — a deletion needs
-// no lock (ADR-0027), and deleting what the other already deleted is not an
-// error — and only wasteful; ten minutes is what a listing of a few million
-// objects takes, and a dead holder costs no more than ten minutes of a pass
-// that is due hourly.
-const collectorDutyTTL = 10 * collectorPoll
+// THREE POLLS, the ratio every other singleton here keeps: one missed claim
+// must not hand the duty to a peer. It no longer has to outlive a PASS, which
+// renews it as it runs ([collectorDuty.renewal]). Sized to outlive one, it was
+// ten minutes, and an audit of a large store outlived that many times over: a
+// peer took the duty mid-audit, ran its own beside it, and the two wrote the
+// fleet's one record in turn. What it bounds now is how long the duty stays
+// dark after its holder dies — three minutes, against a collection due hourly.
+const collectorDutyTTL = 3 * collectorPoll
 
 // collectorDuty is what the collector's duty remembers between turns.
 type collectorDuty struct {
 	collector *collect.Collector
+
+	// renewal is how a turn keeps the duty while it runs: renewed four times
+	// a [collectorDutyTTL], on a test's own clock in the tests.
+	renewal dutyRenewal
 
 	// mu guards the schedule, which only the loop writes and the alarm
 	// tick reads.
@@ -113,6 +140,45 @@ type collectorDuty struct {
 	// zero until the holder has read one and on a backend with no
 	// reservation (an S3 bucket).
 	usage objstore.Usage
+
+	// decidesFrom is every domain whose rows name the objects it collects
+	// and audits ([copiesNamedBy]); declines is whether this node is
+	// declining the duty because its copy of one is out of service, and
+	// giveBack gives the duty back where it holds it on a turn that does
+	// ([Engine.workerGiveBack]) — nil holds no lease to give.
+	decidesFrom []string
+	declines    dutyDecline
+	giveBack    func(context.Context) (bool, error)
+}
+
+// copiesNamedBy is every domain whose rows refs reads — the domains a declared
+// table names an object in — once each, in refs' order: what the collector
+// decides from, read off the references it was built with so no list beside
+// them can drift from what it reads.
+func copiesNamedBy(refs collect.References) []string {
+	var out []string
+	for _, src := range refs {
+		if !slices.Contains(out, src.Name()) {
+			out = append(out, src.Name())
+		}
+	}
+	return out
+}
+
+// newCollectorDuty is the duty's state over c, renewed on the system's clock,
+// deciding from the domains named and giving the duty back through giveBack
+// when it declines — nil where there is no lease to give back.
+//
+// ITS RENEWALS ASK NO DECLINE: unlike the embedding duty's training, a pass
+// reads the rows that name objects through the read authority, which refuses a
+// copy out of service ([dutyDecline]), so a pass whose copy goes wrong under it
+// stops at its next read on its own, and the next turn declines.
+func newCollectorDuty(c *collect.Collector, decidesFrom []string,
+	giveBack func(context.Context) (bool, error)) *collectorDuty {
+
+	return &collectorDuty{collector: c,
+		renewal:     newDutyRenewal(objectCollectorDuty, collectorDutyTTL),
+		decidesFrom: decidesFrom, giveBack: giveBack}
 }
 
 // collectionReport is what the collector's duty records in the coordination
@@ -141,7 +207,7 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	if err != nil {
 		return fmt.Errorf("engine: the object collector: %w", err)
 	}
-	duty := &collectorDuty{collector: c}
+	duty := newCollectorDuty(c, copiesNamedBy(refs), e.workerGiveBack(objectCollectorDuty))
 	o.duty.Store(duty)
 	claim := e.workerDuty(objectCollectorDuty, collectorDutyTTL)
 	o.collector = startLoop(ctx, sleep, func(ctx context.Context) time.Duration {
@@ -151,57 +217,127 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	return nil
 }
 
-// collectorTurn is one turn of the duty: claim it, and run whichever pass is
-// due.
+// collectorTurn is one turn of the duty: claim it, keep it while whichever
+// pass is due runs, and record what the pass found if the duty is still this
+// node's when it ends.
+//
+// DECLINED FIRST, before the claim, while this node's copy of a domain whose
+// rows name objects is out of service ([dutyDecline]) — given back if this
+// node holds it, and otherwise declined as an unanswered claim is: the node
+// runs no pass, keeps what it believed, and forgets the resume, since another
+// node may take the duty and record a newer pass meanwhile ([collectorDuty.settle]).
 func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) (bool, error),
 	duty *collectorDuty) {
 
-	mine := claim == nil // a node with nobody to claim from runs it alone
-	if claim != nil {
-		held, err := claim(ctx)
-		if err != nil {
-			// UNKNOWN IS NEITHER: a claim that could not be answered
-			// says nothing about who holds the duty, so this node runs
-			// no pass — it cannot say the duty is its own — and keeps
-			// whatever it believed before, the alarm its last audit
-			// raised included. Read as "not mine", a two-second store
-			// blip would clear an alarm about lost files on the one
-			// node reporting it.
-			//
-			// BUT IT FORGETS THE RESUME. While nobody can say who holds
-			// the duty, another node may take it and record a newer
-			// pass — an audit that found files lost — so the next claim
-			// that answers held reads the fleet's record again rather
-			// than run from this node's own, older status and write
-			// those findings out of the record. Resuming twice costs a
-			// read: Restore keeps the newer of each half.
-			duty.mu.Lock()
-			duty.resumed = false
-			duty.mu.Unlock()
-			if ctx.Err() == nil {
-				log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
-			}
+	if _, out := duty.declines.check(ctx, collectorDecline, e.copyOutOfService,
+		duty.decidesFrom); out {
+		// A NODE THAT GAVE THE DUTY BACK IS NO LONGER ITS HOLDER, and
+		// lets go of what only the holder reports — the bucket's gauges,
+		// its near-ceiling alarm and the missing count — exactly as a
+		// claim that answered "not held" does ([Engine.settleCollector]):
+		// kept, they went on describing the bucket from a node that had
+		// stopped reading it, beside the node that took the duty over.
+		// A give-back the store did not answer settles nothing, as an
+		// unknown claim does; it only forgets the resume, since the next
+		// holder may record a newer pass meanwhile.
+		if duty.declines.giveBack(ctx, collectorDecline, duty.giveBack) {
+			e.settleCollector(duty, false, nil)
 			return
 		}
-		mine = held
-	}
-	duty.mu.Lock()
-	duty.holding = mine
-	if !mine {
+		duty.mu.Lock()
 		duty.resumed = false
-		duty.usage = objstore.Usage{}
-	}
-	resume := mine && !duty.resumed
-	duty.mu.Unlock()
-	if !mine {
-		e.unsetObjectsUsage()
+		duty.mu.Unlock()
 		return
 	}
-	if resume {
-		e.resumeCollector(ctx, duty)
+	asked := duty.renewal.clock.Now() // BEFORE the claim: what it confirms runs from here
+	held, err := true, error(nil)     // a node with nobody to claim from runs it alone
+	if claim != nil {
+		held, err = claim(ctx)
 	}
+	mine, resume := e.settleCollector(duty, held, err)
+	if err != nil && ctx.Err() == nil {
+		log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
+	}
+	if !mine {
+		return
+	}
+	// THE BUCKET'S USAGE ON EVERY TURN OF THE HOLDER, before whichever pass
+	// is due, so a pass that runs for hours does not hold the gauges and the
+	// near-ceiling alarm at the reading before it.
 	e.sampleObjectsUsage(ctx, duty)
+	// FROM HERE THE TURN KEEPS THE DUTY AS IT GOES — the resume's read and
+	// the pass alike — so a pass may outlive any number of leases
+	// ([dutyRenewal.keep]), and is stopped once the duty is not this node's.
+	work, kept := duty.renewal.keep(ctx, claim, asked)
+	ran := e.collectorPass(work, duty, resume)
+	held, err = kept.Stop()
+	// A PASS THAT ENDED WITHOUT THE DUTY RECORDS NOTHING: the fleet's record
+	// has one writer at a time, and a node that lost the duty — or cannot say
+	// it still holds it — writing its report would replace the holder's.
+	// Settled by the same rule as the claim, so the two answers cannot be
+	// read differently.
+	mine, _ = e.settleCollector(duty, held, err)
+	if !mine || !ran || ctx.Err() != nil {
+		return
+	}
+	e.recordCollection(ctx, duty)
+}
 
+// settleCollector settles an answer about the duty ([collectorDuty.settle])
+// and, where the answer is that this node does NOT hold it, withdraws the
+// bucket's gauges from this node ([Engine.unsetObjectsUsage]), so two nodes
+// never report the one bucket. An unknown answer keeps them, as it keeps the
+// alarm: it says nothing about who holds the duty.
+func (e *Engine) settleCollector(duty *collectorDuty, held bool, err error) (mine, resume bool) {
+	mine, resume = duty.settle(held, err)
+	if !mine && err == nil {
+		e.unsetObjectsUsage()
+	}
+	return mine, resume
+}
+
+// settle applies an answer to "does this node hold the duty?" — the claim at
+// the top of a turn, or what a pass's renewals concluded as it ended — to what
+// the duty remembers, and reports whether this node may act as its holder, and
+// whether it has to read the fleet's record first. THREE-VALUED (ADR-0005):
+// held holds; not held lets the duty and its alarm go; unknown keeps both.
+func (d *collectorDuty) settle(held bool, err error) (mine, resume bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err != nil {
+		// UNKNOWN IS NEITHER: an answer the store could not give says
+		// nothing about who holds the duty, so this node acts as no
+		// holder — it cannot say the duty is its own — and keeps whatever
+		// it believed before, the alarm its last audit raised included.
+		// Read as "not mine", a two-second store blip would clear an
+		// alarm about lost files on the one node reporting it.
+		//
+		// BUT IT FORGETS THE RESUME. While nobody can say who holds the
+		// duty, another node may take it and record a newer pass — an
+		// audit that found files lost — so the next claim that answers
+		// held reads the fleet's record again rather than run from this
+		// node's own, older status and write those findings out of the
+		// record. Resuming twice costs a read: Restore keeps the newer of
+		// each half.
+		d.resumed = false
+		return false, false
+	}
+	d.holding = held
+	if !held {
+		d.resumed = false
+		d.usage = objstore.Usage{}
+		return false, false
+	}
+	return true, !d.resumed
+}
+
+// collectorPass reads the fleet's record first if the turn has to, runs
+// whichever pass is due, and reports whether one ran — none on a turn whose
+// read of the record the store did not answer ([Engine.resumeCollector]).
+func (e *Engine) collectorPass(ctx context.Context, duty *collectorDuty, resume bool) bool {
+	if resume && !e.resumeCollector(ctx, duty) {
+		return false
+	}
 	now := time.Now()
 	duty.mu.Lock()
 	collectDue := now.Sub(duty.collected) >= collect.CollectInterval
@@ -215,11 +351,9 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 		_, err := duty.collector.Audit(ctx)
 		duty.ran(&duty.audited, collect.AuditInterval, err)
 	default:
-		return
+		return false
 	}
-	if ctx.Err() == nil {
-		e.recordCollection(ctx, duty)
-	}
+	return true
 }
 
 // sampleObjectsUsage reads how much of the bucket's reservation its objects
@@ -285,17 +419,46 @@ func (d *collectorDuty) ran(last *time.Time, interval time.Duration, err error) 
 // resumeCollector picks the schedule and the findings up from the fleet's
 // record when this node takes the duty, so a duty that moved does not run every
 // pass again at once — the record says when its last holder ran each — and
-// does not forget what the last audit found.
-func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
-	raw, found, err := e.backends.Fleet.ObjectCollection(ctx)
-	var last collectionReport
-	if err == nil && found {
-		err = json.Unmarshal(raw, &last)
-	}
-	if err != nil {
-		// RUN THE PASSES rather than wait on a record that cannot be read:
-		// the cost is a pass run early, never one skipped.
-		log.WarnContext(ctx, "object_collector_schedule_unread", "error", err)
+// does not forget what the last audit found. It reports whether it read the
+// record: false when the store did not give it up, and the turn then runs no
+// pass.
+//
+// ONLY A RECORD OF THIS STORE, read whole ([Backends.ObjectCollection]): a
+// report of another store — left behind by a move of the fleet's files — is
+// none, and both passes are due at once, as on a fleet that never recorded
+// one.
+//
+// AND NO PASS UNTIL THE STORE HAS ANSWERED. A record the store did not give
+// up — the objects bucket's leader moving, a blip — is UNKNOWN (ADR-0005),
+// and says nothing about what the last holder found: run from nothing, the
+// turn collected at once and recorded a status with no audit half, writing
+// the last holder's findings out of the fleet's record and clearing
+// objects_missing until a whole audit of the store found them again, a day
+// later. So the turn runs no pass and records nothing, the resume stays owed,
+// and the next turn — a minute later — reads again, as an unknown claim is
+// settled ([collectorDuty.settle]). A record that DOES NOT DECODE is an
+// answer, and the passes run from nothing over it: waiting on a record that
+// will never decode would skip every pass, where running from nothing costs a
+// pass run early.
+func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) bool {
+	last, found, err := e.backends.ObjectCollection(ctx)
+	switch {
+	case errors.Is(err, errCollectionUnreadable):
+		log.WarnContext(ctx, "object_collector_schedule_unread", "error", err,
+			"detail", "the collector's record does not decode, so this store is "+
+				"collected and audited now and the record replaced")
+	case err != nil:
+		if ctx.Err() == nil {
+			log.WarnContext(ctx, "object_collector_schedule_unanswered", "error", err,
+				"detail", "no pass runs until the fleet's record of the collector is "+
+					"read; the duty's next turn asks again")
+		}
+		return false
+	case !found:
+		log.InfoContext(ctx, "object_collector_nothing_to_resume",
+			"store", e.backends.objectsIdentity,
+			"detail", "the fleet holds no report of this store's passes — a new fleet, "+
+				"or one whose files moved here — so it is collected and audited now")
 	}
 	// THE FINDINGS AS WELL AS THE SCHEDULE: the next pass this node records
 	// carries its other half from here, and seeded with nothing it would
@@ -311,6 +474,7 @@ func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
 	if last.Status.Audit.At.After(duty.audited) {
 		duty.audited = last.Status.Audit.At
 	}
+	return true
 }
 
 // recordCollection writes the collector's status where every node reads it.
@@ -330,8 +494,12 @@ func (e *Engine) recordCollection(ctx context.Context, duty *collectorDuty) {
 // stopObjectCollector ends the collector's duty for good, waiting out a pass
 // in flight. Nil-safe.
 //
-// BEFORE [Engine.releaseDuties], with every other loop that claims a duty: a
-// loop still running past the release takes the duty straight back.
+// BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
+// loop that appends to a log: every pass pins the estate with a barrier, and
+// one still running once the admission is gone appends where a capacity
+// coordinator may already be sealing. And so before [Engine.releaseDuties],
+// which follows the withdrawal, as every loop that claims a duty is: one
+// still running past the release takes the duty straight back.
 func (e *Engine) stopObjectCollector() {
 	o := e.objects
 	if o == nil {
@@ -348,8 +516,8 @@ func (e *Engine) stopObjectCollector() {
 }
 
 // objectsReading fills the object store's half of an alarm reading: the
-// bucket's usage against its reservation, and the files
-// the collector's last audit to run to its end found missing or damaged — on
+// bucket's usage against its reservation, and the files the collector's last
+// audit to run to its end found missing, damaged or unanswered — on
 // the node holding the collector's duty, and nothing on any other, since the
 // store is one the whole fleet shares and one node's count of it is the
 // fleet's. FROM THE FINDINGS, never the last attempt: an audit that failed
@@ -372,7 +540,7 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 	}
 	out.ObjectsBucketBytes, out.ObjectsBucketMaxBytes = usage.Bytes, usage.MaxBytes
 	if found := duty.collector.Status().Audit.Found; found != nil {
-		out.ObjectsMissing = found.Missing + found.Damaged
+		out.ObjectsMissing = found.Lost()
 	}
 }
 
@@ -403,8 +571,8 @@ var pinnedDomains = sync.OnceValue(func() map[string]bool {
 var errNoObjectStore = errors.New("engine: this node runs no object store")
 
 // OpenObject streams one object back, checked against the row that names it
-// ([objstore.Store.Open]) — the backup's read, which copies every object its
-// copy of the estate names.
+// ([objstore.Store.Open]) — the backup's read, which copies every object a
+// required table of its copy of the estate names.
 func (e *Engine) OpenObject(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
 	if e.objects == nil {
 		return nil, errNoObjectStore
@@ -465,18 +633,56 @@ func (e *Engine) ObjectsStream() string {
 	return e.backends.objectsStream
 }
 
-// ObjectCollection is the collector's last report as the fleet recorded it,
-// for the status surfaces — false when no pass has recorded one.
-func ObjectCollection(ctx context.Context, fleet CollectionRecords) (CollectionReport, bool, error) {
-	raw, found, err := fleet.ObjectCollection(ctx)
+// errCollectionUnreadable is a record of the collector that the store gave up
+// and that does not decode — an ANSWER, unlike a store that did not give the
+// record up at all, and the duty treats the two apart
+// ([Engine.resumeCollector]).
+var errCollectionUnreadable = errors.New("engine: the object collection record is unreadable")
+
+// ObjectCollection is the collector's last report on store, the object store
+// identity a node agreed with the fleet at boot ([openObjects]), as the fleet
+// recorded it — false when no pass on that store has recorded one. It is the
+// record's ONE reader: a node taking the collector's duty resumes from it
+// ([Engine.resumeCollector]) and the status surfaces render it, both through
+// [Backends.ObjectCollection], so the rules below cannot hold for one and not
+// the other.
+//
+// A REPORT OF ANOTHER STORE IS NONE. The record names the store its passes
+// ran on, and it outlives a change of store: a move deletes the backend record
+// beside it and leaves the report, and a restore into a new bucket may bring
+// the bucket back. Resumed, another store's report put the new store's first
+// audit — the one check that its copy is whole — up to a day away, raised the
+// old store's lost files as the new one's, and was written back at the next
+// pass under the new store's name; rendered, it showed every node's /fleet and
+// `crewlet objects status` the OLD store as the one the files are in, with the
+// old store's audit and lost files, until the new store's first pass recorded
+// — and for as long as no data node took the duty. So it answers as a fleet
+// whose collector never reported.
+//
+// READ WHOLE OR NOT AT ALL: JSON fills every field it can before it reports
+// one it could not, so a record that fails to decode answers nothing of it —
+// a partly decoded one would put a pass off on the strength of a timestamp
+// beside a field nobody could read.
+func ObjectCollection(ctx context.Context, records CollectionRecords, store string) (CollectionReport, bool, error) {
+	raw, found, err := records.ObjectCollection(ctx)
 	if err != nil || !found {
 		return CollectionReport{}, false, err
 	}
 	var r collectionReport
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return CollectionReport{}, false, fmt.Errorf("engine: the object collection record is unreadable: %w", err)
+		return CollectionReport{}, false, fmt.Errorf("%w: %w", errCollectionUnreadable, err)
+	}
+	if r.Backend != store {
+		return CollectionReport{}, false, nil
 	}
 	return CollectionReport(r), true, nil
+}
+
+// ObjectCollection is the collector's last report on the object store this
+// node agreed with the fleet at boot — [ObjectCollection] over this node's
+// fleet store and its identity, which only [OpenBackends] knows.
+func (b *Backends) ObjectCollection(ctx context.Context) (CollectionReport, bool, error) {
+	return ObjectCollection(ctx, b.Fleet, b.objectsIdentity)
 }
 
 // CollectionRecords is where the collector's reports are recorded — the

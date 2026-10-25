@@ -166,7 +166,7 @@ describe("outside the chart", () => {
     doc.units![0]!.roles![1] = {
       name: "Dev",
       integrations: {
-        github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
+        github: { app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
         mattermost: { bot_token: "${DEV_MM_TOKEN}", username: "dev-bot" },
       },
       mcp_env: {

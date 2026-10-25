@@ -16,7 +16,8 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 )
 
-// MCPPath is the route the MCP transport is mounted at.
+// MCPPath is the path the MCP transport is served at — the address an
+// assistant is configured with. [MCPPattern] is the route mounted at it.
 //
 // UNDER ITS OWN PREFIX rather than under /mcp/, which the auth package exempts
 // wholesale for the sandbox bridge — mounting here would have put a writable
@@ -24,6 +25,18 @@ import (
 // bridge's own `/mcp/{token}` pattern would have made which one answered a
 // question of registration order.
 const MCPPath = "/operator/mcp"
+
+// MCPPattern is the route the MCP transport is mounted at, on [MCPPath]: a
+// POST, because a transport that keeps no session has nothing for the other
+// two verbs of streamable HTTP to do (see [Server.MCPHandler]). A GET, which asks for
+// a server-to-client stream, and a DELETE, which ends a session, are answered
+// the mux's own 405 naming POST — the answer MCP's streamable-HTTP transport
+// gives a client for "this server offers no stream", and one carrying a code
+// like every other refusal this engine writes. A client of the 2026-07-28
+// protocol opens its stream as a POST instead — `subscriptions/listen`, held
+// open until the client or the node ends it — and that is the one way this
+// transport reaches a client between its requests ([Listeners]).
+const MCPPattern = "POST " + MCPPath
 
 // serverName is what an MCP client lists this server as.
 const serverName = "crewlet-operator"
@@ -33,7 +46,8 @@ const serverName = "crewlet-operator"
 //
 // BUILT FOR THE REQUEST, from the catalogue the request found: the transport
 // is stateless ([Server.MCPHandler]), so there is no session a server built
-// once would serve and nothing a rebuilt one strands.
+// once would serve and nothing a later one strands — save the stream a
+// listening client holds, which the node's one registry keeps ([Listeners]).
 func (s *Server) mcpServer(cat catalogue) *mcp.Server {
 	title := "Crewlet"
 	if name := strings.TrimSpace(cat.company); name != "" {
@@ -42,6 +56,11 @@ func (s *Server) mcpServer(cat catalogue) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name: serverName, Title: title, Version: "1",
 	}, nil)
+	// EVERY CALL'S SERVER KEEPS ITS LISTEN STREAMS IN THE NODE'S ONE
+	// REGISTRY, so an announcement that the node's tools changed reaches
+	// a stream held open on a catalogue no later call reads ([Listeners]).
+	srv.AddReceivingMiddleware(s.listeners.receiving)
+	srv.AddSendingMiddleware(s.listeners.sending)
 	for _, tool := range cat.tools {
 		srv.AddTool(&mcp.Tool{
 			Name:        tool.Name(),
@@ -103,7 +122,7 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 	}
 }
 
-// MCPHandler serves the MCP transport at [MCPPath].
+// MCPHandler serves the MCP transport at [MCPPattern].
 //
 // # STATELESS, so every call is decided by the request that carries it
 //
@@ -121,8 +140,16 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 // request's own context, so the guard's resolution of each request is the
 // resolution its tool call is decided on, and there is no session for a second
 // credential to ride. Nothing this surface serves needed the state: its
-// catalogue is read for each request, so there is no list-changed
-// notification to push, and no tool here asks the client anything back.
+// catalogue is read for each request and no tool here asks the client anything
+// back. The one thing it tells a client between its requests — that its tools
+// changed — goes down the stream a 2026-07-28 client opens as a POST of its
+// own, `subscriptions/listen`, whose session lives exactly as long as that one
+// request: ended by the client, by its connection dropping, or by the node's
+// listener shutting down ([Listeners.End]). Stateless is also what serves a
+// FLEET: a session is held by the one node that opened it, so behind a load
+// balancer with no affinity every other ingress node refused it, and the MCP
+// client this repository ships reads that refusal as the end of its
+// connection.
 //
 // # Three answers before any tool runs
 //
@@ -132,11 +159,12 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 // endpoint that lists no tools reads to an operator as broken; and anything
 // else is served over the catalogue the request found.
 //
-// EVERY METHOD IS STILL ROUTED HERE, so a GET for the server-to-client stream
-// and a DELETE to end a session are answered by the SDK's own 405 with
-// `Allow: POST` — the transport's documented way of saying "this server offers
-// no stream" — rather than by a mux 405 a client reports as a route
-// registered wrong.
+// MOUNTED AT [MCPPattern], a POST: a GET for the server-to-client stream and a
+// DELETE to end a session are answered the mux's own 405 naming POST before
+// anything here runs — the transport's documented way of saying "this server
+// offers no stream", in the engine's envelope rather than the SDK's plain text.
+// Served bare, as a suite serves it, the SDK's stateless handler answers both
+// 405 too, so neither verb reaches a tool whichever way the handler is mounted.
 func (s *Server) MCPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// THE GUARD IS THE APP'S, not a second one here: this path is not
@@ -163,6 +191,20 @@ func (s *Server) MCPHandler() http.Handler {
 		}
 		srv := s.mcpServer(cat)
 		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
-			&mcp.StreamableHTTPOptions{Stateless: true}).ServeHTTP(w, r)
+			&mcp.StreamableHTTPOptions{Stateless: true, MaxRequestBodyBytes: MCPMaxBody}).
+			ServeHTTP(w, r)
 	})
 }
+
+// MCPMaxBody bounds one MCP request's body.
+//
+// The transport reads a request's body whole before it dispatches it, so this
+// is what one request may hold in memory. FOUR MEBIBYTES — the SDK's own
+// default, stated here rather than inherited, since it is a promise this
+// surface makes — because every catalogue call fits far below it: the largest
+// is a page's body, at most twice [pages.MaxBody] once escaped as a JSON
+// string, which [MaxActBody] derives. The one argument it does bound is
+// `write_project_file`'s content, the whole file in one string; a file that
+// does not fit goes up through `PUT /work/files/{project}/{path...}`, which
+// streams its body to the object store instead of holding it.
+const MCPMaxBody = 4 << 20

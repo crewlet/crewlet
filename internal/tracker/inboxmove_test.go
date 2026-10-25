@@ -30,7 +30,7 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
 	var got [][]tracker.InboxMovement
-	h.applier = tracker.NewApplier("node-a", func(m []tracker.InboxMovement) {
+	h.applier = tracker.NewApplier(func(m []tracker.InboxMovement) {
 		got = append(got, m)
 	})
 
@@ -136,7 +136,7 @@ func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
 	var got [][]tracker.InboxMovement
-	h.applier = tracker.NewApplier("node-a", func(m []tracker.InboxMovement) {
+	h.applier = tracker.NewApplier(func(m []tracker.InboxMovement) {
 		got = append(got, m)
 	})
 	create := taskRecord("t-1", tracker.OpCreate, newTask("t-1"), &tracker.Notify{

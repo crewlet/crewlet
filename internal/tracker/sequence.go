@@ -334,6 +334,10 @@ func (w *Writer) CreateTaskAsking(ctx context.Context, opID string, task Task,
 func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 	ask *Comment, notify *Notify) (WriteResult, error) {
 
+	// THE TASK AS THE CALLER HANDED IT IN, which is what its wake was built
+	// from: everything below that settles a field of it is brought onto the
+	// wake once the task is filed ([Notify.settled]).
+	handed := task
 	switch {
 	case task.ID == "":
 		return WriteResult{}, invalid("a create names no task id")
@@ -389,13 +393,13 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 		w.settleCreate(ctx, task, &settled))
 	switch {
 	case errors.Is(err, errMintLanded):
-		return w.resumeCreate(ctx, opID, task, ask, notify)
+		return w.resumeCreate(ctx, opID, task, handed, ask, notify)
 	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
 		return w.unvouchedCreate(ctx, opID, task, minted)
 	case err != nil:
 		return WriteResult{Result: minted}, err
 	}
-	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
+	return w.fileTask(ctx, opID, task, handed, ask, n, settled, notify)
 }
 
 // unvouchedCreate answers a create whose counter step this node's operation
@@ -455,8 +459,9 @@ func (w *Writer) settleCreate(ctx context.Context, task Task,
 }
 
 // fileTask is a create's second append, on the key number n its mint took —
-// carrying ask, the question the task is filed as, where it is one.
-func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
+// carrying ask, the question the task is filed as, where it is one. handed is
+// the task as the create's caller handed it in, which its wake was built from.
+func (w *Writer) fileTask(ctx context.Context, opID string, task, handed Task,
 	ask *Comment, n uint64, settled settledCreate, notify *Notify) (WriteResult, error) {
 
 	if settled.fields != nil {
@@ -465,13 +470,11 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 	task.FiledUnit, task.RoutingUnit = filedUnit(
 		task.FiledUnit, task.RoutingUnit, settled.unit)
 	if filed := w.landsOn(task, settled.assignee); filed.assignee != task.Assignee {
-		was := task
 		task.Assignee = filed.assignee
 		// THE ASSIGNEE WATCHES WHAT THEY HOLD, whoever named them: the
 		// caller put a named assignee on the watchers, and a default one is
 		// the same person holding the same task.
 		task.Watchers, _ = followAuto(task.Watchers, task.Muted, task.Assignee)
-		notify.filedTo(was, task)
 	} else if filed.warning != "" {
 		settled.warnings = append(settled.warnings, filed.warning)
 	}
@@ -491,6 +494,9 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 	if task.Priority == "" {
 		task.Priority = PriorityNone
 	}
+	// EVERY SETTLEMENT IS MADE, so the wake is brought up to all of them at
+	// once: what the record carries, its wake names.
+	notify.settled(handed, task, w.Leads)
 
 	if ask != nil {
 		// THE TASK'S OWN INSTANT, so the question is not older than the
@@ -530,7 +536,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 // still costs only a number: the task step then meets the earlier copy on the
 // task's own subject, is refused its expectation of zero, and is answered
 // from the ledger once this node catches up ([Writer.fileTask]).
-func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
+func (w *Writer) resumeCreate(ctx context.Context, opID string, task, handed Task,
 	ask *Comment, notify *Notify) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
@@ -562,7 +568,7 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
 	if err != nil {
 		return WriteResult{Result: minted}, err
 	}
-	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
+	return w.fileTask(ctx, opID, task, handed, ask, n, settled, notify)
 }
 
 // errTaskNotApplied is a resumed create's task step finding no ledger row to

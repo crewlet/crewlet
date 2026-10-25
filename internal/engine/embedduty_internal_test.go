@@ -208,6 +208,80 @@ func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 	}
 }
 
+// AN EMBEDDING TICK STOPS WHEN A RENEWAL SAYS ANOTHER NODE HOLDS THE DUTY —
+// mid-request, for that reason, publishing nothing. The kept duty's own cases
+// certify the renewal; what only this one can see is the tick's WIRING to it:
+// that the provider is asked on the kept duty's context and not on the turn's,
+// a context derived without its cancellation, or one bounded before the duty
+// was kept.
+func TestAnEmbeddingTickStopsWhenARenewalSaysAnotherNodeHoldsTheDuty(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNodeOf(t, embeddingDutyCompany)
+	e.stopEmbedding()
+	provider := &pacedEmbedder{Fake: embeddings.NewFake(64)}
+	var held embeddings.Embedder = provider
+	e.embeddings.Store(&held)
+	seedTasks(t, e, 1)
+	duty := e.newEmbedDuty(e.core.Load().log)
+	if duty == nil {
+		t.Fatal("a node with the vector log and a corpus built no duty")
+	}
+	clock := newFakeDutyClock()
+	duty.renewal.clock = clock
+	claim := newScriptedClaim(answer{held: true}, answer{held: false})
+	duty.claim = claim.claim
+	called, cut := make(chan struct{}, 1), make(chan error, 1)
+	provider.set(func(ctx context.Context) error {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		select {
+		case cut <- context.Cause(ctx):
+		default:
+		}
+		return context.Cause(ctx)
+	}, false)
+
+	done := make(chan tickReport, 1)
+	go func() { done <- duty.tick(t.Context()) }()
+	if a := claim.await(t); !a.held {
+		t.Fatalf("the turn's claim answered %+v, want held", a)
+	}
+	// THE PROVIDER IS MID-REQUEST before the renewal is asked: a renewal
+	// landing before the request would prove only that the tick's reads were
+	// cut off, not its call to the provider.
+	select {
+	case <-called:
+	case r := <-done:
+		t.Fatalf("the tick returned %+v before it asked the provider", r)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the provider was never asked")
+	}
+	clock.tick(t, duty.renewal.every())
+	if a := claim.await(t); a.held {
+		t.Fatalf("the renewal answered %+v, want another node holding the duty", a)
+	}
+	select {
+	case why := <-cut:
+		if !errors.Is(why, errDutyLost) {
+			t.Fatalf("the provider's request was cut off by %v, want %v", why, errDutyLost)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a renewal answered that another node holds the duty, and the " +
+			"provider's request ran on")
+	}
+	select {
+	case r := <-done:
+		if r.published != 0 {
+			t.Fatalf("a tick whose duty went to another node published %d source(s)", r.published)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the tick never returned")
+	}
+}
+
 // pacedEmbedder is the fake embedder with every request first waiting on pace,
 // and answering with no vectors at all while it is blank.
 type pacedEmbedder struct {

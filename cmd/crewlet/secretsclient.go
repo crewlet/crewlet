@@ -301,7 +301,7 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 		return fmt.Errorf("%w: %s", secrets.ErrNotFound,
 			strings.TrimPrefix(strings.SplitN(path, "?", 2)[0], "/secrets/"))
 	case status == http.StatusNotFound:
-		return missingSurface(c.base, "/secrets", body.Error)
+		return missingSurface(c.base, "/secrets", body.Error, "-api")
 	case status == http.StatusForbidden && body.Error == "reserved_name":
 		// THE SENTINEL again, for the same reason: the name is the
 		// engine's own, which no grant changes — a caller that read this

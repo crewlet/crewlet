@@ -75,8 +75,12 @@ var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoC
 // Read off this node's copy directly, a data node whose copy was out of
 // service — wrong rather than behind, or its file shut — went on drawing its
 // operator's board from rows it would not vouch for to its own seats. The
-// links between pages are the exception, and deliberately: they are this
-// node's own lexical index, which no peer answers for.
+// links between pages too ([estate.Pages.LinkedFrom]): they are a data node's
+// own lexical index, named from its copies of the knowledge base AND the
+// tracker, so they are answered by a data node whose copies of both serve
+// (ADR-0046) — read off this node's index, a node whose pages or tracker copy
+// had stopped serving listed links derived from rows it no longer answered
+// for, beside a page a peer had answered.
 func NativeSources(e *engine.Engine) (queries.WorkReader, queries.PageReader,
 	queries.PageBacklinks, queries.WorkSearcher, queries.FileReader) {
 
@@ -369,17 +373,20 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 //
 // ITS OWN SOURCE, and a native-half one: the links are an index the engine
 // keeps over its own knowledge base's pages, which comes up with the node's
-// first company and is absent for a company whose wiki is a vendor's.
+// first company and is absent for a company whose wiki is a vendor's. Read
+// through the knowledge base's routed reader, as [livePages] is, so the data
+// node that answers is one whose copies of both domains the links are named
+// from serve — see [NativeSources].
 type liveBacklinks struct{ engine *engine.Engine }
 
 func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 	search.Backlinks, error) {
 	started := l.engine.NativeStarted()
-	x := l.engine.Backlinks()
-	if x == nil {
+	p, ok := engine.OperatorPages(l.engine)
+	if !ok {
 		return search.Backlinks{}, nativeAbsent(started, "knowledge base")
 	}
-	return x.LinkedFrom(ctx, pageID)
+	return p.LinkedFrom(ctx, pageID)
 }
 
 // liveWorkSearch is ranked item search, resolved per question.

@@ -3,6 +3,7 @@ package queries_test
 import (
 	"database/sql"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -67,7 +68,7 @@ func (f *spendFixture) sources() queries.Sources {
 		// on the projection's own, and on the wall clock a record stamped
 		// beside spendNow left it long ago.
 		State:   livestate.New(livestate.WithClock(func() time.Time { return spendNow })),
-		Usage:   f.db.Replicated(),
+		Usage:   usage.Reader{Estate: f.db.Replicated()},
 		Company: companySource(f.t, f.company),
 		Now:     func() time.Time { return spendNow },
 	}
@@ -403,6 +404,40 @@ func TestASeatIsAskedByItsHandle(t *testing.T) {
 		hers.AgentID != "" || hers.Seat != "ana" {
 		t.Errorf("seat=ana, a person, answered %+v; want her 7 tokens alone, named by "+
 			"her seat and by no agent id", hers)
+	}
+}
+
+// EVERY SEAT IS BANDED BY ITS OWN UNIT — the one holding it directly, never a
+// unit above it, so a team's spend is not counted again for its division — and
+// a root seat by none, which the series places in a band of its own.
+//
+// Mutation: band a seat by its outermost unit, and Dev reads Engineering.
+func TestEverySeatIsBandedByItsOwnUnit(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+roles:
+  - name: Lead
+units:
+  - name: Engineering
+    roles:
+      - name: VP
+    children:
+      - name: Platform
+        roles:
+          - name: Dev
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := map[string]string{}
+	for _, seat := range (queries.Sources{Company: companySource(t, cfg)}).Seats() {
+		if seat.UnitName != "" {
+			got[seat.Handle] = seat.UnitName
+		}
+	}
+	if want := map[string]string{"vp": "Engineering", "dev": "Platform"}; !maps.Equal(got, want) {
+		t.Errorf("Seats() bands %v, want %v: each seat by the unit holding it, the root seat by none", got, want)
 	}
 }
 

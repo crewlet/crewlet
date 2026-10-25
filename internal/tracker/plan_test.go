@@ -876,3 +876,30 @@ func historyRow(i int) []any {
 		store.EncodeTime(at), store.EncodeTime(at), []byte(`{}`),
 	}
 }
+
+// THE ASKS A PAGE NAMES ARE SOUGHT BY ID, never found by reading every comment.
+//
+// An inbox page and a feed page each resolve their comments to the asks they
+// are about in one statement ([askViewsStatement]), bound to the page's ids as
+// one JSON array. Tested with IN over json_each's own column, the pinned
+// driver's planner cannot seek by the ids and SCANS tracker_comments — every
+// comment the company ever wrote, per page. Planned with no statistics, as a
+// deployment plans it ([seededPlanStore]), and so the same over an empty
+// estate as over a full one.
+//
+// Mutation: bind the ids as `SELECT value FROM json_each(?)` and the plan
+// scans tracker_comments.
+func TestTheAsksAPageNamesAreSoughtByID(t *testing.T) {
+	t.Parallel()
+	db := seededPlanStore(t, func(context.Context, *sql.Tx, int) error { return nil })
+	plan := explain(t, db, askViewsStatement, []any{`["c-1","c-2"]`})
+	shown := strings.Join(plan, "\n")
+	if scansHeap(plan, "tracker_comments") || slices.ContainsFunc(plan, func(line string) bool {
+		return strings.HasPrefix(line, "SCAN tracker_comments")
+	}) {
+		t.Fatalf("the asks a page names read every comment the company wrote:\n%s", shown)
+	}
+	if !slices.Contains(plan, "SEARCH c USING INDEX sqlite_autoindex_tracker_comments_1 (id=?)") {
+		t.Fatalf("the page's comments are not sought by id:\n%s", shown)
+	}
+}

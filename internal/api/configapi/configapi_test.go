@@ -509,6 +509,44 @@ func TestADiffNeverCarriesEitherSecret(t *testing.T) {
 
 // --- writes ----------------------------------------------------------------
 
+// A CONFIGURATION WRITE ANSWERS WHAT THE COMPANY DOES BESIDE THIS NODE'S TIER
+// A: the person turning code.native on, on a fleet whose files bucket is the
+// default object store, reads in the answer that applied it that every member
+// holding the bucket will hold every pack — which neither document says alone.
+//
+// Mutation: drop the append of Options.TierWarnings from the write's
+// warnings, and this goes red.
+func TestAConfigWriteAnswersTheCrossTierWarnings(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+	b.Stream.StoreDir = t.TempDir()
+	b.Stream.Replicas = 3
+	b.Stream.Cluster = config.StreamCluster{Name: "acme", Port: 6222,
+		Peers: []string{"nats://b.example.com:6222", "nats://c.example.com:6222"}}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		o.TierWarnings = func(c *config.Company) []config.Warning {
+			return config.TierWarnings(&b, c)
+		}
+	})
+	res := s.do(t, http.MethodPut, "/config", companyDoc+"code:\n  native: true\n",
+		map[string]string{"X-Summary": "host our code"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201: %s", res.Code, res.Body)
+	}
+	var answer struct {
+		Warnings []config.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode: %v (%s)", err, res.Body)
+	}
+	if !slices.ContainsFunc(answer.Warnings, func(w config.Warning) bool {
+		return w.Kind == config.WarningAdvisory && w.Path == "store.objects.backend"
+	}) {
+		t.Fatalf("warnings = %+v, want the store.objects.backend advisory", answer.Warnings)
+	}
+}
+
 func TestAWriteNeedsASummary(t *testing.T) {
 	t.Parallel()
 	// The history is what an operator reads at 3am to find the change that

@@ -134,16 +134,18 @@ human seat is never claimed, so there is no claim to constrain),
 `integrations.slack` and `integrations.mattermost` (a seat's own chat app),
 `project` and `space` (the tracker project and knowledge container a seat
 owns, written at the top of the seat rather than under `integrations:`),
-`mcp_env` and `behavioral_guidelines`. A seat's own GitHub App
-(`integrations.github`) is refused on a human seat as well, because a person
-acts on GitHub as their own `contact.github_login`. That refusal is an
-[admission rule](configuration.md#what-a-stored-revision-is-held-to): a
-revision being applied that carries the block still runs, and the next write
-that keeps it is refused. So is an `avatar` (an agent's Crewlet character
-and colour): a person is drawn as themself, the circle and their initials,
-and the block would read as a setting and change nothing. The reverse holds
-too: `contact` or `availability` on an agent seat is refused with a hint to
-set `kind: human`.
+`mcp_env` and `behavioral_guidelines`. What a seat holds on a code host is
+refused on a human seat as well, because a person acts on every code host as
+their own identity — their own token on the engine's own, their
+`contact.github_login` on GitHub: a seat's code access tier (`code`), which
+would cap nothing, and its own GitHub App (`integrations.github`). Those two
+refusals are [admission rules](configuration.md#what-a-stored-revision-is-held-to):
+nothing running reads either off a human seat, so a revision being applied
+that carries one still runs, and the next write that keeps it is refused. So
+is an `avatar` (an agent's Crewlet character and colour): a person is drawn as
+themself, the circle and their initials, and the block would read as a setting
+and change nothing. The reverse holds too: `contact` or `availability` on an
+agent seat is refused with a hint to set `kind: human`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a
@@ -285,6 +287,26 @@ What the binding buys:
   the wake your own change sends. There is still no way for a caller to name a seat to act as.
   See [who a write is attributed
   to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
+- **Your git pushes are yours.** A company that hosts its repositories in the
+  engine ([`code.native`](code-host.md)) is cloned, fetched and pushed to over
+  HTTPS with a token as git's password — your own machine token (`crewlet iam
+  token -login` mints one for you), or a Tier A token the directory binds to a
+  seat. git is one more way a person acts, beside the dashboard's act route,
+  the `/work` and `/pages` routes and their assistant's MCP, and it follows the
+  same binding: a token acting as a
+  human seat pushes **as that person**, while a credential bound to no seat
+  fetches only, and a push with it is refused at its first request saying so.
+  Every push is recorded as one `operator_acted` event with transport `git`:
+  the caller exactly as every write names it — your seat, kind `human`, and the
+  credential beside it — the repository and what became of the push. A fetch is
+  a read and is not recorded. A person reads **every** repository: a
+  repository's `visibility` narrows which **seats** read it and never a person,
+  so nobody who runs the company is shut out of its code by a setting meant to
+  keep one team's seats out of another's
+  ([Visibility](code-host.md#visibility)). The [Code guide](../guides/code.md)
+  is how to set it up, and
+  [ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-a-person-reaches-git-with-their-own-bound-token.md)
+  why there is no second credential for git.
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the
 deployment's own break-glass token — each acts as itself under its own login,

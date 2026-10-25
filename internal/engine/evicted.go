@@ -101,19 +101,30 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 // beginning rather than ask for a snapshot nobody has. A domain nobody has
 // published anything for is absent from the map, which reads as that zero.
 //
-// rows is the positions register as the caller read it — once, for every
-// question its caller asks of it ([stateLog.publishPositions] asks two).
+// rows is the positions register and floors the published floors, each as
+// the caller read it — once, for every question its caller asks of them
+// ([stateLog.publishPositions] asks two, and the join asks each domain's floor
+// beside its generation).
+//
+// EACH DOMAIN ON ITS OWN, and so is its failure: a domain whose floor could
+// not be read, or whose peers ahead of this node could not be judged evicted,
+// is answered in the second map rather than the first, while every other
+// domain is answered — the heartbeat judges the domains it can, and only the
+// join, which needs every domain at once, refuses when any is missing.
 func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositions,
-	logs map[string]*jetstream.DomainLog, above map[string]uint32) (map[string]uint32, error) {
+	floors publishedFloors, logs map[string]*jetstream.DomainLog,
+	above map[string]uint32) (map[string]uint32, map[string]error) {
 
-	floors, err := s.fleet.Floors(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the fleet's published trim floors to "+
-			"establish which generation each domain is on: %w", err)
-	}
 	newest := map[string]uint32{}
+	unread := map[string]error{}
 	for _, domain := range registeredDomains() {
 		name := domain.Name()
+		floor, published, err := floors.row(name)
+		if err != nil {
+			unread[name] = fmt.Errorf("engine: establish which generation %s is on: %w",
+				name, err)
+			continue
+		}
 		var candidates []string
 		for _, row := range rows {
 			if at, runs := row.Domains[name]; runs && at.Generation > above[name] &&
@@ -121,18 +132,17 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				candidates = append(candidates, row.NodeID)
 			}
 		}
-		for _, f := range floors {
-			if f.Domain == name && f.Generation > above[name] && f.By != "" &&
-				f.By != s.nodeID {
-				candidates = append(candidates, f.By)
-			}
+		if published && floor.Generation > above[name] && floor.By != "" &&
+			floor.By != s.nodeID {
+			candidates = append(candidates, floor.By)
 		}
 		var evicted map[string]bool
 		if len(candidates) > 0 {
 			log, held := logs[name]
 			if !held {
-				return nil, fmt.Errorf("engine: %s's log is not open, so whether the "+
-					"nodes ahead of this one on it are evicted cannot be read", name)
+				unread[name] = fmt.Errorf("engine: %s's log is not open, so whether "+
+					"the nodes ahead of this one on it are evicted cannot be read", name)
+				continue
 			}
 			// THROUGH THE DOMAIN'S VERIFIER, since the standing is decoded
 			// from a record's body — and derived here from the keyring
@@ -140,11 +150,13 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 			// before any log has started.
 			verifier, verr := s.verifierFor(domain)
 			if verr != nil {
-				return nil, verr
+				unread[name] = verr
+				continue
 			}
 			if evicted, err = s.evictedOn(ctx, domain, domain.Stream(),
 				statelog.StandingOf(log, verifier), candidates); err != nil {
-				return nil, err
+				unread[name] = err
+				continue
 			}
 		}
 		for _, row := range rows {
@@ -152,13 +164,11 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				newest[name] = max(newest[name], at.Generation)
 			}
 		}
-		for _, f := range floors {
-			if f.Domain == name && !evicted[f.By] {
-				newest[name] = max(newest[name], f.Generation)
-			}
+		if published && !evicted[floor.By] {
+			newest[name] = max(newest[name], floor.Generation)
 		}
 	}
-	return newest, nil
+	return newest, unread
 }
 
 // openLogs is every log this node runs, keyed as the register keys them —

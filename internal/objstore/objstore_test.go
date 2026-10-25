@@ -2,10 +2,12 @@ package objstore
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -114,7 +116,7 @@ func TestOnlyLowercaseHexIsAHash(t *testing.T) {
 func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 	t.Parallel()
 	good := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
-		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}}
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}, Standing: Required}
 	among, err := good.ObjectsAmong(3)
 	if err != nil {
 		t.Fatal(err)
@@ -148,12 +150,134 @@ func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 			Owner: []string{"path, (SELECT 1)"}},
 		"upper case": {Domain: "tracker", Table: "T", Key: "object", Hash: "hash", Size: "size", Owner: []string{"path"}},
 	} {
+		// A STANDING ON EVERY ONE, so each is refused for its own fault
+		// rather than for the standing none of them states — without it
+		// this loop passes with every other check deleted.
+		bad.Standing = Required
 		if _, err := bad.ObjectsAmong(1); err == nil {
 			t.Errorf("%s: a question was built", name)
 		}
 		if _, err := bad.ReferencesAfter(1); err == nil {
 			t.Errorf("%s: a page was built", name)
 		}
+	}
+}
+
+// A DECLARATION STATES ITS STANDING, AND NONE IS A DEFAULT (ADR-0048): a live
+// table read as retired is audited by nobody and accounted for by no backup,
+// and a retired one read as live pages somebody about bytes nobody needs. So
+// the zero value — a declaration that forgot the field — is refused by name,
+// the refusal names both remedies, and no statement is built from it.
+func TestADeclarationStatesItsStanding(t *testing.T) {
+	t.Parallel()
+	declared := func(s Standing) ReferenceTable {
+		return ReferenceTable{Domain: "tracker", Table: "t", Key: "object", Hash: "hash",
+			Size: "size", Owner: []string{"path"}, Standing: s}
+	}
+	for _, s := range []Standing{"", "live", "Required", "required ", "RETIRED"} {
+		t.Run("refused "+strconv.Quote(string(s)), func(t *testing.T) {
+			t.Parallel()
+			ref := declared(s)
+			if s.Valid() {
+				t.Errorf("Standing(%q).Valid() = true", s)
+			}
+			err := ref.Validate()
+			if err == nil {
+				t.Fatalf("a declaration with standing %q validated", s)
+			}
+			for _, remedy := range []string{"objstore.Required", "objstore.Retired"} {
+				if !strings.Contains(err.Error(), remedy) {
+					t.Errorf("the refusal %q does not name %s", err, remedy)
+				}
+			}
+			if _, err := ref.ObjectsAmong(1); err == nil {
+				t.Error("a question was built from it")
+			}
+			if _, err := ref.ReferencesAfter(1); err == nil {
+				t.Error("a page was built from it")
+			}
+		})
+	}
+	for _, s := range []Standing{Required, Retired} {
+		ref := declared(s)
+		if !s.Valid() {
+			t.Errorf("Standing(%q).Valid() = false", s)
+		}
+		if err := ref.Validate(); err != nil {
+			t.Errorf("a declaration standing %s: %v", s, err)
+		}
+		if _, err := ref.ObjectsAmong(1); err != nil {
+			t.Errorf("a declaration standing %s cannot be asked about its objects: %v", s, err)
+		}
+	}
+}
+
+// ONLY A REQUIRED TABLE IS WALKED (ADR-0048). A retired row keeps its object
+// from the collector exactly as a live one does — so the collector's batch
+// question is the same statement whatever the standing — and names nothing
+// the company is owed, so the walk the audit and the backup share is REFUSED
+// for it: a consumer that forgot to leave a retired table out fails on its
+// first pass rather than paging somebody about a replaced object or copying it
+// into every backup.
+func TestOnlyARequiredTableIsWalked(t *testing.T) {
+	t.Parallel()
+	live := ReferenceTable{Domain: "tracker", Table: "replaced_packs", Key: "object", Hash: "hash",
+		Size: "size", Owner: []string{"path"}, Standing: Required}
+	retired := live
+	retired.Standing = Retired
+
+	if _, err := live.ReferencesAfter(500); err != nil {
+		t.Fatalf("a required table cannot be walked: %v", err)
+	}
+	page, err := retired.ReferencesAfter(500)
+	if err == nil {
+		t.Fatalf("a retired table was walked: %q", page)
+	}
+	for _, named := range []string{"replaced_packs", string(Retired)} {
+		if !strings.Contains(err.Error(), named) {
+			t.Errorf("the refusal %q does not name %q", err, named)
+		}
+	}
+	// AND ITS WALK IS REFUSED THE SAME WAY, from its first page, before
+	// anything is read: a pass that forgot to leave it out fails at once.
+	read := func(context.Context, func(*sql.Tx) error) (bool, error) {
+		t.Fatal("a retired table's walk read the estate")
+		return false, nil
+	}
+	if page, _, werr := retired.WalkOf(read).Next(t.Context()); werr == nil ||
+		!strings.Contains(werr.Error(), string(Retired)) {
+		t.Fatalf("a retired table's walk = %d references, %v; want the refusal", len(page), werr)
+	}
+
+	// THE SAME FOR A QUESTION ABOUT GIVEN KEYS, which answers a walk's own
+	// columns so one decoder reads both.
+	if among, err := retired.ReferencesAmong(3); err == nil {
+		t.Fatalf("a retired table was asked which references it holds: %q", among)
+	}
+	if _, err := live.ReferencesAmong(0); err == nil {
+		t.Error("a question about no keys was asked")
+	}
+	among, err := live.ReferencesAmong(3)
+	if err != nil {
+		t.Fatalf("a required table cannot be asked which references it holds: %v", err)
+	}
+	walked, _ := live.ReferencesAfter(500)
+	columns := func(q string) string { return q[:strings.Index(q, " WHERE ")] }
+	if columns(among) != columns(walked) || !strings.HasSuffix(among, ` IN (?, ?, ?)`) {
+		t.Errorf("ReferencesAmong = %q; want the walk's columns, %q, over three keys", among, columns(walked))
+	}
+
+	shields, err := retired.ObjectsAmong(3)
+	if err != nil {
+		t.Fatalf("a retired table cannot be asked which objects it names: %v", err)
+	}
+	keeps, err := live.ObjectsAmong(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shields != keeps {
+		t.Errorf("a retired table is asked %q and a required one %q — a row keeps its "+
+			"object from collection the same way whatever its standing", shields, keeps)
 	}
 }
 
@@ -273,8 +397,8 @@ func TestAReadIsBudgetedBothLegsAtTheFloor(t *testing.T) {
 			t.Errorf("ReadBudget(%d) = %v, want %v", size, got, want)
 		}
 	}
-	if ReadStall != 2*MiBPace {
-		t.Errorf("ReadStall = %v, want two paces", ReadStall)
+	if Stall != 2*MiBPace {
+		t.Errorf("Stall = %v, want two paces", Stall)
 	}
 }
 
@@ -321,7 +445,7 @@ func (r *fakeRows) Scan(dest ...any) error {
 func TestTheDecodersReadTheStatementsColumns(t *testing.T) {
 	t.Parallel()
 	table := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
-		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}}
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}, Standing: Required}
 	k1 := KeyAt(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
 	k2 := KeyAt(time.Date(2026, 10, 6, 13, 0, 0, 0, time.UTC))
 	h := HashOf([]byte("a"))
@@ -376,5 +500,78 @@ func TestTheDecodersReadTheStatementsColumns(t *testing.T) {
 		func(Key) error { t.Error("a digest was visited as a key"); return nil }); err == nil ||
 		!strings.Contains(err.Error(), "tracker_files.object") {
 		t.Errorf("a digest in the key column: %v, want an error naming the column", err)
+	}
+}
+
+// A REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0049): the stream, the
+// table its domain defers records into, and the domain's reader of one record
+// — each refused by name when missing, since a backup cannot carry what a
+// log it was not told about names. A retired table, which no backup carries,
+// needs none of them; and the validation every reader asks comes first.
+func TestARequiredTableSaysHowItsLogNamesObjects(t *testing.T) {
+	t.Parallel()
+	whole := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}, Standing: Required,
+		Log: "CREWLET_TRACKER_LOG", Deferred: "tracker_log_deferred",
+		Records: func([]byte) ([]RecordReference, error) { return nil, nil }}
+	if err := whole.ValidateLog(); err != nil {
+		t.Fatalf("a whole declaration was refused: %v", err)
+	}
+	for field, broken := range map[string]func(*ReferenceTable){
+		"Log":      func(r *ReferenceTable) { r.Log = " " },
+		"Deferred": func(r *ReferenceTable) { r.Deferred = "" },
+		"Records":  func(r *ReferenceTable) { r.Records = nil },
+		"Standing": func(r *ReferenceTable) { r.Standing = "" },
+	} {
+		ref := whole
+		broken(&ref)
+		err := ref.ValidateLog()
+		if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "tracker_files") {
+			t.Errorf("a declaration with no %s = %v; want it refused naming the table and the field", field, err)
+		}
+	}
+	unquoted := whole
+	unquoted.Deferred = "tracker_log_deferred; DROP TABLE tracker_files"
+	if err := unquoted.ValidateLog(); err == nil {
+		t.Error("a deferred table that is not an identifier was accepted into a statement")
+	}
+	retired := ReferenceTable{Domain: "tracker", Table: "replaced", Key: "object", Hash: "hash",
+		Size: "size", Owner: []string{"path"}, Standing: Retired}
+	if err := retired.ValidateLog(); err != nil {
+		t.Errorf("a retired declaration naming no log was refused: %v", err)
+	}
+	if _, err := retired.DeferredRecordsAfter(256); err == nil {
+		t.Error("a retired table's deferred records were read")
+	}
+	if _, err := whole.DeferredRecordsAfter(0); err == nil {
+		t.Error("a page of no deferred records was asked for")
+	}
+	query, err := whole.DeferredRecordsAfter(256)
+	if err != nil || query != `SELECT position, payload FROM tracker_log_deferred `+
+		`WHERE position > ? ORDER BY position LIMIT 256` {
+		t.Errorf("DeferredRecordsAfter = %q, %v", query, err)
+	}
+}
+
+// AN OWNER IS JOINED ONE WAY. The walk of a table spells a row's owner values
+// with JoinOwner and a domain's reader of a record spells the row it writes
+// with it too, so the backup can tell which row a record rewrote — spelled two
+// ways, a file replaced during a backup would read as two files.
+func TestAnOwnerIsJoinedOneWay(t *testing.T) {
+	t.Parallel()
+	if got := JoinOwner("ENG", "a/b.md"); got != "ENG/a/b.md" {
+		t.Errorf(`JoinOwner("ENG", "a/b.md") = %q`, got)
+	}
+	table := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}, Standing: Required}
+	k := KeyAt(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
+	var named string
+	if err := table.ScanReferences(&fakeRows{rows: [][]any{
+		{k.String(), string(HashOf(nil)), int64(0), "ENG", "a/b.md"},
+	}}, func(_ Object, namedBy string) error { named = namedBy; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if named != JoinOwner("ENG", "a/b.md") {
+		t.Errorf("the walk spells the row %q and JoinOwner %q", named, JoinOwner("ENG", "a/b.md"))
 	}
 }

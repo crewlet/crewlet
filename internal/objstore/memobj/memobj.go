@@ -58,9 +58,13 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, _ objstore.
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("memobj: put %s: %w", name, err)
 	}
+	// HASHED BEFORE THE LOCK: the digest is the whole object's, four tenths of a
+	// second for the largest a benchmark puts on a CPU without SHA
+	// instructions, and every other call on the twin would wait it out.
+	digest := objstore.HashOf(data)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.objects[name] = held{data: data, written: b.now().UTC(), digest: objstore.HashOf(data)}
+	b.objects[name] = held{data: data, written: b.now().UTC(), digest: digest}
 	return nil
 }
 
@@ -110,6 +114,24 @@ func (b *Backend) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteBatch implements [objstore.BatchDeleter]: every name at once, under
+// one hold of the lock, as one request removes them on S3.
+func (b *Backend) DeleteBatch(ctx context.Context, names []string) error {
+	if len(names) > objstore.MaxDeleteBatch {
+		return fmt.Errorf("memobj: a batch deletion of %d names, past the %d one takes",
+			len(names), objstore.MaxDeleteBatch)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, name := range names {
+		delete(b.objects, name)
+	}
+	return nil
+}
+
 // List implements [objstore.Backend]. It visits a snapshot, so a visitor may
 // put and delete as it goes.
 func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) error {
@@ -117,6 +139,28 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 	snapshot := make([]objstore.Info, 0, len(b.objects))
 	for _, name := range slices.Sorted(maps.Keys(b.objects)) {
 		snapshot = append(snapshot, b.objects[name].info(name))
+	}
+	b.mu.Unlock()
+	for _, info := range snapshot {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := visit(info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ListRange implements [objstore.Ranged]: the names after after and at or
+// before through, in byte order, over a snapshot as [Backend.List] is.
+func (b *Backend) ListRange(ctx context.Context, after, through string, visit func(objstore.Info) error) error {
+	b.mu.Lock()
+	var snapshot []objstore.Info
+	for _, name := range slices.Sorted(maps.Keys(b.objects)) {
+		if name > after && name <= through {
+			snapshot = append(snapshot, b.objects[name].info(name))
+		}
 	}
 	b.mu.Unlock()
 	for _, info := range snapshot {

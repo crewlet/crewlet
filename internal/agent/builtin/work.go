@@ -328,10 +328,11 @@ type WorkDeps struct {
 	// wall clock in the wrong zone names a different week.
 	//
 	// Zone is READ PER CALL, for the reason the chart seams are: the
-	// operator surface is built once at startup and never rebuilt, so a
-	// zone captured there answered every assistant's "due friday" on the
-	// clock the company booted with — and before that, on UTC, since that
-	// surface was given none at all. Nil is UTC.
+	// operator surface is built again only when what it serves changes,
+	// never for a new clock, so a zone captured there answered every
+	// assistant's "due friday" on the clock the company booted with — and
+	// before that, on UTC, since that surface was given none at all. Nil
+	// is UTC.
 	Now  func() time.Time
 	Zone func() *time.Location
 

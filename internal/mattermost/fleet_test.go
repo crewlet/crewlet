@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -216,7 +216,7 @@ func waitFor(t *testing.T, want int, got func() int) {
 //
 // The fleet must be stopped inside: one left running beats its heartbeat for
 // ever, and the bubble's clock with it. And the stand-in server is built
-// OUTSIDE, reached through [inProcess]: its listener waits on the network,
+// OUTSIDE, reached through [bubbleClient]: its listener waits on the network,
 // which a bubble never counts as blocked, so inside it the bubble would never
 // settle.
 func toTheEnd(t *testing.T, body func(t *testing.T)) {
@@ -256,47 +256,16 @@ func settle(t *testing.T, sockets ...*fakeSocket) {
 	synctest.Wait()
 }
 
-// inProcess answers each request with the stand-in's own handler, called in
-// place on the requesting goroutine: no listener, no connection and no pool.
-//
-// It is what lets a fleet's REST reads run inside a bubble ([toTheEnd]). A
-// goroutine waiting on a socket is never durably blocked, so a fleet that
-// reached its stand-in over the network would keep the bubble from settling,
-// and a pooled connection would outlive it.
-type inProcess struct{ handler http.Handler }
-
-func (p inProcess) RoundTrip(req *http.Request) (*http.Response, error) {
-	// A handler is handed a request as a server reads one, and that always
-	// carries a body, a host and its request URI. A RoundTripper may not
-	// edit the request it is given, so the copy gets them.
-	in := req.Clone(req.Context())
-	if in.Body == nil {
-		in.Body = http.NoBody
-	}
-	if in.Host == "" {
-		in.Host = req.URL.Host
-	}
-	in.RequestURI = req.URL.RequestURI()
-	w := httptest.NewRecorder()
-	p.handler.ServeHTTP(w, in)
-	resp := w.Result()
-	// net/http's server dates every answer that carries no Date, and
-	// [mattermost.Client.ServerTime] reads it; a handler called in place is
-	// dated here instead, from the bubble's clock.
-	if resp.Header.Get("Date") == "" {
-		resp.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
-	}
-	resp.Request = req
-	return resp, nil
-}
-
 // bubbleClient is [client] for a fleet inside [toTheEnd]: the same stand-in,
-// reached through [inProcess].
+// reached through [httpxtest.InProcess] — no listener, no connection and no
+// pool. A goroutine waiting on a socket is never durably blocked, so a fleet
+// that reached its stand-in over the network would keep the bubble from
+// settling, and a pooled connection would outlive it. t is the bubble's own.
 func bubbleClient(t *testing.T, s *server) *mattermost.Client {
 	t.Helper()
 	c, err := mattermost.NewClient(mattermost.ClientOptions{
 		URL: s.URL, Token: "tok",
-		HTTP: &http.Client{Transport: inProcess{handler: s.Config.Handler}},
+		HTTP: httpxtest.InProcess(t, s.Config.Handler),
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

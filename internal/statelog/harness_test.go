@@ -82,19 +82,20 @@ func (probeDomain) NodeGate(statelog.Envelope) bool     { return false }
 
 func (probeDomain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
-		"probe_objects":        statelog.Replicated,
+		"probe_rows":           statelog.Replicated,
+		"probe_evictions":      statelog.Replicated,
 		"probe_ops":            statelog.Divergent,
 		"probe_log_deferred":   statelog.Local,
 		"probe_deferred_scope": statelog.Local,
 	}
 }
 
-func (probeDomain) DeferredTable() string { return "probe_log_deferred" }
-func (probeDomain) ScopeIndex() string    { return "probe_deferred_scope" }
-func (probeDomain) OpsTable() string      { return "probe_ops" }
-func (probeDomain) ReadinessInput() bool  { return true }
-func (probeDomain) ClaimsIdentity() bool  { return true }
-func (probeDomain) FeedGroup() string     { return "" }
+func (probeDomain) DeferredTable() string    { return "probe_log_deferred" }
+func (probeDomain) ScopeIndex() string       { return "probe_deferred_scope" }
+func (probeDomain) OpsTable() string         { return "probe_ops" }
+func (probeDomain) GatesSeatAdmission() bool { return true }
+func (probeDomain) ClaimsIdentity() bool     { return true }
+func (probeDomain) FeedGroup() string        { return "" }
 
 // applier stands in for this node's own apply loop: what it has committed,
 // and which operations it has written rows for.
@@ -857,7 +858,8 @@ func (h *harness) write(subject statelog.Subject, opID string, body string) (sta
 		OpID:    opID,
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: probeRecord(stamp, opID, body), Version: 1}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, subject,
+				statelog.ScopeSet{Paths: []string{subject.String()}}, opID, body), Version: 1}, nil
 		},
 	})
 }
@@ -874,8 +876,8 @@ func (h *harness) writeSized(subject statelog.Subject, opID string, size int) (s
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// A BODY OF `x` IS CARRIED AS IT IS, so the record grows by
 			// exactly what the body does.
-			pad := size - len(probeRecord(stamp, opID, ""))
-			return statelog.Decision{Payload: probeRecord(stamp, opID,
+			pad := size - len(probeRecord(stamp, subject, statelog.ScopeSet{Paths: []string{subject.String()}}, opID, ""))
+			return statelog.Decision{Payload: probeRecord(stamp, subject, statelog.ScopeSet{Paths: []string{subject.String()}}, opID,
 				strings.Repeat("x", pad)), Version: 1}, nil
 		},
 	})
@@ -892,26 +894,37 @@ func (h *harness) writeNoWait(subject statelog.Subject, opID string, body string
 		Pattern: statelog.PatternArbitrated,
 		NoWait:  true,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: probeRecord(stamp, opID, body), Version: 1}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, subject, statelog.ScopeSet{Paths: []string{subject.String()}}, opID, body), Version: 1}, nil
 		},
 	})
 }
 
-// probeRecord is one probe-domain record carrying the stamp its decision was
-// handed and the op id it is published under — the two things the publisher
-// refuses a record without — plus an opaque body.
+// probeRecord is one probe-domain record on subject, declaring scope — the
+// objects its apply may make stale — and carrying the stamp its decision was
+// handed and the op id it is published under, plus an opaque body.
 //
 // THROUGH [probeDomain.Envelope]'s OWN SHAPE, because that reader is what the
-// publisher decodes the record with: a helper that wrote any other shape would
-// be testing a record no domain publishes.
-func probeRecord(stamp statelog.Stamp, opID, body string) []byte {
+// publisher decodes the record with and what an applier files it by: a helper
+// that wrote any other shape would be testing a record no domain publishes.
+// The publisher refuses a record without its stamp and its op id; an applier
+// anchors an arbitrated record by its envelope's SUBJECT and stops on one that
+// declares no SCOPE. A record missing the last two was accepted by every case
+// here that faked the applier, and refused by the first that did not
+// ([TestAWriteRunsTheWholeWritePathOnARealApplier]).
+//
+// ALWAYS AN OBJECT, whatever subject it is published on: the kind is what the
+// record IS, and a case that publishes it where a gate belongs
+// ([TestALogFullForOrdinaryWritesStillTakesAGateRecord]) is publishing
+// precisely a record that is not one.
+func probeRecord(stamp statelog.Stamp, subject statelog.Subject, scope statelog.ScopeSet,
+	opID, body string) []byte {
 	payload, err := json.Marshal(struct {
 		statelog.Envelope
 		Body string
 	}{
 		Envelope: statelog.Envelope{
-			V: 1, Kind: "object", OpID: opID,
-			Gen: stamp.Gen, Writer: stamp.Writer,
+			V: 1, Kind: "object", Subject: subject, OpID: opID,
+			Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Body: body,
 	})

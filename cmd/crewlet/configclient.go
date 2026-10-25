@@ -168,7 +168,7 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 	case status == http.StatusNotFound:
 		// PUT /config answers no 404 of its own, so any 404 is the surface
 		// missing rather than something under it.
-		return missingSurface(c.base, "/config", body.Error)
+		return missingSurface(c.base, "/config", body.Error, "-api")
 	case status == http.StatusConflict && body.Error == "revision_advanced":
 		return lostRace(c.base, body.Current, body.Stored)
 	case status == http.StatusForbidden && body.Error == string(httpjson.CodeConfigManaged):

@@ -42,7 +42,8 @@ func serveObjects(t *testing.T, block *queries.FleetObjects) *httptest.Server {
 func reported(missing ...objstore.Key) *queries.FleetObjects {
 	var files []collect.MissingFile
 	for i, k := range missing {
-		files = append(files, collect.MissingFile{Object: k, NamedBy: fmt.Sprintf("ENG/lost-%d.md", i)})
+		files = append(files, collect.MissingFile{Object: k, NamedBy: fmt.Sprintf("ENG/lost-%d.md", i),
+			Finding: collect.FindingMissing})
 	}
 	found := &collect.AuditFindings{At: objectsAt, Completed: true, Referenced: 1828,
 		Missing: len(missing), MissingFiles: files}
@@ -67,7 +68,8 @@ func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"an S3 bucket (https://s3.example.com/files/acme/)", "data-a",
-		"1840 objects listed, 12 deleted, 1 unfinished upload(s) abandoned", "1828 files named, 0 missing, 0 damaged"} {
+		"1840 objects listed, 12 deleted, 1 unfinished upload(s) abandoned",
+		"1828 files named, 0 missing, 0 damaged, 0 unanswered"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status does not say %q:\n%s", want, out)
 		}
@@ -90,6 +92,7 @@ func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 func TestObjectsStatusKeepsTheFindingsAndTheCountsOfAPassThatStopped(t *testing.T) {
 	t.Parallel()
 	lost := objstore.KeyAt(objectsAt)
+	refused := objstore.KeyAt(objectsAt)
 	block := queries.RenderObjects(engine.CollectionReport{
 		Node: "data-a", Backend: "nats",
 		Status: collect.Status{
@@ -97,8 +100,11 @@ func TestObjectsStatusKeepsTheFindingsAndTheCountsOfAPassThatStopped(t *testing.
 				Skipped: "a record this node could not apply may refer to objects in the store"},
 			Audit: collect.AuditReport{At: objectsAt, Error: "the bucket did not answer",
 				Found: &collect.AuditFindings{At: objectsAt.Add(-24 * time.Hour), Completed: true,
-					Referenced: 9, Damaged: 1,
-					MissingFiles: []collect.MissingFile{{Object: lost, NamedBy: "ENG/a.md", Damaged: true}}}},
+					Referenced: 9, Damaged: 1, Unanswered: 1,
+					MissingFiles: []collect.MissingFile{
+						{Object: lost, NamedBy: "ENG/a.md", Finding: collect.FindingDamaged},
+						{Object: refused, NamedBy: "ENG/b.md", Finding: collect.FindingUnanswered},
+					}}},
 		},
 	})
 	out, _, err := cli(t, "objects", "status", bootstrapForURL(t, serveObjects(t, &block).URL))
@@ -106,8 +112,10 @@ func TestObjectsStatusKeepsTheFindingsAndTheCountsOfAPassThatStopped(t *testing.
 		t.Fatal(err)
 	}
 	for _, want := range []string{"500 deleted", "(stopped judging: a record this node",
-		"9 files named, 0 missing, 1 damaged", "a later audit, at", "stopped: the bucket did not answer",
-		"ENG/a.md (damaged, object " + lost.String() + ")"} {
+		"9 files named, 0 missing, 1 damaged, 1 unanswered", "a later audit, at",
+		"stopped: the bucket did not answer", "2 file(s) cannot be read",
+		"ENG/a.md (damaged, object " + lost.String() + ")",
+		"ENG/b.md (unanswered, object " + refused.String() + ")"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status does not say %q:\n%s", want, out)
 		}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -78,10 +80,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
-			statelog.Reading{DeferredAge: 31 * time.Minute, DeferredJudgesCopy: true,
+			statelog.Reading{DeferredAge: 31 * time.Minute,
 				DeferredRecord: "at CREWLET_TRACKER_LOG@1:42"},
 			"(at CREWLET_TRACKER_LOG@1:42) has been held for 31m, past the 30m " +
-				"deferral grace, at which this node stops serving its copy of the estate",
+				"deferral grace, at which this node's copy of this log goes out of service",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
@@ -92,7 +94,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a slow prefetch": {
 			statelog.KindPrefetchSlow,
 			statelog.Reading{PrefetchP95: time.Second},
-			"context assembly",
+			"the knowledge scans this node ran for turns' prefetches",
 		},
 		"a slow search": {
 			statelog.KindSearchSlow,
@@ -165,10 +167,17 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
 			"5000 linearizable reads a day against the 1000 this log was sized for",
 		},
-		"files the object store lost or damaged": {
+		"files the object store lost, damaged or will not answer for": {
 			statelog.KindObjectsMissing,
 			statelog.Reading{ObjectsMissing: 2},
-			"2 file(s) are missing from the object store or damaged in it",
+			"2 file(s) are missing from the object store, damaged in it, or not answered for by it",
+		},
+		"repositories a git node's memory cannot index": {
+			statelog.KindCodeMaintenanceRefused,
+			statelog.Reading{CodeMaintenanceRefused: 2, CodeMaintenanceLargest: 19 << 30,
+				CodeMaintenanceBudget: 1 << 30},
+			"2 repository(ies) on this node are served without a bitmap: the largest's needs about " +
+				"19.0 GiB, and the node can give its background work 1.0 GiB",
 		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
@@ -243,6 +252,77 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("a measured zero raised %v, want both fraction alarms", kindsOf(got))
 	}
+}
+
+// EVERY PERCENTILE ALARM IS DECIDED AT A HISTOGRAM BOUNDARY.
+//
+// A percentile in the reading is read off a histogram (the engine's
+// retention.observed), and a histogram's quantile is the upper boundary of the
+// bucket the percentile falls in ([metrics.Snapshot.Quantile]) — a boundary
+// and nothing else. So an alarm that fires on a percentile past its budget is
+// exact only where the budget is a boundary: "the percentile is past the
+// budget" and "the boundary above it is" are then one statement. A budget
+// between two boundaries is decided at the one above it — under twenty-one
+// powers of two, `prefetch_slow`'s 500 ms fired for any p95 past 256 ms and
+// said the p95 was 512 ms.
+//
+// The budgets are FOUND rather than listed: each duration field named for a
+// percentile (…P95) is set alone, and the largest duration at which the table
+// raises nothing is bisected out of the table itself — so a percentile alarm
+// added later, or a budget retuned, is held without a line here, and a
+// percentile no alarm reads fails as one.
+//
+// Mutation: set a budget between two boundaries — PoolWaitAlarm to 150 ms —
+// or take a budget's boundary out of the millisecond scale, and this fails.
+func TestEveryPercentileAlarmIsDecidedAtABoundary(t *testing.T) {
+	t.Parallel()
+	bounds, ok := metrics.Bounds(metrics.UnitMilliseconds)
+	if !ok {
+		t.Fatalf("no histogram boundaries for %q, the unit every percentile here is read in",
+			metrics.UnitMilliseconds)
+	}
+	reading := reflect.TypeFor[statelog.Reading]()
+	var held []string
+	for i := range reading.NumField() {
+		field := reading.Field(i)
+		if !strings.HasSuffix(field.Name, "P95") {
+			continue
+		}
+		if field.Type != reflect.TypeFor[time.Duration]() {
+			t.Errorf("Reading.%s is a %s, want a time.Duration read off a millisecond histogram", field.Name,
+				field.Type)
+			continue
+		}
+		raises := func(d time.Duration) bool {
+			var r statelog.Reading
+			reflect.ValueOf(&r).Elem().Field(i).SetInt(int64(d))
+			return len(statelog.Evaluate(r)) > 0
+		}
+		quiet, loud := time.Duration(0), 24*time.Hour
+		if raises(quiet) || !raises(loud) {
+			t.Errorf("Reading.%s raises %v at zero and %v at %v: a percentile no alarm holds to a budget",
+				field.Name, raises(quiet), raises(loud), loud)
+			continue
+		}
+		for loud-quiet > 1 {
+			if mid := quiet + (loud-quiet)/2; raises(mid) {
+				loud = mid
+			} else {
+				quiet = mid
+			}
+		}
+		budget := float64(quiet) / float64(time.Millisecond)
+		if !slices.Contains(bounds, budget) {
+			t.Errorf("Reading.%s's alarm fires past %v, which is no boundary of the %s histograms it is read "+
+				"from (%v): it fires at the boundary above, for a percentile up to that much under its budget",
+				field.Name, quiet, metrics.UnitMilliseconds, bounds)
+		}
+		held = append(held, field.Name)
+	}
+	if len(held) == 0 {
+		t.Fatal("no percentile field in statelog.Reading: the gate's subject moved")
+	}
+	t.Logf("held %v to the %s boundaries", held, metrics.UnitMilliseconds)
 }
 
 // A NODE THAT HAS NEVER MEASURED ITS RATE DOES NOT ALARM — and that is the
@@ -406,6 +486,104 @@ func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
 		_, fired := find(statelog.Evaluate(c.reading), statelog.KindIVFRecallBelowFloor)
 		if fired != c.fires {
 			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE CODE MAINTENANCE ALARM FIRES PAST THE NODE'S OWN BUDGET, never at a
+// number of its own: the budget is what the git cache measured the node's
+// memory to leave its background indexing, and a run AT it starts — so only
+// an estimate past it is a repository refused. A node that serves no git
+// measures nothing and must alarm about nothing, and a node whose lanes leave
+// its maintenance nothing at all is the alarm, not the absence.
+//
+// Mutation: fire at the budget, or on any refused count without comparing,
+// and a case below fails.
+func TestTheCodeMaintenanceAlarmFiresPastTheNodesBudget(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"an estimate at the budget": {statelog.Reading{
+			CodeMaintenanceLargest: 1 << 30, CodeMaintenanceBudget: 1 << 30}, false},
+		"an estimate a byte past it": {statelog.Reading{CodeMaintenanceRefused: 1,
+			CodeMaintenanceLargest: 1<<30 + 1, CodeMaintenanceBudget: 1 << 30}, true},
+		"a node that leaves its maintenance nothing": {statelog.Reading{CodeMaintenanceRefused: 1,
+			CodeMaintenanceLargest: 320}, true},
+		"a budget with nothing refused": {statelog.Reading{CodeMaintenanceBudget: 1 << 30}, false},
+		"a node that serves no git":     {statelog.Reading{}, false},
+	} {
+		_, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMaintenanceRefused)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE FLOOR ALARM NAMES ONLY THE LOGS WHOSE READS IT REFUSES, EACH WITH ITS
+// OWN AGE.
+//
+// A log whose floor began failing inside [statelog.FloorCacheStale] is still
+// served from its memo. Read as one longest age beside every failing name, the
+// alarm told an operator that log's reads were refused, with another log's age
+// as the evidence, and its remedy said so of every name it gave. Each log is
+// evaluated on its own measurement, so a log inside the bound is named by no
+// alarm and every log past it carries its own age.
+//
+// Mutation: compare FloorUnknownFor against zero rather than the bound, or
+// hand every log the node's longest age, and a case below fails.
+func TestTheFloorAlarmNamesOnlyTheLogsPastTheBound(t *testing.T) {
+	t.Parallel()
+	past := statelog.FloorCacheStale
+	for name, c := range map[string]struct {
+		unread map[string]time.Duration
+		names  map[string]string // each log the alarm names, and the age it says
+	}{
+		"one log past the bound, one inside it": {
+			unread: map[string]time.Duration{"pages": past + time.Minute, "tracker": time.Second},
+			names:  map[string]string{"pages": "for 2m"},
+		},
+		"three past the bound, each with its own age": {
+			unread: map[string]time.Duration{
+				"tracker": past + 30*time.Second, "pages": past + time.Minute,
+				"usage": past + 2*time.Minute,
+			},
+			names: map[string]string{"tracker": "for 1m 30s", "pages": "for 2m", "usage": "for 3m"},
+		},
+		"every log inside the bound": {
+			unread: map[string]time.Duration{"pages": past, "tracker": time.Second},
+		},
+	} {
+		var domains []statelog.DomainInputs
+		for _, log := range slices.Sorted(maps.Keys(c.unread)) {
+			d := healthyDomain(log, true)
+			d.FloorUnknownFor = c.unread[log]
+			d.FloorUnknownCause = "coordination unreachable"
+			domains = append(domains, d)
+		}
+		rep := statelog.NewReport(statelog.ReportInputs{
+			NodeID: "node-1", At: reportAt, RegisterReadable: true,
+			ReplayWindow: replayWindow, Domains: domains,
+		})
+		got := map[string]string{}
+		for _, a := range rep.Alarms {
+			if a.Kind != statelog.KindFloorUnknown {
+				continue
+			}
+			for _, d := range a.Domains {
+				got[d.Domain] = d.Detail
+			}
+		}
+		if len(got) != len(c.names) {
+			t.Errorf("%s: floor_unknown named %v, want exactly %v", name, got, c.names)
+			continue
+		}
+		for log, age := range c.names {
+			if !strings.Contains(got[log], age) {
+				t.Errorf("%s: the %s log's floor_unknown reads %q, want its own age, %q",
+					name, log, got[log], age)
+			}
 		}
 	}
 }
@@ -893,6 +1071,29 @@ func TestALogsCensusIsPerSeat(t *testing.T) {
 	if statelog.LinearizableReadsPerSeatDay*100 != 12_500 {
 		t.Errorf("the per-seat census is %d, and the reference company's 12 500 "+
 			"over its 100 seats is 125", statelog.LinearizableReadsPerSeatDay)
+	}
+}
+
+// A LOG'S CENSUS COUNTS THE READERS ITS OWN SIZING DECLARES, beside the seats
+// and the engine's passes: the code log's git clients — people and their CI,
+// whom no seat count predicts — are a term of their own, so a small company's
+// git traffic is held to what its code log was sized for rather than to 125 a
+// day per agent seat. A negative term adds nothing, like Background.
+func TestTheCensusCountsALogsClients(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		census statelog.Census
+		want   int
+	}{
+		{"five seats, the collector and a thousand git reads",
+			statelog.Census{Seats: 5, Background: 25, Clients: 1000}, 1650},
+		{"clients alone beside no seat", statelog.Census{Clients: 112_788}, 125 + 112_788},
+		{"a negative client term adds nothing", statelog.Census{Seats: 5, Clients: -40}, 625},
+	} {
+		if got := tc.census.Expected(); got != tc.want {
+			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)
+		}
 	}
 }
 

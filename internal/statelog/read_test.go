@@ -99,13 +99,19 @@ func newReader(t *testing.T, db interface {
 		DB:     db,
 		Index:  index,
 		Waiter: waiter,
-		Health: h,
+		Health: readable(h),
 		Drain:  func() float64 { return 2000 },
 	})
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
 	return r
+}
+
+// readable is a health provider that always manages to read the health it
+// reports — every case here but the one about a health nobody could read.
+func readable(h func() statelog.Health) func() (statelog.Health, error) {
+	return func() (statelog.Health, error) { return h(), nil }
 }
 
 func pointQuery(level statelog.ReadLevel) statelog.Query {
@@ -357,9 +363,7 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Run("the broker's own answer", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		assertFullLogRead(t, h, refusingAppender{err: &jetstream.APIError{
-			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}},
-			noCeiling(t))
+		assertFullLogRead(t, h, fullLog(), noCeiling(t))
 	})
 
 	t.Run("a real log at its ceiling", func(t *testing.T) {
@@ -582,6 +586,13 @@ func (ctxStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 // refusingAppender is a broker that answers every append with err.
 type refusingAppender struct{ err error }
 
+// fullLog is a broker whose stream is at its byte ceiling: every append is
+// answered what JetStream answers one past it.
+func fullLog() refusingAppender {
+	return refusingAppender{err: &jetstream.APIError{
+		Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}}
+}
+
 func (a refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
 	return 0, false, a.err
 }
@@ -727,6 +738,46 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 	if statelog.ReadRefusal("made_up").Valid() {
 		t.Error("an unknown refusal code reports itself valid")
+	}
+}
+
+// EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE, and only the
+// three that are facts about the whole fleet are not: a full log refuses every
+// node's barrier, and so does a broker that refused to store one for a reason
+// of its own (a sealed stream, a store out of resources), since every node
+// appends to the one stream; and a capacity window holds every node. Each code
+// is named here, so a code added to the set is a decision this table has to make —
+// and a code from a newer build, which nobody here can judge, is final.
+func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
+	t.Parallel()
+	want := map[statelog.ReadRefusal]bool{
+		statelog.RefuseBehind:               true,
+		statelog.RefuseDeferred:             true,
+		statelog.RefuseDeferredScopeUnknown: true,
+		statelog.RefuseStalled:              true,
+		statelog.RefuseBelowFloor:           true,
+		statelog.RefuseFloorUnknown:         true,
+		statelog.RefuseEvicted:              true,
+		statelog.RefuseBrokerUnreachable:    true,
+		statelog.RefuseNoQuorum:             true,
+		statelog.RefuseWrongStream:          true,
+		statelog.RefuseTooStale:             true,
+		statelog.RefuseLogFull:              false,
+		statelog.RefuseBrokerRefused:        false,
+		statelog.RefuseMaintenance:          false,
+	}
+	for _, code := range statelog.ReadRefusals {
+		elsewhere, judged := want[code]
+		if !judged {
+			t.Errorf("%q is a refusal this table does not judge: say whether another node may serve it", code)
+			continue
+		}
+		if got := code.Elsewhere(); got != elsewhere {
+			t.Errorf("%q says another node may serve it: %v, want %v", code, got, elsewhere)
+		}
+	}
+	if statelog.ReadRefusal("made_up").Elsewhere() {
+		t.Error("a refusal code this build does not know says another node may serve it")
 	}
 }
 
@@ -1063,6 +1114,71 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 		t.Fatalf("a bounded stale read with an unknown lag = %v, want "+
 			"broker_unreachable", err)
 	}
+}
+
+// A READINESS NOBODY COULD READ REFUSES `broker_unreachable`, NAMING WHY — at
+// every level, and after a wait as well as before one.
+//
+// The provider's failure is its own return rather than a sentence in
+// [statelog.Health.Err]: folded into a zero health, the zero floor beside it
+// was refused first, and a stream leader that stopped answering the log's ends
+// reached a caller as "the published trim floor has never been read on this
+// node" — the wrong code and a false sentence, sending an operator to
+// coordination.
+func TestAnUnreadableReadinessRefusesBrokerUnreachable(t *testing.T) {
+	t.Parallel()
+	const why = "the stream's leader does not answer"
+	refusedFor := func(t *testing.T, err error, level statelog.ReadLevel) {
+		t.Helper()
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBrokerUnreachable ||
+			!strings.Contains(refusal.Detail, why) {
+			t.Fatalf("a %s read over an unreadable readiness = %v, want %q naming %q",
+				level, err, statelog.RefuseBrokerUnreachable, why)
+		}
+	}
+	unread := func() (statelog.Health, error) { return statelog.Health{}, errors.New(why) }
+	db := newStubStore(t)
+	r, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: statelog.ModeNormal,
+		DB: db, Waiter: &stubWaiter{at: healthy().Position}, Health: unread,
+		Drain: func() float64 { return 2000 },
+	})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	for _, level := range statelog.ReadLevels {
+		_, err := r.Read(t.Context(), pointQuery(level), func(*sql.Tx) error { return nil })
+		refusedFor(t, err, level)
+	}
+	if got := db.reads.Load(); got != 0 {
+		t.Fatalf("reads over an unreadable readiness opened %d transaction(s)", got)
+	}
+
+	// AFTER A WAIT: the readiness answered before it and not after.
+	var asked atomic.Int64
+	waited := func() (statelog.Health, error) {
+		if asked.Add(1) == 1 {
+			return healthy(), nil
+		}
+		return unread()
+	}
+	w := &stubWaiter{at: healthy().Position}
+	r, err = statelog.NewReader(statelog.ReaderDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: statelog.ModeNormal,
+		DB: db, Waiter: w, Health: waited, Drain: func() float64 { return 2000 },
+	})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	q := pointQuery(statelog.ReadSession)
+	q.Session = statelog.Position{Stream: probeStream, Generation: 1, Seq: 42}
+	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+	if w.waited.Load() != 1 {
+		t.Fatalf("the session read waited %d time(s), want once — the case is "+
+			"about a readiness read after a wait", w.waited.Load())
+	}
+	refusedFor(t, err, statelog.ReadSession)
 }
 
 // EVERY READ LEVEL IS ONE THIS BUILD KNOWS, and consistent-prefix is never a
@@ -1524,7 +1640,7 @@ func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
 	deps := func(mode statelog.MaintenanceMode, index *statelog.ReadIndex) statelog.ReaderDeps {
 		return statelog.ReaderDeps{
 			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: mode,
-			DB: newStubStore(t), Index: index, Health: healthy,
+			DB: newStubStore(t), Index: index, Health: readable(healthy),
 			Waiter: &stubWaiter{at: healthy().Position},
 		}
 	}

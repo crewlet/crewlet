@@ -71,14 +71,15 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			in.Live = live
 		}
 	}
-	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
-	// reports its trim as unreadable rather than as a trim that has
-	// concluded nothing, which is a different thing to go and look at.
-	floors := map[string]coord.TrimFloor{}
-	rows, floorsErr := r.fleet.Floors(ctx)
-	for _, row := range rows {
-		floors[row.Domain] = row
-	}
+	// AN UNREADABLE FLOOR IS NOT AN ABSENT ONE: a domain whose floor could
+	// not be read reports its trim as unreadable rather than as a trim that
+	// has concluded nothing, which is a different thing to go and look at —
+	// and only that domain does, since each domain's floor is its own key.
+	//
+	// READ ONCE, for the rows below and for every domain's readiness: two
+	// reads of the floors a round trip apart could disagree about the floor
+	// a row prints and the floor its refusal was judged by.
+	read := readFloorsOf(ctx, r.fleet, registeredNames())
 	backups, _ := r.fleet.BackupPoints(ctx)
 	// THE POINT THE TRIM COUNTS, under the operator's own policy — not the
 	// newest of every owner. Under `backup_floor: operator` the nodes' own
@@ -97,7 +98,9 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	held := r.state.running()
 	healths := make(map[string]domainHealth, len(held))
 	// EACH LOG'S CENSUS, read off the recorder once for every log, as the
-	// reading's other windowed figures are ([retention.census]).
+	// reading's other windowed figures are ([retention.census]) — and sized,
+	// for a log whose census counts readers of its own, by the ceiling the
+	// stream read below finds its stream HOLDING.
 	census := r.census(held)
 	for _, running := range held {
 		name := running.domain.Name()
@@ -117,10 +120,11 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// [retention.measureRates] for why a report never searches a log.
 		d.BytesPerDay = r.rateOf(name)
 		d.FloorState = statelog.TrimFloorNoneAtGeneration
-		if floorsErr != nil {
+		floor, published, floorErr := read.row(name)
+		if floorErr != nil {
 			d.FloorState = statelog.TrimFloorUnreadable
 		}
-		if floor, published := floors[name]; published && floor.Generation == d.Generation {
+		if published && floor.Generation == d.Generation {
 			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW,
 			// and the report carries both: filled from one, the two
 			// figures were always equal and a blocked domain reported
@@ -149,7 +153,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// THIS NODE'S OWN REFUSAL OF THE DOMAIN, from the readiness its
 		// probe reads — so the not-ready state the guides send an operator
 		// here to find is a line this report prints, naming the finding.
-		health, healthErr := r.state.health(ctx, running)
+		health, healthErr := r.state.health(ctx, running, read)
 		healths[name] = domainHealth{health: health, err: healthErr}
 		if healthErr != nil {
 			// THE PROBE'S OWN ANSWER to a health nobody could read.
@@ -189,8 +193,15 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// than taken, because its age is an interval between observations —
 		// one taken per poll would make it whatever the poll rate is.
 		d.FloorUnknownFor, d.FloorUnknownCause = r.floors.of(name)
+		// AT THE CEILING THE STREAM READ ABOVE FOUND IT HOLDING: a log whose
+		// census counts readers of its own and whose stream this pass could
+		// not read is left uncounted rather than judged without them, where
+		// a healthy git host's reads would read as the seats' over-reading.
+		// The next pass that reads the stream judges it.
 		if c, counted := census[name]; counted {
-			d.LinearizableReads, d.LinearizableReadsExpected = c.reads, c.expected
+			if expected, sized := c.expectedAt(d.MaxBytes, d.StreamReadable, r.cfg.MinAge()); sized {
+				d.LinearizableReads, d.LinearizableReadsExpected = c.reads, expected
+			}
 		}
 		in.Domains = append(in.Domains, d)
 	}
@@ -217,10 +228,12 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 // register — neither clears a firing alarm nor hides a new one.
 //
 // PER LOG, which is the one arrangement in which the consequence the alarm
-// states is true: the question [stateLog.judgeCopy] asks before it lets a
-// deferral take the copy out of service is the log's own
-// [statelog.Domain.ReadinessInput], so two logs holding records at once are two
-// different answers.
+// states is true: a deferral past the grace takes that log's copy out of
+// service and no other's ([stateLog.judgeCopy], ADR-0046), so two logs holding
+// records at once are two different answers. And EVERY log's, whatever it
+// declares about seat admission, so nothing here says whether a log's copy is
+// judged: when one declaration answered both questions, the vectors' and the
+// usage domain's copies escaped the judgement.
 func (r *retention) deferral(d *statelog.DomainInputs, running *runningLog,
 	now time.Time) {
 
@@ -232,7 +245,6 @@ func (r *retention) deferral(d *statelog.DomainInputs, running *runningLog,
 	d.DeferredRecord = fmt.Sprintf("at %s, written at record version %d against "+
 		"the %d this build reads", record.Position, record.Version,
 		running.domain.RecordVersion())
-	d.DeferredJudgesCopy = running.domain.ReadinessInput()
 }
 
 // fleetTombstones folds each identity-claiming log's own tombstones into the
@@ -444,14 +456,18 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// alarm then told a company four seconds old that its newest verified
 	// backup was twenty-five hours old, one line above the trim term
 	// reporting that no backup had been recorded at all.
+	// THE FLOORS ARE READ AT MOST ONCE, and only where a health was not
+	// handed in: one read of every domain's key answers every domain's floor.
+	var floors *publishedFloors
 	for _, running := range r.state.running() {
 		name := running.domain.Name()
-		if running == nil {
-			continue
-		}
 		read, ok := healths[name]
 		if !ok {
-			read.health, read.err = r.state.health(ctx, running)
+			if floors == nil {
+				read := r.state.readFloors(ctx)
+				floors = &read
+			}
+			read.health, read.err = r.state.health(ctx, running, *floors)
 		}
 		if read.err != nil {
 			continue
@@ -468,6 +484,9 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	}
 	if r.objects != nil {
 		r.objects(now, &out)
+	}
+	if r.code != nil {
+		r.code(&out)
 	}
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
@@ -611,14 +630,25 @@ func (r *retention) observed(out *statelog.Reading) {
 	for _, snapshot := range reading {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:
-			out.BarrierP95 = max(out.BarrierP95, quantileDuration(snapshot, 0.95))
+			out.BarrierP95 = max(out.BarrierP95, p95Duration(snapshot))
 		case metrics.TrackerSearchScanDuration:
-			out.SearchP95 = max(out.SearchP95, quantileDuration(snapshot, 0.95))
+			// BY THE PATH THE SCAN RAN FOR, each against its own budget:
+			// a turn start's prefetch and a deliberate search are two
+			// promises, and read as one series the faster one hides the
+			// other — while a prefetch series read as interactive would
+			// fire `search_slow` for a slow turn start. The worst `rung`
+			// of each, as the worst file is for the pool.
+			switch scanPath(snapshot.Attrs["path"]) {
+			case scanPrefetch:
+				out.PrefetchP95 = max(out.PrefetchP95, p95Duration(snapshot))
+			case scanInteractive:
+				out.SearchP95 = max(out.SearchP95, p95Duration(snapshot))
+			}
 		case metrics.StorePoolWait:
 			// THE WORST FILE, not the sum of them. A caller queues on
 			// ONE pool, and two estates each half-starved is not the
 			// same node as one estate fully starved.
-			out.PoolWaitP95 = max(out.PoolWaitP95, quantileDuration(snapshot, 0.95))
+			out.PoolWaitP95 = max(out.PoolWaitP95, p95Duration(snapshot))
 		case metrics.StatelogRecordsGated:
 			out.RecordsGated += int(snapshot.Total)
 		case metrics.TrackerFeedUnreadable:
@@ -637,9 +667,28 @@ func (r *retention) observed(out *statelog.Reading) {
 }
 
 // logCensus is one log's census half: the barrier records it received over
-// the window, and the census it was sized for.
+// the window, and the census it was sized for — its seats' and the engine's
+// own terms, and the term of the readers its own sizing declares beside them
+// ([clientBarriers]), nil for a log that declares none.
 type logCensus struct {
-	reads, expected int
+	reads   int
+	census  statelog.Census
+	clients clientTerm
+}
+
+// expectedAt is the census the log was sized for at the byte ceiling its
+// stream holds (read: whether the report's stream read found it), and false
+// for a log whose census counts readers of its own on a pass that could not
+// read that ceiling ([retention.census]).
+func (c logCensus) expectedAt(holds uint64, read bool, minAge time.Duration) (int, bool) {
+	census := c.census
+	if c.clients != nil {
+		if !read {
+			return 0, false
+		}
+		census.Clients = c.clients(int64(holds), minAge)
+	}
+	return census.Expected(), true
 }
 
 // census is each log's census half, keyed by the log's domain: of every log
@@ -667,10 +716,26 @@ type logCensus struct {
 // an operator who could set it would be silencing the alarm rather than
 // resizing the deployment it is about — scaled by the company's own seats,
 // plus what the engine's own periodic reads put on the log whatever the seats
-// do ([statelog.Census]).
+// do, plus the readers the log's own sizing declares that are neither — the
+// code log's git clients ([statelog.Census], [clientBarriers]), counted
+// whatever this node's runtime hosts, since the rate above is the fleet's.
 //
 // WINDOWED, like every alarm input [retention.observed] reads: a count since
 // the process started only grows, and a threshold against it latches.
+//
+// # Sized by the ceiling the stream HOLDS
+//
+// The git clients' term is a share of the log's ceiling, and the ceiling is
+// the one the broker enforces on the stream — read off its configuration in
+// the report's own stream read ([logCensus.expectedAt]) — never the Tier A
+// figure this node would CREATE the stream with ([stateLog.specOf]), which for
+// a stream that exists is applied by nothing: an operator who raised
+// `stream.code_log_max_bytes` and restarted grew that census and silenced the
+// alarm over a log that still held what it always had, and one who resized
+// the log with `crewlet retention set-capacity` left the census at the old
+// figure. Unset, that figure is also each node's own, derived from its free
+// disk, so two nodes judged one log against two censuses. The held ceiling is
+// one number for every node, and the resize is what moves it.
 func (r *retention) census(running []*runningLog) map[string]logCensus {
 	if r.metrics == nil {
 		return nil
@@ -700,19 +765,25 @@ func (r *retention) census(running []*runningLog) map[string]logCensus {
 		name := l.domain.Name()
 		out[name] = logCensus{
 			reads: received[l.spec.Name],
-			expected: statelog.Census{
+			census: statelog.Census{
 				Seats:      seats,
 				Background: background(name),
-			}.Expected(),
+			},
+			clients: clientBarriers(name),
 		}
 	}
 	return out
 }
 
-// quantileDuration reads a histogram's quantile back as the duration its unit
-// says it is.
-func quantileDuration(s metrics.Snapshot, q float64) time.Duration {
-	return time.Duration(s.Quantile(q) * float64(time.Millisecond))
+// p95Duration reads a histogram's 95th percentile back as the duration its
+// unit says it is.
+//
+// THE PERCENTILE IS FIXED HERE rather than an argument, because every budget
+// the reading is held to — the barrier's, the pool wait's and each scan path's
+// — is stated at p95, and a percentile each caller spelled for itself is one a
+// caller could spell differently from the budget it is compared with.
+func p95Duration(s metrics.Snapshot) time.Duration {
+	return time.Duration(s.Quantile(0.95) * float64(time.Millisecond))
 }
 
 // refusalIsOrdinaryLag reports whether a refusal series is one a caller only

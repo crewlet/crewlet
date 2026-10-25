@@ -400,7 +400,13 @@ func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
 			"because a recreated one is EMPTY and would hydrate every seat to "+
 			"nothing while reporting success", err)
 	}
-	created := stream.CachedInfo().Created.UTC()
+	// THE ONE READING of a stream's identity: the instant stamped at its
+	// creation, which a restored changelog keeps and the broker's own
+	// instant does not ([statelog.CreatedAtKey]).
+	created, err := statelog.StreamCreatedAt(stream.CachedInfo())
+	if err != nil {
+		return nil, fmt.Errorf("memsync: read the memory changelog's identity: %w", err)
+	}
 
 	recorded, known, err := statelog.RecordedIdentity(ctx, s.db, topics.MemoryStream)
 	if err != nil {

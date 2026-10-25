@@ -139,7 +139,7 @@ type relayAnswer struct {
 // relayQueue is the two ephemeral verbs the relay rides.
 type relayQueue interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
 // inboxRelay is one data node's half of the relay: the server's ring, and the
@@ -271,8 +271,16 @@ func (r *inboxRelay) answerNow(ctx context.Context, ask relayAsk) (relayAnswer, 
 }
 
 // serve makes this node the answerer of its own relay subject.
+//
+// ON A REGISTRATION OF ITS OWN, because its answers WAIT — up to
+// [inboxRelayWait] for the applier's next announcement — and a slot held
+// through a wait is one every other request of a shared registration would
+// wait behind. Its bound is the queue those waits come from: each follower, a
+// node whose own copy is out of service, keeps one ask in flight, so
+// [queue.ConcurrentAnswers] is that many such nodes at once, and one past it
+// waits for a slot inside its own wait rather than being refused.
 func (r *inboxRelay) serve(ctx context.Context) (queue.Unsubscribe, error) {
-	return r.queue.Serve(ctx, inboxRelaySubject(r.self),
+	return r.queue.Serve(ctx, inboxRelaySubject(r.self), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
 			var ask relayAsk
 			if err := json.Unmarshal(raw, &ask); err != nil {
@@ -417,18 +425,21 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// faultedUnasked reports whether this node's copy is OUT OF SERVICE as far as
-// it can tell without waiting: a verdict read and found wrong. A copy nobody
-// has judged yet and a node whose core is not up are not — [localEstate.For]
-// serves both — and a stale verdict answers while the read that replaces it
-// runs, exactly as a request is answered.
+// faultedUnasked reports whether this node's TRACKER copy is OUT OF SERVICE as
+// far as it can tell without waiting: a verdict read and found that domain's
+// copy wrong (ADR-0046). The tracker's alone, because the inbox movements come
+// from the tracker's applier: a wrong copy of any other domain leaves this
+// node's own announcements complete. A copy nobody has judged yet and a node
+// whose core is not up are not — [localEstate.For] serves both — and a stale
+// verdict answers while the read that replaces it runs, exactly as a request
+// is answered.
 func (l *localEstate) faultedUnasked(ctx context.Context) bool {
 	c := l.e.core.Load()
 	if c == nil || c.log == nil {
 		return false
 	}
 	v, known, _ := l.peek(ctx, c)
-	return known && v.fault != ""
+	return known && !v.serves(tracker.Domain{}.Name())
 }
 
 // armInboxRelay makes this data node a server of its inbox relay and starts

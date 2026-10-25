@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1174,6 +1175,41 @@ func TestTheOrgRootRefusesAnAgentOnlyANewPage(t *testing.T) {
 		Container: "HOME", Title: "Company values", Body: "x",
 	}); err != nil {
 		t.Fatalf("a person could not publish into the org root: %v", err)
+	}
+}
+
+// THE RESERVATION IS ASKED AT EACH WRITE. Both containers are Tier B and an
+// apply can move them, while a surface holding this store is not rebuilt for a
+// new company document — so a write is judged against what the company
+// reserves WHEN IT IS MADE: the container its skills moved to refuses an agent,
+// and the one they moved away from is an ordinary container again. Read once
+// when the store was built, the reservation went on refusing the container a
+// company had renamed away from and admitting the one it had moved to.
+func TestTheReservationIsAskedAtEachWrite(t *testing.T) {
+	t.Parallel()
+	var held atomic.Pointer[pages.Reserved]
+	held.Store(&pages.Reserved{Skills: "TS", Root: "HOME", Declared: harnessSpaces})
+	r := newRoundTripReserving(t, openLog(t), openNodeStore(t, "node.db"), "node-a",
+		func() pages.Reserved { return *held.Load() })
+	create := func(container string) error {
+		t.Helper()
+		_, err := r.store.Create(t.Context(), agent("pm"), pages.NewPage{
+			Container: container, Title: "a page in " + container, Body: "x",
+		})
+		return err
+	}
+	if err := create("TS"); !errors.Is(err, pages.ErrReserved) {
+		t.Fatalf("the premise: TS holds the skills and an agent's page there "+
+			"gave %v, want ErrReserved", err)
+	}
+	held.Store(&pages.Reserved{Skills: "OPS", Root: "HOME", Declared: harnessSpaces})
+	if err := create("OPS"); !errors.Is(err, pages.ErrReserved) {
+		t.Errorf("an agent's page landed in the container the company moved its "+
+			"skills to: %v", err)
+	}
+	if err := create("TS"); err != nil {
+		t.Errorf("the container the company moved its skills away from still "+
+			"refuses an agent: %v", err)
 	}
 }
 

@@ -2,6 +2,8 @@ package config_test
 
 import (
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +243,108 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 	}
 }
 
+// THE CODE LOG IS DERIVED FROM THE MUTATION LOG'S CEILING — set or derived —
+// at two thirds of it, the bytes its push records and its git clients' barriers
+// take a day beside the tracker's (DerivedCodeLogNumerator), on the knowledge
+// base's rule: both logs hold a trailing window of records, so a blocked trim
+// fills both in the same time. Each expectation is
+// the mutation log's own ceiling for the row, times two over three, held
+// inside the code log's own bounds.
+func TestCodeLogCeilingIsTwoThirdsOfTheTrackers(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+	for name, tc := range map[string]struct {
+		stream config.Stream
+		free   int64
+		want   int64
+	}{
+		// The mutation log derives its 4 GiB floor on these two.
+		"an unmeasured volume": {free: 0, want: 4 * gib * 2 / 3},
+		"a 16 GiB disk":        {free: 16 * gib, want: 4 * gib * 2 / 3},
+		// A quarter of 200 GiB is 50 GiB.
+		"an ordinary disk": {free: 200 * gib, want: 50 * gib * 2 / 3},
+		// A quarter of a tebibyte is past the 64 GiB clamp.
+		"a large array, at the mutation log's clamp": {free: 1024 * gib, want: 64 * gib * 2 / 3},
+		// THE OPERATOR'S FIGURE FOR THE COMPANY, on a disk that would have
+		// derived far less.
+		"a mutation log an operator sized": {stream: config.Stream{TrackerLogMaxBytes: 900 * gib},
+			free: 8 * gib, want: 600 * gib},
+		"the largest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesCeiling},
+			free: 8 * gib, want: config.TrackerLogMaxBytesCeiling * 2 / 3},
+		// AND NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE: two thirds
+		// of the smallest mutation log is under a gibibyte.
+		"the smallest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesFloor},
+			free: 4000 * gib, want: config.CodeLogMaxBytesFloor},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, derived := tc.stream.CodeMaxBytes(tc.free)
+			if got != tc.want || !derived {
+				t.Errorf("the code log derives (%d, derived %v), want (%d, true)",
+					got, derived, tc.want)
+			}
+			if got < config.CodeLogMaxBytesFloor || got > config.CodeLogMaxBytesCeiling {
+				t.Errorf("the code log derives %d, outside the %d..%d Tier A accepts",
+					got, config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling)
+			}
+		})
+	}
+
+	// AN OPERATOR'S OWN NUMBER IS NEITHER DERIVED NOR SCALED.
+	s := config.Stream{CodeLogMaxBytes: 3 * gib, TrackerLogMaxBytes: 900 * gib}
+	if got, derived := s.CodeMaxBytes(200 * gib); got != 3*gib || derived {
+		t.Errorf("a set code-log ceiling reads back (%d, derived %v)", got, derived)
+	}
+}
+
+// THE SCHEMA SPELLS EACH LOG'S BOUNDS A SECOND TIME, as the literals of a
+// struct tag, and the generated schema is what an editor and `crewlet validate
+// --schema` admit a value by — so a tag left behind when its constant moved
+// admits a value validation then refuses. The store floor's tag did exactly
+// that when the floor moved from five gibibytes to six; nothing tied the two.
+// This does, for every field whose bounds are constants.
+func TestTheStoreFloorIsTheSchemasMinimum(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		field    string
+		min, max int64
+	}{
+		{"StoreMaxBytes", config.StoreMaxBytesFloor, config.StoreMaxBytesCeiling},
+		{"TrackerLogMaxBytes", config.TrackerLogMaxBytesFloor, config.TrackerLogMaxBytesCeiling},
+		{"TrackerVectorsMaxBytes", config.TrackerVectorsMaxBytesFloor, config.TrackerVectorsMaxBytesCeiling},
+		{"PagesLogMaxBytes", config.PagesLogMaxBytesFloor, config.PagesLogMaxBytesCeiling},
+		{"IamLogMaxBytes", config.IamLogMaxBytesFloor, config.IamLogMaxBytesCeiling},
+		{"UsageLogMaxBytes", config.UsageLogMaxBytesFloor, config.UsageLogMaxBytesCeiling},
+		{"CodeLogMaxBytes", config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling},
+		{"ArtifactsLogMaxBytes", config.ArtifactsLogMaxBytesFloor, config.ArtifactsLogMaxBytesCeiling},
+		{"ArtifactDataLogMaxBytes", config.ArtifactDataLogMaxBytesFloor, config.ArtifactDataLogMaxBytesCeiling},
+	} {
+		field, ok := reflect.TypeFor[config.Stream]().FieldByName(tc.field)
+		if !ok {
+			t.Errorf("config.Stream has no field %s", tc.field)
+			continue
+		}
+		bounds := map[string]int64{}
+		for _, part := range strings.Split(field.Tag.Get("js"), ";") {
+			key, value, found := strings.Cut(part, "=")
+			if !found {
+				continue
+			}
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				t.Errorf("%s's js tag %q: %v", tc.field, part, err)
+				continue
+			}
+			bounds[key] = n
+		}
+		if bounds["min"] != tc.min || bounds["max"] != tc.max {
+			t.Errorf("%s's schema admits %d..%d and validation %d..%d — the tag "+
+				"was left behind when a constant moved", tc.field,
+				bounds["min"], bounds["max"], tc.min, tc.max)
+		}
+	}
+}
+
 // A LOG THAT GROWS WITH NO CORPUS TAKES A FLOOR WELL UNDER ONE THAT DOES, and
 // that is a decision rather than an accident.
 //
@@ -392,6 +496,10 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
 		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
 		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		"code below a gibibyte":    {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = gib - 1 }, false, "code_log_max_bytes"},
+		"code at a gibibyte":       {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = gib }, true, ""},
+		"code at a tebibyte":       {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = 1024 * gib }, true, ""},
+		"code past a tebibyte":     {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = 1024*gib + 1 }, false, "code_log_max_bytes"},
 		// THE IDENTITY LOG AND THE USAGE LOG TAKE A FLOOR OF THEIR OWN,
 		// well under the gibibyte the corpus-sized logs take: neither
 		// grows with a corpus, and a floor is free space every node must
@@ -474,34 +582,39 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		says   string
 	}{
 		"unset": {func(*config.Bootstrap) {}, true, ""},
-		// SIX: what five state logs reserve at their smallest unset
-		// ceilings (4.5 GiB), and about 1.5 GiB for every stream that
-		// reserves nothing.
+		// SIX: the smallest limit the logs' floors sat inside, with room
+		// beside them, while the register held fewer — what a fresh node
+		// needs is computed (engine.BrokerFloor) and is past it now; see
+		// config.StoreMaxBytesFloor.
 		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
 		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
 		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
 		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
-		// THE FLOOR IS WHY THE FLOOR MOVED. Five state-log domains at the
-		// ceilings they take unset come to 4.5 GiB, which fits the old
-		// five-gibibyte limit — and the cross-field rule below refuses
-		// only a sum GREATER than the limit, so at five this document
-		// validated and the node was left half a gibibyte for every
-		// mailbox, the event stream and every coordination bucket. The
-		// floor is what moves that refusal forward to `crewlet validate`.
-		"every domain at its unset size inside the floor": {func(b *config.Bootstrap) {
+		// THE FLOOR IS WHY THE FLOOR MOVED. The five state-log domains the
+		// register held then, at the ceilings they take unset, come to
+		// 4.5 GiB, which fits the old five-gibibyte limit — and the
+		// cross-field rule below refuses only a sum GREATER than the
+		// limit, so at five this document validated and the node was left
+		// half a gibibyte for every mailbox, the event stream and every
+		// coordination bucket. The floor is what moves that refusal forward
+		// to `crewlet validate`. (The eight there are now reserve 7.5 GiB
+		// at their smallest, past this floor, which is why the room a fresh
+		// node needs is computed and the boot refuses a limit under it.)
+		"the five first domains at their unset sizes inside the floor": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 6 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
 			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
 			b.Stream.IamLogMaxBytes = 512 * mib
 		}, true, ""},
-		"every domain at its unset size inside the old limit": {func(b *config.Bootstrap) {
+		"the five first domains at their unset sizes inside the old limit": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 5 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
 			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
 			b.Stream.IamLogMaxBytes = 512 * mib
 		}, false, "store_max_bytes"},
-		// EACH OF THE FIVE IS IN THE SUM: ceilings that fit exactly, and
-		// the one log that tips them past the limit.
+		// EACH LOG IS IN THE SUM: ceilings that fit exactly, and the one
+		// log that tips them past the limit — the knowledge base's and the
+		// identity log's here, the usage log's and the code log's below.
 		"tipped past it by the knowledge base's log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 16 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 8*gib, 4*gib
@@ -537,6 +650,14 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 			b.Stream.UsageLogMaxBytes = 1 * gib
 		}, false, "usage_log_max_bytes"},
+		// AND THE CODE LOG: four ceilings that fit exactly, and the fifth
+		// tips them past it — the message names it beside the others.
+		"tipped past it by the code log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 49 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.UsageLogMaxBytes = 1 * gib
+			b.Stream.CodeLogMaxBytes = 1 * gib
+		}, false, "code_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()

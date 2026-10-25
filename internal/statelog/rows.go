@@ -162,8 +162,9 @@ type Snap struct {
 	// Anchor is the arbitration anchor for (stream, subject) — THE
 	// EXPECTATION, and the only thing an expectation is ever formed
 	// from. A zero anchor means this node has consumed nothing on this
-	// subject in this generation, which is a probe rather than a
-	// licence to publish at zero.
+	// subject in this generation — or the trim removed its anchor
+	// because the log holds none of its records (ADR-0047) — which is a
+	// probe rather than a licence to publish at zero.
 	Anchor Position
 
 	// Deferral and Deferred are the step-0 scope probe. SCOPE-KEYED and
@@ -197,6 +198,23 @@ type Snap struct {
 	// check against the live position while the decision about to be
 	// published at zero never saw it — a lost update of exactly that record.
 	Checkpoint Position
+}
+
+// anchorIn is the subject's arbitration anchor IN generation gen, or zero.
+//
+// ONE RULE FOR EVERY READER OF THE ANCHOR. A row keeps the generation it was
+// written in and a reanchor keeps every row, so an anchor from another
+// generation is a sequence in a number space the log has left — a restored log
+// counts again below it, a rebuilt one from one. Compared with a sequence from
+// this generation it says nothing: an expectation formed from it arbitrates
+// against a number the broker never assigned on this log, and the ambiguous
+// path that compared with it read "nothing landed above the anchor" for a
+// record that had landed, and decided again.
+func (s Snap) anchorIn(gen uint32) uint64 {
+	if s.Anchor.Generation != gen {
+		return 0
+	}
+	return s.Anchor.Seq
 }
 
 // ErrNoDecision reports a domain that returned neither a payload nor an

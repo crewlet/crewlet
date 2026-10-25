@@ -77,12 +77,13 @@ func TestAPagesRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 }
 
 // A RECORD EVERY BUILD MUST READ NEVER CARRIES A VERSIONED FIELD — a gate, the
-// read index's barrier and a reanchor's generation, stamped or set.
+// read index's barrier, the trim's trimmed record and a reanchor's generation,
+// stamped or set.
 //
 // Each is what an older node cannot afford to hold back: a deferred gate
 // licenses every record it was meant to drop, a retained barrier is a deferral
-// row per linearizable read, and a retained generation is a transition that
-// node never makes. So a field one of them would need is refused at the
+// row per linearizable read, a retained trimmed record keeps every anchor it
+// names, and a retained generation is a transition that node never makes. So a field one of them would need is refused at the
 // encoder rather than stamped above what every build reads.
 func TestARecordEveryBuildReadsRefusesAVersionedField(t *testing.T) {
 	t.Parallel()
@@ -96,6 +97,8 @@ func TestARecordEveryBuildReadsRefusesAVersionedField(t *testing.T) {
 			Subject: PageSubject("stamp"), Op: OpPurge}},
 		"a barrier": {RecordEnvelope: RecordEnvelope{
 			Subject: BarrierSubject(), Op: OpBarrier}},
+		"a trimmed record": {RecordEnvelope: RecordEnvelope{
+			Subject: Subject{Kind: KindTrimmed, ID: "1.2"}, Op: OpTrimmed}},
 		"a generation": {RecordEnvelope: RecordEnvelope{
 			Subject: GenerationSubject(2), Op: OpGeneration}},
 	} {

@@ -369,7 +369,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	rows, readErr := c.log.fleet.Positions(ctx)
 	// A FLOOR IS ONLY EVER A SOURCE OF AN ABANDONED GENERATION here, and one
 	// that cannot be read leaves that number to the log's own records.
-	floors, _ := c.log.fleet.Floors(ctx)
+	floor, published, floorErr := readFloorsOf(ctx, c.log.fleet, []string{domain}).row(domain)
 	through := in.Generation
 	var candidates []string
 	if readErr == nil {
@@ -381,11 +381,10 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			}
 		}
 	}
-	for _, f := range floors {
-		if f.Domain == domain && f.Generation > in.Generation && f.By != "" && f.By != self {
-			candidates = append(candidates, f.By)
-			through = max(through, f.Generation)
-		}
+	if floorErr == nil && published && floor.Generation > in.Generation &&
+		floor.By != "" && floor.By != self {
+		candidates = append(candidates, floor.By)
+		through = max(through, floor.Generation)
 	}
 	enc, err := generationEncoder(running.domain)
 	if err != nil {
@@ -466,10 +465,8 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			}
 		}
 	}
-	for _, f := range floors {
-		if f.Domain == domain && evicted[f.By] && f.Generation > in.Generation {
-			in.Abandoned = max(in.Abandoned, f.Generation)
-		}
+	if floorErr == nil && published && evicted[floor.By] && floor.Generation > in.Generation {
+		in.Abandoned = max(in.Abandoned, floor.Generation)
 	}
 	for gen, writer := range openers {
 		if evicted[writer] {

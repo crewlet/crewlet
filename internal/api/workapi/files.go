@@ -67,18 +67,26 @@ type ObjectStore interface {
 	Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error)
 }
 
-// servesFiles reports whether these halves hold the byte routes' whole
-// surface: the tracker's file rows, the project read an upload is refused on
-// before a byte is read, the file writer and the object store.
-func (h Halves) servesFiles() bool {
-	_, projects := h.Work.Reader.(builtin.ProjectReader)
-	return projects && h.Work.Files != nil && h.Work.FileWriter != nil &&
-		h.Objects != nil
+// servesFileReads reports whether these halves hold what a DOWNLOAD reads: the
+// tracker's file rows and the object store.
+//
+// TWO PREDICATES, because a download is a read. A node serves its reads
+// wherever it runs the tracker and its writes only where it also hands out the
+// tracker's writer — never in a maintenance mode, which hands no writer to any
+// surface (the engine's OperatorWorkWriter). One predicate over both halves was
+// met only where both were, so a node in a maintenance window listed a
+// project's files (`work_files`, a read) and answered every download of them
+// as a route it does not serve.
+func (h Halves) servesFileReads() bool {
+	return h.Work.Files != nil && h.Objects != nil
 }
 
-// onFiles mounts a byte route.
-func (s *Service) onFiles(h servedHandler) http.HandlerFunc {
-	return s.on(Halves.servesFiles, h)
+// servesFileWrites reports whether these halves hold what an upload and a
+// removal write through: the tracker's file rows, the project read an upload
+// is refused on before a byte is read, the file writer and the object store.
+func (h Halves) servesFileWrites() bool {
+	_, projects := h.Work.Reader.(builtin.ProjectReader)
+	return projects && h.servesFileReads() && h.Work.FileWriter != nil
 }
 
 // fileRoutes mounts the byte routes.
@@ -90,7 +98,11 @@ func (s *Service) onFiles(h servedHandler) http.HandlerFunc {
 // file tools ask the same rows of the same object.
 func (s *Service) fileRoutes(mount mounter) {
 	route := func(pattern string, p authz.Policy, h servedHandler) {
-		mount(pattern, p, s.onFiles(h))
+		serves := Halves.servesFileWrites
+		if strings.HasPrefix(pattern, http.MethodGet+" ") {
+			serves = Halves.servesFileReads
+		}
+		mount(pattern, p, s.on(serves, h))
 	}
 	project := func(a authz.Action) authz.Policy {
 		return authz.Policy{Action: a, Object: func(r *http.Request) authz.Object {

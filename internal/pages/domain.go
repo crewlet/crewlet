@@ -82,11 +82,12 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: PagesMaxRecordBytes,
 		Duplicates:     PagesLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// FIVE OF THE SIX KINDS. A barrier shares one subject across
+		// FIVE OF THE SEVEN KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an
 		// anchor row per read into the transaction holding this store's
-		// only writer.
+		// only writer; and the trim's trimmed record removes anchors, so
+		// arbitrated it would write one of its own (ADR-0047).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
@@ -215,14 +216,16 @@ func (Domain) ScopeIndex() string { return "pages_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 func (Domain) OpsTable() string { return "pages_ops" }
 
-// ReadinessInput reports that this domain's health gates seat admission.
+// GatesSeatAdmission reports that a seat depends on this domain's copy.
 //
-// TRUE, for the tracker's reason: a strict replay's stall is a FAULT rather
-// than a coverage number. A node behind on the pages log serves a page body
-// that is simply wrong — an older paragraph presented as the current one —
-// where a node behind on a compacted domain serves an answer that is merely
-// less complete and says so.
-func (Domain) ReadinessInput() bool { return true }
+// TRUE, for the tracker's reason: every seat's tools read this log on every
+// turn, and a strict replay's stall is a FAULT rather than a coverage number.
+// A node behind on the pages log serves a page body that is simply wrong — an
+// older paragraph presented as the current one — where a node behind on a
+// compacted domain serves an answer that is merely less complete and says so.
+// Its copy is judged like every domain's, and a wrong one goes out of service
+// for the knowledge base's operations alone — ADR-0046.
+func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical.
@@ -245,11 +248,3 @@ func (Domain) ClaimsIdentity() bool { return true }
 // here — so its feed term permitted nothing and the knowledge base's log was
 // never trimmed at all.
 func (Domain) FeedGroup() string { return FeedGroup }
-
-// BarrierTables is the empty set, DECLARED.
-//
-// The barrier writes no row on any node, and stating that explicitly is what
-// stops a no-op record slipping through the kind-completeness walk by writing
-// nothing: "this kind wrote nothing" and "nobody classified this kind" are the
-// same observation, and only one of them is correct.
-var BarrierTables = map[string]statelog.TableClass{}

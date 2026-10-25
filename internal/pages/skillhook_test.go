@@ -23,7 +23,7 @@ func hooked(t *testing.T) (*roundTrip, *int) {
 	t.Helper()
 	r := newRoundTrip(t)
 	reports := 0
-	r.applier = pages.NewApplier("node-a", admission{}, func() { reports++ })
+	r.applier = pages.NewApplier(admission{}, func() { reports++ })
 	return r, &reports
 }
 

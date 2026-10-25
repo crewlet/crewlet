@@ -101,6 +101,11 @@ func serveAPI(
 // file byte routes are IN too, served by the human write surface, because a
 // file's bytes crossing between members is something only a fleet here can
 // exercise.
+//
+// AND THE ENGINE'S OWN GIT HOST AND THE CODE READS, through [api.EngineCode] —
+// the adapter `crewlet run` hands the API — asked per request, because the
+// code host is built with the native runtime, which a company applied after
+// boot brings up after this wiring ran.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
@@ -192,6 +197,7 @@ func wireAPI(
 		Store: backends.Store, Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
 		Conn: backends.Conn(), API: backends.API(),
 		Holds: backends.Fleet, Backups: backends.Fleet, NodeID: nodeID,
+		Keyring: e.RecordKeyring(),
 		// AS cmd/crewlet WIRES IT, the stream included: a backup of a fleet
 		// whose files ride the broker's bucket snapshots that stream and
 		// checks each object it names, rather than copying them beside it.
@@ -230,8 +236,11 @@ func wireAPI(
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
 			// the node the harness serves answers history the way a real
 			// node does — from every live member.
-			Events:  e.History(),
-			Usage:   e.UsageEstate(),
+			Events: e.History(),
+			// EVERY NODE'S company days, through the estate's router as
+			// cmd/crewlet reads them, so a member whose usage copy is out
+			// of service answers from a peer's.
+			Usage:   e.UsageReads(),
 			Company: company,
 			NodeID:  nodeID,
 			Chart:   engine.ChartAuthorityOf(e),
@@ -252,10 +261,13 @@ func wireAPI(
 			// the object collector's recorded report, as cmd/crewlet reads
 			// it: the seat states the dashboard is served read placement
 			// from the leases, and a member that ran no pass reads the
-			// collector's report off the store every member reads.
+			// collector's report off the store every member reads, as a
+			// report on the object store it agreed with the fleet — through
+			// the reader the collector's duty resumes from, so a report
+			// left behind by a move of the files is none here too.
 			Coord:   backends.Coord,
 			Plane:   backends.Fleet,
-			Objects: backends.Fleet,
+			Objects: backends,
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
@@ -263,6 +275,10 @@ func wireAPI(
 			// them.
 			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
 			WorkSearch: searchSource, Files: fileSource,
+			// AND WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY,
+			// through the constructor cmd/crewlet wires it with: nil on a
+			// member in a maintenance mode, which arms no trim.
+			Retention: api.RetentionSource(ctx, e),
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
@@ -280,11 +296,16 @@ func wireAPI(
 		// hands it: api.New requires it.
 		Audit: backends.Queue,
 		// THE EVICTION GATE, which every node holding the estate runs
-		// from boot and api.New requires.
-		Nodes: e.NodeGate(),
+		// from boot — and NONE on a node that holds none, as cmd/crewlet
+		// hands it: a nil *engine.NodeGate in the interface would be a gate
+		// mounted over nothing on a stateless member.
+		Nodes: nodeGate(e),
 		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
 		// reports every refused bearer and every token use through it.
 		AuthEvents: e.AuthEvents(),
+		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, through the
+		// adapter `crewlet run` uses, asked per request.
+		Code: api.EngineCode(e),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,
@@ -313,7 +334,7 @@ func wireAPI(
 		return fail("api.New", err)
 	}
 	app.Start(ctx)
-	stops = append(stops, app.Stop)
+	stops = append(stops, func() { app.Stop(context.WithoutCancel(ctx)) })
 
 	// The other half of the observability pipeline: the engine persists what
 	// THIS node publishes, and this is what puts the whole company's events
@@ -344,6 +365,29 @@ func wireAPI(
 
 	srv := httptest.NewServer(app)
 	stops = append(stops, srv.Close)
+
+	// AND THE RECONCILE LOOP, as `crewlet run` starts it once the node is
+	// serving: what applies a configuration write. Without it a PUT /config
+	// stored a revision and moved the fleet's pointer, and no node here —
+	// the one that took the write included — ever applied it, so a harness
+	// node was one whose company no write could change. With no pointer
+	// published, which is every case here that writes no configuration, a
+	// tick reads the pointer, finds none and changes nothing.
+	//
+	// STOPPED FIRST, before the listener (a teardown runs in reverse), as
+	// the signal that ends `crewlet run` ends the loop before its drain:
+	// an apply racing the engine's stop would be work with nowhere to go.
+	// The goroutine is waited for, so nothing it started outlives the stop.
+	loopCtx, endLoop := context.WithCancel(ctx)
+	looped := make(chan struct{})
+	go func() {
+		defer close(looped)
+		reconciler.Run(loopCtx)
+	}()
+	stops = append(stops, func() {
+		endLoop()
+		<-looped
+	})
 	return app, srv, stops, nil
 }
 
@@ -357,4 +401,14 @@ func stopInReverse(stops []func()) {
 	for i := len(stops) - 1; i >= 0; i-- {
 		stops[i]()
 	}
+}
+
+// nodeGate is the engine's eviction gate as the API's seam, or nil on a node
+// holding no estate — cmd/crewlet's own rule, so the harness serves a
+// stateless member exactly as `crewlet run` does.
+func nodeGate(e *engine.Engine) api.NodeGate {
+	if g := e.NodeGate(); g != nil {
+		return g
+	}
+	return nil
 }

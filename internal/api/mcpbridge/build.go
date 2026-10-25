@@ -21,6 +21,10 @@ const KeyDomain = "crewlet.mcp.v1"
 // of the company document, so it is Tier A environment rather than Tier B
 // config. An engine behind a load balancer, in a private network, or on a
 // laptop all answer this differently with the same company running.
+//
+// ONE GRAMMAR WITH THE RECEIVER'S, too: the engine reads it through
+// sandbox.ParseBoxURL, which refuses the boot on a value that is set and that
+// no box could dial, and hands [Build] what that returns.
 const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 
 // Build is THE construction path, called by the engine.
@@ -37,19 +41,29 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // key: there is no node without one, so reaching here with one is a mistake to
 // name, not a posture to degrade into.
 //
+// base is [BaseURLVar] as the caller PARSED it — an absolute http or https URL
+// with a host, its trailing '/' trimmed — never the raw variable. Every
+// endpoint this bridge mints is base plus a path, handed to a CLI inside a box
+// that never reports back, so a base no client can dial fails every tool call
+// of every agent-mode run, each rescued as incomplete with no sign of why;
+// that is refused at boot, by the engine, before anything opens. The parse is
+// the caller's rather than this package's because its grammar is the one every
+// URL a box dials shares (sandbox.ParseBoxURL), and the API's bridge has no
+// other reason to depend on the sandbox runtime.
+//
 // An unset base URL builds NOTHING, and that is a real configuration rather
 // than an error: most deployments run no agent mode. The route is then absent,
 // and a seat that asks for agent mode is refused with the variable named —
 // which is a better failure than a run that starts and cannot call a tool.
-func Build(env func(string) string, material runtoken.Material) (*Bridge, error) {
-	if !Configured(env) {
+func Build(base string, material runtoken.Material) (*Bridge, error) {
+	if base == "" {
 		return nil, nil
 	}
-	return New(Options{Material: material, BaseURL: strings.TrimSpace(env(BaseURLVar))})
+	return New(Options{Material: material, BaseURL: base})
 }
 
-// Configured reports whether env names a bridge base URL: whether [Build]
-// builds a bridge at all.
+// Configured reports whether env names a bridge base URL: whether the engine
+// parses one and [Build] builds a bridge at all.
 //
 // ITS OWN FUNCTION because a node asks it before there is an engine to build
 // one: `crewlet run` binds the listener a seats node serves its bridge on the

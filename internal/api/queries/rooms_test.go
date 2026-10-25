@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // memorySandbox is a pending-run store with nothing in it: this sweep is
@@ -90,7 +91,7 @@ func everySeam(t *testing.T) queries.Sources {
 	return queries.Sources{
 		State:    &livestate.LiveState{},
 		Events:   eventfan.Solo("node-a", &store.EventLog{}),
-		Usage:    &store.DB{},
+		Usage:    usage.Reader{Estate: &store.DB{}},
 		Company:  companySource(t, cfg),
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),

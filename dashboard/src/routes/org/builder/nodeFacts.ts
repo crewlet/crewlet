@@ -235,6 +235,16 @@ export function backendFor(company: CompanyDocument, axis: "tracker" | "knowledg
   return isConnected(company, "confluence") ? "confluence" : "native";
 }
 
+/**
+ * Whether a seat's code access means anything here: the company is connected
+ * to GitHub, whose per-seat app is created at the tier, or runs the engine's
+ * own code host (`code.native`), which caps what the chart grants a seat by
+ * it. On neither, a tier would read as a setting and do nothing.
+ */
+export function readsCodeAccess(company: CompanyDocument): boolean {
+  return isConnected(company, "github") || getPath(company, ["code", "native"]) === true;
+}
+
 /** Whether GitLab provisioning is connected: the block per-seat access levels live in. */
 export function hasGitLabProvisioning(company: CompanyDocument): boolean {
   return isRecord(getPath(company, ["integrations", "gitlab", "provisioning"]));

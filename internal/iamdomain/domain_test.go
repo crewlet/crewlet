@@ -201,7 +201,7 @@ func TestTheDurableTablesAreTheOnesTheDesignNames(t *testing.T) {
 func TestTheIdentityDomainDoesNotGateSeatAdmission(t *testing.T) {
 	t.Parallel()
 	d := iamdomain.Domain{}
-	if d.ReadinessInput() {
+	if d.GatesSeatAdmission() {
 		t.Error("the identity domain gates seat admission — a stalled identity " +
 			"applier would shed every seat in the company, for a subsystem no " +
 			"turn reads")
@@ -234,5 +234,76 @@ func TestTheBarrierDeclaresTheEmptyTableSet(t *testing.T) {
 	t.Parallel()
 	if len(iamdomain.BarrierTables) != 0 {
 		t.Errorf("the barrier declares %v", iamdomain.BarrierTables)
+	}
+}
+
+// TestATrimmedRecordIntersectsNothing, for the barrier's reason: it writes no
+// row of this domain's anywhere — the framework removes this log's anchors in
+// its transaction (ADR-0047) — so a scope that named a bucket would make every
+// read and write about those people wait behind a record that changed none of
+// their rows, and the root would hold every sign-in in the company behind it.
+// Resolved from the KIND, so whatever a peer stated reads back the same.
+func TestATrimmedRecordIntersectsNothing(t *testing.T) {
+	t.Parallel()
+	floor := statelog.Position{Stream: topics.IamLogStream, Generation: 1, Seq: 7}
+	for name, scope := range map[string]iamdomain.ScopeSet{
+		"the root it is encoded with": iamdomain.RootScope(),
+		"a bucket a peer might state": iamdomain.BucketScope(3),
+	} {
+		paths := scope.Resolve(iamdomain.TrimmedSubject(floor)).Paths
+		if len(paths) != 1 || paths[0] != statelog.FrameworkScope {
+			t.Errorf("%s: a trimmed record's scope resolves to %v, and it must be "+
+				"the framework's own %q", name, paths, statelog.FrameworkScope)
+		}
+	}
+}
+
+// TestTheTrimmedRecordIsItsLiteral: through the encoder the trim calls, so what
+// is pinned is what is appended — the base version whatever this build reads,
+// the writer the eviction gate reads, the floor in the subject, no operation
+// and no person — and the framework's own check of it passes.
+func TestTheTrimmedRecordIsItsLiteral(t *testing.T) {
+	t.Parallel()
+	body, err := iamdomain.EncodeTrimmed(statelog.TrimmedEnvelope(statelog.Position{
+		Stream: topics.IamLogStream, Generation: 3, Seq: 42}, "node-a"))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	rec, err := iamdomain.Decode(body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rec.V != iamdomain.BaseRecordVersion || rec.OpID != "" || rec.Writer != "node-a" ||
+		rec.Gen != 3 || rec.Op != iamdomain.OpTrimmed || rec.Person != "" ||
+		rec.Subject != (iamdomain.Subject{Kind: iamdomain.KindTrimmed, ID: "3.42"}) {
+		t.Fatalf("the trimmed record decodes as %+v", rec)
+	}
+	if strings.Contains(string(body), "op_id") {
+		t.Error("a trimmed record carries an operation id")
+	}
+	if err := statelog.CheckTrimmed(iamdomain.Domain{}, iamdomain.Domain{}.Stream(),
+		iamdomain.EncodeTrimmed); err != nil {
+		t.Fatalf("the framework would not recognise this domain's trimmed record: %v", err)
+	}
+}
+
+// TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise, at the write —
+// never in the subject's validation, which the read path runs too.
+func TestEncodeTrimmedRefusesWhatTheFrameworkWouldNotRecognise(t *testing.T) {
+	t.Parallel()
+	good := statelog.TrimmedEnvelope(statelog.Position{
+		Stream: topics.IamLogStream, Generation: 1, Seq: 2}, "node-a")
+	for name, mutate := range map[string]func(*statelog.Envelope){
+		"another kind":      func(e *statelog.Envelope) { e.Kind, e.Subject.Kind = "barrier", "barrier" },
+		"an operation id":   func(e *statelog.Envelope) { e.OpID = "op-1" },
+		"no floor":          func(e *statelog.Envelope) { e.Subject.ID = "x" },
+		"half a floor":      func(e *statelog.Envelope) { e.Subject.ID = "1" },
+		"a second spelling": func(e *statelog.Envelope) { e.Subject.ID = "01.2" },
+	} {
+		env := good
+		mutate(&env)
+		if body, err := iamdomain.EncodeTrimmed(env); err == nil {
+			t.Errorf("%s: encoded %s", name, body)
+		}
 	}
 }

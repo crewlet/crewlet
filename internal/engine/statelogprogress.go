@@ -23,7 +23,8 @@ import (
 // unreachable and left a frozen applier serving reads as though it were
 // current, and `DeferredSince` had no producer at all, so what the
 // `deferred_old` alarm promises an operator — then "its seats move at 30m",
-// now that the node takes its copy out of service — never happened.
+// now that the node takes its copy of that domain out of service — never
+// happened.
 //
 // # It is observed on the position heartbeat, not on the read
 //

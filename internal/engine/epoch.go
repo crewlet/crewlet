@@ -108,7 +108,20 @@ func (e *Engine) RecheckGitHub() {
 // IT DOES NOT STAMP THE ACTIVATION: the company arrives here stamped, by
 // [stampActivation] where it was built, because the native halves an apply
 // starts and the reconcile it runs read the company before it is installed.
+// What it does stamp, before the company is published, is what the code host
+// reads off the CURRENT epoch alone ([Engine.codeInForce], [Engine.codeRoster])
+// — so nothing reads it between the build and the publish — and depends on
+// the epoch this one replaces, read here as it is replaced.
 func (e *Engine) installEpoch(ctx context.Context, c *Company) {
+	if c != nil {
+		// The code host's settings in force — its limits and its
+		// retention — carried over the epoch this one replaces where it
+		// hosts no code of its own.
+		c.codeInForce = carriedCode(c, e.epoch.current.Load())
+		// And its chart as the code host judges a seat by, built at the
+		// first agent read that asks rather than at every apply.
+		c.roster = rosterOf(c)
+	}
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(ctx, c)
 	}
@@ -390,7 +403,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		// a start that fails is refused like a build: a company served
 		// with no inbound edge looks healthy and hears nothing, and the
 		// retry the refusal earns starts it again. See
-		// [Engine.startInbound].
+		// [Engine.startInbound] — which starts nothing on a node in a
+		// maintenance mode, the other node with no edge here.
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the inbound edge could not be started for this node's "+
 				"first company; the revision is not served here yet")

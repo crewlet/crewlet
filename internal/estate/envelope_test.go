@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -53,14 +54,20 @@ func signed(t *testing.T, env *Envelopes, req request) (request, []byte) {
 // the way the router does: verified, and bound to the request.
 func askSigned(t *testing.T, q *memory.Queue, node string, req request) reply {
 	t.Helper()
+	return askSignedOn(t, q, Subject(node), req)
+}
+
+// askSignedOn is [askSigned] on one subject of a node's — a [lane]'s.
+func askSignedOn(t *testing.T, q *memory.Queue, subject string, req request) reply {
+	t.Helper()
 	req, sealed := signed(t, fleetEnvelopes, req)
-	replies, err := q.Ask(t.Context(), Subject(node), sealed, 1)
+	replies, err := q.Ask(t.Context(), subject, sealed, 1)
 	if err != nil || len(replies) != 1 {
-		t.Fatalf("ask %s = (%d replies, %v)", node, len(replies), err)
+		t.Fatalf("ask %s = (%d replies, %v)", subject, len(replies), err)
 	}
 	rep, why, err := fleetEnvelopes.openReply(replies[0], req.ID)
 	if err != nil || why != "" {
-		t.Fatalf("the reply from %s was not believed: %q, %v", node, why, err)
+		t.Fatalf("the reply on %s was not believed: %q, %v", subject, why, err)
 	}
 	return rep
 }
@@ -231,7 +238,7 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 			t.Parallel()
 			f := newFleet(t)
 			impostor := f.start(t)
-			stop, err := impostor.Serve(t.Context(), Subject("data-x"),
+			stop, err := impostor.Serve(t.Context(), Subject("data-x"), queue.ConcurrentAnswers,
 				func(_ context.Context, raw []byte) ([]byte, error) { return forge(raw), nil })
 			if err != nil {
 				t.Fatal(err)
@@ -273,7 +280,7 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 	f := newFleet(t, "data-a")
 	capture := &capturingAsker{Asker: f.start(t)}
 	r, err := NewRouter(RouterOptions{Self: "agent-2", Queue: capture, Placement: f.placement,
-		Session: NewSession(), Envelopes: fleetEnvelopes})
+		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,11 +405,10 @@ func serveAs(t *testing.T, f *fleet, node *fakeNode, env *Envelopes) {
 func routerAs(t *testing.T, f *fleet, self string, env *Envelopes) *Router {
 	t.Helper()
 	r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement,
-		Session: NewSession(), Envelopes: env})
+		Session: NewSession(), Timing: Production(), Envelopes: env})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.readBudget, r.writeBudget = 300*time.Millisecond, 300*time.Millisecond
 	return r
 }
 

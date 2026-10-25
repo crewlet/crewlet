@@ -1,0 +1,798 @@
+package cache
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/semaphore"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// SyncKind is what handing out a cache's directory cost: a closed set
+// ([SyncKinds], [SyncKind.Valid]), and the host's fetch.duration{sync}
+// attribute.
+type SyncKind string
+
+const (
+	// SyncNone is an answer from what the cache holds, with no estate call.
+	SyncNone SyncKind = "none"
+	// SyncDelta is the rows that moved since the cache's position.
+	SyncDelta SyncKind = "delta"
+	// SyncFull is the repository's whole answer.
+	SyncFull SyncKind = "full"
+)
+
+// SyncKinds is every [SyncKind], in the order of what each costs.
+var SyncKinds = []SyncKind{SyncNone, SyncDelta, SyncFull}
+
+// Valid reports whether k is one of [SyncKinds].
+func (k SyncKind) Valid() bool { return slices.Contains(SyncKinds, k) }
+
+// Synced is a repository's directory, handed to a reader PINNED: Dir is valid
+// until Release, and THERE IS NO OTHER WAY TO A REPOSITORY'S DIRECTORY — no
+// path accessor that skips the pin, so no reader can hold a directory a
+// rebuild or a purge is about to remove. Every holder defers Release.
+type Synced struct {
+	// Dir is the incarnation's directory, absolute and clean.
+	Dir string
+	// Repo is the repository row the cache last read.
+	Repo code.RepoRef
+	// Position: every row up to here is reflected in Dir.
+	Position statelog.Position
+	// Kind is what this hand-out cost.
+	Kind SyncKind
+	// Repairer names this reader to the cache's observer. A git process run
+	// in Dir whose failure this reader repairs names it on its Cmd
+	// (gitproc.Cmd.Repairer), and what that process reports is HELD for this
+	// reader rather than acted on beside its repair (report.go): the repair
+	// it asks ([Cache.Rebuild]) consumes it, and Release hands whatever it
+	// did not to the ordinary report rules.
+	Repairer gitproc.Repairer
+
+	// release unpins Dir, once: what [Synced.Release] calls.
+	release func()
+	// inc is which incarnation Dir is, and entry the repository it is one
+	// of: what Rebuild reads to tell whether that incarnation is still the
+	// one readers are handed. owner is the cache that handed it out — the
+	// one whose entry and incarnation these are.
+	inc   *incarnation
+	entry *entry
+	owner *Cache
+}
+
+// Release unpins Dir. Idempotent — a second call does nothing — and A NO-OP
+// ON THE ZERO Synced, which every failed Sync answers: a holder that defers
+// the release of a variable a later Sync may overwrite (a fetch asking once
+// more at the log's head) releases whatever the variable holds when it
+// returns, and a failed second Sync must leave it something safe to release
+// rather than a nil function that panics on the request's goroutine.
+func (s Synced) Release() {
+	if s.release != nil {
+		s.release()
+	}
+}
+
+// handedOut refuses a Synced this cache did not hand out — a zero one, or
+// another cache's — by name: every method that takes one acts on its
+// incarnation, and only the cache that pinned it may.
+func (c *Cache) handedOut(s Synced, what string) error {
+	if s.inc == nil || s.entry == nil || s.owner != c {
+		return fmt.Errorf("%w: %s names the Synced a sync of this cache handed out", ErrInvalid, what)
+	}
+	return nil
+}
+
+// entry is one repository's place in the cache. Lock order is ALWAYS write,
+// then Cache.mu, then entry.mu; nothing holds Cache.mu or entry.mu across a
+// git process, an estate call or a file copy, and nothing that holds either
+// WAITS for write — an adoption's try of it and a holder's release are taken
+// under entry.mu, and neither waits (adopt.go).
+type entry struct {
+	id string
+
+	// write is what may change what the directory HOLDS, or must see it
+	// whole: held WHOLE (writeExclusive) by every round for its whole body
+	// and by Verify for its listing, and ONE of it by each adoption for its
+	// links. A round writes the directory by steps that assume nothing else
+	// does — a full one sweeps what its snapshot does not name and counts
+	// what it finds, so a pack linked in beside it could be swept as a stray
+	// or counted twice — and Verify's listing must see no step half done;
+	// adoptions link distinct files, so they share it. Taken whole under a
+	// context, so a Verify waiting behind a round's downloads gives up with
+	// its caller; and an adoption only TRIES it: one that finds a round or a
+	// listing holding it or waiting for it hands its pack to that holder
+	// (handed) rather than make a push wait behind somebody else's
+	// downloads — a weighted semaphore's try fails while a whole taker
+	// waits, so adoptions never starve a round.
+	write *semaphore.Weighted
+	// handed is the pushed packs adoptions handed to whoever holds write
+	// whole, by git checksum: staged in tmp/ (adopt.go), claimed by a round
+	// about to download one, and installed by the holder before it lets go
+	// (releaseWrite).
+	handed map[string]*staging
+
+	// mu guards everything below but stateMu, and every incarnation's
+	// fields.
+	mu sync.Mutex
+	// current is the incarnation readers are handed; nil when there is no
+	// directory yet.
+	current *incarnation
+	// retiring is every incarnation replaced or purged while a reader still
+	// held it, removed as its last pin is released.
+	retiring []*incarnation
+	// running is the round in flight, and next the one queued behind it:
+	// at most one of each (sync.go).
+	running, next *round
+	// dead: the repository was purged or evicted and the entry left the
+	// cache; a caller that finds it so looks the repository up again.
+	dead bool
+	// maint is the maintenance running on an incarnation of the repository,
+	// if any (maintain.go): one at a time a repository.
+	maint *maintRun
+	// verifying counts the Verify calls checking the repository: no
+	// maintenance run starts while one does (verify.go), from its listing
+	// to its fsck — which a run in the lane's last free slot would refuse.
+	// A run already in flight is never stopped for one: its own files are
+	// admitted instead (Write.Holds).
+	verifying int
+	// adopting counts the adoptions holding ONE of write outside a round
+	// (Adopt, and a failed whole wait's settle in acquireWrite): no
+	// maintenance run starts while one does (runnable), as none starts while
+	// a round runs. An adoption ADDS A PACK, and a declaration may drop what
+	// a run writes when one is added (dropFor) — which stops a run in flight
+	// writing it, so one started between that drop and the pack's links
+	// would write a file over the packs before the change and record it as
+	// current after it. Milliseconds a push; a pass that finds one owes the
+	// maintainer a wake when the last lets go (maintainerOwed).
+	adopting int
+	// lastAdded is when a round last added packs: the maintainer's debounce.
+	lastAdded time.Time
+	// maintainerOwed: a full round converged, or a pass found the repository
+	// due while an adoption held it, and the maintainer is to be woken once
+	// no round runs on it (run) and no adoption holds it (releaseWrite),
+	// since a pass starts no run on one either holds (runnable).
+	maintainerOwed bool
+	// uncoveredSince is when the oldest pack the maintainer's index does not
+	// cover arrived — set by the round that adds packs while none wait, and
+	// cleared by a run whose index covers every pack — and zero when none
+	// waits: the debounce's ceiling (MidxMaxWait).
+	uncoveredSince time.Time
+	// lastRebuild is when the last rebuild ATTEMPT started; lastAsked when a
+	// rebuild of the current incarnation was last ASKED for, whether it was
+	// refused, joined or started — the quiet that ends a line of attempts
+	// (RebuildQuiet) is measured from it; and refusedLogged is when a
+	// refusal was last logged: a repository failing on every request logs a
+	// refusal once a RebuildCooldown, never once a request.
+	lastRebuild, lastAsked, refusedLogged time.Time
+
+	// stateMu serialises persisting the state.
+	stateMu sync.Mutex
+}
+
+// newEntry is repository id's place in the cache, with no incarnation yet.
+func newEntry(id string) *entry {
+	return &entry{id: id, write: semaphore.NewWeighted(writeExclusive)}
+}
+
+// incarnation is one directory of a repository: repos/<id>.<n>.git. A
+// rebuild builds the next number BESIDE the one readers hold rather than
+// renaming a path under them — a path is a NAME, and a git process whose
+// GIT_DIR is that name would otherwise open the new directory's files half
+// way through its run.
+type incarnation struct {
+	n   int
+	dir string
+
+	// pins counts the readers holding the directory.
+	pins int
+	// retired: replaced or purged; the directory goes as the last pin is
+	// released.
+	retired bool
+	// discarded: moved into trash/ (or given up on) — its bytes have left the
+	// cache's total, and nothing it does moves the total again.
+	discarded bool
+	// converged: a full round ran on it in this process, so every later
+	// round may be a delta — nothing but this process has written the
+	// directory since — and a caller it already meets is answered from it
+	// at once.
+	converged bool
+	// reread is why its next full round reads it whole again — a log
+	// recreated or gone back under it (Cache.reread), or an in-place repair
+	// (markWhole: a git process the pool refused there for its shape, or one
+	// that named its derived files damaged) — counted when that round
+	// completes; "" for none. The FIRST reason is kept: one whole read
+	// answers every reason it was marked for, and is counted once.
+	reread RebuildReason
+	// marks counts the times it was marked to be read whole IN PLACE
+	// (markWhole): a round converges it only when no mark was made since the
+	// round began, since a round that swept it before the damage a mark
+	// answers did not repair that damage.
+	marks uint64
+	// drop is the derived files, by declaration, a git process over it named
+	// damaged (markWhole for RebuildDerived: the multi-pack-index's, the
+	// commit-graph, or both), gathered by every mark, so its next full round
+	// DROPS them before deciding its own index (apply). A mark of its own
+	// rather than a reading of reread, which keeps only the first reason: a
+	// copy already marked to be read whole for its shape, or for a log
+	// recreated under it, would otherwise be read whole with the damaged
+	// files kept, and the request that asked for the repair meet the same
+	// damage on its retry. Taken by the round that drops them.
+	drop derivedDrops
+	// packChecks are the hashes of the packs hints named (gitproc.Hint),
+	// by checksum, each in flight or decided (ConfirmHint, hint.go): a hint
+	// about a pack being hashed waits for that hash rather than starting its
+	// own, and one about a pack decided on the files it holds now hashes
+	// nothing. A verdict is kept with the files' identity it was reached on,
+	// so it outlives every write into the directory that leaves that pack's
+	// files alone — an adoption of another pack, the maintainer's index — and
+	// none that replaces them; a hash that decided nothing is replaced by the
+	// next hint's.
+	packChecks map[string]*packCheck
+	// rebuilds is how many rebuild attempts in a row stand behind this
+	// incarnation without having ended the failure that asked for them: none
+	// for one no rebuild made, one more than its predecessor's for a
+	// rebuild's product, and one more for each rebuild of it that failed —
+	// IN A ROW: a rebuild asked for after RebuildQuiet with none asked
+	// starts the line again from none.
+	// unmoved: what it holds is what the last of those attempts read — it IS
+	// that rebuild's product, or that rebuild failed definitively on its
+	// rows — and nothing has written into it since: no round moved its packs
+	// or its refs, wrote its index or swept a file out of it, and the
+	// maintainer wrote no index and no graph into it. Cleared, too, with the
+	// line. Both are what Rebuild refuses by (rebuild.go).
+	rebuilds int
+	unmoved  bool
+
+	// state is the state as last persisted, but for its Derived map; nil when
+	// there is none. The map is derived's — moved there from a boot's state
+	// (fromState) and dropped from each state persist writes — because what a
+	// round reads of the state it last wrote is its position, its stream and
+	// whether there is one, never the map, and kept here too every repository
+	// would hold its derived record twice.
+	state *state
+	// at is the in-memory position, at or past state's: a round whose delta
+	// was empty moves it without rewriting the state, since nothing between
+	// the two changed the directory.
+	at statelog.Position
+	// stream is the StreamCreated of the answer at came from.
+	stream     time.Time
+	repo       code.RepoRef
+	refsDigest string
+	refs       int
+	packs      int
+	// objects is how many objects its packs hold, as their rows count them:
+	// set whole by every full round and raised by each pack a delta installs,
+	// so it is exact on every incarnation this process has converged — the
+	// only ones the maintainer runs on, whose memory it estimates by it.
+	// Never persisted: a boot's first round is a full one.
+	objects int64
+	// diskBytes is the pack files and packed-refs, set only through setSize;
+	// metaBytes the derived files', the sum of derived's Bytes, set only
+	// through setDerived. Each keeps the cache's total in step.
+	diskBytes, metaBytes int64
+	// derived is what it records of each declared derived file on disk, by
+	// the declaration's name (state.go's derivedState): a declaration with
+	// no file on disk has no entry. maintained is its last maintenance run,
+	// the duty cycle's clock. Both are what its state persists; maintain.go
+	// reads the derived files through covered, bitmapped and graphed.
+	derived    map[DerivedName]derivedState
+	maintained maintainedState
+	// graphFailed: its graph-first run's commit-graph step failed (not a
+	// slot refused, not a run stopped from outside), so its graph is due
+	// only by the ordinary rules from now on (maintain.go, GRAPH FIRST),
+	// rather than asked again every pass. Cleared by a graph written; never
+	// persisted, so a boot asks again at once.
+	graphFailed bool
+	// vouched is every checkable file of it this process wrote or checked
+	// (check.go), with the identity it had then: a pack's .idx and .rev by
+	// the pack's checksum, the derived files by their path relative to the
+	// incarnation. NEVER PERSISTED: a new process holds every file a
+	// previous one left to its trailer once, at the incarnation's first full
+	// round. A vouch spares a file the check, never the scrub — and no .pack
+	// is vouched, since the check reads none. KEYED BY THE CHECKSUM'S BYTES,
+	// one entry a pack holding both its identities, because the map lives
+	// in every incarnation the node holds and grows by a pack a push: keyed
+	// by each file's path, three strings of sixty bytes a pack, it cost 528
+	// bytes a pack (measured, a .pack's vouch among them that nothing read),
+	// and it costs 118 to 207 now — 168 at 300 000 packs, the spread the
+	// map's own growth (Go 1.27.2, TestAPacksVouchesFitInAQuarterKilobyte):
+	// 3 000 packs hold about half a megabyte, and a node holding a million
+	// packs about 170 MB, against 530 MB before.
+	vouched vouches
+	// checkedOnce: a full round of this process has held its files to their
+	// trailers — the check's `first` and every later one's `unvouched`.
+	checkedOnce bool
+	// indexRepair: its multi-pack-index was dropped as damaged, so the
+	// maintainer's index is due AT ONCE — no debounce, no interval — in a
+	// slot of the maintainer's own (maintain.go). Cleared by the index
+	// written. A commit-graph dropped as damaged needs no mark: the
+	// maintainer writes a missing graph first, at once, anyway.
+	indexRepair bool
+	// repair is what reports asked its next full round to do (report.go).
+	repair repairMark
+	// held is what each of its readers' runs reported that the reader's own
+	// repair answers (report.go, HELD FOR THE REQUEST), by the reader's name
+	// (Synced.Repairer): a key for every reader pin hands it to, taken by
+	// that reader's release — and for every round applying to it, taken as
+	// the round settles (roundReader) — so a report reaches a reader that is
+	// still there or the ordinary rules and never waits on one already gone.
+	held map[gitproc.Repairer][]heldReport
+	// written is when this process last changed each declaration's files —
+	// a write that moved a file's identity, the round's own index, or a drop
+	// — a time.Now() reading compared on the monotonic clock with a report's
+	// Began (dropDamaged).
+	written map[DerivedName]time.Time
+	// damagedAt is when each declaration's files were last dropped for
+	// damage, on Options.Now's clock: one dropped again within RebuildQuiet of
+	// it is damaged AGAIN (D13 of report.go's doc), and waits for the ordinary
+	// rules rather than being written again at once — whatever ordinary
+	// writes came between, since a disk that keeps damaging what is written
+	// to it damages those too. againLogged is the declarations logged so.
+	damagedAt   map[DerivedName]time.Time
+	againLogged derivedSet
+	// memoryRefused is the steps the node's memory has refused it — each
+	// one whose charge alone is more than the node can give its background
+	// work — and said so: each logged and counted once an incarnation,
+	// however many passes, rounds and checks find it again.
+	memoryRefused maintStep
+	// inherited: a previous process left it — Open indexed it from the disk
+	// — so its bytes are none this process held to their rows as it placed
+	// them, and its first full round in this process makes its first scrub
+	// due (scrub.go).
+	inherited bool
+	// scrubbing: its scrub is running now, asked at scrubRunning: a report
+	// meanwhile is answered by one evidence asked for (a report's, a
+	// request's), which hashes every file it holds, and ends a routine one
+	// to run as a report's in its place (scrub.go). scrubDue is why its next
+	// scrub is due AT ONCE — zero when only its interval makes it due — and
+	// scrubAsked when it was made so: the scrubber takes the due-at-once by
+	// evidence, and within each the oldest first.
+	scrubbing    bool
+	scrubRunning scrubPrio
+	scrubDue     scrubWhy
+	scrubAsked   time.Time
+	// scrubBase is when every byte it holds was last held to its checksum —
+	// its last scrub's end, or, for one this process built, its first full
+	// round's, every file of which this process placed after holding it to
+	// its row — and zero until then: ScrubInterval runs from it. scrubbedAt
+	// is when its last scrub ended and scrubFound whether that scrub found
+	// anything: ScrubCooldown runs from them. All on Options.Now's clock.
+	scrubBase, scrubbedAt time.Time
+	scrubFound            bool
+	// scrubBegan and scrubEnded are when its last scrub began and ended, as
+	// time.Now() readings compared on the monotonic clock with repairWrite
+	// and the Began of a failing process — a request's or a round's own;
+	// scrubWhole is the packs that scrub found whole, all three files, by
+	// checksum (and, while its findings wait for their repair, the packs a
+	// rebuild past them links, less the ones they name). A repair's
+	// escalation (Cache.escalate) takes them for a scrub of its own when
+	// that scrub began after the process failed, or found nothing within
+	// ScrubCooldown with no repair written since — the same bytes, which
+	// would be found whole again.
+	scrubBegan, scrubEnded time.Time
+	scrubWhole             []string
+	// repairWrite is when this process last wrote into it what can END a
+	// pack's or an object's failure — a pack installed again over its files,
+	// a pack it had lost installed again, a derived file dropped (a
+	// multi-pack-index or a graph that placed an object wrongly is read
+	// around once it is gone) — as a time.Now() reading, compared on the
+	// monotonic clock with the Began of the git process whose pack or object
+	// damage is being repaired, a request's or a round's own (the guard of
+	// that repair, rebuild.go and repairDamaged). NOTHING ELSE: a push's
+	// pack, an adoption and the maintainer's index or graph add what the
+	// failing process never needed, and leave whatever failed it as it was —
+	// taken for repairs, a repository taking pushes answered every request's
+	// damage "as it stands" and never repaired it.
+	repairWrite time.Time
+	// forcedAt and forcedEnded are when its last FORCED round — the in-place
+	// repair of a request's pack or object damage or of a round's own, every
+	// index file held to its trailer — had acted on what it found having
+	// repaired nothing, on Options.Now's clock and as a time.Now() reading,
+	// whatever the round met after (its refs' peel failing on the damage
+	// again); zero when that round repaired something. A repair asked within
+	// ScrubCooldown of it that names no pack it can fetch, with no repair
+	// written since, is not given another (rebuild.go, repairDamaged): the
+	// same files would hash the same, and each forced round reads the rows
+	// whole and holds every reader of the repository while it hashes a
+	// quarter of the copy's bytes.
+	forcedAt, forcedEnded time.Time
+	// lastUsed is when a reader last took or released it, or made a push's
+	// scratch over it: set as the incarnation is made or read at boot, and
+	// moved only by used, which wakes the scrubber at the first use since
+	// scrubBase.
+	lastUsed time.Time
+	// stamped is the last use the disk records (lastUsedOn): read at boot,
+	// moved forward by the janitor's recordUse.
+	stamped time.Time
+}
+
+// repaired stamps that this process has just written into inc what can end a
+// pack's or an object's failure (incarnation.repairWrite), as a time.Now()
+// reading; e.mu is held.
+func repaired(inc *incarnation) { inc.repairWrite = time.Now() }
+
+// fromState sets inc's in-memory fields from a state read at boot, taking
+// its derived map rather than a copy (incarnation.state).
+func (inc *incarnation) fromState(st *state) {
+	inc.state = st
+	inc.at = st.Position
+	inc.stream = st.StreamCreated
+	inc.repo = st.Repo
+	inc.refsDigest = st.RefsDigest
+	inc.refs = st.Refs
+	inc.packs = st.Packs
+	inc.diskBytes = st.DiskBytes
+	inc.metaBytes = st.derivedBytes()
+	inc.derived, st.Derived = st.Derived, nil
+	inc.maintained = st.Maintained
+}
+
+// stateValue is the state inc's in-memory fields describe; the entry's mu is
+// held. Its map is a copy: the state is encoded once the lock is let go,
+// while a measure or a write may change the incarnation's own.
+func (inc *incarnation) stateValue(id string) state {
+	return state{
+		Format:        stateFormat,
+		RepoID:        id,
+		StreamCreated: inc.stream,
+		Position:      inc.at,
+		Repo:          inc.repo,
+		RefsDigest:    inc.refsDigest,
+		Refs:          inc.refs,
+		Packs:         inc.packs,
+		DiskBytes:     inc.diskBytes,
+		Derived:       maps.Clone(inc.derived),
+		Maintained:    inc.maintained,
+	}
+}
+
+// covered is how many packs inc's multi-pack-index covers: none where there
+// is none, or where no write this cache recorded made the one on disk
+// (derivedState.covers). e.mu is held.
+func (inc *incarnation) covered() int { return inc.derived[DerivedMidx].covers() }
+
+// bitmapped reports that inc's multi-pack-index is the maintainer's with its
+// bitmap, rather than one without — a full round's, or the maintainer's
+// where the node's memory cannot hold the bitmap. e.mu is held.
+func (inc *incarnation) bitmapped() bool { return inc.derived[DerivedMidx].Step == StepBitmap }
+
+// graphed reports that the maintainer's commit-graph is on disk. Recorded
+// apart from the index, because the two are written by two processes and the
+// second can be refused a slot the first had: a repository whose index is
+// current and whose graph is missing is due for the graph alone, where read
+// only from the index it would never be due again until MidxPacks more packs
+// had landed. e.mu is held.
+func (inc *incarnation) graphed() bool { return inc.derived[DerivedGraph].Step == StepGraph }
+
+// used records a reader's use of inc — taking it (pin), letting it go
+// (release), or making a push's scratch over it (newScratch) — on the cache's
+// clock; the entry's mu is held. EVERY USE GOES THROUGH HERE, because the
+// FIRST use since its bytes were last held to their checksums wakes the
+// scrubber, wherever in the interval it falls and whichever kind of use it
+// is: only a use makes a copy's interval count (a copy nobody uses is never
+// due), so the scrubber reads it and arms its wake for the interval's end
+// (scrub.go), and it has no other reason to wake for the copy. Woken only
+// once the interval had passed, a copy used within it — every busy
+// repository, right after its first scrub — was never woken for again; woken
+// only by a reader taking it, a copy whose first use after a scrub was the
+// RELEASE of a reader held across the scrub's end — a clone of a large
+// repository, one long request at a time — was not either, since every
+// reader taken after that release found the copy used already. Either way its
+// next scrub waited for something unrelated to wake the scrubber.
+func (c *Cache) used(inc *incarnation) {
+	if !inc.scrubBase.IsZero() && !inc.lastUsed.After(inc.scrubBase) {
+		c.kickScrubber()
+	}
+	inc.lastUsed = c.now()
+}
+
+// noReader is the name of a pin that is no reader's — a push's scratch or an
+// advertisement view holding the incarnation it leans on (scratch.go): no
+// report is held under it, since a process there is never one whose
+// incarnation's damage its caller repairs (report.go).
+const noReader gitproc.Repairer = 0
+
+// reader mints a name for a reader of inc and opens its key in inc.held, so
+// what a run naming it reports is held for it (report.go): a pin's (pin), or a
+// round's own git runs' (roundReader), which hold no pin — the round holds
+// the entry's write lock instead. The entry's mu is held.
+func (c *Cache) reader(inc *incarnation) gitproc.Repairer {
+	by := gitproc.Repairer(c.repairers.Add(1))
+	if inc.held == nil {
+		inc.held = map[gitproc.Repairer][]heldReport{}
+	}
+	inc.held[by] = nil
+	return by
+}
+
+// pin hands inc to a reader — a use (used) — under a name of its own
+// (Synced.Repairer), live on inc until the reader lets it go: what the
+// observer holds the reader's reports under (report.go). The entry's mu is
+// held.
+func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
+	inc.pins++
+	c.used(inc)
+	by := c.reader(inc)
+	return Synced{
+		Dir:      inc.dir,
+		Repo:     inc.repo,
+		Position: inc.at,
+		Kind:     kind,
+		Repairer: by,
+		release:  sync.OnceFunc(func() { c.release(e, inc, by) }),
+		inc:      inc,
+		entry:    e,
+		owner:    c,
+	}
+}
+
+// release is reader by letting inc go — a use (used) — handing every report
+// held for it to the ordinary report rules (handOn). The last release of a
+// RETIRED incarnation moves its directory into trash/ and kicks the janitor;
+// the removal itself is the janitor's, so a request that lets go of a 20 GiB
+// directory returns at once. The last release of a current incarnation while
+// the cache is over its budget kicks the janitor too: a repository too large
+// to keep is served while a request holds it, and evicted as soon as none
+// does rather than at the next tick. Safe after Stop.
+func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
+	e.mu.Lock()
+	c.used(inc)
+	c.handOn(e, inc, by)
+	gone := c.unpin(e, inc)
+	e.mu.Unlock()
+	c.trash(gone)
+}
+
+// unpin drops one pin on inc; the entry's mu is held. With the last one, a
+// retired incarnation is discarded, and unpin answers the directory its
+// caller moves into trash/ once it has let go of the entry (Cache.trash);
+// and a current one while the cache is over its budget kicks the janitor,
+// since it was not evictable while held. What a reader's release and the
+// maintainer's share — a maintenance run's pin keeps a repository from the
+// budget exactly as a reader's does, so its end must not leave the eviction
+// to the tick — but the maintainer's pin is no USE, so it leaves lastUsed as
+// it was and the budget's order is the readers' alone.
+func (c *Cache) unpin(e *entry, inc *incarnation) string {
+	inc.pins--
+	switch {
+	case inc.pins > 0:
+	case inc.retired:
+		e.retiring = slices.DeleteFunc(e.retiring, func(r *incarnation) bool { return r == inc })
+		return c.discard(inc)
+	case c.total() > c.maxBytes:
+		c.kick()
+	}
+	return ""
+}
+
+// retire takes inc out of service — a rebuild replaced it, or the repository
+// was purged or evicted; the entry's mu is held. A maintenance run on it is
+// cancelled — what it writes is about to be thrown away — without waiting for
+// it, since its pin keeps the directory until it has ended. Unpinned, it is
+// discarded at once, and retire answers the directory its caller moves into
+// trash/ once it holds no lock (Cache.trash); pinned, it waits in retiring for
+// its last reader, and retire answers "".
+func (c *Cache) retire(e *entry, inc *incarnation) string {
+	if inc.retired {
+		return ""
+	}
+	inc.retired = true
+	if m := e.maint; m != nil && m.inc == inc {
+		m.cancel()
+	}
+	if e.current == inc {
+		e.current = nil
+		c.heldRepos.Add(-1)
+	}
+	if inc.pins > 0 {
+		e.retiring = append(e.retiring, inc)
+		return ""
+	}
+	return c.discard(inc)
+}
+
+// setSize sets what inc's pack files and packed-refs hold, keeping the
+// cache's running total (Cache.heldBytes) in step; the entry's mu is held.
+// Every change to those sizes goes through here, and every change to the
+// derived files' through setDerived, so the total is never recomputed.
+func (c *Cache) setSize(inc *incarnation, disk int64) {
+	if !inc.discarded {
+		c.heldBytes.Add(disk - inc.diskBytes)
+	}
+	inc.diskBytes = disk
+}
+
+// setDerived records d as what inc holds of the declaration name on disk —
+// no entry when present is false, since a declaration with no file on disk
+// has none — keeping metaBytes, the entries' bytes together, and the cache's
+// running total in step; the entry's mu is held. EVERY CHANGE to what an
+// incarnation records of its derived files goes through here, so the bytes a
+// boot restores from the state (their sum) are the bytes the budget counted.
+func (c *Cache) setDerived(inc *incarnation, name DerivedName, d derivedState, present bool) {
+	was := inc.derived[name].Bytes
+	if present {
+		if inc.derived == nil {
+			inc.derived = map[DerivedName]derivedState{}
+		}
+		inc.derived[name] = d
+	} else {
+		delete(inc.derived, name)
+		d.Bytes = 0
+	}
+	if !inc.discarded {
+		c.heldBytes.Add(d.Bytes - was)
+	}
+	inc.metaBytes += d.Bytes - was
+}
+
+// made records that the write step has just written inc's derived file name
+// over covers packs: what the maintainer reads of it until a change drops it
+// or a measure finds it gone. Its bytes are a measure's (recordDerived). The
+// entry's mu is held.
+func (c *Cache) made(inc *incarnation, name DerivedName, covers int, step Step) {
+	d := inc.derived[name]
+	d.Covers, d.Step = covers, step
+	c.setDerived(inc, name, d, true)
+}
+
+// recordDerived sets what inc records of its derived files from one
+// measurement of them (image.derivedSizes): each declaration with a file on
+// disk takes that measure's bytes, keeping what it records of the write that
+// made it while its main file is there and forgetting it where it is not —
+// an index gone covers nothing, a graph gone is due again, and a part left
+// beside no main file (a bitmap a killed writer left with no index) is
+// counted, never read as made; a declaration with no file on disk has no
+// entry. The entry's mu is held.
+func (c *Cache) recordDerived(inc *incarnation, m derivedMeasure) {
+	c.image.each(c.image.all(), func(i int, d *Derived) {
+		bytes, present := m.bytes[d.Name]
+		s := inc.derived[d.Name]
+		if m.mains&(1<<i) == 0 {
+			s = derivedState{}
+		}
+		s.Bytes = bytes
+		c.setDerived(inc, d.Name, s, present)
+	})
+}
+
+// discard takes a retired incarnation nobody holds out of the cache — its
+// bytes out of the total, whether or not its directory is ever moved: nothing
+// names the directory any more, and one a failed move left is the next boot's
+// to count and clear — and answers the directory, which its caller moves into
+// trash/ (Cache.trash) once it holds NO LOCK: a rename can wait on the
+// filesystem's journal, and the locks a discard is decided under are every
+// request's to the repository (entry.mu) and, for an eviction or a purge,
+// every request's to any repository on the node (Cache.mu). A repository's
+// next incarnation never waits for the move either: it takes the next free
+// number while the old directory is still there (newIncarnation). The
+// entry's mu is held; "" when inc was already discarded.
+func (c *Cache) discard(inc *incarnation) string {
+	if inc.discarded {
+		return ""
+	}
+	inc.discarded = true
+	c.heldBytes.Add(-(inc.diskBytes + inc.metaBytes))
+	return inc.dir
+}
+
+// trash moves a directory a discard answered into trash/, kicks the janitor
+// and sets the gauges; "" does nothing. A rename that fails leaves the
+// directory where it is: no entry names it any more, and the next boot's
+// reading trashes it as an older incarnation or converges it as the newest —
+// so it is logged, never fatal. Once Stop has begun it moves nothing, for the
+// same reason: the directory is the next Open's, which may be another
+// process's already. A move that began before Stop is work Stop waits for
+// (enter). Called holding no lock.
+func (c *Cache) trash(dir string) {
+	if dir == "" {
+		return
+	}
+	c.setGauges()
+	if !c.enter() {
+		return
+	}
+	defer c.leave()
+	if err := toTrash(c.dir, dir, newV7()+"-"+filepath.Base(dir)); err != nil {
+		c.log.Warn("code_cache_trash_failed", "path", dir, "error", err)
+		return
+	}
+	c.kick()
+}
+
+// newIncarnation makes e's next incarnation — one past the highest it has
+// had. A FIRST incarnation (current: the entry has none) is e's current one
+// from the moment it is made: there is nothing else to serve, and no reader
+// is handed it before a round has converged it (a reader is answered at once
+// only from an incarnation this process has converged). A REBUILD's is not:
+// it is built beside the current one, which serves until the rebuild has
+// converged its replacement (promote).
+//
+// Its skeleton is a bare repository git can run in: HEAD naming main (the
+// round's refs step names the repository's own default branch before any
+// reader sees it), config gitproc.RepoConfig, a packed-refs of the header
+// alone, and the empty directories refs/heads, refs/tags, objects/pack and
+// objects/info. The number is taken by os.Mkdir, never by a rename over a
+// name: a directory already there under it — a purged repository's
+// incarnation a reader still holds — keeps its name, and the next number is
+// taken. A skeleton that cannot be written is moved into trash/.
+func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
+	e.mu.Lock()
+	n := 1
+	for _, inc := range append([]*incarnation{e.current}, e.retiring...) {
+		if inc != nil && inc.n >= n {
+			n = inc.n + 1
+		}
+	}
+	e.mu.Unlock()
+	repos := filepath.Join(c.dir, reposDir)
+	var dir string
+	for ; ; n++ {
+		dir = filepath.Join(repos, e.id+"."+strconv.Itoa(n)+".git")
+		err := os.Mkdir(dir, hostbox.DirMode)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("making %s: %w", dir, err)
+		}
+	}
+	if err := c.skeleton(dir); err != nil {
+		if terr := toTrash(c.dir, dir, newV7()+"-"+filepath.Base(dir)); terr != nil {
+			err = errors.Join(err, terr)
+		}
+		return nil, err
+	}
+	inc := &incarnation{n: n, dir: dir, lastUsed: c.now()}
+	if current {
+		e.mu.Lock()
+		if e.current == nil {
+			c.heldRepos.Add(1)
+		}
+		e.current = inc
+		e.mu.Unlock()
+	}
+	return inc, nil
+}
+
+// skeleton writes an empty bare repository's files into dir.
+func (c *Cache) skeleton(dir string) error {
+	for _, d := range []string{"refs/heads", "refs/tags", "objects/pack", "objects/info"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), hostbox.DirMode); err != nil {
+			return fmt.Errorf("making %s: %w", filepath.Join(dir, d), err)
+		}
+	}
+	for _, f := range []struct{ name, content string }{
+		{"HEAD", string(headFor("main"))},
+		{"config", gitproc.RepoConfig},
+		{"packed-refs", packedRefsHeader},
+	} {
+		staged, err := c.stage(hostbox.FileMode, func(w *os.File) error {
+			_, werr := w.WriteString(f.content)
+			return werr
+		})
+		if err != nil {
+			return err
+		}
+		if err = c.place(staged, filepath.Join(dir, f.name)); err != nil {
+			return err
+		}
+	}
+	for _, d := range []string{dir, filepath.Dir(dir)} {
+		if err := syncDir(d); err != nil {
+			return err
+		}
+	}
+	return nil
+}

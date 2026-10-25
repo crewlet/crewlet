@@ -48,7 +48,7 @@ func (d *desk) note(op, opID string, a Actor) tracker.WriteResult {
 	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}
 }
 
-func (d *desk) For(context.Context) (Backend, bool) {
+func (d *desk) For(context.Context, string) (Backend, bool) {
 	return Backend{
 		Tracker: deskBoard{d: d}, Pages: deskPages{}, PageWriter: deskPageWriter{d: d},
 		Writer: func(a Actor) TrackerWriter { return deskWriter{d: d, a: a} },

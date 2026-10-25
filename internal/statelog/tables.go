@@ -379,12 +379,10 @@ func (t tables) advanceAnchor(ctx context.Context, tx *sql.Tx, subject string, p
 	return nil
 }
 
-// anchor reads a subject's arbitration anchor by exact key.
+// anchor reads a subject's arbitration anchor by exact key ([anchorSQL]).
 func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint32) (Position, error) {
 	var packed int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT anchor FROM statelog_anchor WHERE stream = ? AND subject = ?`,
-		t.stream, subject).Scan(&packed)
+	err := tx.QueryRowContext(ctx, anchorSQL, t.stream, subject).Scan(&packed)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Position{Stream: t.stream, Generation: gen}, nil
@@ -392,6 +390,76 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 		return Position{}, fmt.Errorf("statelog: read the anchor on %s: %w", subject, err)
 	}
 	return Unpack(t.stream, packed), nil
+}
+
+// The anchor table's three reads, each held to the index it is written for by
+// TestEveryAnchorStatementSeeksItsKey: the pinned driver's planner, given no
+// statistics — no deployment gathers any — chooses between two indexes that
+// both lead with the stream on the stream alone.
+const (
+	// anchorSQL reads ONE subject's anchor, and names its key: the table's
+	// primary key (stream, subject), whose automatic index is
+	// sqlite_autoindex_statelog_anchor_1. Unnamed, the planner took
+	// statelog_anchor_swept_idx (stream, anchor) on the stream alone and
+	// walked every anchor of the stream for the one it wanted — a scan every
+	// write's snapshot ran, on every domain, growing with every subject the
+	// log had written inside the trim's window: 4.0 ms a read at twenty
+	// thousand anchors and 84 ms at three hundred thousand, against under
+	// 0.2 ms at both by the key (BenchmarkReadingASubjectsAnchor), so each of
+	// ten thousand repository creates was slower than the last.
+	anchorSQL = `SELECT anchor FROM statelog_anchor INDEXED BY sqlite_autoindex_statelog_anchor_1
+		WHERE stream = ? AND subject = ?`
+
+	// sweepAnchorsSQL and anchorsBelowSQL are ranges over
+	// statelog_anchor_swept_idx (stream, anchor), the index the replicated
+	// estate's first migration shipped for exactly these two.
+	sweepAnchorsSQL = `DELETE FROM statelog_anchor WHERE rowid IN (
+		SELECT rowid FROM statelog_anchor
+		WHERE stream = ? AND anchor < ?
+		ORDER BY anchor LIMIT ?)`
+	anchorsBelowSQL = `SELECT COUNT(*) FROM (
+		SELECT 1 FROM statelog_anchor
+		WHERE stream = ? AND anchor < ? LIMIT ?)`
+)
+
+// sweepAnchors removes up to [AnchorsPerTrimmedRecord] of this stream's
+// anchors below below, LOWEST FIRST, and reports how many went — a trimmed
+// record's whole effect (ADR-0047).
+//
+// A RANGE OVER `statelog_anchor_swept_idx (stream, anchor)`, the index the
+// replicated estate's first migration shipped for exactly this delete. PACKED
+// COMPARISON, so every anchor of an earlier generation goes too — the
+// publisher already ignores one ([Snap.anchorIn]).
+//
+// WHICH [AnchorsPerTrimmedRecord] go is a function of the table's contents
+// alone, so two nodes holding the same anchors remove the same rows: an anchor
+// is the position of the last record consumed on its subject, and one position
+// is one record on one subject, so no two of a stream's anchors are equal and
+// the order has no ties to break.
+func (t tables) sweepAnchors(ctx context.Context, tx *sql.Tx, below Position) (int, error) {
+	res, err := tx.ExecContext(ctx, sweepAnchorsSQL, t.stream, below.Packed(), AnchorsPerTrimmedRecord)
+	if err != nil {
+		return 0, fmt.Errorf("statelog: remove the anchors on %s below %s: %w", t.stream, below, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("statelog: count the anchors removed on %s: %w", t.stream, err)
+	}
+	return int(n), nil
+}
+
+// anchorsBelow counts this stream's anchors below below, up to limit — a
+// bounded walk of the same index, because what the caller needs is how many
+// records to append, which the bound already caps.
+func (t tables) anchorsBelow(ctx context.Context, db ReadEstate, below Position, limit int) (int, error) {
+	var n int
+	err := db.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, anchorsBelowSQL, t.stream, below.Packed(), limit).Scan(&n)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("statelog: count the anchors on %s below %s: %w", t.stream, below, err)
+	}
+	return n, nil
 }
 
 // writeOp records that this node applied an operation at a position, by the
@@ -512,60 +580,6 @@ func (t tables) purgeOpsWhere(ctx context.Context, db Estate, mark func(*sql.Tx)
 			// rather than on a zero: a final batch that exactly
 			// filled the limit costs one more empty statement, and a
 			// loop that only stopped at zero would run one anyway.
-			return total, nil
-		}
-	}
-}
-
-// purgeAnchors removes arbitration anchors below the published trim floor.
-//
-// THE TABLE HAD NO DELETE ANYWHERE IN THE TREE. `0001_the_state_log_lands.sql`
-// ships `statelog_anchor_swept_idx` and says in so many words that the SWEEP
-// needs it — and then nothing swept. One row per arbitrated subject, kept for
-// the life of the deployment: every task, every page, every subject any writer
-// ever contended on, in the replicated estate, in every snapshot artefact and
-// in every backup. It bites the tracker and the knowledge base today; a domain
-// whose subjects are per session would only make it fatal sooner.
-//
-// # Why the trim floor is the right cutoff, and an age would not be
-//
-// An anchor's whole job is to answer "what does this subject's last record
-// expect", and a record below the floor is one no node can replay any more.
-// Above the floor the row must stay however old it is, because an anchor read
-// as absent hands the next writer an expectation of "this subject holds
-// nothing" — which the broker refuses for ever against a subject that does.
-// So this is keyed on the same published floor the trim itself moves, never on
-// a clock: two nodes reading their own wall clocks would delete different rows.
-//
-// BATCHED, as purgeOps is and for the same reason: one unbounded DELETE over a
-// company's whole subject space holds the writer for as long as it takes.
-func (t tables) purgeAnchors(ctx context.Context, db Estate, floor Position) (int64, error) {
-	if floor.Seq == 0 {
-		// NOTHING IS BELOW ZERO, and a floor of zero is what a log
-		// that has never trimmed publishes. Sweeping on it would be a
-		// statement per tick that deletes nothing.
-		return 0, nil
-	}
-	var total int64
-	for {
-		var deleted int64
-		err := db.Tx(ctx, func(tx *sql.Tx) error {
-			res, err := tx.ExecContext(ctx, `
-				DELETE FROM statelog_anchor WHERE rowid IN (
-					SELECT rowid FROM statelog_anchor
-					WHERE stream = ? AND anchor < ? LIMIT ?)`,
-				t.stream, floor.Packed(), OpsPurgeBatch)
-			if err != nil {
-				return err
-			}
-			deleted, err = res.RowsAffected()
-			return err
-		})
-		if err != nil {
-			return total, fmt.Errorf("statelog: sweep the anchors on %s: %w", t.stream, err)
-		}
-		total += deleted
-		if deleted < OpsPurgeBatch {
 			return total, nil
 		}
 	}

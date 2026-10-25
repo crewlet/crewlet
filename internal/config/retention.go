@@ -185,8 +185,8 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// the last gibibyte of the 4.5 GiB that five unset ceilings reserve at
-	// their smallest, which is what [StoreMaxBytesFloor] is sized from.
+	// one of the gibibytes every node reserves at the logs' smallest, which
+	// [StoreMaxBytesFloor] counts.
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: the broker grants a stream its whole ceiling when it creates
@@ -212,6 +212,68 @@ const (
 	// grows at about a quarter of the tracker's rate, and at a quarter of
 	// the tracker's ceiling a blocked trim fills both in the same time.
 	DerivedPagesLogDivisor = 4
+
+	// CodeLogMaxBytesFloor and CodeLogMaxBytesCeiling bound the code log's
+	// ceiling: the gibibyte every corpus-sized log takes, and the mutation
+	// log's ceiling, because the two grow at the same order
+	// (DerivedCodeLogNumerator).
+	CodeLogMaxBytesFloor   int64 = 1 << 30
+	CodeLogMaxBytesCeiling int64 = 1 << 40
+
+	// DerivedCodeLogNumerator and DerivedCodeLogDenominator: an unset
+	// CodeLogMaxBytes is TWO THIRDS of the mutation log's ceiling, set or
+	// derived.
+	//
+	// THE RATIO IS THE BYTE RATE, the rule DerivedPagesLogDivisor states
+	// for the knowledge base: both logs hold a trailing window, so at the
+	// ratio of what each takes a day a blocked trim fills both in the same
+	// time. What each takes is its records and the barriers its
+	// linearizable reads append (176 bytes each in their signed frames,
+	// code.BarrierRecordBytes), at the reference company once its seats
+	// push:
+	//
+	//   - the mutation log about 12.1 MB a day: 9.9 MB of records,
+	//     MEASURED for the reference company's tasks, comments, edits and
+	//     turns (internal/tracker's "What a day costs the log, measured",
+	//     within a tenth of the 16 GiB in five years its declared ceiling is
+	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
+	//     seats' 12 500 reads and the object collector's 25;
+	//   - the code log 6.4–9.0 MB a day: 3 000 pushes at 1 332 bytes,
+	//     MEASURED for a push alone in its record (internal/code's
+	//     BenchmarkPushLogBytes; 744.0 a push in a burst group commit holds
+	//     together), 4.0 MB; and the barriers of its git clients, 2.4–5.0 MB
+	//     — a push asks the log twice (its advertisement and its receive's
+	//     sync) and the fetch before it once (its ls-refs, whose sync brings
+	//     every want), so a seat's push three times, 9 000 a day, beside
+	//     thirty people fetching every three minutes of a working day (4 800)
+	//     and, where one runs, a CI polling ten repositories a minute
+	//     (14 400).
+	//
+	// Every figure is of SIGNED records (ADR-0031), each about forty bytes
+	// longer than the records the ratio was first set from: the frame grows
+	// a barrier by about three tenths and a push or a gesture by a few
+	// percent, so it moved the code log, whose day is half barriers, more
+	// than the mutation log.
+	//
+	// So the code log takes 0.53–0.74 of the mutation log's day — 0.33 on
+	// its push records alone (0.40 of the tracker's records), which is what
+	// the 1.5–2 KiB a record this ratio was first set from overstated — and
+	// TWO THIRDS is taken past the middle of that range, never past its
+	// top. Past the middle because the changes, reviews and checks that
+	// later releases put on this same log come on top and a log keeps the
+	// ceiling it was created with: an operator who wants more room later
+	// pays for it with `crewlet retention set-capacity`. Not raised to the
+	// top the frame moved it to (0.51–0.68 unsigned, two thirds near its
+	// top then), because the frame grew the git barriers most, and they are
+	// the softest term in the day: a JUDGEMENT on an ESTIMATE of git traffic
+	// no deployment has reported yet, while every byte of ratio above it is
+	// taken from the other logs on every volume whose logs are scaled into
+	// their share. The reading that would say otherwise is the code log's
+	// crewlet.statelog.barrier.applied, and a company that knows its git
+	// clients read far less sets stream.code_log_max_bytes before its first
+	// boot.
+	DerivedCodeLogNumerator   = 2
+	DerivedCodeLogDenominator = 3
 
 	// DerivedArtifactsLogDivisor is how much smaller an unset
 	// ArtifactsLogMaxBytes is than the mutation log's ceiling: FOUR, the
@@ -244,32 +306,37 @@ const (
 	// broker's own declared store limit.
 	//
 	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside with room beside them. Every node reserves all
-	// FIVE state-log domains' ceilings whatever it runs, and left unset
-	// they come to 4.5 GiB at their smallest: the tracker's, the vectors',
-	// the knowledge base's and the usage log's at the gibibyte scaling stops
-	// at, and the identity log's 512 MiB default (never scaled below what
-	// it asks). What is left, about 1.5 GiB, is for the mailboxes, the event
-	// stream and every coordination bucket, which reserve nothing and grow
-	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last.
+	// own logs' FLOORS sat inside with room beside them while there were
+	// fewer logs — and it is NOT the room a fresh node needs, which is
+	// COMPUTED from the register (engine.BrokerFloor) rather than written
+	// here, because the register moves and a figure stated here went stale
+	// each time it did: it was five while there were four domains, and the
+	// artifact logs and the code log took what the logs reserve at their
+	// smallest to 7.5 GiB — seven at a gibibyte (the tracker's, the vectors',
+	// the knowledge base's, the code log's and the two artifact logs' at the
+	// gibibyte scaling stops at, and the usage log's default) and the
+	// identity log's 512 MiB default. Every node reserves every one of them
+	// whatever it runs. So a limit between this floor and the computed one is
+	// valid here, `crewlet validate` says it is short, and the boot refuses it
+	// naming both figures; and the mailboxes, the event stream and every
+	// coordination bucket, which reserve nothing, grow against what is left.
 	//
-	// SIX AND NOT FIVE: at five gibibytes the unreserved streams would have
-	// half a gibibyte, so a document `crewlet validate` admits — every
-	// ceiling unset, which the cross-field check above cannot sum — would
-	// fail at boot on whichever stream the broker reached last, which is
-	// the failure that check exists to move forward to `crewlet validate`.
+	// NOT LOWER: at five gibibytes even the original four logs' unreserved
+	// streams would have half a gibibyte, so a document `crewlet validate`
+	// admits — every ceiling unset, which the cross-field check above cannot
+	// sum — would fail at boot on whichever stream the broker reached last,
+	// which is the failure that check exists to move forward to `crewlet
+	// validate`.
 	//
-	// THE COMPANY'S FILES RESERVE NOTHING HERE: the object store's NATS
-	// bucket is created with no byte ceiling, so it grows against this
-	// number beside the unreserved streams rather than claiming a share of
-	// it up front.
+	// THE COMPANY'S FILES are not in this floor either: where they live in
+	// the broker's own bucket, its reservation (store.objects.nats_max_bytes,
+	// or a share of this limit) is a term of the computed one.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
 	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB of
-	// knowledge base), so anything past it is a unit mistake rather than a
-	// deployment.
+	// knowledge base, 1 TiB of code log), so anything past it is a unit
+	// mistake rather than a deployment.
 	StoreMaxBytesFloor   int64 = 6 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
@@ -482,8 +549,8 @@ func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
 // explicit ones can conflict with stream.store_max_bytes.
 func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
-		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
-		s.ArtifactDataLogMaxBytes
+		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.CodeLogMaxBytes +
+		s.ArtifactsLogMaxBytes + s.ArtifactDataLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
@@ -568,6 +635,28 @@ func (s Stream) UsageMaxBytes() (int64, bool) {
 		return s.UsageLogMaxBytes, false
 	}
 	return DefaultUsageLogMaxBytes, true
+}
+
+// CodeMaxBytes is the code log's ceiling, and whether it was derived.
+//
+// DERIVED FROM THE MUTATION LOG'S CEILING, set or derived, on the rule
+// [Stream.PagesMaxBytes] states: both logs hold a trailing window of records
+// as long as a blocked trim lasts, so in the ratio of the bytes each takes a
+// day a blocked trim fills both in the same time — two thirds here
+// ([DerivedCodeLogNumerator]), the reference company's pushes and its git
+// clients' reads against its tracker writes and its seats' reads. An operator
+// who sized the mutation log for their company therefore sizes this log with
+// it.
+//
+// Held inside the bounds Tier A accepts for the field, so a node never derives
+// a ceiling its own validation would refuse to be told.
+func (s Stream) CodeMaxBytes(free int64) (int64, bool) {
+	if s.CodeLogMaxBytes > 0 {
+		return s.CodeLogMaxBytes, false
+	}
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker*DerivedCodeLogNumerator/DerivedCodeLogDenominator,
+		CodeLogMaxBytesFloor), CodeLogMaxBytesCeiling), true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

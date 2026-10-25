@@ -2,6 +2,8 @@ package seat
 
 import (
 	"context"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -309,6 +311,47 @@ func TestEveryRoleSaysWhatAFleetWithoutItLoses(t *testing.T) {
 		if unmannedHints[role] == "" {
 			t.Errorf("role %q has no unmanned hint", role)
 		}
+	}
+}
+
+// A ROLE THE COMPANY DOES NOT NEED IS NEVER REPORTED UNMANNED. git serves
+// nothing for a company that hosts no code, so a fleet whose every node
+// declared its roles without git is missing nothing — until the company turns
+// code on, which is said once; and when it turns code off again the role is
+// said to be UNNEEDED, never manned, since no git node came back.
+//
+// Mutation: drop the check's `continue` for an unneeded role, and the first
+// sweep reports git unmanned.
+func TestAnUnneededRoleIsNeverReportedUnmanned(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	var hostsCode atomic.Bool
+	h := f.newHost("node-a", Config{RoleNeeded: func(role placement.NodeRole) bool {
+		return role != placement.RoleGit || hostsCode.Load()
+	}})
+	roles := placement.Roles(placement.RoleData, placement.RoleIngress, placement.RoleSeats,
+		placement.RoleWorkers)
+	live := []placement.NodeProfile{{ID: "node-a", Roles: roles}, {ID: "node-b", Roles: roles}}
+	git := []placement.NodeRole{placement.RoleGit}
+
+	for sweep := range 2 {
+		if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
+			t.Fatalf("sweep %d, no code hosted: %+v, want nothing said", sweep, got)
+		}
+	}
+	hostsCode.Store(true)
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unmanned: git}) {
+		t.Fatalf("the sweep after code is hosted: %+v, want git unmanned once", got)
+	}
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
+		t.Fatalf("the sweep after that: %+v, want nothing said again", got)
+	}
+	hostsCode.Store(false)
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{unneeded: git}) {
+		t.Fatalf("the sweep after code is turned off: %+v, want git unneeded and never manned", got)
+	}
+	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
+		t.Fatalf("the sweep after that: %+v, want nothing said again", got)
 	}
 }
 

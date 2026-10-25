@@ -294,11 +294,14 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	// THE CENSUS IS EACH LOG'S, as the report evaluates it
 	// ([statelog.DomainInputs.LinearizableReads]).
 	held, counted := r.census(r.state.running())[trackerLog.Name()]
-	if !counted || held.expected != (statelog.Census{Seats: 100}).Expected() ||
-		held.reads != 3*held.expected {
+	// THE TRACKER'S LOG COUNTS NO READERS OF ITS OWN, so no ceiling enters
+	// its census ([clientBarriers]).
+	expected, _ := held.expectedAt(0, true, 0)
+	if !counted || expected != (statelog.Census{Seats: 100}).Expected() ||
+		held.reads != 3*expected {
 		t.Errorf("the tracker's log reached its census as %d read against %d (counted "+
 			"%v), so `census_drift` compares against nothing", held.reads,
-			held.expected, counted)
+			expected, counted)
 	}
 
 	fired := map[statelog.Kind]bool{}
@@ -306,7 +309,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		fired[alarm.Kind] = true
 	}
 	for _, alarm := range statelog.Evaluate(statelog.Reading{
-		LinearizableReads: held.reads, LinearizableReadsExpected: held.expected,
+		LinearizableReads: held.reads, LinearizableReadsExpected: expected,
 	}) {
 		fired[alarm.Kind] = true
 	}
@@ -331,8 +334,9 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	silent.observed(&empty)
 	alarms := statelog.Evaluate(empty)
 	for _, c := range silent.census(silent.state.running()) {
+		expected, _ := c.expectedAt(0, true, 0)
 		alarms = append(alarms, statelog.Evaluate(statelog.Reading{
-			LinearizableReads: c.reads, LinearizableReadsExpected: c.expected,
+			LinearizableReads: c.reads, LinearizableReadsExpected: expected,
 		})...)
 	}
 	for _, alarm := range alarms {
@@ -554,9 +558,12 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 				background: func(domain string) int { return tc.background[domain] }}
 			census := r.census(r.state.running())
 			held, counted := census[tc.log]
-			if !counted || held.expected != tc.expected {
+			// NONE OF THESE LOGS COUNTS READERS OF ITS OWN, so no ceiling
+			// enters a census here ([clientBarriers]).
+			expected, _ := held.expectedAt(0, true, 0)
+			if !counted || expected != tc.expected {
 				t.Errorf("the census holds %q to %d a day (counted %v), want %d",
-					tc.log, held.expected, counted, tc.expected)
+					tc.log, expected, counted, tc.expected)
 			}
 			if _, counted := census[vectorLog.Name()]; counted {
 				t.Error("the vector log, which no read appends to, is held to a census")
@@ -565,15 +572,16 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			// its own census, and the alarm names the log.
 			fired := false
 			for _, c := range census {
+				sized, _ := c.expectedAt(0, true, 0)
 				for _, alarm := range statelog.Evaluate(statelog.Reading{
-					LinearizableReads: c.reads, LinearizableReadsExpected: c.expected,
+					LinearizableReads: c.reads, LinearizableReadsExpected: sized,
 				}) {
 					fired = fired || alarm.Kind == statelog.KindCensusDrift
 				}
 			}
 			if fired != tc.fires {
 				t.Errorf("census_drift fired %v on %d a day against %d, want %v",
-					fired, held.reads, held.expected, tc.fires)
+					fired, held.reads, expected, tc.fires)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CompassGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useRoute } from "~/app/router.tsx";
+import { sentence } from "~/lib/format.ts";
 
 /**
  * A path the route table does not have.
@@ -21,7 +22,7 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
       title={`This URL names ${what}, and there is no such screen.`}
       description={
         <>
-          {hint ? <>{capitalise(hint)}. </> : null}
+          {hint ? <>{sentence(hint)} </> : null}
           The address was <InlineCode>{route.hash}</InlineCode>.
         </>
       }
@@ -32,8 +33,4 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
       }
     />
   );
-}
-
-function capitalise(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }

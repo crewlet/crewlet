@@ -26,6 +26,7 @@ Crewlet is a Go engine for orchestrating hierarchically organized AI agent compa
 - **Official vendor SDKs** for integrations where one exists; a thin typed client where one does not (Mattermost, GitLab, Confluence)
 - **`github.com/aws/aws-sdk-go-v2`** — the object store's `s3` backend and only that: request signing, the regional endpoint rules and the credential chain. Its HTTP goes through `httpx`. The default backend, `nats`, needs nothing beyond the broker
 - **YAML** (`gopkg.in/yaml.v3`) — config parsing
+- **git ≥ 2.55 on a git node, ≥ 2.40 for a client** (ADR-0054) — the code host runs real upstream git as a subprocess (`internal/code/gitproc`), never a reimplementation, and the engine image BUILDS the git it runs from the tarball `scripts/git-pin.env` pins by version and SHA-256, through `scripts/git.sh`, the ONE recipe the image, CI and a contributor share (it links no OpenSSL of its own; `RELEASING.md` has the licence reading). The SUITE runs that pin, never the machine's git: every make target that runs Go tests depends on `make git` and puts the node pin first on PATH (`GIT_ENV`); a one-package loop runs it as two statements, `bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/code/…`, never one substitution, which is empty when the recipe fails. A git-driven test on a git below its floor FAILS rather than skips (`gittest.RequireNode`, `gittest.Require`), and `TestTheGitFloorsPassTheSuite` runs the two floors against each other under every make target. A diff to the pin or the recipe changes every git node's git, so it is release surface (`CONTRIBUTING.md`, Development setup)
 - **`testing`** — the standard library's, with no assertion framework. Table tests where the cases vary, named tests where the reasoning does
 
 ## This Is a Public Open-Source Repository
@@ -116,10 +117,11 @@ When in doubt, ask: "If I stopped right now, would a reader of this diff conside
 ```
 cmd/crewlet/          # The one binary: run / validate / schema / migrate / budgets /
                       #   backup / retention / work / objects / fleet / seats /
-                      #   artifacts / secrets / config / iam / llm / search, and the
-                      #   six vendor CLIs (gitlab, github, jira, slack, confluence,
-                      #   mattermost). Every command the switch dispatches must
-                      #   appear in usage(): nothing connects them, a test asserts it
+                      #   artifacts / secrets / config / iam / llm / search / code,
+                      #   and the six vendor CLIs (gitlab, github, jira, slack,
+                      #   confluence, mattermost). Every command the switch
+                      #   dispatches must appear in usage(): nothing connects
+                      #   them, a test asserts it
 internal/             # Everything else, mapped package by package in
                       #   internal/README.md. Nothing here is importable from outside
                       #   the module: the engine has no stable Go API, only a CLI, a
@@ -144,8 +146,12 @@ adr/                  # Decision records, for a decision that binds more than on
                       #   an Authority it may not restate and an Enforced-by (a test,
                       #   a compile error or `nothing`); internal/adr checks both ways
 skills/               # FOUNDER-facing authoring skills for an AI assistant
-scripts/              # The two vendor dev-loop bootstraps, and the DCO gate
-                      #   (check-signoff.sh) with its suite (check-signoff_test.sh)
+scripts/              # The two vendor dev-loop bootstraps, the DCO gate
+                      #   (check-signoff.sh) with its suite (check-signoff_test.sh),
+                      #   and the git the engine runs: git-pin.env (the pins),
+                      #   git.sh (the one recipe that builds them), git-pin-check.sh
+                      #   (the weekly check against upstream, verifying each release
+                      #   against git-signing-key.asc) and their suite git-pin_test.sh
 ```
 
 **`internal/README.md` maps every package** — what it is for, and the decisions it holds that a reader would be tempted to "fix" back to the obvious shape. Before you change a package, read its row there and its package doc (`go doc ./internal/<pkg>`), which is the authority. Change the code, the comment and the row together, and give a new package a row.
@@ -157,10 +163,12 @@ Before committing, ALWAYS run **`make check`** and fix what it reports. It is ev
 - `gofmt -l` over `go run ./internal/sourcetree/gofiles` — never `gofmt -l .`, which enters every nested checkout under `.claude/worktrees/`
 - `go mod tidy -diff` (`make tidy` applies the patch)
 - `scripts/check-signoff.sh` and its suite `scripts/check-signoff_test.sh`
+- `scripts/git-pin_test.sh` (`make git-test`) — the git recipe's and the weekly pin check's own suite; it reads no network, builds no git and needs GnuPG
 - `go vet ./...` — the only vet: both test targets run `go test -vet=off`
 - `golangci-lint run` — use a prebuilt release; one built with a Go older than `go.mod`'s refuses the module
 - `go build ./...`, and a cross-compile of every release target
 - the three dashboard gates: `dashboard-lint` (`npm run format:check`), `dashboard-check` (rebuild and diff the committed bundle) and `dashboard-test` (`npm run typecheck && npm test`)
+- `make git` — the pinned gits, built once a machine; both test targets depend on it, so no gate runs the machine's own git
 - `make test`, then `make test-solo`
 
 **Every package runs under the race detector with `-count=1`**, so a cached pass never answers for a change; `make test-norace` is a faster loop and not a gate. **The packages that stand up a multi-member broker run alone**, in `make test-solo` at `-p 1`, because N embedded NATS servers in one CPU-starved process leave replicated creates unanswered. Which packages those are is COMPUTED, never listed: a package declares it by importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster guard fails the build in both directions. Never reach for a build tag, `-short`, `-skip` or a custom flag instead — each fails silently (`go doc ./internal/solo` has the measurements). `make check` runs both halves, so nothing is uncovered, but a run of `make test` by itself has NOT exercised the fleet. In CI each half is one job on its own runner: `test (race)` runs `make test` with `TEST_WEIGHTS`/`TEST_TIMINGS` (longest packages first, never fewer packages), and `end-to-end gates` runs `make test-solo`.
@@ -175,6 +183,7 @@ Dependabot watches every manifest — the workflows, `go.mod`, `dashboard/packag
 - **Three workflows handle the bumps, and every diff to one is security review**, since nothing asserts their guards: `dependabot-dashboard.yml` rebuilds and pushes the bundle of a dashboard bump that changes the emitted bytes (with `DASHBOARD_BUNDLE_TOKEN`, a fine-grained Dependabot secret for this repository with Contents read and write; its commit carries `[dependabot skip]`); `dependabot-recreate.yml` asks a conflicted bump Dependabot will not rebase to `@dependabot recreate` (with `DEPENDABOT_RECREATE_TOKEN`, Pull requests read and write, in the `dependabot-recreate` environment); `dependabot-merge.yml` approves and queues `gh pr merge --auto --squash` only when Dependabot is both the author and the actor, which relies on `main`'s protection rule requiring the `ci` checks and on "Allow auto-merge". Read every `if:`, `permissions:` and token scope on each edit
 - **Tool servers the docs launch are pins Dependabot cannot see** — `internal/config/toolservers_test.go` holds every package a page or a skill fetches by name to an exact release, the one `pinnedToolServers` records as `readAt`; moving one is reading and running the new release. The shipped examples float instead (`@latest` at most), except a server a bundled tool skill triggers on by tool name
 - **Pick the newest release, then pin it exactly** — established from the registry rather than memory, written as a literal (`4.2.4`), never `latest` or `@main`, which nothing moves. A version held back on purpose carries its reason at the pin
+- **The git pin is watched by `.github/workflows/git-pin.yml`, not Dependabot** — weekly, `scripts/git-pin-check.sh` verifies each newer release's signature against `scripts/git-signing-key.asc` and opens one issue, `git pin behind upstream`, naming the pin's new version and SHA-256, and it fails 60 days before the key's signing subkeys expire. A bump moves a pin's version and SHA-256 together, from that report, and is titled `build(deps): bump git from <a> to <b>`; nothing asserts the workflow, so read its `permissions:`, the issue title and its `key` step on every edit (`CONTRIBUTING.md`, "The git pin is checked every week")
 - **A new dependency surface ships with its `updates:` entry**, and actions are pinned to a version tag or a full SHA (a branch ref gets no update pull requests)
 
 ## Releases
@@ -259,3 +268,4 @@ The implementation follows `docs/concepts/`. Its subsystems:
 19. **State Log** — one ordered stream per domain is the write-ahead log, N identical SQL copies are the state, and the checkpoint commits in the same transaction as the rows; one write authority (take one snapshot, decide inside it, publish, let the broker arbitrate), three write outcomes, four read levels
 20. **Identity Estate** — people, credentials, invitations and sessions as `statelog`'s fourth domain; uniqueness is arbitrated on one directory subject, never indexed, and a person holds one human seat for as long as they exist (ADR-0032)
 21. **Estate Topology** — a node holds the estate (`data`, which `ingress` and `workers` require) or reaches it through one that does, over the estate router, every request signed under the fleet keyring (ADR-0025, ADR-0031); a file is a replicated row naming an object in the fleet's one object store (ADR-0026)
+22. **Code Host** — the company's git repositories as rows on the code log, each push's pack bundle one object in the object store, a disposable cache of each repository on every git node derived from the rows, and persons cloning and pushing over HTTPS with their own token — git, one more way a person acts (ADR-0051, ADR-0052)

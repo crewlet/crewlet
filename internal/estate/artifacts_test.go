@@ -30,7 +30,7 @@ type vault struct {
 // refused is the artifact whose every write answers a moved head.
 var refused = artifacts.IDFor("the refused artifact")
 
-func (v *vault) For(context.Context) (Backend, bool) {
+func (v *vault) For(context.Context, string) (Backend, bool) {
 	return Backend{Artifacts: ArtifactsHalf{Reader: v, Writer: v}}, true
 }
 

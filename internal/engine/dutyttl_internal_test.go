@@ -37,13 +37,14 @@ var dutyTTLs = map[string]struct {
 	// sizesCeiling is false for a bound derived from coord.MaxDutyTTL.
 	sizesCeiling bool
 }{
-	"maintenanceDutyTTL": {maintenanceDutyTTL, true},
-	"retentionDutyTTL":   {retentionDutyTTL, true},
-	"embedDutyTTL":       {embedDutyTTL, true},
-	"collectorDutyTTL":   {collectorDutyTTL, true},
-	"trashReaperDutyTTL": {trashReaperDutyTTL, true},
-	"integrationDutyTTL": {integrationDutyTTL, true},
-	"learningDutyTTL":    {learningDutyTTL, true},
+	"maintenanceDutyTTL":   {maintenanceDutyTTL, true},
+	"retentionDutyTTL":     {retentionDutyTTL, true},
+	"embedDutyTTL":         {embedDutyTTL, true},
+	"collectorDutyTTL":     {collectorDutyTTL, true},
+	"codeRetentionDutyTTL": {codeRetentionDutyTTL, true},
+	"trashReaperDutyTTL":   {trashReaperDutyTTL, true},
+	"integrationDutyTTL":   {integrationDutyTTL, true},
+	"learningDutyTTL":      {learningDutyTTL, true},
 	// THE IDENTITY DUTY'S LEASE is three of its interval, the sweep's hour.
 	"identityDutyTTL(interval)": {identityDutyTTL(IdentitySweepInterval), true},
 	"setup.LeaseTTL":            {setup.LeaseTTL, true},

@@ -44,6 +44,7 @@ var suite = objstoretest.Options{
 	Piece:      natsobj.MessageBytes,
 	Digest:     true,
 	Unfinished: unfinished,
+	Spoil:      spoil,
 }
 
 // clients is the client each backend a case opened was opened on, so the
@@ -71,12 +72,30 @@ func unfinished(t *testing.T, b objstore.Backend) objstore.Pending {
 	return objstore.Pending{ID: nuid}
 }
 
+// spoil leaves under name what no get could read: metadata that does not
+// decode, published over whatever name held — as a client of the bucket's
+// documented format writing garbage, or a disk returning it, would.
+func spoil(t *testing.T, b objstore.Backend, name string) {
+	t.Helper()
+	c, ok := clients.Load(b)
+	if !ok {
+		t.Fatal("the backend was not opened through open()")
+	}
+	subject := "$O." + natsobj.Bucket + ".M." + base64.URLEncoding.EncodeToString([]byte(name))
+	if _, err := c.(jetstream.JetStream).Publish(t.Context(), subject,
+		[]byte("not an object's metadata")); err != nil {
+		t.Fatalf("spoil %s: %v", name, err)
+	}
+}
+
 // THE BROKER'S OWN OBJECT STORE PASSES THE SUITE, on a member's own client.
 func TestContract(t *testing.T) {
 	t.Parallel()
+	opts := suite
+	opts.Stalling = stallingMember
 	objstoretest.Run(t, func(t *testing.T) objstore.Backend {
 		return open(t, memberClient(t))
-	}, suite)
+	}, opts)
 }
 
 // AND THROUGH A LEAF: a node without `data` runs no JetStream and reaches the
@@ -84,14 +103,16 @@ func TestContract(t *testing.T) {
 // exactly that.
 func TestContractThroughALeaf(t *testing.T) {
 	t.Parallel()
+	opts := suite
+	opts.Stalling = stallingLeaf
 	objstoretest.Run(t, func(t *testing.T) objstore.Backend {
 		return open(t, leafClient(t))
-	}, suite)
+	}, opts)
 }
 
 // EVERY MESSAGE OF A PUT BUT ITS LAST IS FULL, however few bytes at a time the
-// reader yields. The library sends one message per read it makes, so a body
-// arriving a byte at a time would otherwise be stored as a message per byte.
+// reader yields: a put that sent a message per read of its body would store a
+// body arriving a byte at a time as a message per byte.
 func TestEveryMessageButTheLastIsFull(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
@@ -140,66 +161,6 @@ func TestAFailedPutLeavesNoMessages(t *testing.T) {
 	}
 }
 
-// A PUT WHOSE ACKNOWLEDGEMENTS COME LATE STILL LANDS, inside the object
-// store's pace. Spike S7 lost a 16 MiB put to "timeout waiting for ack": the
-// library's put sent all 128 pieces at once and gave each acknowledgement the
-// client's five seconds, so slow flushes with the logs busy failed it. Here
-// every acknowledgement arrives six seconds after the broker sends it, and
-// the put holds at most a mebibyte in flight and gives each mebibyte its
-// pace.
-//
-// Mutation: publish every piece before waiting (no window), or wait five
-// seconds a window, and this goes red.
-func TestAPutWhoseAcknowledgementsComeLateStillLands(t *testing.T) {
-	t.Parallel()
-	client := memberClient(t)
-	b := open(t, client)
-	natsobj.SetPace(b, 10*time.Second)
-	peak := natsobj.DelayAcks(b, 6*time.Second)
-	data := make([]byte, 2*natsobj.PutWindow*natsobj.MessageBytes+100)
-	_, _ = rand.Read(data)
-	started := time.Now()
-	if err := b.Put(t.Context(), "late", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
-		t.Fatalf("a put whose acknowledgements each came six seconds late failed: %v", err)
-	}
-	if took := time.Since(started); took > 30*time.Second {
-		t.Errorf("the put took %s: each window should wait out one delay, not a delay a piece", took)
-	}
-	if got := peak(); got > natsobj.PutWindow {
-		t.Errorf("%d pieces were in flight at once, past the window of %d", got, natsobj.PutWindow)
-	}
-	r, err := b.Get(deadline(t), "late", 0, -1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("the object read back %d of %d bytes, %v", len(got), len(data), err)
-	}
-}
-
-// A PUT WHOSE ACKNOWLEDGEMENTS OUTLAST THE PACE FAILS AND LEAVES NOTHING: the
-// window's wait is bounded, and the cleanup waits for what is still in
-// flight before it purges, so no piece lands behind it.
-func TestAPutPastItsPaceFailsAndLeavesNoMessages(t *testing.T) {
-	t.Parallel()
-	client := memberClient(t)
-	b := open(t, client)
-	natsobj.SetPace(b, time.Second)
-	natsobj.DelayAcks(b, 1500*time.Millisecond)
-	err := b.Put(t.Context(), "slow", bytes.NewReader(make([]byte, 3*natsobj.MessageBytes)),
-		objstore.PutMeta{})
-	if !errors.Is(err, nats.ErrTimeout) {
-		t.Fatalf("Put = %v, want a timeout naming the pace", err)
-	}
-	if got := messages(t, client); got != 0 {
-		t.Fatalf("the failed put left %d messages in %s", got, natsobj.Stream)
-	}
-	if _, err := b.Stat(deadline(t), "slow"); !errors.Is(err, objstore.ErrNotFound) {
-		t.Fatalf("Stat of the failed put = %v, want ErrNotFound", err)
-	}
-}
-
 // cancelAfter cancels its context once it has yielded after bytes, and keeps
 // yielding.
 type cancelAfter struct {
@@ -218,27 +179,23 @@ func (c *cancelAfter) Read(p []byte) (int, error) {
 }
 
 // A DOWNLOAD WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
-// byte for byte.
+// byte for byte, and within [lostConsumerBound].
 //
 // A get is an ordered consumer of the object's messages, and the broker can
 // take that consumer away under a reader — reaped while the reader was slow,
 // dropped in a leader change. The client then makes a new one from the last
-// message the reader took, which is the path every one of those failures goes
-// down, and the one this case stages: the consumer is deleted a few messages
-// into a 4 MiB read, past what the read held in hand, so the rest can only
-// come from a replacement. This replaced a read paced over twelve seconds to
-// outlast two of the consumer's heartbeats; the vendored client arms none
-// between reads, so that read tripped nothing and never asserted that a
-// replacement was made.
+// message the reader took, once two of the broker's heartbeats have gone
+// missing — the path every one of those failures goes down, and every pull a
+// clustered fleet drops at a consumer's creation too — and the one this case
+// stages: the consumer is deleted a few messages into a 4 MiB read, past what
+// the read held in hand, so the rest can only come from a replacement. This
+// replaced a read paced over twelve seconds to outlast two of the consumer's
+// heartbeats; the vendored client arms none between reads, so that read
+// tripped nothing and never asserted that a replacement was made.
 func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
 	b := open(t, client)
-	// THE REPLACEMENT WAITS FOR THE OUTSTANDING PULL TO EXPIRE, so the
-	// expiry is the client's floor of a second rather than the production
-	// ten: what is held is that the rest of the read comes from a new
-	// consumer, not how long that takes ([TestTheTimeALostReaderCostsIsBounded]).
-	natsobj.ShortenPulls(b, time.Second)
 	data := bytes.Repeat([]byte("read across a lost consumer "), 4<<20/28)
 	if err := b.Put(t.Context(), "lost", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
@@ -250,7 +207,10 @@ func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	defer r.Close()
 	var got bytes.Buffer
 	buf := make([]byte, natsobj.MessageBytes/2)
-	var deleted []string
+	var (
+		deleted []string
+		lost    time.Time
+	)
 	for {
 		n, err := r.Read(buf)
 		got.Write(buf[:n])
@@ -261,19 +221,24 @@ func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 			t.Fatalf("a read whose consumer was deleted failed at %d bytes: %v", got.Len(), err)
 		}
 		if deleted == nil && got.Len() >= 3*natsobj.MessageBytes {
-			deleted = dropConsumers(t, client)
+			deleted, lost = dropConsumers(t, client), time.Now()
 		}
 	}
 	if !bytes.Equal(got.Bytes(), data) {
 		t.Fatalf("a read across a lost consumer answered %d bytes, want %d exactly", got.Len(), len(data))
 	}
 	replacedBy(t, client, deleted)
+	if took := time.Since(lost); took > lostConsumerBound {
+		t.Fatalf("the read finished %v after its consumer was lost, past the %v a lost "+
+			"consumer may cost", took, lostConsumerBound)
+	}
 }
 
 // A LISTING ENDS EVEN WHEN THE NEWEST METADATA CANNOT BE READ. The library's
 // own watch learns it has seen everything only from a message it decoded, so
 // one that ended on garbage never finished — and the collector, whose context
-// has no deadline, waited on it for ever.
+// has no deadline, waited on it for ever. And it hands the garbled name on,
+// holding nothing, so the collector can judge and clear it like any other.
 func TestAListingEndsPastMetadataItCannotRead(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
@@ -287,15 +252,37 @@ func TestAListingEndsPastMetadataItCannotRead(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	var names []string
+	listed := map[string]objstore.Info{}
 	if err := b.List(ctx, func(info objstore.Info) error {
-		names = append(names, info.Name)
+		listed[info.Name] = info
 		return nil
 	}); err != nil {
 		t.Fatalf("a listing ending on unreadable metadata: %v", err)
 	}
-	if len(names) != 1 || names[0] != "readable" {
-		t.Fatalf("listed %q, want the one readable object", names)
+	if len(listed) != 2 || listed["readable"].Size != 1 || listed["garbled"].Size != 0 ||
+		listed["garbled"].Written.IsZero() {
+		t.Fatalf("listed %+v, want the readable object and the garbled name, dated and "+
+			"holding nothing", listed)
+	}
+	// THE SUBJECT A NAME IS SPELLED IN IS NOT ALWAYS ONE: metadata on a
+	// subject that decodes to no name is stepped over, and the listing goes
+	// ON past it — to an object stored after it, so the stepped-over message
+	// is not the listing's last and the walk has to read beyond it rather
+	// than end on it.
+	if _, err := client.Publish(t.Context(), "$O."+natsobj.Bucket+".M.!",
+		[]byte("on no name at all")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put(t.Context(), "after", bytes.NewReader([]byte("yz")), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	clear(listed)
+	if err := b.List(ctx, func(info objstore.Info) error {
+		listed[info.Name] = info
+		return nil
+	}); err != nil || len(listed) != 3 || listed["after"].Size != 2 {
+		t.Fatalf("a listing past metadata on a subject spelling no name = %+v, %v; want "+
+			"readable, garbled and after", listed, err)
 	}
 	// AND IT LEAVES NO CONSUMER BEHIND for the broker to reap later: a
 	// collection lists the bucket every hour.
@@ -580,7 +567,7 @@ func TestAnObjectWhosePiecesAreGoneReadsEmpty(t *testing.T) {
 }
 
 // A LISTING WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
-// visiting every name exactly once.
+// visiting every name exactly once, and within [lostConsumerBound].
 //
 // The listing is an ordered consumer over the metadata, holding
 // [natsobj.WalkAhead] messages at a time, so the bucket holds more names than
@@ -598,7 +585,6 @@ func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
 	b := open(t, client)
-	natsobj.ShortenPulls(b, time.Second) // for the read case's reason
 	const extra = 50
 	names := natsobj.WalkAhead + extra
 	for i := range names {
@@ -614,18 +600,25 @@ func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 		}
 	}
 	seen := map[string]int{}
-	var deleted, last []string
+	var (
+		deleted, last []string
+		lost          time.Time
+	)
 	if err := b.List(t.Context(), func(info objstore.Info) error {
 		seen[info.Name]++
 		switch len(seen) {
 		case 10:
-			deleted = dropConsumers(t, client)
+			deleted, lost = dropConsumers(t, client), time.Now()
 		case names:
 			last = consumerNames(t, client)
 		}
 		return nil
 	}); err != nil {
 		t.Fatalf("a listing whose consumer was deleted: %v", err)
+	}
+	if took := time.Since(lost); took > lostConsumerBound {
+		t.Fatalf("the listing finished %v after its consumer was lost, past the %v a lost "+
+			"consumer may cost", took, lostConsumerBound)
 	}
 	if len(seen) != names {
 		t.Fatalf("the listing visited %d names of %d", len(seen), names)
@@ -648,27 +641,714 @@ func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	}
 }
 
-// THE TIME A LOST READER COSTS IS BOUNDED, and by a number that keeps the
-// client's own heartbeat.
+// lostConsumerBound is the most a consumer lost under a read may cost it: the
+// quiet second the read waits before it waits again ([natsobj.QuietWait]), the
+// two heartbeats the client then waits out before it replaces the consumer
+// ([natsobj.PullHeartbeat]), and room for a loaded runner to make the
+// replacement and hand over what it reads first. A lost consumer is the one
+// case the heartbeats are for, so the bound is theirs; what holds THEM is
+// [TestAReadsHeartbeatOutlastsItsHandAtTheFloor].
+const lostConsumerBound = natsobj.QuietWait + 2*natsobj.PullHeartbeat + 5*time.Second
+
+// A READ'S HEARTBEATS OUTLAST ITS HAND CROSSING A LINK AT THE FLOOR, TWICE
+// OVER — AND A CONSUMER LOST UNDER IT IS REPLACED INSIDE THE STALL.
 //
-// A get or a listing whose consumer the broker loses is silent until its
-// outstanding pull expires — that is when the client makes the replacement the
-// two cases above stage — so the expiry IS the stall, and the client's default
-// made it thirty seconds. Below ten, the client halves its five-second
-// heartbeat for an ordered consumer, and missed heartbeats replace the
-// consumer too, with a metadata request each, on a broker already too slow to
-// send them. And it stays well inside the minute a read that hears nothing is
-// ended at.
-func TestTheTimeALostReaderCostsIsBounded(t *testing.T) {
+// The client replaces a read's consumer when two heartbeats go missing while
+// it waits, and hears of a heartbeat or a message only once the whole of it
+// has arrived — on a compressed link, once the whole block the broker flushed
+// has, and a get's first pull puts its whole hand on the wire in one flush. So
+// on a link at [objstore.MiBPace], the slowest every object store leg accepts,
+// a healthy read can hear nothing for as long as its hand takes to cross, and
+// two heartbeats must outlast that or the reader is replaced before its hand
+// arrives, and again before its replacement's, and fails a minute later at
+// [objstore.Stall] having read nothing. Twice over, the room the stall
+// gives a mebibyte.
+//
+// And a consumer the broker loses under a read costs a quiet second, two
+// heartbeats and then its replacement's first hand — which must fit in the
+// stall, or the read the replacement was made for is ended before it arrives.
+// That is what bounds the hand: at eight messages, a mebibyte, the two could
+// not both hold.
+func TestAReadsHeartbeatOutlastsItsHandAtTheFloor(t *testing.T) {
 	t.Parallel()
-	if natsobj.PullExpiry < 10*time.Second {
-		t.Errorf("a pull expires after %v; below ten seconds the client halves the "+
-			"heartbeat its ordered consumers are replaced on", natsobj.PullExpiry)
+	hand := time.Duration(natsobj.ReadAhead*natsobj.MessageBytes) * objstore.MiBPace / objstore.MiB
+	if 2*natsobj.PullHeartbeat < 2*hand {
+		t.Errorf("two heartbeats of %v are under twice the %v a hand of %d messages takes to "+
+			"cross a link at the floor: a read at the floor is replaced before its hand arrives",
+			natsobj.PullHeartbeat, hand, natsobj.ReadAhead)
 	}
-	if natsobj.PullExpiry > objstore.ReadStall/4 {
-		t.Errorf("a lost reader stays silent for %v, too close to the %v a read is "+
-			"ended at for hearing nothing", natsobj.PullExpiry, objstore.ReadStall)
+	if lost := natsobj.QuietWait + 2*natsobj.PullHeartbeat + hand; lost > objstore.Stall {
+		t.Errorf("a consumer lost under a read at the floor costs a quiet wait, two heartbeats "+
+			"and a hand, %v, past the %v a read waits before it is ended as stalled",
+			lost, objstore.Stall)
 	}
+}
+
+// A READ ACROSS A LINK NEAR THE FLOOR FINISHES ON THE CONSUMER IT BEGAN WITH.
+//
+// A leaf reaches the bucket across its link to a member, and the link is held
+// to a quarter above [objstore.MiBPace]'s floor towards the leaf. The link is
+// compressed, as a leaf's is by default, so what the member flushes at once
+// arrives as one block: the read's first hand, [natsobj.ReadAhead] messages,
+// in twelve seconds and nothing of it sooner, then what its next pull asked
+// for. The object is a hand and a half, so the read waits on the link twice.
+// It also asks its consumer about its first message a second in — which the
+// consumer answers, behind the hand, as being read — and must not remake it.
+// At a heartbeat whose two went missing in either wait, the read's consumer
+// was replaced before its messages arrived, and again before each of the
+// replacement's, which queued behind what its predecessor had been sent: the
+// read never completed a message and failed when its deadline ran out.
+//
+// A QUARTER ABOVE THE FLOOR rather than at it, so a scheduler running late on
+// a loaded runner cannot push the link under the floor, where no heartbeat is
+// promised to hold; the floor itself is held by the arithmetic
+// ([TestAReadsHeartbeatOutlastsItsHandAtTheFloor]).
+func TestAReadAcrossALinkNearTheFloorKeepsItsConsumer(t *testing.T) {
+	t.Parallel()
+	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start the member: %v", err)
+	}
+	t.Cleanup(member.Shutdown)
+	gate := holdGate(t)
+	floor := int64(objstore.MiB) * int64(time.Second) / int64(objstore.MiBPace)
+	gate.slow(floor * 5 / 4)
+	gate.open(fmt.Sprintf("127.0.0.1:%d", member.LeafPort()))
+	leaf := client(t, startLeaf(t, gate.port()))
+	awaitLink(t, leaf)
+	b := open(t, leaf)
+	data := make([]byte, 3*natsobj.ReadAhead*natsobj.MessageBytes/2)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put(t.Context(), "slow", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	// EVERY CONSUMER THE READ MAKES IS COUNTED, nothing made deaf: the get
+	// waits for its first message before it returns, so a consumer it
+	// remade in that wait is gone before the reader is handed back.
+	made := &deafStream{}
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { made.Stream = s; return made })
+
+	// THE MEMBER'S OWN CLIENT names the consumers, so asking adds nothing to
+	// the slow link the read is waiting on.
+	direct := client(t, member)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	r, err := b.Get(ctx, "slow", 0, -1)
+	if err != nil {
+		t.Fatalf("a get across a link a quarter above the floor: %v", err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("a read across a link a quarter above the floor failed after %d bytes of %d: %v",
+			len(got), len(data), err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("a read across a slow link answered %d bytes, want %d exactly", len(got), len(data))
+	}
+	made.mu.Lock()
+	began := made.names
+	made.mu.Unlock()
+	if ended := consumerNames(t, direct); len(began) != 1 || !slices.Equal(began, ended) {
+		t.Fatalf("the read made the consumers %v and ended on %v: a link above the floor "+
+			"remade or replaced the consumer it began with", began, ended)
+	}
+}
+
+// A READ WHOSE FIRST PULL NEVER REACHED ITS CONSUMER REMAKES THE CONSUMER, A
+// SECOND IN — a whole get, a ranged get's walk to its offset, and a listing.
+//
+// On a clustered fleet a new consumer's first pull is dropped one read in 25
+// to one in 1,500 ([natsobj.QuietWait]), and nothing tells the reader:
+// it hears only heartbeats, and waiting on them cost the read two of them —
+// thirty seconds at a heartbeat that honours the floor. The read asks its
+// consumer instead, and one that holds no pull and has delivered nothing is
+// made again. A [deafStream] stages exactly that: the first consumer it is
+// asked for is made on the broker as asked, so what the read asks it is the
+// broker's answer, but its pull goes elsewhere and never reaches it.
+func TestAReadWhoseFirstPullNeverArrivedRemakesItsConsumer(t *testing.T) {
+	t.Parallel()
+	data := bytes.Repeat([]byte("asked again "), 3*natsobj.MessageBytes/12)
+	for _, c := range []struct {
+		name string
+		// makes is how many consumers the read makes when none is deaf: a
+		// ranged get walks to its offset on one and reads on another.
+		makes int32
+		read  func(t *testing.T, b *natsobj.Backend) error
+	}{
+		{"get", 1, func(t *testing.T, b *natsobj.Backend) error {
+			return readsBack(t, b, 0, data)
+		}},
+		{"ranged", 2, func(t *testing.T, b *natsobj.Backend) error {
+			return readsBack(t, b, natsobj.MessageBytes+5, data[natsobj.MessageBytes+5:])
+		}},
+		{"listing", 1, func(t *testing.T, b *natsobj.Backend) error {
+			var names []string
+			err := b.List(t.Context(), func(info objstore.Info) error {
+				names = append(names, info.Name)
+				return nil
+			})
+			if err == nil && !slices.Equal(names, []string{"asked"}) {
+				return fmt.Errorf("the listing named %v, want the one object", names)
+			}
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			client := memberClient(t)
+			b := open(t, client)
+			if err := b.Put(t.Context(), "asked", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+				t.Fatal(err)
+			}
+			deaf := &deafStream{}
+			deaf.deaf.Store(1)
+			natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { deaf.Stream = s; return deaf })
+			began := time.Now()
+			if err := c.read(t, b); err != nil {
+				t.Fatalf("a read whose first pull never reached its consumer: %v", err)
+			}
+			if took, bound := time.Since(began), natsobj.QuietWait+5*time.Second; took > bound {
+				t.Fatalf("the read took %v, past the %v asking its consumer and remaking it may "+
+					"cost: it waited for its heartbeats", took, bound)
+			}
+			if made := deaf.made.Load(); made != c.makes+1 {
+				t.Fatalf("the read made %d consumers, want its own %d and the deaf one's remake",
+					made, c.makes)
+			}
+			if left := consumers(t, client); left != 0 {
+				t.Fatalf("the read left %d consumers behind, the deaf one among them", left)
+			}
+		})
+	}
+}
+
+// A READ REMAKES A CONSUMER THAT NEVER GETS ITS PULL [natsobj.FirstPullRemakes]
+// TIMES, THEN WAITS. A consumer still without its pull after that is behind a
+// link holding the pull itself back rather than a cluster that dropped it, and
+// remaking it on every second would only add consumers for the cluster to
+// create; its heartbeats and the read's own deadline are still over it.
+func TestAReadRemakesAnUnpulledConsumerOnlySoOften(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	if err := b.Put(t.Context(), "unheard", bytes.NewReader([]byte("never pulled")), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	deaf := &deafStream{}
+	deaf.deaf.Store(1 << 20)
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { deaf.Stream = s; return deaf })
+	wait := time.Duration(natsobj.FirstPullRemakes+3) * natsobj.QuietWait
+	ctx, cancel := context.WithTimeout(t.Context(), wait)
+	defer cancel()
+	if _, err := b.Get(ctx, "unheard", 0, -1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a get no consumer ever heard the pull of = %v, want its deadline", err)
+	}
+	if made, want := deaf.made.Load(), int32(1+natsobj.FirstPullRemakes); made != want {
+		t.Fatalf("the get made %d consumers in %v, want %d: the first and %d remakes",
+			made, wait, want, natsobj.FirstPullRemakes)
+	}
+	if left := consumers(t, client); left != 0 {
+		t.Fatalf("the get left %d consumers behind", left)
+	}
+}
+
+// A READ WHOSE CLIENT SKIPPED A PULL GOES ON A SECOND LATER, not two
+// heartbeats later.
+//
+// The client decides whether to send its next pull only as a wait begins, and
+// now and then decides not to ([natsobj.QuietWait]): its consumer has
+// delivered the hand, holds no pull, and has nothing to say, and nothing
+// tells the reader — which heard only heartbeats, and replaced the consumer
+// once two went missing. A [skippingStream] stages exactly that: after the
+// first hand the reader's next wait is spent hearing nothing, and only a wait
+// begun after it reads on, as only a wait begun again makes the client send
+// the pull. The object is two hands, so the skip falls in the middle of it.
+func TestAReadWhoseClientSkippedAPullGoesOn(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	data := bytes.Repeat([]byte("skipped once "), 2*natsobj.ReadAhead*natsobj.MessageBytes/13)
+	if err := b.Put(t.Context(), "asked", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	skip := &skippingStream{after: natsobj.ReadAhead}
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { skip.Stream = s; return skip })
+	began := time.Now()
+	if err := readsBack(t, b, 0, data); err != nil {
+		t.Fatalf("a read whose client skipped a pull: %v", err)
+	}
+	if took, bound := time.Since(began), natsobj.QuietWait+5*time.Second; took > bound {
+		t.Fatalf("the read took %v, past the %v waiting again costs: it waited out the stall "+
+			"its skipped pull left it in", took, bound)
+	}
+	if skipped := skip.skipped.Load(); skipped != 1 {
+		t.Fatalf("%d waits were spent hearing nothing, want the one this case is for", skipped)
+	}
+	if left := consumers(t, client); left != 0 {
+		t.Fatalf("the read left %d consumers behind", left)
+	}
+}
+
+// A READ ON A REPLICA BEHIND THE STREAM'S LEADER READS WHAT THE LEADER HOLDS.
+//
+// The broker makes a read's consumer on whichever replica it places it, one
+// still catching up after a restart included, and that consumer counts what
+// follows from what its replica has stored: it says nothing follows where the
+// leader holds more. A [laggingStream] stages exactly that, the replica
+// holding none of the object or only its first piece. Taken for the end, the
+// get read back none or part of the object — DAMAGED to the store, a definite
+// answer, where the object was whole — and a range past what the replica held
+// was read as past the object's end. Seen on a three-member fleet: a cache
+// syncing from a member just back from a restart took a pushed pack for
+// damaged, `ended at 0 of the 1460 bytes`.
+func TestAReadOnAReplicaBehindTheLeaderReadsWhatTheLeaderHolds(t *testing.T) {
+	t.Parallel()
+	data := bytes.Repeat([]byte("caught up "), 3*natsobj.MessageBytes/10)
+	off := int64(2*natsobj.MessageBytes + 5)
+	for _, c := range []struct {
+		name string
+		// holds is how many of the object's pieces the replica behind has
+		// stored, and makes how many consumers the read makes: the one
+		// made there and its replacement, and a ranged get's own after
+		// its walk.
+		holds int
+		makes int32
+		off   int64
+	}{
+		{"get_on_a_replica_holding_none", 0, 2, 0},
+		{"get_on_a_replica_holding_one_piece", 1, 2, 0},
+		{"range_on_a_replica_holding_none", 0, 3, off},
+		{"range_on_a_replica_holding_one_piece", 1, 3, off},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			client := memberClient(t)
+			b := open(t, client)
+			before := lastSeq(t, client)
+			if err := b.Put(t.Context(), "asked", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+				t.Fatal(err)
+			}
+			lag := &laggingStream{holds: before + uint64(c.holds)}
+			lag.lagging.Store(1)
+			natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { lag.Stream = s; return lag })
+			if err := readsBack(t, b, c.off, data[c.off:]); err != nil {
+				t.Fatalf("a read whose consumer was made on a replica behind the leader: %v", err)
+			}
+			if made := lag.made.Load(); made != c.makes {
+				t.Fatalf("the read made %d consumers, want %d: the one behind the leader and "+
+					"what read on past it", made, c.makes)
+			}
+			if left := consumers(t, client); left != 0 {
+				t.Fatalf("the read left %d consumers behind", left)
+			}
+		})
+	}
+}
+
+// A LISTING ON A REPLICA BEHIND THE STREAM'S LEADER NAMES WHAT THE LEADER HELD,
+// or fails — and a pass over the unfinished uploads fails with it, rather than
+// hand the collector the pieces of an upload the listing missed.
+//
+// The listing's consumer is made on whichever replica the broker places it,
+// and one still catching up has stored the metadata of the uploads before
+// "late" but not of "late" itself. Made there with nothing at all, it is made
+// again; made there part way through, it cannot go on from a consumer made
+// again — that would deliver every message past its end, superseded ones
+// among them — and fails, to be asked again. Taken for the end, the listing
+// named only "early", and [natsobj.Backend.Pending] answered "late"'s pieces
+// as an upload nobody finished: the collector abandons one of those a day
+// after it began, which purges the pieces of a whole object a replica a day
+// behind had not yet caught up on.
+func TestAListingOnAReplicaBehindTheLeaderNamesWhatTheLeaderHeld(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// holds is how many of the bucket's messages the replica behind
+		// has stored: none, or the first upload's piece and metadata.
+		holds uint64
+		// fails says the listing must fail; otherwise it names both
+		// names on a consumer made again.
+		fails bool
+	}{
+		{"on_a_replica_holding_none", 0, false},
+		{"on_a_replica_holding_part", 2, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			client := memberClient(t)
+			b := open(t, client)
+			before := lastSeq(t, client)
+			for _, name := range []string{"early", "late"} {
+				if err := b.Put(t.Context(), name, strings.NewReader(name), objstore.PutMeta{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := lastSeq(t, client) - before; got != 4 {
+				t.Fatalf("two one-piece uploads took %d messages, want a piece and a metadata each", got)
+			}
+			lag := &laggingStream{holds: before + c.holds}
+			natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { lag.Stream = s; return lag })
+
+			lag.lagging.Store(1)
+			var names []string
+			err := b.List(t.Context(), func(info objstore.Info) error {
+				names = append(names, info.Name)
+				return nil
+			})
+			switch {
+			case c.fails && err == nil:
+				t.Fatalf("a listing that ended short of the leader passed, naming %v", names)
+			case c.fails && !strings.Contains(err.Error(), "behind the stream's leader"):
+				t.Fatalf("a listing that ended short of the leader failed without saying why: %v", err)
+			case !c.fails && err != nil:
+				t.Fatalf("a listing whose first consumer held nothing: %v", err)
+			case !c.fails && !slices.Equal(names, []string{"early", "late"}):
+				t.Fatalf("a listing whose first consumer held nothing named %v, want both", names)
+			}
+
+			lag.lagging.Store(1)
+			var pending []objstore.Pending
+			err = b.Pending(t.Context(), func(p objstore.Pending) error {
+				pending = append(pending, p)
+				return nil
+			})
+			switch {
+			case len(pending) != 0:
+				t.Fatalf("Pending over a listing behind the leader answered %v: finished "+
+					"uploads, for the collector to abandon", pending)
+			case c.fails && err == nil:
+				t.Fatal("Pending over a listing that ended short of the leader passed")
+			case !c.fails && err != nil:
+				t.Fatalf("Pending over a listing whose first consumer held nothing: %v", err)
+			}
+			if left := consumers(t, client); left != 0 {
+				t.Fatalf("the listings left %d consumers behind", left)
+			}
+		})
+	}
+}
+
+// A READ WHOSE CONSUMER THE BROKER KEEPS PLACING BEHIND THE LEADER MAKES IT
+// AGAIN A QUIET SECOND APART: once at once, since a consumer is placed afresh,
+// and then [natsobj.QuietWait] apart while the replica catches up — never in
+// a loop that asks the cluster for a consumer as fast as it can answer.
+func TestAReadThatStaysBehindTheLeaderAsksAgainOnlySoOften(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	if err := b.Put(t.Context(), "asked", strings.NewReader("still behind"), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	lag := &laggingStream{}
+	lag.lagging.Store(1 << 20)
+	natsobj.SwapStream(b, func(s jetstream.Stream) jetstream.Stream { lag.Stream = s; return lag })
+	const pauses = 3
+	ctx, cancel := context.WithTimeout(t.Context(), pauses*natsobj.QuietWait+natsobj.QuietWait/2)
+	defer cancel()
+	if _, err := b.Get(ctx, "asked", 0, -1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a get whose every consumer is behind the leader = %v, want its deadline", err)
+	}
+	if made, most := lag.made.Load(), int32(2+pauses); made < 3 || made > most {
+		t.Fatalf("the get made %d consumers in %d quiet seconds, want the first, one at once "+
+			"and one a quiet second apart: %d at most", made, pauses, most)
+	}
+	if left := consumers(t, client); left != 0 {
+		t.Fatalf("the get left %d consumers behind", left)
+	}
+}
+
+// lastSeq is the newest sequence the bucket's stream has stored.
+func lastSeq(t *testing.T, client jetstream.JetStream) uint64 {
+	t.Helper()
+	stream, err := client.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := stream.Info(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.State.LastSeq
+}
+
+// laggingStream stands between a backend and its bucket's stream, and makes
+// the next lagging ordered consumers it is asked for consumers on a REPLICA
+// BEHIND THE LEADER, one that has stored the stream through holds and no
+// further. Each is made on the broker as asked, so it is the broker's own,
+// but what it says stops at holds: one that would begin past holds has
+// nothing to deliver, the message at holds says nothing follows it, and a
+// wait after that is handed to a consumer over a subject nothing is on — as a
+// replica catching up tells a consumer made before nothing of what it stores
+// after. holds is a sequence the consumer delivers, or zero for none.
+type laggingStream struct {
+	jetstream.Stream
+	holds uint64
+	// lagging is how many more consumers to make behind the leader, and
+	// made how many ordered consumers the stream has been asked for.
+	lagging, made atomic.Int32
+}
+
+func (s *laggingStream) OrderedConsumer(ctx context.Context, cfg jetstream.OrderedConsumerConfig) (jetstream.Consumer, error) {
+	s.made.Add(1)
+	cons, err := s.Stream.OrderedConsumer(ctx, cfg)
+	if err != nil || s.lagging.Add(-1) < 0 {
+		return cons, err
+	}
+	none := s.holds == 0 ||
+		(cfg.DeliverPolicy == jetstream.DeliverByStartSequencePolicy && cfg.OptStartSeq > s.holds)
+	return &laggingConsumer{Consumer: cons, s: s, none: none}, nil
+}
+
+// laggingConsumer is a consumer on a replica that has stored s's stream
+// through s.holds.
+type laggingConsumer struct {
+	jetstream.Consumer
+	s    *laggingStream
+	none bool
+}
+
+func (c *laggingConsumer) CachedInfo() *jetstream.ConsumerInfo {
+	info := c.Consumer.CachedInfo()
+	if info == nil || !c.none {
+		return info
+	}
+	behind := *info
+	behind.NumPending = 0
+	return &behind
+}
+
+func (c *laggingConsumer) Messages(opts ...jetstream.PullMessagesOpt) (jetstream.MessagesContext, error) {
+	msgs, err := c.Consumer.Messages(opts...)
+	if err != nil {
+		return nil, err
+	}
+	silent, err := c.s.Stream.OrderedConsumer(context.Background(), jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{"$O." + natsobj.Bucket + ".C.silent"}})
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	quiet, err := silent.Messages(opts...)
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	return &laggingMessages{MessagesContext: msgs, holds: c.s.holds,
+		quiet: &silentMessages{MessagesContext: quiet, silent: silent, stream: c.s.Stream}}, nil
+}
+
+// laggingMessages hands a reader its consumer's messages through holds, the
+// one at holds saying nothing follows, and every wait after it to quiet.
+type laggingMessages struct {
+	jetstream.MessagesContext
+	holds uint64
+	quiet *silentMessages
+	past  bool
+}
+
+func (m *laggingMessages) Next(opts ...jetstream.NextOpt) (jetstream.Msg, error) {
+	if m.past {
+		return m.quiet.Next(opts...)
+	}
+	msg, err := m.MessagesContext.Next(opts...)
+	if err != nil {
+		return msg, err
+	}
+	meta, err := msg.Metadata()
+	if err != nil {
+		return nil, err
+	}
+	switch seq := meta.Sequence.Stream; {
+	case seq > m.holds:
+		m.past = true
+		return m.quiet.Next(opts...)
+	case seq == m.holds:
+		m.past = true
+		return lastHeld{Msg: msg}, nil
+	}
+	return msg, nil
+}
+
+func (m *laggingMessages) Stop() {
+	m.MessagesContext.Stop()
+	m.quiet.Stop()
+}
+
+// lastHeld is the message a replica behind the leader has stored last, which
+// says nothing follows it.
+type lastHeld struct{ jetstream.Msg }
+
+func (m lastHeld) Metadata() (*jetstream.MsgMetadata, error) {
+	meta, err := m.Msg.Metadata()
+	if err != nil {
+		return nil, err
+	}
+	last := *meta
+	last.NumPending = 0
+	return &last, nil
+}
+
+// skippingStream stands between a backend and its bucket's stream, and makes
+// a reader of every ordered consumer it is asked for SPEND ONE WAIT ON
+// NOTHING once it has taken after messages: that wait is handed to a second
+// consumer over a subject nothing is on, so it hears heartbeats and nothing
+// else until it ends, and only a wait begun after it reads on — a client that
+// skipped its next pull, exactly, which sends it as the next wait begins.
+type skippingStream struct {
+	jetstream.Stream
+	after int
+	// skipped counts the waits spent hearing nothing.
+	skipped atomic.Int32
+}
+
+func (s *skippingStream) OrderedConsumer(ctx context.Context, cfg jetstream.OrderedConsumerConfig) (jetstream.Consumer, error) {
+	cons, err := s.Stream.OrderedConsumer(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &skippingConsumer{Consumer: cons, s: s}, nil
+}
+
+// skippingConsumer is a consumer whose reader spends one wait on nothing.
+type skippingConsumer struct {
+	jetstream.Consumer
+	s *skippingStream
+}
+
+func (c *skippingConsumer) Messages(opts ...jetstream.PullMessagesOpt) (jetstream.MessagesContext, error) {
+	msgs, err := c.Consumer.Messages(opts...)
+	if err != nil {
+		return nil, err
+	}
+	silent, err := c.s.Stream.OrderedConsumer(context.Background(), jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{"$O." + natsobj.Bucket + ".C.silent"}})
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	quiet, err := silent.Messages(opts...)
+	if err != nil {
+		msgs.Stop()
+		return nil, err
+	}
+	return &skippingMessages{MessagesContext: msgs, quiet: &silentMessages{MessagesContext: quiet,
+		silent: silent, stream: c.s.Stream}, s: c.s}, nil
+}
+
+// skippingMessages hands a reader its consumer's messages, and its wait after
+// the s.after-th one to quiet.
+type skippingMessages struct {
+	jetstream.MessagesContext
+	quiet *silentMessages
+	s     *skippingStream
+	taken int
+	spent bool
+}
+
+func (m *skippingMessages) Next(opts ...jetstream.NextOpt) (jetstream.Msg, error) {
+	if m.taken == m.s.after && !m.spent {
+		m.spent = true
+		m.s.skipped.Add(1)
+		return m.quiet.Next(opts...)
+	}
+	msg, err := m.MessagesContext.Next(opts...)
+	if err == nil {
+		m.taken++
+	}
+	return msg, err
+}
+
+func (m *skippingMessages) Stop() {
+	m.MessagesContext.Stop()
+	m.quiet.Stop()
+}
+
+// readsBack reads b's object "asked" from off, wanting want.
+func readsBack(t *testing.T, b *natsobj.Backend, off int64, want []byte) error {
+	r, err := b.Get(deadline(t), "asked", off, -1)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("read back %d bytes from %d, want %d exactly", len(got), off, len(want))
+	}
+	return nil
+}
+
+// deafStream stands between a backend and its bucket's stream, and makes the
+// next deaf ordered consumers it is asked for DEAF: each is made on the broker
+// as asked — so a read asking it about itself has the broker's own answer —
+// but the read is handed the messages of a second consumer over a subject
+// nothing is on, so its pull reaches somebody else and the consumer it asked
+// for never has one. A pull a cluster dropped, exactly: the consumer exists,
+// holds no pull and has delivered nothing, and the read hears heartbeats.
+type deafStream struct {
+	jetstream.Stream
+	// deaf is how many more consumers to make deaf, and made how many
+	// ordered consumers the stream has been asked for.
+	deaf, made atomic.Int32
+
+	mu sync.Mutex
+	// names is the broker's name for every consumer made, in order.
+	names []string
+}
+
+func (s *deafStream) OrderedConsumer(ctx context.Context, cfg jetstream.OrderedConsumerConfig) (jetstream.Consumer, error) {
+	s.made.Add(1)
+	cons, err := s.Stream.OrderedConsumer(ctx, cfg)
+	if err == nil {
+		s.mu.Lock()
+		s.names = append(s.names, cons.CachedInfo().Name)
+		s.mu.Unlock()
+	}
+	if err != nil || s.deaf.Add(-1) < 0 {
+		return cons, err
+	}
+	silent, err := s.Stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{"$O." + natsobj.Bucket + ".C.silent"}})
+	if err != nil {
+		return nil, err
+	}
+	return &deafConsumer{Consumer: cons, silent: silent, stream: s.Stream}, nil
+}
+
+// deafConsumer is a consumer whose reader is handed silent's messages.
+type deafConsumer struct {
+	jetstream.Consumer
+	silent jetstream.Consumer
+	stream jetstream.Stream
+}
+
+func (c *deafConsumer) Messages(opts ...jetstream.PullMessagesOpt) (jetstream.MessagesContext, error) {
+	msgs, err := c.silent.Messages(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &silentMessages{MessagesContext: msgs, silent: c.silent, stream: c.stream}, nil
+}
+
+// silentMessages are a silent consumer's messages, whose consumer is deleted
+// with them, so a case can count the consumers its read left behind.
+type silentMessages struct {
+	jetstream.MessagesContext
+	silent jetstream.Consumer
+	stream jetstream.Stream
+}
+
+func (m *silentMessages) Stop() {
+	m.MessagesContext.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = m.stream.DeleteConsumer(ctx, m.silent.CachedInfo().Name)
 }
 
 // dropConsumers deletes every consumer on the bucket's stream — the get's or
@@ -790,9 +1470,15 @@ type bucketJS struct {
 	// the broker is asked at all — and then the broker answers.
 	refusals int
 	refusal  error
+	// drop leaves every other request of each read unanswered — the first,
+	// the third, … — as a member that is not leading the object drops a
+	// read without a word.
+	drop bool
 	// left is what each read's context gave it to answer in, by the read
-	// — or a negative duration for one handed no deadline at all.
+	// — or a negative duration for one handed no deadline at all — and at
+	// when each was sent.
 	left map[string][]time.Duration
+	at   map[string][]time.Time
 }
 
 func (b *bucketJS) wrote(verb string) {
@@ -807,8 +1493,9 @@ func (b *bucketJS) sent() []string {
 	return slices.Clone(b.writes)
 }
 
-// read records what ctx gave the read named call to answer in.
-func (b *bucketJS) read(ctx context.Context, call string) {
+// read records what ctx gave the read named call to answer in and when it was
+// sent, and reports whether it is one to leave unanswered.
+func (b *bucketJS) read(ctx context.Context, call string) (drop bool) {
 	left := time.Duration(-1)
 	if deadline, ok := ctx.Deadline(); ok {
 		left = time.Until(deadline)
@@ -816,24 +1503,31 @@ func (b *bucketJS) read(ctx context.Context, call string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.left == nil {
-		b.left = map[string][]time.Duration{}
+		b.left, b.at = map[string][]time.Duration{}, map[string][]time.Time{}
 	}
 	b.left[call] = append(b.left[call], left)
+	b.at[call] = append(b.at[call], time.Now())
+	return b.drop && len(b.left[call])%2 == 1
 }
 
-// lefts is every read's recorded time to answer, by the read.
-func (b *bucketJS) lefts() map[string][]time.Duration {
+// lefts is every read's recorded time to answer, by the read, and when each
+// request of it was sent.
+func (b *bucketJS) lefts() (map[string][]time.Duration, map[string][]time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make(map[string][]time.Duration, len(b.left))
+	left := make(map[string][]time.Duration, len(b.left))
+	at := make(map[string][]time.Time, len(b.at))
 	for call, l := range b.left {
-		out[call] = slices.Clone(l)
+		left[call], at[call] = slices.Clone(l), slices.Clone(b.at[call])
 	}
-	return out
+	return left, at
 }
 
 func (b *bucketJS) ObjectStore(ctx context.Context, bucket string) (jetstream.ObjectStore, error) {
-	b.read(ctx, "bucket "+bucket)
+	if b.read(ctx, "bucket "+bucket) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	b.mu.Lock()
 	silent, hide := b.silent, b.hidden > 0
 	if silent {
@@ -852,7 +1546,10 @@ func (b *bucketJS) ObjectStore(ctx context.Context, bucket string) (jetstream.Ob
 }
 
 func (b *bucketJS) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
-	b.read(ctx, "stream "+name)
+	if b.read(ctx, "stream "+name) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return b.JetStream.Stream(ctx, name)
 }
 
@@ -1128,7 +1825,7 @@ func TestAFailedCreatesReadBackKeepsBothErrors(t *testing.T) {
 	}
 }
 
-// EVERY READ OPEN MAKES IS ASKED AT THE READ TERM, never at a write's.
+// EVERY READ OPEN MAKES IS ASKED AGAIN AT THE READ TERM, never at a write's.
 //
 // The bucket's lookup, the read-back after a create whose name was taken, and
 // the stream behind the bucket are all metadata READS, which the broker
@@ -1137,16 +1834,19 @@ func TestAFailedCreatesReadBackKeepsBothErrors(t *testing.T) {
 // every member but the one preferred to lead it drops a read of it without a
 // word: a read held for a write's term waits on a reply that does not exist,
 // and that was measured costing a fleet's boot sixteen idle seconds a lookup.
-// So each request carries the read term as its deadline — a second, against a
-// write's fifteen clustered and thirty solo — and a read asked as a write is
-// told apart by the deadline it carried.
+// So a request nobody answers is presumed lost at the read term and the next
+// is sent a re-ask after it, the first still outstanding beside it; asked as
+// a write, the next would follow a write's term later — fifteen seconds
+// clustered and thirty solo.
 //
-// At each topology's PRODUCTION timing, since what is held is which of its
-// terms each call is handed. Two opens: one that loses the create race as
+// At each topology's own write term and a read term short enough to measure
+// against it, since what is held is which of its cadences each call is asked
+// again at. Two opens: one that loses the create race as
 // [TestANodeThatLosesTheCreateRaceBindsItsPeersBucket] stages it — the lookup
 // told the bucket is not there, and the create told its name is taken by a
-// peer's — so the read-back runs, and one that finds the bucket.
-func TestEveryReadOpenMakesIsAskedAtTheReadTerm(t *testing.T) {
+// peer's — so the read-back runs, and one that finds the bucket; every read's
+// first request dropped, and its second answered.
+func TestEveryReadOpenMakesIsAskedAgainAtTheReadTerm(t *testing.T) {
 	t.Parallel()
 	for _, clustered := range []bool{false, true} {
 		t.Run(fmt.Sprintf("clustered=%v", clustered), func(t *testing.T) {
@@ -1157,38 +1857,54 @@ func TestEveryReadOpenMakesIsAskedAtTheReadTerm(t *testing.T) {
 				Storage: jetstream.FileStorage, Replicas: 1, MaxBytes: testCeiling}); err != nil {
 				t.Fatalf("the peer's create: %v", err)
 			}
-			w := &bucketJS{JetStream: c, hidden: 1}
+			timing := jsprovision.Clustered(clustered).Timing()
+			timing.ReadTerm, timing.ReAsk = 100*time.Millisecond, 50*time.Millisecond
+			w := &bucketJS{JetStream: c, hidden: 1, drop: true}
 			cfg := natsobj.Config{MaxBytes: testCeiling, Replicas: 1, Clustered: clustered}
 			for _, open := range []string{"losing the create race", "finding the bucket"} {
-				if _, err := natsobj.Open(t.Context(), w, cfg); err != nil {
+				if _, err := natsobj.OpenAt(t.Context(), w, cfg, timing); err != nil {
 					t.Fatalf("open the bucket, %s: %v", open, err)
 				}
 			}
 
-			lefts := w.lefts()
+			lefts, at := w.lefts()
 			// THE LOOKUP OF EACH OPEN, AND THE RACE'S READ-BACK: three
-			// reads of the bucket. Fewer, and one of the three was not
-			// measured at all.
-			if n := len(lefts["bucket "+natsobj.Bucket]); n < 3 {
-				t.Errorf("the bucket was read %d time(s), want each open's lookup "+
-					"and the lost race's read-back", n)
+			// reads of the bucket, two requests each. Fewer, and one of
+			// the three was not measured at all.
+			if n := len(lefts["bucket "+natsobj.Bucket]); n < 6 {
+				t.Errorf("the bucket was asked %d time(s), want two for each of "+
+					"each open's lookup and the lost race's read-back", n)
 			}
-			if n := len(lefts["stream "+natsobj.Stream]); n < 2 {
-				t.Errorf("the stream was read %d time(s), want one bind per open", n)
+			if n := len(lefts["stream "+natsobj.Stream]); n < 4 {
+				t.Errorf("the stream was asked %d time(s), want two for each "+
+					"open's bind", n)
 			}
-			read := jsprovision.Clustered(clustered).Timing().ReadTerm
+			ceiling := max(timing.Lookup, timing.ReadBack)
 			for call, ls := range lefts {
 				for _, left := range ls {
 					switch {
 					case left < 0:
-						t.Errorf("%s was given no deadline at all, want at "+
-							"most the %v read term — a dropped read with none "+
-							"waits on a reply nobody will send until the boot "+
-							"gives up", call, read)
-					case left > read:
-						t.Errorf("%s was given %v to answer, want at most the %v "+
-							"read term — a dropped read held that long waits on a "+
-							"reply nobody will send", call, left, read)
+						t.Errorf("%s was given no deadline at all — a dropped "+
+							"read with none waits on a reply nobody will send "+
+							"until the boot gives up", call)
+					case left > ceiling:
+						t.Errorf("%s was given %v to answer, past the %v the "+
+							"lookup and the read-back are bounded by", call, left,
+							ceiling)
+					}
+				}
+			}
+			// WELL INSIDE A WRITE'S TERM, with a read term of slack for a
+			// loaded runner: what tells the cadences apart is the hundredfold
+			// between them.
+			limit := 2*timing.ReadTerm + timing.ReAsk
+			for call, sent := range at {
+				for i := 0; i+1 < len(sent); i += 2 {
+					if gap := sent[i+1].Sub(sent[i]); gap > limit {
+						t.Errorf("%s was asked again %v after a request nobody "+
+							"answered, want within %v — a dropped read held for a "+
+							"write's %v term waits on a reply nobody will send",
+							call, gap, limit, timing.AskTerm)
 					}
 				}
 			}
@@ -1212,9 +1928,15 @@ func TestABucketReplicatedBelowThisNodeIsRefused(t *testing.T) {
 	}
 }
 
-func open(t *testing.T, client jetstream.JetStream) *natsobj.Backend {
+func open(t testing.TB, client jetstream.JetStream) *natsobj.Backend {
 	t.Helper()
-	b, err := natsobj.Open(t.Context(), client, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+	return openWith(t, client, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+}
+
+// openWith is [open] with the configuration cfg.
+func openWith(t testing.TB, client jetstream.JetStream, cfg natsobj.Config) *natsobj.Backend {
+	t.Helper()
+	b, err := natsobj.Open(t.Context(), client, cfg)
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
@@ -1223,9 +1945,15 @@ func open(t *testing.T, client jetstream.JetStream) *natsobj.Backend {
 	return b
 }
 
-func memberClient(t *testing.T) jetstream.JetStream {
+func memberClient(t testing.TB) jetstream.JetStream { return memberClientAt(t, js.Config{}) }
+
+// memberClientAt is a client of a fresh member started from base, whose
+// server name and store directory are its own — the rest of base, the file
+// store's sync among it, is the caller's.
+func memberClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
-	srv, err := js.StartServer(t.Context(), js.Config{ServerName: "member", StoreDir: t.TempDir()})
+	base.ServerName, base.StoreDir = "member", t.TempDir()
+	srv, err := js.StartServer(t.Context(), base)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1244,10 +1972,15 @@ func memberClient(t *testing.T) jetstream.JetStream {
 //
 // The member binds [js.AnyPort] and names it afterwards, so nothing else can
 // take the port between its choosing and its binding.
-func leafClient(t *testing.T) jetstream.JetStream {
+func leafClient(t testing.TB) jetstream.JetStream { return leafClientAt(t, js.Config{}) }
+
+// leafClientAt is [leafClient] with its member started from base, as
+// [memberClientAt] starts one.
+func leafClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
-	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+	base.ServerName, base.StoreDir = "member", t.TempDir()
+	base.LeafHost, base.LeafPort = "127.0.0.1", js.AnyPort
+	member, err := js.StartServer(t.Context(), base)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1259,7 +1992,7 @@ func leafClient(t *testing.T) jetstream.JetStream {
 }
 
 // startLeaf starts a leaf that dials a member's leaf listener on port.
-func startLeaf(t *testing.T, port int) *js.Server {
+func startLeaf(t testing.TB, port int) *js.Server {
 	t.Helper()
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf",
 		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}})
@@ -1272,7 +2005,7 @@ func startLeaf(t *testing.T, port int) *js.Server {
 
 // awaitLink waits until the members' JetStream answers across the leaf's
 // link: a leaf runs none of its own, so an answer is the link.
-func awaitLink(t *testing.T, c jetstream.JetStream) {
+func awaitLink(t testing.TB, c jetstream.JetStream) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
@@ -1294,7 +2027,7 @@ func awaitLink(t *testing.T, c jetstream.JetStream) {
 // A leaf's JetStream is across its link, and until the link forms nobody
 // answers: every request comes back "no responders" at once. The first one is
 // the bucket's LOOKUP, a read asked again for as long as nobody answers
-// ([jsprovision.Timing.Read], under [jsprovision.LookupBudget]) — so on a link
+// ([jsprovision.ReadWith], under [jsprovision.LookupBudget]) — so on a link
 // that forms inside that ceiling it is the lookup that waits it out, and the
 // create is sent once the link is up. A create that goes unanswered itself is
 // asked again as well, through [jsprovision.Timing.Place], and
@@ -1355,7 +2088,7 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	}
 }
 
-func client(t *testing.T, srv *js.Server) jetstream.JetStream {
+func client(t testing.TB, srv *js.Server) jetstream.JetStream {
 	t.Helper()
 	nc, err := srv.Conn()
 	if err != nil {
@@ -1373,10 +2106,13 @@ func client(t *testing.T, srv *js.Server) jetstream.JetStream {
 // a member that is not up yet: until [gate.open], every connection to it is
 // closed as it arrives — which a leaf reads as it reads a refused dial, no
 // member to reach, and dials again — and after it each one is piped to the
-// member's own leaf listener.
+// member's own leaf listener, at the rate [gate.slow] set towards the leaf.
 type gate struct {
 	ln     net.Listener
 	target atomic.Pointer[string]
+	// rate is how many bytes a second a connection opened from now on
+	// carries from the member to the leaf; zero is as fast as loopback.
+	rate atomic.Int64
 
 	mu    sync.Mutex
 	shut  bool
@@ -1426,6 +2162,10 @@ func (g *gate) port() int { return g.ln.Addr().(*net.TCPAddr).Port }
 // open pipes every connection from now on to target.
 func (g *gate) open(target string) { g.target.Store(&target) }
 
+// slow holds every connection opened from now on to rate bytes a second from
+// the member to the leaf — the direction a read's messages cross.
+func (g *gate) slow(rate int64) { g.rate.Store(rate) }
+
 // track records c for the case's end to close, and refuses it once that end
 // has begun, so no connection outlives the gate.
 func (g *gate) track(c net.Conn) bool {
@@ -1451,22 +2191,68 @@ func (g *gate) pipe(in net.Conn, target string) {
 		_ = out.Close()
 		return
 	}
+	rate := g.rate.Load()
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(out, in); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(in, out); done <- struct{}{} }()
+	go func() { throttle(in, out, rate); done <- struct{}{} }()
 	<-done
 	_ = in.Close()
 	_ = out.Close()
 	<-done
 }
 
+// throttle copies src to dst until either ends, at no more than rate bytes a
+// second — or as fast as it can where rate is zero.
+//
+// A PIECE IS WRITTEN WHEN A LINK AT RATE WOULD HAVE FINISHED CARRYING IT, each
+// one's time counted from when the one before it finished or from when it
+// arrived, whichever is later: a link that was idle has carried nothing ahead,
+// so it never lets a burst through at once.
+func throttle(dst io.Writer, src io.Reader, rate int64) {
+	if rate == 0 {
+		_, _ = io.Copy(dst, src)
+		return
+	}
+	buf := make([]byte, 4<<10)
+	carried := time.Now()
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			carried = later(carried, time.Now()).Add(time.Duration(n) * time.Second / time.Duration(rate))
+			time.Sleep(time.Until(carried))
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// later is whichever of a and b is later.
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
 // testCeiling is the reservation every case here opens the bucket with:
-// eight mebibytes, thirty times the largest object any case stores (the
-// suite's two pieces and a tail), and small enough that a test machine's
-// brokers, which reserve against three quarters of its free disk, grant one
-// to every case running at once. The engine never derives one this small
-// (store.objects.nats_max_bytes takes a gibibyte at least); the package
-// itself takes any positive reservation.
+// eight mebibytes, TWICE the largest object any case stores — the 4 MiB read
+// across a lost consumer ([TestAReadWhoseConsumerIsLostFinishesOnItsReplacement])
+// — which leaves the object's metadata and its pieces' message overhead room
+// with a whole second copy to spare. No case holds more at once: the 4 MiB puts
+// put_test.go stalls on a frozen link land a window of pieces at most, and are
+// purged when they fail, and the contract suite's largest object is two pieces
+// and a tail (some 256 KiB, a thirty-second of the ceiling). The margin asks
+// for nothing more: a case needs only its own bytes to fit, and a case about
+// the ceiling opens a bucket of its own size
+// ([TestAFullBucketLeavesTheCoordinationRemainder]). Small enough
+// besides that a test machine's brokers, which reserve against three quarters
+// of its free disk, grant one to every case running at once. The engine never
+// derives one this small (store.objects.nats_max_bytes takes a gibibyte at
+// least); the package itself takes any positive reservation.
 const testCeiling = 8 << 20
 
 // A BUCKET IS CREATED HOLDING ITS RESERVATION, and the ceiling Usage reports

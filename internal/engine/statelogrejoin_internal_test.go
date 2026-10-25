@@ -153,6 +153,16 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
+	// AND THE NEXT BEAT FINDS THE SAME HISTORY: a running node's heartbeat
+	// compares the record its checkpoint names with the log's record there
+	// every ten seconds, so an adoption the node only keeps until that beat
+	// is no adoption. Run once rather than waited for, as above.
+	e.core.Load().log.publishPositions(t.Context())
+	if !e.StateLogHydrated(t.Context()) {
+		t.Fatal("the node withdrew its seats at the first heartbeat after " +
+			"adopting — the adopted checkpoint names another record than the " +
+			"log holds at its sequence")
+	}
 	// AND THE CONSUMER WAS MOVED: nothing below the artefact's position is
 	// pending for the applier to drop.
 	pending, err := running.consumer.Pending(t.Context())
@@ -249,7 +259,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 
 // bootRejoinNode starts one node over its own embedded broker and returns it
 // with its backends and that broker.
-func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
+func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
@@ -259,7 +269,7 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -319,16 +329,9 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		t.Fatal("the tracker domain is not running")
 	}
 
-	// THE OBJECT COLLECTOR FINISHES ITS FIRST PASS AND STOPS: each pass pins
-	// the tracker's estate with a barrier of its own, and its first runs as
-	// the node boots — so left running, a pin lands between the two staged
-	// below and moves where they land. Stopping it mid-pass is not enough:
-	// a barrier's publish outlives the read that asked for it.
-	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
-		_, found, err := ObjectCollection(t.Context(), e.backends.Fleet)
-		return err == nil && found
-	})
-	e.stopObjectCollector()
+	// Left running, the collector's boot pass pins between the two staged
+	// below and moves where they land.
+	quietTheCollector(t, e)
 
 	// Settle: whatever the boot wrote to the tracker's log is applied.
 	waitUntil(t, 20*time.Second, "the node to catch up on its own log", func() bool {
@@ -356,7 +359,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	body, err := tracker.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,
-		Scope: statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope: statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
@@ -377,6 +380,14 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 // tracker checkpoint advanced to last — what a peer holds that applied the
 // barriers past at, since a barrier writes no rows — and quiesces it, so the
 // file is self-contained for whatever opens or installs it.
+//
+// THE CHECKPOINT NAMES THE RECORD AT last, by the instant the broker stored it,
+// as a peer's commit of that barrier wrote it ([moveCheckpoint]). Advancing the
+// sequence alone left it naming the node's own record at at — another record
+// than the log holds at last, which the purge keeps — so the adopter's first
+// heartbeat found the log diverged from the rows it had just installed and
+// took its copy out of service, and a case that read the node before that
+// beat passed on the race.
 func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	at statelog.Position, last uint64, path string) {
 
@@ -397,6 +408,29 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	if err := store.QuiesceCopy(t.Context(), path); err != nil {
 		t.Fatalf("quiesce the copy: %v", err)
 	}
+}
+
+// quietTheCollector lets the object collector finish its first pass and stops
+// it, so nothing but the case itself appends to the tracker's log from here.
+//
+// EACH PASS PINS THE TRACKER'S ESTATE WITH A BARRIER of its own, and the first
+// runs as the node boots, on its own goroutine, whenever its duty claim and
+// its decline check come back — under load, now and then after the node
+// admits seats and after a case's first write. A case that reads the log's
+// end, or stages records at chosen sequences, around a pin landing where it
+// pleases is reading a log it does not know: a probe of the restored reanchor
+// case caught the pin 46 ms after the case's own write, between its copy of
+// the estate and its read of the checkpoint, and the donor it stood up named
+// a record the log did not hold at that sequence. Stopping it mid-pass is not
+// enough: a barrier's publish outlives the read that asked for it, so the
+// pass is waited out first.
+func quietTheCollector(t testing.TB, e *Engine) {
+	t.Helper()
+	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
+		_, found, err := e.backends.ObjectCollection(t.Context())
+		return err == nil && found
+	})
+	e.stopObjectCollector()
 }
 
 // moveCheckpoint moves db's checkpoint on at's stream to at, keyed to created,
@@ -439,7 +473,7 @@ func moveCheckpoint(t *testing.T, log *jetstream.DomainLog, db *store.DB,
 	}
 }
 
-func waitUntil(t *testing.T, within time.Duration, what string, cond func() bool) {
+func waitUntil(t testing.TB, within time.Duration, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
@@ -501,9 +535,9 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			// nothing else would ever call it wrong — so this node's own
 			// seats would be answered that failure rather than asked of
 			// a peer.
-			if v := s.judgeCopy(t.Context()); v.fault != shutEstate || v.answers {
-				t.Fatalf("a copy whose file is shut is judged %+v, want wrong, naming %q",
-					v, shutEstate)
+			if v := s.judgeCopy(t.Context()); !v.shut || v.answers(tracker.Domain{}.Name()) {
+				t.Fatalf("a copy whose file is shut is judged %+v, want it shut — "+
+					"every domain's copy out of service at once", v)
 			}
 
 			if err := s.restoreEstate(s.run); err != nil {
@@ -518,7 +552,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 				t.Errorf("a reopened estate told the credential listener %+v, "+
 					"want everyone: its rows may be a donor's", got)
 			}
-			if v := s.judgeCopy(t.Context()); v.fault == shutEstate {
+			if v := s.judgeCopy(t.Context()); v.shut {
 				t.Fatalf("a copy whose file the restore reopened is still judged shut: %+v", v)
 			}
 			if !c.below {
@@ -920,7 +954,7 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 
 // hydrated is [Engine.StateLogHydrated] as the condition a wait polls, under
 // the test's own context.
-func hydrated(t *testing.T, e *Engine) func() bool {
+func hydrated(t testing.TB, e *Engine) func() bool {
 	t.Helper()
 	return func() bool { return e.StateLogHydrated(t.Context()) }
 }

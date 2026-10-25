@@ -80,6 +80,28 @@ const (
 	// thread they were asked to answer on.
 	ActionWorkThread Action = "work.thread"
 
+	// --- the company's code ----------------------------------------- //
+	//
+	// ADMITTED AT THE ROUTE AND DECIDED PER REPOSITORY, as a work item's
+	// thread is. Who may read a repository, fetch from it or push to it is
+	// a GRANT the serving node derives from the chart for the repository a
+	// request names (code.GrantOf, ADR-0055): a person maintains every
+	// repository, and a seat holds the least of its code tier and its
+	// relation to the repository's owner — a question the route cannot ask
+	// before the repository is read, and that this table has no chart arm
+	// for. So the route admits everybody the guard resolved, and the grant
+	// decides. DOTTED, because no tool is named for either.
+	//
+	// ActionCodeRead admits the code host's REST reads: the repositories,
+	// one repository, its push history.
+	ActionCodeRead Action = "code.read"
+	// ActionCodeGit admits the git transport — the advertisement, a
+	// fetch's upload-pack and a push's receive-pack — whose grant then
+	// decides by service: a push is refused at its advertisement to a
+	// principal that may push nothing, and every command it carries is
+	// judged by the grant's ref rule.
+	ActionCodeGit Action = "code.git"
+
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
 	ActionMyWork        Action = "my_work"
@@ -194,9 +216,17 @@ const (
 	ActionSecretWrite  Action = "secrets.write"
 	ActionSetupRead    Action = "setup.read"
 	ActionSetupConnect Action = "setup.connect"
+	// ActionFleetOperate is the deployment's own controls: a backup, the
+	// retention gestures, the capacity window, the fleet broker's
+	// membership — and a verify of a git node's cache of one repository,
+	// which reads every byte of THIS NODE's copy, holds a maintenance slot
+	// and the memory its check needs, and with a repair rewrites the copy
+	// every fetch on the node is served from: an operation on the node, as
+	// a backup of it is, and nothing a repository's own grant decides.
 	ActionFleetOperate Action = "fleet.operate"
 	// ActionFleetRead is the deployment's own controls READ — the
-	// maintenance window's status and the value a reanchor must echo.
+	// maintenance window's status, the value a reanchor must echo and a
+	// verify's outcome.
 	// Admin's as [ActionFleetOperate] is, and its own verb because it asks
 	// for no step-up: a read changes nothing, and a status an operator
 	// cannot see without re-proving who they are is a status they stop
@@ -550,6 +580,14 @@ var rules = map[Action]rule{
 	// [ActionWorkComment] decides once the item is read. See
 	// [ActionWorkThread].
 	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny},
+
+	// THE CODE ROUTES ADMIT EVERYBODY and decide nothing: the repository's
+	// grant decides once the repository is read. See [ActionCodeRead] and
+	// [ActionCodeGit]. A machine token takes both — the git transport is
+	// what a person's token is for — and neither asks a proof, since a
+	// read changes nothing and a push is decided per ref by its grant.
+	ActionCodeRead: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeGit:  {class: ClassEverybody, recency: iam.RecencyAny},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/tracker's own tag rule has always said: adding a label

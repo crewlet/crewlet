@@ -102,14 +102,21 @@ func Client(timeout time.Duration) *http.Client {
 // Customized is a client on a CLONE of [Transport] with opts applied — the one
 // way to build an outbound client whose transport differs from the shared one.
 //
-// IT EXISTS FOR A CLIENT WHOSE TLS GENUINELY DIFFERS, and for nothing else: an
-// S3 bucket behind a private certificate authority (`AWS_CA_BUNDLE`) needs
-// that bundle in the transport's root pool, which is a property of a
-// transport and cannot ride the shared one without changing every other
-// client's trust. The clone keeps
-// the proxy, HTTP/2 and pool settings the shared transport has, and is a pool
-// of its own — the cost [Transport]'s doc counts against a per-client clone,
-// paid only where the TLS genuinely differs.
+// IT EXISTS FOR A CLIENT WHOSE TLS OR PROTOCOL GENUINELY DIFFERS, and for
+// nothing else — the S3 bucket's, which speaks HTTP/1.1 alone so a socket is
+// one request's to watch for a write the bucket stopped taking, and which
+// adds an operator's private certificate authority (`AWS_CA_BUNDLE`) to its
+// roots where one is set: both are properties of a transport, and neither can
+// ride the shared one without changing every other client's protocol or
+// trust. The clone keeps the proxy and pool settings the shared transport
+// has, and is a pool of its own — the cost [Transport]'s doc counts against a
+// per-client clone, paid only where the transport genuinely differs.
+//
+// WHERE THE PROCESS'S DEFAULT TRANSPORT IS NOT ONE THIS CAN CLONE — a test
+// harness or an instrumented build, never the engine's own run — the client
+// is the shared one, opts unapplied, as [Transport] answers the default
+// itself there: the caller's difference is then not in force, which the
+// bucket's client documents for its own.
 func Customized(timeout time.Duration, opts ...func(*http.Transport)) *http.Client {
 	base, ok := Transport().(*http.Transport)
 	if !ok {

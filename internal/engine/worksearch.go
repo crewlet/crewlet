@@ -97,14 +97,15 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // THROUGH THE ROUTER ON EVERY NODE, like every other tool seam: a data node's
 // router answers from its own index, and a node that holds no data asks a node
 // that has one — the same verb over the same fleet-wide index.
+//
+// AND ONLY WHERE THE COMPANY RUNS THE NATIVE TRACKER, on a data node as on a
+// node without `data`: the index is built under either backend
+// ([indexedCorpora]), so on a company whose tracker is a vendor's it holds
+// pages and no task, and a searcher handed out there ranks nothing and reads
+// as "nothing matched". That rule is [OperatorNative]'s, stated once for every
+// operator read seam and read here from the same one reading.
 func WorkSearcher(e *Engine) builtin.WorkSearcher {
-	if r := e.remote.Load(); r != nil {
-		if !r.tracker {
-			return nil
-		}
-		return e.router.Work()
-	}
-	if s := e.WorkSearch(); s != nil && e.router != nil {
+	if reads := OperatorNative(e); reads.Search {
 		return e.router.Work()
 	}
 	return nil

@@ -43,7 +43,7 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 			}
 			if e.objects == nil || len(e.native.Load().objectEstates()) == 0 {
 				t.Fatalf("the premise: the %s-mode node runs no object store or "+
-					"no tracker, so it would start no collector in any mode", mode)
+					"offers it no estate, so it would start no collector in any mode", mode)
 			}
 			if e.objects.duty.Load() != nil {
 				t.Errorf("the object collector runs in %s mode: every pass pins "+
@@ -111,15 +111,23 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 // company whose logs it runs.
 func aNodeInMode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aNodeInModeOf(t, mode, nativeCleanupCompany)
+}
+
+// aNodeInModeOf is [aNodeInMode] over the company doc.
+func aNodeInModeOf(t *testing.T, mode statelog.MaintenanceMode, doc string) (*Engine, natsjs.JetStream) {
+	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	PinGitLanes(&b)
 	SeedStore(t, &b)
-	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	RequireNodeGit(t, &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -138,4 +146,58 @@ func aNodeInMode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, natsjs.J
 		t.Fatalf("jetstream: %v", err)
 	}
 	return e, js
+}
+
+// scheduledNativeCompany is [nativeCleanupCompany] whose one seat keeps a
+// schedule: a revision that arms the cron loop wherever it is applied on a
+// node that publishes.
+const scheduledNativeCompany = nativeCleanupCompany + `    schedules:
+      - name: standup
+        cron: "30 9 * * *"
+        task: "Post the standup thread"
+`
+
+// AN APPLY ON A NODE IN A MAINTENANCE MODE STARTS NO PUBLISHER EITHER.
+//
+// The constructor keeps every publisher off such a node behind one gate — the
+// notification spine and the scheduler among them — and an apply reached
+// both past it: the integrations stage started the inbound edge on any node
+// that had none, which is every node in a maintenance mode, and the scheduler
+// stage armed the cron loop for any revision declaring a schedule. So an
+// activation during a capacity window put the fleet-wide inbound consumer and
+// the scheduler's duty on every node in the window, routing deliveries and
+// firing crons onto mailboxes while the fleet was meant to be holding still.
+//
+// THE CONTROL is the same revision on a node that publishes and booted with
+// no company, which starts both: without it, a revision that started neither
+// anywhere would pass here.
+func TestAnApplyInAMaintenanceModeStartsNoPublisher(t *testing.T) {
+	t.Parallel()
+	t.Run("normal", func(t *testing.T) {
+		t.Parallel()
+		e := newSandboxNode(t, nil)
+		applyOK(t, e, scheduledNativeCompany)
+		if !e.inboundStarted() {
+			t.Error("the control: a publishing node's first company started no inbound edge")
+		}
+		if !e.SchedulerRunning() {
+			t.Error("the control: a publishing node armed no scheduler for a revision " +
+				"declaring a schedule")
+		}
+	})
+	for _, mode := range []statelog.MaintenanceMode{statelog.ModeMaintenance, statelog.ModeSeal} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			e, _ := aNodeInMode(t, mode)
+			applyOK(t, e, scheduledNativeCompany)
+			if e.inboundStarted() {
+				t.Errorf("an apply in %s mode started the inbound edge: the fleet-wide "+
+					"consumer routes deliveries onto seat mailboxes", mode)
+			}
+			if e.SchedulerRunning() {
+				t.Errorf("an apply in %s mode armed the scheduler, whose duty fires "+
+					"crons onto seat mailboxes", mode)
+			}
+		})
+	}
 }

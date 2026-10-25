@@ -175,8 +175,8 @@ systemd, the host name.
 
 #### `node.roles`
 
-What this process is willing to do. Four roles, and the default is all
-four — one process running a whole company, which is every single-node
+What this process is willing to do. Five roles, and the default is all
+five — one process running a whole company, which is every single-node
 deployment:
 
 ```yaml
@@ -190,6 +190,7 @@ node:
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
 | `data` | Keeps the company's durable state on this node's disk: a copy of the replicated estate and the event log. The company's files are not under it: they are in the [object store](object-store.md), which on the default `nats` backend is a stream the broker's members keep. It says nothing about the broker (see below). `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
+| `git` | Serves the company's git repositories where its company sets [`code.native`](code-host.md): keeps a disposable [cache](code-host.md#the-cache-on-a-git-node) of them on this node's disk (`git.cache_dir`, below) and runs git for their clones, fetches and pushes. Its routes are the API's, so it requires `ingress`. It does nothing for a company that hosts no code | Nobody can clone, fetch or push the company's repositories — said only where the company sets `code.native` |
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state logs' trim, the embedding duty, the sandbox waiter, the integration reconcile loop, the object store's collector, the trash reaper, the identity sweep, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no state log is trimmed (each grows until its ordinary writes are refused `log_full`), no knowledge is embedded for semantic search, no integration is reconciled, no unnamed object is collected, nothing in a trash is purged past its term, and the identity estate's retention never runs |
@@ -199,8 +200,18 @@ company**, so the fleet as a whole still needs every role somewhere. That
 is a shape no single node's config is wrong for, and every symptom of
 getting it wrong is an absence — so the engine checks it against live
 node presence and logs `fleet_role_unmanned` when nobody is doing a job.
-A node that does not run seats is also left out of the denominator its
-peers divide the seats by; counting it would strand the difference.
+`git` is checked only where the company sets `code.native`: a company that
+hosts no code is missing nothing without it, and a role that stops being
+needed while nobody held it is logged as `fleet_role_unneeded`, never as a
+node coming back. A node that does not run seats is also left out of the
+denominator its peers divide the seats by; counting it would strand the
+difference.
+
+**A node that lists its roles serves git only if it names `git`.** An
+undeclared node has every role, so the single-node deployment, and every fleet
+that never wrote `node.roles`, serves git the moment its company sets
+`code.native`; a node whose list predates the role, or leaves it out, serves
+none.
 
 **`data` is the one role that is a promise about the disk rather than about
 work.** A node without it keeps nothing that has to outlive it, and Tier A
@@ -233,13 +244,110 @@ both ways out: a data node on a leaf, a broker member without `data`, and
 `ingress` or `workers` without `data`. Every data node holds the whole estate
 as a member of the broker, and a node without `data` reaches the estate
 through one — so a node without `data` on an embedded stream joins the fleet
-as a leaf through `stream.leaf.urls`. Two valid shapes are warned about, by
+as a leaf through `stream.leaf.urls`. And `git` without `ingress` is refused
+on every broker, data node or not: its routes are served on the API listener,
+which only an ingress node mounts. Two valid shapes are warned about, by
 `crewlet validate` and by every start of the node, which logs them as
 `config_advisory`: a member whose peer list names more than four other
 members (no stream keeps more than five copies, so a sixth member is a voter
 holding nothing — a fleet grows by adding leaves), and a fleet node that left
 `node.roles` undeclared and so runs every role. The start judges the roles it
 runs with, so a fleet node given `-roles` is not told they are undeclared.
+
+#### `git`
+
+How a node with the `git` role serves the company's repositories. Every field
+is a fact about this node's machine — its disk, its cores, its memory — so the
+block is Tier A, read once per process, and two git nodes on different
+hardware size theirs differently:
+
+```yaml
+git:
+  cache_dir: /srv/crewlet-git     # default <store dir>/git; a volume of its own
+  cache_max_bytes: 214748364800   # default: derived at boot, see below
+  max_processes: 0                # default: one a core (GOMAXPROCS)
+  max_transfers: 0                # default: four a process slot, by memory
+```
+
+- **`cache_dir`** — where the node keeps its disposable copies of the
+  repositories. A relative path is resolved against the store's directory, as
+  `store.snapshot_dir` is. A volume of its own is recommended — its own
+  filesystem with its own space: a btrfs subvolume or a ZFS dataset drawing on
+  the store's pool shares that pool's space, and the engine reads it as shared
+  — a dataset whatever recordsize it or the store's is tuned to, since each
+  reports the pool's free space rounded only to its own block.
+  The cache is never backed up: it is rebuilt from the code log and the object
+  store, and its `CACHEDIR.TAG` keeps tar, borg and restic out of it with
+  `--exclude-caches`. A directory that holds the store, the replicated estate
+  or the snapshots is refused at `crewlet validate`, because the cache empties
+  its own `tmp/`, `scratch/` and `trash/` at every boot.
+- **`cache_max_bytes`** — the budget the cache evicts down to, least recently
+  used first; at least 1 GiB when set. Unset, it is derived at every boot from
+  the **room** the cache can use: the volume's free space, **plus what the
+  cache already holds** (free space leaves out the cache's own files, and a
+  budget derived from it alone would shrink at every restart of a warm node),
+  **less what an embedded broker storing its streams on the same volume may
+  still write** under its limit (`stream.store_max_bytes`, or three quarters of
+  the volume's free space when that is unset — a share of the same free space,
+  so a budget taken beside it claimed the same bytes twice) **and less the
+  request spools' allowance** (64 MiB a transfer slot, on this volume and never
+  in the budget). Of that room the cache takes half where the volume also holds
+  the store, the replicated estate, the snapshots or the broker's streams — the
+  other half is the store's to grow into, a snapshot's to be written beside the
+  one it replaces — and seven eighths of a volume of its own (the eighth left
+  free is for what the budget does not count: removals in flight and a new
+  index written beside the old one). Never more, with no floor raising a small
+  share and no ceiling. The node logs what it chose, and every figure it chose
+  from, as `code_cache_sized` — a warning naming what to change where a derived
+  budget comes out under 1 GiB, or an explicit one is more than the room. A
+  volume that leaves **no room at all** — the broker's claim and the spools
+  taking everything it has — derives no budget, and the node refuses to build
+  its code host rather than run a cache in bytes the volume does not have: the
+  boot (or the apply that brings code hosting up) fails naming the figures and
+  what to change — a volume of the cache's own, `cache_max_bytes`, a lower
+  `stream.store_max_bytes`, or fewer `max_transfers`. On the single-volume
+  layout that is a cold cache whose quarter of the free space is no more than
+  the spools: under 16 GiB free on a sixteen-core node's default lane.
+- **`max_processes`** — the git processes the node runs at once to answer
+  reads, one core each, and half as many again for its caches' background
+  maintenance. 0 is one a core.
+- **`max_transfers`** — the clones, fetches and pushes the node serves at
+  once. 0 is four for each process slot, and no more than one for every
+  512 MiB of the node's memory: a transfer holds memory for its whole life and
+  a core only now and then, so size it to memory rather than cores. A figure
+  set by hand is taken as written, and the node keeps 224 MiB of its memory
+  for every transfer it names whatever they serve, beside 896 MiB for each
+  core its memory backs at 2 GiB a core; the caches' background indexing has
+  what is left. So a figure well short of what the memory holds at 224 MiB
+  each already leaves it nothing — as little as 56% of that, where the node
+  has a core for every 2 GiB of memory or more: on 16 GiB and eight cores,
+  42 transfers, of the 73 that 16 GiB holds — every repository's bitmap is
+  refused, and [`code_maintenance_refused`](../reference/alarms.md) says so
+  until the figure is lowered or unset, or the node is given memory past what
+  it keeps, in place or at a boot. A restart alone changes nothing.
+
+A `git` block on a node whose roles name no `git` is read by nothing, and
+`crewlet validate` warns about it.
+
+#### Warnings across the two tiers
+
+Some consequences belong to neither file alone. Two are said wherever both
+are in hand — by `crewlet validate` given both files, in the answer of a
+configuration write (`PUT` or `PATCH /config`, and the dashboard) judged
+against the Tier A of the node that served it, and in the node's own log as
+`config_tier_warning`, once per node per applied epoch:
+
+| Warning | Where | Why |
+|---|---|---|
+| A company with `code.native` in a fleet on the default object store | `store.objects.backend` | Every broker member holding a copy of the files bucket holds every pack of every repository; a company whose code outgrows a member's disk takes `store.objects.backend: s3` |
+| A git node whose cache budget is below `code.limits.repo_max_bytes` | `git.cache_max_bytes` | A repository at its size limit cannot be cached within the budget: it is served, and evicted as soon as it is idle — every fetch of it is a cold sync |
+
+The cache budget compared is the one each place can know. `crewlet validate`
+and a configuration write compare only an explicit `git.cache_max_bytes`: a
+derived budget is a share of a volume neither file describes. A git node
+compares the budget it **resolved** — derived from its volume where the field
+is unset, which is the default on every git node — at every epoch it applies,
+and names where the budget came from.
 
 #### `node.labels`
 
@@ -387,7 +495,7 @@ command, against a node that already has one.
 
 `crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere. **A missing `./company.yaml` is not an error** — the store is authoritative, so a node with no Tier B file boots on whatever the store holds, or unconfigured when it holds nothing.
 
-`-company` only ever **bootstraps an empty store**. Once a company exists the file is ignored, with a `company_seed_ignored` warning naming it and the active revision, so a restart cannot revert a change made live. Two flags cover the other intents:
+`-company` only ever **bootstraps an empty store**, and only while the fleet runs no company either: a node whose own store is empty — one without `data`, at every boot, or a data node joining a running fleet — leaves the fleet's company alone and converges on it. Once a company exists the file is ignored, with a `company_seed_ignored` warning naming it and the active revision, so a restart cannot revert a change made live — and the node boots on the store's company rather than the file's, so what it builds once per process (the [native tracker and knowledge base](control-plane.md#a-native-backend-changes-at-a-restart), the code sandbox's runtime, the store's embedding width) is built from the company it serves. Two flags cover the other intents:
 
 | I want to… | Use |
 |---|---|
@@ -426,7 +534,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | `/work/*`, `/pages/*`, `/operator/mcp`, and the work, page and search questions | `503 no_active_revision` with a 15-second `Retry-After` — over the socket, an `unavailable` frame naming the same `refusal` with the same `retry_after` and words: the routes are **mounted** and say why they cannot serve rather than answering the `404` of a route that does not exist. They read the tracker's and the knowledge base's halves **per request**, so the first company's apply brings them up under the same API with no restart; a company that keeps its tracker or wiki on a vendor answers the `404` a route with nothing behind it answers from then on |
 | `POST /webhooks/...` | Answered **before** the signature check — a node with no revision has no secrets to check against, and verifying first would answer every delivery with the no-secret refusal and its five-minute wait — as `503 no_active_revision` with a 15-second `Retry-After`, so the sender **retries**; `webhook_rejected_unconfigured` is logged at WARNING with the source and the event. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet. See [Webhook refusals](../reference/api-endpoints.md#webhook-refusals) |
 
-Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including everything boot starts only for a company it already has: the native tracker's and knowledge base's halves with their tools, the projects and knowledge containers the org chart's units declare, the code sandbox's coordinator and completion poll, the reflect dispatcher and the inbound edge (see the `native`, `sandbox_runtime`, `learning`, `integrations` and `maintenance` stages below) → the engine is fully alive, with no restart. The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being refused, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including everything boot starts only for a company it already has: the native tracker's and knowledge base's halves with their tools, the projects and knowledge containers the org chart's units declare, the code sandbox's coordinator and completion poll, the reflect dispatcher and the inbound edge (see the `native`, `sandbox_runtime`, `learning`, `integrations` and `maintenance` stages below) → the engine is fully alive, with no restart. The API that was already serving answers for the new company too, because it reads the native halves at every request rather than once when it was wired: the board's, the pages', the file list's and the ranked search's questions, the routes over them, and the operator's tools — the catalogue the dashboard's buttons and an operator's own assistant are served (`/operator/act`, `/operator/mcp`) is built for each call from what the node serves at that moment — so the person the first revision invites can file a task from the dashboard at once (see [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)). The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being refused, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
 
 ---
 
@@ -494,17 +602,17 @@ in a fixed order, and names each stage it got through.
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
    A company with no `providers.llm` is not refused: it builds with no model registry (see [A Company With No Model Provider](#a-company-with-no-model-provider)).
    The revision's sandbox catalogue (`providers.sandbox`) is built straight after, and one that cannot be built refuses the apply there — reporting `secrets, company` and nothing else, since nothing below has touched the node yet. On **every** node, whether or not it runs a sandbox yet: the alternative publishes a company whose sandbox-enabled seats plan around a box nobody can mint.
-3. **`native`** — bring up the native tracker's and knowledge base's **halves** on a node running neither, for its first company on them: their read and write sides, the lexical index, and — on a node that publishes — the embedding duty and the change feeds. Not their logs: every node has applied every domain's log since boot, company or none ([Bootstrap Sequence](#bootstrap-sequence) step 10), so what the first company brings up is the writers and readers over logs the node already holds. **Before** `tools`, because the native tools are registered only where the halves exist, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The halves follow the fleet's logs rather than a revision, so a later refusal of the same apply does not take them down, and which halves run are the ones that first company declared: changing `tracker.backend` or `knowledge.backend` after that still takes a restart.
+3. **`native`** — bring up the native tracker's and knowledge base's **halves**, and the code host's where the company sets `code.native`, on a node running none of them, for its first company on them: their read and write sides — the code host's committer and repository lifecycle among them — the lexical index, and — on a node that publishes — the embedding duty, the code-retention duty where the company hosts code, and the change feeds. Not their logs: every node has applied every domain's log since boot, company or none ([Bootstrap Sequence](#bootstrap-sequence) step 10), so what the first company brings up is the writers and readers over logs the node already holds. **Before** `tools`, because the native tools are registered only where the halves exist, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The halves follow the fleet's logs rather than a revision, so a later refusal of the same apply does not take them down, and which halves run are the ones that first company declared: changing `tracker.backend`, `knowledge.backend` or `code.native` after that still takes a restart, and every later apply that asks for one says so with a `native_backend_needs_restart` warning (see [A native backend changes at a restart](control-plane.md#a-native-backend-changes-at-a-restart)). What a half is held to is the epoch's, not the halves': `code.limits` takes effect at its activation, since every committer reads the current revision's limits at each decision — and a revision that turns `code.native` off, which must drop its limits, leaves a node still serving the code host the limits of the last revision that hosted code until it restarts.
 4. **`sandbox_runtime`** — bring up the [code sandbox](code-sandbox.md)'s coordinator and completion poll on a node running neither, for the first revision whose `providers.sandbox` reaches a cell, and prepare the seats this node **already** holds: each was taken before there was anything to prepare, so each now attaches its completion topic and recovers the runs recorded on it, as a seat taken afterwards does on its way in. A seat whose preparation fails is handed back (a voluntary `unprepared` release), so its next acquisition, here or on a peer, runs the whole of it. **Before** `tools` for the reason `native` is: `run_sandbox` and an agent-mode executor are offered only where the runtime exists. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met a sandbox company at boot. Like the native halves it is a fact about the process rather than a revision, so a later refusal of the same apply does not take it down.
 5. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change. (The one part of a published epoch that does change is its shared MCP servers' tools: a server that comes up after its start failed, or comes back from a crash with a different tool list, is refiled into the current epoch's registry without an apply. See [A server that dies, or will not start](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start).)
 6. **`learning`**: rebuild the reflection workers against the new org — built here, and swapped into the running dispatcher only at `epoch`, once the revision's configured credential bundles are restored, so no reflection pass runs the revision's models before its login is in place or for a revision a later stage refuses. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage builds it, and a build that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy). What feeds the dispatcher is not this stage's: each seat's reflection subject is attached by the node that acquires the seat, beside its mailbox.
 7. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. The swap carries the backend of any cell the revision dropped as *retired*, for the runs still on it, and a revision with no `providers.sandbox` keeps the last manager for the runs in flight (see [Code Sandbox](code-sandbox.md#engine-provider--providerssandbox)). It cannot fail — the catalogue was built at `company` — and it runs after every stage that can refuse a node already serving a company, so a refused apply never leaves this node launching through a catalogue its current epoch does not have. **Conditional:** only where this node runs a sandbox runtime, from its boot or from a `sandbox_runtime` start.
 8. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new org chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
-   On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing.
+   On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing. A node in a [maintenance mode](../guides/retention.md#the-three-modes) has no edge either, and its applies start none: the edge routes every delivery onto a seat's mailbox, which a node that starts no publisher at boot must not begin doing because a revision was activated during the window.
 9. **`epoch`** — publish the new epoch. Immediately before the swap, with every refusal behind it, each [`providers.llm`](llm-backends.md) entry's configured credential bundle is restored into its credential directory where that holds no login (and a [logout](llm-backends.md#1-broker-the-vendors-own-login-any-cli) has not withheld it), and the reflection workers built at `learning` are swapped in — so only a revision about to be published writes a login, and its first call finds it. This is the swap; everything before it built, everything after it reads the now-current company.
 10. **`maintenance`** — rebuild the retention sweep, on a node's **first** company (or the apply that started the native halves). Its job list is read once, and on a node that booted unconfigured it was read before there were native halves to contribute the tracker's repairs and the inbox sweep, or a company to state the conversation horizon — so it swept none of those until a restart. Every operation ledger is swept from boot either way: the ledgers are the core runtime's. **After** the swap, because it reads those horizons off the current company. The old sweep stops, its in-flight tick waited out, before the new one starts. **Conditional:** only on that first apply, and only on a node that publishes.
 11. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to. Not part of the convergence below, because nothing it builds is derived from the org chart.
-12. — 19. **the convergence**: everything derived from the *published company itself*, brought up to it. These are not the apply's own stages: they are the same list a node's boot runs, through the same function, because a boot publishes a company exactly as an activation does. They are described under [What follows a published company](#what-follows-a-published-company) below, and an apply names each of them in `applied_subsystems` in that order: `parties`, `seat_identities`, `seat_tools`, `tracker_projects`, `knowledge_containers`, `mailboxes`, `scheduler`, `published`. `seat_tools` hands each held seat's per-role children their reconcile and does **not wait** for it: a start is a subprocess handshake and a first tool listing, each of which can take a whole `startup_timeout_seconds`, and with the new company already current every step after it would otherwise wait behind it. `mailboxes` is where a company that gained its first model provider lets through the mail every seat inbox held while it had none — after the seat tools, because the first thing a released inbox does is run a turn.
+12. — 20. **the convergence**: everything derived from the *published company itself*, brought up to it. These are not the apply's own stages: they are the same list a node's boot runs, through the same function, because a boot publishes a company exactly as an activation does. They are described under [What follows a published company](#what-follows-a-published-company) below, and an apply names each of them in `applied_subsystems` in that order: `parties`, `seat_identities`, `seat_tools`, `tracker_projects`, `knowledge_containers`, `code_repos`, `mailboxes`, `scheduler`, `published`. `seat_tools` hands each held seat's per-role children their reconcile and does **not wait** for it: a start is a subprocess handshake and a first tool listing, each of which can take a whole `startup_timeout_seconds`, and with the new company already current every step after it would otherwise wait behind it. `mailboxes` is where a company that gained its first model provider lets through the mail every seat inbox held while it had none — after the seat tools, because the first thing a released inbox does is run a turn.
 
 Then a `config_revision_applied` event is published on
 `crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
@@ -698,8 +806,9 @@ So there is **one list**, and both paths run it. In order:
 | `seat_tools` | Each held seat's registry, and its per-role MCP children | Both halves are described under [Shared MCP servers](#live-propagation) above. The registry is refiled before the step returns; the children are each seat's own reconcile, which the step hands over and does not wait for, because a start's handshake and first tool listing can each take a whole `startup_timeout_seconds` |
 | `tracker_projects` | The projects the org chart names, as objects, stamped with the revision's activation instant | A project belongs to a **unit**, so the revision that first names one is usually the one that adds the unit. A create takes its key from the project's own counter, so a project that is not an object refuses every task filed into it |
 | `knowledge_containers` | The containers each unit's and seat's `space:` names | Same reason, one subsystem along |
+| `code_repos` | With `code.native`, the repositories `code.repos` declares: created, settled and deleted behind the code log's activation fence, so an apply that changes none of them writes one record and an older activation applied late changes nothing | The containers' reason, one subsystem along — and asked for here but decided **beside** the apply rather than inside it, so however many a revision changes never holds a node behind its epoch; a reconcile that leaves one undone is run again by the node until it applies, since the apply has already been reported (see [Code Host](code-host.md#the-reconcile-and-the-activation-fence)). Written wherever this node may write, whether or not its inbound edge is running |
 | `mailboxes` | A durable subscription per seat; the release of every inbox held while the company had no model; a fresh judgement of every seat [parked on its token budget](agent-runtime.md#the-budget-park) against the ceilings now current; and the end of every [pause](agent-runtime.md#pausing-a-seat) whose seat the revision removed | Until a mailbox exists, every event published to that seat is **dropped** rather than retained. A convergence rather than a walk: it asks the broker what is missing and writes only that, so a company whose mailboxes all exist costs a comparison and no consumer proposals at all — and it runs unconditionally, because a mailbox lost under a company nobody edited is a fact about the broker that no comparison of two companies would notice. A pause is keyed by the seat's id, so it is cleared only when the seat itself is gone |
-| `scheduler` | The cron loop, armed or disarmed | It reads its schedules off the current company, so it is armed after the pointer moves: armed earlier, it would fire the outgoing company's crons |
+| `scheduler` | The cron loop, armed or disarmed | It reads its schedules off the current company, so it is armed after the pointer moves: armed earlier, it would fire the outgoing company's crons. Never on a node in a maintenance mode, which arms no loop when a company is published as it arms none at boot: every fire is a task on a seat's mailbox |
 | `published` | The socket push that re-sends the roster, org tree, tool catalogue and schedules **whole** | The dashboard's company-derived screens come from the company, so no event will ever correct them and an overlay merge cannot express a seat going away |
 | *the directory* — not a step of this list | The party index again, rebuilt **for the same company** when the [identity directory](identity-and-access.md#what-a-suspension-reaches-and-how-fast) moved | Not a configuration change at all, which is the point: suspending, reinstating, binding or removing the person who holds a seat is a record on the identity log, and a registry rebuilt only on a published company went on attributing a suspended person's Slack messages to their seat until somebody next activated a revision. See below |
 
@@ -708,8 +817,9 @@ makes running the list on every apply cheap — re-activating an unchanged
 revision is the credential-rotation gesture: the registry compares the company
 it was built from, the identity lookups are token-keyed and cached, the mailbox
 pass compares its own set against the broker's, the tracker and the containers
-compare the row against what the company says, and the scheduler arms or
-disarms rather than rebuilding.
+compare the row against what the company says, the repositories' reconcile
+writes one record for an activation that changes none of them, and the
+scheduler arms or disarms rather than rebuilding.
 
 **The party index has a second trigger, and it follows the same rule.** Who
 holds a seat, and at what stage, is the identity directory's answer rather than
@@ -832,7 +942,7 @@ A stored revision is not a document somebody just submitted. It passed the valid
 - **Applying holds a revision to the runnable rules.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. A company file named with `-company` or `-import-company` is held to the runnable rules while the node only runs it, because most boots write nothing from it: it is already the active revision, or a bootstrap the store's own company outranks. `POST /config/reload` and a revert validate what they re-activate.
 - **A written document is held to every rule.** `PUT`, `PATCH`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) validate the entire document the write produces, after its masks are restored. A write over a revision this build refuses therefore succeeds exactly when it corrects it.
 
-The difference between the last two is the **admission rules**: authoring hygiene that nothing about running a company depends on, and the part of the rule set a later build may add to or relax. A revision that breaks one still runs, so an apply does not refuse it: during a rolling upgrade a newer peer may activate a revision it admitted under rules this build does not share, and refusing it would split the fleet's epoch. Today they are [unique unit keys](organization-model.md#handles-and-keys-are-unique-names-are-not) — a display name, a seat's or a unit's, is prose and never held unique — and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. So is a schedule's `cron` that has five fields and still breaks the [cron grammar](scheduling.md#cron-syntax) (`61 * * * *`): a company carrying one runs with that schedule never firing and every other schedule untouched. So is a seat's `avatar` naming a character or a colour this build does not draw, or written on a human seat: nothing that runs a seat reads it, and the set of characters will grow, so a revision a newer peer admitted with a character this build does not know still applies here, and the dashboard draws that seat as the original Crewlet until it is upgraded. So is a sandbox-enabled seat whose code work would hand a [`providers.llm`](llm-backends.md) entry to another CLI's coding agent — an `opencode` entry under Claude Code, say: the company runs, and only that seat's `run_sandbox` launches are refused, each naming the fix (see [Code Sandbox](code-sandbox.md#failure-modes)). So is a seat's sandbox gate saying what nothing reads: a `run_in` other than `self`, or a `coding_agent` other than the entry's own CLI, on a seat whose executor runs in agent mode, which is never offered `run_sandbox` and runs in the box its entry places (see [Code Sandbox](code-sandbox.md#where-code-work-runs)), and a gate that is off with provisioning under it on any other seat. So is a sandbox setup step writing a file a box some seat runs in would refuse — `/usr/local/bin/…` for a seat that runs `direct`, say, or the home itself in any cell: the company runs, and only the boxes that step reaches fail at setup (see [Code Sandbox](code-sandbox.md#setup-steps--provisioning-the-box)). A `providers.llm` entry's credential configured where its CLI never reads it is the same kind of rule, and so is an `opencode` entry's `model` with no provider segment (see [LLM Backends](llm-backends.md#configuration-reference)). So is a coding run's `optional_keys` entry — on a seat's `sandbox` or on a setup step — that leaves nothing out: a key or path its block does not write, a variable's name where its key belongs, or a key whose values reference nothing, each leaving the key it was meant for required and `run_sandbox` refused wherever its value resolves to nothing (see [Code Sandbox](code-sandbox.md#credentials-and-the-run-environment)). Five more are **whole-document** rules: each compares one part of the document against another, or one seat against every other seat.
+The difference between the last two is the **admission rules**: authoring hygiene that nothing about running a company depends on, and the part of the rule set a later build may add to or relax. A revision that breaks one still runs, so an apply does not refuse it: during a rolling upgrade a newer peer may activate a revision it admitted under rules this build does not share, and refusing it would split the fleet's epoch. Today they are [unique unit keys](organization-model.md#handles-and-keys-are-unique-names-are-not) — a display name, a seat's or a unit's, is prose and never held unique — and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). So is what a seat holds on a code host, on a [human seat](humans-in-the-org.md): a seat's code access tier (`code`), which caps nothing for a person, who acts on every code host as their own identity, and a seat's own GitHub App (`integrations.github`), the identity an agent acts as on GitHub where a person acts as their own `contact.github_login`. Nothing creates or reconciles an app for a person, and nothing reads a tier off one, so either block would read as a setting and do nothing. So is a schedule's `cron` that has five fields and still breaks the [cron grammar](scheduling.md#cron-syntax) (`61 * * * *`): a company carrying one runs with that schedule never firing and every other schedule untouched. So is a seat's `avatar` naming a character or a colour this build does not draw, or written on a human seat: nothing that runs a seat reads it, and the set of characters will grow, so a revision a newer peer admitted with a character this build does not know still applies here, and the dashboard draws that seat as the original Crewlet until it is upgraded. So is a sandbox-enabled seat whose code work would hand a [`providers.llm`](llm-backends.md) entry to another CLI's coding agent — an `opencode` entry under Claude Code, say: the company runs, and only that seat's `run_sandbox` launches are refused, each naming the fix (see [Code Sandbox](code-sandbox.md#failure-modes)). So is a seat's sandbox gate saying what nothing reads: a `run_in` other than `self`, or a `coding_agent` other than the entry's own CLI, on a seat whose executor runs in agent mode, which is never offered `run_sandbox` and runs in the box its entry places (see [Code Sandbox](code-sandbox.md#where-code-work-runs)), and a gate that is off with provisioning under it on any other seat. So is a sandbox setup step writing a file a box some seat runs in would refuse — `/usr/local/bin/…` for a seat that runs `direct`, say, or the home itself in any cell: the company runs, and only the boxes that step reaches fail at setup (see [Code Sandbox](code-sandbox.md#setup-steps--provisioning-the-box)). A `providers.llm` entry's credential configured where its CLI never reads it is the same kind of rule, and so is an `opencode` entry's `model` with no provider segment (see [LLM Backends](llm-backends.md#configuration-reference)). So is a coding run's `optional_keys` entry — on a seat's `sandbox` or on a setup step — that leaves nothing out: a key or path its block does not write, a variable's name where its key belongs, or a key whose values reference nothing, each leaving the key it was meant for required and `run_sandbox` refused wherever its value resolves to nothing (see [Code Sandbox](code-sandbox.md#credentials-and-the-run-environment)). And so are the code host's two policy bounds, at most 10 000 repositories in `code.repos` and a `code.deleted_retention_days` of at most 365: the reconcile creates and settles any number of declarations, and the retention duty purges by any retention, so neither is something running depends on — a retention too long for the engine to count in, about 292 years, is refused as a runnable rule, because it would read as one every deleted repository has already outlived. Five more are **whole-document** rules: each compares one part of the document against another, or one seat against every other seat.
 
 - **An `mcp_env` key must name a tool server.** The engine looks a seat's credentials up per *server*, so a block keyed on a name `mcp_servers` does not declare is never read by anything: it sits in the document looking configured while the server it was meant for starts with none. Six names need no server, because the engine reads those blocks itself — `github`, `gitlab`, `datadog`, and Atlassian's `atlassian`, `jira` and `confluence`.
 - **A tool server's `optional_keys` entry must leave something out.** It names a key of the server's own `env` or `headers`, or of a seat's or unit's `mcp_env` block for it, whose value carries a `${VAR}` reference; a variable's name where its key belongs, a variable only the `url` references, a key nothing writes and a key whose values reference nothing are refused, because each leaves the key it was meant for required and the server not started wherever its value resolves to nothing (see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)).
@@ -1029,6 +1139,17 @@ means the engine is fine and the protocol was wrong. A node that cannot read
 its identity estate answers `503` rather than `401`, and a person whose seat
 the running company no longer holds gets the guard's `403` naming the seat.
 
+A git client reaches `/git/*` with a token — a Tier A token, or a machine
+token (`cwl_pat_…`) a person minted — as the **password** of a Basic credential
+(the user name is ignored), because git answers a Basic challenge from its
+credential helper and presents a token no other way without configuration.
+That is the one route family where Basic is accepted: a browser caches a Basic
+credential it was asked for and replays it to every route of the origin. See
+[API Endpoints → Routes](../reference/api-endpoints.md#routes) for the
+challenge and the logging, and [During a
+drain](../reference/api-endpoints.md#during-a-drain) for which git requests a
+draining node still serves.
+
 **The guard is mounted whether or not `api.auth` is configured, and it decides
 who is asking — never what they may do.** Every request leaves its middleware
 carrying one of three answers: **resolved** (a session cookie, a Tier A token
@@ -1150,9 +1271,15 @@ permitted as request headers, and a preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
-A credential presented and refused logs `api_auth_failed` at WARNING (never
-the candidate token value), while a request that presented none — a signed-out
-tab, an invitation's page — logs `api_auth_anonymous` at DEBUG; successes log `api_auth_ok` at DEBUG with `actor` (who a write would
+A credential presented and refused logs `api_auth_failed` at WARNING with
+reason `credential_refused`, the route and the resolved client address (never
+the candidate token value) — a wrong Basic password on `/git/*` included —
+while a request that presented none — a signed-out tab, an invitation's page —
+logs `api_auth_anonymous` at DEBUG. A
+git request under `/git/*` that presented none is answered git's Basic
+challenge and logs `api_auth_challenge` at DEBUG, because git's first request
+never carries a credential: it asks its credential helper only once the `401`
+challenge arrives. Successes log `api_auth_ok` at DEBUG with `actor` (who a write would
 be attributed to), `operator_id` (the credential it came through) and `route`.
 Every write this surface logs — `config_revision_written`, `secret_written`,
 `backup_taken`, `retention_gate` and the rest — carries the same pair as `by`

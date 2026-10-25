@@ -56,39 +56,52 @@ func TestEveryHealthInputIsPopulated(t *testing.T) {
 	want := []string{"Err", "Stalled", "Evicted", "Floor", "Drained", "Deferred",
 		"LastSeq", "StreamRecreated", "GenerationPassed"}
 
+	// THE FUNCTIONS A HEALTH IS ASSEMBLED IN: the entry point, the half a
+	// reading takes before the published floors land, and the floor that
+	// completes it ([readHealthsWith] reads the logs and the floors at once),
+	// whether the log's ends are read now or served from memory
+	// ([stateLog.observeWith]). A field any of them sets is set.
+	assemblers := map[string]bool{"health": false, "observeWith": false, "floored": false}
+
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "statelog.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse statelog.go: %v", err)
 	}
-	var body *ast.FuncDecl
+	assigned := map[string]bool{}
 	ast.Inspect(file, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "health" && fn.Recv != nil {
-			body = fn
-		}
-		return body == nil
-	})
-	if body == nil {
-		t.Fatal("(*stateLog).health is gone; this test names the function it guards")
-	}
-
-	assigned := map[string]bool{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
-		if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "health" {
-			assigned[sel.Sel.Name] = true
+		if _, assembles := assemblers[fn.Name.Name]; !assembles {
+			return false
 		}
-		return true
+		assemblers[fn.Name.Name] = true
+		ast.Inspect(fn, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "health" {
+				assigned[sel.Sel.Name] = true
+			}
+			return true
+		})
+		return false
 	})
+	for name, found := range assemblers {
+		if !found {
+			t.Fatalf("%s is gone from statelog.go; this test names the functions a "+
+				"health is assembled in", name)
+		}
+	}
 	for _, field := range want {
 		if !assigned[field] {
-			t.Errorf("health() never mentions Health.%s, which Refusal, Healthy "+
-				"or the snapshot gate reads — so that decision turns on a zero "+
-				"value and the state it is meant to catch goes unreported", field)
+			t.Errorf("no function assembling a health mentions Health.%s, which "+
+				"Refusal, Healthy or the snapshot gate reads — so that decision "+
+				"turns on a zero value and the state it is meant to catch goes "+
+				"unreported", field)
 		}
 	}
 }

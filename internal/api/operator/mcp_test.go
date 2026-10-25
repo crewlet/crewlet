@@ -324,6 +324,20 @@ func TestARequestTheGuardDidNotAdmitIsRefusedAsJSON(t *testing.T) {
 	}
 }
 
+// THE LARGEST PAGE A TOOL TAKES FITS ONE MCP REQUEST. The transport reads a
+// body whole and refuses one past its bound with a 413, and the largest
+// argument set any catalogue tool takes but a project file is a page's body —
+// which the act transport's own bound is derived from, escaping included. A
+// bound under it refused, over MCP alone, a page the knowledge base accepts.
+func TestTheLargestPageFitsOneMCPRequest(t *testing.T) {
+	t.Parallel()
+	if operator.MaxActBody > operator.MCPMaxBody {
+		t.Errorf("an MCP request holds %d bytes and the largest page call takes %d "+
+			"(twice pages.MaxBody, %d, escaped, and the rest of the call)",
+			operator.MCPMaxBody, operator.MaxActBody, pages.MaxBody)
+	}
+}
+
 // EVERY TOOL AN OPERATOR IS OFFERED IS ONE A SEAT HAS. Not a subset check for
 // tidiness: a name here that no seat tool answers would be a second
 // implementation, which is what this whole seam exists to avoid.

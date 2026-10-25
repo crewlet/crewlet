@@ -156,16 +156,17 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: IamMaxRecordBytes,
 		Duplicates:     IamLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// SEVEN OF THE EIGHT KINDS. A barrier shares one subject across the
+		// SEVEN OF THE NINE KINDS. A barrier shares one subject across the
 		// whole domain, so an expectation there would serialise every
 		// linearizable read behind every other one and write an anchor
 		// row per read into the transaction holding this store's only
-		// writer.
+		// writer; and the trim's trimmed record removes anchors, so
+		// arbitrated it would write one of its own (ADR-0047).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
 
-// arbitratedKinds is the nine, derived from the enum rather than typed again —
+// arbitratedKinds is the seven, derived from the enum rather than typed again —
 // a list written twice is a kind that arbitrates in one place and not the
 // other, which wedges that subject the first time a gate drops a record.
 func arbitratedKinds() []string {
@@ -279,26 +280,29 @@ func (Domain) ScopeIndex() string { return "iam_log_deferred_scope" }
 // client will retry.
 func (Domain) OpsTable() string { return "iam_ops" }
 
-// ReadinessInput reports that this domain's health does NOT gate seat
-// admission, and never judges this node's copy of the estate — and it is the
-// FIRST strictly-ordered domain to say so, which is why this is the longest
-// answer in the file.
+// GatesSeatAdmission reports that this domain's health does NOT gate seat
+// admission — and it is the FIRST strictly-ordered domain to say so, which is
+// why this is the longest answer in the file. It does not decide whether this
+// node's copy of the identity estate is judged: every domain's copy is, on its
+// own, and a wrong one goes out of service for that domain's operations alone
+// whatever this answers (ADR-0046).
 //
 // The tracker and the knowledge base both say true, and the argument is the
-// same each time: a node behind on them serves a turn from state that
-// is wrong, so a fault there takes this node's copy out of service rather than
-// serve confident wrong output. The vector domain says false because it is
-// COMPACTED and a gap is a coverage number. This one says false for a third
-// reason, and stating it is the point.
+// same each time: a node behind on them serves a turn from state that is
+// wrong, so a node whose copy of either is out of service, and that can name
+// no peer to serve it, gives its seats up rather than serve confident wrong
+// output. The vector domain says false because it is COMPACTED and a gap is a
+// coverage number. This one says false for a third reason, and stating it is
+// the point.
 //
 // AN AGENT SEAT NEVER READS THIS DOMAIN. A seat's principal is its own handle,
 // its authority is decided by internal/authz from the ORG CHART, and its work
 // arrives on its mailbox. Nothing in a turn asks who the people are. So a node
 // whose iam applier has stalled runs every seat it holds exactly as correctly
-// as a node whose applier is current — and taking its copy of the work and the
-// pages out of service because a human cannot sign in would stop the company's
-// work for a fault in the wrong subsystem, at the moment an operator most
-// needs the company still working so they can go and fix it.
+// as a node whose applier is current — and withholding every seat claim on
+// the node because a human cannot sign in would stop the company's work for a
+// fault in the wrong subsystem, at the moment an operator most needs the
+// company still working so they can go and fix it.
 //
 // WHAT THE STALL MUST GATE INSTEAD IS THE REQUEST PATH, and it does, one layer
 // up: a node that has not applied a revocation answers a session bearer with
@@ -312,7 +316,7 @@ func (Domain) OpsTable() string { return "iam_ops" }
 // with NO operation ledger may not gate seat admission, and this one keeps a
 // ledger and does not gate it. That is a legal combination and this is the
 // domain that makes it a real one.
-func (Domain) ReadinessInput() bool { return false }
+func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical.

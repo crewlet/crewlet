@@ -14,6 +14,7 @@ func everyLogPrefix() []string {
 		topics.PagesLogPrefix,
 		topics.IamLogPrefix,
 		topics.UsageLogPrefix,
+		topics.CodeLogPrefix,
 		topics.ArtifactsLogPrefix,
 		topics.ArtifactDataLogPrefix,
 	}
@@ -81,6 +82,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.PagesLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the pages log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.CodeLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.CodeLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the code log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 		if got, want := topics.IamLogSubject(tc.kind, tc.id),
 			topics.LogSubject(topics.IamLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the identity log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
@@ -122,6 +127,7 @@ func TestALogSubjectRefusesWhatItsInverseCouldNotRecover(t *testing.T) {
 		// The vectors share the tracker's head and are another log.
 		topics.TrackerVectorsPrefix + ".task.x",
 		topics.PagesLogPrefix + ".task.x",
+		topics.CodeLogPrefix + ".task.x",
 	} {
 		if kind, id, ok := topics.LogPath(prefix, subject); ok {
 			t.Errorf("%q was read under %q as (%q, %q)", subject, prefix, kind, id)
@@ -158,6 +164,8 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_IAM_LOG", "crewlet.iam.log"},
 		{"usage", topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard,
 			"CREWLET_USAGE_LOG", "crewlet.usage.log"},
+		{"code", topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard,
+			"CREWLET_CODE_LOG", "crewlet.code.log"},
 		{"artifacts", topics.ArtifactsLogStream, topics.ArtifactsLogPrefix, topics.ArtifactsLogWildcard,
 			"CREWLET_ARTIFACTS_LOG", "crewlet.artifacts.log"},
 		{"artifactdata", topics.ArtifactDataLogStream, topics.ArtifactDataLogPrefix,

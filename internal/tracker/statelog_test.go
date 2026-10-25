@@ -28,7 +28,7 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  tracker.Domain{},
-			Applier: tracker.NewApplier("suite-node", nil),
+			Applier: tracker.NewApplier(nil),
 			// Migrate is nil: the tracker's tables ship in the
 			// replicated estate's own migration, so a fresh store
 			// already has them. A domain that created its tables from
@@ -50,6 +50,8 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			Rows:       tracker.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
+			// THE PRODUCTION ENCODER the engine hands the trim.
+			EncodeTrimmed: tracker.EncodeTrimmed,
 		}
 	})
 }
@@ -191,7 +193,7 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  tracker.Domain{},
-				Applier: tracker.NewApplier("suite-node", nil),
+				Applier: tracker.NewApplier(nil),
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},

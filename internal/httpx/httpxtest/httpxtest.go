@@ -35,6 +35,22 @@
 // A started server's transport is its own, and the only CloseIdleConnections
 // it ever sees is its own Close, which runs from t.Cleanup after the test
 // body has returned.
+//
+// # A test whose subject is time
+//
+// [InProcess] is the other kind of double: no server, no listener and no
+// pool, the handler run in this process. It exists for a test that asserts
+// how LONG something takes — a stream bounded by its silence, a call ended at
+// its deadline — because such a test run on the wall clock asserts the
+// runner's load as much as the code: under the race detector beside the rest
+// of the suite, a goroutine handed a byte every 50 ms went unscheduled for
+// the 150 ms a 200 ms silence bound left it, and the provider's own
+// suite reported a stall that never happened. Inside a testing/synctest
+// bubble the clock moves only while everything in the bubble waits, so the
+// same case decides on exactly the instants it names. A request that crosses
+// a socket keeps a bubble from ever settling — a goroutine waiting on the
+// network is never durably blocked — which is why a bubble needs this rather
+// than a server.
 package httpxtest
 
 import (

@@ -141,7 +141,7 @@ func (s artifactsAnswers) read(ctx context.Context, what string, p Params, versi
 // `work_item=` (the artifacts made for that tracker item), `cursor=` and
 // `limit=`.
 func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

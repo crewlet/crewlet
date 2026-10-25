@@ -190,21 +190,36 @@ const RetryUndecidedSeconds = 2
 //     answer a surface gives for an id nothing holds, so the refusal cannot
 //     say whether the artifact exists.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
+	status, code := RefusalCode(d)
+	switch {
+	case status == http.StatusServiceUnavailable:
+		httpjson.Unavailable(w, code, RetryUndecidedSeconds)
+	case status == http.StatusNotFound:
+		httpjson.Fail(w, status, code)
+	case code == httpjson.CodeStepUpRequired:
+		httpjson.FailWithFields(w, status, code, StepUpDetail(d))
+	default:
+		httpjson.FailWithFields(w, status, code, RefusalDetail(d.Reason, d.Grants))
+	}
+}
+
+// RefusalCode is the status and the code a decision the router did not admit
+// is answered with — the one mapping [EnvelopeRefusal] answers by, and the one
+// a surface that renders a refusal in another form reads, so a git route's
+// one line of text and a JSON route say the same status under the same code.
+// See [EnvelopeRefusal] for why each is what it is.
+func RefusalCode(d Decision) (int, httpjson.Code) {
 	switch {
 	case d.Unknown():
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
+		return http.StatusServiceUnavailable, httpjson.CodeUnavailable
 	case d.NotFound():
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		return http.StatusNotFound, httpjson.CodeNotFound
 	case d.Reason == ReasonStepUp:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-			StepUpDetail(d))
+		return http.StatusForbidden, httpjson.CodeStepUpRequired
 	case d.Reason == ReasonTokenRefused:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused,
-			RefusalDetail(d.Reason, d.Grants))
-	default:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			RefusalDetail(d.Reason, d.Grants))
+		return http.StatusForbidden, httpjson.CodeTokenRefused
 	}
+	return http.StatusForbidden, httpjson.CodeUnauthorized
 }
 
 // Handle mounts one guarded route.

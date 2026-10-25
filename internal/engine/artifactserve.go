@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactserve/ticket"
 	"github.com/crewlet/crewlet/internal/config"
@@ -92,8 +93,10 @@ func ArtifactOrigin(e *Engine, boot *config.Bootstrap, creds artifactserve.Crede
 
 // ArtifactsCopyServes reports whether this node answers artifacts reads from
 // its own copy right now, as far as it can tell WITHOUT WAITING: it holds the
-// estate, the last verdict read of its copy found it sound, and that copy
-// answers rather than lags its logs. False is a decision the estate router
+// estate, the last verdict read of its artifacts copy found it sound, and that
+// copy answers rather than lags its log — the artifacts domain's own verdict
+// (ADR-0046), since a wrong copy of another domain is no reason to send an
+// artifacts read away. False is a decision the estate router
 // takes through another data node.
 //
 // FROM THE VERDICT THE ROUTER ITSELF ANSWERS BY, never a second judgement and
@@ -109,5 +112,6 @@ func (e *Engine) ArtifactsCopyServes(ctx context.Context) bool {
 		return false
 	}
 	v, known, _ := e.local.peek(ctx, c)
-	return known && v.fault == "" && v.answers
+	artifacts := artifactsdomain.Domain{}.Name()
+	return known && v.serves(artifacts) && v.answers(artifacts)
 }

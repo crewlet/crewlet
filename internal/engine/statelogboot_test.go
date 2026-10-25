@@ -136,7 +136,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	body, err := tracker.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
-		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
@@ -219,7 +219,7 @@ func joinBackends(t *testing.T) (*config.Bootstrap, *config.Company, *engine.Bac
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
 	company := parsedCompany(t, companyDoc)
-	backends, err := engine.OpenBackends(t.Context(), boot, company)
+	backends, err := engine.OpenBackends(t.Context(), boot, company, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

@@ -13,7 +13,31 @@ import (
 // over the broker are the same function of the same corpus. A second
 // implementation for the local case would be a second ranking to keep in step
 // with the first.
-type NodeScanner struct{ Index *Indexer }
+type NodeScanner struct {
+	Index *Indexer
+
+	// Copies is this node's verdict on the copies a scan reads — ADR-0046 —
+	// or nil for a process that judges none (a single test node, an
+	// evaluation over a backup's estate), which scans every copy it holds.
+	Copies Copies
+}
+
+// Copies is whether this node's copies of what a scan reads are in service,
+// declared here by the scanner that asks.
+//
+// A COPY OUT OF SERVICE IS WRONG RATHER THAN BEHIND — its applier halted, its
+// rows below the log — and its index is over rows that stopped being the
+// fleet's. A participant scanning it answered its range from them and the
+// coordinator merged the answer under complete coverage, which is the quietly
+// short answer this fan-out exists to make visible.
+type Copies interface {
+	// Serves reports whether this node's copy of the rows src is indexed
+	// from is in service.
+	Serves(ctx context.Context, src Source) bool
+
+	// VectorsServe reports whether this node's copy of the vectors is.
+	VectorsServe(ctx context.Context) bool
+}
 
 // Scan runs both halves over one bucket range.
 //
@@ -35,6 +59,18 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 	}
 	if len(q.Methods) == 0 {
 		return Slice{}, ErrNoMethods
+	}
+	// A COPY OUT OF SERVICE COVERS NOTHING, and it is asked FIRST: an index
+	// that is still building finishes on its own, while a copy that is wrong
+	// does not, so it is the truer reason a range went unscanned. PER
+	// SOURCE, for the reason building is — a query naming only the corpus
+	// whose copy serves is answered normally.
+	if n.Copies != nil {
+		for _, src := range n.Index.covered(q.Sources...) {
+			if !n.Copies.Serves(ctx, src) {
+				return Slice{Shards: shards, OutOfService: true}, nil
+			}
+		}
 	}
 	// BEFORE THE SCAN, because a scan over an index that has not finished
 	// its first lap answers almost nothing and is indistinguishable from a
@@ -66,6 +102,14 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 		// a company without an embeddings provider ever runs, which is
 		// an alarm that is red for the life of the deployment and
 		// therefore an alarm nobody reads.
+		return out, nil
+	}
+	// A VECTORS COPY OUT OF SERVICE SKIPS THE SEMANTIC HALF, and says so:
+	// the half is best effort, so this is the degradation it already
+	// reports rather than a range left uncovered — the lexical half above
+	// scanned the range from copies that serve.
+	if n.Copies != nil && !n.Copies.VectorsServe(ctx) {
+		out.SemanticSkipped, out.VectorsOutOfService = true, true
 		return out, nil
 	}
 	n.semantic(ctx, q, shards, &out)

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/filelock"
 )
 
 // WHAT THE LOCK IS FOR.
@@ -72,7 +74,7 @@ func TestTheStampIdentifiesTheHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read sidecar: %v", err)
 	}
-	pid, ok := pidOf(strings.TrimSpace(string(raw)))
+	pid, ok := filelock.PID(strings.TrimSpace(string(raw)))
 	if !ok {
 		t.Fatalf("the stamp carries no pid: %q", raw)
 	}

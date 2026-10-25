@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -130,6 +132,20 @@ type Slice struct {
 	// The zero value is "ready": a participant whose index has completed a
 	// lap over the named sources reports false.
 	Building bool
+
+	// OutOfService says this participant's copy of what this query reads is
+	// OUT OF SERVICE — wrong rather than behind (ADR-0046) — so it scanned
+	// nothing and the coordinator counts its buckets MISSING, never merges
+	// an answer from rows the node has stopped serving. The zero value is a
+	// copy in service.
+	OutOfService bool
+
+	// VectorsOutOfService says this participant skipped its semantic half
+	// ([Slice.SemanticSkipped]) because its copy of the VECTORS is out of
+	// service — a state that lasts, unlike a scan that failed once — so a
+	// coordinator gives this node's range to the others for the queries
+	// that rank by meaning ([FanOut.plan]).
+	VectorsOutOfService bool
 }
 
 // FanQuery is what every participant is asked.
@@ -164,6 +180,13 @@ type FanQuery struct {
 
 	// Limit caps the fused answer. Zero takes [ReturnDepth].
 	Limit int
+
+	// Prefetch says the search is a turn's knowledge prefetch rather than
+	// somebody's deliberate search ([knowledge.Query.Prefetch]). The
+	// COORDINATOR'S ALONE: it changes no scan, only which budget
+	// [FanOut.Report] holds the search's duration to, so the slice request
+	// a participant answers carries no such field.
+	Prefetch bool
 }
 
 // runs reports whether this query asks a participant to run method m.
@@ -223,10 +246,15 @@ const FanOutFloor = 10_000
 
 // FanOut is the coordinator.
 //
-// THE LOCAL SCAN IS NOT A PARTICIPANT LIKE THE OTHERS. This node always takes
-// an assignment and runs it directly, never through the broker: a search that
+// THE LOCAL SCAN IS NOT A PARTICIPANT LIKE THE OTHERS. This node takes an
+// assignment and runs it directly, never through the broker: a search that
 // answered nothing because the broker hiccupped would be a fleet-wide outage
-// of a read every node could serve alone.
+// of a read every node could serve alone. A node its own last scan said
+// cannot cover a shape is given no range for it ([FanOut.plan]), and it still
+// holds the whole corpus — so whatever range the others then leave uncovered,
+// it scans in their place before it fuses ([FanOut.standIn]): a broker
+// failure never empties a search this node could answer, whatever it was
+// passed over for.
 type FanOut struct {
 	// Self is this node's id, which is its name in the assignment table.
 	Self string
@@ -260,15 +288,18 @@ type FanOut struct {
 	// [SemanticScanBudget], which is the ceiling one search already has.
 	Budget time.Duration
 
-	// Report is told what every answer covered and what it cost.
+	// Report is told what every answer covered and what it cost, beside
+	// the query it answered — whose [FanQuery.Prefetch] says which budget
+	// the cost is held to.
 	//
 	// A HOOK RATHER THAN A METRICS DEPENDENCY, so this package does not
 	// import the recorder to say one sentence. It is what lets
-	// `search_scoped`, `search_degraded` and `search_slow` fire at all:
-	// each of those alarms is a fraction of the answers, and a fraction
-	// nobody counts is an alarm that is permanently silent and looks
-	// exactly like a system with nothing wrong.
-	Report func(Answer, time.Duration)
+	// `search_scoped`, `search_degraded`, `search_slow` and `prefetch_slow`
+	// fire at all: the first two are fractions of the answers and the last
+	// two percentiles of their cost, and an input nobody records is an
+	// alarm that is permanently silent and looks exactly like a system
+	// with nothing wrong.
+	Report func(FanQuery, Answer, time.Duration)
 
 	// Enter is called when a search BEGINS, and the function it returns
 	// when that search ends.
@@ -282,6 +313,129 @@ type FanOut struct {
 	// where every published scan figure was measured with one reader on an
 	// idle node. Nil counts nothing.
 	Enter func() func()
+
+	// passed is every node — this one included — that recently answered
+	// that it could not cover a range: see [FanOut.plan]. The zero value
+	// remembers nobody.
+	passed passedOver
+
+	// now is the clock the passes are timed by; nil is the wall clock.
+	now func() time.Time
+}
+
+// passOverFor is how long a node that answered it covered nothing — its copy
+// of what the query reads out of service, or its index still on its first
+// lap — or that skipped its semantic half because its vectors copy is out of
+// service, is given no range for queries of the same shape ([FanOut.plan]).
+// The coordinator's own scan counts: it is passed over exactly as a peer is.
+//
+// THIRTY SECONDS, and the two ways of being wrong cost different things. Too
+// long costs PARALLELISM only: a node that recovered inside the window is
+// left idle while the rest scan its share, and the answer is complete all the
+// same, because every node holds the whole corpus and a node known not to
+// cover a shape is given none of it, the coordinator included. Too short
+// costs COVERAGE:
+// each lapse spends one search re-learning the state, answered over part of
+// the corpus. The states it is for are long — a copy stays out of service
+// until an eviction is lifted, a snapshot is adopted or an upgrade decodes
+// what it held, and a first lap takes minutes — so the window is the order
+// of a presence lease's life, the estate router's for the same remedy (a node
+// not worth asking first): a coordinator re-asks a node once per lease, and a
+// search loses at most one slice per half minute per shape of query to it.
+const passOverFor = 30 * time.Second
+
+// passedOver is a coordinator's memory of the nodes — itself included — it
+// gives no range, each until when, by why ([passKey]).
+type passedOver struct {
+	mu    sync.Mutex
+	until map[passKey]time.Time
+}
+
+// passKey is one node and the shape of query it could not cover: the sources
+// a query names (canonical, empty for every source) — since a copy out of
+// service and an index still building are both PER SOURCE — or
+// [vectorsShape] for a node whose vectors copy is out of service, which only a
+// query that ranks by meaning is passed over for.
+type passKey struct{ node, shape string }
+
+// vectorsShape is the shape a node whose vectors copy is out of service is
+// passed over for: every query that runs the semantic method.
+const vectorsShape = "\x00vectors"
+
+// shapeOf is the shape of query q, as a pass is keyed: the sources it names,
+// sorted.
+func shapeOf(q FanQuery) string {
+	return strings.Join(slices.Sorted(slices.Values(q.Sources)), ",")
+}
+
+// clock is now, from [FanOut.now] or the wall clock.
+func (f *FanOut) clock() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
+}
+
+// passes reports whether node is passed over for q at now.
+func (p *passedOver) passes(node string, q FanQuery, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, shape := range []string{shapeOf(q), vectorsShape} {
+		if shape == vectorsShape && !q.runs(MethodSemantic) {
+			continue
+		}
+		key := passKey{node: node, shape: shape}
+		until, held := p.until[key]
+		switch {
+		case !held:
+		case now.Before(until):
+			return true
+		default:
+			delete(p.until, key)
+		}
+	}
+	return false
+}
+
+// remember records what the slices answering q said they could not do, at
+// now — the coordinator's own slice exactly as a peer's.
+func (p *passedOver) remember(q FanQuery, answers []Slice, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, a := range answers {
+		var shape string
+		switch {
+		case a.OutOfService || a.Building:
+			shape = shapeOf(q)
+		case a.VectorsOutOfService && q.runs(MethodSemantic):
+			shape = vectorsShape
+		default:
+			continue
+		}
+		if p.until == nil {
+			p.until = map[passKey]time.Time{}
+		}
+		key := passKey{node: a.Node, shape: shape}
+		if _, held := p.until[key]; !held {
+			log.Debug("search_participant_passed_over", "node", a.Node,
+				"sources", shape, "reason", passReason(a),
+				"detail", "its range goes to the other participants for "+
+					passOverFor.String()+", so searches stay complete; it is "+
+					"asked again after that")
+		}
+		p.until[key] = now.Add(passOverFor)
+	}
+}
+
+// passReason is why a node is passed over, for the line that says so.
+func passReason(a Slice) string {
+	switch {
+	case a.OutOfService:
+		return "its copy of what the search reads is out of service"
+	case a.Building:
+		return "its search index is still building its first pass"
+	}
+	return "its copy of the vectors is out of service"
 }
 
 // Answer is one fused result and what it is missing.
@@ -296,13 +450,18 @@ type Answer struct {
 	BucketsAnswered int
 	BucketsMissing  int
 
-	// Absent names the nodes that did not COVER their assignment, so an
-	// operator has somewhere to look. Sorted, for a stable log line.
+	// Absent names the nodes whose assignment went UNSCANNED — exactly
+	// the ones [Answer.BucketsMissing] counts — so an operator has
+	// somewhere to look. Sorted, for a stable log line.
 	//
-	// Two ways in, and they read the same to a caller because the corpus
+	// Three ways in, and they read the same to a caller because the corpus
 	// lost the same slice either way: a participant that never replied,
-	// and one that replied saying its lexical index is still building
-	// (see [Slice.Building]).
+	// one that replied saying its lexical index is still building (see
+	// [Slice.Building]), and one that replied saying its copy of what the
+	// query reads is out of service (see [Slice.OutOfService]). A
+	// participant whose range the coordinator scanned in its place
+	// ([FanOut.standIn]) is not absent — nothing of the corpus was lost —
+	// and [Answer.Nodes] says it did not answer.
 	Absent []string
 
 	// SemanticSkipped says at least one answering participant ran without
@@ -316,10 +475,10 @@ type Answer struct {
 	// filtering Hits after the cut.
 	Candidates Candidates
 
-	// Nodes is every participant in the assignment table, sorted by id,
-	// and whether each covered its range — the per-node half of
-	// [Answer.Coverage]. Absent is the same fact, narrowed to the ones
-	// that did not.
+	// Nodes is every participant in the assignment table — and the
+	// coordinator, where it scanned a range in a participant's place —
+	// sorted by id, and whether each answered — the per-node half of
+	// [Answer.Coverage].
 	Nodes []knowledge.NodeCoverage
 
 	// Served, Modes and Degraded are what the search actually ranked by,
@@ -449,20 +608,25 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 		answer := Answer{Modes: f.Modes(), Degraded: degraded,
 			Nodes: []knowledge.NodeCoverage{}}
 		if f.Report != nil {
-			f.Report(answer, time.Since(started))
+			f.Report(q, answer, time.Since(started))
 		}
 		return answer, nil
 	}
-	table, err := f.plan(ctx)
+	table, err := f.plan(ctx, q)
 	if err != nil {
 		return Answer{}, err
 	}
 
-	mine := Assignment{}
+	// WHETHER THIS NODE SCANS IS TRACKED, never read off the assignment:
+	// a table that gives this node no range has no entry for it, and the
+	// zero [Assignment] an absent entry would leave behind means EVERY
+	// bucket — a scan merged over every peer's range.
+	var mine Assignment
+	scansHere := false
 	peers := make([]Assigned, 0, len(table))
 	for _, a := range table {
 		if a.Node == f.Self {
-			mine = a.Shards
+			mine, scansHere = a.Shards, true
 			continue
 		}
 		peers = append(peers, a)
@@ -493,16 +657,18 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 		}()
 	}
 
-	local, err := f.Local.Scan(ctx, q, mine)
-	if err != nil {
-		// THE LOCAL SCAN IS THE ONE FAILURE THAT IS AN ERROR. Every
-		// other participant's silence is a partial answer; this one is
-		// the store under the caller's own feet.
-		return Answer{}, err
+	answers := make([]Slice, 0, len(table))
+	if scansHere {
+		local, err := f.Local.Scan(ctx, q, mine)
+		if err != nil {
+			// THE LOCAL SCAN IS THE ONE FAILURE THAT IS AN ERROR. Every
+			// other participant's silence is a partial answer; this one
+			// is the store under the caller's own feet.
+			return Answer{}, err
+		}
+		local.Node, local.Shards = f.Self, mine
+		answers = append(answers, local)
 	}
-	local.Node, local.Shards = f.Self, mine
-
-	answers := []Slice{local}
 	var scatterErr error
 	if replies != nil {
 		got := <-replies
@@ -512,20 +678,70 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 			scatterErr = got.err
 		}
 	}
-	answer := fuseSlices(answers, table, q, scatterErr)
+	settled := settle(answers, table)
+	var stood standIns
+	if !scansHere {
+		var err error
+		if stood, err = f.standIn(ctx, q, settled.gaps(table)); err != nil {
+			return Answer{}, err
+		}
+	}
+	// EVERY SLICE THIS SEARCH HOLDS, its own included — the ones it scanned
+	// in a participant's place too: a coordinator that cannot cover a shape
+	// is given none of it for a while, as a peer is.
+	f.passed.remember(q, append(answers, stood.slices...), f.clock())
+	answer := fuseSlices(settled, stood, table, q, scatterErr)
 	answer.Served, answer.Modes, answer.Degraded = served, f.Modes(), degraded
 	if answer.Degraded == knowledge.NotDegraded && answer.SemanticSkipped &&
 		served.Semantic() {
 		answer.Degraded = knowledge.DegradedSemanticPartial
 	}
 	if f.Report != nil {
-		f.Report(answer, time.Since(started))
+		f.Report(q, answer, time.Since(started))
 	}
 	return answer, nil
 }
 
-// plan decides who participates and which buckets each one takes.
-func (f *FanOut) plan(ctx context.Context) ([]Assigned, error) {
+// plan decides who participates in q and which buckets each one takes.
+//
+// # A node that said it could not cover a range is given none, for a while — this one included
+//
+// A node whose copy of what q reads is out of service, or whose index has not
+// finished its first lap, answers its range saying it covered nothing — and
+// both states last. Handed its share of every search regardless, it cost
+// every search in the company a slice of its corpus and a round trip for as
+// long as the state held, though every node holds the whole corpus and the
+// rest could have scanned that slice. So a coordinator that hears it passes
+// that node over for [passOverFor] for queries of the same shape — the same
+// sources, since both states are per source — and divides every bucket among
+// the rest: the next search is complete. A node whose VECTORS copy is out of
+// service is passed over the same way for the queries that rank by meaning,
+// the only ones it cannot fully answer. Whoever is passed over is asked again
+// once the window lapses, which is what brings a recovered node back.
+//
+// THE COORDINATOR IS PASSED OVER BY ITS OWN SCAN as a peer is by its reply.
+// The router sends a node searches the moment its copy of their domain
+// serves, and nothing routes on what else a scan needs: a freshly joined data
+// node's index is on its first lap for minutes, and its vectors copy may be
+// out of service while its pages copy is not. Kept as a participant, its own
+// range was missing from every search however many peers could have scanned
+// it — and a passed-over peer's share that landed on it was missing too.
+//
+// AND IT STILL STANDS IN. A coordinator given no range holds the whole corpus
+// all the same, so a range the others leave uncovered — the broker could not
+// be asked, a peer stayed silent, a peer answered covering nothing — it scans
+// itself before it fuses ([FanOut.standIn]). Passed over for its vectors, its
+// keyword half is still an answer, said as a semantic skip: given no range and
+// nothing in its place, a broker that failed during the half minute emptied
+// every search the node could have answered by its words alone.
+//
+// WHEN NOBODY IS LEFT, EVERYBODY IS ASKED. A search every one of whose nodes
+// is known not to cover its shape ignores the pass-overs and divides among
+// them all, so each reply refreshes what is known and a node that recovered
+// is found by the next search rather than after the window. Solo is not the
+// answer there: it asks the coordinator alone, the one node known not to
+// cover.
+func (f *FanOut) plan(ctx context.Context, q FanQuery) ([]Assigned, error) {
 	solo := []Assigned{{Node: f.Self, Shards: Everything()}}
 	if f.Peers == nil || f.Roster == nil || f.Corpus == nil {
 		return solo, nil
@@ -547,29 +763,31 @@ func (f *FanOut) plan(ctx context.Context) ([]Assigned, error) {
 		// corpus, so an unreadable roster costs parallelism and nothing else.
 		return solo, nil
 	}
-	nodes = slices.Compact(slices.Sorted(slices.Values(nodes)))
-	if !slices.Contains(nodes, f.Self) {
-		// THIS NODE IS ALWAYS A PARTICIPANT, whatever presence says.
-		// A roster that has not yet seen this node's own lease would
-		// otherwise hand every bucket to peers and make a local read
-		// depend on the network.
-		nodes = append(nodes, f.Self)
-		slices.Sort(nodes)
+	// THIS NODE IS ALWAYS IN THE ROSTER, whatever presence says. A roster
+	// that has not yet seen this node's own lease would otherwise hand
+	// every bucket to peers and make a local read depend on the network.
+	nodes = slices.Compact(slices.Sorted(slices.Values(append(nodes, f.Self))))
+	now := f.clock()
+	participants := slices.DeleteFunc(slices.Clone(nodes), func(node string) bool {
+		return f.passed.passes(node, q, now)
+	})
+	if len(participants) == 0 {
+		participants = nodes
 	}
-	if len(nodes) < 2 {
+	if len(participants) == 1 && participants[0] == f.Self {
 		return solo, nil
 	}
-	if len(nodes) > SearchShards {
+	if len(participants) > SearchShards && slices.Contains(participants, f.Self) {
 		// THIS NODE KEEPS ITS SEAT when the fleet is larger than the
-		// bucket count. [Divide] drops the surplus by sorted id, and a
-		// coordinator that dropped ITSELF would scan every bucket
-		// locally while the peers scanned them too — every document
-		// counted twice and merged against itself. The table is this
-		// coordinator's own plan and travels with the request, so two
-		// coordinators picking different sixty-four are not in conflict.
+		// bucket count and it is a participant at all. [Divide] drops
+		// the surplus by sorted id, and a coordinator that dropped
+		// ITSELF would lose the one scan that needs no broker. The
+		// table is this coordinator's own plan and travels with the
+		// request, so two coordinators picking different sixty-four are
+		// not in conflict.
 		keep := make([]string, 0, SearchShards)
 		keep = append(keep, f.Self)
-		for _, node := range nodes {
+		for _, node := range participants {
 			if len(keep) == SearchShards {
 				break
 			}
@@ -577,9 +795,11 @@ func (f *FanOut) plan(ctx context.Context) ([]Assigned, error) {
 				keep = append(keep, node)
 			}
 		}
-		nodes = keep
+		participants = keep
 	}
-	return Divide(nodes), nil
+	// One participant that is a PEER takes every bucket as an explicit
+	// range ([Divide]), never the zero [Assignment].
+	return Divide(participants), nil
 }
 
 // Divide splits [SearchShards] into one contiguous range per node.
@@ -625,6 +845,119 @@ func Divide(nodes []string) []Assigned {
 	return out
 }
 
+// standIns is what a coordinator that gave itself no range scanned in the
+// place of the participants that left theirs uncovered: by is its id, and
+// slices its scans, each over the range its Shards name.
+type standIns struct {
+	by     string
+	slices []Slice
+}
+
+// covering is the stand-in scan that covered the whole of r, if one did — a
+// scan that answered it covered nothing ([Slice.Building],
+// [Slice.OutOfService]) covers no range.
+func (in standIns) covering(r Assignment) (Slice, bool) {
+	for _, s := range in.slices {
+		if !s.Building && !s.OutOfService && s.Shards.From <= r.From && r.To <= s.Shards.To {
+			return s, true
+		}
+	}
+	return Slice{}, false
+}
+
+// refusal is why the coordinator could not scan r in its participant's place,
+// or "" where it covered it or never tried.
+func (in standIns) refusal(r Assignment) string {
+	for _, s := range in.slices {
+		if (s.Building || s.OutOfService) && s.Shards.From <= r.From && r.To <= s.Shards.To {
+			return in.by + " could not scan it in its place: " + uncoveredReason(s)
+		}
+	}
+	return ""
+}
+
+// standIn scans, in their participants' place, every range gaps names — the
+// ranges no participant covered, as one scan per run of adjacent ones.
+//
+// ONLY FOR A COORDINATOR THAT GAVE ITSELF NO RANGE ([FanOut.plan]), which is
+// otherwise a search that answers nothing when the broker does not: a
+// coordinator that scanned its own range already answers that one, and the
+// rest is the partial answer naming who did not cover theirs. A scan that
+// answers it covered nothing — this node's copy is out of service, its index
+// still building — is said beside the range it could not cover, and a scan
+// that FAILS is the store under the caller's feet, as the coordinator's own
+// scan failing is.
+func (f *FanOut) standIn(ctx context.Context, q FanQuery, gaps []Assignment) (standIns, error) {
+	in := standIns{by: f.Self}
+	for _, gap := range gaps {
+		scanned, err := f.Local.Scan(ctx, q, gap)
+		if err != nil {
+			return standIns{}, err
+		}
+		scanned.Node, scanned.Shards = f.Self, gap
+		in.slices = append(in.slices, scanned)
+	}
+	return in, nil
+}
+
+// settledTable is which participants of a table covered their range: the
+// slice each one that did answered with, and why each that replied covering
+// nothing did not.
+//
+// THE ONE PLACE A REPLY IS JUDGED, so the coordinator's stand-in and the
+// fusion agree on which ranges went uncovered.
+type settledTable struct {
+	covered   map[string]Slice
+	uncovered map[string]string
+}
+
+// settle judges the answers against the table.
+//
+// A slice from a node the table does not name is DROPPED WHOLE — its range
+// overlaps somebody's, so its documents would be merged against themselves
+// and ranked above where they belong — and so is a second answer from one
+// node. A reply that says it covered nothing is not an answer: counting it
+// would put its participant's buckets among the answered on the strength of a
+// reply stating the opposite, which is the silent short answer the whole
+// partition exists to make visible.
+func settle(answers []Slice, table []Assigned) settledTable {
+	assigned := make(map[string]bool, len(table))
+	for _, a := range table {
+		assigned[a.Node] = true
+	}
+	out := settledTable{covered: map[string]Slice{}, uncovered: map[string]string{}}
+	for _, a := range answers {
+		if _, seen := out.covered[a.Node]; !assigned[a.Node] || seen {
+			continue
+		}
+		if a.Building || a.OutOfService {
+			out.uncovered[a.Node] = uncoveredReason(a)
+			continue
+		}
+		out.covered[a.Node] = a
+	}
+	return out
+}
+
+// gaps is every range of table no participant covered, in bucket order, with
+// adjacent ranges joined into one.
+func (t settledTable) gaps(table []Assigned) []Assignment {
+	var out []Assignment
+	for _, a := range slices.SortedFunc(slices.Values(table), func(x, y Assigned) int {
+		return cmp.Compare(x.Shards.From, y.Shards.From)
+	}) {
+		if _, covered := t.covered[a.Node]; covered {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].To == a.Shards.From {
+			out[n-1].To = a.Shards.To
+			continue
+		}
+		out = append(out, a.Shards)
+	}
+	return out
+}
+
 // fuseSlices merges the answers by score within each method, then fuses the
 // two global lists once.
 //
@@ -633,9 +966,8 @@ func Divide(nodes []string) []Assigned {
 // coordinator's own arithmetic: counting an answer's own claim would let one
 // slow peer's stale table inflate the coverage of a search that missed a third
 // of the corpus, and the partial report exists precisely to be untrusting
-// here. For the same reason a slice from a node the table does not name is
-// DROPPED WHOLE — its range overlaps somebody's, so its documents would be
-// merged against themselves and ranked above where they belong.
+// here. Which participants covered their range is [settle]'s judgement, on
+// the same terms.
 //
 // ONLY THE RANKERS THE QUERY ASKED FOR ARE FUSED, whatever a participant sent
 // back: what goes into the answer is the coordinator's decision, on the same
@@ -644,38 +976,23 @@ func Divide(nodes []string) []Assigned {
 //
 // scatterErr is why the peers could not be asked at all, which becomes every
 // unanswered peer's own reason rather than a generic silence.
-func fuseSlices(answers []Slice, table []Assigned, q FanQuery, scatterErr error) Answer {
-	limit := q.Limit
-	assigned := make(map[string]Assignment, len(table))
-	for _, a := range table {
-		assigned[a.Node] = a.Shards
-	}
-	building := make(map[string]bool)
+//
+// A RANGE THE COORDINATOR SCANNED IN ITS PARTICIPANT'S PLACE ([FanOut.standIn])
+// is answered — its buckets count, its hits merge — while the participant it
+// stood in for is named as not having answered and why, and the coordinator
+// is named as having answered: the corpus lost nothing, and the fleet still
+// did not answer as it was asked.
+func fuseSlices(settled settledTable, stood standIns, table []Assigned, q FanQuery,
+	scatterErr error) Answer {
 
-	lexical := make([][]Scored, 0, len(answers))
-	semantic := make([][]Scored, 0, len(answers))
-	answered := make(map[string]bool, len(answers))
+	limit := q.Limit
+	lexical := make([][]Scored, 0, len(table)+len(stood.slices))
+	semantic := make([][]Scored, 0, len(table)+len(stood.slices))
 	out := Answer{}
-	for _, a := range answers {
-		if _, named := assigned[a.Node]; !named || answered[a.Node] {
-			// Not in the table, or a second answer from one node —
-			// either way a range somebody else also holds.
-			continue
-		}
-		if a.Building {
-			// A REPLY THAT SAYS IT COVERED NOTHING IS NOT AN ANSWER.
-			// Counting it would put this participant's buckets in
-			// BucketsAnswered on the strength of a reply that states
-			// the opposite, which is the silent-short-answer the whole
-			// partition exists to make visible. Its hits are dropped
-			// with it rather than merged beside a missing range: a
-			// range cannot be both scanned and unscanned, and half of
-			// one merged under "complete" is how the coverage number
-			// stops meaning anything.
-			building[a.Node] = true
-			continue
-		}
-		answered[a.Node] = true
+	merge := func(a Slice) {
+		// A RANGE CANNOT BE BOTH SCANNED AND UNSCANNED: a reply that
+		// covered nothing never reaches here, so no half of one is
+		// merged under "complete" ([settle]).
 		if q.runs(MethodLexical) {
 			lexical = append(lexical, a.Lexical)
 		}
@@ -684,18 +1001,37 @@ func fuseSlices(answers []Slice, table []Assigned, q FanQuery, scatterErr error)
 			out.SemanticSkipped = out.SemanticSkipped || a.SemanticSkipped
 		}
 	}
-	out.Nodes = make([]knowledge.NodeCoverage, 0, len(table))
+	out.Nodes = make([]knowledge.NodeCoverage, 0, len(table)+1)
+	stoodIn := false
 	for _, a := range table {
-		if answered[a.Node] {
+		if covered, ok := settled.covered[a.Node]; ok {
+			merge(covered)
 			out.BucketsAnswered += a.Shards.Width()
 			out.Nodes = append(out.Nodes, knowledge.NodeCoverage{ID: a.Node, Answered: true})
 			continue
 		}
+		why := absentReason(settled.uncovered[a.Node], scatterErr)
+		if _, ok := stood.covering(a.Shards); ok {
+			stoodIn = true
+			out.BucketsAnswered += a.Shards.Width()
+			out.Nodes = append(out.Nodes, knowledge.NodeCoverage{ID: a.Node,
+				Error: why + "; " + stood.by + " scanned its range in its place"})
+			continue
+		}
+		if refused := stood.refusal(a.Shards); refused != "" {
+			why += "; " + refused
+		}
 		out.BucketsMissing += a.Shards.Width()
 		out.Absent = append(out.Absent, a.Node)
-		out.Nodes = append(out.Nodes, knowledge.NodeCoverage{
-			ID: a.Node, Error: absentReason(building[a.Node], scatterErr),
-		})
+		out.Nodes = append(out.Nodes, knowledge.NodeCoverage{ID: a.Node, Error: why})
+	}
+	if stoodIn {
+		for _, scanned := range stood.slices {
+			if !scanned.Building && !scanned.OutOfService {
+				merge(scanned)
+			}
+		}
+		out.Nodes = append(out.Nodes, knowledge.NodeCoverage{ID: stood.by, Answered: true})
 	}
 	slices.Sort(out.Absent)
 	slices.SortFunc(out.Nodes, func(a, b knowledge.NodeCoverage) int {
@@ -718,13 +1054,24 @@ func fuseSlices(answers []Slice, table []Assigned, q FanQuery, scatterErr error)
 	return out
 }
 
+// uncoveredReason is why a participant that replied covered none of its range,
+// in words an operator can act on — what the reply itself said.
+func uncoveredReason(a Slice) string {
+	if a.OutOfService {
+		return "its copy of what this search reads is out of service — wrong " +
+			"rather than behind — so it covered none of its range"
+	}
+	return "its search index is still building its first pass, so it " +
+		"covered none of its range"
+}
+
 // absentReason is why one participant's range went unscanned, in words an
-// operator can act on.
-func absentReason(building bool, scatterErr error) string {
+// operator can act on: the reason its own reply gave where it replied
+// covering nothing, and otherwise why no reply counted.
+func absentReason(uncovered string, scatterErr error) string {
 	switch {
-	case building:
-		return "its search index is still building its first pass, so it " +
-			"covered none of its range"
+	case uncovered != "":
+		return uncovered
 	case scatterErr != nil:
 		return "the fleet could not be asked: " + scatterErr.Error()
 	}

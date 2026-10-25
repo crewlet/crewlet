@@ -55,6 +55,7 @@ func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bo
 	// other test in the run. One process owns a store file exclusively.
 	chosen := filepath.Join(t.TempDir(), "crewlet.db")
 	b.Store.Path = chosen
+	engine.PinGitLanes(&b)
 	// AND A KEYRING, because every record on every state log is signed
 	// under one and a node that has none refuses to start. It is not in
 	// [config.DefaultBootstrap] and must not be: a default key is a key
@@ -96,7 +97,7 @@ func parsedCompany(t *testing.T, doc string) *config.Company {
 // subject is the topology rather than the store.
 func openBackends(t *testing.T, b *config.Bootstrap) (*engine.Backends, error) {
 	t.Helper()
-	return engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	return engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 }
 
 func TestTheDefaultTopologyRunsWithNoExternalService(t *testing.T) {
@@ -238,7 +239,7 @@ func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 
 func TestNoBootstrapIsRefused(t *testing.T) {
 	t.Parallel()
-	if _, err := engine.OpenBackends(context.Background(), nil, parsedCompany(t, companyDoc)); err == nil {
+	if _, err := engine.OpenBackends(context.Background(), nil, parsedCompany(t, companyDoc), nil); err == nil {
 		t.Error("a nil bootstrap opened backends")
 	}
 }
@@ -249,7 +250,7 @@ func TestAnUnknownStreamTypeNamesItself(t *testing.T) {
 	// through validation — and an error that does not name the value sends
 	// a reader to read the code instead of their config.
 	b := bootstrap(t, func(b *config.Bootstrap) { b.Stream.Type = "kafka" })
-	_, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc))
+	_, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc), nil)
 	if err == nil {
 		t.Fatal("an unknown stream type opened backends")
 	}
@@ -402,7 +403,7 @@ roles:
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, doc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, doc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -448,7 +449,7 @@ func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, nil)
+	back, err := engine.OpenBackends(t.Context(), b, nil, nil)
 	if err != nil {
 		t.Fatalf("a nil company was refused: %v", err)
 	}

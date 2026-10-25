@@ -145,8 +145,10 @@ func Catalogue() []Instrument {
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +
-				"meanwhile), `floor_unknown` (the floor or the log's ends could " +
-				"not be read — clears when coordination answers). The log: " +
+				"meanwhile), `floor_unknown` (the domain's floor or the log's " +
+				"ends could not be read — clears when coordination answers, or " +
+				"once a floor row that does not read as its floor is removed). " +
+				"The log: " +
 				"`log_full` (at its ceiling — raise it or unblock the trim), " +
 				"`record_too_large` (the record is larger than the broker takes " +
 				"in one message — split the change; the detail names which " +
@@ -441,7 +443,8 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
 				"left — on every log that claims identity (the tracker, the " +
-				"pages and the identity estate), the ceiling " +
+				"pages, the identity estate, the artifacts, their datastores " +
+				"and the code log), the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
@@ -453,6 +456,20 @@ func Catalogue() []Instrument {
 			Shows: "How long one retention term has held the trim, named. A " +
 				"trim blocked for weeks is a log walking toward its ceiling " +
 				"with a cause an operator can act on.",
+		},
+		{
+			Name: StatelogAnchorsSwept, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Arbitration anchors this node's applier removed under the " +
+				"trim's `trimmed` records (ADR-0047), counted once the " +
+				"transaction that removed them commits. Every node applies " +
+				"every record, so every data node counts the same removals. " +
+				"Flat is the normal reading of a log whose purged objects all " +
+				"wrote again later — their anchors moved above the trim and " +
+				"nothing is below it to remove; a sweep that is failing shows " +
+				"as a `retention_anchor_sweep_failed` line from the trim's " +
+				"holder, and as anchors below the log's first record that keep " +
+				"growing while this stays flat.",
 		},
 
 		// ---- the backup -----------------------------------------------
@@ -526,13 +543,17 @@ func Catalogue() []Instrument {
 		{
 			Name: TrackerSearchScanDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"path", "rung"},
-			Shows: "One search's scan, split by whether it ran for a turn's " +
-				"prefetch or for somebody's deliberate search, and by the " +
-				"ranking it actually served (`rung`: hybrid, keyword, " +
-				"semantic, or none). Only the prefetch had a published " +
-				"percentile, and the interactive path is the one with a " +
-				"target; a keyword scan is a fraction of a fused one's cost, " +
-				"so reading them as one series hides a slow meaning half.",
+			Shows: "One search's scan, recorded by the node that coordinated " +
+				"it, split by what it ran for (`path`: `prefetch` for a turn's " +
+				"knowledge prefetch, which the turn waits on before its first " +
+				"token, `interactive` for somebody's deliberate search) and by " +
+				"the ranking it actually served (`rung`: hybrid, keyword, " +
+				"semantic, or none). Each path has its own budget — half a " +
+				"second for a prefetch (`prefetch_slow`), a second for an " +
+				"interactive search (`search_slow`) — and read as one series " +
+				"the quicker one hides the other; a keyword scan is a fraction " +
+				"of a fused one's cost, so reading rungs as one series hides a " +
+				"slow meaning half.",
 		},
 		{
 			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitCount,
@@ -599,6 +620,606 @@ func Catalogue() []Instrument {
 				"summed. Over 24 hours it IS the fleet-wide read-degradation " +
 				"budget: every second here is a second in which reads are " +
 				"behind and writes are pending on every node.",
+		},
+		// ---- the object store's S3 requests ---------------------------
+		{
+			Name: ObjectsS3Attempts, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"operation", "outcome"},
+			Shows: "Every attempt this node's S3 client sent its bucket, by S3 " +
+				"`operation` (the API's own name: `HeadObject`, " +
+				"`GetObject`, `PutObject`, `CreateMultipartUpload`, " +
+				"`UploadPart`, `CompleteMultipartUpload`, " +
+				"`AbortMultipartUpload`, `DeleteObject`, `DeleteObjects`, " +
+				"`ListObjectsV2`, `ListMultipartUploads`, and S3 Express's " +
+				"`CreateSession`) and what the bucket made of it (`outcome`): " +
+				"`answered` — served, a success or a refusal such as a missing " +
+				"key; `throttled` — asked to slow down (`503 SlowDown`, any " +
+				"`429`, MinIO's `SlowDownRead` and `SlowDownWrite`), which cuts " +
+				"the node's gate; `failed` — any other answer: a server error " +
+				"that is no throttle, or a status no request expects, such as a " +
+				"redirect to another region; `unreached` — no answer at all: a " +
+				"connection refused or reset, a name that did not resolve, a TLS " +
+				"failure, or an attempt never sent because its S3 Express " +
+				"session could not be had; `stalled` — the bucket stopped " +
+				"moving the attempt for a minute: took no more of its body, " +
+				"acknowledged none of it at the node's socket and sent none of " +
+				"its answer, so the request was given up; `ended` — the " +
+				"attempt's own deadline or its caller ended it in flight. An " +
+				"operation's RETRIES are " +
+				"this counter's total for it, less the count of " +
+				"`crewlet.objects.s3.request.attempts` for it, plus that " +
+				"histogram's `unsent` count for it. `throttled` rising is the " +
+				"fleet over the bucket's rate for the prefix (S3 serves 5 500 " +
+				"reads and 3 500 writes a second a prefix); `failed` the " +
+				"bucket's own fault; `unreached` the network or the endpoint.",
+		},
+		{
+			Name: ObjectsS3GateLimit, Kind: KindGauge, Unit: UnitCount,
+			Shows: "How many attempts this node's S3 client lets its bucket " +
+				"hold at once while a throttle holds it back — seven tenths of " +
+				"the most the node had out at once when the bucket last " +
+				"throttled it, one more each round of answers — and zero while " +
+				"nothing does: the gate lifts a minute after the bucket's last " +
+				"throttle. Above zero for long is a fleet held over the " +
+				"prefix's rate; every request of the node — git syncs, the " +
+				"collector, backups, people's files — shares what it allows.",
+		},
+		{
+			Name: ObjectsS3GateWaiting, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Attempts of this node's S3 client waiting in line for the " +
+				"gate, first come first served: what a throttle is costing the " +
+				"node now. High while `crewlet.objects.s3.gate.limit` stays low " +
+				"is a node sending more than the prefix will take from it — its " +
+				"requests wait rather than fail, until their own deadlines.",
+		},
+		{
+			Name: ObjectsS3RequestAttempts, Kind: KindHistogram, Unit: UnitCount,
+			Attributes: []string{"operation", "outcome"},
+			Shows: "How many attempts each request of this node's S3 client " +
+				"took, observed once as it ends, by `operation` and how it " +
+				"ended (`outcome`): `answered` — the bucket's final answer, a " +
+				"success or a refusal; `given_up` — the bucket answered nothing " +
+				"but failures (server errors that are no throttle, or no answer " +
+				"at all) from the first to a bound drawn for it between forty " +
+				"seconds and a minute after it, or stopped moving one of its " +
+				"attempts for a minute (`stalled` on the attempts counter), so " +
+				"the request was not asked again and its caller was told the " +
+				"bucket's last answer; " +
+				"`ended` — its deadline or its caller ended it after at least " +
+				"one attempt, one still throttled among them; `unsent` — it " +
+				"ended before its first attempt, observed at zero: its deadline " +
+				"or its caller ended it while it waited at the gate (the gate " +
+				"starving the node's requests), or it was refused before " +
+				"sending; `failed` — a failure asking again cannot change, such " +
+				"as a certificate the node does not trust, or an S3 Express " +
+				"session that could not be had for it. Nothing counts a " +
+				"request's attempts but its deadline and that bound, so the " +
+				"tail is how long the bucket made requests wait: a p95 above " +
+				"one is a bucket throttling or failing, and `given_up` above " +
+				"zero is a bucket that failed every attempt for most of a " +
+				"minute, or held one for a whole minute without moving it.",
+		},
+		// ---- code -----------------------------------------------------
+		{
+			Name: CodeCommitBatchSize, Kind: KindHistogram, Unit: UnitCount,
+			Shows: "Pushes per code record: group commit working, or not. The " +
+				"committer takes everything already queued behind an in-flight " +
+				"record — without lingering for more — so an idle repository's " +
+				"records stay at one push and a busy one's grow, up to 64. A busy " +
+				"repository whose batches stay at one is one whose pushes arrive " +
+				"more slowly than a record commits.",
+		},
+		{
+			Name: CodeCommitBusy, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Pushes refused `busy`, undecided — the client runs `git " +
+				"push` again — for one of three causes that point at different " +
+				"remedies. A BACKLOG: a repository taking pushes faster than one " +
+				"node's committer commits them (its queue of 1 024 pushes, or " +
+				"sixteen records' bytes, is full), or the node holding sixty-four " +
+				"records' bytes of pushes across its repositories. A DEADLINE, " +
+				"either way round: a push that waited behind earlier ones until " +
+				"its asker's attempt had no more left than the 30-second commit " +
+				"budget and a second for the answer, or one that ARRIVED with no " +
+				"more than that left — the attempt spent before it reached the " +
+				"committer, waiting for the node to take it (its proposal slots " +
+				"full), for the node to reach the asker's own writes, or under a " +
+				"caller deadline shorter than 31 seconds; asked with no deadline, " +
+				"a push that waited that budget whole. Or a record that lost " +
+				"every compare-and-set round it may take. No repository is an " +
+				"attribute — which one is hot is a question for its rows, not a " +
+				"time series a repository.",
+		},
+		// ---- git ------------------------------------------------------
+		{
+			Name: CodeCacheAdoptions, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Pushes this node's git cache was asked to adopt — the " +
+				"pack the push's receive-pack wrote, linked into the cache " +
+				"once its row applied rather than downloaded back by the " +
+				"node that took the push — by `outcome`. `adopted`: linked " +
+				"in by the adoption itself. `handed`: a sync or a verify " +
+				"was writing the repository's directory, and the adoption " +
+				"left the pack to it, staged; it installs the pack from " +
+				"that staging rather than the object store before it lets " +
+				"the directory go, unless it had already begun to download " +
+				"it. `held`: the cache already held the pack. `uncached`: " +
+				"the repository's cache left this node between the push's " +
+				"sync and its adoption — the repository purged — so there " +
+				"was nothing to adopt into. `failed`: the links failed, and " +
+				"the next sync downloads the pack, one GET of its bundle; " +
+				"rising, it is this node's disk refusing writes.",
+		},
+		{
+			Name: CodeCacheBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "What this node's git cache holds on disk — every " +
+				"repository's packs, indexes and refs, plus the downloads and " +
+				"pushes in flight — against its byte budget, which it is " +
+				"evicted to, least recently used first, and for " +
+				"no other reason. Sitting at the budget is a cache doing its " +
+				"job; held above it is a repository larger than the budget " +
+				"being served, evicted once nothing reads it; climbing past " +
+				"it while syncs keep starting cold is a budget too small for " +
+				"the repositories this node serves.",
+		},
+		{
+			Name: CodeCacheChecks, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"file", "outcome", "trigger"},
+			Shows: "Files of this node's git cache held to their own " +
+				"checksum — the trailer git writes at the end of every " +
+				"pack and index file, the SHA-1 of the bytes before it — " +
+				"because git checks none of them when it reads: a damaged " +
+				"index file can answer wrong without a word, and a damaged " +
+				"pack is sent to clients byte for byte. Before a copy this " +
+				"process did not write answers its first request, every " +
+				"index file it holds; and behind the serving, a SCRUB of " +
+				"every file a copy holds, packs included — once after a " +
+				"copy a previous process left first answers, daily while it " +
+				"is used, and at once when a git process over it reports a " +
+				"pack it could not read or crashes; and when a request — " +
+				"or the node's own sync — fails on a pack or an object, " +
+				"every index file again, " +
+				"whatever was checked before, then every file if that " +
+				"repaired nothing. By `file` " +
+				"(`commit-graph`, `multi-pack-index`, `bitmap`, `midx-rev`: " +
+				"files the node derives from its packs; `idx`, `rev`: a " +
+				"pack's index and reverse index, stored with its push; " +
+				"`pack`, the pack itself, read only by a scrub), `outcome` " +
+				"(`sound`; `damaged` — a derived file dropped to be written " +
+				"again, a stored one fetched again with its pack, one " +
+				"download; `unreadable`, a read of it that failed — " +
+				"repaired as though damaged, since a file the disk cannot " +
+				"read is one git cannot serve, and never a refused read " +
+				"slot or an ended request, which decide nothing and are not " +
+				"counted; `replaced`, " +
+				"the file renamed over or removed while it was read, so no " +
+				"verdict is its) and `trigger` (`first`, a copy's first full " +
+				"sync in this process, which reads every index file a " +
+				"previous process left, or the scrub after it, which reads " +
+				"every pack and every file that sync did not; `unvouched`, a " +
+				"later full sync reading only what this process has neither " +
+				"written nor checked since; `scrub`, a used copy's daily " +
+				"scrub; `report`, a scrub a git process's report or crash " +
+				"made due; `forced`, the in-place repair a pack's or an " +
+				"object's failure asks first — a request's git, or the " +
+				"node's own sync's — every index file held to its checksum " +
+				"whatever was checked before; `request`, the scrub that " +
+				"repair runs at once when it found nothing, when it is " +
+				"skipped (a forced round having found nothing within the " +
+				"hour, or every pack it named held off after the store " +
+				"refused it), or when the sync's own git met the damage " +
+				"again past it, and a pack a " +
+				"git process named in words, confirmed against its row and " +
+				"fetched again). Any `damaged` is a disk losing data, or something " +
+				"outside the engine writing into the cache: the copy repairs " +
+				"it, and a verify of the repository names what else that " +
+				"disk holds damaged.",
+		},
+		{
+			Name: CodeCacheCheckDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"trigger"},
+			Shows: "How long one check of a copy's index files, or one scrub " +
+				"of every file it holds, took, by `trigger` (`first`, " +
+				"`unvouched`, `scrub`, `report`, `forced` or `request`, as " +
+				"`crewlet.code.cache.checks`), counted only where it read " +
+				"something. A check is what a copy's first request after a " +
+				"restart waited for beside its sync — about a quarter of the " +
+				"copy's pack bytes read; a scrub runs behind the serving and " +
+				"nobody waits for it, reading every byte the copy holds. " +
+				"Both hash on one core, a read slot a 64 MiB piece, and at " +
+				"the volume's own throughput when read cold.",
+		},
+		{
+			Name: CodeCacheReports, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"part", "outcome"},
+			Shows: "Damage any git process over this node's git cache " +
+				"named — whether its request failed or git read around the " +
+				"damage and answered — as the cache took it, by the `part` " +
+				"named (`commit-graph`, `multi-pack-index`, `chunk`: a " +
+				"derived file of either, dropped by a repair round with no " +
+				"request waiting and written again at once; `pack`, " +
+				"`object`: stored damage, and `hint`, a pack git named as " +
+				"holding a corrupt object — git 2.56's bare message, or the " +
+				"pack git 2.55's report of that damage names — each making " +
+				"the copy's scrub due at once, " +
+				"which holds every file it holds to its checksum and fetches " +
+				"again what fails; `crash`, a git process dying of a signal " +
+				"the node did not send — what a damaged reverse index or " +
+				"bitmap does to a clone, naming nothing — which makes the " +
+				"scrub due the same way; any of these four named by the git " +
+				"a request ran, which repairs what that git fails with " +
+				"before its first byte, is held for that request until it " +
+				"asks its repair or lets the copy go, and counted then — " +
+				"and one the node's own sync's git names, for that sync's " +
+				"round until it is answered) and " +
+				"its `outcome`: `queued`, a " +
+				"repair asked — a round, or the scrub; `deferred`, asked " +
+				"while a check of the repository ran, repaired once it ends; " +
+				"`stale`, not dropped — the node wrote the file after the " +
+				"process that named it began, so the report was of the file " +
+				"it replaced — and, for a `pack` or an `object`, a failed " +
+				"request whose process began before the node last wrote a " +
+				"repair into the copy, answered from the copy as it stands " +
+				"once no round is repairing it and run once more rather " +
+				"than repaired further, or a sync whose own git met it so, " +
+				"synced again; `unrouted`, a pack, an object or a hint named " +
+				"by a push's own throwaway repository, which may be the " +
+				"client's pack; `again`, a derived file named damaged within " +
+				"a day of its last drop for damage, whatever the node wrote " +
+				"of it between: dropped and left to the ordinary schedule " +
+				"rather than written again at once; `cooldown`, a stored " +
+				"report or a crash within an hour of a scrub of the copy " +
+				"that found nothing, which makes no other; `covered`, one " +
+				"within an hour of a scrub whose findings still wait for " +
+				"their repair, which is its answer; `request`, one held for " +
+				"the request whose git named it — or for the sync whose own " +
+				"git did — and answered by the repair that request or that " +
+				"sync's round asked — its in-place round, its scrub and, " +
+				"past both, its rebuild — with no scrub of the copy made due " +
+				"beside it (one the request did not repair — it failed past " +
+				"its first byte, failed in a way the node does not repair, " +
+				"or never failed — is counted under the others as the " +
+				"request lets the copy go). `queued` rising is a disk " +
+				"losing data under the cache; `again`, a disk that keeps " +
+				"losing it; `cooldown` rising, a git process failing on " +
+				"something the copy's checksums do not show; `request` " +
+				"rising, requests failing on damage they had repaired " +
+				"under them.",
+		},
+		{
+			Name: CodeCacheHints, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Packs of this node's git cache that a git process named " +
+				"as holding a corrupt object, held to the row that names " +
+				"them, one a naming, by the verdict that answered it " +
+				"(`outcome`). git 2.56 says a packed object is corrupt " +
+				"through a bare message, which nothing reads as damage — " +
+				"beside whatever else of the damage it reports, and alone " +
+				"for an object whose header states the wrong size — and git " +
+				"2.55 through a report of its own, read as a pack's damage. " +
+				"A naming is hashed and counted here only where a " +
+				"repair waits on its verdict, on either git: a request's git " +
+				"in the copy that failed before its first byte, and the " +
+				"node's own sync's git — the peel of the tags it sets — " +
+				"each with no damage it repairs other than a pack's or an " +
+				"object's. Any other naming — by a run that did not fail on " +
+				"it, a request that failed past its first byte, or a push's " +
+				"own throwaway repository — is hashed by nobody: it makes " +
+				"the copy's scrub due, counted only as " +
+				"`crewlet.code.cache.reports{part=hint}`. `confirmed`, the " +
+				"pack's bytes are not its row's, and that pack is fetched " +
+				"again IN PLACE with one download, whichever git named it " +
+				"(counted under `crewlet.code.cache.rebuilds{reason=stored}`), " +
+				"the repository read whole into a new directory (`corrupt`) " +
+				"only when that repair and a scrub of the copy find nothing " +
+				"to fetch again; `sound`, its bytes are the row's — after " +
+				"2.56's message nothing is repaired, and after 2.55's report " +
+				"the damage it names is repaired as any pack's is, with no " +
+				"pack named to the repair; `unknown`, no row names the pack " +
+				"at the log's head; `unread`, no verdict — the rows or the " +
+				"pack could not be read in time, or its files moved under " +
+				"the hash; `gone`, the request left before the verdict, the " +
+				"hash going on for the next. `confirmed` rising is disk " +
+				"damage a verify of the repository names; `sound` rising is " +
+				"git naming damage the pack does not hold — a git bug, or, " +
+				"on 2.56, a request that made git print the sentence — which " +
+				"costs one hash of the pack's files and, on 2.56, no repair " +
+				"at all; `unread` and `gone` rising is a node too busy or a " +
+				"disk too slow to decide a hash inside its bound. Beside " +
+				"`crewlet.code.cache.hint.hashes`, the namings one hash " +
+				"answered.",
+		},
+		{
+			Name: CodeCacheHintHashes, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Hashes of a pack of this node's git cache that git named " +
+				"as holding a corrupt object (`crewlet.code.cache.hints`), by what " +
+				"each decided (`outcome`): `confirmed`, `sound`, `unknown` and " +
+				"`unread`, as there. One a pack's files however many namings " +
+				"wait on it — a naming of a pack being hashed waits for that " +
+				"hash, and a verdict is kept for as long as the pack's files " +
+				"are the ones it was reached on — each run on the cache's own " +
+				"time rather than a request's, a read slot a 64 MiB piece, and " +
+				"bounded by the hash alone. Namings less hashes is what " +
+				"waiting saved; `unread` here is a hash the node could not " +
+				"fit, which the next naming starts again.",
+		},
+		{
+			Name: CodeCacheMaintenanceRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason", "step"},
+			Shows: "Steps of the background work on a repository this node's " +
+				"git cache found it will not run, counted once for each copy " +
+				"of a repository the cache holds and each step, by `reason` " +
+				"and `step`. `memory`: the step's charge — its own figure an " +
+				"object of the repository, and 240 more for room beside it " +
+				"for a clone of the repository — is more than this node can " +
+				"give its background work, which is its memory (its cgroup's " +
+				"limit where one is set) less what it keeps for its git " +
+				"lanes, the store, the broker and the engine. `bitmap` (1000 " +
+				"bytes an object): the repository is indexed without one, and " +
+				"a clone walks its history; `index` (80): it is served from " +
+				"its packs' own indexes, a round's index included; `graph` " +
+				"(56): its walks go by date, and a push of a commit dated " +
+				"before its parent walks every commit. Slower, never wrong. " +
+				"Rising is repositories outgrowing the node; the " +
+				"code_maintenance_refused alarm stands while any bitmap is " +
+				"refused.",
+		},
+		{
+			Name: CodeCacheMaintenanceRefused, Kind: KindGauge, Unit: UnitCount,
+			Attributes: []string{"step"},
+			Shows: "Repositories this node's git cache cannot write a bitmap " +
+				"(`step` `bitmap`) or a commit-graph (`graph`) of now, because " +
+				"one needs more memory than the node can give its background " +
+				"work — as its latest pass found them. Each refused a bitmap is " +
+				"indexed without one; each refused a commit-graph walks its " +
+				"history by date, so a push of a commit dated before its parent " +
+				"walks every commit — slower, never refused. Either above zero " +
+				"raises code_maintenance_refused, since a repository refused " +
+				"its graph is refused its bitmap too; falling back is a " +
+				"repository purged, evicted or rebuilt smaller, or a node " +
+				"given more memory, which the cache reads again every ten " +
+				"seconds.",
+		},
+		{
+			Name: CodeCacheRebuildRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason", "rule"},
+			Shows: "Rebuilds this node's git cache refused, by the `reason` " +
+				"the git process gave (`corrupt`, `missing` or `shape` — a " +
+				"shape only once reading the directory whole in place left " +
+				"the pool still refusing it, since that repair downloads " +
+				"nothing and is never refused) and " +
+				"the `rule` that refused it. `unchanged`: the repository's " +
+				"cache holds exactly what a rebuild that did not end the " +
+				"failure read less than a day ago, and nothing has written " +
+				"into it since, so another would make the same directory — " +
+				"never for `shape`, whose refusal is itself something " +
+				"written into it; " +
+				"`cooldown`: the last attempt began too recently — ten " +
+				"minutes after the first of a line of attempts that keep " +
+				"failing, twice as long after each one after it, at most a " +
+				"day, a line starting again once a day passes with no " +
+				"rebuild asked for. Each refusal fails the request that asked " +
+				"at once rather than downloading the whole repository again. " +
+				"Rising at all is " +
+				"damage no rebuild repairs — a pack the object store lost or " +
+				"holds damaged, rows naming an object no pack holds, a " +
+				"directory something keeps writing into — which " +
+				"a verify of the repository names; flat while " +
+				"`crewlet.code.cache.rebuilds` rises is damage each rebuild " +
+				"ended.",
+		},
+		{
+			Name: CodeCacheRebuilds, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Repositories this node's git cache read whole from the " +
+				"rows again, by `reason`. `corrupt`, `derived`, `missing` and " +
+				"`shape` are a repair a git process asked for — a request's " +
+				"or a sync's own — read from the format strings of git's " +
+				"own reports, which no request can write. `corrupt` and " +
+				"`missing` are a rebuild into " +
+				"a new directory beside the damaged one: it found a pack or " +
+				"an index it could not read, or an object a row names that " +
+				"no pack held — the last step of its repair, whichever git " +
+				"named it, a request's or a sync's own, after an in-place " +
+				"repair and a scrub of every file the copy holds found " +
+				"nothing to fetch again, so it links every pack the scrub " +
+				"found whole and downloads only the rest, nothing at all " +
+				"when the damage is in the rows. `derived` is a " +
+				"damaged derived file (the multi-pack-index with its bitmap " +
+				"and reverse index, the commit-graph, or a chunk-format file " +
+				"of either), named by any git process over the copy and " +
+				"repaired IN PLACE — the same directory read whole again, " +
+				"the files the damage named DROPPED so the round or the " +
+				"maintainer rewrites sound ones over the same packs, none " +
+				"downloaded — since those are derived files, not the " +
+				"repository; damage the drop does not end escalates to " +
+				"`corrupt`; a pack or object failure — a request's or a " +
+				"sync's own — whose in-place repair only dropped derived " +
+				"files is counted `derived` too. `shape` is the " +
+				"pool refusing to run git there because the directory is " +
+				"not the shape the engine writes (its config edited, a " +
+				"commondir, an objects directory not its own, or an " +
+				"alternates file planted in it), repaired IN PLACE — the " +
+				"same directory read whole again, every pack it holds " +
+				"reused and none downloaded — and rebuilt into a new one " +
+				"only when the pool still refuses it after that; " +
+				"any of them rising is disk or object-store damage, or " +
+				"something outside the engine writing into the cache, which " +
+				"a verify of the repository names — every pack checked " +
+				"against its row, the ref file against the digest written " +
+				"with it, the directory's shape, " +
+				"and git's connectivity check. `verify` is that check, asked " +
+				"to repair what it found: read whole IN PLACE, as `shape` " +
+				"is, where everything it found is the copy's own " +
+				"directory out of place — a file or entry the engine does " +
+				"not write there, a pack no row names, its shape — every " +
+				"pack, index, bitmap and graph kept and none downloaded; " +
+				"rebuilt into a new directory otherwise, or for what that " +
+				"read leaves — a shape written past its sweep included, " +
+				"never counted under `shape` — each counted once it has " +
+				"read the copy whole, so a read in place that shape " +
+				"stopped is not. `stored` is " +
+				"no read of the rows' history at all: a pack whose stored " +
+				"files — the pack, its index or its reverse index — a check " +
+				"before serving or a scrub behind it found failing their " +
+				"own checksum, a full sync found at another size than " +
+				"their row's, a request's repair found the copy had lost, " +
+				"or a git process named in words " +
+				"and its row confirmed, fetched again IN PLACE with one " +
+				"download a pack, renamed over the damaged files, counted " +
+				"once a sync that did it — the first repair of a pack or " +
+				"object failure, a request's git or a sync's own, which " +
+				"reaches `corrupt` or " +
+				"`missing` only when it and a scrub find nothing; rising is " +
+				"a disk losing data under the cache. " +
+				"`stream` is " +
+				"the code log " +
+				"RECREATED under the cache (provisioned anew, its stamp not " +
+				"the one the cache read under); `rewound` is the log gone " +
+				"BACK under it on the same stream — a broker restored from " +
+				"an older copy — seen in a read at the log's head below a " +
+				"position the cache had read. Either of those counts every " +
+				"repository on the node once, as its next sync converges to " +
+				"the rows the log holds rather than taking a delta from a " +
+				"position that log never had or has since given to other " +
+				"records. A repository marked to be read whole for more " +
+				"than one reason at once is read once and counted once, " +
+				"under the first: damaged derived files found on a " +
+				"copy already marked for its shape or for the log are " +
+				"counted under that reason, dropped all the same " +
+				"(logged `code_cache_derived_repaired`).",
+		},
+		{
+			Name: CodeCacheRepos, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Repositories with a cache on this node. One leaves when " +
+				"its rows are purged or the budget evicts it; every one that " +
+				"arrives cost a cold sync of the whole repository. Falling " +
+				"while the cache's bytes stay at the budget is eviction " +
+				"churn: every repository it drops is a cold sync the next " +
+				"time it is fetched.",
+		},
+		{
+			Name: CodeCacheSyncDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"kind"},
+			Shows: "How long a completed cache sync took, by `kind` (`delta`: " +
+				"the rows moved since the cache's position; `full`: the whole " +
+				"repository — a cold cache, the first sync of a repository " +
+				"after a restart, a log recreated under it). A delta p95 " +
+				"climbing is a node falling behind its pushes; a full sync's " +
+				"time is mostly its downloads, sixteen at once.",
+		},
+		{
+			Name: CodeGitWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"class"},
+			Shows: "How long a git process waited for a slot on this node, by " +
+				"`class` (`read`, `transfer`, `maintenance`). A p95 " +
+				"approaching ten seconds is a node about to answer clones and pushes " +
+				"with 503 — every slot of one lane busy for a whole read attempt. " +
+				"`transfer` waiting is a node serving as many clones and pushes as " +
+				"`git.max_transfers` admits (more git nodes, or more memory and a " +
+				"wider `git.max_transfers`); `read` waiting is a node out of " +
+				"`git.max_processes`, one core a slot.",
+		},
+		{
+			Name: CodeGitCPU, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"class"},
+			Shows: "CPU a git process tree spent, by lane: `transfer` is clones " +
+				"and pushes, `read` the cache's reads and a push's scans and " +
+				"fetch checks, `maintenance` the bitmaps, indexes and checks. " +
+				"One observation per process, its whole cost, recorded when it " +
+				"ends: its user and system time and that of every process it " +
+				"waited for (upload-pack's pack-objects, receive-pack's " +
+				"index-pack) — and for one the node ended (a deadline, a stall, " +
+				"a client gone) at least what its whole group had spent when it " +
+				"was signalled; on macOS, only what the process and the " +
+				"children it had reaped spent. So the sum is what a lane's runs " +
+				"cost, read over a window longer than the runs it counts — a " +
+				"clone may run for hours and a bitmap for a quarter of an hour, " +
+				"each landing whole in the window it ends in — and never the " +
+				"share of the node git is taking now, which is the container's " +
+				"own CPU usage. Read the sum and the count rather than the " +
+				"percentiles: a run past 64 s of CPU lands in the last bin.",
+		},
+		{
+			Name: CodeGitProcesses, Kind: KindGauge, Unit: UnitCount,
+			Attributes: []string{"class"},
+			Shows: "Git processes running on this node, by `class`. `transfer` " +
+				"pinned at `git.max_transfers` while `crewlet.code.git.wait` " +
+				"climbs is a node serving as many clones and pushes as its memory " +
+				"was sized for; `maintenance` is background index rebuilding, " +
+				"at most half of `git.max_processes`.",
+		},
+		{
+			Name: CodeGitLentCores, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Cores of this node's read lane lent right now to pushes as " +
+				"extra index-pack threads — up to three a push, never the last " +
+				"free core. A loan is made when a push's receive-pack starts — " +
+				"the one that receives its pack, never the refs advertisement " +
+				"its first request is answered with — and repaid once its pack " +
+				"is indexed, so it covers the client's whole upload: " +
+				"lent cores held high while `crewlet.code.git.processes` for " +
+				"`read` sits low is slow uploads holding loans, and the reason " +
+				"a later push on this node indexes on one core.",
+		},
+		// ---- the code host ---------------------------------------------
+		{
+			Name: CodePushDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long a git push took on this node, from its request to its " +
+				"answer, by `outcome` (`applied`, `pending`, `unknown`, `refused`, " +
+				"`failed`). `pending` growing is a code log whose records are " +
+				"durable and slow to apply here; `unknown` is a committer that " +
+				"stopped answering; the tail of `applied` is what a person waits " +
+				"for a push.",
+		},
+		{
+			Name: CodePushBytes, Kind: KindHistogram, Unit: UnitBytes,
+			Shows: "The size of each push's bundle — the pack its receive-pack " +
+				"kept and the two indexes it wrote — observed once the pack is " +
+				"checked, whatever becomes of the push: the one object the object " +
+				"store stores for it, against `code.limits.max_push_bytes` (what " +
+				"the client may send) and the 1.25 GiB one push may store.",
+		},
+		{
+			Name: CodeFetchDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"command", "sync"},
+			Shows: "How long a fetch request took on this node, by `command` " +
+				"(`advertise`, `ls-refs`, `fetch`) and by what the cache had to " +
+				"do first (`sync`: `none`, `delta`, `full`). A `full` tail is cold " +
+				"caches downloading whole repositories; a `delta` tail is the " +
+				"barrier and the sync every answer that names a ref waits for.",
+		},
+		{
+			Name: CodeHostSpoolWaits, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Fetch requests large enough to spool — a partial clone's " +
+				"lazy fetch past a mebibyte of wants — that could not start " +
+				"spooling, or take room for the rest of their body, at once on " +
+				"this node and waited their turn, by `outcome`: `granted`, " +
+				"served after its wait; `expired`, answered 503 after waiting " +
+				"55 s unserved; `abandoned`, its request ended while it " +
+				"waited; and `refused`, answered 503 at once because it had to " +
+				"wait and found no place to — the node's waiting room full, " +
+				"four places a git transfer slot, or its credential's quarter " +
+				"of it, a lane's width. git does not retry a lazy fetch, so " +
+				"every `expired` or `refused` is a checkout that failed, and " +
+				"git prints only the status: the `code_fetch_spool_unserved` " +
+				"line names the token and what held it back. `granted` " +
+				"climbing is a credential at its quarter of the node's " +
+				"spooling — one token behind several CI runners, which a " +
+				"token per runner ends — or a node whose spooling is full: " +
+				"more git transfer slots (more memory, a wider " +
+				"`git.max_transfers`) or more git nodes.",
+		},
+		{
+			Name: CodeHostSpoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long each fetch counted by " +
+				"`crewlet.code.host.spool.waits` waited for room to spool, by " +
+				"the same `outcome` (`granted`, `expired`, `abandoned`; a " +
+				"`refused` one waited for nothing). The `granted` tail is what " +
+				"the wait adds to a checkout; one nearing 55 s is a node about " +
+				"to answer checkouts 503.",
 		},
 		// ---- authentication -------------------------------------------
 		{
@@ -851,6 +1472,12 @@ func Validate(entries []Instrument) error {
 			return fmt.Errorf("metrics: %q has no unit: a number with no unit "+
 				"is one a collector cannot convert and a reader cannot check",
 				e.Name)
+		case e.Kind == KindHistogram && boundsOf(e.Unit) == nil:
+			return fmt.Errorf("metrics: %q is a histogram in %q, which has no "+
+				"boundaries: a histogram counts into its unit's (Bounds), and a "+
+				"unit with none would count every value into one bucket — "+
+				"record it in a unit that has them, or give that unit a set",
+				e.Name, e.Unit)
 		case e.Shows == "":
 			return fmt.Errorf("metrics: %q does not say which failure it makes "+
 				"visible: an instrument nobody will alarm on is a number on a "+

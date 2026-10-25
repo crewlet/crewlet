@@ -548,6 +548,45 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
+// GIT IS UNMANNED ONLY WHERE THE COMPANY HOSTS CODE. A git node serves nothing
+// for a company that does not set code.native, so a fleet whose nodes declare
+// every other role is missing nothing — and the screen says so exactly as each
+// node's own fleet_role_unmanned warning does, by the one rule both read
+// (config.Company.NeedsRole).
+//
+// Mutation: list every role in the vocabulary no node runs, and the company
+// hosting no code is told git is missing.
+func TestFleetNamesGitOnlyWhereCodeIsHosted(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{
+			"roles": []any{"data", "ingress", "seats", "workers"},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, native := range []bool{false, true} {
+		cfg := company(t)
+		cfg.Code.Native = native
+		body := asMap(t, answer(t, queries.Sources{
+			Coord: backend, NodeID: "node-a",
+			Company: companySource(t, cfg),
+		}, "fleet", nil))
+		unmanned, _ := body["unmanned_roles"].([]any)
+		var names []string
+		for _, role := range unmanned {
+			names = append(names, role.(string))
+		}
+		want := []string{}
+		if native {
+			want = []string{"git"}
+		}
+		if !slices.Equal(names, want) {
+			t.Errorf("code.native %t: unmanned = %v, want %v", native, names, want)
+		}
+	}
+}
+
 // EVERY ANSWER SETTINGS DRAWS IS ADMIN'S.
 //
 // The dashboard's rail marks all five Admin destinations `guarded: true`: it

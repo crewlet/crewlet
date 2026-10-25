@@ -30,7 +30,7 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// writes skill = 0 where a build with one writes 1, and
 			// the identity claim must still hold. A suite run with a
 			// detector would prove the easy half.
-			Applier: pages.NewApplier("suite-node", nil, nil),
+			Applier: pages.NewApplier(nil, nil),
 			// Migrate is nil: these tables ship in the replicated
 			// estate's own migration, so a fresh store already has
 			// them. A domain that created its tables from test code
@@ -46,6 +46,8 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			Kinds:  suiteKinds(),
 			Rows:   pages.NewRows,
 			Write:  suiteWrite,
+			// THE PRODUCTION ENCODER the engine hands the trim.
+			EncodeTrimmed: pages.EncodeTrimmed,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
@@ -180,6 +182,8 @@ func suitePayload(kind pages.ObjectKind, id string) (pages.OpKind, any, pages.Sc
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindBarrier:
 		return pages.OpBarrier, nil, pages.ScopeSet{Subject: true}
+	case pages.KindTrimmed:
+		return pages.OpTrimmed, nil, pages.ScopeSet{Subject: true}
 	}
 	return pages.OpPatch, nil, pages.ScopeSet{Subject: true}
 }
@@ -202,7 +206,7 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  pages.Domain{},
-				Applier: pages.NewApplier("suite-node", nil, nil),
+				Applier: pages.NewApplier(nil, nil),
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},

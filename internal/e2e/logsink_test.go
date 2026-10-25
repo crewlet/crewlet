@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/solo"
 )
@@ -28,12 +29,23 @@ import (
 // embedding its own NATS server, in this one process. See
 // `go doc ./internal/solo`.
 //
+// THE HOOK FIRST, before the sink is installed. Every node here that hosts
+// code execs THIS binary as its proc-receive hook ([codetest.HookCommand],
+// handed to the engine as engine.Options.GitHook), because the test binary is
+// not `crewlet`; started that way it is a push's hook and not a test run, and
+// it answers exactly as `crewlet code hook` does — main()'s reason for asking
+// before anything else: the hook's stdout is git's protocol and its stderr
+// reaches the pushing client, so a log line on either is a corrupted push.
+//
 // And it is where this binary becomes the scripted model's CLI when it was
-// re-executed as one ([scriptedCLIEnv]) — FIRST, before the sink or the
+// re-executed as one ([scriptedCLIEnv]) — also before the sink or the
 // framework, so the child's stdout is exactly the answer it prints, and as
 // a dispatch here rather than a test function, which every ordinary run would
-// otherwise report as a skip.
+// otherwise report as a skip. A process is one or the other, never both.
 func TestMain(m *testing.M) {
+	if status, ok := codetest.RunHookIfAsked(); ok {
+		os.Exit(status)
+	}
 	if endpoint := os.Getenv(scriptedCLIEnv); endpoint != "" {
 		os.Exit(runScriptedCLI(endpoint))
 	}

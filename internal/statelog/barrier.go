@@ -2,6 +2,7 @@ package statelog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,19 +12,28 @@ import (
 
 // BarrierKind is the subject kind of the one subject that names no object.
 //
-// It is a KIND anyway, because the applier has a case for it and a domain's
-// table map must classify it — it declares the EMPTY set, explicitly, so a
-// record that writes nothing cannot slip through a completeness walk by
-// writing nothing.
+// It is a KIND anyway, because every domain's applier has a case for it: an
+// applier faults on a kind it has no case for, so a domain that forgot the
+// barrier would stop at the first linearizable read rather than skip a record
+// it did not know.
 const BarrierKind = "barrier"
 
-// BarrierScope is the one-byte scope sentinel a barrier declares.
+// FrameworkScope is the one-byte scope sentinel every FRAMEWORK record
+// declares — a record whose whole effect is the framework's own and which
+// writes no domain row on any node: the read index's barrier, and the trim's
+// trimmed record ([TrimmedKind]).
 //
-// Chosen so it can never intersect any read's closure: a barrier makes
+// Chosen so it can never intersect any read's closure: such a record makes
 // nothing stale, so a scope that overlapped a real object would make every
-// linearizable read look as though it had been invalidated by the very
-// append that establishes it.
-const BarrierScope = "s"
+// read of it wait behind the record — for a barrier, every linearizable read
+// invalidated by the very append that establishes it.
+//
+// ONE SENTINEL FOR EVERY FRAMEWORK RECORD rather than one each: a new
+// one-byte sentinel is a path some domain's scope alphabet may already use —
+// the tracker's whole-domain path is `t` — so each would be a fresh chance to
+// collide with a real object, and one that is known not to is the only safe
+// choice.
+const FrameworkScope = "s"
 
 // BarrierVersion is 1 from the first release AND FOR EVER.
 //
@@ -138,10 +148,6 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
 	if gen == nil {
 		return nil, fmt.Errorf("statelog: read index for %q has no generation source", d.Name())
 	}
-	if class, ok := d.Tables()[BarrierKind]; ok && class != Local {
-		return nil, fmt.Errorf("statelog: domain %q classes the barrier %s — a "+
-			"barrier writes no rows at all", d.Name(), class)
-	}
 	return &ReadIndex{
 		log:       signed,
 		stream:    spec.Name,
@@ -169,6 +175,19 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
 // So a caller that arrives mid-flight waits for that run to finish and then
 // starts or joins the NEXT one. The cost is at most one extra round trip
 // under contention; the alternative is a linearizable read that is not.
+//
+// # The arrival is taken ONCE
+//
+// Every run that starts after a caller arrived bounds its read, however long
+// the caller then waited, so its arrival is the instant it called and is
+// never taken again. Taken again each time the caller woke from a run it
+// could not use, it held itself to a run started after IT WOKE — and the
+// first waiter to wake claims the next run at once, before the rest have
+// woken, so every waiter but that one went round again, and the next, and the
+// one after: sixteen readers on one node made sixteen appends between them
+// where one round trip should have served fifteen
+// (TestReadersThatArriveDuringOneBarrierAreServedByTheNext; `make bench`'s
+// read arms at readers=16 report the appends a read made).
 func (r *ReadIndex) Read(ctx context.Context) (Position, error) {
 	arrived := time.Now()
 	for {
@@ -188,9 +207,8 @@ func (r *ReadIndex) Read(ctx context.Context) (Position, error) {
 			return Position{Stream: r.stream, Generation: run.gen, Seq: run.seq}, nil
 		}
 		// The run we joined had already started when we arrived, so its
-		// sequence bounds nothing for this reader. Go round again; the
-		// next run starts from here.
-		arrived = time.Now()
+		// sequence bounds nothing for this reader. Go round again: the
+		// next run starts after this one ended, which is after we arrived.
 	}
 }
 
@@ -242,12 +260,12 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 			Kind:    BarrierKind,
 			Subject: Subject{Kind: BarrierKind},
 			Gen:     run.gen,
-			Scope:   ScopeSet{Paths: []string{BarrierScope}},
+			Scope:   ScopeSet{Paths: []string{FrameworkScope}},
 		}
 		body, err := r.encode(env)
 		if err != nil {
-			// LOGGED HERE, once, for the reason [barrierAppendError]
-			// logs: every reader waiting on this run is told the
+			// LOGGED HERE, once, for the reason [frameworkAppendError]
+			// gives: every reader waiting on this run is told the
 			// refusal's own sentence, never these words.
 			log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
 				"stage", "encode", "error", err.Error())
@@ -273,7 +291,14 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		seq, duplicate, err := r.log.Append(appendCtx, r.subject, "", nil, body)
 		release()
 		if err != nil {
-			run.err = barrierAppendError(r.subject, err)
+			run.err = frameworkAppendError(BarrierKind, r.subject, err)
+			if refused := (*Unavailable)(nil); !errors.As(run.err, &refused) {
+				// LOGGED HERE, once per append, for the reason
+				// [frameworkAppendError] gives: what nobody answered
+				// is told to no reader in these words.
+				log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
+					"stage", "append", "error", err.Error())
+			}
 			return
 		}
 		if duplicate {
@@ -296,55 +321,54 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 	}()
 }
 
-// barrierAppendError is what a barrier append the broker did not store means
-// to the read waiting on it, decided by the same [classify] a write's append
-// is.
+// frameworkAppendError is what an append of a framework record the broker
+// did not store (a barrier, a trimmed record) means to whoever waits on it,
+// decided by the same [classify] a write's append is.
 //
 // A REFUSAL THE BROKER NAMED IS A REFUSAL, NOT A MISSED QUORUM. The error went
 // back wrapped and unclassified, and the read mapped anything that was not
-// already an [Unavailable] to `no_quorum` — so a log at its ceiling, which
+// already an [Unavailable] to `no_quorum`, so a log at its ceiling, which
 // refuses the barrier exactly as it refuses a write, was answered as a failed
 // election: retryable, with a four-second hint, from a node that will refuse
 // the next barrier identically until an operator resizes the log. And
 // `log_full`, the refusal the read vocabulary has for it, was reachable only
-// from a test's fake appender that returned one ready-made.
+// from a test's fake appender that returned one ready-made. The trim's line
+// names a refused trimmed record `log_full` by the same rule.
 //
-// What nobody answered stays unclassified, and is the missed quorum it was —
-// and so does an answer saying the barrier may yet land ([faultUnsettled]): a
-// barrier carries no message id, so the one such answer it can meet is a
-// store that closed under an entry raft had committed, which is a stream
-// restarting and clears exactly as a missed quorum does.
-//
-// THAT ERROR IS LOGGED HERE, once per append, and never told to a caller: it
-// is the transport's or the broker's own words, and every reader waiting on
-// the append is told [barrierRefusal]'s sentence instead. A refusal the broker
-// NAMED is different — its words are the remedy, so they travel on the
+// What nobody answered stays unclassified, and is the missed quorum it was;
+// and so does an answer saying the record may yet land ([faultUnsettled]): a
+// framework record carries no message id, so the one such answer it can meet
+// is a store that closed under an entry raft had committed, which is a stream
+// restarting and clears exactly as a missed quorum does. The barrier's caller
+// LOGS that error, once per append, and never tells it to a reader: it is the
+// transport's or the broker's own words, and every reader waiting on the
+// append is told [barrierRefusal]'s sentence instead. A refusal the broker
+// NAMED is different: its words are the remedy, so they travel on the
 // refusal's detail.
-func barrierAppendError(subject string, err error) error {
+func frameworkAppendError(record, subject string, err error) error {
 	switch f, detail := classify(err); f {
 	case faultFull:
 		return &Unavailable{
 			Reason: ReasonLogFull,
-			Detail: fmt.Sprintf("the broker refused to store the barrier on %s: "+
-				"%s — a full log refuses appends rather than dropping records, "+
+			Detail: fmt.Sprintf("the broker refused to store the %s record on %s: "+
+				"%s; a full log refuses appends rather than dropping records, "+
 				"so raise the stream's byte ceiling or unblock the trim "+
 				"(`crewlet retention status` names the term holding it)",
-				subject, detail),
+				record, subject, detail),
 			Cause: err,
 		}
 	case faultTooLarge, faultRefused:
-		// A BARRIER IS A FEW HUNDRED BYTES, so a broker that refuses one
-		// as too large is one whose limit refuses every record; either way
-		// it is the broker's decision, and the detail carries its words —
-		// and, for a limit, which one and what moves it.
+		// A FRAMEWORK RECORD IS A FEW HUNDRED BYTES, so a broker that
+		// refuses one as too large is one whose limit refuses every
+		// record; either way it is the broker's decision, and the detail
+		// carries its words (and, for a limit, which one and what moves
+		// it).
 		return &Unavailable{
 			Reason: ReasonBrokerRefused,
-			Detail: fmt.Sprintf("the broker refused to store the barrier on %s: %s",
-				subject, detail),
+			Detail: fmt.Sprintf("the broker refused to store the %s record on %s: %s",
+				record, subject, detail),
 			Cause: err,
 		}
 	}
-	log.Warn("statelog_barrier_unconfirmed", "subject", subject,
-		"stage", "append", "error", err.Error())
-	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)
+	return fmt.Errorf("statelog: append a %s record on %s: %w", record, subject, err)
 }

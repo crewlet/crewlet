@@ -71,6 +71,11 @@ type roundTrip struct {
 	// nodeID is which node this harness is, for the second writer a case
 	// builds over the same store ([roundTrip.lossyWriter]).
 	nodeID string
+
+	// leads is the chart seam the writer resolves a lead through
+	// ([tracker.Writer.Leads]): nil, as most cases want, unless a case is
+	// about who a write's fallback reaches ([roundTrip.ledBy]).
+	leads tracker.Leads
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -224,7 +229,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r.writer, r.applier = writer, tracker.NewApplier(nodeID, nil)
+	r.writer, r.applier = writer, tracker.NewApplier(nil)
 	r.reader, r.waiter = reader, waiter
 	return r
 }
@@ -238,7 +243,7 @@ func (r *roundTrip) writerClaiming(claims coord.Backend) *tracker.Writer {
 	r.t.Helper()
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: r.publisher, DB: r.db.Reader(), NodeID: r.nodeID,
-		Claims: claims, Metrics: r.metrics,
+		Claims: claims, Metrics: r.metrics, Leads: r.leads,
 		Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
@@ -257,6 +262,15 @@ func (r *roundTrip) claimOn(claims coord.Backend) {
 	r.t.Helper()
 	r.claims = claims
 	r.writer = r.writerClaiming(claims)
+}
+
+// ledBy gives this node's writer a chart to resolve leads through, as the
+// engine's writer holds one: the writer is rebuilt over the same publisher and
+// coordination, so it writes exactly as the one it replaces did.
+func (r *roundTrip) ledBy(leads tracker.Leads) {
+	r.t.Helper()
+	r.leads = leads
+	r.writer = r.writerClaiming(r.claims)
 }
 
 // holdTheAppliersPin takes the pinned writer this harness's replicated estate

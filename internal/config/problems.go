@@ -560,7 +560,9 @@ func (c *Company) ReferenceWarnings() []Warning {
 // company its agents run alone and a surprise for one somebody meant to sign
 // in to.
 //
-// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]).
+// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]),
+// and a code setting that grants or protects less than it reads as
+// ([Company.codeWarnings]).
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
@@ -580,7 +582,8 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	}
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
-	return append(out, c.budgetWarnings()...)
+	out = append(out, c.budgetWarnings()...)
+	return append(out, c.codeWarnings()...)
 }
 
 // peoplelessWarnings is the one warning a company declaring no human seat
@@ -823,6 +826,55 @@ func (b *Bootstrap) Warnings() []Warning {
 				"destination records it: "+b.unrecordedDebug()))
 	}
 
+	// A LEASE TOO SHORT FOR AN UPLOAD ACROSS A LINK. A node whose uploads to
+	// the broker's object store cross a link — a leaf, a client of an
+	// external cluster — sends them on the connection its lease renewals
+	// ride, so a renewal can queue behind the message an upload holds out;
+	// the window that bounds how many shrinks with the lease to as few as
+	// one, and under [LinkLeaseFloor] even one crosses a link at the floor
+	// in more than a heartbeat. A MEMBER that opens a leaf listener is told
+	// too: its leaves renew at the lease the fleet's bucket holds, which
+	// the members' own setting decides — a fleet runs one lease TTL.
+	//
+	// A WARNING RATHER THAN A REFUSAL: a link whose uploads never slow to
+	// the floor never meets it, and a short lease is a legitimate trade for
+	// a quicker failover. Only the setting this file states, and only where
+	// renewals ride the broker (`embedded-kv`), since `local` coordination
+	// holds its leases in this process.
+	if b.Coordination.Type == CoordinationEmbeddedKV &&
+		b.Store.Objects.BackendOrDefault() == ObjectBackendNATS {
+		ttl := b.Coordination.LeaseTTL()
+		who := ""
+		switch {
+		case b.BrokerKind() != placement.BrokerMember:
+			who = "this node uploads to the broker's object store across a link, on " +
+				"the connection its lease renewals ride"
+		case b.Stream.Leaf.Port != 0:
+			who = "the leaves this member serves upload to the broker's object store " +
+				"across their link, on the connection their lease renewals ride — at the " +
+				"lease the fleet's bucket holds, which the members' setting decides"
+		}
+		if who != "" && ttl > 0 && ttl < LinkLeaseFloor {
+			out = append(out, advisory(field("coordination.lease_ttl_seconds"), fmt.Sprintf(
+				"is %v, under %v: %s, and one 128 KiB message of an upload crosses a "+
+					"link at the floor of thirty seconds a mebibyte in more than this "+
+					"lease's heartbeat. A renewal queued behind it lands with less than a "+
+					"heartbeat of the lease to spare, and under %v after the lease, losing "+
+					"that node its seats. Raise it to at least %v on every node, or keep "+
+					"the files in store.objects.backend: s3",
+				ttl, LinkLeaseFloor, who, LinkLeaseFloor/2, LinkLeaseFloor)))
+		}
+	}
+
+	// A GIT BLOCK ON A NODE THAT SERVES NO GIT is read by nothing: the cache,
+	// its budget and its processes exist only where the role does, and an
+	// operator who sized them believes this node serves code.
+	if !b.Git.IsZero() && !b.Profile("").Roles.Has(placement.RoleGit) {
+		out = append(out, advisory(field("git"), fmt.Sprintf(
+			"is set and this node does not serve git (node.roles names no %q), "+
+				"so nothing reads it", placement.RoleGit)))
+	}
+
 	out = append(out, b.API.warnings(b.ServesAPI())...)
 	out = append(out, b.API.Artifacts.warnings(b.API, b.ServesAPI())...)
 	return out
@@ -934,6 +986,107 @@ func (b *Bootstrap) loggingLevelName() string {
 		return "`info` (unset)"
 	}
 	return "`" + string(b.Logging.Level) + "`"
+}
+
+// TierWarnings is what is VALID across the two tiers and worth knowing before
+// a company is applied to this node — never a refusal, for [Bootstrap.Warnings]'
+// reason (a warning that can fail a build is one somebody suppresses), and no
+// rule needs both documents any more (the in-memory stream it once refused
+// with the company's help is refused by Tier A alone: [Stream.Durable]).
+// Nil-safe: either document absent is no warning, which is a node that has no
+// company yet.
+//
+// Each is located at the field whose change answers it, and printed in three
+// places: `crewlet validate` given both files, a configuration write's answer
+// (where a person turning code.native on reads the consequence in the answer
+// that applied it), and the engine's own log, once per node per applied epoch
+// (config_tier_warning) — the engine's through [NodeTierWarnings], which also
+// knows the cache budget this node derived.
+//
+// THE DOCUMENTS ALONE compare only an EXPLICIT git.cache_max_bytes with the
+// company's repository limit: a derived budget is a share of a volume neither
+// file describes, so `crewlet validate` and a configuration write, which run
+// where that volume is not, cannot know it.
+func TierWarnings(boot *Bootstrap, company *Company) []Warning {
+	if boot == nil {
+		return nil
+	}
+	return tierWarnings(boot, company, CacheBudget{Bytes: boot.Git.CacheMaxBytes})
+}
+
+// CacheBudget is the code cache's budget as a node resolved it: its bytes, and
+// whether it was DERIVED from the cache's volume because git.cache_max_bytes is
+// unset. The zero value is a node that has resolved none — it serves no git, or
+// its code host is not built — which compares nothing.
+type CacheBudget struct {
+	Bytes   int64
+	Derived bool
+}
+
+// NodeTierWarnings is [TierWarnings] on a running node that knows its code
+// cache's RESOLVED budget, derived or explicit — the engine's own log of them,
+// once per applied epoch. A derived budget is the default on every git node,
+// and one smaller than the company's repository size limit is the same fact as
+// an explicit one: such a repository is served and evicted as soon as it is
+// idle, every later busy period a cold sync of the whole repository, one GET a
+// push it ever took. The node knows that the moment it sizes its cache, which
+// is long before code_cache_over_budget can say so.
+func NodeTierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warning {
+	if boot == nil {
+		return nil
+	}
+	if cache.Bytes <= 0 {
+		cache = CacheBudget{Bytes: boot.Git.CacheMaxBytes}
+	}
+	return tierWarnings(boot, company, cache)
+}
+
+// tierWarnings is the rule [TierWarnings] and [NodeTierWarnings] share, with
+// the cache budget each can know.
+func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warning {
+	if boot == nil || company == nil {
+		return nil
+	}
+	var out []Warning
+	servesGit := boot.Profile("").Roles.Has(placement.RoleGit)
+
+	// EVERY MEMBER HOLDING THE FILES BUCKET HOLDS EVERY PACK. The default
+	// object store is a bucket on the fleet's own broker, replicated to
+	// `stream.replicas` members, and every push stores its pack bundle
+	// there — so in a fleet each of those members holds every repository's
+	// every pack, on the same disk as the logs. Correct, and fine for a small
+	// company; S3 is the production store for code. A solo member is the
+	// single-process deployment, where the one disk holds everything
+	// whichever store is chosen.
+	if company.Code.Native && boot.Store.Objects.BackendOrDefault() == ObjectBackendNATS &&
+		(boot.declaresFleet() || boot.BrokerKind() == placement.BrokerClient) {
+		out = append(out, advisory(field("store.objects.backend"),
+			"every broker member holding a copy of the files bucket holds every pack "+
+				"of every repository; a company whose code outgrows a member's disk "+
+				"takes store.objects.backend: s3"))
+	}
+
+	// A REPOSITORY LARGER THAN THE CACHE. A git node caches a repository
+	// whole, and one past its budget is served and evicted as soon as its
+	// last reader lets go — so every fetch of it is a cold sync, one GET a
+	// push. Compared at whatever budget the caller knows: an explicit one from
+	// the file, and on a running node the one it derived from its volume.
+	if servesGit && company.Code.Native && cache.Bytes > 0 {
+		if limit := company.Code.Limits.Resolved().RepoMaxBytes; cache.Bytes < limit {
+			budget := fmt.Sprintf("this node's budget (%d)", cache.Bytes)
+			if cache.Derived {
+				budget = fmt.Sprintf("this node's budget (%d, derived from git.cache_dir's "+
+					"volume because git.cache_max_bytes is unset)", cache.Bytes)
+			}
+			out = append(out, advisory(field("git.cache_max_bytes"), fmt.Sprintf(
+				"a repository at its size limit (code.limits.repo_max_bytes, %d) cannot "+
+					"be cached within %s: it is served, and evicted as soon as it is idle, "+
+					"so every busy period after is a cold sync of the whole repository",
+				limit, budget)))
+		}
+	}
+
+	return out
 }
 
 // writerWarnings are the company_writers settings that are valid and almost

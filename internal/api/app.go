@@ -50,6 +50,12 @@ type App struct {
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
 
+	// git counts the git requests the drain gate let through and has not
+	// seen answered, for [App.DrainGit]; gitGap is how long that wait goes
+	// on listening after the last one ([gitExchangeGap], scaled by a test).
+	git    gitServing
+	gitGap time.Duration
+
 	nodeID       string
 	queueBackend string
 
@@ -79,6 +85,18 @@ type App struct {
 	// it is a different seam from the one above. Never nil: see
 	// [Options.Nodes].
 	nodes NodeGate
+
+	// code is the engine's git host and its reads, ASKED ON EVERY REQUEST —
+	// see [CodeSurface] — and servesGit whether this node's Tier A roles
+	// name git: a fact known at [New], which decides whether the git routes
+	// are mounted at all (code.go).
+	code      CodeSurface
+	servesGit bool
+
+	// listens tells every MCP client listening on the operator surface that
+	// its tools changed ([OperatorListens]); nil where the app serves no
+	// operator surface.
+	listens *OperatorListens
 
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
@@ -259,8 +277,8 @@ type guardedMounter interface {
 // Runtime, Inbox, Credentials, Sources.Company, Sources.Chart, Sources.Holders,
 // Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
 // Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
-// Setup, Retention, Capacity, FleetBroker, Backup, Nodes, AuthEvents and Audit
-// are REQUIRED, and [New] refuses a missing one by name.
+// Setup, Retention, Code, Capacity, FleetBroker, Backup, Nodes, AuthEvents and
+// Audit are REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -268,6 +286,11 @@ type guardedMounter interface {
 // all. So a nil here is a wiring mistake, and a narrower answer built around it
 // (a health body missing the engine's fields, a 503, an unregistered /config)
 // would hide that mistake behind something an operator reads as deliberate.
+//
+// That holds for the code host too: what a real node can lack there is the
+// BACKEND (a company that hosts no code, a node whose first company has not
+// been applied yet), which [CodeSurface] answers per request — never the seam
+// that asks.
 //
 // What stays optional is what a real node can lack: a native tracker (a company
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
@@ -548,6 +571,15 @@ type Options struct {
 	// nobody to attribute the write to.
 	Operator *operator.Server
 
+	// OperatorListens tells every MCP client listening on Operator's
+	// transport that its tools changed ([OperatorListens]): it joins the
+	// fleet's announcements at [App.Start], is told of this node's moves
+	// through [App.OperatorToolsMoved], ends every stream at
+	// [App.EndListens] and leaves the fleet at [App.Stop].
+	// [HumanSurfaces.Mount] is what hands it over, beside Operator. Nil
+	// tells nobody, which is what a suite about something else has.
+	OperatorListens *OperatorListens
+
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
 	Retention retentionWriter
@@ -562,6 +594,12 @@ type Options struct {
 	// (ADR-0025) — so every engine this API runs beside holds a gate, and a
 	// nil is a wiring mistake, not a narrower node.
 	Nodes NodeGate
+
+	// Code is the engine's own git host — smart HTTP under /git/ on a node
+	// whose roles name git — and the code domain's reads under /code/ on
+	// every node, asked of the engine on every request: see [CodeSurface].
+	// Never on api.public (ADR-0052). REQUIRED, for [Options]' reason.
+	Code CodeSurface
 
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
@@ -646,6 +684,7 @@ func New(opts Options) (*App, error) {
 		csrf:         auth.NewCSRF(opts.Bootstrap),
 		state:        state,
 		runtime:      opts.Runtime,
+		gitGap:       gitExchangeGap,
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
 		now:          now,
@@ -797,6 +836,13 @@ func New(opts Options) (*App, error) {
 	a.backup, a.audit = opts.Backup, opts.Audit
 	a.objects = opts.Objects
 	a.retention, a.nodes = opts.Retention, opts.Nodes
+	// WHETHER THIS NODE SERVES GIT is its Tier A roles' answer, never the
+	// company's: a node that lists its roles serves git only if it names
+	// it, and an undeclared node has every role. Which company it serves is
+	// asked per request (code.go).
+	a.code = opts.Code
+	a.servesGit = servesGit(opts.Bootstrap)
+	a.listens = opts.OperatorListens
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 
@@ -814,6 +860,12 @@ func New(opts Options) (*App, error) {
 	// missing.
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
+	}
+	// The engine's own git host and its reads: git on a node with the git
+	// role, the reads on every node, each on the verb it is decided by and
+	// failing the boot where a policy is missing. See code.go.
+	if err := a.mountCode(mux); err != nil {
+		return nil, fmt.Errorf("api: mount the code host's routes: %w", err)
 	}
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
@@ -1058,6 +1110,7 @@ func (o Options) missing() error {
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
 		{"Retention", o.Retention == nil},
+		{"Code", o.Code == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
@@ -1298,17 +1351,46 @@ func (a *App) Configured() bool {
 // broadcast subscription is attached, or an event published between the read
 // and the subscribe falls into the gap. This runs before it, so the seed is
 // the caller's (see observe.Seed, wired in cmd/crewlet).
+//
+// IT ALSO JOINS THE FLEET'S ANNOUNCEMENTS of operator tool changes
+// ([OperatorListens.Join]), and takes the first reading of the tools a call is
+// served, so the first move this node is told of is compared with what it
+// served before it.
 func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
+	a.listens.Join(ctx)
 }
 
-// Stop ends the tick and disconnects every client.
-func (a *App) Stop() {
+// Stop ends the tick, disconnects every client and leaves the fleet's
+// announcements of operator tool changes, waiting for this node's own nudges
+// still in flight — before the engine closes the queue they ride — for at most
+// [fleetTellBudget] and never past ctx, the caller's shutdown grace.
+func (a *App) Stop(ctx context.Context) {
 	for _, stop := range a.stopRooms {
 		stop()
 	}
 	a.stream.Stop()
+	ctx, cancel := context.WithTimeout(ctx, fleetTellBudget)
+	defer cancel()
+	a.listens.Close(ctx)
 }
+
+// OperatorToolsMoved tells every MCP client listening on this node's operator
+// surface, and every other node, that its tools changed — where they did
+// ([OperatorListens.Moved]). The node runs it after every company it publishes
+// and every catalogue change a shared tool server makes, which is where each
+// fact the catalogue is built from moves. Nil-safe: an app serving no operator
+// surface tells nobody.
+func (a *App) OperatorToolsMoved(ctx context.Context) { a.listens.Moved(ctx) }
+
+// EndListens ends every stream an MCP client listens on at this node's
+// operator surface ([OperatorListens.End]). The node registers it on api.port's
+// listener, to run as its graceful shutdown begins: a stream is one request
+// held open, and the shutdown would otherwise wait for every listening
+// assistant until its grace ran out and then cut them, logging
+// api_shutdown_failed — a warning meant for a request that was stuck. Only
+// api.port: the operator routes are never public.
+func (a *App) EndListens() { a.listens.End() }
 
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an

@@ -463,12 +463,26 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 // certified for is the SEMANTICS — an atomic increment, a Create that only one
 // caller wins, a Put whose revision is the epoch — and those do not vary with
 // the retention.
+//
+// EVERY NODE OVER A CONNECTION OF ITS OWN to one embedded broker — the easy
+// topology — because a node is a store that coalesces its own writes to a key
+// ([writeLines]): the contention cases' several nodes on one record are
+// several contenders only as several stores, and each on its own connection
+// is how a fleet's nodes reach it. Through leaves of their own is
+// [TestFleetContractThroughALeaf].
 func TestFleetContract(t *testing.T) {
 	t.Parallel()
-	nc := embeddedNATS(t)
+	srv, _ := embeddedServer(t)
 	coordtest.RunFleet(t, func(t *testing.T) func() coord.Fleet {
 		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		return func() coord.Fleet { return openFleetForTest(t, nc, prefix) }
+		return func() coord.Fleet {
+			nc, err := nats.Connect("", nats.InProcessServer(srv))
+			if err != nil {
+				t.Fatalf("connect a node: %v", err)
+			}
+			t.Cleanup(nc.Close)
+			return openFleetForTest(t, nc, prefix)
+		}
 	})
 }
 

@@ -44,9 +44,9 @@ const (
 
 	// FloorBelow is below the log itself: the next record this node needs
 	// has been removed, so its rows are missing state no replay can
-	// supply. Reads and writes both refuse, the node stops serving its
-	// copy (its seats read the estate from another data node), and it
-	// adopts a peer's snapshot.
+	// supply. Reads and writes both refuse, the node takes its copy of
+	// this domain out of service (its operations go to another data node,
+	// and its seats stay — ADR-0046), and it adopts a peer's snapshot.
 	FloorBelow
 
 	// FloorUnknown is the fourth value, and it takes the SAME branch as
@@ -174,8 +174,8 @@ func Replayable(checkpoint, first uint64) bool {
 
 // ApplyRetryBudget is how long a transient apply error is retried in place
 // before the applier reports itself faulted — which its readers treat as
-// stalled: reads refuse naming the error, and the node stops serving its copy
-// until a retry succeeds.
+// stalled: reads refuse naming the error, and the node takes its copy of that
+// domain out of service until a retry succeeds.
 //
 // HALF THE STALL GRACE, deliberately: a retry that outlasted the grace would
 // let a node report itself healthy while it made no progress, and one much
@@ -285,6 +285,13 @@ type Health struct {
 	// A POINTER because a zero-because-unknown lag serves a bounded
 	// stale read without any bound at all: the read asks "how far behind
 	// may this answer be", and an unreadable broker answers "not at all".
+	//
+	// AS OF THE LAST READ OF THE LOG'S ENDS, which a read's health may be
+	// served from memory rather than asked per read ([ReaderDeps.Health])
+	// — a few seconds at most, since a lag older than that is no bound on
+	// a log that can run on by thousands of records meanwhile. Ends nobody
+	// could refresh for that long are not a lag of any age: the health that
+	// would carry them is not served at all.
 	Lag *uint64
 
 	// FirstSeq is the stream's first surviving sequence as last read, and
@@ -305,7 +312,10 @@ type Health struct {
 	// stale-low value reports a node as replaying records that are already
 	// gone. What bounds that is where a stale value comes from: only a
 	// replica of a group with no leader answers the stream info, and every
-	// health read and every heartbeat asks afresh rather than from a cache.
+	// heartbeat, verdict and admission check asks afresh — a READ is served
+	// the value last read, and never one older than the few seconds a
+	// working refresh leaves it ([ReaderDeps.Health]), which can call a
+	// node replaying for those seconds and never longer.
 	// The heartbeat, asking of this value alone, is what requests the
 	// rejoin once a reading shows the record gone — a LATER reading of the
 	// same stream info, not an independent source — and meanwhile a strict
@@ -345,17 +355,18 @@ type Health struct {
 	// that has caught up with it. What is left is a node applying a DIFFERENT
 	// history into rows keyed by the old one, reporting itself caught up.
 	//
-	// The only thing that separates the two streams is the broker's own creation
-	// instant. The boot compares it once, and a running node sees the live one
-	// wherever it reads the stream's state — the position heartbeat every
-	// [PositionHeartbeat], and the write fence on every expectation of zero.
-	// Every one of those lands in [Runner.StreamIdentity], and this is that
-	// answer's RECREATION half — errors.Is against [ErrStreamRecreated] — the
-	// SAME one the write path refuses on, so a node can never refuse its reads
-	// over a rebuilt log while its writes go on landing there. The identity's other
-	// half, a checkpoint past the end, is [Health.AheadOfLog] here, read live
-	// from this health's own end rather than from the runner's last reading.
-	// The remedy is the same either way, an operator's re-anchor.
+	// The only thing that separates the two streams is the stream's creation
+	// instant ([StreamCreatedAt]). The boot compares it once, and a running
+	// node sees the live one wherever it reads the stream's state — the
+	// position heartbeat every [PositionHeartbeat], and the write fence on
+	// every expectation of zero. Every one of those lands in
+	// [Runner.StreamIdentity], and this is that answer's RECREATION half —
+	// errors.Is against [ErrStreamRecreated] — the SAME one the write path
+	// refuses on, so a node can never refuse its reads over a rebuilt log
+	// while its writes go on landing there. The identity's other half, a
+	// checkpoint past the end, is [Health.AheadOfLog] here, read live from
+	// this health's own end rather than from the runner's last reading. The
+	// remedy is the same either way, an operator's re-anchor.
 	StreamRecreated bool
 
 	// GenerationPassed is a domain a peer re-anchored past this node's rows
@@ -453,10 +464,11 @@ func (h Health) AheadOfLog() bool {
 	return h.LastSeq != nil && pastEnd(h.Position.Seq, *h.LastSeq)
 }
 
-// Healthy reports whether this copy of the domain's log is SOUND — the copy
-// its node may keep serving the estate from. One that is not stops serving,
-// and the node's seats read the estate from the other data nodes; the seats
-// themselves stay, since a copy being wrong is no fault of theirs.
+// Healthy reports whether this copy of the domain's log is SOUND — the copy its
+// node may keep serving that DOMAIN's operations from. One that is not goes out
+// of service for that domain alone (ADR-0046): its operations go to the other
+// data nodes, every other domain's copy keeps serving, and the node's seats
+// stay, since a copy being wrong is no fault of theirs.
 //
 // # It answers "is this copy WRONG", never "is this copy BEHIND"
 //
@@ -502,22 +514,41 @@ func (h Health) AheadOfLog() bool {
 // A compacted domain's coverage does not make it false either: a derived row's
 // gaps are the compaction policy working.
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
+	return h.Fault(now, deferredSince) == ""
+}
+
+// Fault is WHY this copy is wrong ([Health.Healthy] false), or empty while it
+// is sound: the refusal its reads answer for the same state, in
+// [Health.Refusal]'s order, and [RefuseDeferred] for a record held past the
+// deferral grace, which no read refuses on by itself. It is what the line
+// announcing a copy going out of service names, because WHICH fault holds is
+// what an operator acts on — an eviction is lifted, a copy below its log
+// adopts a snapshot, an undecodable record needs an upgrade.
+//
+// ONE LIST, the one [Health.Healthy] reads: a reason computed beside the
+// predicate rather than by it would be a second opinion about one copy.
+func (h Health) Fault(now time.Time, deferredSince DeferredSince) ReadRefusal {
 	floor := h.Floor.Effective(now)
-	if h.Err != "" || h.Evicted || floor == FloorBelow || floor == FloorUnknown ||
-		h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged {
-		return false
-	}
+	switch {
+	case h.Evicted:
+		return RefuseEvicted
+	case floor == FloorUnknown:
+		return RefuseFloorUnknown
+	case floor == FloorBelow:
+		return RefuseBelowFloor
+	case h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged:
+		return RefuseWrongStream
 	// A FROZEN PREFIX, which is the one term here that a lag resembles and
 	// is not: a node that owes progress and has made none for the stall
 	// grace answers every expectation out of rows that stopped, where a
-	// node that is merely behind is applying its way out of it.
-	if h.Stalled {
-		return false
+	// node that is merely behind is applying its way out of it. An applier
+	// that stopped, or has faulted past its budget, is the same report.
+	case h.Err != "" || h.Stalled:
+		return RefuseStalled
+	case h.Deferred > 0 && deferredSince.Age(now) > DeferralGrace:
+		return RefuseDeferred
 	}
-	if h.Deferred > 0 && deferredSince.Age(now) > DeferralGrace {
-		return false
-	}
-	return true
+	return ""
 }
 
 // Established is the two-sided inequality plus a drain, and it is
@@ -606,8 +637,9 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 // # Neither half alone
 //
 // Serving alone refuses a copy that is level but has not yet LEARNED it is:
-// the drained latch is set on the fetch after the last record commits, up to a
-// fetch wait later, and a seat admitted at lag zero in that window would find
+// the drained latch is set once a run commits with nothing pending behind it,
+// or on the empty fetch after one that closed for another reason — up to a
+// fetch wait later — and a seat admitted at lag zero in that window would find
 // every call it made refused by the node that admitted it. Strict alone is
 // seat admission's question, and a request gate that asked it refused a busy
 // company's copy on most instants — a record in flight — so every request

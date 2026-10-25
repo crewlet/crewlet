@@ -273,9 +273,10 @@ func (m *meter) windows() coord.Windows {
 // counted nothing used to be. The CALLER is still told it hung up, exactly as
 // a charge on its own dead context told it, so it stops where it stopped
 // before and never runs the round's tools; only the record is new. It cannot
-// hang in the caller's place: the counter races other nodes' writes for no
-// longer than its patience, and the client bounds every request made on a
-// context with no deadline.
+// hang in the caller's place: the counter races other nodes' writes for a
+// bounded number of attempts, sized for the nodes writing it (coord/kv's
+// casline.go), and the client bounds every request made on a context with no
+// deadline.
 func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	got, err := m.budgets.Charge(context.WithoutCancel(ctx), coord.ChargeRequest{
 		Seat: m.agentScope, Tokens: tokens, Windows: m.windows(),
@@ -409,7 +410,7 @@ func (m *meter) Held(ctx context.Context) error { return toolloop.Refusal(ctx, m
 // a refusal is one event, not one write per question. Every window that write
 // stamps is claimed with it. The write is on a context that outlives the
 // caller's, because the refusal happened whatever the caller does next, and is
-// bounded by the counter's patience and the client's request timeout. A
+// bounded by the counter's attempts and the client's request timeout. A
 // write that fails is logged and is never anything else: the refusal stands
 // either way, and what failed is the report of it, so it is not retried on the
 // next question — a counter that cannot be written is one the turn's next
@@ -535,7 +536,7 @@ func (m *meter) turnAway(ctx context.Context, r refusal) {
 // caller made, for that log line.
 //
 // On a context that outlives the caller's, because the refusal happened
-// whatever the caller does next, bounded by the counter's patience and the
+// whatever the caller does next, bounded by the counter's attempts and the
 // client's request timeout.
 func (m *meter) stamp(ctx context.Context, scope string, caps coord.Caps, p period.Period, window string) (coord.Usage, bool) {
 	usage, err := m.budgets.Refuse(context.WithoutCancel(ctx), scope, caps, m.windows())

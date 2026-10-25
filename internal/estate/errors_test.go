@@ -81,14 +81,16 @@ func TestARefusalThatIsTwoSentinelsKeepsBoth(t *testing.T) {
 // reason (`op_reused` has a remedy of its own), and the cause is what still
 // answers errors.Is — a stream recreated behind `wrong_stream` — so a
 // refusal rebuilt as its message alone would lose both. And the writer of a
-// copy it names crosses too: whether the reason is the serving node's standing
-// or another node's is what its remedy turns on.
+// copy it names crosses too, and whether the record it names is the
+// operation's own: whether the reason is the serving node's standing or
+// another node's, and whether a record of the write landed at all, are what
+// its remedy turns on.
 func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	t.Parallel()
 	original := fmt.Errorf("write: %w", &statelog.Unavailable{
 		Reason: statelog.ReasonOpReused, Detail: "the op wrote elsewhere",
 		Position: statelog.Position{Stream: trackerStream, Generation: 2, Seq: 41},
-		OpID:     "op-1", CopyWriter: "node-b",
+		OpID:     "op-1", CopyWriter: "node-b", Dropped: true,
 		Cause: fmt.Errorf("because: %w", statelog.ErrStreamRecreated),
 	})
 	got := throughWire(t, original)
@@ -98,7 +100,7 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	}
 	if refusal.Reason != statelog.ReasonOpReused || refusal.OpID != "op-1" ||
 		refusal.Position.Seq != 41 || refusal.Detail != "the op wrote elsewhere" ||
-		refusal.CopyWriter != "node-b" {
+		refusal.CopyWriter != "node-b" || !refusal.Dropped {
 		t.Errorf("the refusal's fields did not survive: %+v", refusal)
 	}
 	if !errors.Is(refusal.Cause, statelog.ErrStreamRecreated) {
@@ -118,8 +120,8 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 	t.Parallel()
 	var unserved *ErrUnserved
-	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer"}), &unserved) ||
-		unserved.Detail != "data-a: no answer" {
+	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer", NodeSilent: true}), &unserved) ||
+		unserved.Detail != "data-a: no answer" || !unserved.Silent() {
 		t.Fatalf("an unserved estate crossed as %+v", unserved)
 	}
 	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", tracker.ErrStepUnvouched))
@@ -183,7 +185,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	// whose answers a person verb is decided on. A code is the identifier
 	// as Go code spells it, so a nested package is named by its last
 	// element.
-	for _, pkg := range []string{"tracker", "pages", "statelog", "estate",
+	for _, pkg := range []string{"tracker", "pages", "search", "usage", "code", "statelog", "estate",
 		"iamdomain", "iam", "iam/session", "artifactsdomain", "artifacts",
 		"artifacts/manifest", "artifacts/mediatype", "artifactdata", "artifactdata/canon",
 		"artifactdata/query"} {

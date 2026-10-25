@@ -397,10 +397,11 @@ engine in a single invocation:
 crewlet run crewlet.yaml -company company.yaml
 ```
 
-`-company` is a **bootstrap seed**: it is imported when the store holds no
-company yet, and once one exists it is ignored — with a warning that says so,
-naming the file and the two ways to apply it. So a restart never reverts a
-change you made live, however stale the file on disk is.
+`-company` is a **bootstrap seed**: it is imported when no company exists
+yet — in the store, or in the fleet a new node joins — and once one exists it
+is ignored, with a warning that says so, naming the file and the two ways to
+apply it. So a restart never reverts a change you made live, however stale the
+file on disk is, and neither does adding a node with this same command.
 
 When you do want the file to win, that is a different flag:
 `crewlet run -import-company company.yaml` makes it the active revision over
@@ -408,7 +409,9 @@ whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
 
-A running node always serves the store, not the file.
+A running node always serves the store, not the file — and once the store
+holds a company it also *starts* on the store's, so nothing it builds at boot
+comes from a file it is about to ignore.
 
 **Or two steps** — import once, then run:
 
@@ -687,7 +690,14 @@ answer `503 no_active_revision` until the first revision arrives. That
 revision brings up everything the company needs, the engine's own tracker and
 knowledge base included, with their projects and spaces, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
-`providers.sandbox` — under the same API, with nothing restarted:
+`providers.sandbox` — and the API that was already serving answers the board's
+and the pages' questions, takes and serves a project's files, and offers the
+tracker's and the knowledge base's tools to the dashboard's buttons and to
+your own assistant over [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
+from that revision on, with nothing restarted — an assistant already
+connected that listens for tool changes (the 2026-07-28 MCP protocol's
+`subscriptions/listen` stream) is told at once and lists again, and one on an
+earlier protocol sees them at its next listing:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
@@ -854,6 +864,12 @@ each), then wire them in:
   them on it from its card in **Company › Org chart**, every person holds a
   seat of their own. See [Putting a person in the
   seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat)
+- Or host the repositories in the engine itself — add
+  `code: {native: true, repos: [...]}` to the company file and push to
+  `<the API's address>/git/<name>.git` with a token of your own (`crewlet iam
+  token -login` mints one) as git's password. [Hosting Code](../guides/code.md)
+  walks through it, and it runs beside a GitLab or GitHub connection rather
+  than in place of one
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)
   you already have at the root — add the `contact` identities for each
   surface you connect (`mattermost_user_id`, `atlassian_account_id`,

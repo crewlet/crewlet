@@ -124,6 +124,47 @@
 // option of the ask it answers, and that a promised inform is kept — never an
 // approval chain, a quorum or a state machine. decision.go holds the type and
 // the rules; the ADR says why the engine stops there.
+//
+// # What a day costs the log, measured
+//
+// The reference company — 100 000 tasks a year, 300 000 comments, 1 000 edits
+// and 3 000 turns a day, the corpus docs/guides/retention.md's forecast is
+// stated for — written as a seat's tools write it, through the real writer
+// onto a real broker: each task filed into the unit the chart gives its
+// project, each change with the notification the seat's tools attach, which
+// names the project's lead and that unit's lead for its fallback, and each
+// gesture costed by the stream's own growth, which is what the broker counts
+// against the ceiling (TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay,
+// which holds each figure here to within a hundredth of what it measures, and
+// TestTheDocsPrintTheMeasuredDay, which holds every page that prints one).
+// Every record is appended in the signed frame ADR-0031 puts round it — its
+// magic, version and key id's length, the key id and a 32-byte MAC, forty bytes
+// under the suite's two-byte key id — so each figure carries one frame a record:
+//
+//   - a task filed: 5 266 bytes, in two records — the project's counter and
+//     the task — at a 2 KiB description, which the task record carries whole
+//     and its notification's excerpt again up to [MaxExcerpt];
+//   - a comment: 3 037 bytes at 1 KiB, carried twice the same way, with the
+//     commenter's watch;
+//   - an edit: 1 157 bytes for a status change — the change itself is a few
+//     bytes, and the rest the record's envelope, its frame and the routing
+//     snapshot every notification takes;
+//   - a turn charged to its task: 1 608 bytes with its summary at
+//     [MaxTurnSummary].
+//
+// So the day is 9.9 MB of records — 1.44 MB of tasks, 2.50 of comments, 1.16
+// of edits and 4.82 of turns: half of it is the turns, whose every field is
+// capped, so the text a company writes moves it less than its rate of turns
+// does (a 1 KiB description and a 512-byte comment make it 9.1 MB). Its keys
+// are a new project's, one or two digits, where a project of the reference
+// company's writes five by its fifth year: three bytes more wherever a key is
+// written, about 8 kB of the day. Beside the records the seats' 12 500
+// linearizable reads and the object collector's 25 append 2.2 MB of barriers,
+// at 176 bytes each from a log's second generation to its tenth (168 at its
+// first; TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt) — 12.1 MB a
+// day in all, which the trim's seven-day min_age holds about 85 MB of on a
+// fleet that trims. [TrackerLogMaxBytes] is nearly five years of the records,
+// and nearly four years of the whole day, barriers included.
 package tracker
 
 import (
@@ -134,6 +175,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // ObjectKind is what an object on the mutation log is.
@@ -212,10 +254,10 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain.
 	//
-	// The only kind that writes no row on any node, which is why its
-	// table declaration is the EMPTY set stated explicitly rather than
-	// left out: a kind that writes nothing must not be able to slip
-	// through the completeness walk by writing nothing.
+	// One of the two kinds that write no row of this domain's on any node —
+	// the other is [KindTrimmed] — and the applier has a case for it all the
+	// same: a kind with no case faults (TestAKindNobodyDeclaredFaults), so a
+	// barrier is applied as nothing on purpose rather than by omission.
 	KindBarrier ObjectKind = "barrier"
 
 	// KindFile is one file in a project: where it lives, what it is and
@@ -234,6 +276,15 @@ const (
 	// write naming one key, which is the race the collector's lock-free
 	// deletion rests on there being none of.
 	KindFile ObjectKind = "file"
+
+	// KindTrimmed is the trim's record that removes the arbitration
+	// anchors below what the log no longer holds — [statelog.TrimmedKind],
+	// ADR-0047 — on one subject per floor, which the subject's id names.
+	//
+	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies
+	// the record; this domain writes nothing for it, and has the case
+	// that says so, for the barrier's reason.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
 // ObjectKinds are every kind this build writes, in the order they are
@@ -249,7 +300,7 @@ var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
-	KindFile,
+	KindFile, KindTrimmed,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -258,14 +309,17 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// EVERY KIND BUT TWO DOES. A turn is ADDITIVE — it records spend that happened
-// and races nobody — and a barrier is arbitrated by nothing at all: every
-// barrier shares one subject, so an expectation there would serialise the
+// EVERY KIND BUT THREE DOES. A turn is ADDITIVE — it records spend that
+// happened and races nobody — and a barrier is arbitrated by nothing at all:
+// every barrier shares one subject, so an expectation there would serialise the
 // whole company's linearizable reads behind one another and write an anchor
-// row per read into the transaction holding this store's only writer.
+// row per read into the transaction holding this store's only writer. A
+// trimmed record REMOVES anchors, and identical ones are each meant to land, so
+// an expectation would refuse every one after the first and an anchor of its
+// own would be the one row it exists not to leave behind.
 func (k ObjectKind) Arbitrated() bool {
 	switch k {
-	case KindTurn, KindBarrier:
+	case KindTurn, KindBarrier, KindTrimmed:
 		return false
 	}
 	return k.Valid()
@@ -378,6 +432,13 @@ func GenerationSubject(gen uint32) Subject {
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]) — the framework
+// reads the floor back from the id.
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
+
 // FileSubject names one file by its address: the project it is in and the
 // path it has there, which is what two writers of one path contend on.
 //
@@ -398,6 +459,21 @@ func FileSubject(project, path string) Subject {
 func FileToken(path string) string {
 	sum := sha256.Sum256([]byte(path))
 	return hex.EncodeToString(sum[:16])
+}
+
+// isFileToken reports whether id has a [FileToken]'s shape — thirty-two
+// lower-case hex digits — which is what tells a file's object term from every
+// other object's: a task's and a view's ids are hyphenated uuids.
+func isFileToken(id string) bool {
+	if len(id) != hex.EncodedLen(sha256.Size/2) {
+		return false
+	}
+	for _, r := range id {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // SplitFileID takes a file subject's id apart: the project and the token.

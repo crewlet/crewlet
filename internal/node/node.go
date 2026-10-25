@@ -81,6 +81,11 @@ type Config struct {
 	// The beat bounds it: see [seat.Config].Status.
 	Status func(context.Context) coord.NodeStatus
 
+	// RoleNeeded is whether the company needs a role at all right now,
+	// asked by the fleet's unmanned-role check: see [seat.Config].RoleNeeded.
+	// Nil needs every role.
+	RoleNeeded func(placement.NodeRole) bool
+
 	// Turn runs a seat's turn. Required.
 	Turn TurnFunc
 
@@ -274,6 +279,7 @@ func New(cfg Config) (*Node, error) {
 		Serviceable:       cfg.SeatsServiceable,
 		Profile:           cfg.Profile,
 		Status:            cfg.Status,
+		RoleNeeded:        cfg.RoleNeeded,
 		Hooks:             n,
 		TTL:               cfg.LeaseTTL,
 		HeartbeatInterval: cfg.HeartbeatInterval,

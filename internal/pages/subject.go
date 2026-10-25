@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The knowledge base as a state-log DOMAIN: what a record is, and what the
@@ -97,12 +98,23 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain.
 	//
-	// The only kind that writes no row on any node, which is why its table
-	// declaration is the EMPTY set stated explicitly rather than left out.
+	// One of the two kinds that write no row of this domain's on any node —
+	// the other is [KindTrimmed] — and the applier has a case for it all the
+	// same: a kind with no case faults, so a barrier is applied as nothing on
+	// purpose rather than by omission.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindTrimmed is the trim's record that removes the arbitration
+	// anchors below what the log no longer holds — [statelog.TrimmedKind],
+	// ADR-0047 — on one subject per floor, which the subject's id names.
+	//
+	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies
+	// the record; this domain writes nothing for it, and has the case that
+	// says so, for the barrier's reason.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
-// ObjectKinds are the six, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the seven, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies.
@@ -113,7 +125,7 @@ const (
 // certify a failure.
 var ObjectKinds = []ObjectKind{
 	KindContainer, KindTitle, KindPage, KindEviction, KindGeneration,
-	KindBarrier,
+	KindBarrier, KindTrimmed,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -122,11 +134,15 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// FIVE OF SIX DO. The barrier shares one subject across the whole domain, so
+// FIVE OF SEVEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one and write an anchor row per read into the transaction holding this
-// store's only writer.
-func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
+// store's only writer. A trimmed record REMOVES anchors, and identical ones are
+// each meant to land, so an expectation would refuse every one after the first
+// and an anchor of its own would be the one row it exists not to leave behind.
+func (k ObjectKind) Arbitrated() bool {
+	return k != KindBarrier && k != KindTrimmed
+}
 
 // InstallsGate reports a kind whose unknown version must STOP the applier
 // rather than be filed for later.
@@ -175,6 +191,13 @@ func GenerationSubject(gen uint32) Subject {
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]) — the framework
+// reads the floor back from the id.
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
 
 // TitleSubject names one container's claim on one title.
 //

@@ -89,6 +89,24 @@ type Company struct {
 	// separately, at its reconcile tick and again at every boot. See
 	// [Engine.applyChart].
 	ActivatedAt time.Time
+
+	// codeInForce is the code host's settings IN FORCE at this epoch — its
+	// limits and its deleted retention — stamped when it is installed
+	// ([Engine.installEpoch], [carriedCode]): its own `code` block where it
+	// sets `code.native`, and otherwise that of the newest earlier epoch
+	// that did, which a committer and a retention duty still running from
+	// it decide with until a restart. Nil on an epoch never installed, or
+	// one with no hosting epoch before it, which is held to its own
+	// configuration's ([Engine.codeInForce]).
+	codeInForce *config.Code
+
+	// roster is this epoch's chart as the code host reads a seat's grant
+	// ([codeRoster]), built at its first question — stamped when the epoch is
+	// installed ([Engine.installEpoch], [rosterOf]). Nil on an epoch never
+	// installed, which [Engine.codeRoster] answers as no chart: every seat
+	// stands nowhere. A function rather than the value, so an epoch copied
+	// whole copies no lock.
+	roster func() codeRoster
 }
 
 // NewCompany builds an epoch from a validated config.

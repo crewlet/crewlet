@@ -12,11 +12,14 @@
 // The environment had already drifted: the CLI backend carried a copy of the
 // allowlist that disagreed with this one about five names, and the MCP client
 // carried none at all and handed every tool server the engine's whole
-// environment — its keyring and its Tier A token values among it. A container runtime's own CLI has a rule
-// of its own ([ContainerRuntime]), held here for the same reason: two callers
-// start one, the sandbox and a tool server declared as `command: docker`.
-// So does where a local box writes a file it is handed ([InHome], [SafeJoin]),
-// which config validation applies to a setup step before any box exists.
+// environment — its keyring and its Tier A token values among it. A container
+// runtime's own CLI has a rule of its own ([ContainerRuntime]), held here for
+// the same reason: two callers start one, the sandbox and a tool server
+// declared as `command: docker`. So does where a local box writes a file it is
+// handed ([InHome], [SafeJoin]), which config validation applies to a setup
+// step before any box exists. It is also where a freshly written executable is
+// waited for ([Settle]), because the code host's hook script and every test
+// stand-in hit the same window.
 //
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox

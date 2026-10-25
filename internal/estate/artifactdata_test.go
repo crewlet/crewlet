@@ -27,7 +27,7 @@ type ledger struct {
 // limited is the store whose every write is refused by the node's budget.
 var limited = artifacts.IDFor("the limited store")
 
-func (l *ledger) For(context.Context) (Backend, bool) {
+func (l *ledger) For(context.Context, string) (Backend, bool) {
 	return Backend{ArtifactData: ArtifactDataHalf{Reader: l, Writer: l}}, true
 }
 

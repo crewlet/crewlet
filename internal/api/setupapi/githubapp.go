@@ -567,17 +567,24 @@ func seatByHandle(roster *org.Organization, handle string) *org.Role {
 	return nil
 }
 
-// seatTier is the access tier this seat runs at, as written down.
+// seatTier is the access tier this seat runs at: its role.code.access, as
+// written down ([org.Role.CodeAccess]).
+//
+// WHETHER OR NOT THE SEAT HAS AN APP YET. The tier is the seat's, not its
+// app's, so a seat whose access says full_access and whose app is still to
+// be created is created at full_access. Read off the app's own block, such a
+// manifest asked GitHub for read_only while every token the engine then
+// minted for the app asked for the seat's whole tier.
 //
 // THE RAW VALUE, unparsed. Every caller passes it to [github.ParseTier], which
-// already answers the default for an empty string and for a typo and is the
-// package that owns the closed set — so a second "or default" here would be a
-// place for the two to disagree about what an unrecognised tier runs at.
+// already answers the default for an empty string and is the package that owns
+// the closed set — so a second "or default" here would be a place for the two
+// to disagree about what an unset tier runs at.
 func seatTier(seat *org.Role) string {
-	if seat == nil || seat.GitHub == nil {
+	if seat == nil {
 		return ""
 	}
-	return seat.GitHub.Tier
+	return seat.CodeAccess
 }
 
 // orgOf is the organization whose repositories these agents work in.

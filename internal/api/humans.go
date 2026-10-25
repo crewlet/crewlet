@@ -83,6 +83,11 @@ type HumanSurfaces struct {
 	// server per node, because its answer cache is per node and a second
 	// one beside it would be a second catalogue for one surface.
 	Operator *operator.Server
+
+	// Listens tells every MCP client listening on Operator's transport that
+	// its tools changed — when this node's catalogue moves and when another
+	// node's does ([OperatorListens]).
+	Listens *OperatorListens
 }
 
 // NewHumanSurfaces builds a node's human surfaces over its engine and the Tier
@@ -123,10 +128,14 @@ func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, 
 	// and the tool behind it cannot be handed two charts and answer one
 	// question two ways.
 	authority := engine.ChartAuthorityOf(e)
-	operators, err := operatorSurface(e, authority)
+	// ONE REGISTRY OF LISTEN STREAMS for the node, which the server keeps
+	// every stream in and the telling announces through.
+	listeners := operator.NewListeners()
+	operators, err := operatorSurface(e, authority, listeners)
 	if err != nil {
 		return HumanSurfaces{}, err
 	}
+	listens := NewOperatorListens(operators, listeners, e.Backends().Queue, e.Node().ID())
 	// AND THE WRITE SURFACE, over the halves each request finds.
 	work, err := workSurface(e, operators, authority)
 	if err != nil {
@@ -135,6 +144,7 @@ func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, 
 	return HumanSurfaces{
 		SignIn: signIn, Sessions: sessions, Tokens: tokens,
 		Directory: directory, Work: work, Operator: operators,
+		Listens: listens,
 	}, nil
 }
 
@@ -153,7 +163,7 @@ func (h HumanSurfaces) Mount(o *Options) {
 	}
 	o.Sessions, o.Tokens = h.Sessions, h.Tokens
 	o.IAM, o.Work = h.Directory, h.Work
-	o.Operator = h.Operator
+	o.Operator, o.OperatorListens = h.Operator, h.Listens
 }
 
 // signInSurface builds /auth and the session arm beside it.
@@ -379,7 +389,8 @@ var errNoIdentityEstate = errors.New("api: this node serves the API but has " +
 // on the auxiliary model of their own seat and is charged to the company's
 // windows, with the answers cached on this node — once, here, since a cache a
 // per-call catalogue built would remember nothing.
-func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server, error) {
+func operatorSurface(e *engine.Engine, authority authz.Chart,
+	listeners *operator.Listeners) (*operator.Server, error) {
 	chart := func() *org.Organization {
 		c := e.Company()
 		if c == nil {
@@ -418,6 +429,9 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		// so the event store here holds who did what through any of the
 		// three transports.
 		Audit: e.Backends().Queue,
+		// THE NODE'S ONE REGISTRY of the streams clients listen on, which
+		// [OperatorListens] announces through.
+		Listeners: listeners,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: the operator surface: %w", err)
@@ -531,15 +545,25 @@ func personWriter(as func(estate.Actor) estate.WorkWriter, actor builtin.Actor) 
 // answered as the seats are, and a read after their own write waits for it
 // on the router's session floor ([engine.Engine.AwaitEstate]) — never this
 // node's own applier, which is not the one that answers once its copy is out
-// of service. A data node that hands out no writer — one in a maintenance
-// mode, which may publish nothing — hands out no tools either, rather than
-// tools whose every write is refused.
+// of service.
+//
+// THE READS WHEREVER THIS NODE SERVES THEM, THE WRITES ONLY WHERE IT HANDS OUT
+// A WRITER: two facts, so two gates. A node in a maintenance mode serves the
+// tracker's and the knowledge base's reads and hands no writer to any surface
+// ([engine.OperatorWorkWriter], [engine.OperatorPageWriter], behind the
+// engine's one writer gate), so it is handed the read tools and no write tool
+// — never write tools whose every write is refused. Gated on both at once,
+// such a node's operator was offered no read at all for the whole of a
+// capacity window: their assistant could not read a board the dashboard beside
+// it was drawing, nor fetch a project's file the listing named. Every tool is
+// gated on its own seam ([builtin.OperatorTools]), so a reader handed without
+// a writer serves exactly the reads ([readsOnly]).
 func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 	var work builtin.WorkDeps
 	var kb builtin.PageDeps
 	reader, readable := engine.OperatorWork(e)
 	writer, writable := engine.OperatorWorkWriter(e)
-	if readable && writable {
+	if readable {
 		work = builtin.WorkDeps{
 			Reader: reader,
 			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
@@ -691,10 +715,13 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// THE ROUTER'S SESSION FLOOR, which every write above raises.
 			Await: e.AwaitEstate,
 		}
+		if !writable {
+			work = readsOnly(work)
+		}
 	}
 	pageReader, pagesReadable := engine.OperatorPages(e)
 	pageWriter, pagesWritable := engine.OperatorPageWriter(e)
-	if pagesReadable && pagesWritable {
+	if pagesReadable {
 		kb = builtin.PageDeps{
 			Reader: pageReader, Writer: pageWriter,
 			Mentions: engine.LiveMentions(e),
@@ -713,6 +740,34 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			SkillsContainer: engine.LiveSkillsContainer(e),
 			Await:           e.AwaitEstate,
 		}
+		if !pagesWritable {
+			// The zero estate.Pages the engine answers beside false is a
+			// value, so as an interface it is not nil and would register
+			// every page write tool over a writer that writes nothing.
+			kb.Writer = nil
+		}
 	}
 	return work, kb
+}
+
+// readsOnly is d with every per-actor seam cleared — each is a family of WRITE
+// tools ([TestAPersonsSurfacesAreHandedEveryWriterSeam] reads the same set off
+// the struct) — leaving the reads a node with no writer still serves.
+//
+// A seam added to [builtin.WorkDeps] is cleared here or a test fails
+// ([TestReadsOnlyClearsEveryWriterSeam]), because a seam left set on a node
+// with no writer is a tool whose every call reaches a writer that is nil.
+func readsOnly(d builtin.WorkDeps) builtin.WorkDeps {
+	d.Writer = nil
+	d.ProjectWriter = nil
+	d.Dependencies = nil
+	d.Merges = nil
+	d.Moves = nil
+	d.ViewWriter = nil
+	d.CatalogueWriter = nil
+	d.PersonWriter = nil
+	d.TrashWriter = nil
+	d.Placer = nil
+	d.FileWriter = nil
+	return d
 }

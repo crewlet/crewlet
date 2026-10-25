@@ -76,10 +76,10 @@ type SearcherOptions struct {
 	Peers  search.Peers
 	Roster func(ctx context.Context) ([]string, error)
 
-	// Report is told what every answer covered and what it cost. Nil
-	// counts nothing, which is what an embedded engine with no recorder
-	// gets.
-	Report func(search.Answer, time.Duration)
+	// Report is told what every answer covered and what it cost, beside
+	// the query it answered ([search.FanOut.Report]). Nil counts nothing,
+	// which is what an embedded engine with no recorder gets.
+	Report func(search.FanQuery, search.Answer, time.Duration)
 
 	// Enter is called when a search begins and its return when it ends,
 	// so scans in flight can be counted. Nil counts nothing.
@@ -97,6 +97,11 @@ type SearcherOptions struct {
 	// or one returning empty, excludes nothing — which is the company that
 	// has turned tool skills off.
 	SkillsContainer func() string
+
+	// Copies is this node's verdict on the copies its own range is scanned
+	// from (ADR-0046): a copy out of service covers none of the range,
+	// which the answer counts missing. Nil scans every copy.
+	Copies search.Copies
 }
 
 // NewSearcher builds the native knowledge searcher.
@@ -105,7 +110,7 @@ func NewSearcher(opts SearcherOptions) *Searcher {
 	if opts.Index != nil {
 		s.fan = &search.FanOut{
 			Self:    cmp.Or(opts.Node, soloNode),
-			Local:   search.NodeScanner{Index: opts.Index},
+			Local:   search.NodeScanner{Index: opts.Index, Copies: opts.Copies},
 			Peers:   opts.Peers,
 			Roster:  opts.Roster,
 			Corpus:  opts.Index.Corpus,
@@ -211,6 +216,7 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 		Containers: scope,
 		Sources:    []string{string(search.SourcePage)},
 		Mode:       q.Mode,
+		Prefetch:   q.Prefetch,
 		// NOT THE CALLER'S LIMIT: what is walked below is the candidates,
 		// each method's top FuseN whatever the limit, and the fused cut
 		// the fan-out also makes is not read here.
@@ -256,7 +262,9 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 
 // failed is the answer to a search this node could not run at all: no hits,
 // nothing served, and THIS node named as the participant that did not cover
-// its range — the coordinator always scans, so a failure here is its own.
+// its range — a search fails only on this node's own plan or its own scan, its
+// range or a range it scanned in a silent peer's place, since a peer that does
+// not answer costs a partial answer rather than an error.
 func (s *Searcher) failed(err error) knowledge.Result {
 	return knowledge.Result{Outcome: knowledge.Outcome{
 		Modes: s.fan.Modes(),

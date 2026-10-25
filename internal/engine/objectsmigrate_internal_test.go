@@ -20,7 +20,7 @@ import (
 )
 
 // migrationSource names a fixed set of objects.
-type migrationSource struct{ refs []collect.Reference }
+type migrationSource struct{ refs []objstore.Reference }
 
 func (*migrationSource) Name() string { return "tracker" }
 
@@ -32,14 +32,23 @@ func (*migrationSource) Referenced(context.Context, []objstore.Key, statelog.Pos
 	return nil, false, errors.New("unused")
 }
 
-func (s *migrationSource) Each(_ context.Context, _ statelog.Position, _ objstore.Key,
-	visit func(collect.Reference) error) (bool, error) {
-	for _, r := range s.refs {
-		if err := visit(r); err != nil {
-			return false, err
-		}
+// Required is one walk handing every reference on its first page.
+func (s *migrationSource) Required(statelog.Position) []objstore.Walk {
+	return []objstore.Walk{&migrationWalk{refs: s.refs}}
+}
+
+// migrationWalk is a [migrationSource]'s one walk.
+type migrationWalk struct {
+	refs []objstore.Reference
+	done bool
+}
+
+func (w *migrationWalk) Next(context.Context) ([]objstore.Reference, bool, error) {
+	if w.done {
+		return nil, true, nil
 	}
-	return true, nil
+	w.done = true
+	return w.refs, true, nil
 }
 
 // migrationNode is an engine on the nats backend holding three named files,
@@ -61,7 +70,7 @@ func migrationNode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, *coord
 		if err != nil {
 			t.Fatal(err)
 		}
-		src.refs = append(src.refs, collect.Reference{Object: o, NamedBy: "ENG/" + body})
+		src.refs = append(src.refs, objstore.Reference{Object: o, NamedBy: "ENG/" + body})
 	}
 	srv := s3fake.Start(t, "files")
 	var objects config.StoreObjects

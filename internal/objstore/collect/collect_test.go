@@ -8,26 +8,33 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// fakeSource is one domain's references, held in memory.
+// fakeSource is one domain's references, held in memory — all of them in a
+// required table, so its walk hands on every one (standing_test.go has what a
+// retired table does, through the real declarations).
 type fakeSource struct {
 	mu    sync.Mutex
-	named map[objstore.Key]Reference
+	named map[objstore.Key]objstore.Reference
 	// incomplete is whether every read reports itself incomplete, and
 	// incompleteAfter how many judged batches answer complete first.
 	incomplete      bool
 	incompleteAfter int
 	judged          int
 	barriers        int
+	// pageRead, when set, is called as each page of a walk is read, with
+	// the source's lock held.
+	pageRead func()
 }
 
 func (s *fakeSource) Name() string { return "tracker" }
@@ -56,36 +63,57 @@ func (s *fakeSource) Referenced(_ context.Context, among []objstore.Key,
 	return out, !s.incomplete, nil
 }
 
-// Each walks the references in key order after `after`, as a declared
-// table's keyset walk does.
-func (s *fakeSource) Each(_ context.Context, _ statelog.Position, after objstore.Key,
-	visit func(Reference) error) (bool, error) {
-	s.mu.Lock()
-	named := slices.SortedFunc(maps.Values(s.named), func(a, b Reference) int {
+// Required is one walk over every reference the source names, in key order, a
+// page of [objstore.WalkPage] at a time — read when the walk is asked, as an estate's
+// is, so a reference named after the walk began and before its page is read is
+// in it.
+func (s *fakeSource) Required(statelog.Position) []objstore.Walk {
+	return []objstore.Walk{&fakeWalk{s: s}}
+}
+
+// fakeWalk is a [fakeSource]'s walk, keyset-paged on the key as a table's is.
+type fakeWalk struct {
+	s     *fakeSource
+	after objstore.Key
+	begun bool
+	done  bool
+}
+
+func (w *fakeWalk) Next(context.Context) ([]objstore.Reference, bool, error) {
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	if w.done {
+		return nil, !w.s.incomplete, nil
+	}
+	if w.s.pageRead != nil {
+		w.s.pageRead()
+	}
+	var page []objstore.Reference
+	for _, ref := range slices.SortedFunc(maps.Values(w.s.named), func(a, b objstore.Reference) int {
 		return a.Object.Key.Compare(b.Object.Key)
-	})
-	incomplete := s.incomplete
-	s.mu.Unlock()
-	for _, ref := range named {
-		if !after.IsZero() && ref.Object.Key.Compare(after) <= 0 {
+	}) {
+		if w.begun && ref.Object.Key.Compare(w.after) <= 0 {
 			continue
 		}
-		err := visit(ref)
-		if errors.Is(err, ErrSkipTable) {
+		page = append(page, ref)
+		if len(page) == objstore.WalkPage {
 			break
 		}
-		if err != nil {
-			return false, err
-		}
 	}
-	return !incomplete, nil
+	if len(page) < objstore.WalkPage {
+		w.done = true
+	}
+	if len(page) > 0 {
+		w.after, w.begun = page[len(page)-1].Object.Key, true
+	}
+	return page, !w.s.incomplete, nil
 }
 
 // name records a row naming o, owned by the file at path.
 func (s *fakeSource) name(o objstore.Object, path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.named[o.Key] = Reference{Object: o, NamedBy: "ENG/" + path}
+	s.named[o.Key] = objstore.Reference{Object: o, NamedBy: "ENG/" + path}
 }
 
 // unname drops the row naming k, as a file's removal or rewrite does.
@@ -116,21 +144,50 @@ func (c *clock) advance(d time.Duration) {
 // backend is the twin with what a real backend has and the twin does not:
 // uploads begun and never finished, a store that answers "not found" for an
 // object it has not caught up with yet, and one whose questions fail.
+//
+// IT KEEPS NO ORDER — the twin's ranged listing is not promoted through the
+// interface it is held by — so the audit reads its whole listing a window at a
+// time, as it reads the broker's object store, and asks about an object by
+// name only for a second look or once a listing has failed; a case auditing a
+// store that lists ranges wraps it in a [ranged].
 type backend struct {
-	*memobj.Backend
+	objstore.Backend
+	mem *memobj.Backend
 
 	mu         sync.Mutex
 	pending    []objstore.Pending
 	pendingErr error
 	// listTail is what a listing answers once it has handed on every
-	// object — an S3 gateway's ErrUndated, say.
-	listTail error
+	// object — an S3 gateway's ErrUndated, say — and listErr what it
+	// answers before handing on any.
+	listTail, listErr error
+	// lists is how many listings the store was asked for. onList, when set,
+	// is called as a listing ends — once it has handed on every name and
+	// before it answers, outside every lock, so it may block — with which
+	// listing this is, counting from one, and an error it returns is the
+	// listing's.
+	lists  int
+	onList func(ctx context.Context, nth int) error
+	// hidden is the names a listing leaves out, as one that has not caught
+	// up with an upload, or a gateway that could not date it, does; and
+	// nothing is the names it hands on holding nothing — no bytes and no
+	// digest, as the broker's listing hands on a name whose metadata does
+	// not decode or that only a delete marker holds — each with what a stat
+	// of it answers.
+	hidden  map[string]bool
+	nothing map[string]error
 	// lagging is how many more times a stat of a name answers "not found"
 	// before it answers what the twin holds.
 	lagging map[string]int
 	statErr error
-	// stats and lists count the questions the store was asked.
-	stats, lists int
+	// asks is how many times each name has been asked about. onStat, when
+	// set, is called before a stat is answered — outside every lock, so it
+	// may block — with the name and which ask of it this is, counting from
+	// one, and an error it returns is the answer; onDelete is the same for a
+	// deletion.
+	asks     map[string]int
+	onStat   func(ctx context.Context, name string, nth int) error
+	onDelete func(ctx context.Context, name string) error
 }
 
 func (b *backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
@@ -151,13 +208,58 @@ func (b *backend) Pending(ctx context.Context, visit func(objstore.Pending) erro
 func (b *backend) List(ctx context.Context, visit func(objstore.Info) error) error {
 	b.mu.Lock()
 	b.lists++
+	nth, hook, failure := b.lists, b.onList, b.listErr
 	b.mu.Unlock()
-	if err := b.Backend.List(ctx, visit); err != nil {
+	if failure != nil {
+		return failure
+	}
+	if err := b.Backend.List(ctx, func(info objstore.Info) error {
+		b.mu.Lock()
+		hide := b.hidden[info.Name]
+		_, empty := b.nothing[info.Name]
+		b.mu.Unlock()
+		switch {
+		case hide:
+			return nil
+		case empty:
+			return visit(objstore.Info{Name: info.Name, Written: info.Written})
+		}
+		return visit(info)
+	}); err != nil {
 		return err
+	}
+	if hook != nil {
+		if err := hook(ctx, nth); err != nil {
+			return err
+		}
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.listTail
+}
+
+// hide leaves names out of every listing from now on.
+func (b *backend) hide(names ...string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, name := range names {
+		b.hidden[name] = true
+	}
+}
+
+// holdNothing has listings hand name on holding nothing, and a stat of it
+// answer answer.
+func (b *backend) holdNothing(name string, answer error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nothing[name] = answer
+}
+
+// listings is how many listings the store has been asked for.
+func (b *backend) listings() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lists
 }
 
 func (b *backend) Abandon(_ context.Context, p objstore.Pending) error {
@@ -169,21 +271,47 @@ func (b *backend) Abandon(_ context.Context, p objstore.Pending) error {
 
 func (b *backend) Stat(ctx context.Context, name string) (objstore.Info, error) {
 	b.mu.Lock()
-	b.stats++
+	b.asks[name]++
+	nth, hook := b.asks[name], b.onStat
+	b.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, name, nth); err != nil {
+			return objstore.Info{}, err
+		}
+	}
+	b.mu.Lock()
 	failure := b.statErr
 	lag := b.lagging[name]
 	if lag > 0 {
 		b.lagging[name] = lag - 1
 	}
+	answer, empty := b.nothing[name]
 	b.mu.Unlock()
 	switch {
 	case failure != nil:
 		return objstore.Info{}, failure
 	case lag > 0:
 		return objstore.Info{}, objstore.ErrNotFound
+	case empty:
+		return objstore.Info{}, answer
 	}
 	return b.Backend.Stat(ctx, name)
 }
+
+func (b *backend) Delete(ctx context.Context, name string) error {
+	b.mu.Lock()
+	hook := b.onDelete
+	b.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, name); err != nil {
+			return err
+		}
+	}
+	return b.Backend.Delete(ctx, name)
+}
+
+// Corrupt replaces name's bytes, keeping its digest — [memobj.Backend.Corrupt].
+func (b *backend) Corrupt(name string, data []byte) { b.mem.Corrupt(name, data) }
 
 func (b *backend) begin(p objstore.Pending) {
 	b.mu.Lock()
@@ -216,12 +344,14 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	clk := &clock{now: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}
-	b := &backend{Backend: memobj.NewAt(clk.Now), lagging: map[string]int{}}
+	mem := memobj.NewAt(clk.Now)
+	b := &backend{Backend: mem, mem: mem, lagging: map[string]int{}, asks: map[string]int{},
+		hidden: map[string]bool{}, nothing: map[string]error{}}
 	store, err := objstore.NewStoreAt(b, clk.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := &fakeSource{named: map[objstore.Key]Reference{}}
+	src := &fakeSource{named: map[objstore.Key]objstore.Reference{}}
 	c, err := New(Options{Store: store, References: References{src}, Now: clk.Now})
 	if err != nil {
 		t.Fatal(err)
@@ -260,6 +390,20 @@ func (h *harness) putAt(minted time.Time, content string) objstore.Key {
 	}
 	return k
 }
+
+// askByName fails every listing the store is asked for, so the audit takes
+// its first look at each object BY NAME: a store that keeps no order is asked
+// so from the window whose listing failed, and a case about what a stat's
+// answer makes of an object takes its first look the way the stat is asked.
+// The failed listing is one failed question, which the first answer after it
+// ends ([failedInARow]).
+func (h *harness) askByName() {
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	h.backend.listErr = errListingFailed
+}
+
+var errListingFailed = errors.New("the listing failed: the replica it was read from is behind")
 
 func (h *harness) held(k objstore.Key) bool {
 	h.t.Helper()
@@ -642,9 +786,9 @@ func TestTheAuditFindsMissingAndDamagedFiles(t *testing.T) {
 		t.Fatalf("Audit = %+v, %v; want one missing and two damaged of four", r, err)
 	}
 	want := []MissingFile{
-		{Object: bent.Key, NamedBy: "ENG/bent.md", Damaged: true},
-		{Object: lost.Key, NamedBy: "ENG/lost.md"},
-		{Object: short.Key, NamedBy: "ENG/short.md", Damaged: true},
+		{Object: bent.Key, NamedBy: "ENG/bent.md", Finding: FindingDamaged},
+		{Object: lost.Key, NamedBy: "ENG/lost.md", Finding: FindingMissing},
+		{Object: short.Key, NamedBy: "ENG/short.md", Finding: FindingDamaged},
 	}
 	if r.Found == nil || r.Found.Missing != 1 || r.Found.Damaged != 2 ||
 		!slices.Equal(r.Found.MissingFiles, want) {
@@ -652,52 +796,123 @@ func TestTheAuditFindsMissingAndDamagedFiles(t *testing.T) {
 	}
 }
 
-// A STORE THAT HAD NOT CAUGHT UP IS NOT ONE THAT LOST THE OBJECT: a file no
-// listing showed is asked about by name at the end of the pass before it is
-// called missing, and one the store then answers is judged as it holds it.
+// A NAME THE STORE HOLDS NO READABLE OBJECT UNDER IS DAMAGED, ON ONE ANSWER:
+// the store said so definitely ([objstore.ErrCorrupt]) — metadata that does
+// not decode, on the broker — and asking again reads the same. Taken for a
+// failure, it stopped every audit at that object and never named the file,
+// and each retry asked the whole store again up to it.
+func TestANameHoldingNoReadableObjectIsDamaged(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.askByName()
+	h.file("kept.md", "kept")
+	spoiled := h.file("spoiled.md", "bytes the store can no longer read")
+	h.backend.onStat = func(_ context.Context, name string, _ int) error {
+		if name == spoiled.Key.Name() {
+			return fmt.Errorf("%w: its metadata does not decode", objstore.ErrCorrupt)
+		}
+		return nil
+	}
+	r, err := h.c.Audit(t.Context())
+	if err != nil || !r.Completed || r.Referenced != 2 || r.Damaged != 1 || r.Missing != 0 {
+		t.Fatalf("Audit = %+v, %v; want it complete with the one file damaged", r, err)
+	}
+	want := []MissingFile{{Object: spoiled.Key, NamedBy: "ENG/spoiled.md", Finding: FindingDamaged}}
+	if r.Found == nil || r.Found.Damaged != 1 || !slices.Equal(r.Found.MissingFiles, want) {
+		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+	}
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	if n := h.backend.asks[spoiled.Key.Name()]; n != 1 {
+		t.Fatalf("the spoiled name was asked about %d times; a definite answer needs no second look", n)
+	}
+}
+
+// A NAME THE LISTING HANDS ON HOLDING NOTHING IS ASKED ABOUT BY NAME, and the
+// stat's answer is the finding: the broker's listing hands on a name whose
+// metadata does not decode, and one only a delete marker holds, as an object
+// of no bytes and no digest. Judged from the listing, a marker over a file's
+// object read as DAMAGED where the object is gone, and a spoiled empty file's
+// as HELD, since an empty object of no digest is what the listing said.
+func TestANameListedHoldingNothingIsAskedAboutByName(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	kept := h.file("kept.md", "kept")
+	marked := h.file("marked.md", "an object a delete marker replaced")
+	h.backend.holdNothing(marked.Key.Name(), objstore.ErrNotFound)
+	spoiledEmpty := h.file("empty.md", "")
+	h.backend.holdNothing(spoiledEmpty.Key.Name(), fmt.Errorf("%w: its metadata does not decode", objstore.ErrCorrupt))
+	spoiled := h.file("spoiled.md", "bytes the store can no longer read")
+	h.backend.holdNothing(spoiled.Key.Name(), fmt.Errorf("%w: its metadata does not decode", objstore.ErrCorrupt))
+
+	r, err := h.c.Audit(t.Context())
+	if err != nil || !r.Completed || r.Referenced != 4 || r.Missing != 1 || r.Damaged != 2 {
+		t.Fatalf("Audit = %+v, %v; want the marked file missing and both spoiled ones damaged", r, err)
+	}
+	want := []MissingFile{
+		{Object: spoiledEmpty.Key, NamedBy: "ENG/empty.md", Finding: FindingDamaged},
+		{Object: marked.Key, NamedBy: "ENG/marked.md", Finding: FindingMissing},
+		{Object: spoiled.Key, NamedBy: "ENG/spoiled.md", Finding: FindingDamaged},
+	}
+	if r.Found == nil || !slices.Equal(r.Found.MissingFiles, want) {
+		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+	}
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	for _, o := range []objstore.Object{marked, spoiledEmpty, spoiled} {
+		if n := h.backend.asks[o.Key.Name()]; n != 1 {
+			t.Errorf("%s, listed holding nothing, was asked about %d times, want once", o.Key, n)
+		}
+	}
+	if n := h.backend.asks[kept.Key.Name()]; n != 0 || h.backend.lists != 1 {
+		t.Errorf("the audit asked about the listed file %d times over %d listings, want none "+
+			"over one", n, h.backend.lists)
+	}
+}
+
+// A STORE THAT HAD NOT CAUGHT UP IS NOT ONE THAT LOST THE OBJECT: a "not found"
+// to a question by name is asked again at the end of the pass before the
+// object is called missing.
+func TestALaggingNotFoundIsNotMissing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.askByName()
+	o := h.file("new.md", "just uploaded")
+	h.backend.lagging[o.Key.Name()] = 1
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Missing != 0 || r.Found == nil || r.Found.Missing != 0 {
+		t.Fatalf("Audit = %+v, %v; an object answered once as not found and then found "+
+			"is not missing", r, err)
+	}
+	h.backend.lagging[o.Key.Name()] = 2
+	if r, err = h.c.Audit(t.Context()); err != nil || r.Missing != 1 {
+		t.Fatalf("Audit = %+v, %v; an object not found twice is missing", r, err)
+	}
+}
+
+// AND AN OBJECT NO LISTING SHOWED IS ASKED ABOUT BY NAME before it is missing:
+// a listing that left it out — a store that had not caught up with it, a
+// gateway that could not date it — is not a store that lost it, and one the
+// store then answers is judged as it holds it.
 func TestAnUnlistedObjectIsAskedAboutBeforeItIsMissing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	o := h.file("new.md", "just uploaded")
-	// A LISTING THAT LEFT IT OUT, as a gateway that did not date it does.
+	h.backend.hide(o.Key.Name())
 	h.backend.listTail = objstore.ErrUndated
-	hidden := &hidingBackend{backend: h.backend, hide: o.Key.Name()}
-	store, err := objstore.NewStoreAt(hidden, h.clock.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := New(Options{Store: store, References: References{h.source}, Now: h.clock.Now})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := c.Audit(t.Context())
+	r, err := h.c.Audit(t.Context())
 	if err != nil || r.Missing != 0 || r.Found == nil || r.Found.Missing != 0 {
 		t.Fatalf("Audit = %+v, %v; an object a listing left out and a stat found "+
 			"is not missing", r, err)
 	}
 	h.backend.lagging[o.Key.Name()] = 1
-	if r, err = c.Audit(t.Context()); err != nil || r.Missing != 1 {
+	if r, err = h.c.Audit(t.Context()); err != nil || r.Missing != 1 {
 		t.Fatalf("Audit = %+v, %v; an object neither listed nor found is missing", r, err)
 	}
 }
 
-// hidingBackend is a store whose listing leaves one name out.
-type hidingBackend struct {
-	*backend
-	hide string
-}
-
-func (b *hidingBackend) List(ctx context.Context, visit func(objstore.Info) error) error {
-	return b.backend.List(ctx, func(info objstore.Info) error {
-		if info.Name == b.hide {
-			return nil
-		}
-		return visit(info)
-	})
-}
-
-// THE AUDIT READS THE LISTING, NOT A QUESTION PER OBJECT: a store holding
-// every file it should is listed and asked nothing else.
+// THE AUDIT READS THE LISTING, NOT A QUESTION PER OBJECT: a store that keeps no
+// order holding every file it should is listed once and asked nothing else.
 func TestTheAuditReadsAListingRatherThanAStatPerObject(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -705,18 +920,18 @@ func TestTheAuditReadsAListingRatherThanAStatPerObject(t *testing.T) {
 		h.file(fmt.Sprintf("f%02d.md", i), fmt.Sprintf("content %d", i))
 	}
 	r, err := h.c.Audit(t.Context())
-	if err != nil || r.Referenced != 20 || r.Missing != 0 || r.Damaged != 0 {
+	if err != nil || !r.Completed || r.Referenced != 20 || r.Missing != 0 || r.Damaged != 0 {
 		t.Fatalf("Audit = %+v, %v", r, err)
 	}
-	if h.backend.stats != 0 || h.backend.lists != 1 {
-		t.Fatalf("the audit made %d stats and %d listings, want one listing and no stat",
-			h.backend.stats, h.backend.lists)
+	if stats, lists := h.backend.stats(), h.backend.listings(); stats != 0 || lists != 1 {
+		t.Fatalf("the audit made %d stats and %d listings, want one listing and no stat", stats, lists)
 	}
 }
 
-// EVERY WINDOW IS AUDITED, each reference once: a store larger than a window
-// is listed once per window, and what it lost or damaged in any of them is
-// found.
+// EVERY WINDOW OF THE LISTING IS AUDITED, each reference once: a store holding
+// more objects than a window is listed once a window, and what it lost or
+// holds wrong in any of them is found — an object the engine did not put
+// there taking no room in one.
 func TestEveryWindowOfTheListingIsAudited(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -724,9 +939,9 @@ func TestEveryWindowOfTheListingIsAudited(t *testing.T) {
 	var all []objstore.Object
 	for i := range 10 {
 		all = append(all, h.file(fmt.Sprintf("f%02d.md", i), fmt.Sprintf("content %d", i)))
+		// MINTED A MOMENT APART, so the keys' order is the files'.
 		h.clock.advance(time.Millisecond)
 	}
-	// SOMEBODY ELSE'S OBJECT, which the window must not count.
 	if err := h.backend.Put(t.Context(), "elsewhere/x", strings.NewReader("x"), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
 	}
@@ -741,8 +956,207 @@ func TestEveryWindowOfTheListingIsAudited(t *testing.T) {
 	if err != nil || r.Referenced != 10 || r.Missing != 3 || r.Damaged != 1 {
 		t.Fatalf("Audit = %+v, %v; want ten files, three missing and one damaged", r, err)
 	}
-	if h.backend.lists != 3 {
-		t.Fatalf("seven held objects in windows of three were listed %d times, want 3", h.backend.lists)
+	if n := h.backend.listings(); n != 3 {
+		t.Fatalf("seven held objects in windows of three were listed %d times, want 3", n)
+	}
+	h.backend.mu.Lock()
+	defer h.backend.mu.Unlock()
+	for _, i := range []int{1, 5, 9} {
+		if n := h.backend.asks[all[i].Key.Name()]; n != 1 {
+			t.Errorf("%s, in no window, was asked about by name %d times, want once", all[i].Key, n)
+		}
+	}
+	if len(h.backend.asks) != 3 {
+		t.Errorf("asked about by name: %v; want only the three no window held", h.backend.asks)
+	}
+}
+
+// THE SECOND LOOK HOLDS AT MOST ITS LIMIT OF REFERENCES, oldest first, a
+// reference or a range at a time: a push past it hands back the oldest entries
+// until what is held fits — a range counting every reference it holds — and a
+// drain hands back the rest in the order they came. An entry handed back is
+// cleared from the array behind the queue, so the queue never keeps what it no
+// longer counts reachable.
+func TestTheSecondLookQueueHoldsAtMostItsLimit(t *testing.T) {
+	t.Parallel()
+	ref := func(i int) objstore.Reference { return objstore.Reference{NamedBy: fmt.Sprintf("ENG/%d.md", i)} }
+	one := func(i int) lookAgain { return lookAgain{ref: ref(i)} }
+	span := func(from, to int) lookAgain {
+		l := lookAgain{refs: []objstore.Reference{}}
+		for i := from; i <= to; i++ {
+			l.refs = append(l.refs, ref(i))
+		}
+		return l
+	}
+	names := func(ls []lookAgain) []string {
+		var out []string
+		for _, l := range ls {
+			if l.refs == nil {
+				out = append(out, l.ref.NamedBy)
+				continue
+			}
+			out = append(out, fmt.Sprintf("%s..%s", l.refs[0].NamedBy, l.refs[len(l.refs)-1].NamedBy))
+		}
+		return out
+	}
+	q := suspects{limit: 3}
+	for i := 1; i <= 7; i++ {
+		due := q.push(one(i))
+		switch {
+		case i <= 3 && len(due) != 0:
+			t.Fatalf("push %d handed back %v while the queue had room", i, names(due))
+		case i > 3 && !slices.Equal(names(due), names([]lookAgain{one(i - 3)})):
+			t.Fatalf("push %d handed back %v, want the oldest, %q", i, names(due), ref(i-3).NamedBy)
+		}
+		if q.held > 3 {
+			t.Fatalf("after push %d the queue holds %d, past its limit of 3", i, q.held)
+		}
+	}
+	// A RANGE COUNTS EVERY REFERENCE IT HOLDS: two of them push out the two
+	// oldest references, and the next reference the range itself.
+	if due := q.push(span(10, 11)); !slices.Equal(names(due), []string{"ENG/5.md", "ENG/6.md"}) {
+		t.Fatalf("a range of two handed back %v, want the two oldest references", names(due))
+	}
+	if due := q.push(one(12)); !slices.Equal(names(due), []string{"ENG/7.md"}) {
+		t.Fatalf("a reference after the range handed back %v, want the oldest", names(due))
+	}
+	if due := q.push(one(13)); !slices.Equal(names(due), []string{"ENG/10.md..ENG/11.md"}) {
+		t.Fatalf("a reference past the limit handed back %v, want the range", names(due))
+	}
+	for i, l := range q.queue[:cap(q.queue)] {
+		if i >= q.head && i < len(q.queue) {
+			continue // held
+		}
+		if l.refs != nil || l.ref != (objstore.Reference{}) {
+			t.Fatalf("slot %d, handed back, is still reachable from the queue's array: %v", i, names([]lookAgain{l}))
+		}
+	}
+	if got, want := names(q.drain()), []string{"ENG/12.md", "ENG/13.md"}; !slices.Equal(got, want) {
+		t.Fatalf("drain = %v, want %v", got, want)
+	}
+	if rest := q.drain(); len(rest) != 0 || q.held != 0 {
+		t.Fatalf("a drained queue still holds %v (%d)", names(rest), q.held)
+	}
+	// A LONE RANGE PAST THE LIMIT IS HELD rather than looked at again the
+	// moment its first look failed, and the next push hands it back.
+	if due := q.push(span(20, 24)); len(due) != 0 {
+		t.Fatalf("a lone range past the limit was handed back at once: %v", names(due))
+	}
+	if due := q.push(one(25)); !slices.Equal(names(due), []string{"ENG/20.md..ENG/24.md"}) {
+		t.Fatalf("the push after a range past the limit handed back %v, want the range", names(due))
+	}
+	// A LIMIT BELOW ONE HOLDS ONE rather than dropping what it is handed.
+	unset := suspects{}
+	if due := unset.push(one(1)); len(due) != 0 {
+		t.Fatal("a queue with no limit set dropped the first reference it was handed")
+	}
+	if due := unset.push(one(2)); !slices.Equal(names(due), []string{"ENG/1.md"}) {
+		t.Fatalf("a queue with no limit set handed back %v, want the first", names(due))
+	}
+}
+
+// AN AUDIT TAKES ITS SECOND LOOK BEFORE ITS WALK ENDS ONCE IT HOLDS ITS BOUND:
+// a store that lost everything must not have the audit hold the company's
+// whole inventory until the end of the walk. Every reference whose first look
+// found nothing still gets exactly one second look, the ones asked early
+// included, and only those found nowhere are missing — whether the first look
+// was a stat ("by_name") or the window of the listing it falls in ("listed").
+//
+// The walk's last first look waits for a second look to have been taken, so an
+// audit that saved every second look for the end of its walk never finishes it:
+// by name, the last first stat; listed, the last window's listing, which the
+// walk needs before it can judge the references in it.
+func TestTheAuditTakesItsSecondLookBeforeItsWalkEndsOnceItHoldsItsBound(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []string{"by_name", "listed"} {
+		t.Run(arm, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.c.suspectsHeld = 3
+			var names []string
+			for i := range 12 {
+				o := h.file(fmt.Sprintf("late-%02d.md", i), fmt.Sprintf("late %d", i))
+				if arm == "by_name" {
+					h.backend.lagging[o.Key.Name()] = 1
+				} else {
+					h.backend.hide(o.Key.Name())
+				}
+				names = append(names, o.Key.Name())
+			}
+			for i := range 2 {
+				o := h.file(fmt.Sprintf("lost-%d.md", i), fmt.Sprintf("lost %d", i))
+				if err := h.store.Delete(t.Context(), o.Key); err != nil {
+					t.Fatal(err)
+				}
+				names = append(names, o.Key.Name())
+			}
+			var (
+				second    = make(chan struct{})
+				sawSecond sync.Once
+			)
+			waitForASecondLook := func() {
+				select {
+				case <-second:
+				case <-time.After(10 * time.Second):
+					t.Error("the walk's last first look came with no second look taken: " +
+						"every suspect was held for the end of the walk")
+				}
+			}
+			// Each look by name answers which look of its object it is.
+			nthSecond := 2
+			if arm == "listed" {
+				nthSecond = 1
+				// LISTED OBJECTS AFTER THE SUSPECTS IN KEY ORDER, one to a
+				// window, so the walk lists the store again for each: the
+				// last listing is the walk's last first look.
+				const listed = 3
+				h.c.window = 1
+				for i := range listed {
+					h.clock.advance(time.Millisecond)
+					h.file(fmt.Sprintf("listed-%d.md", i), fmt.Sprintf("listed %d", i))
+				}
+				h.backend.onList = func(_ context.Context, nth int) error {
+					if nth == listed {
+						waitForASecondLook()
+					}
+					return nil
+				}
+			}
+			var (
+				mu     sync.Mutex
+				firsts int
+			)
+			h.backend.onStat = func(_ context.Context, _ string, nth int) error {
+				if nth == nthSecond {
+					sawSecond.Do(func() { close(second) })
+					return nil
+				}
+				mu.Lock()
+				firsts++
+				last := firsts == len(names)
+				mu.Unlock()
+				if last {
+					waitForASecondLook()
+				}
+				return nil
+			}
+			if arm == "by_name" {
+				h.askByName()
+			}
+
+			r, err := h.c.Audit(t.Context())
+			if err != nil || r.Missing != 2 || r.Found == nil || r.Found.Missing != 2 {
+				t.Fatalf("Audit = %+v, %v; want the two lost files missing", r, err)
+			}
+			h.backend.mu.Lock()
+			defer h.backend.mu.Unlock()
+			for _, name := range names {
+				if got := h.backend.asks[name]; got != nthSecond {
+					t.Errorf("%s was asked about by name %d times, want %d: a first look and "+
+						"exactly one second", name, got, nthSecond)
+				}
+			}
+		})
 	}
 }
 
@@ -762,9 +1176,11 @@ func TestAFailedAuditKeepsTheLastFindings(t *testing.T) {
 		t.Fatalf("the first audit = %+v, %v", first, err)
 	}
 	h.clock.advance(AuditInterval)
+	// EVERY QUESTION FAILS, the second look included, and the store answers
+	// none: a store that has gone away, never a file it refuses.
 	h.backend.statErr = errors.New("the broker stopped answering")
-	if _, err := h.c.Audit(t.Context()); err == nil {
-		t.Fatal("an audit whose every question failed succeeded")
+	if _, err := h.c.Audit(t.Context()); !errors.Is(err, errStoreFailing) {
+		t.Fatalf("an audit whose every question failed = %v, want errStoreFailing", err)
 	}
 	got := h.c.Status().Audit
 	if got.Error == "" || !got.At.After(first.At) {
@@ -782,7 +1198,7 @@ func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	at := h.clock.Now()
-	lost := MissingFile{Object: objstore.KeyAt(at), NamedBy: "ENG/lost.md"}
+	lost := MissingFile{Object: objstore.KeyAt(at), NamedBy: "ENG/lost.md", Finding: FindingMissing}
 	h.c.Restore(Status{
 		Collect: CollectionReport{Completed: true, Deleted: 3, At: at},
 		Audit: AuditReport{Completed: true, Referenced: 9, Missing: 1, At: at,
@@ -806,5 +1222,646 @@ func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	if again := h.c.Status(); again.Audit.Error != "stopped" || again.Audit.Found == nil ||
 		again.Audit.Found.Missing != 1 {
 		t.Fatalf("a newer failed attempt took the findings with it: %+v", again.Audit)
+	}
+}
+
+// gate holds every call that passes it until it is opened, counting how many
+// it holds at once.
+type gate struct {
+	open chan struct{}
+
+	mu         sync.Mutex
+	held, peak int
+}
+
+func newGate() *gate { return &gate{open: make(chan struct{})} }
+
+// pass is a call arriving: counted, then held until the gate opens or ctx
+// ends — whose error it answers.
+func (g *gate) pass(ctx context.Context) error {
+	g.mu.Lock()
+	g.held++
+	g.peak = max(g.peak, g.held)
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.held--
+		g.mu.Unlock()
+	}()
+	select {
+	case <-g.open:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// counts is how many calls the gate holds now, and the most it has held.
+func (g *gate) counts() (held, peak int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.held, g.peak
+}
+
+// waitHeld fails the test unless n calls are held at once within ten seconds.
+func (g *gate) waitHeld(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		held, peak := g.counts()
+		if held >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the gate never held %d calls at once (at most %d): the calls are not "+
+				"made concurrently", n, peak)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// THE AUDIT ASKS UP TO ITS BOUND AT ONCE, AND NEVER MORE. Asked one at a time,
+// an audit of two million objects on S3 is most of a day; asked without a
+// bound, it floods the store it is auditing. So with its first looks by name,
+// and with its second looks of everything a listing left out.
+func TestTheAuditAsksAtMostItsBoundAtOnce(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []string{"by_name", "second_looks"} {
+		t.Run(arm, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			for i := range 3 * auditConcurrency {
+				o := h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
+				if arm == "second_looks" {
+					h.backend.hide(o.Key.Name())
+				}
+			}
+			if arm == "by_name" {
+				h.askByName()
+			}
+			g := newGate()
+			h.backend.onStat = func(ctx context.Context, _ string, _ int) error { return g.pass(ctx) }
+			type result struct {
+				r   AuditReport
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				r, err := h.c.Audit(t.Context())
+				done <- result{r, err}
+			}()
+			g.waitHeld(t, auditConcurrency)
+			// AND NO FURTHER while every one of them is held: a question
+			// waits for one to be answered before it is asked.
+			time.Sleep(50 * time.Millisecond)
+			if _, peak := g.counts(); peak != auditConcurrency {
+				t.Fatalf("the audit asked %d questions at once, past its bound of %d", peak, auditConcurrency)
+			}
+			close(g.open)
+			got := <-done
+			if got.err != nil || !got.r.Completed || got.r.Referenced != 3*auditConcurrency || got.r.Missing != 0 {
+				t.Fatalf("Audit = %+v, %v; want every object asked about and held", got.r, got.err)
+			}
+			if held, peak := g.counts(); held != 0 || peak != auditConcurrency {
+				t.Fatalf("after the audit the gate holds %d and held at most %d; want nothing left "+
+					"asking and the bound reached, never passed", held, peak)
+			}
+		})
+	}
+}
+
+// A COLLECTION DELETES UP TO ITS BOUND AT ONCE, AND NEVER MORE, while its
+// listing goes on — and every deletion it began is counted.
+func TestACollectionDeletesAtMostItsBoundAtOnce(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var orphans []objstore.Key
+	for i := range 2 * judgeBatch {
+		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
+	}
+	h.clock.advance(PendingGrace + time.Hour)
+	g := newGate()
+	h.backend.onDelete = func(ctx context.Context, _ string) error { return g.pass(ctx) }
+	type result struct {
+		r   CollectionReport
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, err := h.c.Collect(t.Context())
+		done <- result{r, err}
+	}()
+	g.waitHeld(t, deleteConcurrency)
+	time.Sleep(50 * time.Millisecond)
+	if _, peak := g.counts(); peak != deleteConcurrency {
+		t.Fatalf("the collection had %d deletions in flight, past its bound of %d", peak, deleteConcurrency)
+	}
+	close(g.open)
+	got := <-done
+	if got.err != nil || !got.r.Completed || got.r.Deleted != len(orphans) {
+		t.Fatalf("Collect = %+v, %v; want all %d orphans deleted", got.r, got.err, len(orphans))
+	}
+	if held, peak := g.counts(); held != 0 || peak != deleteConcurrency {
+		t.Fatalf("after the collection the gate holds %d and held at most %d", held, peak)
+	}
+	for _, k := range orphans {
+		if h.held(k) {
+			t.Fatalf("%s survived a collection that reported it deleted", k)
+		}
+	}
+}
+
+// THE FILES A STATUS SHOWS ARE THE FIRST BY NAME, whatever order the audit
+// found them in: its questions run at once, so the order they are answered
+// in is chance, and a list chosen by it would name a different hundred each
+// day for the same lost files.
+func TestTheFilesShownAreTheFirstByName(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	lost := MissingShown + 50
+	// CREATED IN REVERSE, so the keys' order — which is their minting
+	// order — and the files' order disagree.
+	for i := lost - 1; i >= 0; i-- {
+		o := h.file(fmt.Sprintf("f%03d.md", i), fmt.Sprintf("lost %d", i))
+		if err := h.store.Delete(t.Context(), o.Key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Missing != lost || r.Found == nil {
+		t.Fatalf("Audit = %+v, %v; want %d missing", r, err, lost)
+	}
+	var got, want []string
+	for _, f := range r.Found.MissingFiles {
+		got = append(got, f.NamedBy)
+	}
+	for i := range MissingShown {
+		want = append(want, fmt.Sprintf("ENG/f%03d.md", i))
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the files shown are %v, want the first %d by name: %v", got, MissingShown, want)
+	}
+}
+
+// A PASS ITS CALLER STOPPED SAYS WHY — the engine stops one when its duty
+// moves to another node — rather than reporting "context canceled", and
+// leaves no call to the store running behind it: an audit stopped in its
+// listing, and one stopped in a second look by name, as a collection stopped
+// in a deletion.
+func TestAStoppedPassSaysWhy(t *testing.T) {
+	t.Parallel()
+	for _, pass := range []string{"audit", "audit_second_look", "collection"} {
+		t.Run(pass, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			g := newGate()
+			a := h.file("a.md", "a file")
+			run := func(ctx context.Context) (string, error) {
+				r, err := h.c.Audit(ctx)
+				return r.Error, err
+			}
+			switch pass {
+			case "audit":
+				h.backend.onList = func(ctx context.Context, _ int) error { return g.pass(ctx) }
+			case "audit_second_look":
+				h.backend.hide(a.Key.Name())
+				h.backend.onStat = func(ctx context.Context, _ string, _ int) error { return g.pass(ctx) }
+			case "collection":
+				h.put("an orphan")
+				h.clock.advance(PendingGrace + time.Hour)
+				h.backend.onDelete = func(ctx context.Context, _ string) error { return g.pass(ctx) }
+				run = func(ctx context.Context) (string, error) {
+					r, err := h.c.Collect(ctx)
+					return r.Error, err
+				}
+			}
+			why := errors.New("another node holds the duty now")
+			ctx, stop := context.WithCancelCause(t.Context())
+			type result struct {
+				reported string
+				err      error
+			}
+			done := make(chan result, 1)
+			go func() {
+				reported, err := run(ctx)
+				done <- result{reported, err}
+			}()
+			g.waitHeld(t, 1)
+			stop(why)
+			got := <-done
+			if !errors.Is(got.err, why) || !strings.Contains(got.reported, why.Error()) {
+				t.Fatalf("a stopped %s returned %v and reported %q; want it to say why it "+
+					"was stopped", pass, got.err, got.reported)
+			}
+			if held, _ := g.counts(); held != 0 {
+				t.Fatalf("%d calls to the store outlived the %s", held, pass)
+			}
+		})
+	}
+}
+
+// AN AUDIT STOPPED BEFORE ITS SECOND LOOKS HAS NOT RUN TO ITS END, although no
+// question it asked failed: the one first look ANSWERS — the listing that left
+// the object out, or a "not found" by name, neither needing the context — so
+// nothing is in flight when the stop lands, and the drain stops between two
+// questions rather than inside one. Reported as complete, its floor counts
+// would replace the last whole audit's findings and clear the alarm; the
+// engine stops an audit exactly this way when its duty moves.
+func TestAnAuditStoppedBeforeItsSecondLooksHasNotRunToItsEnd(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []string{"listed", "by_name"} {
+		t.Run(arm, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			late := h.file("late.md", "an object the store lists late")
+			ctx, stop := context.WithCancelCause(t.Context())
+			defer stop(nil)
+			why := errors.New("the duty moved")
+			if arm == "listed" {
+				h.backend.hide(late.Key.Name())
+				h.backend.onList = func(context.Context, int) error {
+					stop(why)
+					return nil
+				}
+			} else {
+				h.askByName()
+				h.backend.mu.Lock()
+				h.backend.lagging[late.Key.Name()] = 1
+				h.backend.mu.Unlock()
+				h.backend.onStat = func(_ context.Context, _ string, nth int) error {
+					if nth == 1 {
+						stop(why)
+					}
+					return nil
+				}
+			}
+			r, err := h.c.Audit(ctx)
+			if !errors.Is(err, why) {
+				t.Fatalf("an audit stopped before its second looks returned %v, want it to say "+
+					"it was stopped by %v", err, why)
+			}
+			if r.Completed || r.Found != nil || !strings.Contains(r.Error, "the audit was stopped") {
+				t.Fatalf("an audit stopped before its second looks reported %+v; want it "+
+					"incomplete, with no findings of its own and the stop as its error", r)
+			}
+			if found := h.c.Status().Audit.Found; found != nil {
+				t.Fatalf("an audit stopped before its second looks recorded findings %+v", found)
+			}
+			if n := h.backend.stats(); arm == "listed" && n != 0 {
+				t.Fatalf("an audit stopped before its second looks asked %d questions by name", n)
+			}
+		})
+	}
+}
+
+// A STORE THAT FAILS QUESTION AFTER QUESTION STOPS THE AUDIT, with its own
+// error, once it has failed a window of them with none answered between — its
+// listing, and then the questions by name a failed listing turns the audit to
+// — and the audit returns only once every question it asked has ended: a
+// question to the store never outlives the pass that asked it. The findings
+// the last audit made stand, and none of the failed questions is taken for a
+// finding.
+func TestAStoreThatFailsQuestionAfterQuestionStopsTheAudit(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	lost := h.file("lost.md", "lost")
+	if err := h.store.Delete(t.Context(), lost.Key); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := h.c.Audit(t.Context()); err != nil || r.Found == nil || r.Found.Missing != 1 {
+		t.Fatalf("the first audit = %+v, %v", r, err)
+	}
+	for i := range 3 * auditConcurrency {
+		h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
+	}
+	broke := errors.New("the store stopped answering")
+	h.backend.mu.Lock()
+	h.backend.listErr = broke
+	h.backend.mu.Unlock()
+	var (
+		mu       sync.Mutex
+		asked    int
+		inFlight atomic.Int64
+	)
+	h.backend.onStat = func(ctx context.Context, _ string, _ int) error {
+		mu.Lock()
+		asked++
+		n := asked
+		mu.Unlock()
+		if n <= 5 {
+			return nil
+		}
+		inFlight.Add(1)
+		defer inFlight.Add(-1)
+		// A REQUEST TAKES A MOMENT TO FAIL, so the questions beside the
+		// one that stops the audit are still out when it does — and an
+		// audit that returned without waiting for them is caught with them
+		// running.
+		select {
+		case <-time.After(5 * time.Millisecond):
+		case <-ctx.Done():
+			time.Sleep(20 * time.Millisecond)
+			return ctx.Err()
+		}
+		return broke
+	}
+	h.clock.advance(AuditInterval)
+	r, err := h.c.Audit(t.Context())
+	if !errors.Is(err, broke) || !errors.Is(err, errStoreFailing) || r.Completed ||
+		!strings.Contains(r.Error, broke.Error()) {
+		t.Fatalf("Audit = %+v, %v; want it failed as a failing store, with the store's own error", r, err)
+	}
+	if n := inFlight.Load(); n != 0 {
+		t.Fatalf("%d questions were still running when the audit returned", n)
+	}
+	mu.Lock()
+	n := asked
+	mu.Unlock()
+	if n > 5+failedInARow+auditConcurrency {
+		t.Fatalf("a store that answered nothing was asked %d questions; want the audit stopped "+
+			"within a window of its run of %d", n, failedInARow)
+	}
+	if r.Found == nil || r.Found.Missing != 1 || r.Found.Unanswered != 0 ||
+		r.Found.MissingFiles[0].NamedBy != "ENG/lost.md" {
+		t.Fatalf("the findings after a failed audit = %+v; want the last whole audit's", r.Found)
+	}
+}
+
+// ONE OBJECT THE STORE KEEPS FAILING IS UNANSWERED, AND THE AUDIT RUNS TO ITS
+// END: asked by name, set aside, asked again after the walk, and named — or,
+// left out of a listing, asked by name once and named. Failing the audit
+// instead never named the file, and the engine's retry ten minutes later asked
+// the store about every object before it again — every attempt of every day —
+// while the alarm kept the last audit to have finished. The store answers
+// every other question, which is what makes the failure the object's.
+func TestAnObjectTheStoreKeepsFailingIsUnanswered(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []string{"by_name", "listed"} {
+		t.Run(arm, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			var bad objstore.Object
+			for i := range 2*auditConcurrency + 3 {
+				o := h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
+				if i == auditConcurrency {
+					bad = o
+				}
+			}
+			asks := 1
+			if arm == "by_name" {
+				h.askByName()
+				asks = 2
+			} else {
+				h.backend.hide(bad.Key.Name())
+			}
+			refused := errors.New("InternalError: we encountered an internal error, please try again")
+			h.backend.onStat = func(_ context.Context, name string, _ int) error {
+				if name == bad.Key.Name() {
+					return refused
+				}
+				return nil
+			}
+			r, err := h.c.Audit(t.Context())
+			if err != nil || !r.Completed || r.Unanswered != 1 || r.Missing != 0 || r.Damaged != 0 {
+				t.Fatalf("Audit = %+v, %v; want it complete with the one file unanswered", r, err)
+			}
+			want := []MissingFile{{Object: bad.Key, NamedBy: fmt.Sprintf("ENG/%03d.md", auditConcurrency),
+				Finding: FindingUnanswered}}
+			if r.Found == nil || r.Found.Unanswered != 1 || r.Found.Lost() != 1 ||
+				!slices.Equal(r.Found.MissingFiles, want) {
+				t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+			}
+			h.backend.mu.Lock()
+			defer h.backend.mu.Unlock()
+			for name, n := range h.backend.asks {
+				switch {
+				case name == bad.Key.Name() && n != asks:
+					t.Errorf("the failing object was asked about %d times, want %d", n, asks)
+				case name != bad.Key.Name() && n > asks:
+					t.Errorf("%s was asked about %d times; nothing is walked again", name, n)
+				}
+			}
+		})
+	}
+}
+
+// A STORE THAT STOPS ANSWERING AS THE AUDIT ENDS FAILS IT, rather than having
+// every second look it failed then called unanswered: the store is asked once
+// more, about an object it answered for, and only an answer there says the
+// failures were the objects'. A store that answered nothing all audit is
+// failing too, however few the questions. So whether the first looks were by
+// name or from the listing — whose answer settles the objects it holds.
+func TestAStoreThatStopsAnsweringAsTheAuditEndsFailsIt(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []string{"by_name", "listed"} {
+		t.Run(arm, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.file("kept.md", "kept")
+			late := h.file("late.md", "an object the store has not caught up with")
+			// The look by name that is the late object's second.
+			second := 1
+			if arm == "by_name" {
+				h.askByName()
+				second = 2
+			} else {
+				h.backend.hide(late.Key.Name())
+			}
+			setLate := func() {
+				h.backend.mu.Lock()
+				defer h.backend.mu.Unlock()
+				clear(h.backend.asks)
+				if arm == "by_name" {
+					h.backend.lagging[late.Key.Name()] = 1
+				}
+			}
+			setLate()
+			broke := errors.New("the store went away")
+			var down atomic.Bool
+			h.backend.onStat = func(_ context.Context, name string, nth int) error {
+				if name == late.Key.Name() && nth == second {
+					down.Store(true)
+				}
+				if down.Load() {
+					return broke
+				}
+				return nil
+			}
+			r, err := h.c.Audit(t.Context())
+			if !errors.Is(err, errStoreFailing) || r.Completed || r.Found != nil {
+				t.Fatalf("Audit = %+v, %v; want it failed as a failing store, finding nothing", r, err)
+			}
+
+			// AND THE SAME LAST SECOND LOOK, FAILED BY A STORE STILL
+			// ANSWERING, IS THE OBJECT'S: the question after it is answered.
+			setLate()
+			down.Store(false)
+			h.backend.onStat = func(_ context.Context, name string, nth int) error {
+				if name == late.Key.Name() && nth == second {
+					return broke
+				}
+				return nil
+			}
+			r, err = h.c.Audit(t.Context())
+			if err != nil || r.Unanswered != 1 || r.Found == nil || r.Found.Unanswered != 1 {
+				t.Fatalf("Audit = %+v, %v; want the one file unanswered", r, err)
+			}
+		})
+	}
+}
+
+// A DELETION THAT FAILS STOPS THE COLLECTION WITH ITS OWN ERROR — never the
+// cancellation it caused — and the pass returns only once every deletion it
+// began has ended, counting exactly those that took effect.
+//
+// THE COUNT IS JUDGED AGAINST THE STORE, never against a number: a deletion
+// the store let through before the failure can still reach the twin after the
+// failure cancelled the pass, and fail there, so how many of the nineteen
+// before it take effect is the scheduler's to decide. What is not is that the
+// report counts every one that did and none that did not, and that nothing
+// after the failure is deleted.
+func TestAFailedDeletionStopsTheCollection(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var orphans []objstore.Key
+	for i := range 2 * judgeBatch {
+		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
+	}
+	h.clock.advance(PendingGrace + time.Hour)
+	broke := errors.New("the store refused a deletion")
+	var (
+		mu       sync.Mutex
+		calls    int
+		inFlight atomic.Int64
+	)
+	h.backend.onDelete = func(ctx context.Context, _ string) error {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		switch {
+		case n < 20:
+			return nil
+		case n == 20:
+			return broke
+		}
+		inFlight.Add(1)
+		defer inFlight.Add(-1)
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond)
+		return ctx.Err()
+	}
+	r, err := h.c.Collect(t.Context())
+	if !errors.Is(err, broke) || errors.Is(err, context.Canceled) || r.Completed {
+		t.Fatalf("Collect = %+v, %v; want it failed with the deletion's own error alone", r, err)
+	}
+	if n := inFlight.Load(); n != 0 {
+		t.Fatalf("%d deletions were still running when the collection returned", n)
+	}
+	gone := 0
+	for _, k := range orphans {
+		if !h.held(k) {
+			gone++
+		}
+	}
+	if r.Deleted != gone || gone >= 20 {
+		t.Fatalf("the collection reported %d deleted and the store lost %d; want the report "+
+			"to count exactly the deletions that took effect, all of them before the 20th", r.Deleted, gone)
+	}
+}
+
+// EVERY REFERENCE IS LOOKED AT ONCE, AND A SUSPECT EXACTLY TWICE, however the
+// questions interleave: nothing held asked about again, nothing called missing
+// on one answer, nothing damaged counted as missing. By name, a reference's
+// first look is a stat; from the listing, read here across windows, it is the
+// window its key falls in, and only what no window held is asked by name.
+func TestEveryReferenceIsAskedOnceAndASuspectTwice(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []string{"by_name", "listed"} {
+		t.Run(arm, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			const total, deleted, corrupted, late = 1507, 37, 13, 5
+			// suspects is every name whose first look found nothing, which
+			// gets one more by name.
+			suspects := map[string]bool{}
+			for i := range total {
+				o := h.file(fmt.Sprintf("%04d.md", i), fmt.Sprintf("object %d", i))
+				switch {
+				case i < deleted:
+					if err := h.store.Delete(t.Context(), o.Key); err != nil {
+						t.Fatal(err)
+					}
+					suspects[o.Key.Name()] = true
+				case i < deleted+corrupted:
+					h.backend.Corrupt(o.Key.Name(), []byte("rot"))
+				case i < deleted+corrupted+late:
+					if arm == "by_name" {
+						h.backend.lagging[o.Key.Name()] = 1
+					} else {
+						h.backend.hide(o.Key.Name())
+					}
+					suspects[o.Key.Name()] = true
+				}
+			}
+			const window = 100
+			if arm == "by_name" {
+				h.askByName()
+			} else {
+				h.c.window = window
+			}
+			r, err := h.c.Audit(t.Context())
+			if err != nil || r.Referenced != total || r.Missing != deleted || r.Damaged != corrupted {
+				t.Fatalf("Audit = %+v, %v; want %d asked, %d missing and %d damaged", r, err, total, deleted, corrupted)
+			}
+			h.backend.mu.Lock()
+			defer h.backend.mu.Unlock()
+			if arm == "listed" {
+				listed := total - deleted - late
+				if want := (listed + window - 1) / window; h.backend.lists != want {
+					t.Errorf("%d held objects in windows of %d were listed %d times, want %d",
+						listed, window, h.backend.lists, want)
+				}
+				if len(h.backend.asks) != len(suspects) {
+					t.Fatalf("%d names asked about by name, want the %d no window held",
+						len(h.backend.asks), len(suspects))
+				}
+				for name, n := range h.backend.asks {
+					if !suspects[name] || n != 1 {
+						t.Errorf("%s asked about by name %d times; want once, and only for a suspect", name, n)
+					}
+				}
+				return
+			}
+			if len(h.backend.asks) != total {
+				t.Fatalf("%d names asked about, want %d", len(h.backend.asks), total)
+			}
+			for name, n := range h.backend.asks {
+				want := 1
+				if suspects[name] {
+					want = 2
+				}
+				if n != want {
+					t.Errorf("%s asked about %d times, want %d", name, n, want)
+				}
+			}
+		})
+	}
+}
+
+// THE AUDIT ASKS NO MORE AT ONCE THAN THE TRANSPORT KEEPS WARM, and deletes
+// fewer at once than it asks. On S3 an audit past the shared transport's warm
+// connections to one host pays a fresh TLS handshake for every question over
+// the pool; a deletion is a WRITE, on the share of the bucket's request rate
+// the company's own uploads spend.
+func TestTheAuditAsksNoMoreAtOnceThanTheTransportKeepsWarm(t *testing.T) {
+	t.Parallel()
+	if auditConcurrency > httpx.MaxIdleConnsPerHost {
+		t.Errorf("the audit asks %d at once and the transport keeps %d connections warm per host",
+			auditConcurrency, httpx.MaxIdleConnsPerHost)
+	}
+	if deleteConcurrency >= auditConcurrency {
+		t.Errorf("a collection deletes %d at once, not fewer than the %d questions an audit asks",
+			deleteConcurrency, auditConcurrency)
 	}
 }

@@ -135,12 +135,12 @@ func adoptSteps(live, prepared string) []adoptStep {
 // # Why the name says COPY
 //
 // The lock sidecar is deliberately never removed from a live database — see
-// [fileLock.release]: unlinking it races a peer that has already opened it and
-// is about to lock, and two processes would then believe they hold it. A copy
-// has no peer: nothing else will ever open it in place, because a restore
-// moves it first. So the constraint is in the name rather than in a comment
-// somebody reads afterwards, and the file must already be CLOSED by whoever
-// opened it.
+// internal/filelock's package doc: unlinking it races a peer that has already
+// opened it and is about to lock, and two processes would then believe they
+// hold it. A copy has no peer: nothing else will ever open it in place,
+// because a restore moves it first. So the constraint is in the name rather
+// than in a comment somebody reads afterwards, and the file must already be
+// CLOSED by whoever opened it.
 func QuiesceCopy(ctx context.Context, path string) error {
 	if err := checkpointAndClose(ctx, path); err != nil {
 		return fmt.Errorf("store: quiesce %s: %w", path, err)

@@ -137,15 +137,17 @@ var tagKeys = map[string]string{
 	// record deliberately leaves the node to the envelope.
 	"node": "node",
 	// The RUNTIME AUDIT's dimensions (types.OperatorActed and
-	// types.BackupRequested): the operator tool a call ran and the directory
-	// a backup was written to, which only those two carry, and beside the
-	// author the row's `actor` column already holds, WHAT SORT of author it
-	// is and the CREDENTIAL it acted through — the two halves of
-	// iam.ActorFor that are not the name. Tags for the reason every one here
-	// is — the Audit log and the backup history draw these rows from a
-	// listing, which never selects the payload, and without them a row
-	// could say only the summary's prose about who did what, through what,
-	// and where.
+	// types.BackupRequested): the operator tool a call ran, the repository
+	// a git push named and the directory a backup was written to, which
+	// only those two carry, and beside the author the row's `actor` column
+	// already holds, WHAT SORT of author it is and the CREDENTIAL it acted
+	// through — the two halves of iam.ActorFor that are not the name. Tags
+	// for the reason every one here is — the Audit log and the backup
+	// history draw these rows from a listing, which never selects the
+	// payload, and without them a row could say only the summary's prose
+	// about who did what, through what, and where. A refused push writes no
+	// row in the code domain, so its record's repository is the only place
+	// it is named.
 	//
 	// `operator_id` is a field of the same meaning wherever a payload
 	// carries it — a seat pause, a sandbox answer, a sign-in, a revision's
@@ -156,6 +158,7 @@ var tagKeys = map[string]string{
 	"actor_kind":  "actor_kind",
 	"operator_id": "operator_id",
 	"tool":        "tool",
+	"repo":        "repo",
 	"dir":         "dir",
 }
 

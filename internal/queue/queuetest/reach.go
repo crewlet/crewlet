@@ -226,7 +226,7 @@ func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResul
 			return err
 		}},
 		{"Serve", func() error {
-			stop, err := q.Serve(ctx, topic, func(context.Context, []byte) ([]byte, error) {
+			stop, err := q.Serve(ctx, topic, queue.ConcurrentAnswers, func(context.Context, []byte) ([]byte, error) {
 				return nil, nil
 			})
 			if stop != nil {

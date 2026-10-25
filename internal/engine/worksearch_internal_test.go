@@ -1,8 +1,14 @@
 package engine
 
 import (
+	"context"
 	"slices"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE INDEX FOLLOWS BOTH BACKENDS, not the wiki's alone.
@@ -55,5 +61,59 @@ func TestTheIndexerIsBuiltOverTheCorporaTheBackendsName(t *testing.T) {
 			t.Errorf("tracker=%v wiki=%v builds the index over %v and names %v",
 				tc.tracker, tc.wiki, got, want)
 		}
+	}
+}
+
+// THE RANKED WORK SEARCH FOLLOWS THE TRACKER, not the index alone. The index is
+// built under EITHER backend, so a data node of a company on Jira with the
+// native knowledge base holds an item searcher over an index with no task in
+// it — and handing that searcher out answered the dashboard's `work_search`
+// with a ranking of nothing on a company whose work lives in Jira, where every
+// other native tracker question answers unknown, the operator's catalogue and
+// the seats' tools offer no such search, and a node without `data` hands out
+// none. "Nothing matched" is the one answer a person acts on by filing the
+// duplicate.
+func TestTheRankedWorkSearchFollowsTheTracker(t *testing.T) {
+	t.Parallel()
+	q := memory.NewBroker().Client()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	router, err := estate.NewRouter(estate.RouterOptions{
+		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Session: estate.NewSession(),
+		Envelopes: routerEnvelopes(t), Timing: estate.Production(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		native *native
+		remote *remoteNative
+		want   bool
+	}{
+		{"a data node on the native tracker",
+			&native{trackerReader: &tracker.Reader{}, itemSearch: &tracker.Searcher{}}, nil, true},
+		{"a data node on Jira with the native knowledge base",
+			&native{pageReader: &pages.Reader{}, itemSearch: &tracker.Searcher{}}, nil, false},
+		{"a node without data on the native tracker", nil, &remoteNative{tracker: true}, true},
+		{"a node without data on Jira with the native knowledge base",
+			nil, &remoteNative{wiki: true}, false},
+		{"a node running no native runtime", nil, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := &Engine{router: router}
+			if tc.native != nil {
+				e.native.Store(tc.native)
+			}
+			if tc.remote != nil {
+				e.remote.Store(tc.remote)
+			}
+			if got := WorkSearcher(e) != nil; got != tc.want {
+				t.Errorf("the ranked work search handed out = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

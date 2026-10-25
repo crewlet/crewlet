@@ -3,10 +3,13 @@ package engine
 import (
 	"encoding/json"
 	"errors"
+	"maps"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -97,7 +100,7 @@ func paddedBarrierOn(t *testing.T, running *runningLog, pad int) {
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Gen:     running.runner.Committed().Generation,
-		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
@@ -278,17 +281,45 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 		t.Fatalf("recorder: %v", err)
 	}
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a", metrics: recorder}
+	// READ WHILE EVERY LOG STANDS STILL: a log can move between the report's
+	// reading of its usage and this case's — the code domain's activation
+	// record lands after the apply returns, since its reconcile runs off the
+	// apply's critical path — and a headroom compared across that write is two
+	// readings, not a wrong one. So each log's usage is read on both sides of
+	// the report, and the report is taken again until none moved across it.
+	usage := func() map[string]jetstream.LogStats {
+		out := map[string]jetstream.LogStats{}
+		for _, running := range s.running() {
+			stats, err := running.log.Stats(t.Context())
+			if err != nil {
+				t.Fatalf("read %s's usage: %v", running.domain.Name(), err)
+			}
+			out[running.domain.Name()] = stats
+		}
+		return out
+	}
+	sameUsage := func(a, b jetstream.LogStats) bool {
+		return a.Bytes == b.Bytes && a.MaxBytes == b.MaxBytes
+	}
 	rows := map[string]statelog.DomainReport{}
-	for _, d := range r.Report(t.Context()).Domains {
-		rows[d.Domain] = d
+	var still map[string]jetstream.LogStats
+	for attempt := 0; still == nil; attempt++ {
+		if attempt == 100 {
+			t.Fatal("a running log moved across every one of 100 reports")
+		}
+		before := usage()
+		report := r.Report(t.Context())
+		if after := usage(); maps.EqualFunc(before, after, sameUsage) {
+			still = after
+			for _, d := range report.Domains {
+				rows[d.Domain] = d
+			}
+		}
 	}
 	for _, running := range s.running() {
 		name := running.domain.Name()
 		reservation := statelog.ReservationOf(running.domain)
-		stats, err := running.log.Stats(t.Context())
-		if err != nil {
-			t.Fatalf("read %s's usage: %v", name, err)
-		}
+		stats := still[name]
 		want := *reservation.Headroom(stats.Bytes, stats.MaxBytes)
 		wantReserve := reservation.Bytes(stats.MaxBytes)
 		if reservation.Kept && wantReserve == 0 {
@@ -301,8 +332,8 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 				got.ReserveBytes, wantReserve)
 		}
 		if got.HeadroomFraction == nil || *got.HeadroomFraction != want {
-			t.Errorf("%s reports a headroom of %v, want %v — of the ceiling its "+
-				"ordinary writes are held to", name, got.HeadroomFraction, want)
+			t.Errorf("%s reports a headroom of %s, want %v — of the ceiling its "+
+				"ordinary writes are held to", name, fraction(got.HeadroomFraction), want)
 		}
 
 		r.gauges(name, reservation, stats, statelog.TrimDecision{}, fleetInputs{})
@@ -313,7 +344,7 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 			}
 		}
 		if gauged == nil || *gauged != want {
-			t.Errorf("%s's headroom gauge reads %v, want %v", name, gauged, want)
+			t.Errorf("%s's headroom gauge reads %s, want %v", name, fraction(gauged), want)
 		}
 	}
 	for _, name := range []string{"tracker", "pages"} {
@@ -321,4 +352,14 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 			t.Errorf("%s claims identity and reports no reserve", name)
 		}
 	}
+}
+
+// fraction is a headroom a report or a gauge held, as a failure prints it: the
+// value, or "absent" where there is none — never the pointer, which says
+// nothing about the headroom a failing case was shown.
+func fraction(f *float64) string {
+	if f == nil {
+		return "absent"
+	}
+	return strconv.FormatFloat(*f, 'g', -1, 64)
 }

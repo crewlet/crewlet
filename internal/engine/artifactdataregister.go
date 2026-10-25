@@ -46,6 +46,7 @@ func artifactDataRegistrations() []registration {
 				Gates: artifactdata.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
 		Barrier:    artifactdata.EncodeBarrier,
+		Trimmed:    artifactdata.EncodeTrimmed,
 		Generation: artifactdata.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
 			publisher *statelog.Publisher) (gateWrite, error) {

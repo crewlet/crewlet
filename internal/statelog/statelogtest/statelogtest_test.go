@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,11 +36,18 @@ func TestTheControlDomainPasses(t *testing.T) {
 func TestTheCompactedControlPasses(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
-		c := control()
-		c.Domain = compactedControl{}
-		c.Rows = rowsOver(c.Domain)
-		return c
+		return compacted()
 	})
+}
+
+// compacted is the control under the compacted protocol: no arbitration, so no
+// anchor and no trimmed record.
+func compacted() statelogtest.Candidate {
+	c := control()
+	c.Domain = compactedControl{}
+	c.Rows = rowsOver(c.Domain)
+	c.EncodeTrimmed = nil
+	return c
 }
 
 // rowsOver is the framework's own read seam over one control domain, which is
@@ -78,12 +86,13 @@ func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Cont
 
 func control() statelogtest.Candidate {
 	return statelogtest.Candidate{
-		Domain:     controlDomain{},
-		Applier:    controlApplier{},
-		Kinds:      []string{"widget"},
-		Rows:       rowsOver(controlDomain{}),
-		Write:      controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
-		EncodeGate: encodeControlGate,
+		Domain:        controlDomain{},
+		Applier:       controlApplier{},
+		Kinds:         []string{"widget"},
+		Rows:          rowsOver(controlDomain{}),
+		Write:         controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
+		EncodeGate:    encodeControlGate,
+		EncodeTrimmed: encodeControlTrimmed,
 		Migrate: func(ctx context.Context, db store.ReplicatedHandle) error {
 			return db.Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
@@ -224,6 +233,18 @@ func encodeControlGate(node string, readmit bool) ([]byte, error) {
 	})
 }
 
+// encodeControlTrimmed is the control's encoder of the trim's trimmed record:
+// its wire shape is the framework's envelope, so the record is the envelope.
+func encodeControlTrimmed(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.TrimmedKind {
+		return nil, fmt.Errorf("control: a %q envelope is not a trimmed record", env.Kind)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("control: a trimmed record carries no op id")
+	}
+	return json.Marshal(env)
+}
+
 type controlBase struct{}
 
 func (controlBase) Name() string { return "control" }
@@ -274,12 +295,12 @@ func (controlBase) Tables() map[string]statelog.TableClass {
 	}
 }
 
-func (controlBase) DeferredTable() string { return "control_log_deferred" }
-func (controlBase) ScopeIndex() string    { return "control_deferred_scope" }
-func (controlBase) OpsTable() string      { return "control_ops" }
-func (controlBase) ReadinessInput() bool  { return true }
-func (controlBase) ClaimsIdentity() bool  { return true }
-func (controlBase) FeedGroup() string     { return "" }
+func (controlBase) DeferredTable() string    { return "control_log_deferred" }
+func (controlBase) ScopeIndex() string       { return "control_deferred_scope" }
+func (controlBase) OpsTable() string         { return "control_ops" }
+func (controlBase) GatesSeatAdmission() bool { return true }
+func (controlBase) ClaimsIdentity() bool     { return true }
+func (controlBase) FeedGroup() string        { return "" }
 
 // controlDomain is the identity-claiming control: the base, plus the eviction
 // record and table every domain the trim counts nodes on has to have.
@@ -357,9 +378,9 @@ func (c compactedControl) Stream() statelog.StreamSpec {
 	return s
 }
 
-func (compactedControl) OpsTable() string     { return "" }
-func (compactedControl) ReadinessInput() bool { return false }
-func (compactedControl) ClaimsIdentity() bool { return false }
+func (compactedControl) OpsTable() string         { return "" }
+func (compactedControl) GatesSeatAdmission() bool { return false }
+func (compactedControl) ClaimsIdentity() bool     { return false }
 
 func (compactedControl) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
@@ -374,9 +395,18 @@ func (compactedControl) Tables() map[string]statelog.TableClass {
 type controlApplier struct{}
 
 func (controlApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
-	if rec.Kind == controlGateKind {
+	switch rec.Kind {
+	case controlGateKind:
 		return applyControlGate(ctx, tx, rec, false)
+	case statelog.TrimmedKind:
+		// THE FRAMEWORK REMOVES THE ANCHORS; the control writes nothing.
+		return 0, nil
 	}
+	return applyWidget(ctx, tx, rec)
+}
+
+// applyWidget is the control's one row per record.
+func applyWidget(ctx context.Context, tx *sql.Tx, rec statelog.Record) (int, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO control_widgets (id, version) VALUES (?, ?)
 		ON CONFLICT (id) DO UPDATE SET version = excluded.version
@@ -460,6 +490,14 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		},
 		"an operation ledger scrubbed out of every snapshot": {
 			domain: scrubbedLedger{controlDomain{}}, names: "must be divergent",
+		},
+		"a compacted domain that gates seat admission": {
+			domain: gatingCompacted{compactedControl{}},
+			names:  "gates seat admission and replays compacted",
+		},
+		"a domain with no operation ledger that gates seat admission": {
+			domain: ledgerlessGate{controlDomain{}},
+			names:  "keeps no operation ledger and gates seat admission",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -919,6 +957,40 @@ func (scrubbedLedger) Tables() map[string]statelog.TableClass {
 	return tables
 }
 
+// gatingCompacted is the compacted control claiming that a seat depends on
+// it — with an operation ledger, so the only rule it breaks is that one: a
+// compacted domain's gap is a coverage number, and admission waiting on it
+// withholds every seat claim on a node over one.
+type gatingCompacted struct{ compactedControl }
+
+func (gatingCompacted) GatesSeatAdmission() bool { return true }
+func (gatingCompacted) OpsTable() string         { return "control_ops" }
+
+func (gatingCompacted) Tables() map[string]statelog.TableClass {
+	tables := compactedControl{}.Tables()
+	tables["control_ops"] = statelog.Divergent
+	return tables
+}
+
+// ledgerlessGate is the strict control with no operation ledger and nothing
+// arbitrated, still claiming that a seat depends on it — the pairing the
+// ledger rule refuses, with every other rule satisfied.
+type ledgerlessGate struct{ controlDomain }
+
+func (ledgerlessGate) OpsTable() string { return "" }
+
+func (ledgerlessGate) Stream() statelog.StreamSpec {
+	s := controlDomain{}.Stream()
+	s.ArbitratedKinds = nil
+	return s
+}
+
+func (ledgerlessGate) Tables() map[string]statelog.TableClass {
+	tables := controlDomain{}.Tables()
+	delete(tables, "control_ops")
+	return tables
+}
+
 type nothingReplicated struct{ controlDomain }
 
 func (nothingReplicated) Tables() map[string]statelog.TableClass {
@@ -1056,3 +1128,161 @@ type compactedNodeGate struct{ compactedControl }
 
 func (compactedNodeGate) InstallsGate(statelog.Envelope) bool { return true }
 func (compactedNodeGate) NodeGate(statelog.Envelope) bool     { return true }
+
+// A DOMAIN WHOSE TRIMMED RECORD THE FRAMEWORK CANNOT USE IS CAUGHT — and each
+// arm is a way one ships silently: no record, and the anchors grow with every
+// subject ever written; one the framework does not recognise, and it removes
+// nothing; one an older build defers, a gate, or arbitrated, and every node
+// pays for it on every tick; an applier that writes a row for it, or has no
+// case for it, and the first trim changes or stops every node's copy.
+func TestTheSuiteCatchesADomainWhoseTrimmedRecordTheFrameworkCannotUse(t *testing.T) {
+	t.Parallel()
+	encoding := func(mutate func(*statelog.Envelope)) func(statelog.Envelope) ([]byte, error) {
+		return func(env statelog.Envelope) ([]byte, error) {
+			mutate(&env)
+			return json.Marshal(env)
+		}
+	}
+	for name, tc := range map[string]struct {
+		candidate func() statelogtest.Candidate
+		names     string
+	}{
+		"a log that writes anchors and supplies no trimmed record": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.EncodeTrimmed = nil
+				return c
+			},
+			names: "supplies no trimmed record",
+		},
+		"a log that writes no anchor and supplies one": {
+			candidate: func() statelogtest.Candidate {
+				c := compacted()
+				c.EncodeTrimmed = encodeControlTrimmed
+				return c
+			},
+			names: "writes no anchor",
+		},
+		"an encoder that writes another kind": {
+			candidate: withTrimmed(encoding(func(e *statelog.Envelope) {
+				e.Kind, e.Subject.Kind = "widget", "widget"
+			})),
+			names: "would not recognise it",
+		},
+		"an encoder that drops the floor": {
+			candidate: withTrimmed(encoding(func(e *statelog.Envelope) { e.Subject.ID = "" })),
+			names:     "would not recognise it",
+		},
+		"an encoder that stamps an operation": {
+			candidate: withTrimmed(encoding(func(e *statelog.Envelope) { e.OpID = "op-1" })),
+			names:     "carries operation",
+		},
+		"an encoder that stamps a version an older build defers": {
+			candidate: withTrimmed(encoding(func(e *statelog.Envelope) { e.V = 2 })),
+			names:     "an older build would defer it",
+		},
+		"an encoder that drops the writer": {
+			candidate: withTrimmed(encoding(func(e *statelog.Envelope) { e.Writer = "" })),
+			names:     "eviction gate reads the writer",
+		},
+		"an encoder that scopes it to an object": {
+			candidate: withTrimmed(encoding(func(e *statelog.Envelope) {
+				e.Scope = statelog.ScopeSet{Paths: []string{"widget/w-1"}}
+			})),
+			names: "not the framework's",
+		},
+		"a domain that calls it a gate": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.Domain = trimmedGate{controlDomain{}}
+				c.Rows = rowsOver(c.Domain)
+				return c
+			},
+			names: "declares its trimmed record a gate",
+		},
+		"a log that arbitrates it": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.Domain = trimmedArbitrated{controlDomain{}}
+				c.Rows = rowsOver(c.Domain)
+				return c
+			},
+			names: "arbitrates the trimmed kind",
+		},
+		"an applier that writes a row for it": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.Applier = widgetsForAll{}
+				return c
+			},
+			names: "wrote rows of its own",
+		},
+		"an applier with no case for it": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.Applier = noTrimmedCase{}
+				return c
+			},
+			names: "did not apply the trimmed record",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := statelogtest.TrimmedAnchorsGoAndAZeroWriteIsFenced(t,
+				func(*testing.T) statelogtest.Candidate { return tc.candidate() })
+			if err == nil {
+				t.Fatalf("the suite passed %s", name)
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("the suite objected, but to something else: %v", err)
+			}
+		})
+	}
+}
+
+// withTrimmed is the control with its trimmed-record encoder replaced.
+func withTrimmed(encode func(statelog.Envelope) ([]byte, error)) func() statelogtest.Candidate {
+	return func() statelogtest.Candidate {
+		c := control()
+		c.EncodeTrimmed = encode
+		return c
+	}
+}
+
+// trimmedGate calls its trimmed record an apply gate.
+type trimmedGate struct{ controlDomain }
+
+func (trimmedGate) InstallsGate(env statelog.Envelope) bool {
+	return env.Kind == statelog.TrimmedKind || controlDomain{}.InstallsGate(env)
+}
+
+// trimmedArbitrated arbitrates the trimmed kind on its log.
+type trimmedArbitrated struct{ controlDomain }
+
+func (d trimmedArbitrated) Stream() statelog.StreamSpec {
+	s := d.controlDomain.Stream()
+	s.ArbitratedKinds = append(slices.Clone(s.ArbitratedKinds), statelog.TrimmedKind)
+	return s
+}
+
+// widgetsForAll writes the control's row for every record it has no other case
+// for — the trimmed record included.
+type widgetsForAll struct{ controlApplier }
+
+func (widgetsForAll) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
+	if rec.Kind == controlGateKind {
+		return applyControlGate(ctx, tx, rec, false)
+	}
+	return applyWidget(ctx, tx, rec)
+}
+
+// noTrimmedCase faults on the trimmed record, as a domain's exhaustive switch
+// does on a kind it has no case for.
+type noTrimmedCase struct{ controlApplier }
+
+func (noTrimmedCase) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
+	if rec.Kind == statelog.TrimmedKind {
+		return 0, fmt.Errorf("control: no case for a %q record", rec.Kind)
+	}
+	return controlApplier{}.Apply(ctx, tx, rec, opts)
+}

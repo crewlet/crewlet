@@ -647,23 +647,23 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 // A HELD RECORD AND AN UNREADABLE FLOOR ARE EACH LOG'S OWN MEASUREMENT, and
 // each says what is true of that log.
 //
-// What the deferral grace does is a log's: past it, a record held on a log that
-// judges this node's copy of the estate has taken the copy out of service and
-// one held on a log that judges none has taken nothing out. The form this
-// replaced reduced the node to its OLDEST held record, so a node holding an
-// identity record for two hours and a tracker record for forty minutes raised
-// one alarm saying the identity record took nothing out of service — while the
-// tracker's already had. A floor is
+// What the deferral grace does is a log's: every log's copy is judged on its
+// own (ADR-0046), so past it a record held on one log has taken this node's
+// copy of THAT log out of service and no other's. The form this replaced
+// reduced the node to its OLDEST held record, so a node holding an identity
+// record for two hours and a tracker record for forty minutes raised one alarm
+// naming the identity record alone, while the tracker's copy had gone out of
+// service too. A floor is
 // the same: a read of one log refuses on that log's floor, and two logs
 // re-anchored while this node was not are two re-anchors, where the node's
 // longest named one.
 func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 	t.Parallel()
 	identity := healthyDomain("iam", true)
-	identity.DeferredAge, identity.DeferredJudgesCopy = 2*time.Hour, false
+	identity.DeferredAge = 2 * time.Hour
 	identity.DeferredRecord = "at CREWLET_IAM@1:88, written at record version 2 against the 1 this build reads"
 	work := healthyDomain("tracker", true)
-	work.DeferredAge, work.DeferredJudgesCopy = 40*time.Minute, true
+	work.DeferredAge = 40 * time.Minute
 	work.DeferredRecord = "at CREWLET_TRACKER@1:640, written at record version 3 against the 2 this build reads"
 	// AND ONE LOG'S FLOOR UNREADABLE, the other's fine.
 	work.FloorUnknownFor = 3 * time.Minute
@@ -703,10 +703,9 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 	}
 	for log, want := range map[string][]string{
 		"tracker": {"CREWLET_TRACKER@1:640", "held for 40m,",
-			"at which this node stops serving its copy of the estate"},
+			"at which this node's copy of this log goes out of service"},
 		"iam": {"CREWLET_IAM@1:88", "held for 2h,",
-			"this log does not judge this node's copy of the estate, so nothing " +
-				"is taken out of service"},
+			"at which this node's copy of this log goes out of service"},
 	} {
 		for _, says := range want {
 			if !strings.Contains(held[log], says) {
@@ -757,7 +756,7 @@ func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	d.Decision = statelog.Trim(in.Terms())
 	d.BlockedSince = reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
 	// HOLDING A RECORD PAST THE GRACE, and unable to read its floor.
-	d.DeferredAge, d.DeferredJudgesCopy = statelog.DeferralGrace+time.Minute, true
+	d.DeferredAge = statelog.DeferralGrace + time.Minute
 	d.FloorUnknownFor = statelog.FloorCacheStale + time.Second
 	// AND READ LINEARIZABLY PAST ITS CENSUS, by more than the drift factor.
 	d.LinearizableReadsExpected = 1_000

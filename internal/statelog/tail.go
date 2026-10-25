@@ -25,9 +25,14 @@ import (
 // are its tail. So the question is asked of the NEWEST record that writes rows:
 // if these rows applied it, nothing written after the restore wrote any, and
 // following the log from its end discards nothing but records that write
-// nothing. A barrier is the one kind that writes nothing whatever its history —
-// a linearizable read's append, which a node whose rows are the copy's age
-// goes on making — and is stepped over.
+// nothing. The framework's own records write no domain row whatever their
+// history, and are stepped over: a barrier — a linearizable read's append,
+// which a node whose rows are the copy's age goes on making — and a trimmed
+// record, whose whole effect is to remove arbitration anchors, so one these
+// rows never applied leaves only anchors a write treats as a probe anyway
+// (ADR-0047). Neither carries an operation id, so the ledger could never say
+// these rows hold one, and a reanchor would refuse over a record that wrote
+// nothing until an operator discarded it.
 //
 // # How "these rows applied it" is established
 //
@@ -112,7 +117,7 @@ func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, l
 			return nil, fmt.Errorf("statelog: %s's record at %d does not decode, so "+
 				"whether it writes rows cannot be told: %w", t.stream, seq, decodeErr)
 		}
-		if env.Subject.Kind == BarrierKind {
+		if frameworkRecord(env.Subject.Kind) {
 			continue
 		}
 		at := Position{Stream: t.stream, Generation: gen, Seq: seq}

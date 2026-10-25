@@ -44,7 +44,7 @@ func (s Sources) workFlow(ctx context.Context, p Params) (any, error) {
 		return nil, badParams("points", p.String("points"),
 			[]string{fmt.Sprintf("1 to %d", tracker.MaxFlowPoints)})
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +276,7 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +571,7 @@ func (s Sources) feedSchedules(ctx context.Context, names scopeNames, actor,
 		}
 		q.BeforeAt, q.BeforeKey = when, key
 	}
-	runs, more, err := usage.ScheduleRuns(ctx, s.Usage, q)
+	runs, more, err := s.Usage.ScheduleRuns(ctx, q)
 	if err != nil {
 		return src, err
 	}
@@ -647,7 +647,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if work {
-		fresh, err := freshness(p)
+		fresh, err := Freshness(p)
 		if err != nil {
 			return nil, err
 		}

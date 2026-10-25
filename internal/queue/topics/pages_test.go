@@ -64,6 +64,7 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.TrackerLogPrefix + ".task.1",
 		topics.TrackerVectorsPrefix + ".source.1",
 		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
+		topics.CodeLogPrefix + ".repo.1",
 		topics.IamLogPrefix + ".session.0f3c",
 	} {
 		if kind, id, ok := topics.PagesLogPath(subject); ok {
@@ -86,6 +87,7 @@ func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 		"pages":   topics.PagesLogPrefix + ".",
 		"iam":     topics.IamLogPrefix + ".",
 		"usage":   topics.UsageLogPrefix + ".",
+		"code":    topics.CodeLogPrefix + ".",
 	}
 	for a, pa := range prefixes {
 		for b, pb := range prefixes {

@@ -14,7 +14,7 @@ import {
   collectSummary,
   FileStorage,
 } from "./FileStorage.tsx";
-import { OBJECTS_STATES } from "~/contract/fleet.ts";
+import { OBJECT_FINDINGS, OBJECTS_STATES } from "~/contract/fleet.ts";
 import { Router } from "~/app/router.tsx";
 import { engineFile } from "~/test/engineFiles.ts";
 import type { FleetObjects, ReportedObjects } from "~/protocol/types.ts";
@@ -77,19 +77,20 @@ describe("file storage", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  test("files that cannot be read are an alert naming each file, to restore first", () => {
+  test("files that cannot be read are an alert naming each file and what was found of it", () => {
     const r = reported("missing");
     renderCard(r);
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("2 files are missing or damaged");
+    expect(alert.textContent).toContain("3 files can’t be read");
     const files = r.audit?.found?.missing_files ?? [];
-    expect(files.length).toBe(2);
+    expect(files.length).toBe(3);
     for (const m of files) {
       expect(alert.textContent).toContain(m.named_by);
-      expect(alert.textContent).toContain(m.object);
+      expect(alert.textContent).toContain(`${m.finding} · ${m.object}`);
     }
-    expect(alert.textContent).toContain("damaged");
-    expect(screen.getByText("1,828 named, 1 missing, 1 damaged")).toBeTruthy();
+    // ONE OF EACH FINDING, so each is drawn by what it is called.
+    expect(new Set(files.map((m) => m.finding))).toEqual(new Set(OBJECT_FINDINGS));
+    expect(screen.getByText("1,828 named, 1 missing, 1 damaged, 1 unanswered")).toBeTruthy();
     expect(
       screen.getByText("The fleet's own NATS object bucket, replicated like the stream"),
     ).toBeTruthy();
@@ -97,10 +98,10 @@ describe("file storage", () => {
 
   test("an audit that failed keeps what the last whole one found, and says it failed", () => {
     renderCard(block("failed"));
-    expect(screen.getByRole("alert").textContent).toContain("2 files are missing or damaged");
+    expect(screen.getByRole("alert").textContent).toContain("3 files can’t be read");
     expect(
       screen.getByText(
-        /^1,828 named, 1 missing, 1 damaged \(a later audit stopped: .*did not answer\)$/,
+        /^1,828 named, 1 missing, 1 damaged, 1 unanswered \(a later audit stopped: .*did not answer\)$/,
       ),
     ).toBeTruthy();
   });
@@ -161,9 +162,16 @@ describe("file storage", () => {
   });
 
   test("an incomplete audit's count is a floor, and a failed pass says what stopped it", () => {
-    expect(auditSummary({ at: "", completed: false, referenced: 10, missing: 2, damaged: 0 })).toBe(
-      "10 named so far, at least 2 missing",
-    );
+    expect(
+      auditSummary({
+        at: "",
+        completed: false,
+        referenced: 10,
+        missing: 2,
+        damaged: 0,
+        unanswered: 0,
+      }),
+    ).toBe("10 named so far, at least 2 missing");
     expect(
       auditRow({
         at: "2026-09-01T12:00:00Z",
@@ -171,6 +179,7 @@ describe("file storage", () => {
         referenced: 0,
         missing: 0,
         damaged: 0,
+        unanswered: 0,
         error: "the bucket did not answer",
       }),
     ).toBe("Stopped: the bucket did not answer");

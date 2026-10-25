@@ -1270,7 +1270,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		}
 
 	case faultUnknown:
-		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
+		res, err := p.classifyAmbiguous(ctx, req, snap, gen, detail)
 		res.Rounds = round
 		if err != nil || res.Outcome != "" {
 			return res, dispDone, err
@@ -1285,7 +1285,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		// entry raft had committed. Resolved exactly as an unanswered
 		// append is, because the record may already be visible and then
 		// the ledger answers for it.
-		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
+		res, err := p.classifyAmbiguous(ctx, req, snap, gen, detail)
 		res.Rounds = round
 		if err != nil || res.Outcome != "" {
 			return res, dispDone, err
@@ -1406,8 +1406,7 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 	// a licence to publish at zero: only the broker can tell a subject
 	// that has never been written from one whose only record this node
 	// has not applied.
-	if snap.Anchor.Seq > 0 && snap.Anchor.Generation == gen {
-		seq := snap.Anchor.Seq
+	if seq := snap.anchorIn(gen); seq > 0 {
 		return &seq, nil, nil
 	}
 
@@ -1559,7 +1558,11 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, snap Snap, 
 //
 // A zero Outcome with a nil error means nothing landed and the caller should
 // retake its snapshot.
-func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Snap, detail string) (Result, error) {
+//
+// gen is the generation the append was made in, which is the number space the
+// broker's answer about the subject is in — and so the only generation whose
+// anchor that answer can be compared with ([Snap.anchorIn]).
+func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Snap, gen uint32, detail string) (Result, error) {
 	subject := p.subjectOf(req.Subject)
 	seq, found, err := p.log.LastSeq(ctx, subject)
 	switch {
@@ -1573,10 +1576,17 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 			"op_id", req.OpID, "publish_error", detail, "probe_error", err.Error())
 		return Result{Outcome: OutcomeUnknown, OpID: req.OpID}, nil
 
-	case !found, seq <= snap.Anchor.Seq:
+	case !found, seq <= snap.anchorIn(gen):
 		// At or below the anchor this write decided against, so the
 		// subject holds nothing this write put there. Nothing landed:
 		// retake the snapshot and re-decide.
+		//
+		// THIS GENERATION'S ANCHOR, and none where the row's is from
+		// the generation before: a restored log counts again below such
+		// an anchor, so a record this write landed there read as "at or
+		// below it" and was decided again — on a node that had not
+		// applied it, behind it on every round, until a write that was
+		// on the log came back a conflict.
 		return Result{}, nil
 
 	default:
@@ -1662,8 +1672,15 @@ const (
 // A record the read shows is ANOTHER operation's — the ambiguous path found it
 // newest on the subject — is not this operation's landing, and the gates are
 // asked about this node, whose own copy may be the one below it that a gate
-// dropped. And a record that cannot be read is one whose writer nobody here
-// can name, which is `unknown` rather than a guess in either direction.
+// dropped. A refusal there is about THIS NODE, and it says so: it names the
+// position the gate was judged at and NOT a dropped record of this operation
+// ([Unavailable.Dropped]), because the record there may be a healthy peer's
+// that applied everywhere and this write's own append may never have landed.
+// What it does say of that append — that if it landed it applies nowhere — is
+// a reading of the ledger's silence, so it is said only where the ledger
+// vouches, and is `unknown` where it cannot. And a record that cannot be read
+// is one whose writer nobody here can name, which is `unknown` rather than a
+// guess in either direction.
 //
 // # And whether it is this operation's
 //
@@ -1707,7 +1724,10 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			Outcome: OutcomePending, Position: at, OpID: req.OpID,
 		}, nil
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, p.budget(ctx))
+	// WITHIN WHAT THE ASKER LEFT, on a write asked across a wire
+	// ([WithReplyMargin]): `pending` said after the asker stopped listening
+	// is a node heard as gone.
+	waitCtx, cancel, _ := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
 
 	if err := p.waiter.WaitApplied(waitCtx, req.Scope, at); err != nil {
@@ -1806,10 +1826,31 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	if err != nil {
 		return Result{}, err
 	}
+	if gated && !ours {
+		// ANOTHER OPERATION'S RECORD, AT WHICH THE GATE HOLDS THIS NODE, so
+		// the gate says nothing of the record at `at`, and what a refusal
+		// would say of this write's own append — below `at`, applying
+		// nowhere, if it landed — is the LEDGER'S SILENCE read: an append
+		// that landed before this node's eviction applied, and only its row
+		// says so. So it is asked here, where the record is not this
+		// operation's, and not on the ours arm, where the gate's answer is
+		// about the record itself. A ledger that cannot vouch answers as the
+		// unvouched arm below does, never with a refusal that called a write
+		// which may have applied one that applies nowhere.
+		vouched, vouchErr := p.vouches(ctx, req)
+		if vouchErr != nil {
+			return Result{}, vouchErr
+		}
+		if !vouched {
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Unvouched: true}, nil
+		}
+	}
 	if gated {
-		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
-		// than an outcome, and never a re-decide: republishing produces
-		// another durable record nothing applies.
+		// THE WRITE APPLIED NOWHERE AND NEVER WILL. A refusal rather than
+		// an outcome, and never a re-decide: republishing produces another
+		// durable record nothing applies — or, where the gate holds this
+		// node at another operation's record, another this node's gate
+		// drops.
 		//
 		// NOT COUNTED AS A DROPPED RECORD HERE. This node's applier
 		// counted the drop when it applied `at` — the wait above is what
@@ -1818,11 +1859,13 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// every node a retry of the same operation id reached inside the
 		// duplicate window. The write's refusal is counted where every
 		// refusal is, by reason ([Publisher.observe]), and this line keeps
-		// the writer and the position.
+		// the writer and the position — and whether the record there is
+		// this operation's ([Unavailable.Dropped]), without which a reader
+		// took another operation's record for the write's own.
 		p.logger.WarnContext(ctx, "statelog_write_gated",
 			"domain", p.domain.Name(), "subject", req.Subject.String(),
 			"gate", string(reason), "position", at.String(), "op_id", req.OpID,
-			"writer", writer)
+			"writer", writer, "dropped", ours)
 		// AND THAT THE OPERATION ID IS SPENT FOR A WHILE, which decides
 		// how it is retried: the broker collapses the same id onto the
 		// record for its duplicate window, and the answer is this refusal
@@ -1835,9 +1878,10 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		var detail string
 		switch {
 		case !ours:
-			detail = fmt.Sprintf("this node is held by the gate at %s, the newest "+
-				"record on the subject, so whatever it appended under this "+
-				"operation applies nowhere — and if that landed, %s", at, spent)
+			detail = fmt.Sprintf("the newest record on the subject, at %s, is "+
+				"another operation's, and the gate holds this node there: whatever "+
+				"it appended under this operation lies below that record and "+
+				"applies nowhere — and if that landed, %s", at, spent)
 		case writer != p.nodeID:
 			detail = fmt.Sprintf("the record at %s is node %s's copy of this "+
 				"operation, which this node's append was collapsed onto, and it "+
@@ -1863,6 +1907,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			Position:   at,
 			OpID:       req.OpID,
 			CopyWriter: copyWriter,
+			Dropped:    ours,
 		}
 	}
 
@@ -2219,8 +2264,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return nil
 	}
 	started := time.Now()
-	budget := p.budget(ctx)
-	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	waitCtx, cancel, bound := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
 	err := p.waiter.WaitCommitted(waitCtx, req.Session)
 	p.observeMillis(metrics.StatelogWriteSessionWait, started, metrics.Attrs{
@@ -2237,7 +2281,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return &Unavailable{
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("this node has not applied this caller's own "+
-				"write at %s within %s", req.Session, budget),
+				"write at %s within %s", req.Session, bound),
 			Position: req.Session,
 			OpID:     req.OpID,
 		}
@@ -2255,8 +2299,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 // conflict a caller would otherwise be told after sixteen rounds — into a
 // number the caller can retry against.
 func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) error {
-	budget := p.budget(ctx)
-	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	waitCtx, cancel, bound := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
 	if err := p.waiter.WaitCommitted(waitCtx, at); err != nil {
 		if ctx.Err() != nil {
@@ -2266,7 +2309,7 @@ func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) er
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("%s is at %s on the log and this node has not "+
 				"applied it within %s, so a write against it would be decided "+
-				"from a state below it", req.Subject, at, budget),
+				"from a state below it", req.Subject, at, bound),
 			Position: at,
 			OpID:     req.OpID,
 		}

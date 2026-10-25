@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
@@ -156,6 +158,90 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	}
 	if string(got) != body {
 		t.Errorf("the data node holds %q", got)
+	}
+}
+
+// A NODE THAT HOLDS NO DATA, IN A MAINTENANCE MODE, READS A FILE AND HANDS OUT
+// NO WRITER. The mode is the node's promise that it starts nothing that
+// writes, and a write it routes to a data node is one it starts — so it hands
+// no tracker writer to any surface, as a data node in the mode does not, while
+// a read is served as on any node: the file's row through a data node, its
+// bytes from the store the fleet shares.
+//
+// Such a node used to be handed the router's writer all the same, the data
+// node's mode taken to be that node's to answer for. In a capacity window, with
+// every data node in the mode too, a write streamed up to a gibibyte into the
+// object store before a data node refused the row, as `unavailable` a client
+// retries; beside a data node in normal mode, as here, it simply landed.
+//
+// ASKED OF THE ENGINE, NOT OVER HTTP, because a node without `data` serves no
+// API: `ingress` needs `data`, so `crewlet run` builds none of the routes there
+// (no config surface either — no identity directory to ask who holds a seat),
+// and what the mode decides is what the engine hands every surface built per
+// request. Where those surfaces ARE built, on a data node in the mode, the
+// halves it hands the human write surface are internal/api's
+// TestAMaintenanceNodeServesAFilesBytesAndWritesNone.
+func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
+	t.Parallel()
+	logs.attribute(t)
+	model := newScriptedModel(t)
+	cfg, err := config.ParseCompany([]byte(goldenCompany(model)))
+	if err != nil {
+		t.Fatalf("company config: %v", err)
+	}
+	ring := fleetRing(t)
+	data, dataBoot := bootDataMember(t, cfg, model, nil, ring)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	waitFor(t, "the data node to serve its estate", hydrated(t, data.engine))
+
+	// A FILE THE FLEET HOLDS, uploaded through the data node's own byte
+	// route — the one `crewlet run` serves — so its row names an object the
+	// shared store holds.
+	const content = "region,quarter,revenue\nemea,q3,1200\n"
+	if status, answer := upload(t, data, "ENG", "reports/q3.csv", []byte(content)); status != http.StatusOK ||
+		answer["outcome"] != string(statelog.OutcomeApplied) {
+		t.Fatalf("the premise: the data node takes the upload; it answered %d %v", status, answer)
+	}
+
+	agentBoot := statelessBootstrap(t.TempDir(), dataBoot, ring)
+	if agentBoot.ServesAPI() {
+		t.Fatal("the premise: a node without data serves no API, so the engine is what is asked")
+	}
+	agent := bootNodeWith(t, engine.Options{
+		Bootstrap: &agentBoot, Company: cfg, ActivatedAt: harnessActivation,
+		Mode: statelog.ModeMaintenance, Environment: nodeEnvironment(nil),
+	}, model)
+
+	var read []byte
+	waitFor(t, "the stateless node to read the file", func() bool {
+		reads := engine.OperatorNative(agent.engine)
+		if !reads.Tracker {
+			return false
+		}
+		detail, err := reads.Work.File(t.Context(), "ENG", "reports/q3.csv",
+			statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			return false
+		}
+		object, named := detail.File.Content()
+		if !named {
+			return false
+		}
+		rc, err := agent.engine.Objects().Open(t.Context(), object)
+		if err != nil {
+			return false
+		}
+		defer rc.Close()
+		if read, err = io.ReadAll(rc); err != nil {
+			return false
+		}
+		return true
+	})
+	if string(read) != content {
+		t.Errorf("the stateless node read %q, want %q", read, content)
+	}
+	if _, ok := engine.OperatorWorkWriter(agent.engine); ok {
+		t.Error("a stateless node in a maintenance mode hands out a tracker writer")
 	}
 }
 

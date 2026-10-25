@@ -88,9 +88,9 @@ type OfferRequest struct {
 	// generation 0 with sequences counting from 1 again, and an artefact
 	// from before it matches on generation, matches on record version,
 	// matches on replay protocol, and names a history that no longer
-	// exists. The broker's own creation instant is the only value that
-	// separates them, which is why it is stamped into every checkpoint
-	// and carried in every manifest.
+	// exists. The stream's creation instant ([StreamCreatedAt]) is the
+	// only value that separates them, which is why it is stamped into
+	// every checkpoint and carried in every manifest.
 	//
 	// Zero is NO CLAIM — a joiner that could not read its own stream's
 	// instant asks without one rather than refusing every donor.

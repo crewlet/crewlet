@@ -30,7 +30,7 @@ type Queue interface {
 	Broadcast(ctx context.Context, subject string, payload []byte) error
 	Listen(ctx context.Context, pattern string, h queue.ListenFunc) (queue.Unsubscribe, error)
 	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
 // Metrics is the recorder the hub reports through.
@@ -211,7 +211,9 @@ func (h *Hub) Start(ctx context.Context) error {
 	lifetime := h.lifetime
 	h.mu.Unlock()
 
-	stop, err := h.queue.Serve(ctx, topics.ArtifactPresenceAsk, h.answer)
+	// queue.ConcurrentAnswers: an answer is work done now (a read of the
+	// room this node holds, under the hub's lock) and waits on nothing.
+	stop, err := h.queue.Serve(ctx, topics.ArtifactPresenceAsk, queue.ConcurrentAnswers, h.answer)
 	if err != nil {
 		h.mu.Lock()
 		h.running = false

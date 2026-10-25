@@ -263,12 +263,14 @@ func subjectPath(s Subject, container string) string {
 		// equality and containment and never read back, and the title
 		// is prose a path separator can appear inside.
 		return ScopeTerm{Kind: TermTitle, Container: space, ID: token}.Path()
-	case KindBarrier:
-		// THE FRAMEWORK'S OWN SCOPE, so a barrier never intersects any
-		// read's closure. A barrier writes no row anywhere, so a scope
-		// that intersected anything would make every linearizable read
-		// wait behind every other.
-		return statelog.BarrierScope
+	case KindBarrier, KindTrimmed:
+		// THE FRAMEWORK'S OWN SCOPE, so a framework record never
+		// intersects any read's closure. Neither writes a row of this
+		// domain's anywhere, so a scope that intersected anything would
+		// make every read of it wait behind a record that changed none of
+		// its rows — for a barrier, every linearizable read behind every
+		// other.
+		return statelog.FrameworkScope
 	case KindGeneration, KindEviction:
 		// A GATE IS ABOUT THE WHOLE DOMAIN. It licenses or drops
 		// records on every subject, so anything narrower would be a

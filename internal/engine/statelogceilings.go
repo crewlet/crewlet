@@ -87,13 +87,35 @@ type domainCeiling struct {
 // their ceilings may reserve between them — the ceilings their existing
 // streams hold included, whatever Tier A would size those at today.
 //
-// HALF. The same broker holds every seat's mailbox, every coordination bucket
-// (the leases, the ledgers, the counters, the company's sealed credentials)
-// and the snapshot a joining node reads. None of those reserves anything, so
-// the broker would hand the logs all of it; a log allowed to reserve the whole
-// account starves the estate it is part of, and the failure is not a full log,
-// it is a company that cannot claim a seat.
-const StreamBudgetShare = 0.5
+// FIVE EIGHTHS, inside two bounds and taken from the register rather than
+// chosen.
+//
+// AT MOST TWO THIRDS. The same broker holds every seat's mailbox, every
+// coordination bucket (the leases, the ledgers, the counters, the company's
+// sealed credentials) and the snapshot a joining node reads. None of those
+// reserves anything, so the broker would hand the logs all of it; a log
+// allowed to reserve the whole account starves the estate it is part of, and
+// the failure is not a full log, it is a company that cannot claim a seat. So
+// what the logs leave must stay at least as large as the `nats` object
+// bucket's reservation, which is taken of the limit first — a quarter of it
+// ([objectsBucketShare]) — and the logs' share of the three quarters it leaves
+// leaves that quarter for any share up to two thirds.
+//
+// AT LEAST 0.593, because the vector changelog's peak is a DESIGNED operation:
+// a re-embedding puts the whole corpus in its window at once, 8.46 GB at the
+// reference company's fifth year, and on a 64 GiB volume under an embedded
+// broker with nothing else reserved — the 48 GiB such a broker can grant —
+// the share must create the changelog that large beside the other seven
+// logs' asks (TestTheVectorChangelogIsCreatedToHoldAModelChange). It was HALF
+// while seven logs were registered; the eighth, the code log, asks two thirds
+// of the mutation log's ceiling, and at half the changelog was created at
+// 6.6 GiB there, under the corpus. Five eighths is the smallest eighth past
+// the bound and creates it at 8.3 GiB; a log a later release registers moves
+// the bound again, and that case is what says so. Under the default `nats`
+// bucket, which takes its quarter first, the same re-embedding fits from
+// about 81 GiB free (docs/guides/replication.md, "What the code log's
+// reservation costs").
+const StreamBudgetShare = 0.625
 
 // MinDomainCeiling is the floor a scaled-down ceiling never goes below.
 //
@@ -137,6 +159,16 @@ const MinDomainCeiling int64 = 1 << 30
 // trailing window — the corpus grows every year the company exists — so an
 // unset one takes the same share of the volume the mutation log derives,
 // whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
+//
+// The code log holds what the mutation log holds — a trailing window of
+// records, as long as a blocked trim lasts — at two thirds of its byte rate,
+// the reference company's pushes and its git clients' reads against its
+// tracker writes and its seats' reads (config.DerivedCodeLogNumerator), so an
+// unset one takes two thirds of the mutation log's ceiling, set or derived
+// (config.Stream.CodeMaxBytes), and a blocked trim fills both in the same
+// time. A push record names its pack bundle and never carries it: the bytes
+// are the object store's, so nothing a repository grows to reaches this
+// ceiling.
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
 	entry, found := registrationFor(domain.Name())
 	if !found || entry.Ceiling == nil {
@@ -228,7 +260,8 @@ func unmeasuredDetail(fields []string) string {
 // UNSTATED IS NOT UNBOUNDED. An external broker whose account states no limit
 // still refuses a reservation its servers cannot back, and a client cannot
 // read their caps; the volume this node measured is the one figure it has, so
-// it stands in for the limit, under the same rule ([logsGrantable]).
+// the cap a server running its defaults takes of it ([unstatedLimit]) stands
+// in for the limit, under the same rule ([logsGrantable]).
 //
 // # What each figure is, and what is taken off it
 //
@@ -241,9 +274,9 @@ func unmeasuredDetail(fields []string) string {
 // disk divided a pool larger than its first boot's by half of what the logs
 // hold. And taking nothing off it counted the OTHER reservations as room: the
 // object bucket is reserved before the logs are sized ([objectsReservation]),
-// a quarter of the same free space, and a pool of half of it on top reached
-// three quarters of the volume, the whole of an operator's server's default
-// cap, so that server refused the last log created.
+// a quarter of the same figure, and a pool of half of the whole of it on top
+// reached three quarters of the volume, the whole of an operator's server's
+// default cap, so that server refused the last log created.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	free int64, volume string) (map[string]domainCeiling, error) {
 
@@ -368,20 +401,39 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 // ONE RULE FOR EVERY BROKER: the limit, less every reservation the broker has
 // granted to a stream that is not a state log. Where the broker states its
 // limit, that is what it has left with the logs' own ceilings (holding) added
-// back. Where it states none this node can read, the stream volume's free
-// space stands in for the limit, and what the broker reports reserved beyond
-// the logs' own (the object bucket's, say) comes off it: free space already
-// contains the logs' ceilings, because a reservation never spends it, but no
-// byte of it can be granted twice. A budget that could not be read reports no
-// reservation, so free space is all this node has.
+// back. Where it states none this node can read, [unstatedLimit] of the stream
+// volume's free space stands in for the limit, and what the broker reports
+// reserved beyond the logs' own (the object bucket's, say) comes off it: free
+// space already contains the logs' ceilings, because a reservation never
+// spends it, but no byte of it can be granted twice. A budget that could not be
+// read reports no reservation, so the stand-in is all this node has.
 func logsGrantable(budget jetstream.StorageBudget, readErr error, free, holding int64) int64 {
 	if readErr != nil {
-		return free
+		return unstatedLimit(free)
 	}
 	if available := budget.Available(); available >= 0 {
 		return available + holding
 	}
-	return max(free-max(budget.Committed-holding, 0), 0)
+	return max(unstatedLimit(free)-max(budget.Committed-holding, 0), 0)
+}
+
+// unstatedLimit is the limit this node assumes for a broker that states none
+// it can read, from the free space on its own stream volume: THREE QUARTERS,
+// the limit nats-server gives itself when nobody sets one and the limit the
+// embedded broker states on the same volume ([embeddedShareNum]).
+//
+// NOT THE WHOLE FREE SPACE, because no server running its defaults can
+// reserve that much: an operator's server beside this node on its volume caps
+// itself at three quarters of it, and sized against all of it the bucket took
+// a quarter of the free space and the logs their share of the rest, which
+// reached the server's whole cap — on a 16 GiB volume once the code log's
+// floor was registered, and on every volume under 32 GiB once the logs' share
+// was five eighths — leaving the mailboxes and coordination, which reserve
+// nothing, less than the gibibyte the bucket's derivation promises them. A
+// server elsewhere with more room is only asked for less than it has, which
+// costs ceilings and never a boot.
+func unstatedLimit(free int64) int64 {
+	return free / embeddedShareDen * embeddedShareNum
 }
 
 // heldCeiling is one log's answer to [domainHost.DomainStreamCeiling]: the
@@ -858,12 +910,12 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 // Bavail rather than Bfree: the reserve only root can reach is not space this
 // engine has, and counting it would derive a ceiling the disk cannot honour.
 func volumeFree(dir string) (int64, error) {
-	var fs unix.Statfs_t
-	if err := unix.Statfs(dir, &fs); err != nil {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
 		return 0, fmt.Errorf("engine: measure the free space on %s: %w", dir, err)
 	}
 	//nolint:unconvert // Statfs_t.Bsize is int64 on linux and uint32 on
 	// darwin, and both are release targets: the conversion is what makes
 	// this one expression compile on the whole matrix.
-	return int64(fs.Bavail) * int64(fs.Bsize), nil
+	return int64(st.Bavail) * int64(st.Bsize), nil
 }

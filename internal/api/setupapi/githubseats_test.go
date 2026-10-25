@@ -23,10 +23,10 @@ const githubAppsDoc = `{
   "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
-    {"name": "Builder", "handle": "builder", "llm": "zulu",
-     "integrations": {"github": {"tier": "full_access", "app_id": 41, "app_slug": "acme-builder"}}},
-    {"name": "Reviewer", "handle": "reviewer", "llm": "zulu",
-     "integrations": {"github": {"tier": "review", "app_id": 42, "app_slug": "acme-reviewer",
+    {"name": "Builder", "handle": "builder", "llm": "zulu", "code": {"access": "full_access"},
+     "integrations": {"github": {"app_id": 41, "app_slug": "acme-builder"}}},
+    {"name": "Reviewer", "handle": "reviewer", "llm": "zulu", "code": {"access": "review"},
+     "integrations": {"github": {"app_id": 42, "app_slug": "acme-reviewer",
        "installation_id": 7, "private_key": "${REVIEWER_GITHUB_APP_KEY}"}}},
     {"name": "Stray", "handle": "stray", "llm": "zulu",
      "integrations": {"github": {"app_id": 43, "app_slug": "acme-stray",
@@ -494,7 +494,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
-	     "integrations": {"github": {"tier": "review"}}},
+	     "integrations": {"github": {"repos": ["acme/api"]}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
 	}`)
@@ -526,6 +526,56 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	if writer["enrolled"] == true {
 		t.Error("a seat with no GitHub block reports itself enrolled, which " +
 			"makes every company with one unfinished for ever")
+	}
+}
+
+// AN APP IS CREATED AT ITS SEAT'S CODE ACCESS, WHETHER OR NOT THE SEAT HAS A
+// GITHUB BLOCK YET.
+//
+// The tier is role.code.access, the seat's on every code host, and no longer
+// a field of the GitHub block a creation writes. A seat that says full_access
+// and has no app yet is the row the flow starts from, so the manifest it is
+// begun with must carry the seat's whole tier: read as read_only until a block
+// existed, the app was created with less than every token the engine then
+// minted for it asked for.
+func TestASeatsAppIsBegunAtItsCodeAccess(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+	  "name": "Acme",
+	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+	  "roles": [
+	    {"name": "Coder", "handle": "coder", "llm": "zulu", "code": {"access": "full_access"}},
+	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
+	  ]
+	}`, map[string]string{"X-Summary": "one agent that codes, one that writes"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	s.seedGitHub(t)
+
+	seats := githubSeats(t, s)
+	for handle, want := range map[string]string{"coder": "full_access", "writer": "read_only"} {
+		if got := seats[handle]["tier"]; got != want {
+			t.Errorf("%s's row reads tier %v, want its code access %s", handle, got, want)
+		}
+	}
+
+	for handle, want := range map[string]struct{ tier, contents string }{
+		"coder":  {"full_access", "write"},
+		"writer": {"read_only", "read"},
+	} {
+		begin := decode(t, s.do(t, http.MethodPost, "/setup/integrations/github/app",
+			`{"seat":"`+handle+`"}`, nil))
+		if begin["tier"] != want.tier {
+			t.Errorf("%s's app is begun at tier %v, want %s", handle, begin["tier"], want.tier)
+		}
+		manifest, _ := begin["manifest"].(map[string]any)
+		perms, _ := manifest["default_permissions"].(map[string]any)
+		if perms["contents"] != want.contents {
+			t.Errorf("%s's manifest asks for contents:%v, want %s (all: %v)",
+				handle, perms["contents"], want.contents, perms)
+		}
 	}
 }
 

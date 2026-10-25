@@ -144,6 +144,11 @@ type Role struct {
 	// anywhere, which is what a single-process deployment always means.
 	Placement *RolePlacement `yaml:"placement,omitempty" json:"placement,omitempty" desc:"Which nodes may run this seat. Absent = any node that runs seats."`
 
+	// Code is this seat's access to the company's code: how much of a
+	// repository it may do, on the native code host and on GitHub alike.
+	// See [RoleCode].
+	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code, on the native code host and on GitHub."`
+
 	// Integrations is this seat's own identity on external surfaces: its
 	// chat apps and its GitHub App. See [RoleIntegrations].
 	Integrations RoleIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
@@ -384,7 +389,7 @@ func (s *RoleSandbox) validate(path Path) error {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: how much it may do, and where."`
+	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: the repositories it works in, and the identity the engine records for it. How much it may do is the seat's code.access."`
 	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
 }
@@ -406,15 +411,15 @@ func (r RoleIntegrations) IsZero() bool {
 // THE CREDENTIALS ARE NOT TYPED IN. An app is created from a manifest the
 // engine builds, and GitHub returns its private key exactly once, to the
 // engine, at conversion time. What an operator does is click through the
-// creation and the install. Everything here except the tier and the
-// repositories is therefore written by the engine, not by a person.
+// creation and the install. Everything here except the repositories is
+// therefore written by the engine, not by a person.
+//
+// HOW MUCH THE APP MAY DO IS NOT HERE. The app is created with, and every
+// token it mints carries, the permissions of the seat's [RoleCode] access:
+// one setting for every code host this engine drives, so a seat's tier is
+// never a GitHub field that a company on the native host has nowhere to
+// write.
 type RoleGitHub struct {
-	// Tier is how much of a repository this seat may do: read_only,
-	// review or full_access. Empty is read_only, which is the least this
-	// engine will hand out and the right answer for a seat nobody has
-	// thought about yet.
-	Tier string `yaml:"tier,omitempty" json:"tier,omitempty" desc:"read_only, review or full_access. Empty means read_only."`
-
 	// Repos are the repositories this seat works in, as owner/name. Empty
 	// means every repository the installation covers, which is what the
 	// operator chose when they installed the app.
@@ -454,7 +459,7 @@ type RoleGitHub struct {
 
 // IsZero lets an unset block drop out of a round trip.
 func (g *RoleGitHub) IsZero() bool {
-	return g == nil || (g.Tier == "" && len(g.Repos) == 0 && g.AppID == 0 &&
+	return g == nil || (len(g.Repos) == 0 && g.AppID == 0 &&
 		g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
 		g.WebhookSecret == "")
 }
@@ -468,19 +473,12 @@ func (g *RoleGitHub) Held() bool {
 
 // validate checks a seat's GitHub App.
 //
-// THE TIER IS THE ONLY THING A PERSON WRITES, so it is the only thing that
-// can be wrong in a way worth refusing. Everything else is written by the
-// engine after GitHub has answered, and refusing a half-built record would
-// refuse the document between the two clicks that build it.
+// THE REPOSITORIES ARE THE ONLY THING A PERSON WRITES here, so they are the
+// only thing that can be wrong in a way worth refusing. Everything else is
+// written by the engine after GitHub has answered, and refusing a half-built
+// record would refuse the document between the two clicks that build it.
 func (g *RoleGitHub) validate(path Path) error {
 	var p problems
-	if tier := normalTier(g.Tier); tier != "" && !slices.Contains(CodeAccessTiers, tier) {
-		p.add(at(path, "tier"), ErrUnknownValue,
-			"%q is not an access tier; give one of %s. An unknown tier would "+
-				"run the seat read-only, which is safe and is not what the "+
-				"document says",
-			g.Tier, strings.Join(CodeAccessTiers, ", "))
-	}
 	for i, repo := range g.Repos {
 		if name := strings.TrimSpace(repo); name == "" || !strings.Contains(name, "/") {
 			p.add(idx(at(path, "repos"), i), ErrUnknownValue,
@@ -492,39 +490,85 @@ func (g *RoleGitHub) validate(path Path) error {
 	return p.err()
 }
 
-// The access tiers a code host's seat can be set to.
+// RoleCode is a seat's code access: ONE VOCABULARY for every code host this
+// engine drives. A seat's GitHub App is created with, and mints every token
+// at, the permission set of its tier (internal/github.Tier), and the native
+// code host caps what the chart grants a seat by the same tier.
+//
+// It was `integrations.github.tier`, which made the one setting a person
+// writes about a seat's code a GitHub field — so a company on the native host
+// had nowhere to say it, and a seat moved between hosts changed what it may
+// do.
+//
+// An AGENT seat's setting. A person acts on every host as their own identity
+// (contact.github_login on GitHub, a bound token on the native host), so a
+// tier on a human seat would cap nothing, and [Company.ValidateAdmission]
+// refuses one.
+//
+// ONE SPELLING PER TIER, compared exactly: no hyphen for the underscore, and
+// no case or space folded. No tag shipped this field, so nothing was ever
+// written in another spelling and nothing needs reading in one — a second
+// spelling would be a compatibility path for a version that never existed,
+// and the published schema, which lists the field's enum, would have to carry
+// it too, since the schema must refuse nothing the engine runs.
+type RoleCode struct {
+	// Access is how much of a repository this seat may do: read_only,
+	// review or full_access. Empty is read_only, the least this engine
+	// hands out and the right answer for a seat nobody has thought about
+	// yet.
+	//
+	// Its js enum is [CodeAccessTiers] — every value the validator accepts
+	// and nothing else, which TestSchemaEnumsMatchTheValidators holds — so
+	// the schema refuses nothing the engine runs.
+	Access string `yaml:"access,omitempty" json:"access,omitempty" js:"enum=read_only|review|full_access" desc:"read_only, review or full_access. Empty means read_only."`
+}
+
+// IsZero lets an unset block drop out of a round trip: a block that says
+// nothing is the same seat as no block.
+func (c *RoleCode) IsZero() bool { return c == nil || c.Access == "" }
+
+// AccessOrDefault is the tier this seat runs at.
+//
+// READ ONLY when the document is silent (nil-safe), which is the least this
+// engine hands out: a seat nobody has thought about should ask for more
+// rather than already hold it. A value the validator refuses never reaches a
+// running engine, and reads read only here too — the narrow direction.
+func (c *RoleCode) AccessOrDefault() string {
+	if c != nil && slices.Contains(CodeAccessTiers, c.Access) {
+		return c.Access
+	}
+	return TierReadOnly
+}
+
+// validate refuses an access no code host has.
+func (c *RoleCode) validate(path Path) error {
+	var p problems
+	if c.Access != "" && !slices.Contains(CodeAccessTiers, c.Access) {
+		p.add(at(path, "access"), ErrUnknownValue,
+			"%q is not an access tier; give one of %s, spelled exactly so. "+
+				"An unknown tier would run the seat read-only, which is safe "+
+				"and is not what the document says",
+			c.Access, strings.Join(CodeAccessTiers, ", "))
+	}
+	return p.err()
+}
+
+// The access tiers a seat's role.code.access can be set to.
 //
 // RESTATED HERE rather than imported from internal/github, because config is
 // the leaf every integration package depends on and reaching the other way
 // for three words would invert that. The same reasoning [Datadog] follows for
 // its tag key. Each code host's package owns the real vocabulary and the
-// permissions behind it, and a test asserts the two lists agree.
+// permissions behind it, and a test asserts the lists agree.
 const (
 	TierReadOnly   = "read_only"
 	TierReview     = "review"
 	TierFullAccess = "full_access"
 )
 
-// CodeAccessTiers is the closed set, in order of how much it grants.
+// CodeAccessTiers is the closed set, in order of how much it grants, and
+// every value role.code.access accepts.
 var CodeAccessTiers = []string{TierReadOnly, TierReview, TierFullAccess}
-
-// normalTier reads a tier the way the code hosts do, so a document written
-// `full-access` is not refused for a hyphen the engine itself accepts.
-func normalTier(raw string) string {
-	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(raw, "-", "_")))
-}
-
-// TierOrDefault is the tier this seat runs at.
-//
-// READ ONLY when the document is silent, which is the least this engine hands
-// out. A seat nobody has thought about should ask for more rather than
-// already hold it.
-func (g *RoleGitHub) TierOrDefault() string {
-	if tier := normalTier(g.Tier); slices.Contains(CodeAccessTiers, tier) {
-		return tier
-	}
-	return TierReadOnly
-}
 
 // RoleSlack is a seat's own Slack app.
 //
@@ -671,6 +715,9 @@ func (r *Role) validate(path Path) error {
 	// THE SEAT'S TOKEN BUDGET IS NOT CHECKED HERE: org.Role.Validate holds
 	// it to the one rule ([org.TokenCeilings.Faults]) and reports it at this
 	// seat's `token_budget.<window>` — see [TokenBudget.validate].
+	if r.Code != nil {
+		p.wrap(r.Code.validate(at(path, "code")))
+	}
 	if g := r.Integrations.GitHub; g != nil {
 		p.wrap(g.validate(at(path, "integrations.github")))
 	}
@@ -756,7 +803,7 @@ func (r *Role) Seat() *org.Role {
 	// is a fact the running company cannot see.
 	if g := r.Integrations.GitHub; g != nil {
 		seat.GitHub = &org.GitHubApp{
-			Tier: g.Tier, Repos: append([]string(nil), g.Repos...),
+			Repos: append([]string(nil), g.Repos...),
 			AppID: g.AppID, AppSlug: g.AppSlug,
 			InstallationID: g.InstallationID,
 			PrivateKey:     g.PrivateKey,
@@ -765,6 +812,14 @@ func (r *Role) Seat() *org.Role {
 	}
 	seat.Project = strings.TrimSpace(r.Project)
 	seat.Space = strings.TrimSpace(r.Space)
+	if r.Code != nil {
+		// What was WRITTEN — one of the three tiers, which is all the
+		// validator admits, or empty where the block says nothing. The
+		// default is the reader's: every code host reads silence as
+		// read_only through its own reading of the tier, so writing one
+		// here would be a second statement of that default.
+		seat.CodeAccess = r.Code.Access
+	}
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))

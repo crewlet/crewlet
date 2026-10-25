@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -273,7 +274,7 @@ func (e *Engine) armSteer(ctx context.Context) error {
 		// the same queue and so cannot exist either.
 		return nil
 	}
-	stop, err := e.backends.Queue.Serve(ctx, topics.SeatSteer, e.steers.answer)
+	stop, err := e.backends.Queue.Serve(ctx, topics.SeatSteer, queue.ConcurrentAnswers, e.steers.answer)
 	if err != nil {
 		return err
 	}

@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -20,10 +23,11 @@ import (
 // reports nothing. That is the shape of the failure: not an error, not a
 // refusal, but a successful read of a stream that has forgotten everything.
 //
-// The broker's own creation instant is what detects it, and it is the only
-// thing that can: a sequence cannot, because a recreated stream's sequences
-// are perfectly plausible; a message count cannot, because an empty stream and
-// an emptied one are the same count.
+// The stream's creation instant is what detects it, and it is the only thing
+// that can: a sequence cannot, because a recreated stream's sequences are
+// perfectly plausible; a message count cannot, because an empty stream and an
+// emptied one are the same count. WHICH instant is [StreamCreatedAt]'s to say,
+// and it is not simply the broker's — see [CreatedAtKey].
 //
 // # Why it is a named contract rather than a check each consumer writes
 //
@@ -72,6 +76,93 @@ func (s StreamState) String() string {
 		return "recreated"
 	}
 	return "unknown"
+}
+
+// CreatedAtKey is the stream METADATA key under which the node whose create
+// made a stream stamps the stream's creation instant — the instant
+// [StreamCreatedAt] answers for it.
+//
+// # Why a stream carries its own instant
+//
+// The broker's creation instant names one INSTANCE of a stream, and a
+// recreation is not the only thing that makes a new one. A SNAPSHOT RESTORE —
+// `nats stream restore`, or the JetStream restore request a restore of a
+// `crewlet backup` sends — gives back every record at its own sequence, with its
+// own subject and its own storage instant, every consumer at its own position,
+// and the configuration the request handed it; and it dates the stream to the
+// moment of the RESTORE. nats-server does so on both of its paths (a solo
+// server creates the stream afresh, a clustered one assigns it `time.Now()`),
+// and the archive a snapshot writes carries no creation instant to restore
+// from. Keyed to the broker's instant, a node restored from a backup exactly as
+// docs/guides/backup.md says found every log "recreated": its appliers stopped,
+// its reads and writes refused `wrong_stream`, the memory changelog refused
+// every seat — a restored company that served nothing until an operator had
+// re-anchored every log and cleared every node's identity rows by hand, and
+// whose re-anchor then read a log holding the whole history as a stream
+// holding none of it.
+//
+// What a restore DOES keep is the configuration, because its request names it.
+// So the instant rides there: stamped once, into the configuration of the
+// create that makes the stream ([StampCreatedAt]), it is in every snapshot and
+// handed back by every restore, while a stream the engine provisions again
+// after it was lost is stamped anew — which is the recreation this contract
+// exists to detect. A restored stream therefore answers its original's
+// instant, as a broker restored from a disk copy always did, and is judged by
+// the two findings that case already has: where the log ENDS
+// ([ErrAheadOfLog]) and which record it holds at the checkpoint
+// ([ErrLogDiverged]).
+//
+// A stream that carries no stamp — one an operator created by hand, a
+// coordination bucket, the object store's — answers the broker's own instant,
+// which is what it always answered; none of those is a stream any identity
+// check here reads, and one a check ever reads must be stamped by its creator,
+// or a restore of it is a recreation again. And an instant an operator copies
+// onto another stream is a DECLARATION that it is the same history, which is
+// exactly what the restore request makes it.
+const CreatedAtKey = "crewlet.created_at"
+
+// StampCreatedAt returns the metadata of a stream about to be created, with
+// its creation instant at stamped under [CreatedAtKey].
+//
+// A NEW MAP, so the caller's own is never written: a stream specification is
+// often a value several creates share.
+func StampCreatedAt(metadata map[string]string, at time.Time) map[string]string {
+	out := make(map[string]string, len(metadata)+1)
+	maps.Copy(out, metadata)
+	out[CreatedAtKey] = at.UTC().Format(time.RFC3339Nano)
+	return out
+}
+
+// StreamCreatedAt is the creation instant a stream's identity is keyed to: the
+// instant stamped into its configuration when it was created ([CreatedAtKey]),
+// and the broker's own for a stream that carries none.
+//
+// THE ONE READING, for every consumer that compares an instant — a state log's
+// applier and every read of its log's state, the memory changelog's hydration
+// and the backup's read past its copy — because two of them reading different
+// instants for one stream is one of them calling a restored stream recreated.
+//
+// A STAMP THAT DOES NOT PARSE IS AN ERROR, never the broker's instant instead:
+// a stream that names a creation instant nobody can read is one this node
+// cannot identify, and unknown is not same ([StreamUnknown]). It names the key
+// and the value, because the remedy is the stream's configuration.
+func StreamCreatedAt(info *jetstream.StreamInfo) (time.Time, error) {
+	if info == nil {
+		return time.Time{}, errors.New("statelog: the broker answered no stream " +
+			"information to read a creation instant from")
+	}
+	stamp, stamped := info.Config.Metadata[CreatedAtKey]
+	if !stamped {
+		return info.Created.UTC(), nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("statelog: stream %s carries %s %q, which is not "+
+			"an RFC 3339 instant, so it cannot be told from a recreated stream — set it "+
+			"to the instant the stream was created at, as the engine stamps it: %w",
+			info.Config.Name, CreatedAtKey, stamp, err)
+	}
+	return at.UTC(), nil
 }
 
 // identityResolution is the precision at which two observations of one instant
