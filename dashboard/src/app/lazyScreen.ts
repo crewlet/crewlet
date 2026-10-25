@@ -50,11 +50,67 @@
  * component for the life of the page, so a screen whose chunk failed once
  * would stay failed through every navigation away and back. [lazyScreen]
  * therefore reads the chunk through React's `use` over the cache below, and
- * the cache FORGETS a rejected load — the next render of any screen in that
+ * the cache FORGETS a rejected load — the next attempt at any screen in that
  * chunk asks the server again.
+ *
+ * # Forgotten once nobody can show it, not once it has failed
+ *
+ * WHEN it is forgotten is the whole of it, and it turns on whether a REGION
+ * that can still show the failure read the load. A region is a boundary's
+ * place on the page ([ChunkRegion], which every boundary in
+ * `app/boundaries.tsx` that draws a lazy screen puts around its `Suspense`,
+ * inside the error boundary that draws a failed chunk), and its ATTEMPT is one
+ * stretch of it drawing one thing: it begins when the region is committed or
+ * its key — the routed path, the peeked object — changes, and it ends when the
+ * region goes, when its key changes, or when its error boundary draws a
+ * failure in its place. A screen reading a load records its region's attempt
+ * on it.
+ *
+ * A failed load is kept while an attempt that read it is still on, and
+ * forgotten the moment none is. That covers each way a load can go:
+ *
+ * - One nobody was drawing — a hover's [preload], the idle prefetch — has no
+ *   attempt, so it is forgotten as it fails: nobody was told, and the
+ *   navigation that follows asks again.
+ * - One a screen is drawing is kept, because React renders that screen
+ *   several more times before the boundary draws anything — when the load
+ *   settles, and once more when that render throws — and each of those
+ *   renders reads the cache. Forgotten at the rejection, as this once did,
+ *   every one of them found nothing and started a fresh `import()`: five
+ *   requests for a chunk that was gone (seven under the whole frame), the
+ *   reader told of the first while the others went on, and React's
+ *   "suspended by an uncached promise" in the console. It is forgotten when the boundary draws it — the boundary's
+ *   fallback takes the region's place, which ends its attempt — so the
+ *   reader's next attempt (the boundary's Try again, a navigation, a layer
+ *   opened again) is the one that asks again.
+ * - One whose screen went before it failed — the reader left, or moved on to
+ *   another path in the same region — is forgotten as it fails, or as the
+ *   last attempt that read it ends: no boundary will ever draw it, so it is
+ *   no answer to anybody's next attempt. Kept by a flag a render sets and
+ *   nothing clears, it would be handed to every hover and prefetch after, and
+ *   the reader coming back shown a failure nobody had asked about.
+ * - One two regions read — a Work screen and the task peeked beside it, both
+ *   out of the Work chunk — is kept until BOTH have drawn it or gone, so the
+ *   second is not handed a fresh request by the first one's boundary.
+ *
+ * ONLY A COMMITTED ATTEMPT HOLDS. An attempt begins in a render, which React
+ * may throw away; one it threw away never commits and so never ends, and
+ * holding a failure for it would keep that failure for the life of the page.
+ * Counting only what committed costs nothing in practice: a region commits
+ * in the same task that rendered it, and an `import()` cannot fail before
+ * that task ends.
  */
 
-import { createElement, use, type ComponentType } from "react";
+import {
+  createContext,
+  createElement,
+  use,
+  useContext,
+  useLayoutEffect,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
 import type { MakeKind } from "~/lib/artifacts/words.ts";
 import { resolve, type FramedScreen, type Resolved } from "./routes.ts";
@@ -277,58 +333,178 @@ export class ChunkLoadError extends Error {
  * marked `fulfilled` is answered at once, while one React has not seen is
  * suspended on for a frame even when it has settled.
  */
-type Load<T> = Promise<T> & { status?: "fulfilled"; value?: T };
+type Thenable<T> = Promise<T> & { status?: "fulfilled"; value?: T };
 
-/** The loads in flight or settled. A rejected load is removed: see the file's doc. */
-const pending = new Map<Chunk, Load<unknown>>();
+/** One fetch of a chunk, as the cache holds it. */
+interface Load {
+  readonly chunk: Chunk;
+  readonly promise: Thenable<unknown>;
+  /** What it failed with, once it has: whether an ending attempt forgets it. */
+  failure?: ChunkLoadError;
+  /**
+   * The attempts a screen read it in while it had not arrived: what decides
+   * when its failure is forgotten. Emptied once it arrives, since an arrived
+   * load is never forgotten and an attempt is then no concern of it.
+   */
+  readonly attempts: Set<Attempt>;
+}
 
-/** Fetch a chunk, once; a failed fetch is forgotten, so the next ask retries. */
+/**
+ * One stretch of a region drawing one thing — see the file's doc. Live from
+ * its region's commit until the region goes, changes its key or draws a
+ * failure in its place. A StrictMode remount takes it down and up again, so
+ * ending is not final, and nothing is taken off the loads that recorded it.
+ */
+class Attempt {
+  live = false;
+  /** The loads a screen in it read that have not arrived. */
+  readonly loads = new Set<Load>();
+}
+
+/**
+ * The loads in flight or settled. A rejected one is removed once no live
+ * attempt read it — see the file's doc.
+ */
+const pending = new Map<Chunk, Load>();
+
+/** Whether a load was read by an attempt that can still show its failure. */
+function held(load: Load): boolean {
+  for (const attempt of load.attempts) if (attempt.live) return true;
+  return false;
+}
+
+/**
+ * Drop a load from the cache, and from every attempt that recorded it. A
+ * failure the cache has already replaced with a newer load leaves that newer
+ * load where it is.
+ */
+function forget(load: Load): void {
+  if (pending.get(load.chunk) === load) pending.delete(load.chunk);
+  for (const attempt of load.attempts) attempt.loads.delete(load);
+  load.attempts.clear();
+}
+
+/** The cache's load of a chunk, begun if there is none. */
+function begin(chunk: Chunk): Load {
+  const kept = pending.get(chunk);
+  if (kept) return kept;
+  const promise: Thenable<unknown> = (overrides.get(chunk) ?? LOADERS[chunk])().then(
+    (module) => {
+      promise.status = "fulfilled";
+      promise.value = module;
+      for (const attempt of load.attempts) attempt.loads.delete(load);
+      load.attempts.clear();
+      return module;
+    },
+    (cause: unknown) => {
+      const failure = new ChunkLoadError(chunk, cause);
+      load.failure = failure;
+      // NO ATTEMPT THAT COULD SHOW IT is on, so nobody will be told:
+      // forgotten now, and the next ask fetches again. One a live attempt
+      // read waits for that attempt to end ([ChunkRegion]).
+      if (!held(load)) forget(load);
+      throw failure;
+    },
+  );
+  const load: Load = { chunk, promise, attempts: new Set() };
+  pending.set(chunk, load);
+  return load;
+}
+
+/**
+ * Fetch a chunk, once. A failure no region can show is forgotten as it
+ * happens, so the next ask fetches again; one a region is drawing is
+ * forgotten once that region has drawn it or gone ([ChunkRegion]).
+ */
 export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
-  let load = pending.get(chunk);
-  if (!load) {
-    const started: Load<unknown> = (overrides.get(chunk) ?? LOADERS[chunk])().then(
-      (module) => {
-        started.status = "fulfilled";
-        started.value = module;
-        return module;
-      },
-      (cause: unknown) => {
-        pending.delete(chunk);
-        throw new ChunkLoadError(chunk, cause);
-      },
-    );
-    pending.set(chunk, started);
-    load = started;
+  return begin(chunk).promise as Promise<ChunkModule<C>>;
+}
+
+/** The attempt of the region a lazy screen is drawn in. */
+const RegionContext = createContext<Attempt | null>(null);
+
+/**
+ * A region that draws lazy screens: what a boundary puts around its
+ * `Suspense`, INSIDE the error boundary that draws a [ChunkLoadError], so
+ * that drawing the failure ends the attempt that read it. `resetKey` is the
+ * boundary's own — the routed path, the peeked object — and a new one is a
+ * new attempt, as it is a new screen to the boundary. See the file's doc for
+ * what an attempt decides.
+ */
+export function ChunkRegion({ resetKey, children }: { resetKey?: string; children: ReactNode }) {
+  const [current, setCurrent] = useState(() => ({ key: resetKey, attempt: new Attempt() }));
+  // A NEW KEY IS A NEW ATTEMPT, taken during the render — React's own pattern
+  // for state that follows a prop: React renders this again at once with the
+  // new attempt, before any screen below has read the old one.
+  let attempt = current.attempt;
+  if (current.key !== resetKey) {
+    attempt = new Attempt();
+    setCurrent({ key: resetKey, attempt });
   }
-  return load as Promise<ChunkModule<C>>;
+  // A LAYOUT EFFECT, so the attempt is live in the task that committed it: a
+  // passive one could run after the load had failed, and a failure no live
+  // attempt holds is forgotten while its screen still reads it.
+  useLayoutEffect(() => {
+    attempt.live = true;
+    return () => {
+      attempt.live = false;
+      for (const load of attempt.loads) {
+        if (load.failure !== undefined && !held(load)) forget(load);
+      }
+    };
+  }, [attempt]);
+  return createElement(RegionContext.Provider, { value: attempt }, children);
 }
 
 /**
  * One screen out of a chunk, as a component that suspends until the chunk is
- * in. Rendered inside a `Suspense` (the fallback) and an error boundary (a
- * [ChunkLoadError]) — both are `app/boundaries.tsx`'s.
+ * in. Rendered inside a [ChunkRegion], a `Suspense` (the fallback) and an
+ * error boundary (a [ChunkLoadError]) — all three are `app/boundaries.tsx`'s
+ * — and one drawn outside a region is refused, since nothing could then say
+ * when its failure is forgotten.
  *
  * A CHUNK ALREADY IN MEMORY IS READ SYNCHRONOUSLY. `use` on a promise React
  * has not seen suspends once even when it has settled, so a screen whose chunk
  * the idle prefetch fetched a minute ago would still flash its skeleton for a
- * frame; the load marking itself fulfilled ([Load]) is what spares it.
+ * frame; the load marking itself fulfilled ([Thenable]) is what spares it.
  *
  * `use` IS CALLED ON EVERY RENDER. A component that suspended on it must call
  * it again on the render that resumes, and a fast path that skipped it once
  * the chunk was in (a map of arrived modules read before `use`) did exactly
  * that: every screen that suspended logged React's "did not call use() when
  * it finished" on the render that drew it.
+ *
+ * A CHUNK IT HAS TO WAIT FOR has its region's attempt recorded on the load
+ * before React reads it, so a failure is kept for every render React makes of
+ * this screen until its boundary has drawn it.
  */
 export function lazyScreen<C extends Chunk, P extends object>(
   chunk: C,
   pick: (module: ChunkModule<C>) => ComponentType<P>,
 ): ComponentType<P> {
   function Lazy(props: P) {
-    const module = use(loadChunk(chunk));
+    const attempt = useContext(RegionContext);
+    if (attempt === null) {
+      throw new Error(
+        `Lazy(${chunk}) was drawn outside a ChunkRegion: draw it inside one of ` +
+          "app/boundaries.tsx's boundaries, which say when a failed load is forgotten.",
+      );
+    }
+    const module = use(drawing(chunk, attempt));
     return createElement(pick(module), props);
   }
   Lazy.displayName = `Lazy(${chunk})`;
   return Lazy;
+}
+
+/** A chunk's load as a screen reads it: recorded on the reading attempt until it arrives. */
+function drawing<C extends Chunk>(chunk: C, attempt: Attempt): Promise<ChunkModule<C>> {
+  const load = begin(chunk);
+  if (load.promise.status !== "fulfilled") {
+    load.attempts.add(attempt);
+    attempt.loads.add(load);
+  }
+  return load.promise as Promise<ChunkModule<C>>;
 }
 
 /**
@@ -336,8 +512,9 @@ export function lazyScreen<C extends Chunk, P extends object>(
  *
  * Called when a row that leads there is hovered or focused, so the fetch runs
  * while the reader is deciding to click. A failure is swallowed HERE because
- * nobody asked to see anything yet — the cache has forgotten it, so the
- * navigation, if it comes, fetches again and reports what it finds.
+ * nobody asked to see anything yet — no region read it, so the cache has
+ * forgotten it, and the navigation, if it comes, fetches again and reports
+ * what it finds.
  */
 export function preload(path: string[]): void {
   const where = resolve(path);

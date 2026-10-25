@@ -8384,10 +8384,20 @@ what is missing ("The Spend screens could not be loaded"), says "The engine was
 updated. Reload to continue.", and offers Reload, which is what fixes it, beside
 Try again for the other reason, a request the network dropped. Try again really asks
 again: a failed load is forgotten rather than cached for the life of the page
-the way `React.lazy` caches one — once its boundary has drawn it, so React's
-replay of the render that waited on it reads the same rejection rather than
-starting a request nobody reads. A load only a hover or the idle prefetch asked
-for has no render to deliver it to, and is forgotten as it fails.
+the way `React.lazy` caches one — once no place on the page can show the
+failure any more. A screen, a peek and each layer is such a place, and one
+stops being able to show a failure when it draws it, when it goes, or when the
+reader moves it on to another path or object. Until then React's replays of
+the render that waited on the load read the same rejection rather than each
+starting a request nobody reads, so a chunk that is gone costs one request
+rather than one for every render React makes before it gives up (five, and
+seven under the whole frame, when the cache forgot a failure as it happened) —
+or one for each of two places drawing it at once, a screen and the object
+peeked beside it. The reader's next attempt (Try again, another navigation, a
+layer opened again) is the one that asks. A load nobody was drawing, a hover's
+or the idle prefetch's, is forgotten as it fails, and so is one whose screen
+the reader left before it failed: nobody was told, so the next hover, prefetch
+or navigation asks afresh rather than being handed a failure nobody saw.
 
 **The bundle has a budget, measured as the engine sends it.** The split above is
 undone by one static import of a screen's module from the frame — the bundler

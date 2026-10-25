@@ -30,6 +30,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { Router, parseHash } from "~/app/router.tsx";
 import { screenFor } from "~/app/App.tsx";
+import { ScreenBoundary } from "~/app/boundaries.tsx";
 import { resolve } from "~/app/routes.ts";
 import { loadChunk } from "~/app/lazyScreen.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -61,7 +62,11 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-/** Whatever the App draws at `hash`, against a scripted configuration surface. */
+/**
+ * Whatever the App draws at `hash`, against a scripted configuration surface,
+ * inside the routed screen's boundary as the frame draws it: a lazy screen is
+ * drawn in a boundary's region or refused (`app/lazyScreen.ts`).
+ */
 function mount(hash: string) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
@@ -79,7 +84,9 @@ function mount(hash: string) {
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
-        <Router>{screenFor(route)}</Router>
+        <Router>
+          <ScreenBoundary resetKey={hash}>{screenFor(route)}</ScreenBoundary>
+        </Router>
       </ViewerProvider>
     </ClientContext.Provider>,
   );

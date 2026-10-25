@@ -38,7 +38,7 @@ import {
   SidebarNav,
   StatusDot,
 } from "@crewlethq/ui";
-import { ChunkLoadError } from "./lazyScreen.ts";
+import { ChunkLoadError, ChunkRegion } from "./lazyScreen.ts";
 
 /** Reload the page — the one fix for a chunk from another engine version. */
 function reload(): void {
@@ -50,7 +50,9 @@ function reload(): void {
  *
  * RELOAD FIRST, because the usual cause is an upgrade and nothing else fixes
  * that. TRY AGAIN beside it, because the other cause is a dropped request,
- * and `lazyScreen.ts` forgets a failed load so a retry really does ask again.
+ * and `lazyScreen.ts` forgets a failed load once no region can show it — this
+ * fallback taking the region's place is what ends the region's attempt — so a
+ * retry really does ask again.
  */
 function ChunkFailed({ error, reset }: { error: ChunkLoadError; reset: () => void }) {
   return (
@@ -93,7 +95,11 @@ function chunkOnly(error: Error, reset: () => void): ReactNode {
  * sentence inside, and the suspense boundary innermost.
  *
  * THE ERROR BOUNDARIES ARE OUTSIDE THE SUSPENSE, so a chunk that rejects —
- * which `Suspense` does not catch — lands in them.
+ * which `Suspense` does not catch — lands in them. THE CHUNK'S REGION IS
+ * INSIDE THE ONE THAT DRAWS THE CHUNK'S SENTENCE, so drawing it ends the
+ * region's attempt and the cache forgets the failure (`lazyScreen.ts`'s
+ * [ChunkRegion]); outside it, the failure would be kept while the sentence was
+ * on screen, and Try again would be handed it rather than ask again.
  */
 function Guarded({
   what,
@@ -111,9 +117,11 @@ function Guarded({
   return (
     <ErrorBoundary resetKey={resetKey} title={`${what} could not be drawn`}>
       <ErrorBoundary resetKey={resetKey} fallback={chunkOnly}>
-        <Suspense fallback={<Skeleton variant="text" rows={rows} label={loading} />}>
-          {children}
-        </Suspense>
+        <ChunkRegion resetKey={resetKey}>
+          <Suspense fallback={<Skeleton variant="text" rows={rows} label={loading} />}>
+            {children}
+          </Suspense>
+        </ChunkRegion>
       </ErrorBoundary>
     </ErrorBoundary>
   );
@@ -156,7 +164,9 @@ export function PeekBoundary({ resetKey, children }: { resetKey: string; childre
  * palette a chunk of its own), so
  * a load in flight draws nothing — the layer is not on screen until it is —
  * and a chunk that never came is this dialog, carrying the chunk's own
- * sentence about reloading.
+ * sentence about reloading. Its region sits inside the boundary for the same
+ * reason a screen's does (see [Guarded]): the dialog taking the layer's place
+ * ends the attempt, so the layer opened again asks again.
  */
 export function LayerBoundary({
   title,
@@ -199,7 +209,9 @@ export function LayerBoundary({
         </Modal>
       )}
     >
-      <Suspense fallback={null}>{children}</Suspense>
+      <ChunkRegion>
+        <Suspense fallback={null}>{children}</Suspense>
+      </ChunkRegion>
     </ErrorBoundary>
   );
 }

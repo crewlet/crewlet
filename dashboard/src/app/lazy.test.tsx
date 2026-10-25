@@ -9,7 +9,7 @@
  * `boundaries.test.tsx`.
  */
 
-import { startTransition, useState } from "react";
+import { startTransition, useState, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
@@ -27,7 +27,7 @@ import {
 import { WORKSPACES } from "./nav.ts";
 import { DESTINATIONS } from "./nav.ts";
 import { resolve } from "./routes.ts";
-import { ScreenBoundary } from "./boundaries.tsx";
+import { LayerBoundary, PeekBoundary, ScreenBoundary } from "./boundaries.tsx";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -226,6 +226,297 @@ describe("a lazy screen", () => {
       await act(async () => load.release({ Spend: () => <p>the spend screen</p> }));
       expect(await screen.findByText("the spend screen")).toBeDefined();
       expect(errors.mock.calls.map((call) => String(call[0]))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  // ONE ASK AN ATTEMPT. React renders a suspended screen again when its load
+  // settles, and again once more when that render throws, before the boundary
+  // draws anything; a cache that forgot the rejection at once handed each of
+  // those renders a fresh `import()` — another request for a chunk the reader
+  // was about to be told had failed, and React's "suspended by an uncached
+  // promise" in the console. The failure is kept until the boundary draws it
+  // in the region's place, and the next attempt — the reader's Try again —
+  // asks again.
+  test("whose chunk fails is asked once, told, and asked again by Try again", async () => {
+    let asks = 0;
+    let fail = true;
+    serve("spend", () => {
+      asks++;
+      return fail
+        ? Promise.reject(new TypeError("Failed to fetch dynamically imported module"))
+        : Promise.resolve({ Spend: () => <p>the spend screen</p> });
+    });
+    const Spend = lazyScreen("spend", (m) => m.Spend);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await act(async () => {
+        render(
+          <ScreenBoundary resetKey="spend">
+            <Spend />
+          </ScreenBoundary>,
+        );
+      });
+      expect(
+        await screen.findByText("The Spend and Budgets screens could not be loaded"),
+      ).toBeDefined();
+      expect(asks).toBe(1);
+      const said = errors.mock.calls.map((call) => String(call[0]));
+      expect(said.filter((line) => line.includes("uncached promise"))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+    fail = false;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    });
+    expect(await screen.findByText("the spend screen")).toBeDefined();
+    expect(asks).toBe(2);
+  });
+
+  // A LAYER HAS NO TRY AGAIN: closing it unmounts it, and the next press opens
+  // a fresh one. That fresh one asks again, because the failure the closed
+  // dialog showed was forgotten when the dialog was drawn in the layer's
+  // region, not when it was retried.
+  test("whose chunk failed in a layer is asked again when the layer opens again", async () => {
+    let asks = 0;
+    let fail = true;
+    serve("spend", () => {
+      asks++;
+      return fail
+        ? Promise.reject(new TypeError("Failed to fetch dynamically imported module"))
+        : Promise.resolve({ Spend: () => <p>the layer's body</p> });
+    });
+    const Body = lazyScreen("spend", (m) => m.Spend);
+    const layer = () => (
+      <LayerBoundary title="New task" onClose={() => {}}>
+        <Body />
+      </LayerBoundary>
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = render(<></>);
+    try {
+      await act(async () => view.rerender(layer()));
+      expect(
+        await screen.findByRole("dialog", { name: "New task could not be drawn" }),
+      ).toBeDefined();
+      expect(asks).toBe(1);
+    } finally {
+      errors.mockRestore();
+    }
+    view.rerender(<></>);
+    fail = false;
+    await act(async () => view.rerender(layer()));
+    expect(await screen.findByText("the layer's body")).toBeDefined();
+    expect(asks).toBe(2);
+  });
+
+  // THE DIALOG ENDS THE LAYER'S ATTEMPT, as a screen's sentence ends its
+  // region's: while it is open, an ask — the idle prefetch, a hover — fetches
+  // afresh rather than being handed the failure the dialog already says.
+  test("whose layer drew its failure is asked again while the dialog is open", async () => {
+    let asks = 0;
+    let fail = true;
+    serve("spend", () => {
+      asks++;
+      return fail
+        ? Promise.reject(new TypeError("Failed to fetch dynamically imported module"))
+        : Promise.resolve({ Spend: () => <p>the layer's body</p> });
+    });
+    const Body = lazyScreen("spend", (m) => m.Spend);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await act(async () => {
+        render(
+          <LayerBoundary title="New task" onClose={() => {}}>
+            <Body />
+          </LayerBoundary>,
+        );
+      });
+      expect(
+        await screen.findByRole("dialog", { name: "New task could not be drawn" }),
+      ).toBeDefined();
+      expect(asks).toBe(1);
+    } finally {
+      errors.mockRestore();
+    }
+    fail = false;
+    await expect(loadChunk("spend")).resolves.toHaveProperty("Spend");
+    expect(asks).toBe(2);
+  });
+
+  // A load nobody was drawing — a hover's preload, the idle prefetch — that
+  // failed is forgotten at once: nobody was told, so the navigation that
+  // follows asks again rather than showing a failure it never saw happen.
+  test("whose chunk a preload failed to fetch asks again when it is drawn", async () => {
+    let asks = 0;
+    serve("spend", () => {
+      asks++;
+      return asks === 1
+        ? Promise.reject(new Error("dropped"))
+        : Promise.resolve({ Spend: () => <p>the spend screen</p> });
+    });
+    await expect(loadChunk("spend")).rejects.toBeInstanceOf(ChunkLoadError);
+    const Spend = lazyScreen("spend", (m) => m.Spend);
+    await act(async () => {
+      render(
+        <ScreenBoundary resetKey="spend">
+          <Spend />
+        </ScreenBoundary>,
+      );
+    });
+    expect(await screen.findByText("the spend screen")).toBeDefined();
+    expect(asks).toBe(2);
+  });
+
+  // A FAILURE NOBODY CAN SEE ANY MORE IS FORGOTTEN. The reader opened the
+  // screen and left before its chunk came; when the request fails there is no
+  // boundary left to show it, so it is no answer to anybody's next attempt — a
+  // hover asks again, and the screen opened again asks again, rather than
+  // being handed a failure the reader never saw happen.
+  test("whose region went before its chunk failed is asked again by the next attempt", async () => {
+    let asks = 0;
+    const loads: ReturnType<typeof held>[] = [];
+    serve("spend", () => {
+      asks++;
+      const load = held();
+      loads.push(load);
+      return load.promise;
+    });
+    const Spend = lazyScreen("spend", (m) => m.Spend);
+    const region = () => (
+      <ScreenBoundary resetKey="spend">
+        <Spend />
+      </ScreenBoundary>
+    );
+    const view = render(<></>);
+    await act(async () => view.rerender(region()));
+    expect(screen.getByText("Loading this screen")).toBeDefined();
+    await act(async () => view.rerender(<></>));
+    await act(async () =>
+      loads[0]!.fail(new TypeError("Failed to fetch dynamically imported module")),
+    );
+    // THE HOVER ASKS AGAIN, and is answered by the new request.
+    preload(["settings", "spend"]);
+    expect(asks).toBe(2);
+    await act(async () => loads[1]!.release({ Spend: () => <p>the spend screen</p> }));
+    await expect(loadChunk("spend")).resolves.toHaveProperty("Spend");
+    await act(async () => view.rerender(region()));
+    expect(screen.getByText("the spend screen")).toBeDefined();
+    expect(screen.queryByText("The Spend and Budgets screens could not be loaded")).toBeNull();
+    expect(asks).toBe(2);
+  });
+
+  // THE SAME, WHERE THE REGION STAYS: the routed screen's boundary is mounted
+  // for the life of the page and a navigation only changes its key, so a
+  // reader who moved on is a boundary drawing something else, not one that
+  // went. Coming back is the next attempt, and it asks.
+  test("whose reader moved on before its chunk failed asks again on the way back", async () => {
+    let asks = 0;
+    const loads: ReturnType<typeof held>[] = [];
+    serve("spend", () => {
+      asks++;
+      const load = held();
+      loads.push(load);
+      return load.promise;
+    });
+    const Spend = lazyScreen("spend", (m) => m.Spend);
+    const at = (key: string, body: ReactNode) => (
+      <ScreenBoundary resetKey={key}>{body}</ScreenBoundary>
+    );
+    const view = render(<></>);
+    await act(async () => view.rerender(at("spend", <Spend />)));
+    expect(screen.getByText("Loading this screen")).toBeDefined();
+    await act(async () => view.rerender(at("home", <p>home</p>)));
+    expect(screen.getByText("home")).toBeDefined();
+    await act(async () =>
+      loads[0]!.fail(new TypeError("Failed to fetch dynamically imported module")),
+    );
+    await act(async () => view.rerender(at("spend", <Spend />)));
+    expect(asks).toBe(2);
+    await act(async () => loads[1]!.release({ Spend: () => <p>the spend screen</p> }));
+    expect(screen.getByText("the spend screen")).toBeDefined();
+    expect(screen.queryByText("The Spend and Budgets screens could not be loaded")).toBeNull();
+  });
+
+  // AND ONE KEPT FOR A REGION THAT IS STILL ON goes when the region does. A
+  // region that stopped drawing the screen without changing its key — the
+  // screen's own path, drawing a check of the reader's access instead — keeps
+  // the failure for when it draws the screen again, since that is the same
+  // attempt; once the region goes, nobody can draw it.
+  test("whose failure a region kept is forgotten when that region goes", async () => {
+    let asks = 0;
+    const loads: ReturnType<typeof held>[] = [];
+    serve("spend", () => {
+      asks++;
+      const load = held();
+      loads.push(load);
+      return load.promise;
+    });
+    const Spend = lazyScreen("spend", (m) => m.Spend);
+    const region = (body: ReactNode) => <ScreenBoundary resetKey="spend">{body}</ScreenBoundary>;
+    const view = render(<></>);
+    await act(async () => view.rerender(region(<Spend />)));
+    await act(async () => view.rerender(region(<p>checking your access</p>)));
+    await act(async () =>
+      loads[0]!.fail(new TypeError("Failed to fetch dynamically imported module")),
+    );
+    // STILL THE REGION'S: an ask now is handed the failure it will draw.
+    await expect(loadChunk("spend")).rejects.toBeInstanceOf(ChunkLoadError);
+    expect(asks).toBe(1);
+    await act(async () => view.rerender(<></>));
+    preload(["settings", "spend"]);
+    expect(asks).toBe(2);
+  });
+
+  // TWO REGIONS DRAWING ONE CHUNK — a screen and the object peeked beside it,
+  // both out of one chunk — are told of its failure by ONE request: the
+  // failure is kept until neither can show it any more, so the region whose
+  // boundary draws it second is not handed a fresh request by the first one's.
+  test("whose chunk two regions draw is asked once for both, and both say so", async () => {
+    let asks = 0;
+    const loads: ReturnType<typeof held>[] = [];
+    serve("spend", () => {
+      asks++;
+      const load = held();
+      loads.push(load);
+      return load.promise;
+    });
+    const Spend = lazyScreen("spend", (m) => m.Spend);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await act(async () => {
+        render(
+          <>
+            <ScreenBoundary resetKey="settings/spend">
+              <Spend />
+            </ScreenBoundary>
+            <PeekBoundary resetKey="budget:company">
+              <Spend />
+            </PeekBoundary>
+          </>,
+        );
+      });
+      await act(async () =>
+        loads[0]!.fail(new TypeError("Failed to fetch dynamically imported module")),
+      );
+      expect(screen.getAllByText("The Spend and Budgets screens could not be loaded")).toHaveLength(
+        2,
+      );
+      expect(asks).toBe(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  // A LAZY SCREEN IS DRAWN IN A REGION, or nothing could say when its failure
+  // is forgotten: one drawn outside every boundary is refused by name.
+  test("drawn outside every boundary is refused, naming its chunk", () => {
+    const Spend = lazyScreen("spend", (m) => m.Spend);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => render(<Spend />)).toThrow(/Lazy\(spend\) was drawn outside a ChunkRegion/);
     } finally {
       errors.mockRestore();
     }

@@ -133,8 +133,10 @@ describe("a screen that throws", () => {
 describe("a chunk that never arrives", () => {
   test("has its own sentence, a Reload, and a Try again that really asks again", async () => {
     let fail = true;
+    let asks = 0;
     undo.push(
       overrideChunkForTest("spend", async () => {
+        asks++;
         if (fail) throw new TypeError("Failed to fetch dynamically imported module");
         return { ...(await import("~/routes/spend/index.ts")), Spend: () => <p>spend, loaded</p> };
       }),
@@ -148,11 +150,40 @@ describe("a chunk that never arrives", () => {
     expect(screen.queryByText("This screen could not be drawn")).toBeNull();
     expect(screen.getByText(/The engine was updated/)).toBeDefined();
     expect(screen.getByRole("button", { name: "Reload" })).toBeDefined();
+    // Asked once to learn that it failed, and once more by the Try again.
+    expect(asks).toBe(1);
     fail = false;
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     });
     expect(await screen.findByText("spend, loaded")).toBeDefined();
+    expect(asks).toBe(2);
+  });
+
+  // THE SIGN-IN SCREENS ARE DRAWN OUTSIDE THE FRAME, with no sidebar and no
+  // shell, through the routed screen's boundary all the same: so a reader
+  // signing in from a tab an upgrade outdated is told once, and asks again.
+  test("outside the frame, on the sign-in screen, is told once and asked again", async () => {
+    let fail = true;
+    let asks = 0;
+    undo.push(
+      overrideChunkForTest("signin", async () => {
+        asks++;
+        if (fail) throw new TypeError("Failed to fetch dynamically imported module");
+        return { ...(await import("~/routes/signin/index.ts")), SignIn: () => <p>signing in</p> };
+      }),
+    );
+    location.hash = "#/login";
+    await mount();
+    expect(await screen.findByText("The sign-in screens could not be loaded")).toBeDefined();
+    expect(screen.queryByRole("navigation", { name: "Navigation" })).toBeNull();
+    expect(asks).toBe(1);
+    fail = false;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    });
+    expect(await screen.findByText("signing in")).toBeDefined();
+    expect(asks).toBe(2);
   });
 });
 
