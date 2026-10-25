@@ -8169,9 +8169,10 @@ is **Settings › Backups & retention › Take a backup**.
 ### `POST /objects/migrate`
 
 Copies every object the company's files name from the fleet's object store
-into an S3-compatible bucket, and on the final pass moves the fleet's record
-of where its files are. `crewlet objects migrate --to s3` is a client of this
-route; the procedure is in [Moving the files to a
+into an S3-compatible bucket — and every object a derived row names, which
+the engine could build again but would on every node — and on the final pass
+moves the fleet's record of where its files are. `crewlet objects migrate
+--to s3` is a client of this route; the procedure is in [Moving the files to a
 bucket](../concepts/object-store.md#moving-the-files-to-a-bucket).
 
 | Parameter | Meaning |
@@ -8188,7 +8189,9 @@ bucket](../concepts/object-store.md#moving-the-files-to-a-bucket).
   "moved": true,
   "direct_upload": "available",
   "pass": {"referenced": 18211, "present": 18190, "copied": 21,
-           "copied_bytes": 4194304, "unreadable": 0, "complete": true},
+           "copied_bytes": 4194304, "unreadable": 0, "complete": true,
+           "derived": {"referenced": 64, "present": 61, "copied": 3,
+                       "copied_bytes": 12582912, "unreadable": 0}},
   "next": "The fleet's files are in …"
 }
 ```
@@ -8198,6 +8201,13 @@ digest, where the provider keeps one), so a pass that stopped resumes by
 running again. `pass.unreadable` counts objects the fleet's own store could not
 give back whole, missing or damaged there, named in `pass.unreadable_files`;
 no copy can bring them back, and `objects_missing` already counts them.
+`pass.derived` holds the same counts for the objects derived rows name
+([live, retired and derived
+references](../concepts/object-store.md#live-retired-and-derived-references)),
+which the pass copies as it copies a file's: one the fleet's own store could
+not give back is counted in `pass.derived.unreadable`, named nowhere, and
+never holds the final pass up — nothing is lost without it, and the engine
+builds it again.
 
 It is **synchronous** and runs to its end even if the client gives up, for the
 backup's reason. It needs `admin` and a recent proof of identity, like every

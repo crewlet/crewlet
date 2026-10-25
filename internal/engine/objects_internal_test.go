@@ -251,6 +251,8 @@ func (*namedNothing) Referenced(context.Context, []objstore.Key,
 
 func (*namedNothing) Required(statelog.Position) []objstore.Walk { return nil }
 
+func (*namedNothing) Moved(statelog.Position) []objstore.Walk { return nil }
+
 // A NODE NAMING ANOTHER OBJECT STORE IS REFUSED, NAMING BOTH.
 //
 // The fleet records the store its first node opened, and a node whose

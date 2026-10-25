@@ -40,16 +40,25 @@ func (s *source) Referenced(context.Context, []objstore.Key, statelog.Position) 
 	return nil, false, errors.New("the migration never asks which keys are named")
 }
 
-// Required is one walk over every object the source names, in key order, in
-// one page — read when the walk is asked, as an estate's is.
+// Required is the audit's walk: every object a Required row of the source
+// names, which a move that walked it in place of [source.Moved] would copy
+// alone.
 func (s *source) Required(statelog.Position) []objstore.Walk {
-	return []objstore.Walk{&walk{s: s}}
+	return []objstore.Walk{&walk{s: s, pass: objstore.PassAudit}}
 }
 
-// walk is a [source]'s one walk: every reference on its first page, none
-// after.
+// Moved is the move's walk: every object the source names, the derived ones
+// among them.
+func (s *source) Moved(statelog.Position) []objstore.Walk {
+	return []objstore.Walk{&walk{s: s, pass: objstore.PassMove}}
+}
+
+// walk is one of a [source]'s walks: every reference its pass reads on its
+// first page, in key order — read when the walk is asked, as an estate's is —
+// and none after.
 type walk struct {
 	s    *source
+	pass objstore.Pass
 	done bool
 }
 
@@ -60,9 +69,14 @@ func (w *walk) Next(context.Context) ([]objstore.Reference, bool, error) {
 		return nil, !w.s.incomplete, nil
 	}
 	w.done = true
-	refs := slices.SortedFunc(maps.Values(w.s.named), func(a, b objstore.Reference) int {
+	var refs []objstore.Reference
+	for _, ref := range slices.SortedFunc(maps.Values(w.s.named), func(a, b objstore.Reference) int {
 		return a.Object.Key.Compare(b.Object.Key)
-	})
+	}) {
+		if w.pass.Reads(ref.Standing) {
+			refs = append(refs, ref)
+		}
+	}
 	return refs, !w.s.incomplete, nil
 }
 
@@ -99,13 +113,21 @@ func newFixture(t *testing.T, files int) *fixture {
 	f := &fixture{t: t, src: &source{named: map[objstore.Key]objstore.Reference{}}, from: from,
 		store: store, target: &target{Backend: memobj.New()}}
 	for i := range files {
-		o, err := store.Put(t.Context(), strings.NewReader(fmt.Sprintf("file %d", i)), 1<<20, objstore.PutMeta{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.src.named[o.Key] = objstore.Reference{Object: o, NamedBy: fmt.Sprintf("ENG/f%02d.md", i)}
+		f.name(objstore.Required, fmt.Sprintf("ENG/f%02d.md", i), fmt.Sprintf("file %d", i))
 	}
 	return f
+}
+
+// name stores body in the source and records a row of standing s naming it,
+// owned by namedBy.
+func (f *fixture) name(s objstore.Standing, namedBy, body string) objstore.Object {
+	f.t.Helper()
+	o, err := f.store.Put(f.t.Context(), strings.NewReader(body), 1<<20, objstore.PutMeta{})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.src.named[o.Key] = objstore.Reference{Object: o, NamedBy: namedBy, Standing: s}
+	return o
 }
 
 func (f *fixture) run(pin bool) (migrate.Report, error) {
@@ -207,5 +229,86 @@ func TestAnIncompleteEstateIsNeverDone(t *testing.T) {
 	r, err := f.run(true)
 	if err != nil || r.Copied != 2 || r.Done() {
 		t.Fatalf("a pass over an incomplete estate = %+v, %v; want copies and not done", r, err)
+	}
+}
+
+// A STORE MOVE COPIES WHAT A DERIVED ROW NAMES, VERIFIED, as it copies a
+// file (ADR-0051): an object the engine can build again is one every node of
+// the moved fleet would otherwise build again, at a cost that grows with what
+// it was built from, where the copy costs its bytes once. It is counted apart
+// from the files, and a second pass finds it present and copies nothing.
+func TestAStoreMoveCopiesADerivedObjectVerified(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, 3)
+	var derived []objstore.Object
+	for i := range 2 {
+		derived = append(derived, f.name(objstore.Derived, fmt.Sprintf("repo/layer/%d", i),
+			fmt.Sprintf("an index the engine builds again, %d", i)))
+	}
+	r, err := f.run(true)
+	want := migrate.Counts{Referenced: 2, Copied: 2, CopiedBytes: derived[0].Size + derived[1].Size}
+	if err != nil || r.Referenced != 3 || r.Copied != 3 || r.Derived != want || !r.Done() {
+		t.Fatalf("the pass = %+v, %v; want the three files and the two derived objects "+
+			"copied, each counted as what names it", r, err)
+	}
+	for _, o := range derived {
+		info, err := f.target.Stat(t.Context(), o.Key.Name())
+		if err != nil || info.Size != o.Size {
+			t.Fatalf("the target holds derived object %s as %+v, %v", o.Key, info, err)
+		}
+	}
+	puts := f.target.puts.Load()
+	again, err := f.run(true)
+	if err != nil || again.Derived != (migrate.Counts{Referenced: 2, Present: 2}) || !again.Done() {
+		t.Fatalf("a second pass = %+v, %v; want both derived objects present", again, err)
+	}
+	if f.target.puts.Load() != puts {
+		t.Fatalf("a pass over a target holding everything put %d objects", f.target.puts.Load()-puts)
+	}
+}
+
+// A DERIVED OBJECT THE SOURCE CANNOT GIVE BACK HOLDS NOTHING UP: one lost
+// from the source and one it holds damaged are counted apart and left behind
+// — the engine builds each again, so nothing is lost — never named as a file
+// no copy can bring back, and the pass is done; the damaged one's failed read
+// leaves nothing in the target, as a file's does.
+func TestADerivedObjectTheSourceCannotGiveBackHoldsNothingUp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, 2)
+	lost := f.name(objstore.Derived, "repo/layer/lost", "an index the store lost")
+	bent := f.name(objstore.Derived, "repo/layer/bent", "an index the store holds damaged")
+	f.name(objstore.Derived, "repo/layer/kept", "an index the store holds whole")
+	if err := f.store.Delete(t.Context(), lost.Key); err != nil {
+		t.Fatal(err)
+	}
+	f.from.Corrupt(bent.Key.Name(), []byte("an index the store holds DAMAGED"))
+	r, err := f.run(true)
+	if err != nil || r.Unreadable != 0 || len(r.Files) != 0 || r.Copied != 2 ||
+		r.Derived.Unreadable != 2 || r.Derived.Copied != 1 || !r.Done() {
+		t.Fatalf("the pass = %+v, %v; want both files and the whole derived object copied, the "+
+			"other two counted apart, no file named, and the pass done", r, err)
+	}
+	if _, err := f.target.Stat(t.Context(), bent.Key.Name()); !errors.Is(err, objstore.ErrNotFound) {
+		t.Fatalf("a damaged derived object reached the target: %v", err)
+	}
+}
+
+// A PASS IS DONE ONLY ONCE EVERY OBJECT IT COUNTED HAS SETTLED — a file's or
+// a derived one's — present, copied or unreadable, from an estate read whole.
+func TestAReportIsDoneOnlyOnceEveryObjectSettled(t *testing.T) {
+	t.Parallel()
+	settled := migrate.Counts{Referenced: 3, Present: 1, Copied: 1, Unreadable: 1}
+	for name, c := range map[string]struct {
+		r    migrate.Report
+		done bool
+	}{
+		"everything settled":      {migrate.Report{Counts: settled, Derived: settled, Complete: true}, true},
+		"a file unsettled":        {migrate.Report{Counts: migrate.Counts{Referenced: 1}, Derived: settled, Complete: true}, false},
+		"a derived one unsettled": {migrate.Report{Counts: settled, Derived: migrate.Counts{Referenced: 1}, Complete: true}, false},
+		"an estate read in part":  {migrate.Report{Counts: settled, Derived: settled}, false},
+	} {
+		if got := c.r.Done(); got != c.done {
+			t.Errorf("%s: Done() = %v, want %v", name, got, c.done)
+		}
 	}
 }

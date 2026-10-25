@@ -3,6 +3,25 @@
 // the broker's own bucket to an S3-compatible one (`crewlet objects migrate
 // --to s3`).
 //
+// # What a move carries, and why it is more than a backup carries
+//
+// Every object a Required row names — a file's bytes, what the company holds
+// — and every object a Derived row names, but no object a Retired row keeps:
+// ADR-0051's table of obligations, whose store-move column is
+// [objstore.PassMove], read through [collect.Source.Moved]. A derived object
+// is one the engine can build again, which is why no backup carries it: a
+// backup is taken again and again and restored rarely, so carrying one would
+// cost its bytes at every backup to spare a rebuild after a restore. A move
+// is made once, and a derived object it left behind would be built again by
+// every node of the moved fleet, at a cost that grows with what it was built
+// from rather than with anything that changed, where a copy costs its bytes
+// once, through the same verified read as a file's. So the move copies it;
+// and since nothing is lost without it, one the source cannot give back whole
+// is counted apart and left behind, never named as a file and never holding
+// the move up ([Report.Derived]). A retired object stays behind: the move
+// ends with every node restarted onto the target, so no reader is left that
+// has not caught up with what replaced it.
+//
 // # Why a copy by key is safe to repeat
 //
 // A key is minted for one upload and never names other bytes (ADR-0026), so an
@@ -76,9 +95,11 @@ type Options struct {
 	Pin bool
 }
 
-// Report is what one pass found and did.
-type Report struct {
-	// Referenced is how many objects the estate names.
+// Counts is what one pass found and did for one kind of object: those the
+// estate's Required rows name ([Report]'s own), or those its Derived rows name
+// ([Report.Derived]).
+type Counts struct {
+	// Referenced is how many such objects the estate names.
 	Referenced int `json:"referenced"`
 
 	// Present is how many the target already held, verified; Copied how
@@ -88,11 +109,29 @@ type Report struct {
 	CopiedBytes int64 `json:"copied_bytes"`
 
 	// Unreadable is how many the SOURCE could not give back whole: missing
-	// from it, or damaged in it. No copy can bring those back; the
-	// objects_missing alarm already counts them, and Files names the first
-	// [UnreadableShown].
-	Unreadable int              `json:"unreadable"`
-	Files      []UnreadableFile `json:"unreadable_files,omitempty"`
+	// from it, or damaged in it.
+	Unreadable int `json:"unreadable"`
+}
+
+// settled reports whether every object c counts ended present, copied or
+// unreadable.
+func (c Counts) settled() bool { return c.Present+c.Copied+c.Unreadable == c.Referenced }
+
+// Report is what one pass found and did.
+type Report struct {
+	// Counts is for the objects Required rows name: the company's files.
+	// One the source could not give back whole is a file no copy can bring
+	// back; the objects_missing alarm already counts it, and Files names
+	// the first [UnreadableShown].
+	Counts
+	Files []UnreadableFile `json:"unreadable_files,omitempty"`
+
+	// Derived is for the objects Derived rows name, which the engine can
+	// build again (ADR-0051): copied as a file is, so the moved fleet has
+	// them without building them. One the source could not give back whole
+	// is counted here and left behind — named nowhere and holding nothing
+	// up, since nothing is lost without it: the engine builds it again.
+	Derived Counts `json:"derived"`
 
 	// Complete is whether every domain's estate was complete: false while
 	// this node holds a record it could not apply, which may name an
@@ -110,7 +149,16 @@ type UnreadableFile struct {
 // Done reports whether the target holds every object the source can give
 // back, from an estate this node read whole: what the move of the fleet's
 // record waits for.
-func (r Report) Done() bool { return r.Complete && r.Present+r.Copied+r.Unreadable == r.Referenced }
+func (r Report) Done() bool { return r.Complete && r.Counts.settled() && r.Derived.settled() }
+
+// counts is the counts ref's object is kept in: [Report.Derived] for one a
+// Derived row names, [Report.Counts] for every other.
+func (r *Report) counts(ref objstore.Reference) *Counts {
+	if ref.Standing == objstore.Derived {
+		return &r.Derived
+	}
+	return &r.Counts
+}
 
 // Run copies every object the estate names that the target does not hold, and
 // verifies what it copied. A transient failure of either store ends the pass
@@ -169,18 +217,13 @@ type pass struct {
 	report Report
 }
 
-// walk hands every reference a REQUIRED table names to the copiers, a domain
-// and a table at a time, a keyset page of each in a read of its own
-// ([collect.Source.Required]).
-//
-// THE REQUIRED TABLES, the set the audit holds the store to and the backup
-// carries: a retired table's object is one the company has let go, and a
-// derived table's one the engine builds again (ADR-0051) — neither is owed to
-// any reader on the source and so neither is on the target, and the collector
-// there keeps it from nothing it does not hold.
+// walk hands every reference a table the move copies names to the copiers —
+// the Required tables and the Derived ones, as the package doc says — a
+// domain and a table at a time, a keyset page of each in a read of its own
+// ([collect.Source.Moved]).
 func (p *pass) walk(ctx context.Context, at []statelog.Position) error {
 	for i, s := range p.opts.References {
-		for _, w := range s.Required(at[i]) {
+		for _, w := range s.Moved(at[i]) {
 			for {
 				page, whole, err := w.Next(ctx)
 				if err != nil {
@@ -193,7 +236,7 @@ func (p *pass) walk(ctx context.Context, at []statelog.Position) error {
 					break
 				}
 				for _, ref := range page {
-					p.count(func(r *Report) { r.Referenced++ })
+					p.count(func(r *Report) { r.counts(ref).Referenced++ })
 					select {
 					case p.refs <- ref:
 					case <-ctx.Done():
@@ -214,7 +257,7 @@ func (p *pass) one(ctx context.Context, ref objstore.Reference) error {
 		return err
 	}
 	if held {
-		p.count(func(r *Report) { r.Present++ })
+		p.count(func(r *Report) { r.counts(ref).Present++ })
 		return nil
 	}
 	body, err := p.opts.Source.Open(ctx, ref.Object)
@@ -244,7 +287,11 @@ func (p *pass) one(ctx context.Context, ref objstore.Reference) error {
 		return fmt.Errorf("objstore/migrate: the target acknowledged %s (%s) and does not hold "+
 			"it at its size and digest", ref.Object.Key, ref.NamedBy)
 	}
-	p.count(func(r *Report) { r.Copied++; r.CopiedBytes += ref.Object.Size })
+	p.count(func(r *Report) {
+		c := r.counts(ref)
+		c.Copied++
+		c.CopiedBytes += ref.Object.Size
+	})
 	return nil
 }
 
@@ -267,9 +314,16 @@ func (p *pass) count(fn func(*Report)) {
 	fn(&p.report)
 }
 
+// unreadable counts ref's object as one the source cannot give back whole,
+// and names it among the files where a Required row names it: a derived one
+// is counted alone ([Report.Derived]).
 func (p *pass) unreadable(ref objstore.Reference, damaged bool) {
 	p.count(func(r *Report) {
-		r.Unreadable++
+		c := r.counts(ref)
+		c.Unreadable++
+		if c == &r.Derived {
+			return
+		}
 		if len(r.Files) < UnreadableShown {
 			r.Files = append(r.Files, UnreadableFile{Object: ref.Object.Key, NamedBy: ref.NamedBy, Damaged: damaged})
 		}

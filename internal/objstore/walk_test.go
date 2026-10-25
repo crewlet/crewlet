@@ -222,7 +222,7 @@ func TestAWalkWhoseReadRunsTwiceHandsEachRowOnce(t *testing.T) {
 			return fn(tx)
 		})
 	}
-	w := walkedTable.WalkOf(twice)
+	w := walkedTable.WalkOf(twice, objstore.PassAudit)
 	var got []objstore.Reference
 	pages := 0
 	for {
@@ -244,7 +244,8 @@ func TestAWalkWhoseReadRunsTwiceHandsEachRowOnce(t *testing.T) {
 	}
 	for i, r := range got {
 		want := fmt.Sprintf("ENG/%04d.md", i)
-		if r.Object.Key != all[i] || r.NamedBy != want || r.Table != walkedTable.Table {
+		if r.Object.Key != all[i] || r.NamedBy != want || r.Table != walkedTable.Table ||
+			r.Standing != walkedTable.Standing {
 			t.Fatalf("reference %d = %+v; want %s named by %s in %s", i, r, all[i], want, walkedTable.Table)
 		}
 	}

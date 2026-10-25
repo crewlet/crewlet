@@ -183,7 +183,8 @@ func serveMigrate(t *testing.T, report string, asked *[]string) *httptest.Server
 }
 
 // MIGRATE NAMES THE TARGET ON THE ENGINE'S HOST AND SAYS WHAT HAPPENED: what
-// was copied, what the old store could not give back, and what to do next.
+// was copied — the files and, apart, the objects derived rows name — what the
+// old store could not give back, and what to do next.
 func TestObjectsMigrateReportsThePassAndTheNextStep(t *testing.T) {
 	t.Parallel()
 	var asked []string
@@ -191,7 +192,8 @@ func TestObjectsMigrateReportsThePassAndTheNextStep(t *testing.T) {
 		"final":true,"sealed":true,"moved":true,"direct_upload":"available",
 		"next":"Give every node the target file's store.objects block.",
 		"pass":{"referenced":5,"present":2,"copied":2,"copied_bytes":2048,"unreadable":1,
-		"complete":true,"unreadable_files":[{"object":"k","named_by":"ENG/gone.md"}]}}`, &asked)
+		"complete":true,"unreadable_files":[{"object":"k","named_by":"ENG/gone.md"}],
+		"derived":{"referenced":4,"present":1,"copied":2,"copied_bytes":4096,"unreadable":1}}}`, &asked)
 	out, _, err := cli(t, "objects", "migrate", "-to", "s3", "-target", "/etc/crewlet/s3.yaml",
 		"-final", bootstrapForURL(t, srv.URL))
 	if err != nil {
@@ -202,7 +204,8 @@ func TestObjectsMigrateReportsThePassAndTheNextStep(t *testing.T) {
 	}
 	for _, want := range []string{"the fleet's own NATS bucket", "an S3 bucket (https://s3.example.com/files/acme/)",
 		"5 (2 already in the bucket, 2 copied", "ENG/gone.md (missing", "now keeps its files in the bucket",
-		"sealed", "Give every node"} {
+		"Derived objects:   4 (1 already in the bucket, 2 copied",
+		"1 derived object(s) could not be read", "nothing is lost", "sealed", "Give every node"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("migrate does not say %q:\n%s", want, out)
 		}

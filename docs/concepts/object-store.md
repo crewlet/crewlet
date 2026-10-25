@@ -636,9 +636,14 @@ passes:
    The node probes the bucket, then reads every object a file names from the
    fleet's store, checked against the file's row, and writes it to the bucket
    under the same key, checking the bucket holds it at its size (and SHA-256,
-   where the provider keeps one). An object the bucket already holds is
-   skipped, so a pass that stopped is resumed by running it again, and later
-   passes copy only what was uploaded since. Nothing about the fleet changes.
+   where the provider keeps one). It copies every object a
+   [derived](#live-retired-and-derived-references) row names the same way —
+   one the engine could build again, but only by reading again everything it
+   was built from, on every node of the moved fleet — so the fleet runs on the
+   bucket with what it had, rather than rebuilding it. An object the bucket
+   already holds is skipped, so a pass that stopped is resumed by running it
+   again, and later passes copy only what was uploaded since. Nothing about
+   the fleet changes.
 3. **Restart every node in maintenance mode**, `crewlet run -mode maintenance`,
    so that no node writes a record naming a new file while the last pass runs.
 4. **Run the final pass:**
@@ -660,7 +665,12 @@ passes:
 A file the fleet's own store could not give back (missing, or damaged) is
 named by both passes and not copied: no copy can bring it back, and
 [`objects_missing`](#alarms) already counts it. Restore it from a
-[backup](../guides/backup.md) or upload it again.
+[backup](../guides/backup.md) or upload it again. A derived object the store
+could not give back is only counted, apart from the files, and holds nothing
+up: nothing is lost without it, and the engine builds it again on the bucket.
+An object a [retired](#live-retired-and-derived-references) row keeps is not
+copied at all: every node restarts onto the bucket, so no reader is left that
+could still want it.
 
 ---
 
@@ -892,9 +902,10 @@ Every table whose rows name objects declares which of three kinds its rows
 are:
 
 - **Live** — the object is part of something the company holds, such as a
-  file's bytes. The collector keeps it, the audit checks it, and a backup
-  carries it — and every object a record its restore replays names, since
-  those records write live rows too.
+  file's bytes. The collector keeps it, the audit checks it, a backup carries
+  it — and every object a record its restore replays names, since those
+  records write live rows too — and
+  [moving the files to a bucket](#moving-the-files-to-a-bucket) copies it.
 - **Retired** — the object has been replaced and nothing new will read it,
   but a reader that has not caught up may still be fetching it. A retired row
   keeps the object from the collector until the part of the engine that wrote
@@ -904,7 +915,8 @@ are:
   miss — and a backup never copies, counts or asks after it: on `s3` it stays
   out of the backup's `objects/`, and on `nats` its bytes ride the bucket's
   stream snapshot, as everything the bucket holds does, uncounted and
-  unchecked.
+  unchecked. A move to a bucket leaves it behind: every node restarts onto the
+  bucket, so no reader that has not caught up is left.
 - **Derived** — the object is one the engine can build again from what live
   rows name, so losing it costs a rebuild and no data. A derived row keeps the
   object from the collector for as long as the row stands, as a live row
@@ -917,13 +929,20 @@ are:
   exactly as a retired one's: on `s3` it stays out of the backup's `objects/`,
   and on `nats` its bytes ride the bucket's stream snapshot uncounted and
   unchecked. A restore brings the rows back without the objects they name,
-  and the engine builds those again.
+  and the engine builds those again. A move to a bucket **does** copy it, as
+  it copies a live one: a backup is taken again and again and restored
+  rarely, so carrying the object would cost its bytes at every backup to
+  spare a rebuild after a restore, while a move is made once, and an object it
+  left behind would be built again on every node of the moved fleet, at a
+  cost that grows with everything it was built from. One the old store cannot
+  give back is counted and left behind, and never holds the move up, as it
+  never raises an alarm.
 
-| Kind | Kept from the collector | Audited | Carried by a backup |
-|---|---|---|---|
-| Live | yes | yes | yes |
-| Retired | until its row's grace has passed | no | no |
-| Derived | for as long as its row stands | no | no |
+| Kind | Kept from the collector | Audited | Carried by a backup | Copied by a move to a bucket |
+|---|---|---|---|---|
+| Live | yes | yes | yes | yes |
+| Retired | until its row's grace has passed | no | no | no |
+| Derived | for as long as its row stands | no | no | yes |
 
 A project's files are live rows, and a file never retires one: a replaced
 file's bytes go at the first hourly pass once nothing names them and they were

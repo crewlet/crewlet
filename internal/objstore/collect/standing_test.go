@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -194,6 +195,56 @@ func TestTheAuditAsksOnlyAfterRequiredReferences(t *testing.T) {
 	want := []MissingFile{{Object: lost.Key, NamedBy: "lost.md", Finding: FindingMissing}}
 	if r.Found == nil || !slices.Equal(r.Found.MissingFiles, want) {
 		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+	}
+}
+
+// A STORE MOVE WALKS THE REQUIRED AND THE DERIVED TABLES, AND NEVER A RETIRED
+// ONE (ADR-0051), while the audit walks the Required tables alone: a derived
+// object left behind by a move is one every node of the moved fleet builds
+// again, and a retired one is one no reader of the moved fleet is left to
+// want. Every reference a move's walk hands on carries its table's standing,
+// which is how the move tells an object it owes the target from one it copies
+// where the source has it.
+func TestAStoreMoveWalksTheRequiredAndDerivedTablesAlone(t *testing.T) {
+	t.Parallel()
+	h := newStandingHarness(t)
+	live := h.putObject("a file's bytes")
+	h.name(liveRefs, live, "file.md")
+	replaced := h.putObject("the bytes a rewrite replaced")
+	h.name(retiredRefs, replaced, "replaced.md")
+	index := h.putObject("an index the engine builds again")
+	h.name(derivedRefs, index, "index")
+
+	walked := func(walks []objstore.Walk) map[objstore.Key]objstore.Standing {
+		t.Helper()
+		out := map[objstore.Key]objstore.Standing{}
+		for _, w := range walks {
+			for {
+				page, whole, err := w.Next(t.Context())
+				if err != nil || !whole {
+					t.Fatalf("a walk's page = %v (whole %v)", err, whole)
+				}
+				if len(page) == 0 {
+					break
+				}
+				for _, ref := range page {
+					out[ref.Object.Key] = ref.Standing
+				}
+			}
+		}
+		return out
+	}
+	src := h.c.opts.References[0]
+	if got, want := walked(src.Moved(statelog.Position{})), map[objstore.Key]objstore.Standing{
+		live.Key: objstore.Required, index.Key: objstore.Derived,
+	}; !maps.Equal(got, want) {
+		t.Errorf("a store move walked %v; want the live object and the derived one, each with "+
+			"its table's standing", got)
+	}
+	if got, want := walked(src.Required(statelog.Position{})), map[objstore.Key]objstore.Standing{
+		live.Key: objstore.Required,
+	}; !maps.Equal(got, want) {
+		t.Errorf("the audit walked %v; want the live object alone", got)
 	}
 }
 

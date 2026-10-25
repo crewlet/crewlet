@@ -32,8 +32,12 @@ func (*migrationSource) Referenced(context.Context, []objstore.Key, statelog.Pos
 	return nil, false, errors.New("unused")
 }
 
-// Required is one walk handing every reference on its first page.
-func (s *migrationSource) Required(statelog.Position) []objstore.Walk {
+// Required is the audit's walk, which a migration never takes: a pass that
+// took it would copy nothing.
+func (*migrationSource) Required(statelog.Position) []objstore.Walk { return nil }
+
+// Moved is one walk handing every reference on its first page.
+func (s *migrationSource) Moved(statelog.Position) []objstore.Walk {
 	return []objstore.Walk{&migrationWalk{refs: s.refs}}
 }
 
@@ -51,8 +55,8 @@ func (w *migrationWalk) Next(context.Context) ([]objstore.Reference, bool, error
 	return w.refs, true, nil
 }
 
-// migrationNode is an engine on the nats backend holding three named files,
-// with an S3 bucket to move them to.
+// migrationNode is an engine on the nats backend holding three named files
+// and one object a derived row names, with an S3 bucket to move them to.
 func migrationNode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, *coordmemory.Fleet,
 	*migrationSource, config.StoreObjects, *s3fake.Server) {
 	t.Helper()
@@ -65,12 +69,17 @@ func migrationNode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, *coord
 		t.Fatal(err)
 	}
 	src := &migrationSource{}
-	for _, body := range []string{"one", "two", "three"} {
-		o, err := store.Put(t.Context(), strings.NewReader(body), 1<<10, objstore.PutMeta{})
+	for _, named := range []struct {
+		body     string
+		standing objstore.Standing
+	}{{"one", objstore.Required}, {"two", objstore.Required}, {"three", objstore.Required},
+		{"an index", objstore.Derived}} {
+		o, err := store.Put(t.Context(), strings.NewReader(named.body), 1<<10, objstore.PutMeta{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		src.refs = append(src.refs, objstore.Reference{Object: o, NamedBy: "ENG/" + body})
+		src.refs = append(src.refs, objstore.Reference{Object: o, NamedBy: "ENG/" + named.body,
+			Standing: named.standing})
 	}
 	srv := s3fake.Start(t, "files")
 	var objects config.StoreObjects
@@ -84,15 +93,16 @@ func migrationNode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, *coord
 }
 
 // A COPY PASS MOVES NOTHING, and the final pass moves the fleet's record
-// once every object is in the bucket: a node still naming the broker is
-// then told the bucket.
+// once every object is in the bucket — the files and what a derived row
+// names alike: a node still naming the broker is then told the bucket.
 func TestTheFinalPassMovesTheFleetOnlyOnceEveryObjectIsCopied(t *testing.T) {
 	t.Parallel()
 	e, fleet, src, objects, srv := migrationNode(t, statelog.ModeNormal)
 	report := ObjectMigrationReport{From: "nats", To: objects.Identity()}
 	copied, err := e.migrateTo(t.Context(), false, objects, collect.References{src}, report)
-	if err != nil || copied.Pass.Copied != 3 || copied.Moved {
-		t.Fatalf("the copy pass = %+v, %v; want three copied and nothing moved", copied, err)
+	if err != nil || copied.Pass.Copied != 3 || copied.Pass.Derived.Copied != 1 || copied.Moved {
+		t.Fatalf("the copy pass = %+v, %v; want three files and one derived object copied and "+
+			"nothing moved", copied, err)
 	}
 	if got, _ := fleet.AgreeObjectBackend(t.Context(), "nats"); got != "nats" {
 		t.Fatalf("a copy pass moved the fleet to %q", got)
@@ -114,14 +124,15 @@ func TestTheFinalPassMovesTheFleetOnlyOnceEveryObjectIsCopied(t *testing.T) {
 		t.Fatal(err)
 	}
 	final, err := e.migrateTo(t.Context(), true, objects, collect.References{src}, report)
-	if err != nil || !final.Moved || final.Pass.Present != 3 || final.Pass.Copied != 0 {
+	if err != nil || !final.Moved || final.Pass.Present != 3 || final.Pass.Copied != 0 ||
+		final.Pass.Derived.Present != 1 {
 		t.Fatalf("the final pass = %+v, %v; want everything present and the fleet moved", final, err)
 	}
 	if got, _ := fleet.AgreeObjectBackend(t.Context(), "nats"); got != objects.Identity() {
 		t.Fatalf("after the move a node naming nats is told %q", got)
 	}
-	if len(srv.Keys()) != 3 {
-		t.Fatalf("the bucket holds %v, want the three files", srv.Keys())
+	if len(srv.Keys()) != 4 {
+		t.Fatalf("the bucket holds %v, want the three files and the derived object", srv.Keys())
 	}
 }
 

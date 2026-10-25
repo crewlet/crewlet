@@ -1192,8 +1192,10 @@ record the move ends with.
   environment, so the bucket's credential never crosses the API.
 - Without `-final` it runs a **copy pass** on a live fleet: every object a
   file names that the bucket does not hold is read from the fleet's store,
-  checked against its row, and written to the bucket. Run it as often as you
-  like; it copies only what is missing.
+  checked against its row, and written to the bucket — and so is every object
+  a [derived](../concepts/object-store.md#live-retired-and-derived-references)
+  row names, which the engine would otherwise build again on every node. Run
+  it as often as you like; it copies only what is missing.
 - `-final` runs the pass that moves the fleet. Every node must be running
   with `crewlet run -mode maintenance`, so that no record naming a new file
   can be written while it runs. It copies what is left, seals the NATS
@@ -1201,9 +1203,11 @@ record the move ends with.
   the fleet's record to the bucket.
 
 It prints what the pass found: the objects the files name, how many the
-bucket already held and how many were copied, whether the bucket offers
-direct uploads, any file the fleet's own store could not give back (no copy
-can bring those back), and what to do next. `-wait` (six hours) is how long
+bucket already held and how many were copied, the same for the derived
+objects where there are any, whether the bucket offers direct uploads, any
+file the fleet's own store could not give back (no copy can bring those back),
+how many derived objects it could not give back (the engine builds those
+again, so nothing is lost), and what to do next. `-wait` (six hours) is how long
 it waits for the answer; the node finishes the pass either way, and running
 the command again reports where the copy stands. `-json` prints the node's
 report as it answered it. The token takes `admin`.

@@ -21,18 +21,24 @@
 // a reviewed row naming why (TestEveryDeclarationStatesItsStanding). A
 // REQUIRED table's rows are live references: the object is part of something
 // the company holds, so the collector keeps it, the audit asks the store for
-// it and a backup accounts for it — copied on `s3`, asked after once the
-// bucket's stream snapshot is taken on `nats`, recorded lost where the store
-// does not hold it. A RETIRED table's rows keep an object the company has let
-// go of from the collector for a grace — a replaced object a reader that has
-// not caught up may still be fetching — and do nothing else: never audited,
-// and never copied, counted or asked after by a backup (on `nats` its bytes
-// ride the bucket's stream snapshot like any other object the bucket holds,
-// uncounted). A DERIVED table's rows keep an object the engine can build again
-// from what Required rows name for as long as they stand, and do nothing else
-// either: a lost one costs a rebuild and no data, so it raises no
-// `objects_missing`, and a restore without it is a company whose engine builds
-// it again.
+// it, a backup accounts for it — copied on `s3`, asked after once the bucket's
+// stream snapshot is taken on `nats`, recorded lost where the store does not
+// hold it — and a store move copies it into the store the fleet moves to. A
+// RETIRED table's rows keep an object the company has let go of from the
+// collector for a grace — a replaced object a reader that has not caught up
+// may still be fetching — and do nothing else: never audited, never copied,
+// counted or asked after by a backup (on `nats` its bytes ride the bucket's
+// stream snapshot like any other object the bucket holds, uncounted), and left
+// behind by a store move, after whose restart onto the new store no such
+// reader is left. A DERIVED table's rows keep an object the engine can build
+// again from what Required rows name for as long as they stand, and have a
+// store move copy it as it copies a Required one, and do nothing else: a lost
+// one costs a rebuild and no data, so it raises no `objects_missing`, and a
+// restore without it is a company whose engine builds it again. A backup and
+// a move part over it for what each costs: a backup is taken again and again,
+// so carrying it would cost its bytes at every backup to spare a rebuild after
+// a rare restore, while a move is made once, and leaving it behind would have
+// every node of the moved fleet build it again.
 //
 // THE GRACE IS THE ROW'S LIFETIME, and bounding it is the declaring domain's
 // obligation: it deletes a retired row once its grace has passed, and the
@@ -64,16 +70,18 @@
 //
 // # The one input, not one of several
 //
-// The collector, its audit and the backup build their statements FROM this
-// list ([objstore.ReferenceTable.ObjectsAmong],
+// The collector, its audit, the backup and a store move build their
+// statements FROM this list ([objstore.ReferenceTable.ObjectsAmong],
 // [objstore.ReferenceTable.ReferencesAfter]); none carries a query of its own.
 // Each reads the standing too: the collector's batch question is asked of
-// every table, and the walk the audit and the backup take is built for
-// Required tables alone and refused for the other two. A domain supplies only
-// what a declaration cannot — a barrier on its log and a read of its rows
-// (collect.Estate) — and the engine's own test builds the passes from this
-// list against the estates it hands them, so a table declared in a domain the
-// engine reads no estate of fails the build rather than the boot.
+// every table, and each walk is built for its pass ([objstore.Pass]) — the
+// audit's and a backup's read Required tables alone and refuse the other two,
+// a store move's reads Required and Derived ones and refuses a retired one. A
+// domain supplies only what a declaration cannot — a barrier on its log and a
+// read of its rows (collect.Estate) — and the engine's own test builds the
+// passes from this list against the estates it hands them, so a table declared
+// in a domain the engine reads no estate of fails the build rather than the
+// boot.
 //
 // # The log half (ADR-0052)
 //

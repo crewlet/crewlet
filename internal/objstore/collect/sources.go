@@ -36,7 +36,7 @@ type Source interface {
 	// Required is a walk of each of the domain's REQUIRED tables — never a
 	// retired or derived one's, whose objects the company is not owed
 	// (ADR-0051) — read no earlier than at, each in KEY ORDER
-	// ([objstore.Key.Compare]).
+	// ([objstore.Key.Compare]): the audit's ([objstore.PassAudit]).
 	//
 	// IN KEY ORDER because the audit merges every walk into one ordered
 	// stream of references, and a store that lists its names in order is
@@ -45,6 +45,18 @@ type Source interface {
 	// NAMED FOR WHAT IT LEAVES OUT, beside a Referenced that leaves out
 	// nothing: a reader seeing a bare Walks would take it for every table.
 	Required(at statelog.Position) []objstore.Walk
+
+	// Moved is a walk of each of the domain's tables a STORE MOVE copies
+	// (internal/objstore/migrate, [objstore.PassMove]) — its Required ones
+	// and its Derived ones, never a retired one's — read no earlier than at,
+	// every reference carrying its table's standing: the move owes the
+	// store it copies into every object a Required row names, and copies
+	// one a Derived row names where the source can give it back whole.
+	//
+	// NO MERGE, unlike the audit's: a move copies each object on its own, so
+	// it needs neither one order across the tables nor a key two rows name
+	// handed on once — a second copy finds the first already there.
+	Moved(at statelog.Position) []objstore.Walk
 }
 
 // References is every source the engine runs.
@@ -83,9 +95,10 @@ type Estate interface {
 // be read twice under two positions.
 //
 // Each source keeps its objects from collection through every one of its
-// tables and walks only its Required ones. A domain whose every table is
-// retired or derived is accepted: its walk reads nothing and is complete, and
-// nothing about it is wrong.
+// tables; the audit walks only its Required ones, and a store move its
+// Required and Derived ones ([objstore.Pass.Reads] decides both). A domain
+// whose every table is retired or derived is accepted: the audit's walk of it
+// reads nothing and is complete, and nothing about it is wrong.
 func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, error) {
 	if len(tables) == 0 {
 		return nil, errors.New("objstore/collect: no table is declared as naming objects — " +
@@ -116,9 +129,13 @@ func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, e
 		}
 		src.tables = append(src.tables, t)
 		// AFTER Validate, which has refused a standing that is none of the
-		// three: only a Required table's objects are the company's to audit.
-		if t.Standing == objstore.Required {
+		// three: only a Required table's objects are the company's to audit,
+		// and a store move copies a Derived table's besides.
+		if objstore.PassAudit.Reads(t.Standing) {
 			src.required = append(src.required, t)
+		}
+		if objstore.PassMove.Reads(t.Standing) {
+			src.moved = append(src.moved, t)
 		}
 	}
 	out := make(References, 0, len(built))
@@ -134,12 +151,14 @@ func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, e
 
 // tableSource is one domain's declared tables, read through its estate:
 // tables is every one of them, each of whose rows keeps the object it names
-// from collection; required is those declared objstore.Required, the only ones
-// the audit walks.
+// from collection; required is those the audit walks ([objstore.PassAudit]:
+// the Required ones), and moved those a store move walks
+// ([objstore.PassMove]: the Required and the Derived ones).
 type tableSource struct {
 	estate   Estate
 	tables   []objstore.ReferenceTable
 	required []objstore.ReferenceTable
+	moved    []objstore.ReferenceTable
 }
 
 func (s *tableSource) Name() string { return s.estate.Name() }
@@ -190,16 +209,32 @@ func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 }
 
 // Required is a keyset walk of each REQUIRED table of the domain
-// ([objstore.ReferenceTable.WalkOf]), each page read through the estate no
-// earlier than at, so a record the node could not apply at any of them is seen
-// — see [Source.Required]. With no required table it is none, and the audit
-// has nothing of this domain to ask about.
+// ([objstore.ReferenceTable.WalkOf], for [objstore.PassAudit]), each page read
+// through the estate no earlier than at, so a record the node could not apply
+// at any of them is seen — see [Source.Required]. With no required table it is
+// none, and the audit has nothing of this domain to ask about.
 func (s *tableSource) Required(at statelog.Position) []objstore.Walk {
-	out := make([]objstore.Walk, 0, len(s.required))
-	for _, t := range s.required {
-		out = append(out, t.WalkOf(func(ctx context.Context, fn func(*sql.Tx) error) (bool, error) {
-			return s.estate.Read(ctx, at, fn)
-		}))
+	return s.walks(s.required, objstore.PassAudit, at)
+}
+
+// Moved is a keyset walk of each table of the domain a store move copies
+// ([objstore.PassMove]), read as [tableSource.Required] reads — see
+// [Source.Moved].
+func (s *tableSource) Moved(at statelog.Position) []objstore.Walk {
+	return s.walks(s.moved, objstore.PassMove, at)
+}
+
+// walks is a keyset walk of each of tables for pass, each page read through
+// the estate no earlier than at.
+func (s *tableSource) walks(tables []objstore.ReferenceTable, pass objstore.Pass,
+	at statelog.Position) []objstore.Walk {
+
+	read := func(ctx context.Context, fn func(*sql.Tx) error) (bool, error) {
+		return s.estate.Read(ctx, at, fn)
+	}
+	out := make([]objstore.Walk, 0, len(tables))
+	for _, t := range tables {
+		out = append(out, t.WalkOf(read, pass))
 	}
 	return out
 }

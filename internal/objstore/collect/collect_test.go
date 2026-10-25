@@ -71,6 +71,10 @@ func (s *fakeSource) Required(statelog.Position) []objstore.Walk {
 	return []objstore.Walk{&fakeWalk{s: s}}
 }
 
+// Moved is the same walk: every reference the source names is a required
+// table's, and a store move walks the required tables too.
+func (s *fakeSource) Moved(at statelog.Position) []objstore.Walk { return s.Required(at) }
+
 // fakeWalk is a [fakeSource]'s walk, keyset-paged on the key as a table's is.
 type fakeWalk struct {
 	s     *fakeSource

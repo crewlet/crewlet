@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/references`
-- **Enforced-by:** `internal/objstore.TestADeclarationStatesItsStanding`, `internal/objstore.TestOnlyARequiredTableIsWalked`, `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestEveryDeclarationStatesItsStanding`, `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`, `internal/objstore/collect.TestARetiredReferenceKeepsItsObjectFromCollection`, `internal/objstore/collect.TestTheAuditAsksOnlyAfterRequiredReferences`, `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`, `internal/backup.TestABackupCarriesNoRetiredReference`, `internal/backup.TestABackupCarriesNoDerivedObject`, `internal/backup.TestABackupRefusesADeclarationThatStatesNoStanding`
+- **Enforced-by:** `internal/objstore.TestADeclarationStatesItsStanding`, `internal/objstore.TestAWalkReadsOnlyTheStandingsItsPassIsOwed`, `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestEveryDeclarationStatesItsStanding`, `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`, `internal/objstore/collect.TestARetiredReferenceKeepsItsObjectFromCollection`, `internal/objstore/collect.TestTheAuditAsksOnlyAfterRequiredReferences`, `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`, `internal/objstore/collect.TestAStoreMoveWalksTheRequiredAndDerivedTablesAlone`, `internal/objstore/migrate.TestAStoreMoveCopiesADerivedObjectVerified`, `internal/objstore/migrate.TestADerivedObjectTheSourceCannotGiveBackHoldsNothingUp`, `internal/backup.TestABackupCarriesNoRetiredReference`, `internal/backup.TestABackupCarriesNoDerivedObject`, `internal/backup.TestABackupRefusesADeclarationThatStatesNoStanding`
 - **Cost-when-tried:** the object store's page and four comments promised a grace from un-naming that the collector never gave — "the older copy goes a day after nothing names it" — so an operator could have planned a recovery from the bucket that was not there (corrected in ce9454996). The collector's grace is an UPLOAD's; before this record the only way to keep an object past its un-naming was to keep a live row naming it, which the audit checks and every backup carries
 - **Tag-status:** unreleased
 
@@ -12,30 +12,45 @@ Every table declared in `internal/objstore/references` states a **standing**
 (`objstore.Standing`), and there is no default:
 
 - **`Required`** — a live reference. It keeps its object from collection, the
-  collector's daily audit asks the store for it (`objects_missing`), and a
-  backup carries it: copied into `objects/` on `s3`, asked after once the
-  bucket's stream snapshot is taken on `nats`.
+  collector's daily audit asks the store for it (`objects_missing`), a backup
+  carries it — copied into `objects/` on `s3`, asked after once the bucket's
+  stream snapshot is taken on `nats` — and a store move
+  (`crewlet objects migrate`) copies it into the store the fleet moves to.
 - **`Retired`** — keeps its object from collection and does nothing else. The
   audit never asks after it, and a backup neither copies it, asks after it nor
   records it lost; on `nats` its bytes ride the bucket's snapshot like every
-  other object the bucket holds, uncounted.
+  other object the bucket holds, uncounted. A store move leaves it behind: the
+  move ends with every node restarted onto the new store, so no reader is left
+  that has not caught up with what replaced it.
 - **`Derived`** — names an object the engine can build again from what
   `Required` rows name, so losing one costs a rebuild and no data. It keeps its
   object from collection while a row names it, exactly as a `Required` row
-  does, and does nothing else: the audit never asks after it, since
-  `objects_missing` is the alarm for lost data and would page somebody about a
-  loss nobody has to repair, and a backup never copies, counts or asks after
-  it — on `nats` its bytes ride the bucket's snapshot uncounted, as a retired
-  object's do — since a restore can do without it.
+  does, and a store move copies it as it copies a `Required` one; it does
+  nothing else: the audit never asks after it, since `objects_missing` is the
+  alarm for lost data and would page somebody about a loss nobody has to
+  repair, and a backup never copies, counts or asks after it — on `nats` its
+  bytes ride the bucket's snapshot uncounted, as a retired object's do — since
+  a restore can do without it. A store move that cannot read one back whole
+  counts it apart and leaves it behind, naming no file and holding nothing up.
 
 The zero value is refused by `ReferenceTable.Validate`, so a declaration that
 says none of the three fails the references gate, every statement built from
 it, the collector's construction at boot and every backup handed it, and the
 gate holds each declaration's standing to a reviewed row naming why it has
-that one. The reference walk the audit and the backup share
-(`ReferenceTable.ReferencesAfter`) is built only for a `Required` table and
-refused for the other two, so a consumer that forgets to leave a retired or
-derived table out fails on its first pass rather than carrying it.
+that one. Each of the three passes that walk the declared tables builds its
+walk for itself (`objstore.Pass`, whose `Reads` is the table of obligations'
+walk columns): the audit's and a backup's read `Required` tables alone and
+refuse the other two, and a store move's reads `Required` and `Derived` tables
+and refuses a retired one — so a consumer that forgets to leave a table out
+fails on its first pass rather than carrying it.
+
+A backup and a store move part over a derived object for what each costs. A
+backup is taken again and again and restored rarely, so carrying an object the
+engine can build again would cost its bytes at every backup to spare a rebuild
+after a restore. A move is made once, and a derived object it left behind would
+be built again by every node of the moved fleet, at a cost that grows with what
+it was built from rather than with anything that changed, where a copy costs
+its bytes once, through the same verified read the move makes of every object.
 
 The grace is the retired **row's lifetime**. Whatever retires a live row writes
 the retired one; its own domain deletes that row once the domain's grace has
@@ -60,10 +75,12 @@ pass deletes the object, and a derived declaration needs no reviewed entry. A
 restore on `s3` brings derived rows back without their objects, and the engine
 builds them again.
 
-Three packages carry it besides the list: `objstore` (the type, the refusal,
-the Required-only walk), `objstore/collect` (every table shields, Required
-tables are audited) and `backup` (every declaration is validated, and
-Required tables are read from the copy).
+Four packages carry it besides the list: `objstore` (the type, the refusal,
+each pass's walk), `objstore/collect` (every table shields, Required tables are
+audited, and a store move walks Required and Derived ones), `objstore/migrate`
+(a store move copies both, and a derived object the source cannot give back
+never holds it up, as it never pages anybody) and `backup` (every declaration
+is validated, and Required tables are read from the copy).
 
 ## Why the obvious alternatives are wrong
 
@@ -79,6 +96,12 @@ to restore, and every backup would carry bytes a restore can do without.
 **…or `Retired`.** A retired row keeps its object only for a grace its domain
 must sweep, and its declaration owes a reviewed entry; a derived object is
 live for as long as a row names it, and goes the moment its row does.
+
+**Leave a derived object behind when the store moves, as a backup does.** The
+moved fleet would then hold rows naming objects its store lacks, and every node
+would build each of them again — for an index over a repository's history, a
+pass over that whole history on every node, repeated for every node added
+later — where the move had the bytes in hand and a verified read away.
 
 **Keep the replaced object named by its live row**, under a state column. It
 gives the grace and costs everything else: the audit pages somebody when a

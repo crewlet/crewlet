@@ -282,11 +282,12 @@ type objectPass struct {
 // newObjectPass is dir's objects, read from the replicated copy at copyPath.
 //
 // EVERY DECLARATION IS VALIDATED BEFORE ANY IS LEFT OUT: sorted by
-// `Standing == Required` alone, one stating no standing would be skipped as
-// though it were retired — a live table missing from the backup with nothing
-// failing, the default the standing exists to forbid. A RETIRED OR DERIVED
-// TABLE IS LEFT OUT — see [Objects] — and its walk refuses to be read, so a
-// pass that forgot to leave it out fails rather than carrying it. And every
+// [objstore.PassBackup]'s question alone, one stating no standing would be
+// skipped as though it were retired — a live table missing from the backup
+// with nothing failing, the default the standing exists to forbid. A RETIRED
+// OR DERIVED TABLE IS LEFT OUT — see [Objects] — and its walk, built for the
+// backup's pass, refuses to be read, so a pass that forgot to leave it out
+// fails rather than carrying it. And every
 // Required one is held to say how its log names objects
 // ([objstore.ReferenceTable.ValidateLog]) before a byte is read, rather than
 // once the copy has been carried.
@@ -300,7 +301,7 @@ func (s *Service) newObjectPass(ctx context.Context, dir, copyPath string) (*obj
 		}
 		// AFTER Validate, which has refused a standing that is none of the
 		// three: only a Required table's objects are the company's to carry.
-		if t.Standing == objstore.Required {
+		if objstore.PassBackup.Reads(t.Standing) {
 			p.required = append(p.required, t)
 		}
 	}
@@ -666,7 +667,8 @@ func (p *objectPass) walkCopy(ctx context.Context, limit int,
 	}
 	walks := make([]objstore.NamedWalk, 0, len(p.required))
 	for _, t := range p.required {
-		walks = append(walks, objstore.NamedWalk{Name: t.Table, Walk: t.WalkOf(read)})
+		walks = append(walks, objstore.NamedWalk{Name: t.Table,
+			Walk: t.WalkOf(read, objstore.PassBackup)})
 	}
 	m := objstore.MergeWalks(walks...)
 	var (

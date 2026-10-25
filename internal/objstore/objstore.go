@@ -73,7 +73,8 @@
 // rows name from collection, and only a Required table's are audited, and
 // copied, counted or asked after by a backup — a retired or derived object's
 // bytes ride a `nats` backup's stream snapshot uncounted, like anything else
-// the bucket holds. The collector (internal/objstore/collect) deletes what
+// the bucket holds — while a store move copies a Required table's objects and
+// a Derived one's. The collector (internal/objstore/collect) deletes what
 // nothing names once it is past a grace measured both from when the backend
 // stored it and from when its key was minted — and [RecordWithin] is the bound
 // on the write that names a key that makes the second of those safe. It also
@@ -367,11 +368,12 @@ type ReferenceTable struct {
 
 	// Standing is whether the rows are references the company is owed
 	// ([Required]: kept from collection, audited, accounted for by every
-	// backup), retired ones whose rows only keep their objects from
-	// collection for a grace ([Retired]), or derived ones naming objects the
-	// engine can build again, kept from collection while a row names them
-	// and nothing else ([Derived]). Stated by every declaration — see
-	// [Standing] for why there is no default.
+	// backup, copied by a store move), retired ones whose rows only keep
+	// their objects from collection for a grace ([Retired]), or derived ones
+	// naming objects the engine can build again, kept from collection while
+	// a row names them and copied by a store move, and nothing else
+	// ([Derived]). Stated by every declaration — see [Standing] for why there
+	// is no default.
 	Standing Standing
 
 	// Log is the stream of the state log whose applier writes the table —
@@ -448,17 +450,23 @@ func JoinOwner(owner ...string) string { return strings.Join(owner, "/") }
 // ones naming objects the engine can build again from what it is owed —
 // ADR-0051, whose rationale is internal/objstore/references' package doc.
 //
-// ONE TABLE OF OBLIGATIONS, which the collector, its audit, the backup and the
-// references gate each read off the standing and none restates:
+// ONE TABLE OF OBLIGATIONS, which the collector, its audit, the backup, a
+// store move and the references gate each read off the standing and none
+// restates — the three walks' columns are [Pass.Reads]:
 //
-//	Standing  Kept from collection  Audited  Carried by a backup  Declares a log
-//	Required  yes                   yes      yes                  yes
-//	Retired   yes, for its grace    no       no                   no
-//	Derived   yes, while named      no       no                   no
+//	Standing  Kept from collection  Audited  Carried by a backup  Copied by a store move  Declares a log
+//	Required  yes                   yes      yes                  yes                     yes
+//	Retired   yes, for its grace    no       no                   no                      no
+//	Derived   yes, while named      no       no                   yes                     no
 //
 // "Carried by a backup" is no for Retired and Derived alike: never copied,
 // counted or asked after — on `nats` the bytes ride the bucket's stream
-// snapshot uncounted, like anything else the bucket holds.
+// snapshot uncounted, like anything else the bucket holds. "Copied by a store
+// move" parts them: a backup is taken again and again and restored rarely, so
+// carrying an object any node can build again would cost its bytes at every
+// backup to spare a rebuild after a restore, while a move is made once, and
+// leaving such an object behind would have every node of the moved fleet
+// build it again (internal/objstore/migrate).
 //
 // A NAMED TYPE WITH NO DEFAULT. Its zero value is refused
 // ([ReferenceTable.Validate]), because every default is a silent failure: a
@@ -492,13 +500,16 @@ const (
 	// what Required rows name — an index over a repository's packs, say — so
 	// losing one costs a rebuild and no data. It keeps the object from
 	// collection while a row names it, exactly as a Required row does (the
-	// collector asks every declared table), and does nothing else. The audit
-	// never asks after it: `objects_missing` is the alarm for lost DATA, and
-	// would page somebody about a loss the engine repairs by itself. And no
-	// backup copies, counts or asks after it — on `nats` its bytes ride the
-	// bucket's stream snapshot uncounted — because a restore can do without
-	// it: the restored rows may name objects the restored store lacks, and the
-	// engine builds them again.
+	// collector asks every declared table), and a store move copies it as it
+	// copies a Required one, since the fleet it moves would otherwise build
+	// it again on every node ([PassMove]). The audit never asks after it:
+	// `objects_missing` is the alarm for lost DATA, and would page somebody
+	// about a loss the engine repairs by itself. And no backup copies, counts
+	// or asks after it — on `nats` its bytes ride the bucket's stream
+	// snapshot uncounted — because a restore can do without it: the restored
+	// rows may name objects the restored store lacks, and the engine builds
+	// them again. For the same reason a store move that cannot read one back
+	// whole leaves it behind and holds nothing up.
 	//
 	// IT OWES NO GRACE, unlike Retired, because of the obligation it puts on
 	// its domain instead: every reader of a derived object goes on without it
@@ -631,17 +642,17 @@ func (t ReferenceTable) ObjectsAmong(n int) (string, error) {
 // the page before, or "" for the first. Each row is the key, the digest, the
 // size and then the owner columns.
 //
-// A KEYSET PAGE ON THE KEY COLUMN'S INDEX, so a walk of every REQUIRED
-// reference — the audit's and the backup's — holds a page in memory and seeks
-// to each next one, and NULL is excluded by name: a row naming no object (a
+// A KEYSET PAGE ON THE KEY COLUMN'S INDEX, so a walk of every reference a
+// pass reads ([ReferenceTable.WalkOf]) holds a page in memory and seeks to
+// each next one, and NULL is excluded by name: a row naming no object (a
 // removed file) is no reference.
 //
-// ONLY FOR A REQUIRED TABLE, and refused for a retired or derived one: its
-// rows name no object the company is owed, so neither the audit nor the backup
-// has any reason to walk them — and a consumer that forgot to leave such a
-// table out fails here, on its first pass, rather than paging somebody about a
-// replaced object or one the engine builds again, or copying it into every
-// backup.
+// ONLY FOR A TABLE SOME PASS WALKS — a Required one, which the audit, a backup
+// and a store move read, or a Derived one, which a store move reads
+// ([Pass.Reads]) — and refused for a retired one, whose rows keep objects from
+// collection and name none any pass is owed. Which pass may walk which table
+// is the walk's to refuse, before it builds this statement: the audit's walk
+// and a backup's refuse a derived table as well.
 func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("objstore: a page of %d references", n)
@@ -649,11 +660,11 @@ func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 	if err := t.Validate(); err != nil {
 		return "", err
 	}
-	if t.Standing != Required {
+	if !walked(t.Standing) {
 		return "", fmt.Errorf("objstore: %s is declared %s: its rows keep objects from "+
-			"collection and name none the company is owed, so nothing walks them as "+
-			"references — the audit and the backup read Required tables alone",
-			t.Table, t.Standing)
+			"collection and name none any pass is owed, so nothing walks them as "+
+			"references — the audit and a backup read Required tables alone, a store "+
+			"move Required and Derived ones", t.Table, t.Standing)
 	}
 	return `SELECT ` + t.Key + `, ` + t.Hash + `, ` + t.Size + `, ` +
 		strings.Join(t.Owner, `, `) + ` FROM ` + t.Table +
@@ -668,7 +679,10 @@ func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 // learn which the copy names too and as what, with n seeks of the key column's
 // index rather than a read of the bytes it carried.
 //
-// ONLY FOR A REQUIRED TABLE, for [ReferenceTable.ReferencesAfter]'s reason.
+// ONLY FOR A TABLE A BACKUP CARRIES ([PassBackup] — a Required one), since a
+// backup is the one pass that asks it, and refused for a retired or derived
+// one, whose objects no backup carries: a consumer that asked it of one has
+// forgotten to leave the table out, and fails here.
 func (t ReferenceTable) ReferencesAmong(n int) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("objstore: a question about %d references", n)
@@ -676,9 +690,9 @@ func (t ReferenceTable) ReferencesAmong(n int) (string, error) {
 	if err := t.Validate(); err != nil {
 		return "", err
 	}
-	if t.Standing != Required {
-		return "", fmt.Errorf("objstore: %s is declared %s: its rows name no object the "+
-			"company is owed, so nothing asks which of them it names", t.Table, t.Standing)
+	if !PassBackup.Reads(t.Standing) {
+		return "", fmt.Errorf("objstore: %s is declared %s: its rows name no object a "+
+			"backup carries, so nothing asks which of them it names", t.Table, t.Standing)
 	}
 	return `SELECT ` + t.Key + `, ` + t.Hash + `, ` + t.Size + `, ` +
 		strings.Join(t.Owner, `, `) + ` FROM ` + t.Table +

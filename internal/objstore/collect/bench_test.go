@@ -148,6 +148,9 @@ func (*paged) Referenced(context.Context, []objstore.Key, statelog.Position) (ma
 
 func (p *paged) Required(statelog.Position) []objstore.Walk { return []objstore.Walk{&pagedWalk{p: p}} }
 
+// Moved is the audit's walk too: every reference is a required table's.
+func (p *paged) Moved(at statelog.Position) []objstore.Walk { return p.Required(at) }
+
 type pagedWalk struct {
 	p    *paged
 	next int

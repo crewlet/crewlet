@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -213,21 +214,27 @@ func TestADeclarationStatesItsStanding(t *testing.T) {
 	}
 }
 
-// ONLY A REQUIRED TABLE IS WALKED (ADR-0051). A retired or derived row keeps
-// its object from the collector exactly as a live one does — so the
-// collector's batch question is the same statement whatever the standing —
-// and names nothing the company is owed: a retired one a replaced object, a
-// derived one an object the engine builds again. So the walk the audit and the
-// backup share is REFUSED for either, and so is the question about given keys
-// a backup asks past its copy: a consumer that forgot to leave such a table
-// out fails on its first pass rather than paging somebody about an object
-// nobody has to repair or copying it into every backup.
-func TestOnlyARequiredTableIsWalked(t *testing.T) {
+// A WALK READS ONLY THE STANDINGS ITS PASS IS OWED (ADR-0051). A retired or
+// derived row keeps its object from the collector exactly as a live one does
+// — so the collector's batch question is the same statement whatever the
+// standing — and names nothing the company is owed: a retired one a replaced
+// object, a derived one an object the engine builds again. So the walk the
+// audit takes and the one a backup takes are REFUSED for either, and so is the
+// question about given keys a backup asks past its copy; a store move's walk
+// reads a derived table besides — its objects are ones the moved fleet would
+// otherwise build again on every node — and still refuses a retired one, whose
+// rows no pass reads at all. Each refusal comes on the walk's first page,
+// before anything is read, so a pass that forgot to leave such a table out
+// fails on its first pass rather than paging somebody about an object nobody
+// has to repair, copying it into every backup, or carrying a replaced one into
+// the store the fleet moves to.
+func TestAWalkReadsOnlyTheStandingsItsPassIsOwed(t *testing.T) {
 	t.Parallel()
 	live := ReferenceTable{Domain: "tracker", Table: "replaced_packs", Key: "object", Hash: "hash",
 		Size: "size", Owner: []string{"path"}, Standing: Required}
 
-	if _, err := live.ReferencesAfter(500); err != nil {
+	walked, err := live.ReferencesAfter(500)
+	if err != nil {
 		t.Fatalf("a required table cannot be walked: %v", err)
 	}
 	if _, err := live.ReferencesAmong(0); err == nil {
@@ -237,7 +244,6 @@ func TestOnlyARequiredTableIsWalked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a required table cannot be asked which references it holds: %v", err)
 	}
-	walked, _ := live.ReferencesAfter(500)
 	columns := func(q string) string { return q[:strings.Index(q, " WHERE ")] }
 	if columns(among) != columns(walked) || !strings.HasSuffix(among, ` IN (?, ?, ?)`) {
 		t.Errorf("ReferencesAmong = %q; want the walk's columns, %q, over three keys", among, columns(walked))
@@ -247,48 +253,100 @@ func TestOnlyARequiredTableIsWalked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, s := range []Standing{Retired, Derived} {
-		t.Run(string(s), func(t *testing.T) {
+	for _, c := range []struct {
+		standing Standing
+		// walkedBy is every pass whose walk reads a table of the standing,
+		// and carried whether a backup asks which references one holds.
+		walkedBy []Pass
+		carried  bool
+	}{
+		{Required, []Pass{PassAudit, PassBackup, PassMove}, true},
+		{Retired, nil, false},
+		{Derived, []Pass{PassMove}, false},
+	} {
+		t.Run(string(c.standing), func(t *testing.T) {
 			t.Parallel()
-			unowed := live
-			unowed.Standing = s
+			table := live
+			table.Standing = c.standing
 
-			page, err := unowed.ReferencesAfter(500)
-			if err == nil {
-				t.Fatalf("a %s table was walked: %q", s, page)
-			}
-			for _, named := range []string{"replaced_packs", string(s)} {
-				if !strings.Contains(err.Error(), named) {
-					t.Errorf("the refusal %q does not name %q", err, named)
+			// THE STATEMENT is built for a standing some pass walks, and
+			// refused, naming the table and its standing, for one none does.
+			page, err := table.ReferencesAfter(500)
+			switch {
+			case len(c.walkedBy) > 0 && err != nil:
+				t.Fatalf("a %s table, which a pass walks, has no walk statement: %v", c.standing, err)
+			case len(c.walkedBy) > 0 && page != walked:
+				t.Errorf("a %s table's walk statement is %q, a required one's %q", c.standing, page, walked)
+			case len(c.walkedBy) == 0 && err == nil:
+				t.Fatalf("a %s table, which no pass walks, has a walk statement: %q", c.standing, page)
+			case len(c.walkedBy) == 0:
+				for _, named := range []string{"replaced_packs", string(c.standing)} {
+					if !strings.Contains(err.Error(), named) {
+						t.Errorf("the refusal %q does not name %q", err, named)
+					}
 				}
 			}
-			// AND ITS WALK IS REFUSED THE SAME WAY, from its first page,
-			// before anything is read: a pass that forgot to leave it out
-			// fails at once.
-			read := func(context.Context, func(*sql.Tx) error) (bool, error) {
-				t.Errorf("a %s table's walk read the estate", s)
-				return false, nil
-			}
-			if page, _, werr := unowed.WalkOf(read).Next(t.Context()); werr == nil ||
-				!strings.Contains(werr.Error(), string(s)) {
-				t.Fatalf("a %s table's walk = %d references, %v; want the refusal", s, len(page), werr)
+
+			// EACH PASS'S WALK reads the table where the pass is owed its
+			// objects, and anywhere else refuses it from its first page,
+			// before anything is read, naming the table, its standing and
+			// the pass.
+			for _, p := range []Pass{PassAudit, PassBackup, PassMove} {
+				owed := slices.Contains(c.walkedBy, p)
+				if p.Reads(c.standing) != owed {
+					t.Errorf("the %s pass reads a %s table: %v, want %v", p, c.standing, !owed, owed)
+				}
+				read := func(context.Context, func(*sql.Tx) error) (bool, error) {
+					if !owed {
+						t.Errorf("the %s pass's walk of a %s table read the estate", p, c.standing)
+					}
+					return true, nil
+				}
+				refs, _, werr := table.WalkOf(read, p).Next(t.Context())
+				switch {
+				case owed && werr != nil:
+					t.Errorf("the %s pass cannot walk a %s table: %v", p, c.standing, werr)
+				case !owed && werr == nil:
+					t.Errorf("the %s pass walked a %s table: %d references", p, c.standing, len(refs))
+				case !owed:
+					for _, named := range []string{"replaced_packs", string(c.standing), string(p)} {
+						if !strings.Contains(werr.Error(), named) {
+							t.Errorf("the refusal %q does not name %q", werr, named)
+						}
+					}
+				}
 			}
 
-			// THE SAME FOR A QUESTION ABOUT GIVEN KEYS, which answers a
+			// THE QUESTION ABOUT GIVEN KEYS is a backup's alone, and answers a
 			// walk's own columns so one decoder reads both.
-			if among, err := unowed.ReferencesAmong(3); err == nil {
-				t.Fatalf("a %s table was asked which references it holds: %q", s, among)
+			if among, err := table.ReferencesAmong(3); (err == nil) != c.carried {
+				t.Errorf("a %s table asked which references it holds = %q, %v; want it built: %v",
+					c.standing, among, err, c.carried)
 			}
 
-			shields, err := unowed.ObjectsAmong(3)
+			shields, err := table.ObjectsAmong(3)
 			if err != nil {
-				t.Fatalf("a %s table cannot be asked which objects it names: %v", s, err)
+				t.Fatalf("a %s table cannot be asked which objects it names: %v", c.standing, err)
 			}
 			if shields != keeps {
 				t.Errorf("a %s table is asked %q and a required one %q — a row keeps its "+
-					"object from collection the same way whatever its standing", s, shields, keeps)
+					"object from collection the same way whatever its standing", c.standing, shields, keeps)
 			}
 		})
+	}
+
+	// A WALK FOR NO PASS reads nothing either: a pass is never a default.
+	for _, p := range []Pass{"", "Audit", "migrate"} {
+		if p.Valid() {
+			t.Errorf("Pass(%q).Valid() = true", p)
+		}
+		read := func(context.Context, func(*sql.Tx) error) (bool, error) {
+			t.Errorf("a walk for the pass %q read the estate", p)
+			return true, nil
+		}
+		if _, _, err := live.WalkOf(read, p).Next(t.Context()); err == nil {
+			t.Errorf("a walk for the pass %q was read", p)
+		}
 	}
 }
 

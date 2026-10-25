@@ -8,15 +8,89 @@ import (
 
 // Walking the declared references, and merging the walks into one order.
 //
-// Two passes read every object a Required table names: the collector's audit
-// (internal/objstore/collect), which asks the store about each, and the
-// backup (internal/backup), which copies each or asks after it. Both read the
-// same declarations in the same keyset pages and both need ONE key order
-// across every table — the audit cuts the order into ranges a store lists at
-// once, and the backup de-duplicates a key two rows name by comparing it with
-// the one before. So the walk, the merge and the page live here, once: the
-// backup's own keyset loop beside the audit's was two implementations of one
-// walk (ADR-0008), and it held every reference twice besides.
+// Three passes read the objects the declared tables name, each the tables of
+// the standings it is owed ([Pass]): the collector's audit
+// (internal/objstore/collect), which asks the store about every object a
+// Required table names; the backup (internal/backup), which copies each of
+// those or asks after it; and a store move (internal/objstore/migrate), which
+// copies every object a Required or a Derived table names into the store the
+// fleet moves to. All three read the same declarations in the same keyset
+// pages, and the first two need ONE key order across every table — the audit
+// cuts the order into ranges a store lists at once, and the backup
+// de-duplicates a key two rows name by comparing it with the one before. So
+// the walk, the merge and the page live here, once: the backup's own keyset
+// loop beside the audit's was two implementations of one walk (ADR-0008), and
+// it held every reference twice besides.
+
+// Pass is one of the passes that walk the declared tables' references, and so
+// which standings' tables its walk reads — three columns of [Standing]'s table
+// of obligations, held here once rather than restated by each pass.
+//
+// A WALK IS BUILT FOR ITS PASS ([ReferenceTable.WalkOf]) and refuses, on its
+// first page and before it reads anything, a table its pass does not read: a
+// pass that forgot to leave such a table out fails at once rather than paging
+// somebody about an object nobody has to repair, copying one into every backup
+// or carrying a replaced one into the store the fleet moves to.
+type Pass string
+
+const (
+	// PassAudit is the collector's audit (internal/objstore/collect), which
+	// asks the store after every object a Required table names.
+	PassAudit Pass = "audit"
+
+	// PassBackup is a backup's object pass (internal/backup), which accounts
+	// for every object a Required table names.
+	PassBackup Pass = "backup"
+
+	// PassMove is a store move (internal/objstore/migrate), which copies into
+	// the store the fleet moves to every object a Required table names AND
+	// every one a Derived table names. A derived object left behind is one
+	// every node of the moved fleet then builds again, at a cost that grows
+	// with what it was built from rather than with anything that changed; the
+	// move copies it for its bytes, once, through the same verified read it
+	// makes of every object. A retired one stays behind: the move ends with
+	// every node restarted onto the new store, so no reader is left that has
+	// not caught up with what replaced it.
+	PassMove Pass = "move"
+)
+
+// passes is every [Pass], for the question whether any of them reads a
+// standing.
+var passes = [...]Pass{PassAudit, PassBackup, PassMove}
+
+// Valid reports whether p is one of the three passes.
+func (p Pass) Valid() bool { return p == PassAudit || p == PassBackup || p == PassMove }
+
+// Reads reports whether p's walk reads a table of standing s: the audit's and
+// a backup's read Required tables alone, a store move's Required and Derived
+// ones, and no pass reads a Retired table's rows as references.
+func (p Pass) Reads(s Standing) bool {
+	switch p {
+	case PassAudit, PassBackup:
+		return s == Required
+	case PassMove:
+		return s == Required || s == Derived
+	}
+	return false
+}
+
+// reading is what p's walk reads, as a refusal says it.
+func (p Pass) reading() string {
+	if p == PassMove {
+		return "Required and Derived tables"
+	}
+	return "Required tables alone"
+}
+
+// walked reports whether any pass reads a table of standing s.
+func walked(s Standing) bool {
+	for _, p := range passes {
+		if p.Reads(s) {
+			return true
+		}
+	}
+	return false
+}
 
 // Reference is one row naming an object: the object as the row records it,
 // the row as a person reads it, and the declared table it is a row of.
@@ -31,10 +105,16 @@ type Reference struct {
 	// a row of one name, and a reader that keys anything on the row has
 	// to tell them apart.
 	Table string
+
+	// Standing is that table's ([ReferenceTable.Standing]), which a pass
+	// walking more than one standing reads: a store move owes the target
+	// every object a Required row names, and copies one a Derived row names
+	// only where the source can give it back whole.
+	Standing Standing
 }
 
-// Walk is one Required table's references in key order ([Key.Compare]), a
-// keyset page at a time.
+// Walk is one declared table's references in key order ([Key.Compare]), a
+// keyset page at a time, for one [Pass].
 type Walk interface {
 	// Next is the walk's next page — at most [WalkPage] references, every
 	// key after the last page's, in key order; none once the walk has
@@ -65,20 +145,24 @@ type RowReader func(ctx context.Context, fn func(*sql.Tx) error) (bool, error)
 // page of each ([MergeWalks]).
 const WalkPage = 500
 
-// WalkOf is t's keyset walk, each page in one read of its own through read.
+// WalkOf is t's keyset walk for pass, each page in one read of its own through
+// read.
 //
-// ONLY A REQUIRED TABLE IS WALKED: on a retired or derived one the walk's
-// first Next answers [ReferenceTable.ReferencesAfter]'s refusal, so a pass that
-// forgot to leave such a table out fails on its first page rather than paging
-// somebody about, or copying, an object nobody is owed (ADR-0051).
-func (t ReferenceTable) WalkOf(read RowReader) Walk {
-	return &tableWalk{table: t, read: read}
+// ONLY A TABLE THE PASS READS IS WALKED ([Pass.Reads]): on any other — a
+// retired or derived one for the audit or a backup, a retired one for a store
+// move — the walk's first Next answers a refusal naming the table, its
+// standing and the pass, before anything is read, so a pass that forgot to
+// leave such a table out fails on its first page rather than paging somebody
+// about, copying or carrying an object it is not owed (ADR-0051).
+func (t ReferenceTable) WalkOf(read RowReader, pass Pass) Walk {
+	return &tableWalk{table: t, read: read, pass: pass}
 }
 
 // tableWalk is one table's keyset walk ([Walk]).
 type tableWalk struct {
 	table ReferenceTable
 	read  RowReader
+	pass  Pass
 
 	// after is the last key handed back, and done set once a page came
 	// back short — there is nothing after it.
@@ -89,6 +173,18 @@ type tableWalk struct {
 func (w *tableWalk) Next(ctx context.Context) ([]Reference, bool, error) {
 	if w.done {
 		return nil, true, nil
+	}
+	if err := w.table.Validate(); err != nil {
+		return nil, false, err
+	}
+	switch {
+	case !w.pass.Valid():
+		return nil, false, fmt.Errorf("objstore: a walk of %s for %q, which is no pass "+
+			"(objstore.PassAudit, objstore.PassBackup or objstore.PassMove)", w.table.Table, w.pass)
+	case !w.pass.Reads(w.table.Standing):
+		return nil, false, fmt.Errorf("objstore: %s is declared %s, and the %s pass walks %s: "+
+			"its rows name no object this pass is owed", w.table.Table, w.table.Standing,
+			w.pass, w.pass.reading())
 	}
 	query, err := w.table.ReferencesAfter(WalkPage)
 	if err != nil {
@@ -107,7 +203,8 @@ func (w *tableWalk) Next(ctx context.Context) ([]Reference, bool, error) {
 		}
 		defer func() { _ = rows.Close() }()
 		return w.table.ScanReferences(rows, func(obj Object, namedBy string) error {
-			page = append(page, Reference{Object: obj, NamedBy: namedBy, Table: w.table.Table})
+			page = append(page, Reference{Object: obj, NamedBy: namedBy, Table: w.table.Table,
+				Standing: w.table.Standing})
 			return nil
 		})
 	})

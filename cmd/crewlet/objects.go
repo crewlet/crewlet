@@ -240,18 +240,27 @@ type migrateView struct {
 	DirectUpload string `json:"direct_upload"`
 	Next         string `json:"next"`
 	Pass         struct {
-		Referenced  int   `json:"referenced"`
-		Present     int   `json:"present"`
-		Copied      int   `json:"copied"`
-		CopiedBytes int64 `json:"copied_bytes"`
-		Unreadable  int   `json:"unreadable"`
-		Complete    bool  `json:"complete"`
-		Files       []struct {
+		migrateCounts
+		Complete bool `json:"complete"`
+		Files    []struct {
 			Object  string `json:"object"`
 			NamedBy string `json:"named_by"`
 			Damaged bool   `json:"damaged"`
 		} `json:"unreadable_files"`
+		// Derived is the objects derived rows name, counted apart: the
+		// engine can build each again, so one the old store could not give
+		// back is no lost file.
+		Derived migrateCounts `json:"derived"`
 	} `json:"pass"`
+}
+
+// migrateCounts is what a pass found and did for one kind of object.
+type migrateCounts struct {
+	Referenced  int   `json:"referenced"`
+	Present     int   `json:"present"`
+	Copied      int   `json:"copied"`
+	CopiedBytes int64 `json:"copied_bytes"`
+	Unreadable  int   `json:"unreadable"`
 }
 
 // objectsMigrate is `crewlet objects migrate --to s3`: a copy pass on a live
@@ -314,6 +323,10 @@ func renderMigrate(w io.Writer, v migrateView) error {
 	p := v.Pass
 	fmt.Fprintf(&b, "Objects named:     %d (%d already in the bucket, %d copied, %s)\n",
 		p.Referenced, p.Present, p.Copied, humanBytes(p.CopiedBytes))
+	if d := p.Derived; d.Referenced > 0 {
+		fmt.Fprintf(&b, "Derived objects:   %d (%d already in the bucket, %d copied, %s)\n",
+			d.Referenced, d.Present, d.Copied, humanBytes(d.CopiedBytes))
+	}
 	fmt.Fprintf(&b, "Direct uploads:    %s\n", v.DirectUpload)
 	if !p.Complete {
 		fmt.Fprintln(&b, "                   this node holds a record it could not apply, so "+
@@ -332,6 +345,10 @@ func renderMigrate(w io.Writer, v migrateView) error {
 		if shown := len(p.Files); shown < p.Unreadable {
 			fmt.Fprintf(&b, "  and %d more\n", p.Unreadable-shown)
 		}
+	}
+	if n := p.Derived.Unreadable; n > 0 {
+		fmt.Fprintf(&b, "\n%d derived object(s) could not be read from the fleet's own store and were "+
+			"not copied; the engine builds each again, so nothing is lost\n", n)
 	}
 	switch {
 	case v.Moved:
