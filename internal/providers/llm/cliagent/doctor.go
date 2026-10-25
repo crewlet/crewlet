@@ -598,7 +598,7 @@ func (p *Provider) webProbe(ctx context.Context) (verdict, problem string) {
 				"version before an assistant runs on this entry",
 			p.agent, webProbeURL, orNone(p.profile.WrittenFor))
 	case fetched:
-		return "ok — fetched " + webProbeURL, ""
+		return "ok: fetched " + webProbeURL, ""
 	case strings.TrimSpace(comp.Content) == "":
 		// Same split as smokeTest, and for the same reason: an empty
 		// answer is a completion now, so "it said: \"\"" would send an

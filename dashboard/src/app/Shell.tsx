@@ -828,7 +828,7 @@ function Frame({ children }: { children: ReactNode }) {
               />
             </LayerBoundary>
           )}
-          {/* THE SHEET'S CODE IS THE WORK WORKSPACE'S CHUNK — it is a Work form,
+          {/* THE SHEET'S CODE IS THE WORK WORKSPACE'S CHUNK: it is a Work form,
           and the frame's own entry stays the frame — so it is mounted only
           while open, through the same loader every screen uses. */}
           {newTask !== null && (

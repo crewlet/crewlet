@@ -5089,7 +5089,7 @@ details > summary.int-summary::-webkit-details-marker {
 /* ---- The body ------------------------------------------------------------
    ONE COLUMN, AND THE PEEK IS NOT IN IT. The tracker grew its own peek — a
    second column of this grid, sized here, flipped to a drawer by a media
-   query of its own — and the frame took it over: the kit's shell carries a
+   query of its own, and the frame took it over: the kit's shell carries a
    peek column and every screen in the product can open one. The
    rules that sized it here matched `[data-peek="true"]` on THIS element,
    which nothing has ever set: the attribute lives on the shell's root. So

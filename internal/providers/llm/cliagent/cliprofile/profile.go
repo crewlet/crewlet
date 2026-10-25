@@ -366,7 +366,7 @@ func (s MarkerScope) Valid() bool {
 //
 // Web is the deliberate exception and is not one of these: a seat on a
 // subscription must not have less reach than the same CLI at a terminal, and
-// a fetch is a read — it never gates delivery. An entry turns web off on its
+// a fetch is a read: it never gates delivery. An entry turns web off on its
 // own stance, [WebTools], never through this one.
 type LocalTools string
 

@@ -890,6 +890,6 @@ export const rest = {
     bodyOf("DELETE", path, { body, headers }),
   /** A file's bytes — see [blob]. */
   blob,
-  /** A long-lived text answer, read as it arrives — see [stream]. */
+  /** A long-lived text answer, read as it arrives (see [stream]). */
   stream,
 };
