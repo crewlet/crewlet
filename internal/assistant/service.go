@@ -616,6 +616,13 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID, key string)
 		}
 		s.revoker.RevokeTurn(turnID)
 		s.declineParked(ctx, p, row, key)
+		if t, err := s.transcripts.Transcript(ctx, owner, row.Conversation); err == nil {
+			s.settleWaiting(ctx, w, waitingSteps(t, turnID), wire.ProposalDeclined, nil, nil)
+		} else {
+			s.log.WarnContext(ctx, "assistant_stop_steps_unsettled", "turn", turnID,
+				"error", redact.Secrets(err.Error()),
+				"detail", "the turn is stopped; its waiting step reads as waiting on a reload")
+		}
 		return wire.StopAnswer{State: wire.TurnStopped}, nil
 	}
 	if t, ok := s.local(owner, turnID); ok {
@@ -824,7 +831,7 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
 	row assistantdomain.Turn) (wire.TurnState, *wire.ErrorEvent, error) {
 
-	state, err := s.closeDerived(ctx, owner, row, "assistant_interrupt", assistantdomain.TurnEnd{
+	state, err := s.closeDerived(ctx, derivedWrite(owner, row, "assistant_interrupt"), row.ID, assistantdomain.TurnEnd{
 		State: wire.TurnInterrupted, Steps: row.Steps, ErrorCode: string(wire.ErrorTurnInterrupted)})
 	if err != nil {
 		return "", nil, err

@@ -76,14 +76,15 @@ func TestApprovingASupersededTurnsProposalShowsItWithoutTheLoop(t *testing.T) {
 		t.Fatalf("approving the superseded turn's proposal answers %v", err)
 	}
 	frames := f.Follow(parked.TurnID, at.AfterSeq)
-	if got := kinds(frames); len(got) != 3 || got[0] != wire.EventCard ||
-		got[1] != wire.EventAction || got[2] != wire.EventDone {
-		t.Fatalf("the approval told %v, want the card, the invalidation and the end", got)
+	if got := kinds(frames); len(got) != 4 || got[0] != wire.EventStep ||
+		got[1] != wire.EventCard || got[2] != wire.EventAction || got[3] != wire.EventDone {
+		t.Fatalf("the approval told %v, want the settled step, the card, the invalidation "+
+			"and the end", got)
 	}
-	if frames[0].Card.Card.Proposal.State != wire.ProposalApplied ||
-		frames[2].Done.State != wire.TurnSuperseded {
-		t.Errorf("the card reads %s and the turn ends %s", frames[0].Card.Card.Proposal.State,
-			frames[2].Done.State)
+	if frames[0].Step.State != wire.StepDone || frames[1].Card.Card.Proposal.State != wire.ProposalApplied ||
+		frames[3].Done.State != wire.TurnSuperseded {
+		t.Errorf("the step reads %s, the card %s and the turn ends %s", frames[0].Step.State,
+			frames[1].Card.Card.Proposal.State, frames[3].Done.State)
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)

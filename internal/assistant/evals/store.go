@@ -144,6 +144,10 @@ func (s *Store) Conversation(_ context.Context, owner, id uuid.UUID) (assistantd
 func (s *Store) Transcript(_ context.Context, owner, id uuid.UUID) (assistantdomain.Transcript, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failConversations > 0 {
+		s.failConversations--
+		return assistantdomain.Transcript{}, errors.New("assistanttest: the store is away")
+	}
 	c, err := s.owned(owner, id)
 	if err != nil {
 		return assistantdomain.Transcript{}, err
@@ -445,7 +449,8 @@ func (s *Store) FailCloses(n int) {
 	s.failCloses = n
 }
 
-// FailConversations makes the next n conversation reads fail as an
+// FailConversations makes the next n conversation and transcript reads fail
+// as an
 // unreachable store would.
 func (s *Store) FailConversations(n int) {
 	s.mu.Lock()

@@ -69,7 +69,11 @@ type turn struct {
 	// answer is this segment's answer message; streamed is its committed
 	// rounds' prose, and drawn is the whole text its deltas have drawn on
 	// the person's screen, a round being written included.
-	answer   uuid.UUID
+	answer uuid.UUID
+	// anchored says a card of this segment hangs on its answer, which is
+	// then recorded whether or not any prose was written, so every card's
+	// message is in the transcript a reload reads.
+	anchored bool
 	streamed []string
 	drawn    string
 	audit    []types.AssistantAuditStep
@@ -192,6 +196,7 @@ func (t *turn) emitCard(ctx context.Context, card wire.Card, apps []string) {
 	t.cards++
 	n := t.cards
 	message := t.answer
+	t.anchored = true
 	t.mu.Unlock()
 	ev := wire.CardEvent{CardID: assistantdomain.CardID(t.id, n), MessageID: message, Card: card}
 	t.emit(wire.Frame{Kind: wire.EventCard, Card: &ev})
@@ -379,10 +384,10 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 	}
 
 	var answer *uuid.UUID
-	if text != "" {
-		t.mu.Lock()
-		id := t.answer
-		t.mu.Unlock()
+	t.mu.Lock()
+	id, anchored := t.answer, t.anchored
+	t.mu.Unlock()
+	if text != "" || anchored {
 		answer = &id
 		t.record(ctx, "answer", func(ctx context.Context, w Write) error {
 			return t.svc.records.RecordMessage(ctx, w.Step("message", "answer"), t.id,
