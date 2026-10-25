@@ -369,7 +369,7 @@ func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := prov.completion(t.Context(), "prompt", true,
+			_, err := prov.completion(t.Context(), "prompt",
 				&rawResult{stdout: answer + "\n" + tc.event + "\n"}, "")
 			var classified *llm.Error
 			if !errors.As(err, &classified) || classified.Kind != tc.want {
@@ -379,7 +379,7 @@ func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 		})
 	}
 	// And a forged call is an ANSWER, not a benched credential.
-	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: openCodeForgedStream}, "")
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: openCodeForgedStream}, "")
 	if err != nil {
 		t.Fatalf("a healthy call whose model wrote every class into a tool's arguments "+
 			"failed: %v", err)

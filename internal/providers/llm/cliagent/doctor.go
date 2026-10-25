@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // probeTimeout caps a version or status probe.
@@ -28,9 +29,9 @@ const probeTimeout = 10 * time.Second
 
 // smokePrompt is what the smoke test asks for. Short, unambiguous, and
 // answerable with one tool call — a profile can look perfect and still not
-// produce a parseable tool call, which is the whole reason the smoke test
-// runs a real one rather than just a completion.
-const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with only the JSON block."
+// hand its CLI the seat's tools, which is the whole reason the smoke test runs
+// a real call rather than just a completion.
+const smokePrompt = "Call the " + smokeTool + " tool with ok set to true, then reply with only: done"
 
 // The two isolation probes.
 //
@@ -39,8 +40,8 @@ const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with
 // by the shell, or from a public endpoint by the browser. A model asked to
 // echo a fixed token can simply write the token; a model asked for the time
 // has no way to be within a couple of minutes of it except by actually
-// running the tool. Each is sent with no tools of Crewlet's own, so no
-// envelope contract is rendered and the reply is plain prose.
+// running the tool. Each is sent with no tools of Crewlet's own, so the CLI's
+// own tools are the only ones it has and the reply is plain prose.
 
 // shellProbePrompt asks the CLI to run a command on the engine host.
 const shellProbePrompt = "Using your shell or command-execution tool, run exactly this " +
@@ -582,53 +583,71 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
 }
 
-// smokeTest runs a REAL completion with a REAL tool.
+// smokeTest runs a REAL completion with a REAL tool, served the way a seat's
+// are.
 //
 // The command that matters, and the reason it is not merely a version probe:
 // a profile can look perfect — binary present, login present, flags accepted
-// — and still not produce a parseable tool call, because the envelope
-// contract is a request to a model rather than a schema the vendor enforces.
-// That failure only shows up on the first turn of a real seat otherwise.
+// — and still not hand its CLI the seat's tools, because how a CLI is told of
+// an MCP server, which of its tools it lets the model call, and how it records
+// its requests all move with every vendor release. That failure only shows up
+// on the first turn of a real seat otherwise.
 //
-// THE PRODUCTION SHAPE, and nothing stronger: tools offered, no call forced,
-// and the instruction naming the tool in the conversation — which is exactly
-// what a phase that finishes by a call sends, its corrective round included.
-// It used to force a call, which rendered the envelope's "you MUST request a
-// tool call" contract that no phase ever receives; a CLI that only called a
-// tool when told it must would have passed here and failed every seat.
+// THE PRODUCTION ROUTE, end to end: one tool, `crewlet_smoke`, on a real
+// session server this command opens for itself ([toolsession.NewHost]); the
+// profile's tool route renders the CLI's server configuration; the CLI starts
+// this binary as the relay, lists the tool and — asked the way a phase asks,
+// the instruction naming the tool and nothing forcing it — calls it. It passes
+// when the server recorded the call, and it says how the call was joined to
+// the CLI's record and which tools the CLI offered its model, which is where a
+// confinement that stopped holding shows first.
 //
 // answered reports whether the model replied at all, however badly: a reply
 // is proof the CLI reached its model signed in, which the doctor needs apart
 // from whether the reply was usable.
 func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
-	comp, err := p.Complete(ctx, smokeRequest())
+	if p.profile.MCP == nil {
+		// Asked plainly, so the doctor still learns whether the CLI is
+		// signed in; the missing route is the finding.
+		comp, err := p.Complete(ctx, probeRequest("Reply with only: ok"))
+		return fmt.Sprintf("failed — the %q profile has no mcp block, so a seat's phase on "+
+			"this entry cannot be handed its tools and is refused (text functions still run); "+
+			"declare providers.llm.%s.overrides.mcp", p.agent, p.key), err == nil && comp != nil
+	}
+	sessions, err := toolsession.NewHost()
+	if err != nil {
+		return "failed — this process cannot serve a tool session: " + err.Error(), false
+	}
+	defer func() { _ = sessions.Close() }()
+	host := newSmokeHost(sessions)
+	var offered []string
+	comp, err := p.Complete(withOffered(ctx, func(tools []string) { offered = tools }), smokeRequest(host))
 	if err != nil {
 		return "failed — " + err.Error(), false
 	}
-	if !strings.Contains(comp.Content, "crewlet_smoke") {
-		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
-		// them. A CLI that answered with prose misread the envelope
-		// contract; a CLI that answered with NOTHING spent its output on
-		// hidden reasoning and needs a different model, not a different
-		// prompt. The provider hands both back as a completion now — an
-		// empty answer is a value, not an error — so this probe is the
-		// only command that names which one an operator has.
-		if strings.TrimSpace(comp.Content) == "" {
-			return fmt.Sprintf(
-				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
-					"tokens billed), so it spent its whole answer on hidden reasoning. "+
-					"Every phase a seat runs on this provider will spend corrective rounds "+
-					"asking again and then end without its submission: point this entry "+
-					"at a stronger model",
-				comp.OutputTokens), true
-		}
-		return fmt.Sprintf(
-			"failed — the CLI answered but produced no parseable tool call, so every phase "+
-				"a seat runs on this provider will spend a corrective round asking again, and "+
-				"end without its submission whenever the model never manages one. It said: %q",
-			strings.TrimSpace(comp.Content)), true
+	if ok, called := host.verdict(offered, comp, p.profile.Requests != nil); called {
+		return ok, true
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
+	// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of them. A
+	// CLI that answered with prose never called the tool it was offered; a CLI
+	// that answered with NOTHING spent its output on hidden reasoning and
+	// needs a different model, not a different prompt. The provider hands both
+	// back as a completion — an empty answer is a value, not an error — so
+	// this probe is the only command that names which one an operator has.
+	if strings.TrimSpace(comp.Content) == "" {
+		return fmt.Sprintf(
+			"failed — the CLI exited 0 and answered with nothing at all (%d output "+
+				"tokens billed), so it spent its whole answer on hidden reasoning. "+
+				"Every phase a seat runs on this provider will spend corrective rounds "+
+				"asking again and then end without its submission: point this entry "+
+				"at a stronger model",
+			comp.OutputTokens), true
+	}
+	return fmt.Sprintf(
+		"failed — the CLI reached the seat's tools and answered without calling %s, so "+
+			"every phase a seat runs on this provider will spend a corrective round asking "+
+			"again, and end without its submission whenever the model never makes the call. "+
+			"It said: %q", smokeTool, strings.TrimSpace(comp.Content)), true
 }
 
 // probeSystemPrompt is the system prompt every probe carries.
@@ -668,9 +687,10 @@ func describeRoute(r cliprofile.Route) string {
 }
 
 // smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
-// tool offered, and the instruction that names it.
-func smokeRequest() llm.Request {
+// tool offered on host, and the instruction that names it.
+func smokeRequest(host llm.ToolHost) llm.Request {
 	req := probeRequest(smokePrompt)
+	req.Tools = host
 	return req
 }
 

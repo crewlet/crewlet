@@ -1,5 +1,6 @@
 // Package cliagent drives a coding CLI the operator already pays a
-// subscription for as a headless text model behind [llm.Provider].
+// subscription for, headless, behind [llm.Provider]: a seat's phase as the
+// CLI's own loop over the seat's tools, and a text function as one answer.
 //
 // WHICH CLIs is the profile table's answer, not this comment's —
 // [cliprofile.BuiltinNames] reads the shipped table and config's tests hold it
@@ -19,10 +20,17 @@
 //     inside it, in an empty per-call working directory, with an ALLOWLISTED
 //     environment rather than the engine's — see workspace.go and env.go.
 //
-//   - NO TOOL CHANNEL. The tool loop needs tool calls back, and a CLI prints
-//     prose. The catalogue and a response contract ride in the prompt, and
-//     the reply is parsed by a deliberately forgiving parser that never
-//     errors — see prompt.go and envelope.go.
+//   - A LOOP OF ITS OWN. A seat's phase hands the CLI its tools as one MCP
+//     server ([llm.ToolHost]), served for the run alone on a socket the
+//     relay reaches, and the CLI calls them natively, asking its model again
+//     and again until it answers or the engine ends the run. So the engine
+//     sees the calls and nothing between them: the CLI's own record — its
+//     stream, or a file it writes — is read as it goes for each model request,
+//     its prose and its cost, and handed to the host; a refreshed login is
+//     carried back at each call; and a model call made inside one of the
+//     run's calls runs on the run's slot — see toolrun.go, record.go and
+//     slots.go. A text function — no tools — is one prompt in and one answer
+//     out, as it always was.
 //
 //   - VENDOR DRIFT. These flags and JSON shapes change between releases, so
 //     every profile field is data an operator can replace from YAML rather
@@ -81,9 +89,12 @@ type Config struct {
 	StateDir string
 	// Overrides are the operator's profile edits.
 	Overrides map[string]any
-	// Timeout caps one invocation, wall clock.
+	// Timeout caps one stretch of the model's own work: a text function's
+	// whole call, and on a run with tools each stretch with none of the
+	// seat's tools in flight — see [stretch].
 	Timeout time.Duration
-	// MaxConcurrent caps this provider's simultaneous processes.
+	// MaxConcurrent caps this provider's simultaneous processes — see
+	// slots.go for the calls made inside a run's own tool calls.
 	MaxConcurrent int
 	// Env is extra child environment, already ${VAR}-resolved.
 	Env map[string]string
@@ -303,6 +314,14 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	if err := p.benched(); err != nil {
 		return nil, err
 	}
+	if req.Tools != nil && p.profile.MCP == nil {
+		// The operator's to fix, and the same on every attempt: the
+		// profile says nothing about how this CLI is handed an MCP server,
+		// so a seat's phase on it would run with none of its tools.
+		return nil, p.fail(llm.KindFatal, fmt.Errorf("the %q profile has no mcp block, so its "+
+			"CLI cannot be handed a seat's tools — declare providers.llm.%s.overrides.mcp, or "+
+			"run seats on another entry and keep this one for text functions", p.agent, p.key))
+	}
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
@@ -323,15 +342,11 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		return nil, p.fail(llm.KindFatal, err)
 	}
 
-	select {
-	case p.slots <- struct{}{}:
-		defer func() { <-p.slots }()
-	case <-ctx.Done():
-		// Queued behind other seats and the caller gave up. Reported as
-		// a timeout rather than fatal: nothing about the request was
-		// wrong, and the chain should be free to try another member.
-		return nil, p.fail(llm.KindTimeout, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
+	slot, err := p.acquire(ctx)
+	if err != nil {
+		return nil, err
 	}
+	defer slot.release()
 	// AGAIN, NOW THAT THE SLOT IS HELD. A call that queued behind a full
 	// entry passed the check above before the sit-out existed, so when the
 	// calls ahead of it report the spent plan it would otherwise take its
@@ -381,14 +396,16 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		env:     buildEnv(p.profile, checkout, p.env, p.auth),
 		timeout: p.timeout,
 		grace:   p.termGrace,
+		failOn:  p.profile.FailureMarkers,
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer. The other two output modes are extracted
 	// from the WHOLE of stdout — a fenced block, one JSON document — so
 	// there is no faithful incremental view of them, and forwarding raw
 	// lines would stream a banner and a half-written fence as though they
-	// were what the model said.
-	if req.Streaming() && p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
+	// were what the model said. A run with tools streams what its record
+	// reader reads instead — see [Provider.serveTools].
+	if req.Tools == nil && req.Streaming() && p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
 		in.onLine = func(line string) {
 			doc, ok := decodeObject(strings.TrimSpace(line))
 			if !ok {
@@ -431,6 +448,19 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		for _, arg := range p.profile.UsageFileArgs {
 			in.args = append(in.args, strings.ReplaceAll(arg, "{usage_file}", usagePath))
 		}
+	}
+	// THE SEAT'S TOOLS, served for this run alone, and the CLI told how to
+	// reach them — before the system prompt and the prompt, as the model is.
+	// Closed on every way out, BEFORE the checkout is released (deferred
+	// earlier, so run later): the release waits for the calls still running,
+	// and a refreshed login's carry works in the home.
+	var tools *toolRun
+	if req.Tools != nil {
+		tools, err = p.serveTools(ctx, req, checkout, slot, &in, session, system+prompt)
+		if err != nil {
+			return nil, err
+		}
+		defer tools.close()
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
 	// have something to put in it — see [cliprofile.SystemPromptFile]. A
@@ -501,6 +531,14 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
+	connected := false
+	if tools != nil {
+		// THE RECORD WHOLE, THEN THE RUN RELEASED: every request the record
+		// showed is told before the host's server for the run is retired,
+		// which waits for every call still running on it.
+		connected = tools.finish()
+		reportOffered(ctx, tools.reader.offeredTools())
+	}
 
 	// READ BEFORE THE CHECKOUT IS RELEASED, which removes the directory.
 	// A missing or unreadable report is not an error: the vendor writes it
@@ -535,12 +573,22 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// file, a report that cannot be had leaves the counts to stdout rather
 	// than failing an answer the operator paid for. In the working directory
 	// the call ran in, before the checkout is released.
-	if len(p.profile.UsageArgs) > 0 && !res.timedOut {
+	//
+	// A RUN WITH TOOLS ASKS ON EVERY OUTCOME, a timeout and a run the host
+	// stopped included, and past the cancellation that may have ended it
+	// (bounded by the command's own timeout): such a run is a phase's whole
+	// loop, and its report is the one count of what the run spent before it
+	// was cut.
+	if len(p.profile.UsageArgs) > 0 && (!res.timedOut || tools != nil) {
 		args := make([]string, 0, len(p.profile.UsageArgs))
 		for _, arg := range p.profile.UsageArgs {
 			args = append(args, strings.ReplaceAll(arg, "{session}", session))
 		}
-		report, reportErr := p.runAuxiliary(ctx, args, checkout.Work,
+		reportCtx := ctx
+		if tools != nil {
+			reportCtx = context.WithoutCancel(ctx)
+		}
+		report, reportErr := p.runAuxiliary(reportCtx, args, checkout.Work,
 			buildEnv(p.profile, checkout, p.env, p.auth), "")
 		switch {
 		case reportErr != nil:
@@ -558,6 +606,9 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
+	if tools != nil {
+		return p.toolCompletion(ctx, res, usageDoc, tools, connected)
+	}
 	return p.completion(ctx, system+prompt, res, usageDoc)
 }
 
