@@ -285,7 +285,9 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
       <SidePanel
         title="Crewlet Assistant"
         icon={<ProductMark product="assistant" size="md" />}
-        className="assistant-panel"
+        // THE THREAD IS THE ONE SCROLLER and insets its own items, so the
+        // panel's body gives up its inset rather than doubling it.
+        flush
         onClose={onClose}
         labels={{ close: () => "Close the assistant" }}
         initialFocus={initialFocus === "composer" && !offline ? composer : "heading"}
