@@ -570,12 +570,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			// tools silently vanish from every prompt.
 			p.add(at(path, "name"), ErrConflict, "duplicate MCP server name %q", name)
 		}
-		if name == BridgeServerName {
+		if name == ToolServerName {
 			// The same collision one layer out: the engine writes the
 			// seat's tool bridge into every box-mode run's box under this
 			// name, and a company server called the same is overwritten
 			// there — its tools gone from the run with nothing saying
-			// why. See [BridgeServerName].
+			// why. See [ToolServerName].
 			p.add(at(path, "name"), ErrConflict,
 				"%q is reserved for the seat's own tool bridge, which every "+
 					"box-mode run sees under that name; a server called the "+

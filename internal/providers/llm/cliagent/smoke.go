@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -54,7 +55,7 @@ func newSmokeHost(sessions *toolsession.Host) *smokeHost {
 }
 
 func (h *smokeHost) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Served, error) {
-	session, err := h.sessions.Open(ctx, "crewlet", "crewlet llm doctor", h)
+	session, err := h.sessions.Open(ctx, config.ToolServerName, "crewlet llm doctor", h)
 	if err != nil {
 		return llm.Served{}, err
 	}

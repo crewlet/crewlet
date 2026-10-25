@@ -131,12 +131,13 @@ var log = logging.Get("api.mcpbridge")
 const PathPrefix = "/mcp/"
 
 // serverName is what the bridge calls itself in the MCP handshake, and the
-// key the engine writes it under in a box's server list — one name, so the
-// tool prefix a coding agent sees (`mcp__crewlet__…`) and the server its logs
-// name agree. Defined by config because config is where the name is RESERVED:
-// an mcp_servers entry called the same thing would be overwritten by the
-// bridge in every box-mode run's box, silently.
-const serverName = config.BridgeServerName
+// key the engine writes it under in a box's server list — the name a host-mode
+// run lists the same tools under, so the tool prefix a coding agent sees
+// (`mcp__crewlet__…`) is one spelling wherever the seat runs. Defined by
+// config because config is where the name is RESERVED: an mcp_servers entry
+// called the same thing would be overwritten by the bridge in every box-mode
+// run's box, silently.
+const serverName = config.ToolServerName
 
 // Session is one run's live tool surface, as the engine opens it.
 //

@@ -235,9 +235,9 @@ func (l *agentLauncher) executorRun(c *Company, seatEnv map[string]string) (codi
 func bridgeServer(endpoint string) map[string]sandbox.MCPServer {
 	// Under the reserved name, which config refuses to any mcp_servers
 	// entry — so this entry can never shadow a server the seat scoped into
-	// its box. See [config.BridgeServerName] for why it is not the handle.
-	return map[string]sandbox.MCPServer{config.BridgeServerName: {
-		Name: config.BridgeServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
+	// its box. See [config.ToolServerName] for why it is not the handle.
+	return map[string]sandbox.MCPServer{config.ToolServerName: {
+		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
 	}}
 }
 

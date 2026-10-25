@@ -173,7 +173,7 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	}
 	prefix := "https://engine.example.com" + mcpbridge.PathPrefix
 	for i, runID := range []string{"t1", "t2"} {
-		url := started[i].MCPServers[config.BridgeServerName].URL
+		url := started[i].MCPServers[config.ToolServerName].URL
 		token, ok := strings.CutPrefix(url, prefix)
 		if !ok {
 			t.Fatalf("run %s's box was given %q, not this node's bridge", runID, url)

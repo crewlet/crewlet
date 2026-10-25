@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -397,7 +398,7 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 	if title == "" {
 		title = d.cfg.Surface.Phase()
 	}
-	session, err := d.cfg.Host.Open(d.ctx, ServerName, title, d)
+	session, err := d.cfg.Host.Open(d.ctx, config.ToolServerName, title, d)
 	if err != nil {
 		return llm.Served{}, err
 	}
@@ -427,11 +428,6 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 		},
 	}, nil
 }
-
-// ServerName is the name a CLI lists the engine's tools under, and so the
-// prefix its model sees them with (`mcp__crewlet__…`). The same name a coding
-// run's box lists them under, so a seat's tools are spelled one way.
-const ServerName = "crewlet"
 
 // Observe records one model request.
 func (d *dispatcher) Observe(t llm.Turn) {

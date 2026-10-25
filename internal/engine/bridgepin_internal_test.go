@@ -99,7 +99,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 	if len(started) != 1 {
 		t.Fatalf("%d jobs started, want 1", len(started))
 	}
-	endpoint := started[0].MCPServers[config.BridgeServerName].URL
+	endpoint := started[0].MCPServers[config.ToolServerName].URL
 	if endpoint == "" {
 		t.Fatal("the job was handed no bridge to dial")
 	}

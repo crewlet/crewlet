@@ -142,7 +142,7 @@ func TestABoxRunIsServedAgainByTheNodeThatRecoversIt(t *testing.T) {
 	if len(started) != 1 {
 		t.Fatalf("%d jobs started, want 1", len(started))
 	}
-	endpoint := started[0].MCPServers[config.BridgeServerName].URL
+	endpoint := started[0].MCPServers[config.ToolServerName].URL
 	before, err := connect(t, endpoint)
 	if err != nil {
 		t.Fatalf("connect: %v", err)

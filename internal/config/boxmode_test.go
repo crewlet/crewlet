@@ -238,13 +238,13 @@ func TestSelfIsNotACellABoxModeEntryCanName(t *testing.T) {
 	}
 }
 
-// THE BRIDGE'S NAME IS RESERVED. The engine writes the seat's tool bridge into
+// THE TOOL SERVER'S NAME IS RESERVED. The engine writes the seat's tool bridge into
 // every box-mode run's server list under it, so a company server of the
 // same name would be replaced there — its tools gone from the run with no
 // error and no log line saying why.
-func TestTheBridgeServerNameIsReserved(t *testing.T) {
+func TestTheToolServerNameIsReserved(t *testing.T) {
 	t.Parallel()
-	err := rejects(t, "name: Acme\nmcp_servers:\n  - name: "+BridgeServerName+"\n    command: npx\n",
+	err := rejects(t, "name: Acme\nmcp_servers:\n  - name: "+ToolServerName+"\n    command: npx\n",
 		"mcp_servers[0].name")
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)

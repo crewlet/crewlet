@@ -73,8 +73,8 @@ units:
 			// declared. So a block keyed on it reaches nothing.
 			"the seat's own tool bridge",
 			"name: Acme\nroles:\n  - {name: CEO, handle: ceo, mcp_env: {" +
-				BridgeServerName + ": {TOKEN: \"${T}\"}}}\n",
-			"roles[0].mcp_env." + BridgeServerName,
+				ToolServerName + ": {TOKEN: \"${T}\"}}}\n",
+			"roles[0].mcp_env." + ToolServerName,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
