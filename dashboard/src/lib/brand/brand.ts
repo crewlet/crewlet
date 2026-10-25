@@ -108,8 +108,8 @@ export interface BrandLogoSpec {
   shape: "wide" | "square";
   /**
    * Said under the slot while it is empty, where the empty slot does not
-   * speak for itself; none for a dark-ground logo, whose empty dark ground
-   * says what is missing.
+   * speak for itself; none for the dark-ground logo or the mark, whose empty
+   * slots say what is missing.
    */
   emptyNote?: string | undefined;
   /** Where the logo appears, as the setup says it: one sentence. */
@@ -150,7 +150,6 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     description: "For chips, slide corners and favicons",
     ground: "light",
     shape: "square",
-    emptyNote: "Nothing is drawn where a mark would go until one is added.",
     purpose: "A square used on chips, slide corners and the brand chip.",
     required: false,
   },

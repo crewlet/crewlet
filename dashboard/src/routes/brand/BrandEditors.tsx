@@ -523,6 +523,7 @@ export function VoiceEditor({ edit, onEdit }: BrandEditorProps) {
           optional
           value={voice.write_like ?? []}
           onChange={(next) => setVoice({ ...voice, write_like: next })}
+          maxItems={BRAND_VOICE_MAX_EXAMPLES}
           error={wrong.like}
           helper={`Up to ${BRAND_VOICE_MAX_EXAMPLES} short lines.`}
         />
@@ -532,6 +533,7 @@ export function VoiceEditor({ edit, onEdit }: BrandEditorProps) {
           optional
           value={voice.avoid ?? []}
           onChange={(next) => setVoice({ ...voice, avoid: next })}
+          maxItems={BRAND_VOICE_MAX_EXAMPLES}
           error={wrong.avoid}
           helper={`Up to ${BRAND_VOICE_MAX_EXAMPLES} short lines.`}
         />

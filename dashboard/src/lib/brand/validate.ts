@@ -65,7 +65,7 @@ export function voiceProblems(voice: BrandDocument["voice"]): {
   const list = (lines: readonly string[] | undefined, what: string) => {
     const kept = (lines ?? []).filter((l) => l.trim() !== "");
     if (kept.length > BRAND_VOICE_MAX_EXAMPLES) {
-      return `${what} can hold at most ${BRAND_VOICE_MAX_EXAMPLES} lines.`;
+      return `${what} has more than ${BRAND_VOICE_MAX_EXAMPLES} lines. Remove one.`;
     }
     for (const line of kept) {
       const wrong = textProblem(line, BRAND_VOICE_EXAMPLE_MAX_BYTES, "A line");
