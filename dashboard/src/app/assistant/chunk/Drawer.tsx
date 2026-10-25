@@ -16,7 +16,11 @@
  * The FOOT is the composer, with the page attached to the next question as a
  * chip inside its edge (removing it sends the question with no page, until
  * the reader adds it back or opens another page, which attaches itself), and
- * the one line that says the assistant can be wrong. Above it, while the
+ * the one line that says the assistant can be wrong. Images join the page in
+ * that row, picked with Attach image, dropped on the composer or pasted into
+ * it (a screenshot): each is uploaded at once and drawn as a chip with its
+ * thumbnail, and one the engine would refuse is refused above the composer
+ * in words that say what to do. Above it, while the
  * engine knows the model cannot answer (signed out, its plan spent, its CLI
  * unable to start), a notice says so in the engine's words and Send stays off
  * with that reason: the reader is told before they ask, never after a wait.
@@ -37,17 +41,22 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
 import {
+  AttachmentChip,
   Button,
   Callout,
   ChatThread,
   Composer,
   ConfirmModal,
   EmptyState,
+  FileDrop,
+  FilePickButton,
   IconButton,
   Menu,
+  RefusalStrip,
   SendButton,
   SidePanel,
   Tag,
@@ -62,12 +71,13 @@ import {
   LayoutDashboardGlyph,
   LockGlyph,
   MessageSquareGlyph,
+  PaperclipGlyph,
   PlusGlyph,
   RotateCcwClockGlyph,
   SquarePenGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
-import { ASSISTANT_INPUT_MAX_RUNES } from "~/contract/assistant.ts";
+import { ASSISTANT_INPUT_MAX_RUNES, type AssistantFileRef } from "~/contract/assistant.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
 import { relTime } from "~/lib/format.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
@@ -100,6 +110,7 @@ import {
   useConversation,
   conversation,
 } from "./session.ts";
+import { ATTACH_ACCEPT, ATTACH_HINT, useAttachments } from "./attachments.ts";
 import { prepareAgainQuestion } from "./blocks.tsx";
 import { Home } from "./Home.tsx";
 import { Thread } from "./Thread.tsx";
@@ -168,6 +179,7 @@ export function Drawer({
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const running = openTurn(view);
   const now = useNow(running !== null);
+  const attachments = useAttachments(view.id);
 
   // ON A PHONE THE PANEL IS THE WHOLE WINDOW, and its foot (the composer and
   // the line under it) is where a toast would land: the stack stands above it.
@@ -252,16 +264,28 @@ export function Drawer({
     if (asked > 0) thread.current?.scrollToLatest();
   }, [asked]);
 
+  // A QUESTION CARRIES THE IMAGES IN THE COMPOSER, or, asked again by Try
+  // again, the ones it was first sent with.
+  const { take } = attachments;
   const ask = useCallback(
-    (text: string) => {
+    (text: string, again?: readonly AssistantFileRef[]) => {
       const question = text.trim();
       if (question === "" || !questionFits(question)) return;
       setDraft("");
       setAsked((n) => n + 1);
-      void send(question, attached);
+      void send(question, attached, again ?? take());
     },
-    [attached],
+    [attached, take],
   );
+
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files);
+    if (files.length === 0) return;
+    // A SCREENSHOT IS PASTED AS AN IMAGE ALONE; text copied with a picture
+    // still lands in the box as text.
+    if (event.clipboardData.getData("text/plain") === "") event.preventDefault();
+    attachments.add(files);
+  };
 
   // A QUESTION TYPED ELSEWHERE (the palette's row) is asked at once where
   // this panel could ask it now, and otherwise waits in the box for the
@@ -440,62 +464,111 @@ export function Drawer({
                   {model.body}
                 </Callout>
               ) : null}
-              <Composer
-                ref={composer}
-                id={ASSISTANT_COMPOSER_ID}
-                label="Ask the assistant"
-                value={draft}
-                onChange={setDraft}
-                onSubmit={() => ask(draft)}
-                onKeyDown={onKeyDown}
-                submitOn="enter"
-                maxLength={ASSISTANT_INPUT_MAX_RUNES}
-                placeholder={
-                  view.turns.length === 0 ? "Ask about agents, tasks or spend" : "Ask a follow-up"
-                }
-                disabledReason={disabledReason}
-                attachmentsLabel="Attached to this question"
-                attachments={
-                  page === null ? undefined : attached ? (
-                    <Tag
-                      size="sm"
-                      appearance="outline"
-                      leadingIcon={<LayoutDashboardGlyph size="xs" />}
-                      title="The assistant can see this page"
-                      onRemove={removePage}
-                      removeAriaLabel={`Remove ${crumb} from this question`}
-                    >
-                      {crumb}
-                    </Tag>
-                  ) : (
-                    <Button
+              {attachments.refusal !== null ? (
+                <RefusalStrip className="assistant-attach-refusal" onDismiss={attachments.dismiss}>
+                  {attachments.refusal}
+                </RefusalStrip>
+              ) : null}
+              {/* IMAGES DROPPED ANYWHERE ON THE COMPOSER are attached; the
+                  button in its foot is the keyboard's way to the same. */}
+              <FileDrop
+                title="Drop images to attach them"
+                hint={ATTACH_HINT}
+                disabled={disabledReason !== undefined}
+                onFiles={(dropped) => attachments.add(dropped.map((d) => d.file))}
+              >
+                <Composer
+                  ref={composer}
+                  id={ASSISTANT_COMPOSER_ID}
+                  label="Ask the assistant"
+                  value={draft}
+                  onChange={setDraft}
+                  onSubmit={() => {
+                    if (!attachments.uploading) ask(draft);
+                  }}
+                  onKeyDown={onKeyDown}
+                  onPaste={disabledReason === undefined ? onPaste : undefined}
+                  submitOn="enter"
+                  maxLength={ASSISTANT_INPUT_MAX_RUNES}
+                  placeholder={
+                    view.turns.length === 0 ? "Ask about agents, tasks or spend" : "Ask a follow-up"
+                  }
+                  disabledReason={disabledReason}
+                  attachmentsLabel="Attached to this question"
+                  attachments={
+                    page === null && attachments.drafts.length === 0 ? undefined : (
+                      <>
+                        {page === null ? null : attached ? (
+                          <Tag
+                            size="sm"
+                            appearance="outline"
+                            leadingIcon={<LayoutDashboardGlyph size="xs" />}
+                            title="The assistant can see this page"
+                            onRemove={removePage}
+                            removeAriaLabel={`Remove ${crumb} from this question`}
+                          >
+                            {crumb}
+                          </Tag>
+                        ) : (
+                          <Button
+                            size="small"
+                            variant="ghost"
+                            leadingIcon={<PlusGlyph size="sm" />}
+                            aria-label={`Add ${crumb} to this question`}
+                            onClick={addPage}
+                          >
+                            Add this page
+                          </Button>
+                        )}
+                        {attachments.drafts.map((d) => (
+                          <AttachmentChip
+                            key={d.key}
+                            name={d.name}
+                            preview={d.preview}
+                            state={d.state}
+                            onRemove={() => {
+                              attachments.remove(d.key);
+                              announce(`${d.name} removed from this question`);
+                            }}
+                          />
+                        ))}
+                      </>
+                    )
+                  }
+                  actions={
+                    <FilePickButton
                       size="small"
                       variant="ghost"
-                      leadingIcon={<PlusGlyph size="sm" />}
-                      aria-label={`Add ${crumb} to this question`}
-                      onClick={addPage}
+                      leadingIcon={<PaperclipGlyph size="sm" />}
+                      accept={ATTACH_ACCEPT}
+                      disabledReason={disabledReason}
+                      onFiles={(picked) => attachments.add(picked.map((p) => p.file))}
                     >
-                      Add this page
-                    </Button>
-                  )
-                }
-                trailing={
-                  <SendButton
-                    mode={stoppable ? "stop" : "send"}
-                    labels={SEND_LABELS}
-                    title={stoppable ? stopTitle : undefined}
-                    onPress={stoppable ? () => void stop() : () => ask(draft)}
-                    disabledReason={
-                      stoppable
-                        ? running?.stopping
-                          ? "Stopping"
-                          : undefined
-                        : (disabledReason ??
-                          (draft.trim() === "" ? "Type a question first" : undefined))
-                    }
-                  />
-                }
-              />
+                      Attach image
+                    </FilePickButton>
+                  }
+                  trailing={
+                    <SendButton
+                      mode={stoppable ? "stop" : "send"}
+                      labels={SEND_LABELS}
+                      title={stoppable ? stopTitle : undefined}
+                      onPress={stoppable ? () => void stop() : () => ask(draft)}
+                      disabledReason={
+                        stoppable
+                          ? running?.stopping
+                            ? "Stopping"
+                            : undefined
+                          : (disabledReason ??
+                            (draft.trim() === ""
+                              ? "Type a question first"
+                              : attachments.uploading
+                                ? "Images are still uploading"
+                                : undefined))
+                      }
+                    />
+                  }
+                />
+              </FileDrop>
               <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
                 The assistant can be wrong. Check before you approve.
               </Text>

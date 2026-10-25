@@ -107,6 +107,7 @@ const SENT: TurnEvent[] = [
     key: "k1",
     text: "Who spent most?",
     page: null,
+    attachments: [],
     at: "2026-10-24T09:41:00Z",
   },
   { type: "accepted", key: "k1", turnId: TURN, afterSeq: 0 },
@@ -492,6 +493,7 @@ describe("the engine's golden stream, reduced", () => {
         key: "g1",
         text: "Fix the flaky sign-in test",
         page: null,
+        attachments: [],
         at: "2026-10-24T09:41:00Z",
       },
       { type: "accepted", key: "g1", turnId: first, afterSeq: 0 },
@@ -519,7 +521,14 @@ describe("the engine's golden stream, reduced", () => {
   test("replayed twice, a turn reads exactly as once", () => {
     const first = turns[0]!;
     const start = after(
-      { type: "send", key: "g1", text: "q", page: null, at: "2026-10-24T09:41:00Z" },
+      {
+        type: "send",
+        key: "g1",
+        text: "q",
+        page: null,
+        attachments: [],
+        at: "2026-10-24T09:41:00Z",
+      },
       { type: "accepted", key: "g1", turnId: first, afterSeq: 0 },
     );
     const own = frames.filter((x) => x.turn_id === first);
@@ -531,7 +540,14 @@ describe("the engine's golden stream, reduced", () => {
   test("a resume that could not be filled draws the snapshot, then the error, then ends", () => {
     const second = turns[1]!;
     let view = after(
-      { type: "send", key: "g2", text: "q", page: null, at: "2026-10-24T09:42:00Z" },
+      {
+        type: "send",
+        key: "g2",
+        text: "q",
+        page: null,
+        attachments: [],
+        at: "2026-10-24T09:42:00Z",
+      },
       { type: "accepted", key: "g2", turnId: second, afterSeq: 0 },
     );
     for (const f of frames.filter((x) => x.turn_id === second))

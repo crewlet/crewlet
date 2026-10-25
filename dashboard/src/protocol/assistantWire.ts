@@ -43,6 +43,8 @@ import type {
   AssistantErrorCard,
   AssistantErrorEvent,
   AssistantEventKind,
+  AssistantFileCard,
+  AssistantFileStored,
   AssistantFrame,
   AssistantNoticeCard,
   AssistantOpenInAppCard,
@@ -99,6 +101,7 @@ export interface AssistantCardBodies {
   open_in_app: AssistantOpenInAppCard;
   error: AssistantErrorCard;
   notice: AssistantNoticeCard;
+  file: AssistantFileCard;
 }
 
 /** A card narrowed to the one body its type names. */
@@ -138,6 +141,7 @@ const CARD_KINDS: Record<AssistantCardKind, true> = {
   open_in_app: true,
   error: true,
   notice: true,
+  file: true,
 };
 
 /**
@@ -329,6 +333,11 @@ export interface AssistantRoutes {
     body: AssistantTurnRequest;
     answer: AssistantTurnAccepted;
   };
+  /**
+   * An image the person attaches to their next question, uploaded at once:
+   * the raw bytes as the body, typed by the file, under an operation key.
+   */
+  "POST /assistant/conversations/{id}/files": { body: Blob; answer: AssistantFileStored };
   "POST /assistant/turns/{id}/stop": { body: AssistantVersioned; answer: AssistantStopAnswer };
   "POST /assistant/proposals/{id}/approve": {
     body: AssistantProposalDecision;

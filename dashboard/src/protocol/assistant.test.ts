@@ -333,6 +333,37 @@ describe("a route", () => {
     });
   });
 
+  test("an attachment is sent as its own bytes, typed by the file, named in the query", async () => {
+    const stored = {
+      file: {
+        file_id: "f",
+        name: "shot.png",
+        media_type: "image/png",
+        size: 3,
+        download: "/assistant/x",
+      },
+    };
+    const sent = serve(
+      () =>
+        new Response(JSON.stringify(stored), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const image = new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" });
+    const answer = await call("POST /assistant/conversations/{id}/files", image, {
+      id: "c1",
+      query: { name: "shot.png" },
+      opKey: "op-2",
+    });
+    expect(answer).toEqual(stored);
+    expect(sent[0]!.url).toMatch(/\/assistant\/conversations\/c1\/files\?name=shot\.png$/);
+    const headers = new Headers(sent[0]!.init.headers);
+    expect(headers.get("Content-Type")).toBe("image/png");
+    expect(headers.get("Idempotency-Key")).toBe("op-2");
+    expect(sent[0]!.init.body).toBe(image);
+  });
+
   test("a route that names an id refuses to be sent without one", async () => {
     await expect(call("GET /assistant/conversations/{id}", null, {})).rejects.toBeInstanceOf(
       TypeError,

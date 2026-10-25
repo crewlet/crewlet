@@ -28,6 +28,7 @@ import { useSyncExternalStore } from "react";
 import {
   ASSISTANT_ACTION_CONTEXT_INVALIDATE,
   type AssistantErrorCode,
+  type AssistantFileRef,
   type AssistantProposalAnswer,
   type AssistantProposalCard,
 } from "~/contract/assistant.ts";
@@ -254,20 +255,63 @@ function read(
   );
 }
 
+/**
+ * The conversation being created, shared by everything that needs one at
+ * once: an image attached and a question sent before the first answer came
+ * back are one new conversation, never two.
+ */
+let creating: { generation: number; id: Promise<string> } | null = null;
+
 /** Make the conversation a question will be asked in, if there is none yet. */
 async function ensureConversation(): Promise<string> {
   if (view.id !== null) return view.id;
+  if (creating !== null && creating.generation === generation) return creating.id;
   const mine = generation;
-  const created = await call("POST /assistant/conversations", versioned);
-  if (mine === generation) {
-    dispatch({
-      type: "created",
-      id: created.conversation.id,
-      title: created.conversation.title,
-    });
-    writeTab({ conversation: created.conversation.id });
+  const id = (async () => {
+    const created = await call("POST /assistant/conversations", versioned);
+    if (mine === generation) {
+      dispatch({
+        type: "created",
+        id: created.conversation.id,
+        title: created.conversation.title,
+      });
+      writeTab({ conversation: created.conversation.id });
+    }
+    return created.conversation.id;
+  })();
+  creating = { generation: mine, id };
+  try {
+    return await id;
+  } finally {
+    if (creating?.id === id) creating = null;
   }
-  return created.conversation.id;
+}
+
+/** An image uploaded for the next question, and the conversation it was stored in. */
+export interface UploadedAttachment {
+  conversationId: string;
+  file: AssistantFileRef;
+}
+
+/**
+ * Upload an image the person attached, at once, to the conversation the next
+ * question is asked in (made now if there is none yet). Sent under its own
+ * operation key through the same request path as every other assistant
+ * write, so a step-up, a retry and a refusal are handled as theirs are; a
+ * refusal rejects with the engine's `RestError`.
+ */
+export async function uploadAttachment(
+  file: File,
+  signal?: AbortSignal,
+): Promise<UploadedAttachment> {
+  const conversationId = await ensureConversation();
+  const stored = await call("POST /assistant/conversations/{id}/files", file, {
+    id: conversationId,
+    query: { name: file.name },
+    opKey: newActOpID(),
+    ...(signal ? { signal } : {}),
+  });
+  return { conversationId, file: stored.file };
 }
 
 /**
@@ -279,7 +323,11 @@ async function ensureConversation(): Promise<string> {
  * twice, since a conversation holds one running turn (409
  * `assistant_turn_running`).
  */
-export async function send(text: string, page: PageSnapshot | null): Promise<void> {
+export async function send(
+  text: string,
+  page: PageSnapshot | null,
+  attachments: readonly AssistantFileRef[] = [],
+): Promise<void> {
   const key = newActOpID();
   const mine = generation;
   dispatch({
@@ -287,13 +335,19 @@ export async function send(text: string, page: PageSnapshot | null): Promise<voi
     key,
     text,
     page: page ? { title: page.title, screen: page.context.screen } : null,
+    attachments: [...attachments],
     at: new Date().toISOString(),
   });
   try {
     const id = await ensureConversation();
     const accepted = await call(
       "POST /assistant/conversations/{id}/turns",
-      { ...versioned, input: { text }, page_context: page ? page.context : null },
+      {
+        ...versioned,
+        input: { text },
+        page_context: page ? page.context : null,
+        ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.file_id) } : {}),
+      },
       { id, opKey: key },
     );
     if (mine !== generation) return;
@@ -545,6 +599,7 @@ export function pageMoved(revision: string): void {
 /** Test seam: a fresh store, as a fresh page has. */
 export function resetSessionForTest(): void {
   generation += 1;
+  creating = null;
   asked.clear();
   approvals.clear();
   declines.clear();

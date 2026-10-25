@@ -90,7 +90,13 @@ export async function call<R extends AssistantRoute>(
     .slice(ASSISTANT_PREFIX.length)
     .replace("{id}", encodeURIComponent(options.id ?? ""));
   const { body: answer } = await rest.request(method, `/assistant/${tail}`, {
-    ...(body === null ? {} : { body, contentType: "application/json" }),
+    // A FILE IS SENT AS ITS OWN BYTES, typed as the browser typed it; the
+    // engine sniffs the bytes and refuses a type it does not take.
+    ...(body === null
+      ? {}
+      : body instanceof Blob
+        ? { body, contentType: body.type || "application/octet-stream" }
+        : { body, contentType: "application/json" }),
     ...(options.query ? { query: options.query } : {}),
     ...(options.opKey ? { headers: { "Idempotency-Key": options.opKey } } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
@@ -119,9 +125,11 @@ export function isAssistantPath(path: string): boolean {
 }
 
 /**
- * A table card's export, as the bytes of a file, read from the stored
- * snapshot under the same session. The path is the card's own
- * (`exports.csv`, `exports.xlsx`), checked to be one of the assistant's.
+ * A file the engine handed back a path to, as its bytes, read under the same
+ * session: a table card's export from the stored snapshot (`exports.csv`,
+ * `exports.xlsx`), or a stored file's `download` route (a file a deep run
+ * delivered, an image the person attached). The path is checked to be one of
+ * the assistant's before any request.
  */
 export async function exportFile(path: string, signal?: AbortSignal): Promise<Blob> {
   if (!isAssistantPath(path)) {

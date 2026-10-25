@@ -77,7 +77,29 @@ describe("the engine's golden stream", () => {
     expect([...seen].sort()).toEqual(Object.keys(KINDS).sort());
     const cards = frames.flatMap((f) => (f.kind === "card" ? [narrowCard(f.card.card)] : []));
     expect(cards).not.toContain(null);
-    expect(new Set(cards.map((c) => c?.type)).size).toBe(6);
+    expect([...new Set(cards.map((c) => c?.type))].sort()).toEqual([
+      "entity",
+      "error",
+      "file",
+      "notice",
+      "open_in_app",
+      "proposal",
+      "table",
+    ]);
+  });
+
+  test("a deep run is re-sent under one step id, its step names it, and its files are a card", () => {
+    const { frames } = parse(GOLDEN, 97);
+    const steps = frames.flatMap((f) => (f.kind === "step" ? [f.step] : []));
+    const runs = steps.filter((s) => s.deep !== undefined);
+    expect(runs.map((s) => s.deep?.state)).toEqual(["running", "finished"]);
+    expect(new Set(runs.map((s) => s.step_id)).size).toBe(1);
+    expect(steps.some((s) => s.parent === runs[0]!.index)).toBe(true);
+    const files = frames.flatMap((f) =>
+      f.kind === "card" && f.card.card.type === "file" ? (f.card.card.file?.files ?? []) : [],
+    );
+    expect(files.map((f) => f.media_type)).toContain("image/svg+xml");
+    for (const file of files) expect(file.download.startsWith("/assistant/")).toBe(true);
   });
 
   test("narrows each frame to the payload its kind names", () => {

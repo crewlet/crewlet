@@ -10,33 +10,22 @@
  * is not an image, or whose bytes cannot be had, is its name and type alone.
  */
 
-import { useEffect, useState } from "react";
 import { LogoSlot } from "@crewlethq/ui";
 import type { AssistantDraftFileRef } from "~/contract/assistant.ts";
 import { conversationFile } from "~/protocol/assistant.ts";
+import { useFilePreview } from "./filePreview.ts";
 
 /** The image types a card draws a thumbnail of. */
 const IMAGES: readonly string[] = ["image/svg+xml", "image/png", "image/webp", "image/jpeg"];
 
 export function DraftFile({ file }: { file: AssistantDraftFileRef }) {
   const image = IMAGES.includes(file.media_type);
-  const [src, setSrc] = useState<string | null>(null);
-  useEffect(() => {
-    if (!image) return;
-    const controller = new AbortController();
-    let url: string | null = null;
-    conversationFile(file, controller.signal).then(
-      (blob) => {
-        url = URL.createObjectURL(new Blob([blob], { type: file.media_type }));
-        setSrc(url);
-      },
-      () => setSrc(null),
-    );
-    return () => {
-      controller.abort();
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [file, image]);
+  const src = useFilePreview(
+    `${file.conversation_id}/${file.file_id}`,
+    file.media_type,
+    (signal) => conversationFile(file, signal),
+    image,
+  );
   const words = `${file.name} (${file.media_type})`;
   if (!image) return <>{words}</>;
   return (

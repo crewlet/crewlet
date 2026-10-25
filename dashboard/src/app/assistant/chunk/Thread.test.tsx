@@ -5,8 +5,8 @@
  * and the run chip is drawn from the first step, closed while the turn runs.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import type { CardHandlers } from "./blocks.tsx";
@@ -30,6 +30,7 @@ const turn: TurnView = {
   seq: 1,
   question: "Which agents spent the most?",
   page: null,
+  attachments: [],
   askedAt: "2026-10-24T09:41:00Z",
   stepsDone: 0,
   steps: [],
@@ -216,4 +217,33 @@ test("a turn that failed before it wrote a word shows its sentence", () => {
   expect(
     screen.getByText("The assistant's model answered in a form the engine could not read."),
   ).toBeTruthy();
+});
+
+test("a sent question shows the images it carried as chips under its bubble", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]))),
+  );
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, { createObjectURL: () => "blob:sent/1", revokeObjectURL: () => {} }),
+  );
+  const { container } = draw({
+    ...turn,
+    phase: "completed",
+    attachments: [
+      {
+        file_id: "f1",
+        name: "screenshot.png",
+        media_type: "image/png",
+        size: 4,
+        download: "/assistant/conversations/c1/files/f1",
+      },
+    ],
+  });
+  const bubble = container.querySelector(".crewlet-message__attachment")!;
+  expect(bubble.textContent).toContain("screenshot.png");
+  expect(bubble.querySelector("button")).toBeNull();
+  await waitFor(() => expect(bubble.querySelector("img")?.getAttribute("src")).toBe("blob:sent/1"));
+  vi.unstubAllGlobals();
 });

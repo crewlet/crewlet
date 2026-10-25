@@ -1,10 +1,11 @@
 /**
  * A conversation's turns, drawn from the reducer's state and nothing else.
  *
- * ONE TURN IS: the person's question in a bubble, with the page it carried
- * under it; the run chip, once the turn has taken a step, which says the
+ * ONE TURN IS: the person's question in a bubble, with the page and the
+ * images it carried under it; the run chip, once the turn has taken a step, which says the
  * turn's state in words and opens on the steps it took (each with the
- * ordinary request it made, in mono); the answer as prose with no container
+ * ordinary request it made, in mono); each deep run the assistant switched
+ * to, as its own card with the steps it made nested under it; the answer as prose with no container
  * round it; the engine's cards; while the assistant works, the thinking
  * indicator after all of it; and, once the turn has ended, a foot with when
  * it was and Copy. No answer rating: in a self-hosted engine nothing would
@@ -42,16 +43,20 @@ import {
   announce,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import type { AssistantFileRef } from "~/contract/assistant.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import {
   ActionReceipt,
   CardBlock,
+  DeepRunBlock,
   ReplyProse,
+  deepRunsOf,
   runChipOf,
   stepsOf,
   thinkingOf,
   type CardHandlers,
 } from "./blocks.tsx";
+import { SentAttachments } from "./files.tsx";
 import { changedNothing } from "./pageActions.ts";
 import { isOpen, proposalOf, type ConversationView, type TurnView } from "./turn.ts";
 
@@ -64,8 +69,8 @@ export interface ThreadProps {
   on: CardHandlers;
   /** The cards whose place the reader opened beside the conversation. */
   opened: ReadonlySet<string>;
-  /** Send a question again, for a turn that failed on something that may pass. */
-  onRetry: (text: string) => void;
+  /** Send a question again, with the images it carried, for a turn that failed on something that may pass. */
+  onRetry: (text: string, attachments: readonly AssistantFileRef[]) => void;
   /** Why a question cannot be sent now (Send's own reason), which holds Try again off too. */
   retryDisabledReason?: string | undefined;
   /** Dial the running turn's stream again. */
@@ -130,12 +135,13 @@ function Turn({
   now: number;
   on: CardHandlers;
   opened: ReadonlySet<string>;
-  onRetry: (text: string) => void;
+  onRetry: (text: string, attachments: readonly AssistantFileRef[]) => void;
   retryDisabledReason: string | undefined;
 }) {
   const open = isOpen(turn.phase);
   const chip = runChipOf(turn, now);
   const steps = stepsOf(turn);
+  const deepRuns = deepRunsOf(turn);
   const thinking = thinkingOf(turn);
   const placed = new Set(turn.replies.map((r) => r.id));
   const cardsOf = (messageId: string) => turn.cards.filter((c) => c.message_id === messageId);
@@ -168,7 +174,14 @@ function Turn({
     <>
       <MessageBubble
         from="self"
-        attachment={turn.page ? <SentWith title={turn.page.title} /> : undefined}
+        attachment={
+          turn.page || turn.attachments.length > 0 ? (
+            <Inline gap={1} wrap>
+              {turn.page ? <SentWith title={turn.page.title} /> : null}
+              <SentAttachments files={turn.attachments} />
+            </Inline>
+          ) : undefined
+        }
       >
         {turn.question}
       </MessageBubble>
@@ -183,11 +196,14 @@ function Turn({
               ? `You can ask again in ${turn.refusal.retryAfterSeconds} seconds, and your question is back in the box below.`
               : "Nothing changed.")}
         </Callout>
-      ) : steps.length > 0 ? (
+      ) : turn.steps.length > 0 ? (
         <RunChip state={chip.state} title={chip.title} meta={chip.meta} defaultOpen={false}>
-          <StepList label="Steps" steps={steps} />
+          {steps.length > 0 ? <StepList label="Steps" steps={steps} /> : undefined}
         </RunChip>
       ) : null}
+      {deepRuns.map((run) => (
+        <DeepRunBlock key={run.step.step_id} run={run} now={now} />
+      ))}
       {turn.replies.map((reply) => (
         <Stack key={reply.id} gap={3}>
           <ReplyProse text={reply.text} dimmed={turn.phase === "stopped"} />
@@ -220,7 +236,7 @@ function Turn({
                 size="small"
                 variant="secondary"
                 disabledReason={retryDisabledReason}
-                onClick={() => onRetry(turn.question)}
+                onClick={() => onRetry(turn.question, turn.attachments)}
               >
                 Try again
               </Button>

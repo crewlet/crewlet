@@ -159,6 +159,7 @@ const base: TurnView = {
   seq: 1,
   question: "q",
   page: null,
+  attachments: [],
   askedAt: "2026-10-24T09:41:00Z",
   stepsDone: 0,
   steps: [],

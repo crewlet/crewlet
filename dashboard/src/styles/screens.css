@@ -11669,7 +11669,9 @@ a.live-row:focus-visible {
   text-align: center;
 }
 
-/* The model notice stands above the composer, the disclaimer's step apart. */
-.assistant-model-notice {
+/* The model notice and an attachment refused stand above the composer, the
+   disclaimer's step apart. */
+.assistant-model-notice,
+.assistant-attach-refusal {
   margin: 0 0 var(--spacing-2);
 }

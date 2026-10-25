@@ -32,6 +32,7 @@ const SENT: TurnEvent[] = [
     key: "k1",
     text: "Rename it",
     page: null,
+    attachments: [],
     at: "2026-10-24T09:41:00Z",
   },
   { type: "accepted", key: "k1", turnId: TURN, afterSeq: 0 },

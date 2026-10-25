@@ -4102,6 +4102,35 @@ downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
 where the result's visibility changes, who will see it). A conversation an
 administrator read for compliance says so at its top, with each reader, when
 and the reason they gave.
+
+**Deep work is one card, redrawn in place.** When the assistant hands a large
+task to a deep-work run, its step carries the run's progress and the engine
+sends it again under the same step id as the run moves. The drawer draws it as
+a `DeepWorkCard`: the goal, its state, its time against its deadline, its
+Crewlet calls against their cap and the share of its budget used (each a
+meter), and its latest activity lines in mono. The steps the run made (`parent`
+is its index) are nested under the card, folded behind their count when there
+are more than three, rather than listed in the `RunChip`, which says "Deep
+work" while the run works. The turn's Stop ends it; a stopped or failed run
+says why, and a waiting run says it waits on the change card below it.
+
+**Files are bytes read as the person, previewed only as pictures.** A file
+card lists what a run delivered in a `FileList`, each with its name, type,
+size and a `DownloadButton` that fetches its `download` route under the
+session. An image (an SVG included) is previewed through an object URL in an
+`<img>`, typed from the reference rather than from the response, so nothing
+a file carries reaches the page as markup; any other file shows no preview.
+
+**A question can carry images.** The person attaches up to four PNG, JPEG,
+WebP or GIF images of at most 5 MB each by Attach image, by dropping them on
+the composer, or by pasting (a screenshot). Each uploads at once
+(`POST /assistant/conversations/{id}/files`, under its own operation key and
+through the same request path as every other assistant write), stands in the
+composer as an `AttachmentChip` with its thumbnail, and its file id travels
+in the question's `attachments`. One the engine would refuse is refused above
+the composer in a sentence that says what to do, and Send waits while an
+image is still uploading. A sent question shows its images as chips under its
+bubble.
 **A model's words are drawn inert**: a link is its label and the host it
 names, never an anchor; a picture is its alt text, never fetched
 (`ASSISTANT_WORDS` in `lib/markdown.ts`). The assistant moves the page only

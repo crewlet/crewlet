@@ -36,6 +36,7 @@
 import type {
   AssistantActionEvent,
   AssistantCardEvent,
+  AssistantFileRef,
   AssistantDoneEvent,
   AssistantErrorEvent,
   AssistantPageContextEvent,
@@ -139,6 +140,8 @@ export interface TurnView {
   question: string;
   /** The page it was sent with, or null where the person removed it. */
   page: PageChip | null;
+  /** The images the person attached to the question. */
+  attachments: AssistantFileRef[];
   /** When the person asked, RFC 3339. */
   askedAt: string;
   /** The engine's step count while a segment runs. */
@@ -193,7 +196,14 @@ export const EMPTY: ConversationView = {
 
 /** Every way a conversation moves. */
 export type TurnEvent =
-  | { type: "send"; key: string; text: string; page: PageChip | null; at: string }
+  | {
+      type: "send";
+      key: string;
+      text: string;
+      page: PageChip | null;
+      attachments: AssistantFileRef[];
+      at: string;
+    }
   | { type: "created"; id: string; title: string }
   | { type: "accepted"; key: string; turnId: string; afterSeq: number }
   | { type: "refused"; key: string; refusal: SendRefusal }
@@ -333,8 +343,10 @@ function applyFrame(turn: TurnView, frame: AssistantNarrowFrame): TurnView {
       return { ...next, error: frame.error, phase: open ? "failed" : next.phase };
     case "snapshot": {
       const { messages, steps, cards } = frame.snapshot;
+      const asked = messages.find((m) => m.role === "user");
       return {
         ...next,
+        attachments: asked?.attachments ?? next.attachments,
         steps: [...steps].sort((a, b) => a.index - b.index),
         cards: [...cards],
         replies: messages
@@ -372,6 +384,7 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
         seq: open?.turn_id === message.turn_id ? open.after_seq : 0,
         question: "",
         page: null,
+        attachments: [],
         askedAt: message.created_at,
         stepsDone: 0,
         steps: [],
@@ -392,6 +405,7 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
         ...turn,
         question: message.text,
         page: message.page ?? null,
+        attachments: message.attachments ?? [],
         askedAt: message.created_at,
       });
     } else {
@@ -442,6 +456,7 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
             seq: 0,
             question: event.text,
             page: event.page,
+            attachments: event.attachments,
             askedAt: event.at,
             stepsDone: 0,
             steps: [],

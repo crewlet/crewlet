@@ -59,7 +59,6 @@ export const ASSISTANT_ATTACHMENTS_PER_TURN = 4;
 /** The most files one deep run hands back. */
 export const ASSISTANT_DELIVERED_FILES_PER_RUN = 10;
 
-
 /** A frame's kind on the live stream. */
 export type AssistantEventKind =
   | "conversation"
@@ -756,13 +755,13 @@ export const ASSISTANT_PAGE_ACTIONS = {
 // --- deep work (im-deep) ---
 
 /** What a person may attach: images, sniffed from their bytes by the engine. */
-type AssistantAttachmentMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+export type AssistantAttachmentMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 
 /** Where a deep run stands. */
 type AssistantDeepState = "starting" | "running" | "waiting" | "finished" | "stopped" | "failed";
 
 /** A deep run as its step shows it. */
-interface AssistantDeepProgress {
+export interface AssistantDeepProgress {
   state: AssistantDeepState;
   goal: string;
   started_at: string;
@@ -776,7 +775,7 @@ interface AssistantDeepProgress {
 }
 
 /** One stored file as a message or a card names it. */
-interface AssistantFileRef {
+export interface AssistantFileRef {
   file_id: string;
   name: string;
   media_type: string;
@@ -786,11 +785,11 @@ interface AssistantFileRef {
 }
 
 /** The files a deep run delivered. */
-interface AssistantFileCard {
+export interface AssistantFileCard {
   files: AssistantFileRef[];
 }
 
 /** An attachment's upload answer: `POST /assistant/conversations/{id}/files`. */
-interface AssistantFileStored {
+export interface AssistantFileStored {
   file: AssistantFileRef;
 }
