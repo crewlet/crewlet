@@ -271,6 +271,25 @@ type CoordinatorOptions struct {
 	// not finished, and its box will resume into the same session.
 	Ended func(runID string)
 
+	// Recovered is told of each run this node takes over still RUNNING in
+	// its box, as it recovers the run's seat ([Coordinator.RecoverSeat]):
+	// before the seat's mailbox opens, and once the run is fenced to this
+	// node's lease — or could not be written either way, which is no
+	// evidence that another node holds it. A run a newer lease already
+	// owns is not reported.
+	//
+	// It exists, as Ended does, for what a run's box REACHES on the engine
+	// rather than for the run's own state, which this package drives
+	// itself. A box-mode run's box calls the seat's tools over the bridge
+	// for as long as its CLI runs, and the session it calls lived in the
+	// process that launched it: a node that restarted, or took the seat
+	// over, serves that session again from here (internal/api/mcpbridge).
+	// A run parked on a question has a paused box that calls nothing, and
+	// a tail being reaped has a finished one, so neither is reported.
+	//
+	// Nil serves nothing again.
+	Recovered func(ctx context.Context, run PendingRun)
+
 	// Stopped is called once for every way a run's engine-side life ENDS,
 	// and for the one way it stops without ending — a park. It is the ONE
 	// report above this package of a fact this package alone can see: that
@@ -470,8 +489,10 @@ type Coordinator struct {
 	audience AudienceResolver
 	condense Condenser
 	ended    func(runID string)
-	stopped  func(ctx context.Context, handle, turnID string)
-	now      func() time.Time
+	// recovered is [CoordinatorOptions.Recovered].
+	recovered func(ctx context.Context, run PendingRun)
+	stopped   func(ctx context.Context, handle, turnID string)
+	now       func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -599,6 +620,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
 		condense:  opts.Condense,
 		ended:     opts.Ended,
+		recovered: opts.Recovered,
 		stopped:   opts.Stopped,
 		now:       opts.Now,
 		runs:      map[string]seatRuns{},
@@ -3140,12 +3162,21 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		}
 		return
 	case StatusRunning:
-		if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
+		won, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch)
+		if err != nil {
 			log.WarnContext(ctx, "sandbox_ownership_claim_failed",
 				"turn_id", run.TurnID, "error", err.Error())
 		}
 		c.countRun(run.AgentHandle, run.Status)
 		tally.running++
+		// WHAT THE BOX CALLS IS SERVED HERE NOW — see
+		// [CoordinatorOptions.Recovered] — unless a newer lease already
+		// owns the run. A claim the store could not answer is no such
+		// evidence, and what is served acts only while this node holds
+		// the seat, which it has just been granted.
+		if c.recovered != nil && (won || err != nil) {
+			c.recovered(ctx, run)
+		}
 	case StatusAnswered:
 		// AN ANSWER THE PREVIOUS OWNER RECORDED AND NEVER RESUMED
 		// WITH: it stopped, or the seat moved, between the record and

@@ -25,17 +25,19 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 
 // Build is THE construction path, called by the engine.
 //
-// The engine OPENS a run's session and mints its endpoint, and the same process
-// serves it: a session is a live tool surface, so no other process can (see
-// [Bridge.session]). The token is still signed from the fleet's key material,
-// and the reason is diagnosis rather than verification: a peer that a
-// misrouted call reaches (a load balancer in front of several nodes) can then
-// tell a token the fleet signed from a forged one, and log that the bridge URL
-// addresses the wrong node rather than that the route is under attack. See
-// [runtoken.Material] and [Bridge.resolve]. A keyring that cannot sign for the
-// fleet is refused ([runtoken.ErrNoKeyring]) rather than given a per-process
-// key: there is no node without one, so reaching here with one is a mistake to
-// name, not a posture to degrade into.
+// The engine OPENS a run's session and mints its endpoint, and the node holding
+// the run's seat serves it: a session is a live tool surface, so no other node
+// can (see [Bridge.resolve]). The token is signed from the FLEET's key
+// material, and that is what lets the session outlive the process that minted
+// it: a node that restarted, or the peer that took the run's seat over, opens
+// the job's session again and verifies the very token the box holds. It also
+// lets a peer that a misrouted call reaches (a load balancer in front of
+// several nodes) tell a token the fleet signed from a forged one, and log that
+// the bridge URL addresses the wrong node rather than that the route is under
+// attack. See [runtoken.Material]. A keyring that cannot sign for the fleet is
+// refused ([runtoken.ErrNoKeyring]) rather than given a per-process key: there
+// is no node without one, so reaching here with one is a mistake to name, not a
+// posture to degrade into.
 //
 // An unset base URL builds NOTHING, and that is a real configuration rather
 // than an error: most deployments run no box mode. The route is then absent,

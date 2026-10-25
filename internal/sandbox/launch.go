@@ -182,11 +182,20 @@ type LaunchRequest struct {
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
 	// name the job before its box can act: a box-mode run's bridge
 	// session, which records every call the box makes under its own job
-	// ([BridgeAppend.Launch]). Learned any later — from the row, say, on the
-	// session's first append — the name would be whichever job the row held
-	// by then, which for a call that outlived its job is the next one. Nil
-	// tells nobody.
-	Opened func(launchID string)
+	// ([BridgeAppend.Launch]), and whose endpoint names the job it serves.
+	// Learned any later — from the row, say, on the session's first append
+	// — the name would be whichever job the row held by then, which for a
+	// call that outlived its job is the next one.
+	//
+	// It answers the MCP servers the job's box is given BESIDE MCPServers:
+	// the ones whose address can only be minted once the job has a name.
+	// A box-mode run's tool bridge is one — its token names the job, so a
+	// node that takes the run over can serve the job's session again under
+	// the token the box already holds, and a relaunch's box cannot reach
+	// its predecessor's. A name it answers that MCPServers also has
+	// replaces it. An error abandons the launch, before any box exists.
+	// Nil tells nobody and adds nothing.
+	Opened func(launchID string) (map[string]MCPServer, error)
 
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
@@ -300,9 +309,22 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// gives it back through [Coordinator.abandon].
 	c.countRun(req.Turn.AgentHandle, StatusLaunching)
 	// THE JOB IS NAMED BEFORE ITS BOX EXISTS, so nothing the box does can be
-	// filed under a job that is not its own — see [LaunchRequest.Opened].
+	// filed under a job that is not its own — see [LaunchRequest.Opened] —
+	// and what it answers joins the box's servers, on the request every step
+	// below reads: the job's own runner and the standing instructions that
+	// list the servers a box has.
 	if req.Opened != nil {
-		req.Opened(opened.LaunchID)
+		named, err := req.Opened(opened.LaunchID)
+		if err != nil {
+			c.abandon(ctx, m, req, fence, "")
+			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", err)
+		}
+		if len(named) > 0 {
+			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named))
+			maps.Copy(servers, req.MCPServers)
+			maps.Copy(servers, named)
+			req.MCPServers = servers
+		}
 	}
 
 	box, runner, reused, err := acquire(ctx, m, req)

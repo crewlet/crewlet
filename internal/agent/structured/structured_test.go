@@ -3,7 +3,9 @@ package structured_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/structured"
@@ -132,6 +134,57 @@ func TestTheLastSubmissionWins(t *testing.T) {
 	got, _ := tl.Value()
 	if got.Note != "second" || got.Decision != "no" {
 		t.Errorf("captured %+v, want the correction", got)
+	}
+}
+
+// SUBMISSIONS MADE AT ONCE LAND WHOLE. A box-mode run's bridge hands a
+// response's calls to the surface side by side, with nothing that runs a
+// submission alone, so two submissions — and the read of one — meet on the
+// tool. Whichever lands last is the answer, and it is one submission: never
+// one call's decision beside another's note.
+//
+// Mutation: drop the lock, and the race detector reports the writes (this
+// package's tests run under -race), or a read returns a torn pair.
+func TestSubmissionsMadeAtOnceLandWhole(t *testing.T) {
+	t.Parallel()
+	tl := tool()
+	ctx := context.Background()
+	const calls = 32
+	submissions := make([]map[string]any, calls)
+	for i := range submissions {
+		decision := "yes"
+		if i%2 == 1 {
+			decision = "no"
+		}
+		submissions[i] = args(t, fmt.Sprintf(`{"decision":%q,"note":"%s-%d"}`, decision, decision, i))
+	}
+	whole := func(a answer) bool { return strings.HasPrefix(a.Note, a.Decision+"-") }
+
+	var wg sync.WaitGroup
+	torn := make(chan answer, calls)
+	for i := range calls {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if res, err := tl.Call(ctx, submissions[i]); err != nil || res.Failed {
+				t.Errorf("submission %d: %v %+v", i, err, res)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if got, called := tl.Value(); called && !whole(got) {
+				torn <- got
+			}
+		}()
+	}
+	wg.Wait()
+	close(torn)
+	for got := range torn {
+		t.Errorf("a read mid-submission returned %+v: one call's decision beside another's note", got)
+	}
+	got, called := tl.Value()
+	if !called || !whole(got) {
+		t.Errorf("captured %+v (called=%v), want one whole submission", got, called)
 	}
 }
 

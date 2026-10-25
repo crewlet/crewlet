@@ -224,17 +224,59 @@ type Resume struct {
 	Answer string
 
 	// Bridged is what a BOX-MODE run called over the MCP bridge, read from
-	// the run's own durable row.
+	// the run's own durable row, in the order the row holds them — each
+	// carries its place in the order the bridge admitted them
+	// ([BridgedCall.Seq]), which is the order the resume records them in.
 	//
 	// It is the whole record for that shape, and it has to come from the
 	// row rather than from memory: the process resuming may not be the one
 	// that launched, so its surface is fresh and has executed nothing.
 	// Ignored by a host-mode resume, which re-enters the conversation
 	// instead.
-	Bridged []ledger.Call
+	Bridged []BridgedCall
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
+}
+
+// BridgedCall is one call a box-mode run made over the MCP bridge, as the
+// run's durable row recorded it: the call the turn's record reads, and when it
+// ran, for how long and who answered — what the phase record's execution for
+// it states.
+//
+// ITS OWN TYPE rather than a [ledger.Call], which is the delivery check's and
+// the ledger's view of a call and has nowhere to put a call's place or its
+// timing: carried as one, a resumed box run's phase record stated every call
+// the run made as untimed, unattributed and in the order the calls happened to
+// finish.
+type BridgedCall struct {
+	ledger.Call
+
+	// Seq is the call's place in the order the bridge admitted the run's
+	// calls, from 1 — the order the CLI made them in, which is not the order
+	// they finished in when it made several at once.
+	Seq int
+
+	// StartedAt is when the call was handed to the seat's surface, and
+	// Duration how long the surface took to answer. Both zero on a call
+	// answered without running — arguments that did not parse — and zero
+	// means "not measured", never "instant".
+	StartedAt time.Time
+	Duration  time.Duration
+
+	// Origin and Server are who answered the call — a builtin, or an MCP
+	// tool and the server it came from — and empty where no tool did.
+	Origin string
+	Server string
+}
+
+// bridgedLedger is a box-mode run's calls as the turn's record reads them.
+func bridgedLedger(bridged []BridgedCall) []ledger.Call {
+	out := make([]ledger.Call, 0, len(bridged))
+	for _, call := range bridged {
+		out = append(out, call.Call)
+	}
+	return out
 }
 
 // RunRecord is what a phase event says about the box a phase ran in.

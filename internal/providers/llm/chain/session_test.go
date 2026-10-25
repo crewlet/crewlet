@@ -42,7 +42,10 @@ func (s *surface) AnnotationsOf(string) mcp.Annotations { return mcp.Annotations
 func (s *surface) Detached(string) bool                 { return false }
 func (s *surface) Phase() string                        { return "execute" }
 
-func (s *surface) Execute(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+// Admit admits a call to a surface that keeps no call log: it runs as it is.
+func (s *surface) Admit(string, map[string]any) toolloop.Admitted { return s.execute }
+
+func (s *surface) execute(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ran = append(s.ran, call.Name)

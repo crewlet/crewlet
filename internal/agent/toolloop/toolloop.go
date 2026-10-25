@@ -171,19 +171,32 @@ type Surface interface {
 	// by side would each start work a parked phase can answer for only one.
 	Detached(name string) bool
 
-	// Execute runs one call. It returns a ToolResult rather than an error
-	// because a failing tool is ORDINARY: its message goes back to the
-	// model, which is expected to react to it. A Go error from this method
-	// means the surface itself broke.
+	// Admit fixes one call's place in its run's call log NOW — the order the
+	// repeat count an operation id carries is read in — and returns the call
+	// bound to that place, to be run once.
 	//
-	// CALLED CONCURRENTLY: a CLI may run a response's calls at once, and
-	// each is handed to the surface on its own goroutine — every call but a
-	// terminator or a [Surface.Detached] one, which runs alone.
-	Execute(ctx context.Context, call llm.ToolCall) (ToolResult, error)
+	// AT ADMISSION, NOT AT RETURN, because a CLI makes a response's calls at
+	// once and they return in whatever order their tools finish: a count read
+	// against the order calls return in is one a re-run, making the same
+	// calls, does not reproduce. The loop admits each call under its own
+	// lock, in the order the calls arrive.
+	//
+	// CALLED CONCURRENTLY with the calls it returns, which run side by side:
+	// every call but a terminator or a [Surface.Detached] one, which runs
+	// alone.
+	Admit(name string, args map[string]any) Admitted
 
 	// Phase names the phase for telemetry.
 	Phase() string
 }
+
+// Admitted is one call a [Surface] admitted, bound to its place in the run's
+// call log: run it once, with the call as the CLI made it.
+//
+// It returns a ToolResult rather than an error because a failing tool is
+// ORDINARY: its message goes back to the model, which is expected to react to
+// it. A Go error means the surface itself broke.
+type Admitted func(ctx context.Context, call llm.ToolCall) (ToolResult, error)
 
 // ToolResult is what one tool call produced.
 type ToolResult struct {
@@ -270,7 +283,7 @@ type Execution struct {
 	// monotonic clock, so a wall-clock correction mid-call cannot report a
 	// negative or inflated one.
 	//
-	// Measured HERE, around [Surface.Execute], because the question a reader
+	// Measured HERE, around the [Admitted] call, because the question a reader
 	// asks of a slow round is which call held it: the round's own span
 	// covers the model's request only, and the phase's covers everything.
 	// Both are zero on an execution nothing timed — a call answered rather

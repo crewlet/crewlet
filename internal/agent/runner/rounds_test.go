@@ -964,9 +964,9 @@ func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 			buildOpts{agentRun: &recordingLauncher{}, calls: calls, resume: &runner.Resume{
 				State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 				Answer: "done",
-				Bridged: []ledger.Call{
+				Bridged: bridgedRun([]ledger.Call{
 					{Name: "jira_create", Args: map[string]any{"summary": "bridged"}},
-				},
+				}),
 			}})
 		if _, _, err := r.Resume(context.Background(), closed); err != nil {
 			t.Fatalf("Resume: %v", err)
@@ -1024,7 +1024,7 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 				agentRun: &recordingLauncher{}, resume: &runner.Resume{
 					State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 2},
 					Answer:  "done",
-					Bridged: []ledger.Call{{Name: runner.SubmitWorkTool, Args: args}},
+					Bridged: bridgedRun([]ledger.Call{{Name: runner.SubmitWorkTool, Args: args}}),
 				}})
 		w, _, err := r.Resume(context.Background(), history)
 		if err != nil {

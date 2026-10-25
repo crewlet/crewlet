@@ -481,10 +481,15 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	req := launchReq("t1")
-	req.Opened = func(launch string) {
+	req.MCPServers = map[string]MCPServer{
+		"jira": {Name: "jira", Transport: TransportStdio, Command: "jira-mcp"},
+	}
+	req.Opened = func(launch string) (map[string]MCPServer, error) {
 		witness.mu.Lock()
 		defer witness.mu.Unlock()
 		witness.named = append(witness.named, launch)
+		return map[string]MCPServer{"crewlet": {Name: "crewlet", Transport: TransportHTTP,
+			URL: "https://engine.example.com/mcp/" + launch}}, nil
 	}
 	if _, err := rig.launchVia(t.Context(), manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -498,8 +503,64 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 		t.Fatalf("the box was created after %d namings, want 1 — the job must be named first",
 			witness.namedAtCreate)
 	}
-	if run := rig.get("t1"); len(witness.named) != 1 || witness.named[0] != run.LaunchID {
+	run := rig.get("t1")
+	if len(witness.named) != 1 || witness.named[0] != run.LaunchID {
 		t.Fatalf("the launch named %v, and the row holds job %q", witness.named, run.LaunchID)
+	}
+
+	// AND WHAT THE NAMING ANSWERS REACHES THE BOX beside the servers the
+	// launch was given: an endpoint that names the job, which only exists
+	// once the job does.
+	started := rig.runner.Started()
+	if len(started) != 1 {
+		t.Fatalf("%d jobs started, want 1", len(started))
+	}
+	servers := started[0].MCPServers
+	if servers["crewlet"].URL != "https://engine.example.com/mcp/"+run.LaunchID ||
+		servers["jira"].Command != "jira-mcp" {
+		t.Errorf("the box was given %+v, want the seat's own server and the job's endpoint", servers)
+	}
+	if !strings.Contains(started[0].System, "crewlet, jira") {
+		t.Errorf("the run's standing instructions do not list the servers it was given:\n%s",
+			started[0].System)
+	}
+}
+
+// A JOB THAT CANNOT BE NAMED TO WHAT SERVES ITS BOX IS NOT LAUNCHED. The naming
+// is what mints the box's endpoint, and a box-mode run with no endpoint is a
+// coding agent with none of the seat's tools: the launch is abandoned before
+// any box exists, and its row ended, rather than started blind.
+//
+// Mutation: ignore the naming's error, and a box is created and its job run.
+func TestALaunchWhoseJobCannotBeNamedStartsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	witness := &openedWitness{FakeProvider: rig.provider}
+	manager, err := NewManager(ManagerOptions{
+		Providers: map[Placement]Provider{Direct: witness},
+		Runners:   map[string]Runner{"claude-code": rig.runner},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	req := launchReq("t1")
+	req.Opened = func(string) (map[string]MCPServer, error) {
+		return nil, errors.New("no endpoint for the job")
+	}
+	if _, err := rig.launchVia(t.Context(), manager, req); err == nil {
+		t.Fatal("a launch whose job could not be named started")
+	}
+	witness.mu.Lock()
+	created := witness.created
+	witness.mu.Unlock()
+	if created {
+		t.Error("a box was created for a job nothing can serve")
+	}
+	if started := rig.runner.Started(); len(started) != 0 {
+		t.Errorf("%d jobs started for a launch that failed", len(started))
+	}
+	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+		t.Errorf("the abandoned launch left its row (found %v, err %v)", found, err)
 	}
 }
 

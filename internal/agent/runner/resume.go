@@ -86,7 +86,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// bridge — or a call made again after a different one would take its
 	// first copy's operation id. See [turnctx.CallLog].
 	seedCalls(r.cfg.Turn.Context.CallLog(), history, parkedCalls(state),
-		r.cfg.Resume.Bridged)
+		bridgedLedger(r.cfg.Resume.Bridged))
 
 	if state.AgentRun {
 		// THE STATE DECIDES, NOT THE CONFIG. A run launched as an agentic

@@ -1284,8 +1284,8 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"round":     ex.Round,
 		}
 		// ONLY WHAT WAS MEASURED. An execution nobody timed — a call
-		// whose arguments did not parse, answered rather than run, or a
-		// box-mode run's bridged call — has no start, and writing
+		// whose arguments did not parse, answered rather than run, on
+		// this host or over a box's bridge — has no start, and writing
 		// `duration_ms: 0` for it would state an instant call. Absent is
 		// the honest spelling of "not recorded", and it is the one every
 		// reader already treats that way.

@@ -119,7 +119,7 @@ func newGated(t *testing.T, ctx context.Context, extra ...tools.Callable) *gated
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(turn)
 	g := &gated{fixture: f}
 	f.session = &mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Engineer",
+		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger,
 		Fence: func() error {
 			if err := g.fenceErr.Load(); err != nil {
@@ -396,7 +396,7 @@ func TestClosingOneRunLeavesAnotherServing(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	first := f.open(t)
-	other := &mcpbridge.Session{RunID: "run-2", Handle: "dev", Role: "Engineer",
+	other := &mcpbridge.Session{RunID: "run-2", Launch: "job-2", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger}
 	second := f.bridge.Open(t.Context(), other)
 	keep := dial(t, second)

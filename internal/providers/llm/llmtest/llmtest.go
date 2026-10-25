@@ -80,6 +80,12 @@ type Call struct {
 	// Exit makes the CLI die once GiveUp has passed instead: it closes its
 	// end of the session — EOF, to the host — and its run fails.
 	Exit bool
+
+	// Wait, when set, holds the call until it is closed (after
+	// [Script.Before]), so a case can make one call of a Parallel response
+	// reach the host only once another has begun — an arrival order the
+	// scheduler would otherwise choose.
+	Wait <-chan struct{}
 }
 
 // Run is what one Complete plays.
@@ -459,6 +465,12 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 	one := func(c Call) {
 		if s.Before != nil {
 			s.Before(c.Name)
+		}
+		if c.Wait != nil {
+			select {
+			case <-c.Wait:
+			case <-ctx.Done():
+			}
 		}
 		if c.Native {
 			// The CLI's own tool: it runs it itself — for as long as

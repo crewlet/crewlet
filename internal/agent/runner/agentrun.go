@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -124,10 +126,13 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 
 	// The submission tool is on the surface for the same reason it is in a
 	// host-mode pass: it is how the executor says what it did. The CLI calls
-	// it over the bridge, which records the call in the run's durable log —
-	// and the resume reads it from there, through a fresh submission tool,
-	// in whatever process collects the run: the value this one captures is
-	// never read, since this surface is gone by then.
+	// it over the bridge, which records the call in the run's durable log,
+	// and the resume reads the outcome from THERE — [Runner.resumeAgentRun]
+	// replays the logged calls through a fresh submission tool every time,
+	// in whichever process collects the run, this one included. So the
+	// value this tool captures is never read: what it does is VALIDATE each
+	// submission as it is made, so the CLI's model is told about one it can
+	// correct while it is still running.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
@@ -213,6 +218,81 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 	r.suspension = &Suspension{State: state}
 }
 
+// ReopenAgentRun rebuilds the tool surface a box-mode run's box is still
+// calling, for a node that has taken the run over while it works — this
+// process after a restart, or the seat's next holder — so the run's bridge
+// session can be opened again (internal/api/mcpbridge). It returns the
+// surface, and the meter the session's calls are counted on.
+//
+// FROM THE RUN'S OWN STATE, as [Runner.Resume] rebuilds a parked executor:
+// the surface its launch recorded — its active tools and the skills it had
+// loaded — and then what the run did to it since, read off the calls it made
+// over the bridge, every tool it activated and every skill it loaded. Rebuilt
+// from the launch's record alone, the box would find tools it had activated
+// gone and the tools a loaded skill unlocked refused again.
+//
+// AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
+// rounds and every call the run has made over the bridge, so a call made from
+// here counts its repeats from the whole run and derives the operation id the
+// run's own process would have; a submission cites those calls as well as the
+// ones made from here; and the meter starts from what the row says the run's
+// bridged calls have cost so far ([NewBridgedSpendFrom]). spent is that total
+// and bridged the row's calls, in any order.
+//
+// It launches nothing and suspends nothing: the run is going already, and its
+// collection resumes the turn as it would have. A state that is not a box-mode
+// run's is refused — a host-mode executor parked on a detached run has no box
+// calling it.
+func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
+	bridged []BridgedCall, spent Bridged,
+) (*tools.Surface, *BridgedSpend, error) {
+	if !state.AgentRun {
+		return nil, nil, fmt.Errorf("runner: reopening a box-mode run: the parked " +
+			"state is a host-mode executor's conversation, which no box is calling")
+	}
+	history := state.Iterations
+	called := bridgedLedger(inAdmissionOrder(bridged))
+	seedCalls(r.cfg.Turn.Context.CallLog(), history, called)
+
+	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
+	var surface *tools.Surface
+	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
+		decodeWork(r.cfg.Reply,
+			func() []ledger.Call {
+				return turn.Record(history, append(slices.Clone(called), calls(surface)...))
+			},
+			func() turn.Surface { return describe(surface) }))
+
+	active := slices.Clone(state.ActiveTools)
+	for _, call := range called {
+		if call.Name == ActivateTool && !call.Failed {
+			active = append(active, activationTarget(call.Args))
+		}
+	}
+	meter := NewBridgedSpendFrom(spent)
+	built, err := r.surfaceWith(ctx, r.meterFor(meter), phase.Execute, state.Round, snapshot, submit,
+		active, state.LoadedSkills...)
+	if err != nil {
+		return nil, nil, err
+	}
+	surface = built
+
+	// THE SKILLS IT LOADED, told to the guard the surface was just armed
+	// with, by the guard's own reading of a call — the one rule for which
+	// call unlocks what. After the surface is built, because whether a guard
+	// is armed at all depends on the loader being active, which an
+	// activation over the bridge may be what made it.
+	r.mu.Lock()
+	guard := r.guard
+	r.mu.Unlock()
+	for _, call := range called {
+		if !call.Failed {
+			guard.Observe(call.Name, call.Args)
+		}
+	}
+	return surface, meter, nil
+}
+
 // resumeAgentRun turns a finished box run into the turn's Work.
 //
 // THE RUN'S OWN TOOL CALLS ARE THE RECORD, replayed from the durable log the
@@ -230,9 +310,11 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // `history` is the turn's closed rounds, which its submission's citations read
 // beside the run's own calls — see [turn.Record].
 func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
-	state execstate.State, answer string, bridged []ledger.Call,
+	state execstate.State, answer string, run []BridgedCall,
 ) (turn.Work, turn.Surface, error) {
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
+	run = inAdmissionOrder(run)
+	bridged := bridgedLedger(run)
 
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
@@ -251,7 +333,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 
 	work, described, err := r.finishWork(ctx, state.Round, work{
 		submit:   submit,
-		res:      agentRunResult(answer, bridged),
+		res:      agentRunResult(answer, run),
 		surface:  surface,
 		snapshot: snapshot,
 		run:      r.cfg.Resume.Run,
@@ -283,12 +365,18 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // bridge's call log carries no round of its own and inventing one per call
 // would claim a structure nobody observed, splitting one run into thirty
 // rounds of one call each.
-func agentRunResult(answer string, bridged []ledger.Call) phaseResult {
+//
+// EACH CALL WITH ITS TIMING AND WHO ANSWERED IT, as the bridge recorded them,
+// in the order the run made them: a box-mode run's calls were the only ones a
+// phase card could not place on a timeline or name a server for.
+func agentRunResult(answer string, bridged []BridgedCall) phaseResult {
 	res := toolloop.Result{Text: answer, RoundsUsed: 1}
 	for _, call := range bridged {
 		res.Executions = append(res.Executions, toolloop.Execution{
 			Round: 1, Name: call.Name, Args: call.Args,
 			Output: call.Result, Failed: call.Failed,
+			StartedAt: call.StartedAt, Duration: call.Duration,
+			Origin: call.Origin, Server: call.Server,
 		})
 	}
 	if strings.TrimSpace(answer) != "" {
@@ -301,12 +389,25 @@ func agentRunResult(answer string, bridged []ledger.Call) phaseResult {
 	return phaseResult{Text: answer, Rounds: 1, Result: res}
 }
 
+// inAdmissionOrder is a run's bridged calls in the order the bridge admitted
+// them — the order the CLI made them in — where the row holds them in the
+// order they FINISHED: each is appended once it returns, and a CLI that makes
+// several calls at once finishes them in whatever order their tools take. The
+// record states the order the run acted in, and the replay below reads a
+// submission made after another as the correction, whichever returned first.
+// Stable, so calls the row carries no place for keep the row's order.
+func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
+	out := slices.Clone(bridged)
+	slices.SortStableFunc(out, func(a, b BridgedCall) int { return cmp.Compare(a.Seq, b.Seq) })
+	return out
+}
+
 // replaySubmission feeds the run's own submit_work call back through a fresh
 // submission tool, so the outcome the CLI declared is the one the turn reports.
 //
 // LAST WRITE WINS, which is the submission contract everywhere else: a second
-// call is a correction, and replaying in order is what makes that true here
-// too. A call the decoder rejects is skipped rather than failing the resume —
+// call is a correction, and replaying in the order the run made its calls is
+// what makes that true here too. A call the decoder rejects is skipped rather than failing the resume —
 // the run happened, its other calls happened, and a malformed submission is
 // exactly the "said nothing" case the rescue path exists for.
 func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []ledger.Call) {

@@ -1213,7 +1213,10 @@ func (s *phaseTools) AnnotationsOf(string) mcp.Annotations { return mcp.Annotati
 func (s *phaseTools) Detached(string) bool                 { return false }
 func (s *phaseTools) Phase() string                        { return "execute" }
 
-func (s *phaseTools) Execute(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+// Admit admits a call to a surface that keeps no call log: it runs as it is.
+func (s *phaseTools) Admit(string, map[string]any) toolloop.Admitted { return s.execute }
+
+func (s *phaseTools) execute(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.got = append(s.got, call)
