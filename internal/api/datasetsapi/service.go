@@ -136,21 +136,22 @@ func New(opts Options) (*Service, error) {
 // precondition, as every artifact route does, and the handler decides the
 // read on the artifact through the artifacts' own gate before anything is
 // read. The catalogue is the engine's own vocabulary, any resolved caller's.
-// A source's preview is a builder's, so it asks what making a board asks
-// (`create_artifact`); the rows themselves are decided by the source's own
-// question, as the viewer, exactly as a board's dataset over it is.
+// A source's preview is a builder's read, so it asks the artifacts app as making
+// a board does, on a read verb of its own (`artifacts.source.read`); the rows
+// themselves are decided by the source's own question, as the viewer, exactly
+// as a board's dataset over it is.
 func (s *Service) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(s.chart))
 	pre := authz.Policy{Action: authz.ActionArtifactList, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
-	create := authz.Policy{Action: authz.ActionArtifactCreate, Object: func(*http.Request) authz.Object {
+	preview := authz.Policy{Action: authz.ActionDashboardSourceRead, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
 	return errors.Join(
 		router.Handle("GET /artifacts/{id}/versions/{n}/sources/{dataset}", pre, http.HandlerFunc(s.dataset)),
 		router.Handle("GET /artifacts/sources", pre, http.HandlerFunc(s.catalogue)),
-		router.Handle("GET /artifacts/sources/preview/{name}", create, http.HandlerFunc(s.preview)),
+		router.Handle("GET /artifacts/sources/preview/{name}", preview, http.HandlerFunc(s.preview)),
 	)
 }
 
@@ -306,7 +307,7 @@ func (s *Service) dataset(w http.ResponseWriter, r *http.Request) {
 func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	p, how := iam.From(r.Context())
 	if how != iam.Resolved {
-		operator.RefuseDecision(w, r, authz.ActionArtifactCreate, authz.Decision{Err: iam.Reason(r.Context())})
+		operator.RefuseDecision(w, r, authz.ActionDashboardSourceRead, authz.Decision{Err: iam.Reason(r.Context())})
 		return
 	}
 	src, ok := dashspec.Source(r.PathValue("name"))

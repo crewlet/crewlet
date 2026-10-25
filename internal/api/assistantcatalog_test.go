@@ -1,6 +1,8 @@
 package api_test
 
 import (
+	"maps"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/api/operator"
@@ -66,20 +69,19 @@ func everySurfaceApp(t *testing.T) *api.App {
 	return newApp(t, opts)
 }
 
-// EVERY GUARDED ROUTE IS COVERED FOR THE ASSISTANT, by exactly one exposure
-// decision, and a route whose verb the authority table keeps from the
-// assistant can only be Never.
+// THE ASSISTANT'S ROUTE TABLE IS THE APP'S OWN, LESS WHAT IT NEVER TAKES.
 //
-// The guarded routes are read from the API's own route table, each with the
-// verb it was mounted with, so a route added to any surface is a red build
-// that says "classify this route for the assistant"; the overview reads the
-// stream service serves are walked beside them. Which decisions are forced is
-// DERIVED from the table rather than listed: a verb whose row is AssistNever
-// (every iam, secrets, setup, fleet, purge and transfer verb among them, held
-// by internal/authz's own walk) or that needs a person present cannot be
-// exposed. Mutation: expose `GET /secrets` as a read in the table, or delete a
-// route's row, and this names it.
-func TestEveryGuardedRouteIsCoveredForTheAssistant(t *testing.T) {
+// The generic API tools name the routes App.AssistantRoutes hands the
+// catalogue, so that table is walked against the one the App mounted: every
+// guarded route is in it with the verb it was mounted with, unless the edge
+// refuses a grant its path (the credential surface, the socket, the MCP
+// transports, the webhooks, the assistant's own routes); every route it
+// names is mounted; and once bound, a route whose verb is on the human-only
+// list is offered to no model (catalog.NewRouteTable leaves it out), while
+// every other route is. Mutation: hand the catalogue a route the App does
+// not mount, drop the guarded routes from AssistantRoutes, or keep a never
+// verb in the bound table, and this fails.
+func TestTheAssistantRouteTableIsTheAppsOwn(t *testing.T) {
 	t.Parallel()
 	app := everySurfaceApp(t)
 	policies := app.Policies()
@@ -87,37 +89,71 @@ func TestEveryGuardedRouteIsCoveredForTheAssistant(t *testing.T) {
 		t.Fatalf("the route table holds %d guarded routes, so the walk is not reading "+
 			"the table a node serves", len(policies))
 	}
-	rows := map[string][]catalog.Exposure{}
-	for _, e := range catalog.Exposures() {
-		if e.Route != "" {
-			rows[e.Route] = append(rows[e.Route], e)
+	mounted := app.Routes()
+	routes := map[string]catalog.Route{}
+	for _, r := range app.AssistantRoutes() {
+		routes[r.Pattern] = r
+		if _, guarded := policies[r.Pattern]; !guarded && !slices.Contains(mounted, r.Pattern) {
+			t.Errorf("the assistant may name %s, which the App does not mount", r.Pattern)
 		}
 	}
-	overview := app.OverviewRoutes()
 	for pattern, policy := range policies {
-		got := rows[pattern]
-		if len(got) != 1 {
-			t.Errorf("%s (%s) has %d assistant exposure rows; give it exactly one in "+
-				"internal/assistant/catalog's routes", pattern, policy.Action, len(got))
+		method, path, _ := strings.Cut(pattern, " ")
+		if auth.AssistRefusedPath(path) || method == http.MethodOptions {
+			if _, listed := routes[pattern]; listed {
+				t.Errorf("%s is refused a grant at the edge and the assistant may name it",
+					pattern)
+			}
 			continue
 		}
-		class, _ := authz.AssistOf(policy.Action)
-		presence, _ := authz.PresenceOf(policy.Action)
-		if (class == authz.AssistNever || presence != authz.PresenceOptional) &&
-			got[0].As != catalog.AsNever {
-			t.Errorf("%s is decided by %s, which the authority table keeps from the "+
-				"assistant, and the catalogue exposes it as %s", pattern, policy.Action, got[0].As)
+		if got, listed := routes[pattern]; !listed || got.Action != policy.Action {
+			t.Errorf("%s (%s) is not in the assistant's table as mounted: %+v", pattern,
+				policy.Action, got)
 		}
 	}
-	for _, pattern := range overview {
-		if len(rows[pattern]) != 1 {
-			t.Errorf("the overview read %s has %d assistant exposure rows, want one",
-				pattern, len(rows[pattern]))
+	table, err := catalog.NewRouteTable(app.AssistantRoutes())
+	if err != nil {
+		t.Fatalf("the App's assistant routes do not make a table: %v", err)
+	}
+	for pattern, r := range routes {
+		class, _ := authz.AssistOf(r.Action)
+		_, bound := table.Lookup(pattern)
+		if never := r.Action != "" && class == authz.AssistNever; bound == never {
+			t.Errorf("%s (%s, %q to the assistant) is bound %v", pattern, r.Action, class, bound)
 		}
 	}
-	for pattern := range rows {
-		if _, guarded := policies[pattern]; !guarded && !slices.Contains(overview, pattern) {
-			t.Errorf("the catalogue decides about %s, which this build does not mount", pattern)
+}
+
+// EVERY ROUTE THE ASSISTANT MAY NAME IS DOCUMENTED, AND THE REFERENCE NAMES
+// NOTHING THE APP DOES NOT MOUNT.
+//
+// describe_api answers a route's documentation from the API reference
+// embedded in the binary (docs/reference/api-endpoints.md), so the reference
+// is held to the route table both ways: every route the assistant may name has
+// its row or its heading there, whatever its wildcards are called, and every
+// route the reference documents on a path the assistant could reach is one the
+// App mounts. Mutation: delete a route's row from the reference, or document a
+// route nothing serves, and this names it.
+func TestEveryAssistantRouteIsDocumented(t *testing.T) {
+	t.Parallel()
+	app := everySurfaceApp(t)
+	mounted := slices.Concat(app.Routes(), slices.Collect(maps.Keys(app.Policies())))
+	for _, r := range app.AssistantRoutes() {
+		if !catalog.RouteDocumented(r.Pattern) {
+			t.Errorf("%s is a route the assistant may name and docs/reference/"+
+				"api-endpoints.md documents it nowhere", r.Pattern)
+		}
+	}
+	for _, key := range catalog.DocumentedRoutes() {
+		method, path, _ := strings.Cut(key, " ")
+		if !slices.Contains([]string{http.MethodGet, http.MethodHead, http.MethodPost,
+			http.MethodPut, http.MethodPatch, http.MethodDelete}, method) ||
+			auth.AssistRefusedPath(path) {
+			continue
+		}
+		if !slices.ContainsFunc(mounted, func(p string) bool { return catalog.Covers(key, p) }) {
+			t.Errorf("docs/reference/api-endpoints.md documents %s, which the App does "+
+				"not mount", key)
 		}
 	}
 }
@@ -157,9 +193,11 @@ func TestEveryAssistantToolRouteIsMounted(t *testing.T) {
 				question = strings.TrimPrefix(req.Path, "/query/")
 			case isNamed:
 			case slices.Contains(app.OverviewRoutes(), route):
-				if !catalog.ReadsRoute(route) {
-					t.Errorf("%s reads the overview route %s, which the table does not read",
-						tool.Name, route)
+				if !slices.ContainsFunc(catalog.Exposures(), func(e catalog.Exposure) bool {
+					return e.Route == route && e.Name == tool.Name
+				}) {
+					t.Errorf("%s reads the overview route %s, which no exposure row names "+
+						"it on", tool.Name, route)
 				}
 				continue
 			default:

@@ -81,13 +81,12 @@ func mission(t *testing.T, fx *assistApp) string {
 // refused by the route itself (412), so nothing the person did not see is
 // overwritten. A person whose sign-in is not recent is asked to confirm it is
 // them (the row's step-up), through the assistant as at their keyboard. And
-// the exception is the principles alone: an exec grant for the whole company
-// document's write is refused, however it was approved.
+// the whole company document is the administrator's own as well: an approved
+// patch of it lands, and the read grant cannot send it.
 //
 // Mutation: send the write without the derived If-Match and the route answers
-// 428; mark config.principles.write assist-never and the approved change is
-// refused; mark config.org.write and config.write assist-approve (and drop the
-// org write's human-only bar) and the whole-document write is admitted.
+// 428; put config.principles.write or config.org.write on the human-only list
+// and the approved change is refused.
 func TestAnApprovedPrinciplesChangeIsThePagesOwnWrite(t *testing.T) {
 	t.Parallel()
 	fx, read := principlesApp(t)
@@ -146,19 +145,25 @@ func TestAnApprovedPrinciplesChangeIsThePagesOwnWrite(t *testing.T) {
 		t.Errorf("a stale change overwrote the mission with %q", got)
 	}
 
-	// THE WHOLE DOCUMENT stays the person's own: an exec grant for its patch
-	// route, on the verb that route is decided by, is refused, and so is the
-	// mission the patch names (the admission asks config.write of a
-	// setting), whatever was approved.
+	// THE WHOLE DOCUMENT IS THE ADMINISTRATOR'S OWN THROUGH THEIR ASSISTANT
+	// TOO (ADR-0051's parity): an approved patch of it, on the verb its route
+	// is decided by, lands as their own save would, and the read grant
+	// still cannot send it.
 	whole := exec.Request{Method: http.MethodPatch, Path: "/config",
 		Body: []byte(`{"mission":"Through the document.","_summary":"a mission"}`)}
-	if g, deriveErr := deriveOrNil(fx, approvedFor(whole, authz.ActionOrgWrite)); deriveErr == nil {
-		if resp, err := fx.disp.Do(t.Context(), g, whole); err == nil && resp.Status < 300 {
-			t.Errorf("the whole company document was written through the assistant: %d", resp.Status)
-		}
+	if resp, err := fx.disp.Do(t.Context(), read, whole); err != nil ||
+		resp.Status != http.StatusForbidden {
+		t.Errorf("the turn's read grant patched the document: %d %s, %v", resp.Status,
+			resp.Body, err)
 	}
-	if got := mission(t, fx); got != "Make every bill add up." {
-		t.Errorf("the mission reads %q after a write to the whole document", got)
+	resp, err = fx.disp.Do(t.Context(), fx.derive(t, approvedFor(whole, authz.ActionOrgWrite)),
+		whole)
+	if err != nil || resp.Status != http.StatusCreated {
+		t.Errorf("an approved patch of the document answered %d %s, %v", resp.Status,
+			resp.Body, err)
+	}
+	if got := mission(t, fx); got != "Through the document." {
+		t.Errorf("the mission reads %q after an approved patch of the document", got)
 	}
 }
 

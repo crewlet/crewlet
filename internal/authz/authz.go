@@ -624,14 +624,15 @@ const (
 	ReasonCeiling Reason = "ceiling"
 	// ReasonAssistRefused is a refusal a request made through the
 	// Dashboard Assistant gets and the person's own click would not: the
-	// verb is never the assistant's ([AssistNever]), or it needs a person
-	// at the keyboard ([rule.presence]). It names no permission, because
-	// none the person could hold would change it; they take the verb
-	// themselves.
+	// verb is never the assistant's ([AssistNever], the human-only list).
+	// It names no permission, because none the person could hold would
+	// change it; they take the verb themselves.
 	ReasonAssistRefused Reason = "assist_refused"
 	// ReasonAssistScope is a refusal an assistant grant gets when its
 	// scope does not reach the verb: a read grant asking a verb the
-	// assistant carries only as an approved request ([AssistApprove]).
+	// assistant carries only as an approved request ([AssistApprove]), or
+	// one that needs a person at the keyboard ([rule.presence]), which only
+	// the person's approval of the request supplies.
 	// The remedy is a proposal the person approves, never a permission.
 	ReasonAssistScope Reason = "assist_scope"
 )

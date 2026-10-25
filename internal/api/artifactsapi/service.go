@@ -236,6 +236,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	purge := authz.Policy{Action: authz.ActionArtifactPurge, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
+	// A FRAME'S TICKET IS A CREDENTIAL, so it is decided on a verb of its
+	// own before the artifact's read is (authz.ActionArtifactTicket).
+	ticket := authz.Policy{Action: authz.ActionArtifactTicket, Object: func(*http.Request) authz.Object {
+		return authz.Object{Kind: authz.KindArtifact}
+	}}
 	ready := authz.Policy{Action: authz.ActionArtifactReady, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
@@ -276,7 +281,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"DELETE /artifacts/{id}/assets/{asset}", pre, s.removeAsset},
 		{"PUT /artifacts/{id}/pin", pre, s.pin},
 		{"DELETE /artifacts/{id}/pin", pre, s.unpin},
-		{"POST /artifacts/{id}/tickets", pre, s.ticket},
+		{"POST /artifacts/{id}/tickets", ticket, s.ticket},
 		{patternFiles, pre, s.file},
 		{"GET /artifacts/{id}/versions/{n}/source", pre, s.source},
 		{"GET /artifacts/{id}/versions/{n}/deck", pre, s.deck},

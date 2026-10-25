@@ -39,7 +39,7 @@ func TestAMirrorRefusesAPrincipalWhoseStageMayNotAct(t *testing.T) {
 	a := &App{stream: mirrorService(t)}
 	for _, stage := range iam.Stages {
 		built := false
-		handler := a.serveFrom("GET /agents", stream.KindAgents, func(stream.Audience) any {
+		handler := a.serveFrom(stream.KindAgents, func(stream.Audience) any {
 			built = true
 			return stream.AgentRows{}
 		})

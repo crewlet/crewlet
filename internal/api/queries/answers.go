@@ -142,15 +142,6 @@ type Sources struct {
 	// on.
 	Acts func(ctx context.Context, p iam.Principal) ([]string, error)
 
-	// AssistReads reports whether the Dashboard Assistant's catalogue reads
-	// a question as a tool (internal/assistant/catalog's ReadsQuestion),
-	// which is the whole set of questions a principal acting through an
-	// assistant grant may ask: an Everybody or a Requires posture never
-	// reaches the authority table, so its assistant column cannot see those
-	// questions, and this is where they are gated instead (ADR-0051). Nil
-	// admits no assisted principal to any question, which fails closed.
-	AssistReads func(question string) bool
-
 	// Assistant answers whether the Dashboard Assistant is available to this
 	// principal on this node, and the first reason not
 	// (internal/api/assistantapi's Surface.Viewer), which `viewer` answers as
@@ -535,7 +526,6 @@ var ErrNotFound = errors.New("queries: no such record")
 // unknown rather than as a failure — the honest answer for a node that does not
 // have that surface at all.
 func Register(r *Registry, s Sources) {
-	r.assistWith(s.AssistReads)
 	if s.State != nil {
 		r.Register("agent", Everybody(), s.agent)
 		// ONE SEAT'S CALL IN FLIGHT, WHOLE: what a tab asks when an `agents`

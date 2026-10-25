@@ -801,9 +801,13 @@ var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, 
 	if err != nil {
 		return "", err
 	}
-	if r.Kind == proposal.RevisionCharter {
+	switch r.Kind {
+	case proposal.RevisionCharter:
 		// THE TAG IS A HEADER, not a field of the answer's body.
 		return principlesRevision(ctx, read)
+	case proposal.RevisionEntity, proposal.RevisionResource:
+		// A GENERIC CHANGE'S RESOURCE, re-read at the path it was read at.
+		return apiRevision(ctx, read, r)
 	}
 	var req exec.Request
 	path, versionAt, idAt := "", "", ""

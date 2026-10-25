@@ -2531,6 +2531,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// fed by this engine's appliers and presence hub.
 	opts.Rooms = artifactRooms
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
+	if err == nil {
+		err = assistantSvc.bindRoutes(app)
+	}
 	if err != nil {
 		closeAssistant(ctx, assistantSvc, log)
 		return nil, err

@@ -245,8 +245,8 @@ var relationClasses = []Class{
 //
 // THEN THE ASSISTANT'S BARS, for the same reason and with the same
 // concealment ([assistBar]): a request made through the Dashboard Assistant
-// is refused a row it never takes, a row that needs a person present, and,
-// under a read grant, a row it only carries as an approved request.
+// is refused a verb it never takes, and, under a read grant, a row it only
+// carries as an approved request or a row that needs a person present.
 //
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the permission cannot: an administrator must
@@ -293,7 +293,7 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if throughToken && r.presence == PresenceRequired {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonTokenRefused})
 	}
-	if bar, barred := assistBar(p, r); barred {
+	if bar, barred := assistBar(p, a, r); barred {
 		return concealed(ctx, p, r, o, chart, bar)
 	}
 	d := withApp(p, r, decideClass(ctx, p, r, o, chart))
@@ -331,13 +331,23 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 // TWO BARS, BOTH FACTS ABOUT THE VERB AND THE GRANT, so both are asked before
 // the class, beside the person-present bar they mirror:
 //
-//   - a row the assistant never takes, or one needing a person at the
-//     keyboard on ANY arm, is [ReasonAssistRefused]. The zero class reads as
-//     never, so a row nobody decided fails closed here as well as failing
-//     the build;
+//   - a verb the assistant never takes ([assistantNever]) is
+//     [ReasonAssistRefused]. The zero class reads as never, so a row nobody
+//     decided fails closed here as well as failing the build;
 //   - a read grant on a row the assistant only carries as an approved
-//     request is [ReasonAssistScope]. Any scope but exec reads as read, so a
-//     grant whose scope is missing or unknown reaches reads alone.
+//     request, or on a row needing a person at the keyboard on ANY arm, is
+//     [ReasonAssistScope]. Any scope but exec reads as read, so a grant whose
+//     scope is missing or unknown reaches reads alone.
+//
+// A PERSON-PRESENT ROW IS ADMITTED TO AN EXEC GRANT, and that is the presence
+// it asks for rather than an exception to it. The row keeps a machine token
+// out because a token proves nobody is at a keyboard; an exec grant carries
+// exactly one request whose server-rendered preview the person approved from
+// their own browser, a moment ago, under their own session and Origin, at the
+// step-up the row asks (ADR-0050). That approval IS the person at the
+// keyboard, deciding this request. A read grant carries no such gesture, so it
+// is refused every presence row, the self arm of a row that spares it for a
+// machine token included.
 //
 // BEFORE THE CLASS rather than after it admits, unlike the step-up: no answer
 // the chart could give would lift either bar, and asked after the class a
@@ -346,15 +356,16 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 // one verb its proposal named, because a write asks dotted verbs from inside
 // its tool; the request guard binds an exec grant to the one request the
 // person approved, which is what limits it to one write.
-func assistBar(p iam.Principal, r rule) (Decision, bool) {
+func assistBar(p iam.Principal, a Action, r rule) (Decision, bool) {
 	if !strings.HasPrefix(p.Via, iam.AssistPrefix) {
 		return Decision{}, false
 	}
+	class := assistOf(a, r)
 	switch {
-	case r.assist != AssistRead && r.assist != AssistApprove ||
-		r.presence != PresenceOptional:
+	case class != AssistRead && class != AssistApprove:
 		return Decision{Reason: ReasonAssistRefused}, true
-	case p.AssistScope != iam.AssistScopeExec && r.assist != AssistRead:
+	case p.AssistScope != iam.AssistScopeExec &&
+		(class != AssistRead || r.presence != PresenceOptional):
 		return Decision{Reason: ReasonAssistScope}, true
 	}
 	return Decision{}, false

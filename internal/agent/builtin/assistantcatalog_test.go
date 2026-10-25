@@ -10,19 +10,21 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 )
 
-// EVERY OPERATOR TOOL HAS ONE ASSISTANT EXPOSURE, and the decision can stand.
+// EVERY CURATED WRITE EXECUTES AS AN OPERATOR TOOL IT CAN STAND ON.
 //
-// Walked over the operator catalogue with every half on, so a tool added to
-// it is a red build that says "classify this tool for the assistant". A row
-// naming no tool is a decision about nothing; a write row's tool is never a
-// proven read; a tool whose verb the authority table keeps from the assistant
-// can only be Never. And each catalogue write that executes as an operator tool
-// is held to it: the destructive hint its tier is derived from is the tool's
-// own annotation, and every argument the model may send is one the act tool
-// declares, of the same type, so an approved request is one the tool reads
-// whole. Mutation: add a tool with no row, mark update_task not destructive,
-// or declare an argument create_work_item does not take, and this fails.
-func TestEveryOperatorToolHasOneAssistantExposure(t *testing.T) {
+// Walked over the operator catalogue with every half on. A row of the
+// catalogue's exposure table naming an operator tool this build does not serve
+// is a curated write that fails on every call; a row's tool is never a proven
+// read; and its verb is one the authority table lets an approval carry. Every
+// other operator tool is the person's own through the generic change, on the
+// act route, decided by its own verb (ADR-0051). And each catalogue write that
+// executes as an operator tool is held to it: the destructive hint its tier is
+// derived from is the tool's own annotation, and every argument the model may
+// send is one the act tool declares, of the same type, so an approved request
+// is one the tool reads whole. Mutation: name an operator tool that is not
+// served, mark update_task not destructive, or declare an argument
+// create_work_item does not take, and this fails.
+func TestEveryCuratedWriteExecutesAsAnOperatorTool(t *testing.T) {
 	t.Parallel()
 	served := map[string]map[string]any{}
 	for _, tool := range builtin.OperatorTools(operatorDeps(t)) {
@@ -31,33 +33,20 @@ func TestEveryOperatorToolHasOneAssistantExposure(t *testing.T) {
 	if len(served) < 40 {
 		t.Fatalf("the operator catalogue serves %d tools, so every half is not on", len(served))
 	}
-	rows := map[string][]catalog.Exposure{}
 	for _, e := range catalog.Exposures() {
-		if e.Tool != "" {
-			rows[e.Tool] = append(rows[e.Tool], e)
-		}
-	}
-	for name := range served {
-		got := rows[name]
-		if len(got) != 1 {
-			t.Errorf("%s has %d assistant exposure rows; give it exactly one in "+
-				"internal/assistant/catalog", name, len(got))
+		if e.Tool == "" {
 			continue
 		}
-		e := got[0]
-		if e.As == catalog.AsWriteTool && crewletmcp.ReadOnlyProven(builtin.AnnotationsFor(name)) {
-			t.Errorf("%s is a proven read and the catalogue proposes it as a write", name)
+		if _, ok := served[e.Tool]; !ok {
+			t.Errorf("%s executes as the operator tool %s, which this build does not serve",
+				e.Name, e.Tool)
+			continue
 		}
-		if class, _ := authz.AssistOf(authz.Action(name)); class == authz.AssistNever &&
-			e.As != catalog.AsNever {
-			t.Errorf("%s is kept from the assistant by the authority table and exposed as %s",
-				name, e.As)
+		if crewletmcp.ReadOnlyProven(builtin.AnnotationsFor(e.Tool)) {
+			t.Errorf("%s is a proven read and the catalogue proposes it as a write", e.Tool)
 		}
-	}
-	for name := range rows {
-		if _, ok := served[name]; !ok {
-			t.Errorf("the catalogue decides about the operator tool %s, which this build "+
-				"does not serve", name)
+		if class, _ := authz.AssistOf(authz.Action(e.Tool)); class != authz.AssistApprove {
+			t.Errorf("%s is %q to the assistant and a curated write proposes it", e.Tool, class)
 		}
 	}
 	for _, tool := range catalog.Tools() {

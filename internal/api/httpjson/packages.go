@@ -24,7 +24,7 @@ var goPackages = map[string]bool{
 	"canon": true, "canvasformat": true, "edits": true,
 	"cliagent": true, "clientsource": true,
 	"cliprofile": true, "codingagent": true, "colleague": true, "collect": true,
-	"compact": true, "config": true, "configapi": true, "configplane": true,
+	"compact": true, "config": true, "configapi": true, "configplane": true, "crewlet": true,
 	"confluence": true, "coord": true,
 	"coordtest": true, "costlimit": true, "credential": true, "cron": true,
 	"dashspec": true, "datadog": true, "datasetsapi": true,

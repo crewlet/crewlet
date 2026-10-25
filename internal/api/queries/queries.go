@@ -470,15 +470,6 @@ func (p Posture) IsEverybody() bool { return p.kind == postureEverybody }
 type Registry struct {
 	mu      sync.RWMutex
 	entries map[string]entry
-	// assistReads is [Sources.AssistReads], installed by [Register].
-	assistReads func(question string) bool
-}
-
-// assistWith installs the assistant's question gate.
-func (r *Registry) assistWith(reads func(question string) bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.assistReads = reads
 }
 
 // NewRegistry builds an empty registry.
@@ -566,7 +557,6 @@ func (r *Registry) Answer(ctx context.Context, what string, params map[string]an
 func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, error) {
 	r.mu.RLock()
 	e, known := r.entries[what]
-	reads := r.assistReads
 	r.mu.RUnlock()
 	if !known {
 		return nil, fmt.Errorf("%w: %q", ErrUnknown, what)
@@ -604,26 +594,18 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 			what, e.posture)
 	case !principal.Stage.MayAct():
 		return nil, &Refusal{What: what, Reason: authz.ReasonStage}
-	// A PRINCIPAL ACTING THROUGH THE ASSISTANT asks only what the
-	// catalogue reads as a tool, whatever the question's posture: an
-	// Everybody or a Requires question never reaches the authority table,
-	// whose assistant column is how every other surface keeps a verb from
-	// the assistant (ADR-0051). Checked before the grant, so a question
-	// the catalogue does not read is refused the same way to everybody.
-	case assisted(principal) && (reads == nil || !reads(what)):
-		return nil, &Refusal{What: what, Reason: authz.ReasonAssistRefused}
+	// A PRINCIPAL ACTING THROUGH THE ASSISTANT asks exactly what its
+	// person may ask, at every posture (ADR-0051's parity): a question is
+	// a read, and no question answers a credential or a secret in clear,
+	// which is all the authority table's human-only list keeps from the
+	// assistant among reads. A [DecidedBy] question decides each record
+	// through the authority table, whose assistant column then applies.
 	case e.posture.kind == postureRequires && !principal.Can(e.posture.grant):
 		return nil, &Refusal{What: what, Reason: authz.ReasonNoGrant,
 			Grants: []iam.Grant{e.posture.grant}}
 	}
 	data, err := e.answer(ctx, p)
 	return data, classifyFailure(err)
-}
-
-// assisted reports a principal acting through an assistant grant.
-func assisted(p iam.Principal) bool {
-	_, ok := p.Assisted()
-	return ok
 }
 
 // unresolved is the refusal for a question asked on a context whose principal

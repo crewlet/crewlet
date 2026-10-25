@@ -45,6 +45,15 @@ type schema struct {
 	// freeform is an object whose members its reader declares (a page
 	// action's payload): any member is taken, an identity name excepted.
 	freeform bool
+	// payload is a request's own parameters or body, which a generic API
+	// call carries to the route that reads them ([APIRequestTool]): any JSON
+	// value is taken, nested as deep as the route reads it, and NO NAME IS
+	// REFUSED. An identity argument names who acts, and a generic call
+	// names no actor: identity is the grant it is sent under, which no
+	// route reads from a parameter or a body, and a body's `login` is the
+	// login of the person a directory edit is about, which the route then
+	// decides as the person's own gesture.
+	payload bool
 }
 
 // JSON is the schema as the model is handed it.
@@ -71,7 +80,7 @@ func (s *schema) JSON() map[string]any {
 	if s.items != nil {
 		out["items"] = s.items.JSON()
 	}
-	if s.kind == "object" && !s.freeform {
+	if s.kind == "object" && !s.freeform && !s.payload {
 		props := map[string]any{}
 		for name, p := range s.properties {
 			props[name] = p.JSON()
@@ -131,6 +140,9 @@ func (s *schema) check(path string, v any) error {
 		obj, ok := v.(map[string]any)
 		if !ok {
 			return fmt.Errorf("%s is an object", path)
+		}
+		if s.payload {
+			return nil
 		}
 		for _, name := range slices.Sorted(maps.Keys(obj)) {
 			if slices.Contains(IdentityArguments, name) {

@@ -76,7 +76,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /iam/people", at(authz.ActionDirectoryRead), s.GetPeople)
 	// CREATING somebody: a service account, or a person onto the human seat
 	// they will hold, answered with that person's first password link.
-	mount("POST /iam/people", at(authz.ActionDirectoryWrite), s.PostPeople)
+	mount("POST /iam/people", at(authz.ActionSignInWrite), s.PostPeople)
 	mount("GET /iam/people/{id}", about(authz.ActionDirectoryRead), s.GetPerson)
 	// AN EDIT OF AN ENROLLED PERSON — what they may do or how they sign in
 	// — is an ordinary directory write: admin, a `step_up` proof and a
@@ -93,7 +93,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// does not exist yet would have had to invent an id for them. (A
 	// person who should exist at once is CREATED instead, above, and handed
 	// a link that sets only their password.)
-	mount("POST /iam/invitations", at(authz.ActionDirectoryWrite), s.PostInvite)
+	mount("POST /iam/invitations", at(authz.ActionSignInWrite), s.PostInvite)
 	// READ LIKE THE DIRECTORY and withdrawn like any directory write: an
 	// outstanding invitation is a way into the company, and both halves of
 	// "who can reach us" are this surface's.
@@ -105,11 +105,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("DELETE /iam/people/{id}/sessions",
 		about(authz.ActionSessionEnd), s.DeleteSessions)
 	mount("POST /iam/people/{id}/mfa/reset",
-		at(authz.ActionDirectoryWrite), s.PostMFAReset)
+		at(authz.ActionSignInWrite), s.PostMFAReset)
 	// THE SAME VERB AS THE SECOND FACTOR'S RESET, for its reason: both
 	// change how somebody else proves who they are, from outside.
 	mount("POST /iam/people/{id}/password-reset",
-		at(authz.ActionDirectoryWrite), s.PostPasswordReset)
+		at(authz.ActionSignInWrite), s.PostPasswordReset)
 	mount("GET /iam/credentials",
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",

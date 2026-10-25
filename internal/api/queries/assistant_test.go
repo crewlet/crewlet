@@ -9,131 +9,111 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// EVERY QUESTION HAS ONE ASSISTANT EXPOSURE, and the decision can stand.
+// EVERY QUESTION A CURATED TOOL READS IS ONE THIS BUILD ANSWERS, AT ITS POSTURE.
 //
-// Walked over every question this build registers (every seam wired), so a
-// question registered without a row is a red build that says "classify this
-// question for the assistant", and a row naming no question is a decision about
-// nothing. A question decided by a verb the authority table keeps from the
-// assistant can only be Never, a question the assistant reads as a tool is
-// offered only to who its posture admits (its app is the tool's), and an
-// administrator's question is read only by an administrator's tool. Mutation:
-// register a question with no row, or read `config` as a tool, and this fails.
-func TestEveryQuestionHasOneAssistantExposure(t *testing.T) {
+// Walked over every question this build registers (every seam wired): a row of
+// the catalogue's exposure table naming a question nobody answers is a curated
+// tool that fails on every call while looking complete, and a curated read of a
+// question only one app opens is offered on exactly that app, so the tool is
+// not offered to whom the question refuses. Mutation: point a row at a question
+// that is not registered, or offer get_task on the knowledge app, and this
+// fails.
+func TestEveryCuratedQuestionIsAnswered(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, everySeam(t))
-	names := r.Names()
-	if len(names) < 60 {
+	if names := r.Names(); len(names) < 60 {
 		t.Fatalf("the registry answers %d questions, so every seam is not wired", len(names))
-	}
-	rows := map[string][]catalog.Exposure{}
-	for _, e := range catalog.Exposures() {
-		if e.Question != "" {
-			rows[e.Question] = append(rows[e.Question], e)
-		}
 	}
 	tools := map[string]catalog.Tool{}
 	for _, tool := range catalog.Tools() {
 		tools[tool.Name] = tool
 	}
-	for _, what := range names {
-		got := rows[what]
-		if len(got) != 1 {
-			t.Errorf("%s has %d assistant exposure rows; give it exactly one in "+
-				"internal/assistant/catalog", what, len(got))
+	rows := 0
+	for _, e := range catalog.Exposures() {
+		if e.Question == "" {
 			continue
 		}
-		e, posture := got[0], r.PostureOf(what)
-		if verb := posture.Verb(); verb != "" {
-			if class, _ := authz.AssistOf(verb); class == authz.AssistNever && e.As != catalog.AsNever {
-				t.Errorf("%s is decided by %s, which the authority table keeps from the "+
-					"assistant, and the catalogue exposes it as %s", what, verb, e.As)
-			}
-		}
-		if e.As != catalog.AsReadTool {
+		rows++
+		posture := r.PostureOf(e.Question)
+		if !posture.Valid() {
+			t.Errorf("%s reads %s, which this build does not answer", e.Name, e.Question)
 			continue
 		}
-		if g := posture.Grant(); g != "" {
+		if g := posture.Grant(); g != "" && e.As == catalog.AsReadTool {
 			if apps := tools[e.Name].Apps; len(apps) != 1 || apps[0] != g {
-				t.Errorf("%s requires %s and its tool %s is offered on %v", what, g, e.Name, apps)
+				t.Errorf("%s requires %s and its tool %s is offered on %v", e.Question, g,
+					e.Name, apps)
 			}
 		}
 	}
-	for what := range rows {
-		if !r.PostureOf(what).Valid() {
-			t.Errorf("the catalogue decides about %s, which this build does not answer", what)
-		}
+	if rows < 20 {
+		t.Fatalf("walked %d curated questions; the exposure table is not being read", rows)
 	}
 }
 
-// assisted is a person acting through an assistant read grant.
-func assisted(grants ...iam.Grant) context.Context {
-	grant := uuid.New()
-	p := iam.Principal{ID: uuid.New(), Login: "jo.park", Kind: iam.KindPerson, Seat: "analyst",
-		Stage: iam.StageActive, Grants: grants, Via: iam.AssistName(grant),
-		AssistScope: iam.AssistScopeRead}
+// through is a person acting through an assistant read grant.
+func through(p iam.Principal) context.Context {
+	p.Via, p.AssistScope = iam.AssistName(uuid.New()), iam.AssistScopeRead
 	return iam.WithPrincipal(context.Background(), p)
 }
 
-// AN ASSISTED QUESTION THE CATALOGUE DOES NOT EXPOSE IS REFUSED, whatever its
-// posture.
+// AN ASSISTED QUESTION IS ANSWERED AS ITS PERSON'S OWN, AT EVERY POSTURE.
 //
-// An Everybody or a Requires question never reaches the authority table, so
-// its assistant column cannot keep the assistant from it: the registry's own
-// gate does, admitting an assisted principal to exactly the questions the
-// catalogue reads and refusing every other `assist_refused`, an administrator
-// included. The person at their keyboard is not touched, and a registry
-// wired with no gate admits no assisted principal at all. Mutation: drop the
-// gate, or let a nil gate admit, and this fails.
-func TestAnAssistedQuestionTheCatalogueDoesNotExposeIsRefused(t *testing.T) {
+// ADR-0051's parity: a question is a read, and no question answers a
+// credential or a secret in clear, so the registry keeps nothing from a
+// principal acting through the assistant that it does not keep from the same
+// person at their keyboard. Over every question this build registers, each at
+// its own posture and answered by a stub, a person holding one app and an
+// administrator are each answered or refused through the assistant exactly as
+// at the keyboard, with the same reason and the same permissions named. The
+// split is real: the one-app person is refused something and answered
+// something. Mutation: put a gate on assisted principals back in AnswerWith
+// and the assistant is refused what its person reads.
+func TestAnAssistedQuestionIsAnsweredAsItsPersonsOwn(t *testing.T) {
 	t.Parallel()
-	// EVERY QUESTION AT ITS OWN POSTURE, answered by a stub, behind the gate
-	// the API wires: the answers are not what this is about.
 	real := queries.NewRegistry()
 	queries.Register(real, everySeam(t))
-	gated := queries.NewRegistry()
-	queries.Register(gated, queries.Sources{AssistReads: catalog.ReadsQuestion})
+	stubbed := queries.NewRegistry()
 	for _, what := range real.Names() {
-		if !gated.PostureOf(what).Valid() {
-			gated.Register(what, real.PostureOf(what), answersWith("answered"))
+		stubbed.Register(what, real.PostureOf(what), answersWith("answered"))
+	}
+	for _, grants := range [][]iam.Grant{{iam.GrantWorklet}, {iam.GrantAdmin}} {
+		person := iam.Principal{ID: uuid.New(), Login: "jo.park", Kind: iam.KindPerson,
+			Seat: "analyst", Stage: iam.StageActive, Grants: grants}
+		keyboard := iam.WithPrincipal(context.Background(), person)
+		answered, refused := 0, 0
+		for _, what := range stubbed.Names() {
+			_, mine := stubbed.AnswerWith(keyboard, what, queries.Params{})
+			_, theirs := stubbed.AnswerWith(through(person), what, queries.Params{})
+			if !sameRefusal(mine, theirs) {
+				t.Errorf("%s for %v answered %v at the keyboard and %v through the assistant",
+					what, grants, mine, theirs)
+			}
+			if mine == nil {
+				answered++
+			} else {
+				refused++
+			}
 		}
-	}
-	ctx := assisted(iam.GrantAdmin)
-	refused := 0
-	for _, what := range gated.Names() {
-		_, err := gated.AnswerWith(ctx, what, queries.Params{})
-		var refusal *queries.Refusal
-		isRefused := errors.As(err, &refusal) && refusal.Reason == authz.ReasonAssistRefused
-		if catalog.ReadsQuestion(what) == isRefused {
-			t.Errorf("%s through the assistant: %v (the catalogue reads it: %v)", what, err,
-				catalog.ReadsQuestion(what))
+		if answered == 0 || (grants[0] != iam.GrantAdmin && refused == 0) {
+			t.Errorf("%v was answered %d and refused %d questions: the walk does not split",
+				grants, answered, refused)
 		}
-		if isRefused {
-			refused++
-		}
-	}
-	if refused < 20 {
-		t.Fatalf("%d questions were refused the assistant; the gate is not asked", refused)
-	}
-	keyboard := iam.WithPrincipal(context.Background(), iam.Principal{ID: uuid.New(),
-		Login: "jo.park", Kind: iam.KindPerson, Seat: "analyst", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantAdmin}})
-	if _, err := gated.AnswerWith(keyboard, "limits", queries.Params{}); isAssistRefusal(err) {
-		t.Error("the person at their keyboard was refused as the assistant")
-	}
-	open := queries.NewRegistry()
-	open.Register("budgets", queries.Everybody(), answersWith("answered"))
-	if _, err := open.AnswerWith(ctx, "budgets", queries.Params{}); !isAssistRefusal(err) {
-		t.Errorf("a registry wired with no gate answered the assistant: %v", err)
 	}
 }
 
-func isAssistRefusal(err error) bool {
-	var refusal *queries.Refusal
-	return errors.As(err, &refusal) && refusal.Reason == authz.ReasonAssistRefused
+// sameRefusal reports two answers that say the same thing to a caller.
+func sameRefusal(a, b error) bool {
+	var x, y *queries.Refusal
+	switch {
+	case a == nil || b == nil:
+		return a == nil && b == nil
+	case errors.As(a, &x) && errors.As(b, &y):
+		return x.Reason == y.Reason && len(x.Grants) == len(y.Grants)
+	}
+	return a.Error() == b.Error()
 }

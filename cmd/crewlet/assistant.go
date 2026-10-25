@@ -57,13 +57,16 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 	if fleet != nil {
 		remote = assistant.FleetRemote(fleet)
 	}
+	// THE CATALOGUE: the curated tools now, and the generic API tools once
+	// the API this node builds next binds its route table ([bindRoutes]).
+	tools := &catalog.API{}
 	svc, err := assistant.New(assistant.Deps{
 		Node:        e.Node().ID(),
 		Company:     func() (*config.Company, *org.Organization) { return companyConfig(e) },
 		Acts:        acts,
 		Models:      engine.AssistantModels(e),
 		Budget:      engine.AssistantBudget(e),
-		Catalogue:   catalog.Curated{},
+		Catalogue:   tools,
 		Transcripts: e.AssistantReader(),
 		Records:     engine.AssistantRecords(e),
 		Dispatcher:  dispatcher,
@@ -118,7 +121,7 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 	}
 	// ANSWERING PEERS LAST, once nothing left can fail: a node that serves
 	// the fleet's replays and stops has a service behind them to answer.
-	node := &assistantNode{svc: svc}
+	node := &assistantNode{svc: svc, tools: tools}
 	if fleet != nil {
 		if err := fleet.Start(ctx, svc); err != nil {
 			closeAssistant(ctx, node, logging.Get("assistant"))
@@ -131,10 +134,20 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 }
 
 // assistantNode is the assistant's service and this node's half of its fleet
-// stream, closed together.
+// stream, closed together, and the catalogue the API's routes are bound to.
 type assistantNode struct {
 	svc   *assistant.Service
 	fleet *live.Fleet
+	tools *catalog.API
+}
+
+// bindRoutes hands the API's route table to the assistant's catalogue, once
+// the API is built: what the generic API tools may name (ADR-0051).
+func (n *assistantNode) bindRoutes(app *api.App) error {
+	if err := n.tools.Bind(app.AssistantRoutes()); err != nil {
+		return fmt.Errorf("assistant: %w", err)
+	}
+	return nil
 }
 
 // noActs is the verdict on a node with no operator surface: no write is

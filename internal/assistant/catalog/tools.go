@@ -116,9 +116,18 @@ func (t Tool) validate() error {
 		return fmt.Errorf("catalog: %q needs a name, a description and a phrase", t.Name)
 	case !t.Kind.Valid() || !t.Tier.Valid():
 		return fmt.Errorf("catalog: %s has kind %q and tier %q", t.Name, t.Kind, t.Tier)
+	case t.Kind == KindDocs:
+		if t.Docs == nil || t.Build != nil || len(t.Routes) > 0 {
+			return fmt.Errorf("catalog: %s answers from the reference, and sends nothing",
+				t.Name)
+		}
+		return nil
 	case t.Build == nil:
 		return fmt.Errorf("catalog: %s builds no request", t.Name)
-	case (t.Kind == KindWrite) != (t.Act != ""):
+	case t.Routed && (t.Kind != KindWrite || t.Act != ""):
+		return fmt.Errorf("catalog: %s is a write on the route its call names, with no "+
+			"act tool of its own", t.Name)
+	case !t.Routed && (t.Kind == KindWrite) != (t.Act != ""):
 		return fmt.Errorf("catalog: %s names an act tool exactly when it is a write", t.Name)
 	case t.Kind != KindPageAction && len(t.Routes) == 0:
 		return fmt.Errorf("catalog: %s names no route", t.Name)
@@ -137,8 +146,12 @@ func (t Tool) validate() error {
 		if !t.Source.Valid() || !t.Trust.Valid() {
 			return fmt.Errorf("catalog: the read %s declares no fence source and trust", t.Name)
 		}
-		if len(t.Cards) == 0 {
+		if len(t.Cards) == 0 && !t.Infer {
 			return fmt.Errorf("catalog: the read %s cards nothing", t.Name)
+		}
+		if t.Infer && (len(t.Cards) > 0 || !t.Fence) {
+			return fmt.Errorf("catalog: the read %s infers its card from any answer, so "+
+				"it declares none and is fenced", t.Name)
 		}
 		for variant, spec := range t.Cards {
 			if err := spec.Validate(); err != nil {

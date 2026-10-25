@@ -23,11 +23,19 @@ have:
   approves from their own session, against a server-rendered preview, under a
   single-use grant bound to that one request
   ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-an-assistant-write-executes-only-from-its-owners-approval-of-a-server-rendered-preview.md)).
-- Every row of the authority table states what the assistant may do with its
-  verb: read it, propose it for approval, or never touch it. Identity, secrets,
-  setup, configuration (but for the company's principles), fleet operations,
-  purges and token minting are never available to it, for any principal
+- The assistant may do whatever its person may, as a read or as a change they
+  approve, but for a short human-only list it never takes, whoever approves:
+  signing in and the session and token ceremonies (minting or revoking a
+  token, changing a second factor, issuing a password or invitation link,
+  ending sessions), anything that carries a credential or a secret in clear
+  (revealing or writing a secret, entering an integration's credentials, a
+  frame's view ticket), its own approvals, and asking the knowledge base's own
+  model (it searches the pages itself instead). It adds a seat to the org
+  chart, but it does not create a person or invite one: the answer to either
+  is a sign-in link, which stays with you, and the drawer says so
   ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-every-authority-row-says-what-the-assistant-may-do-with-it.md)).
+  A gesture that asks a recent proof of identity still asks it of the person
+  when they approve.
 - A conversation belongs to its owner. No route serves one to anybody else,
   except the audited compliance read below
   ([ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-an-assistant-conversation-belongs-to-its-owner.md)).
@@ -36,10 +44,22 @@ Only a **person** signed in through a browser session may use it. Machine
 tokens, service accounts and sessions exchanged from a Tier A token are
 refused, and the dashboard shows them the reason.
 
-### What it can change
+### What it can read and change
 
-Each of these is a proposal the person approves, offered only to a person who
-could make the same change on its screen:
+Anything the person can reach through the engine's API. Beside its dedicated
+tools, the assistant looks a route up in this reference
+([API Endpoints](../reference/api-endpoints.md), embedded in the engine),
+reads it with the person's own access, and proposes any change on it: the card
+shows the request, its body with secrets masked, and the resource as it is now
+beside what the change makes of it, field by field (a seat added to a unit is
+one added seat with its role and responsibilities). A change prepared against
+a resource that has moved since is refused rather than overwritten. Adding a
+seat to the org chart, editing a person's permissions, purging a task or
+adopting a brand are all proposals the person approves, at the same step-up
+the screen would ask.
+
+The dedicated tools are shortcuts with cards and previews of their own, each
+offered only to a person who could make the same change on its screen:
 
 | Change | Who is offered it | On approval |
 |---|---|---|

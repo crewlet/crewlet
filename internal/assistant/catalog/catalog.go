@@ -1,19 +1,18 @@
 // Package catalog is the Dashboard Assistant's tool catalogue: the curated
-// table of what the assistant may reach, and the descriptor each tool the
+// tools, the generic API tools beside them, and the descriptor each tool the
 // model is offered is built from.
 //
-// # One exposure decision per surface, held complete by walks
+// # The person's whole API, and better-shaped shortcuts onto it
 //
-// Every registry question, every operator catalogue tool and every guarded
-// route has exactly one [Exposure] row saying what the assistant does with it:
-// offer it as a read, offer it as a write that becomes a proposal, offer it as
-// a page action, link to it only, or never, with the reason a reviewer reads.
-// The walks that hold the table live beside the engine metadata they read (the
-// registry, the operator catalogue, the API's route table, the authority
-// table), so a new question, tool or route is a red build that says "classify
-// this for the assistant" rather than a surface the assistant silently gains
-// or silently lacks. A verb the authority table keeps from the assistant
-// (ADR-0051) can only be Never, derived from the table rather than a list.
+// The assistant may do with the API whatever its person may (ADR-0051's
+// parity, the human-only list aside): the generic tools ([DescribeAPITool],
+// [APIRequestTool], [ProposeAPIChangeTool]) name any route of the table the API
+// binds ([API.Bind]) and are decided by that route, as the person. The curated
+// tools are shortcuts onto the surfaces a question most often needs, each with
+// a schema, a card and a preview of its own; the [Exposure] rows say which
+// surface each is built on, and the walks beside the engine metadata (the
+// registry, the operator catalogue, the API's route table) hold every row to a
+// surface this build serves.
 //
 // # Only what the person can take now is offered
 //
@@ -47,14 +46,6 @@
 // binds and the exact request the approval sends, which is the one the tool
 // builds. [Revision] re-reads a recorded revision, so an approval refuses a
 // change prepared against a version the object has left.
-//
-// # The registry is gated by the same table
-//
-// [ReadsQuestion] and [ReadsRoute] are what an assisted principal may ask the
-// question registry and the overview routes (ADR-0051): an Everybody or a
-// Requires question never reaches the authority table, so its assistant
-// column cannot keep the assistant from one, and internal/api wires these as
-// the gate instead.
 package catalog
 
 import (
@@ -71,52 +62,41 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// As is what the assistant does with one surface.
+// As is how a curated tool is built on one surface.
 type As string
 
 const (
-	// AsReadTool offers the surface as a read tool (risk tier R0).
+	// AsReadTool is a surface a curated read tool reads (risk tier R0).
 	AsReadTool As = "read_tool"
-	// AsWriteTool offers it as a write tool whose call becomes a proposal
-	// the person approves (R2 or R3).
+	// AsWriteTool is a surface a curated write tool proposes on, its call
+	// becoming a proposal the person approves (R2 or R3).
 	AsWriteTool As = "write_tool"
-	// AsPageAction offers it as a change to the open screen, applied by
-	// the page (R1).
-	AsPageAction As = "page_action"
-	// AsNavigateOnly offers no tool, only an open in app link to it.
-	AsNavigateOnly As = "navigate_only"
-	// AsNever keeps it from the assistant, for the reason the row states.
-	AsNever As = "never"
-	// AsPreviewRead offers no tool: the question is read only by the named
-	// write tool's preview, or an approval's re-read of the revision that
-	// preview recorded (a person's tracker record, which a priority change
-	// is bound to).
+	// AsPreviewRead is a question read only by the named write tool's
+	// preview, or an approval's re-read of the revision that preview
+	// recorded (a person's tracker record, which a priority change is bound
+	// to).
 	AsPreviewRead As = "preview_read"
 )
 
-// Ases are the six, in declaration order.
-var Ases = []As{AsReadTool, AsWriteTool, AsPageAction, AsNavigateOnly, AsNever, AsPreviewRead}
+// Ases are the three, in declaration order.
+var Ases = []As{AsReadTool, AsWriteTool, AsPreviewRead}
 
 // Valid reports whether a is a decision this build knows.
 func (a As) Valid() bool { return slices.Contains(Ases, a) }
 
-// Exposure is one decision about one surface the assistant could reach. It
-// names the surface by the identifier the engine already uses for it, exactly
-// one of Question, Tool and Route.
+// Exposure is one curated tool's surface. It names the surface by the
+// identifier the engine already uses for it, exactly one of Question, Tool and
+// Route.
 type Exposure struct {
 	// Question is a registry question's name.
 	Question string
 	// Tool is an operator catalogue tool's name.
 	Tool string
-	// Route is a guarded route's pattern, "METHOD /path".
+	// Route is a route's pattern, "METHOD /path".
 	Route string
 	As    As
-	// Name is the model-facing tool the surface is offered as, for a read
-	// or a write tool.
+	// Name is the curated tool built on the surface.
 	Name string
-	// Why is required for Never and NavigateOnly: the reason a reviewer
-	// reads.
-	Why string
 }
 
 // Tier is a tool's risk, DERIVED rather than chosen: R3 when its verb row is
@@ -159,10 +139,13 @@ const (
 	KindPageAction Kind = "page_action"
 	// KindNavigate builds an open in app card and sends nothing.
 	KindNavigate Kind = "navigate"
+	// KindDocs answers from the engine's own API reference and the route
+	// table the API bound, and sends nothing ([DescribeAPITool]).
+	KindDocs Kind = "docs"
 )
 
-// Kinds are the four, in declaration order.
-var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate}
+// Kinds are the five, in declaration order.
+var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs}
 
 // Valid reports whether k is a kind this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
@@ -211,8 +194,14 @@ type Tool struct {
 	Trust provenance.Trust
 	// TrustOf, for a read whose answer may or may not carry text from
 	// outside the company, decides the answer's trust from what it holds
-	// (a row's origin, the backend that answered) in place of Trust.
-	TrustOf func(answer any) provenance.Trust
+	// (a row's origin, the backend that answered) or the call that asked
+	// it (the route a generic read named), in place of Trust.
+	TrustOf func(args Args, answer any) provenance.Trust
+	// Infer marks a read whose card is drawn from the answer's own shape
+	// ([cards.Infer]) rather than a declared spec, and whose model text is
+	// the answer itself, redacted, fenced and cut: a generic read, whose
+	// route the catalogue holds no spec for ([APIRequestTool]).
+	Infer bool
 	// Label renders the step's sentence from the call's safe arguments.
 	Label func(args map[string]any) string
 	// Build turns the call's arguments into the one request it sends, on
@@ -242,6 +231,15 @@ type Tool struct {
 	// change, read from the object as it is now, and the exact request
 	// the approval sends (internal/assistant/proposal).
 	Preview proposal.Previewer
+
+	// Routed marks a write that executes on whichever route its call names
+	// ([ProposeAPIChangeTool]): it names no act tool, its preview names the
+	// verb per call ([proposal.Preview.Act]), and it is offered to everybody
+	// the generic tools are, every call decided by its route as the person.
+	Routed bool
+
+	// Docs answers a [KindDocs] call from the reference and the route table.
+	Docs func(args Args) (string, error)
 
 	// StepUp reports a call whose effect asks the approver to confirm who
 	// they are on top of whatever the verb's own row asks: a share to the

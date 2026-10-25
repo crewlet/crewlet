@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
-- **Enforced-by:** `internal/assistant.TestTheAssistantImportsNoWriterAndNoSeat`, `internal/iam.TestAnAssistedPrincipalIsAPersonCarryingItsScope`, `internal/iam.TestAnAssistGrantsNameIsNobodysLogin`, `internal/api/auth.TestAnAssistGrantOverTheWireIsRefused`, `internal/api/auth.TestAnAssistGrantIsTheSessionsPrincipalRecomposed`, `internal/api/auth.TestARevokedSessionEndsItsGrant`, `internal/api/auth.TestAnExecGrantCarriesOnlyItsBoundRequestOnce`, `internal/api/auth.TestAnAssistGrantIsRefusedTheGuardedEdges`, `internal/api/auth.TestAnAssistGrantNeverProvesAFresherIdentityThanItsSession`, `internal/api/auth.TestOnlyASessionPersonDerivesAGrant`, `internal/api.TestTheDispatcherServesTheAPIsOwnHandler`, `internal/api.TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant`, `internal/assistant.TestTheAssistantReachesToolsOnlyAsRequests`, `internal/assistant.TestTheAssistantSendsThroughTheDispatcherAlone`, `internal/assistant.TestNoTokenReachesARecordALogOrAPrompt`, `internal/assistant.TestAGrantEndingMidTurnEndsTheTurn`, `internal/config.TestTheAssistantRefusesAnEntryThatCanRunLocalTools`, `internal/providers/llm/cliagent.TestTheAssistantArgvLeavesTheCLIWithNoToolOfItsOwn`, `internal/api.TestPermissionParityAcrossFivePrincipals`
+- **Enforced-by:** `internal/assistant.TestTheAssistantImportsNoWriterAndNoSeat`, `internal/iam.TestAnAssistedPrincipalIsAPersonCarryingItsScope`, `internal/iam.TestAnAssistGrantsNameIsNobodysLogin`, `internal/api/auth.TestAnAssistGrantOverTheWireIsRefused`, `internal/api/auth.TestAnAssistGrantIsTheSessionsPrincipalRecomposed`, `internal/api/auth.TestARevokedSessionEndsItsGrant`, `internal/api/auth.TestAnExecGrantCarriesOnlyItsBoundRequestOnce`, `internal/api/auth.TestAnAssistGrantIsRefusedTheGuardedEdges`, `internal/api/auth.TestAnAssistGrantNeverProvesAFresherIdentityThanItsSession`, `internal/api/auth.TestOnlyASessionPersonDerivesAGrant`, `internal/api.TestTheDispatcherServesTheAPIsOwnHandler`, `internal/api.TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant`, `internal/assistant.TestTheAssistantReachesToolsOnlyAsRequests`, `internal/assistant.TestTheAssistantSendsThroughTheDispatcherAlone`, `internal/assistant.TestNoTokenReachesARecordALogOrAPrompt`, `internal/assistant.TestAGrantEndingMidTurnEndsTheTurn`, `internal/config.TestTheAssistantRefusesAnEntryThatCanRunLocalTools`, `internal/providers/llm/cliagent.TestTheAssistantArgvLeavesTheCLIWithNoToolOfItsOwn`, `internal/api.TestPermissionParityAcrossFivePrincipals`, `internal/api.TestTheAssistantRouteTableIsTheAppsOwn`, `internal/assistant/catalog.TestAGenericCallNamesARouteOfTheTable`
 - **Cost-when-tried:** the one existing path that runs a model against the company's tools on somebody's behalf, the sandbox MCP bridge, replaces the request's principal with the SEAT (`internal/api/mcpbridge`'s `actingAs`), and a seat holds every app, so a person without the tracker app routed through it would read the tracker; and the agent turn context falls back to a seat's principal when none is set
 - **Tag-status:** unreleased
 
@@ -32,6 +32,16 @@ a click in the dashboard), carrying an **assistant grant**:
   grant only the one approved request its proposal binds (ADR-0050). The
   person's own authority decision is still the whole decision; the grant's
   scope and the authority table's assistant column (ADR-0051) only subtract.
+
+**Any route of the person's, and only as a request.** Beside its curated
+tools the assistant reaches the whole API through generic tools
+(internal/assistant/catalog's `api_request` and `propose_api_change`), whose
+calls name a route of the table the API itself mounted (`App.AssistantRoutes`,
+bound to the catalogue once the App is built), never a URL: each wildcard is
+one escaped segment, and the request is held to the table again before the
+dispatcher sends it. That table is a filter on what the model may name, never
+authority: the guard, the route's own row and the grant decide every call as
+they decide a click.
 
 The orchestrator holds a grant as a handle it can name and time but never
 present (`internal/assistant/exec`'s `Grant`), and no package under

@@ -584,7 +584,7 @@ func readTools() []Tool {
 			Routes: []string{"GET /query/{what}"}, Fence: true,
 			// THE NATIVE KNOWLEDGE BASE IS WRITTEN BY THE COMPANY; a connected
 			// one (Confluence) by whoever its own users are.
-			TrustOf: knowledgeTrust,
+			TrustOf: func(_ Args, answer any) provenance.Trust { return knowledgeTrust(answer) },
 			Shows:   []authz.ObjectKind{authz.KindPage, authz.KindTask},
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get("GET /query/{what}", map[string]string{"what": "knowledge"},
@@ -803,8 +803,8 @@ func artifactKinds() []string {
 // outsideWhere is the trust of an answer whose rows (at rows) may carry text
 // from outside the company at field: external where any row carries some,
 // colleague where none does.
-func outsideWhere(rows, field string) func(answer any) provenance.Trust {
-	return func(answer any) provenance.Trust {
+func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
+	return func(_ Args, answer any) provenance.Trust {
 		list, _ := cards.Lookup(answer, rows).([]any)
 		for _, row := range list {
 			if strings.TrimSpace(cards.Text(cards.Lookup(row, field))) != "" {

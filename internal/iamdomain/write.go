@@ -428,21 +428,29 @@ var ErrRefused = errors.New("not allowed")
 // spelling of an id: an operator id naming the machine-token class is a token,
 // whether or not this build can parse what follows.
 //
-// # Nor through the Dashboard Assistant
+// # Through the Dashboard Assistant, only an approved edit
 //
 // A request the assistant makes is its person's own, composed from their rows,
-// so an administrator's assistant carries admin. The authority table refuses
-// it every directory verb (internal/authz's assist column, ADR-0051); this
+// so an administrator's assistant carries admin, and a write it makes is one
+// the administrator approved from a server-rendered preview (ADR-0050): an
+// edit of somebody's row, a move of their login or seat, a stage, a removal,
+// an invitation withdrawn. Those land as the administrator's own, with the
+// grant named as the credential.
+//
+// THE SIGN-IN CEREMONIES DO NOT ([assistRefusedOps]): an enrolment carries a
+// first password link or spends an invitation, an invitation is a link, and
+// ending every session is a session ceremony. The authority table keeps their
+// verbs from the assistant (internal/authz's human-only list, ADR-0051); this
 // refuses the RECORD for the token's reason, so no surface the table does not
-// guard can be the way a model enrols, promotes or removes somebody. Checked
-// first beside the token, on the class as well.
+// guard can be the way a model is handed a credential. Checked first beside
+// the token, on the class as well.
 func (w *Writer) mayAdminister(op OpKind) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
 		return fmt.Errorf("%w: %w. Sign in and do it yourself (%s, token %s)",
 			ErrRefused, ErrTokenRefused, op,
 			w.OperatorID)
 	}
-	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) {
+	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) && slices.Contains(assistRefusedOps, op) {
 		return fmt.Errorf("%w: %w. Do it yourself from People & access (%s, %s)",
 			ErrRefused, ErrAssistRefused, op, w.OperatorID)
 	}
@@ -452,6 +460,11 @@ func (w *Writer) mayAdminister(op OpKind) error {
 	return fmt.Errorf("%w: %s needs %s, and you have %v", ErrRefused,
 		op, iam.GrantAdmin, w.Grants)
 }
+
+// assistRefusedOps are the administrative records the Dashboard Assistant
+// never writes, whoever approved what: each hands somebody a way to sign in
+// or ends sessions ([Writer.mayAdminister]).
+var assistRefusedOps = []OpKind{OpEnrol, OpInvite, OpInvalidate}
 
 // ErrTokenRefused reports an administrative identity record asked through a
 // machine token ([Writer.mayAdminister]). Every error carrying it also wraps
@@ -465,7 +478,7 @@ var ErrTokenRefused = errors.New("access tokens can't change people or access")
 // [Writer.mayMintFor]). It wraps [ErrRefused] for [ErrTokenRefused]'s reason,
 // and a surface that tells them apart answers that the person takes the
 // gesture themselves rather than that a permission is missing.
-var ErrAssistRefused = errors.New("the assistant can't change people, access or tokens")
+var ErrAssistRefused = errors.New("the assistant can't issue sign-in links, invitations or tokens, or end sessions")
 
 // publish runs one decide through the framework's own write authority.
 //

@@ -41,6 +41,9 @@ import (
 //     object as the person, [proposal.New] binds the change to its digest and
 //     revision, the proposal is recorded and carded, and the loop suspends with
 //     the call unanswered until the person decides (ADR-0050).
+//   - A DOCS call answers from the engine's own API reference and the route
+//     table, and sends nothing: the routes the person may use, or one route's
+//     documentation, the model's text with every fence marker defused.
 //   - A NAVIGATION builds an open in app link, whose `permitted` is asked by
 //     sending the record's own read through the grant, or by the person's
 //     grants for a screen that names no record.
@@ -97,6 +100,8 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return s.propose(ctx, tool, call.Arguments)
 	case catalog.KindNavigate:
 		return s.navigate(ctx, tool, call.Arguments)
+	case catalog.KindDocs:
+		return s.docs(ctx, tool, call.Arguments)
 	}
 	return failed(mcp.RefusalInternalError, "This tool cannot be used here."), nil
 }
@@ -161,6 +166,21 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		return failed(routeClass(resp.Status, shaped.Refusal.Code), shaped.Model), nil
 	}
 	return toolloop.ToolResult{Output: shaped.Model}, nil
+}
+
+// docs answers a [catalog.KindDocs] call: nothing is sent, and the step says
+// what was looked up.
+func (s *surface) docs(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
+	if err := tool.Check(args); err != nil {
+		return s.refuseBefore(ctx, tool, args, "Not looked up", err), nil
+	}
+	answer, err := tool.Docs(args)
+	if err != nil {
+		return s.refuseBefore(ctx, tool, args, "Not found", err), nil
+	}
+	step := s.t.stepStart(tool, args, nil, "")
+	s.t.stepEnd(ctx, step, wire.StepDone, "Looked up", nil, 0, len(answer))
+	return toolloop.ToolResult{Output: provenance.Neutralise(s.t.boundary, answer)}, nil
 }
 
 // unsent ends a step whose request could not be sent at all: the turn's own
@@ -279,8 +299,14 @@ func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview propos
 	if c != nil {
 		ttl = c.Assistant.ProposalTTL()
 	}
+	// A WRITE ON THE ROUTE ITS CALL NAMES is decided by that route's verb,
+	// which its preview names; every other write executes as its tool's own.
+	act := tool.Act
+	if tool.Routed {
+		act = preview.Act
+	}
 	return proposal.New(proposal.Draft{Owner: t.person.ID, Conversation: t.conversation,
-		Turn: t.id, Tool: tool.Name, Act: tool.Act, Scope: scope, Preview: preview,
+		Turn: t.id, Tool: tool.Name, Act: act, Scope: scope, Preview: preview,
 		ChangesVisibility: tool.ChangesVisibility, PageRevision: pageRevision,
 		Taint: t.taint(), Now: t.svc.now(), TTL: ttl})
 }

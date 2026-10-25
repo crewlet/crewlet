@@ -205,7 +205,7 @@ func (a *App) mountReads(mux httpjson.Router) {
 	// trail is not open to as its status alone, exactly as the push hands
 	// it to them.
 	for _, route := range a.overviewRoutes() {
-		mux.Handle(route.pattern, a.serveFrom(route.pattern, route.kind, route.build))
+		mux.Handle(route.pattern, a.serveFrom(route.kind, route.build))
 	}
 }
 
@@ -253,21 +253,13 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 // ([stream.ShapeFor]), so the whole bundle carries only what that caller may
 // read.
 //
-// A PRINCIPAL ACTING THROUGH THE ASSISTANT reads only the ones the catalogue
-// reads as a tool ([App.assistRoute]): these are decided by the push table
-// rather than the authority table, so the assistant column never sees them,
-// and the registry's own gate ([queries.Sources.AssistReads]) does not reach
-// a route that is not a question.
-func (a *App) serveFrom(pattern string, kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
+// A PRINCIPAL ACTING THROUGH THE ASSISTANT reads them as its person does
+// (ADR-0051's parity): each is the overview its person's socket is pushed,
+// shaped for the same audience, and none carries a credential.
+func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := auth.Caller(w, r)
 		if !ok {
-			return
-		}
-		if _, assisted := principal.Assisted(); assisted &&
-			(a.assistRoute == nil || !a.assistRoute(pattern)) {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonAssistRefused, nil))
 			return
 		}
 		out, err := a.overview(r.Context(), principal, kind, build)

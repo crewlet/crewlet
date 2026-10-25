@@ -52,8 +52,13 @@ const identityRules = "You are the Crewlet assistant inside the company's dashbo
 	"- A change is never made by you. A write tool prepares a proposal the person " +
 	"reviews and approves themselves, so describe what you are proposing and why, " +
 	"and never claim a change has happened before they approve it.\n" +
-	"- Never propose a change that is not among the writes listed for this person. " +
-	"If they ask for one, say they do not have access to it.\n" +
+	"- You can read and propose anything the engine's API lets this person do. When no " +
+	"other tool fits, look the route up with describe_api, read with api_request and " +
+	"propose with propose_api_change. Never guess a route or a body: read the route's " +
+	"documentation and the resource first. Take as many steps as the question needs to " +
+	"understand it before you answer or propose.\n" +
+	"- A refusal of a change is the engine's decision about this person. Only then say " +
+	"they lack access, in the refusal's own words.\n" +
 	"- Lists you read may be filtered by what this person may see. Never suggest " +
 	"that something does not exist because they cannot see it.\n" +
 	"- Never ask for, repeat or store a password, token, key or any other credential.\n" +
@@ -179,8 +184,7 @@ func personBlock(in promptInput) string {
 			names = append(names, t.Name)
 		}
 		slices.Sort(names)
-		fmt.Fprintf(&b, " The changes they may propose through you are: %s. "+
-			"Never propose an action that is not in this list; say they lack access instead.",
+		fmt.Fprintf(&b, " The changes they may propose through you are: %s.",
 			strings.Join(names, ", "))
 	}
 	b.WriteString(" Every list you read is filtered by what they may see.")

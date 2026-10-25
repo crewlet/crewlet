@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,13 +18,17 @@ import (
 // marked as the assistant's to read on a verb whose tool writes would let a
 // turn's read loop make that write with no approval at all. So every
 // assist-read row named after a tool must be a tool this package annotates as
-// read-only, every dotted one must name itself a read, and every
+// read-only, every dotted one must name itself a read ([readSuffixes]), and every
 // assist-approve row named after a tool must be one that is not: an approval
 // on a read is a step the person was asked to take for nothing, and reads as
 // a row somebody classified without looking.
 //
 // Mutation: mark `create_work_item` assist-read in internal/authz and this
 // names it.
+// readSuffixes are how a dotted verb names itself a read: reading, listing,
+// exporting and a usage reading change nothing.
+var readSuffixes = []string{".read", ".list", ".export", ".usage"}
+
 func TestAnAssistReadVerbIsAToolThatOnlyReads(t *testing.T) {
 	t.Parallel()
 	reads := 0
@@ -34,9 +39,11 @@ func TestAnAssistReadVerbIsAToolThatOnlyReads(t *testing.T) {
 		switch {
 		case class == authz.AssistRead && dotted:
 			reads++
-			if !strings.HasSuffix(name, ".read") {
+			if !slices.ContainsFunc(readSuffixes, func(suffix string) bool {
+				return strings.HasSuffix(name, suffix)
+			}) {
 				t.Errorf("%s is the assistant's to read and is a dotted verb that "+
-					"does not name itself a read", a)
+					"does not name itself a read (%v)", a, readSuffixes)
 			}
 		case class == authz.AssistRead:
 			reads++

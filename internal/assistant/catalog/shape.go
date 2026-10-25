@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
@@ -70,6 +71,9 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if resp.Truncated {
 		return notice(cards.TooLargeText)
 	}
+	if t.Infer {
+		return shapeAnswer(t, args, resp, b, now)
+	}
 	spec, ok := t.CardFor(args)
 	if !ok {
 		return Result{}, fmt.Errorf("catalog: %s cards no answer of its kind", t.Name)
@@ -88,7 +92,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 		if decodeErr != nil {
 			return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, decodeErr)
 		}
-		trust = t.TrustOf(answer)
+		trust = t.TrustOf(args, answer)
 	}
 	if built.Empty {
 		model, emptyErr := emptyModel(t, trust, args, built.Note, b)
@@ -128,6 +132,101 @@ func modelText(t Tool, trust provenance.Trust, b provenance.Boundary, summary []
 		return "", fmt.Errorf("catalog: encode a fenced result: %w", err)
 	}
 	return string(out), nil
+}
+
+// shapeAnswer is a generic read's answer ([Tool.Infer]): the card drawn from
+// the answer's own shape where a table can show it, and for the model the
+// answer itself rather than a card's summary, because a generic read is how
+// the model reaches what no card was designed for, nested fields included.
+// The same steps every read takes, in the same order: every string through
+// redact.Secrets, the whole fenced under the turn's boundary with the tool's
+// Source and the call's trust, and cut, fence included, to [cards.ModelBytes].
+// An answer that is not JSON (an export, a file's bytes) is its text, redacted
+// and fenced the same way, with no card. A HEAD, or any answer with no body,
+// is its status and the headers that describe the resource.
+func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
+	now time.Time) (Result, error) {
+
+	if len(bytes.TrimSpace(resp.Body)) == 0 {
+		described := map[string]any{"status": resp.Status}
+		headers := map[string]string{}
+		for _, h := range describingHeaders {
+			if v := resp.Header.Get(h); v != "" {
+				headers[h] = redact.Secrets(v)
+			}
+		}
+		if len(headers) > 0 {
+			described["headers"] = headers
+		}
+		encoded, err := json.Marshal(described)
+		if err != nil {
+			return Result{}, fmt.Errorf("catalog: encode %s's answer: %w", t.Name, err)
+		}
+		return Result{Model: provenance.Neutralise(b, string(encoded)),
+			Trust: t.Trust, Empty: true}, nil
+	}
+	body, err := redacted(resp.Body)
+	if err != nil {
+		text := redact.Secrets(string(bytes.ToValidUTF8(resp.Body, nil)))
+		model, fitErr := fitAnswer(t, t.Trust, b, text)
+		return Result{Model: model, Trust: t.Trust}, fitErr
+	}
+	doc, err := cards.Decode(body)
+	if err != nil {
+		return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, err)
+	}
+	trust := t.Trust
+	if t.TrustOf != nil {
+		trust = t.TrustOf(args, doc)
+	}
+	model, err := fitAnswer(t, trust, b, string(body))
+	if err != nil {
+		return Result{}, err
+	}
+	out := Result{Model: model, Trust: trust}
+	if spec, rows, ok := cards.Infer(doc, args.String("route")); ok {
+		encoded, err := json.Marshal(rows)
+		if err != nil {
+			return Result{}, fmt.Errorf("catalog: encode %s's rows: %w", t.Name, err)
+		}
+		built, err := cards.Build(spec, encoded, now)
+		if err != nil {
+			return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
+		}
+		if !built.Empty {
+			out.Cards = built.Cards()
+		}
+	}
+	return out, nil
+}
+
+// describingHeaders are the headers a body-less answer is described by.
+var describingHeaders = []string{"Content-Type", "Content-Length", "ETag", "Last-Modified"}
+
+// fitAnswer is an answer's text as the model reads it, fenced, within
+// [cards.ModelBytes] fence included: cut on a character, saying it was cut and
+// how to ask for less.
+func fitAnswer(t Tool, trust provenance.Trust, b provenance.Boundary, answer string) (string, error) {
+	const cutNote = " [cut here: the answer goes on; narrow it with the route's own " +
+		"filters or paging]"
+	budget := cards.ModelBytes - fenceBytes
+	for budget > len(cutNote) {
+		text := answer
+		if len(text) > budget {
+			text = strings.ToValidUTF8(text[:budget-len(cutNote)], "") + cutNote
+		}
+		model, err := modelText(t, trust, b, []byte(text))
+		if err != nil {
+			return "", err
+		}
+		over := len(model) - cards.ModelBytes
+		if over <= 0 {
+			return model, nil
+		}
+		budget -= over + over/4 + 64
+	}
+	return "", fmt.Errorf("catalog: %s's answer does not fit the %d bytes a model is handed",
+		t.Name, cards.ModelBytes)
 }
 
 // notice is a result that is one notice, the same sentence for both readers.

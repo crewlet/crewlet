@@ -1450,25 +1450,28 @@ func administrativeGestures(ctx context.Context,
 	}
 }
 
-// AN ADMINISTRATIVE RECORD IS NEVER WRITTEN THROUGH THE ASSISTANT.
+// THE ASSISTANT WRITES AN ADMINISTRATIVE RECORD ONLY WHERE NO CEREMONY IS IN IT.
 //
 // A request the Dashboard Assistant makes is its person's own, so an
-// administrator's assistant is composed holding admin, and the authority
-// table's assist column is what refuses it the directory at the route
-// (ADR-0051). This is the record's own refusal, for the machine token's
-// reason: a record is formed by more than the routes that table guards. Over
-// every guarded record, an administrator acting through an assistant grant is
-// refused [iamdomain.ErrAssistRefused] (wrapping [iamdomain.ErrRefused], and
-// never read as a token), composed through [iamdomain.Writer.As] exactly as
-// the request path composes one, and so is an operator id of the assistant's
-// class this build cannot parse; nothing is published. The CONTROL, the same
-// administrator at their own keyboard, enrols. Mutation: drop the assistant's
-// lock and every case is admitted as the administrator.
-func TestAnAdministrativeRecordIsNeverWrittenThroughTheAssistant(t *testing.T) {
+// administrator's assistant is composed holding admin, and the one it sends a
+// write through is an exec grant carrying a request the administrator
+// approved (ADR-0050). The record keeps the sign-in ceremonies from it for the
+// machine token's reason, whatever authority reached it: an enrolment (a
+// first password link, or a redemption), an invitation (a link) and ending
+// every session are refused [iamdomain.ErrAssistRefused], wrapping
+// [iamdomain.ErrRefused] and never read as a token, and so is an operator id of
+// the assistant's class this build cannot parse. Every other administrative
+// record (an edit, a login or seat move, a stage, a removal, an invitation
+// withdrawn) is the administrator's own, decided past the lock by its own
+// rules. The refused set is exactly the intended one, so a record that slips
+// on or off it is a red build. Mutation: drop the lock and the ceremonies are
+// admitted; widen it to every record and the edits are refused.
+func TestTheAssistantWritesNoSignInCeremony(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	keyboard := principalNamed("ana.admin", iam.KindPerson, []iam.Grant{iam.GrantAdmin})
 	gestures := administrativeGestures(rig.t.Context(), uuid.Must(uuid.NewV7()).String())
+	ceremonies := []string{"create", "redeem", "invite", "invalidate every session"}
 	composed := keyboard
 	composed.Via = iam.AssistName(uuid.Must(uuid.NewV7()))
 	composed.AssistScope = iam.AssistScopeExec
@@ -1480,11 +1483,15 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughTheAssistant(t *testing.T) {
 	} {
 		for name, gesture := range gestures {
 			err := gesture(w)
-			if !errors.Is(err, iamdomain.ErrAssistRefused) ||
-				!errors.Is(err, iamdomain.ErrRefused) ||
-				errors.Is(err, iamdomain.ErrTokenRefused) {
+			refused := errors.Is(err, iamdomain.ErrAssistRefused)
+			switch ceremony := slices.Contains(ceremonies, name); {
+			case ceremony && (!refused || !errors.Is(err, iamdomain.ErrRefused) ||
+				errors.Is(err, iamdomain.ErrTokenRefused)):
 				t.Errorf("%s through %s: %v, want %v wrapping %v", name, through,
 					err, iamdomain.ErrAssistRefused, iamdomain.ErrRefused)
+			case !ceremony && refused:
+				t.Errorf("%s through %s was refused as the assistant (%v): an approved "+
+					"edit is the administrator's own", name, through, err)
 			}
 		}
 	}

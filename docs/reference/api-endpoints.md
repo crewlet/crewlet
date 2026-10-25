@@ -361,6 +361,7 @@ node means nothing was done.
 | `GET` | `/worklet/turns` | One page of the agent turns charged to an item, newest first: `?id=` (key or id), `?cursor=`, `?limit=` (default 20, at most 50); see [`work_item_turns`](#queries) |
 | `GET` | `/doclet/pages` | Doclet: a filtered listing of its pages. Served only where `knowledge.backend` is `doclet` |
 | `GET` | `/doclet/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title`: the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
+| `GET` | `/doclet/pages/{id}/revisions/{version}` | One revision of a page: its own body, message and author at that version, the newest included. Decided as reading the page; see [`page_revision`](#queries) |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply and every boot; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds), so a configuration activated earlier never overwrites them |
 | `POST` | `/worklet/items` `/doclet/pages` | **File an item, write a page**, and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded; the item routes are absent on a company that does not run Worklet, and the page routes on one that does not run Doclet |
 | `PATCH` | `/worklet/items/{key}` | Change an item, and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
@@ -4357,7 +4358,7 @@ and `/containers` all resolve them the same way. They did not until recently:
 each of those wrote a hardcoded `stale` into its read and never looked at the
 keys, so a caller asking for a stronger answer was served this node's rows and
 told, in the answer's own `read_level`, that it came back at the level asked
-for, and the two single-object reads, `/worklet/items/{id}` and `/doclet/pages/{id}`,
+for, and the two single-object reads, `/worklet/{id}` and `/doclet/pages/{id}`,
 then took the level and dropped the bounds beside it, on the claim that a bound
 is enforced against a set's coverage and one row has no set. It is not: a bound
 is about **this node's lag**, checked before any row is read, and one row is
@@ -4960,7 +4961,7 @@ Every write's answer carries its three-valued `outcome`, the object's new
 `<stream>@<generation>:<sequence>`, or `null` on an `unknown` outcome, where
 the broker never said. That is the value a client hands back as `min_position`
 on any read above, so an assistant that files an item here and redraws the
-board over `GET /worklet/items` is served an answer that includes it rather than
+board over `GET /worklet` is served an answer that includes it rather than
 whatever this node happened to hold. The tools' own reads need none of it —
 they read `linearizable` — but the answer travels to a client that does not.
 
@@ -6811,7 +6812,8 @@ The API origin **never renders an artifact**:
 - `GET /artifacts/sources/preview/{name}` answers one catalogue source's rows
   **as the caller**, before any board exists: what the dashboard's New
   dashboard builder draws its suggested figures from. Decided by
-  `create_artifact`, then answered by the very read a board's `engine`
+  `artifacts.source.read` (the `artifacts` app, as making a board asks), then
+  answered by the very read a board's `engine`
   dataset over the source is: the same question on the caller's own request,
   the same 30 second per-principal cache, and at most the source's most rows.
   The query string is the source's parameters, each held to the catalogue's
@@ -6916,6 +6918,20 @@ assistant acts as the person and nobody else: every tool call a turn makes is an
 ordinary request through this API's own handler, carrying a read grant derived
 from the request that asked the question, which ends with the turn, with the
 session, or after five minutes, whichever is first.
+
+**Any route of this reference, as the person.** Beside its dedicated tools, the
+assistant reaches every route this page documents that the person may use:
+it lists them and reads one route's entry from this very page, which the engine
+embeds, sends a `GET` or `HEAD` on its read grant, and proposes a `POST`, `PUT`,
+`PATCH` or `DELETE`, which is sent only from the person's approval of a card
+the engine renders from the resource as the route serves it now. A call names
+a route by its method and pattern, never a URL, and each path value is one
+escaped segment. A proposal prepared against a resource whose `ETag` the route
+answers is sent under that tag as its `If-Match`, so a change made meanwhile is
+refused rather than overwritten. Never through the assistant, whoever
+approves: the sign-in, session and token ceremonies, a credential or secret in
+clear (a secret's value, an integration's inputs, a frame's view ticket), and
+the routes on this section's own surface.
 
 **Somebody else's conversation does not exist.** Every read and write is keyed
 on the caller, and a conversation, turn or card that is another person's is

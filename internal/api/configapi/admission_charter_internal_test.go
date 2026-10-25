@@ -11,25 +11,30 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A CHARTER WRITE IS ADMITTED ON ITS OWN VERB, AND ONLY FOR THE CHARTER.
+// A CHARTER WRITE THROUGH THE ASSISTANT IS DECIDED AS THE ADMINISTRATOR'S OWN.
 //
-// An administrator acting through an approved assistant grant is admitted to
-// a charter write that changes the mission, the vision or the policies, on
-// `config.principles.write`; the same change asked as an ordinary document
-// write is refused (`config.write` is never the assistant's), and a charter
-// draft that also changes anything else (the company's name, a seat) is
-// decided by the document's own rules and refused, so the narrow verb never
-// stretches past the three settings. The administrator at their keyboard is
-// admitted to all of it, which is the control. Mutation: drop the
-// charter-only test in admit and the renaming draft is admitted.
-func TestACharterWriteIsAdmittedOnItsVerbOnlyForTheCharter(t *testing.T) {
+// An administrator acting through an approved assistant grant (an exec grant)
+// is admitted to a charter write on `config.principles.write`, and to the same
+// change asked as an ordinary document write, and to a draft that also renames
+// the company or adds a seat: the company document's verbs are the
+// administrator's own through their assistant (ADR-0051's parity), each write
+// the one they approved. A READ grant is refused every one of them, naming the
+// scope, because a write is only ever carried as an approved request. The
+// administrator at their keyboard is admitted to all of it, which is the
+// control. Mutation: let a read grant take an approve row in authz and the
+// read grant writes the charter; keep config.write from the assistant and the
+// approved document write is refused.
+func TestACharterWriteThroughTheAssistantIsTheAdministratorsOwn(t *testing.T) {
 	t.Parallel()
 	keyboard := iam.Principal{ID: uuid.New(), Login: "ana.admin", Kind: iam.KindPerson,
 		Seat: "ana", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 		ReauthAt: time.Now().Add(time.Hour)}
-	assisted := keyboard
-	assisted.Via, assisted.AssistScope = iam.AssistName(uuid.Must(uuid.NewV7())),
-		iam.AssistScopeExec
+	through := func(scope iam.AssistScope) iam.Principal {
+		p := keyboard
+		p.Via, p.AssistScope = iam.AssistName(uuid.Must(uuid.NewV7())), scope
+		return p
+	}
+	approved, reading := through(iam.AssistScopeExec), through(iam.AssistScopeRead)
 
 	prior := &config.Company{Name: "Acme", Mission: "Make every invoice add up.",
 		Policies: []string{"Money is cents."}}
@@ -48,10 +53,12 @@ func TestACharterWriteIsAdmittedOnItsVerbOnlyForTheCharter(t *testing.T) {
 		asCharter bool
 		admitted  bool
 	}{
-		{"the charter, through the assistant", assisted, &charter, true, true},
-		{"the charter as a document write, through the assistant", assisted, &charter, false, false},
-		{"a charter draft that renames the company", assisted, &renamed, true, false},
-		{"a charter draft that adds a seat", assisted, &seated, true, false},
+		{"the charter, approved", approved, &charter, true, true},
+		{"the charter as a document write, approved", approved, &charter, false, true},
+		{"a charter draft that renames the company, approved", approved, &renamed, true, true},
+		{"a charter draft that adds a seat, approved", approved, &seated, true, true},
+		{"the charter, under a read grant", reading, &charter, true, false},
+		{"a document write, under a read grant", reading, &seated, false, false},
 		{"the charter, at the keyboard", keyboard, &charter, true, true},
 		{"a renaming draft, at the keyboard", keyboard, &renamed, true, true},
 	} {

@@ -1,7 +1,6 @@
 package authz_test
 
 import (
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -58,12 +57,12 @@ func assistObjects(self iam.Principal) map[string]authz.Object {
 //
 // The walk that makes the column mandatory: a row with no assist class is a
 // verb somebody added without deciding, and it would otherwise read as one of
-// the three. Each class must be stated by some row or the walks below certify
-// nothing about it. And two statements are refused because they could only
-// mislead a reader: a class other than never on a row that needs a person
-// present (the assistant is not a person at a keyboard, and [authz.Decide]
-// refuses it there whatever the row says), and on a seat-only row (an
-// assistant acts as a person, who never takes one).
+// the three. Each class must be answered by some verb or the walks below
+// certify nothing about it. A verb is never the assistant's exactly when the
+// human-only list names it, with a reason. And a seat-only verb can only be
+// never: an assistant acts as a person, who never takes one. (That a row
+// states its nature and never Never, so the list is the one place the
+// assistant is kept from a verb, is held inside the package.)
 //
 // Mutation: drop the assist field from one row and this names it.
 func TestEveryRowDecidesTheAssistant(t *testing.T) {
@@ -82,19 +81,20 @@ func TestEveryRowDecidesTheAssistant(t *testing.T) {
 			continue
 		}
 		stated[class]++
-		if presence, _ := authz.PresenceOf(a); presence != authz.PresenceOptional &&
-			class != authz.AssistNever {
-			t.Errorf("%s needs a person present (%q) and states %q for the "+
-				"assistant, which no assistant grant can ever take", a, presence, class)
-		}
 		if only, _ := authz.SeatOnlyOf(a); only && class != authz.AssistNever {
-			t.Errorf("%s is an agent's own and states %q for the assistant, "+
+			t.Errorf("%s is an agent's own and answers %q for the assistant, "+
 				"which acts as a person", a, class)
+		}
+		why, listed := authz.AssistNeverReason(a)
+		if listed != (class == authz.AssistNever) || listed && strings.TrimSpace(why) == "" {
+			t.Errorf("%s answers %q for the assistant and is listed %v with the reason "+
+				"%q: a verb is never the assistant's exactly when the human-only list "+
+				"names it, with its reason", a, class, listed, why)
 		}
 	}
 	for _, c := range authz.AssistClasses {
 		if stated[c] == 0 {
-			t.Errorf("no row states %q, so nothing here certifies it", c)
+			t.Errorf("no row answers %q, so nothing here certifies it", c)
 		}
 	}
 	if _, known := authz.AssistOf("no.such.verb"); known {
@@ -105,19 +105,19 @@ func TestEveryRowDecidesTheAssistant(t *testing.T) {
 	}
 }
 
-// AN ASSIST-NEVER ROW REFUSES AN ASSISTED PRINCIPAL, UNDER EITHER SCOPE.
+// AN ASSIST-NEVER VERB REFUSES AN ASSISTED PRINCIPAL, UNDER EITHER SCOPE.
 //
-// Walked over every row the assistant never takes, with a person holding every
+// Walked over every verb on the human-only list, with a person holding every
 // permission and its control, the same person at their keyboard, admitted on
-// some object of the row: through the assistant the row is refused on every
+// some object of the row: through the assistant the verb is refused on every
 // object, under a read grant and under an exec grant alike, naming
 // [authz.ReasonAssistRefused] and no permission (none would change it). A
-// seat-only row is refused before the assistant's bar is reached, as the
+// seat-only verb is refused before the assistant's bar is reached, as the
 // person's own click is. And the bar keeps the artifact rows' concealment: a
 // person with no relation to an artifact is told it does not exist, through
-// the assistant as at their keyboard.
+// the assistant as at their keyboard, under either scope.
 //
-// Mutation: drop the never arm from the bar and every row here is admitted.
+// Mutation: drop the never arm from the bar and every verb here is admitted.
 func TestAnAssistNeverRowRefusesAnAssistedPrincipal(t *testing.T) {
 	t.Parallel()
 	keyboard := assistant()
@@ -156,24 +156,26 @@ func TestAnAssistNeverRowRefusesAnAssistedPrincipal(t *testing.T) {
 				"refusals through the assistant certify nothing", a)
 		}
 	}
-	if rows < 40 {
-		t.Fatalf("walked %d never rows; the column is not being read", rows)
+	if rows < 10 {
+		t.Fatalf("walked %d never verbs; the human-only list is not being read", rows)
 	}
 
 	// THE CONCEALMENT: no relation to an artifact is no artifact, through
-	// the assistant as at the keyboard.
+	// the assistant as at the keyboard, the scope bar included.
 	stranger := personLeading("dana", iam.GrantArtifacts)
 	private := authz.Object{Kind: authz.KindArtifact, ID: "a-private", Owner: "kai"}
 	for _, a := range []authz.Action{authz.ActionArtifactTrash,
-		authz.ActionArtifactExport, authz.ActionArtifactTransfer} {
+		authz.ActionArtifactForce, authz.ActionArtifactTransfer} {
 		if want := authz.Decide(t.Context(), stranger, a, private, nimbus(),
 			decidedAt); !want.NotFound() {
 			t.Fatalf("the control decided %+v on %s, want not found", want, a)
 		}
-		if got := authz.Decide(t.Context(), assisted(stranger, iam.AssistScopeExec), a,
-			private, nimbus(), decidedAt); !got.NotFound() {
-			t.Errorf("%s on an artifact the person holds no relation to decided "+
-				"%+v through the assistant, which names that it exists", a, got)
+		for _, scope := range iam.AssistScopes {
+			if got := authz.Decide(t.Context(), assisted(stranger, scope), a,
+				private, nimbus(), decidedAt); !got.NotFound() {
+				t.Errorf("%s on an artifact the person holds no relation to decided "+
+					"%+v through a %s grant, which names that it exists", a, got, scope)
+			}
 		}
 	}
 }
@@ -208,6 +210,7 @@ func TestAReadGrantTakesOnlyAssistReadRows(t *testing.T) {
 		case authz.AssistApprove:
 			approves++
 		}
+		presence, _ := authz.PresenceOf(a)
 		for name, object := range assistObjects(keyboard) {
 			want := authz.Decide(t.Context(), keyboard, a, object, nimbus(), decidedAt)
 			read := authz.Decide(t.Context(), assisted(keyboard, iam.AssistScopeRead), a,
@@ -216,6 +219,10 @@ func TestAReadGrantTakesOnlyAssistReadRows(t *testing.T) {
 				object, nimbus(), decidedAt)
 			switch class {
 			case authz.AssistRead:
+				if presence != authz.PresenceOptional {
+					t.Errorf("%s needs a person present and is a read the "+
+						"assistant takes unasked", a)
+				}
 				if !sameDecision(read, want) || !sameDecision(exec, want) {
 					t.Errorf("%s about %s decided %+v (read) and %+v (exec) "+
 						"through the assistant and %+v at the keyboard: a read the "+
@@ -264,61 +271,70 @@ func sameDecision(a, b authz.Decision) bool {
 		a.Unknown() == b.Unknown() && slices.Equal(a.Grants, b.Grants)
 }
 
-// THE ASSISTANT IS NEVER ONE STEP FROM WHAT A MODEL MUST NOT TOUCH.
+// THE HUMAN-ONLY LIST IS EXACTLY THE INTENDED SET.
 //
-// ADR-0051's never list, pinned by FAMILY rather than by verb where a family
-// exists, so a verb added to it later is held without anybody remembering this
-// test: every credential, secret, setup and fleet verb, every company document
-// verb but the principles' two (ADR-0051's one exception: mission, vision and
-// policies, read as the person and written only from an approved
-// before-and-after at the step-up window), every identity directory verb but
-// the org chart's seat read, every
-// purge, the company-wide trail, a transfer, a forced publish, an export,
-// nested model spend, the agents' own verbs, the catalogue and every
-// `assistant.` verb itself (which is also a person's alone, present). And the
-// writes an approval may carry are PINNED exactly, because every one of them
-// is a write the assistant can be one approval away from: a verb joins that
-// list in a reviewed diff here, together with the catalogue row that offers it.
+// ADR-0051's parity rule: the person's assistant takes every verb the person
+// may take, as a read or as the one change they approved, but for the verbs
+// on the human-only list. That list is PINNED here verb by verb, because each
+// entry is a decision a reviewer makes (a sign-in or session ceremony, a
+// credential or secret in clear, the assistant's own decisions, an effect a
+// grant would falsify or hide, an agent seat's own verb), and the walk holds both directions: a verb leaving the
+// list opens it to the assistant, and a verb joining it takes it from every
+// person's assistant, so either is a diff here. The families it is drawn from
+// are walked too, so a credential or session verb added to the table later is
+// held without anybody remembering this test, and every `assistant.` verb is
+// also a person's alone, present.
 //
-// Mutation: mark `secrets.reveal` assist-read, `merge_work_item` or
-// `config.write` assist-approve, and this goes red naming it.
-func TestTheAssistantIsNeverOneStepFromTheNeverList(t *testing.T) {
+// Mutation: drop `secrets.reveal` from the list, or add `config.write` to it,
+// and this goes red naming it.
+func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 	t.Parallel()
-	// THE ONE EXCEPTION TO A NEVER FAMILY, by verb: the principles, and
-	// nothing else of the company document.
-	principles := []authz.Action{authz.ActionPrinciplesRead, authz.ActionPrinciplesWrite}
-	never := func(a authz.Action) bool {
-		s := string(a)
-		if slices.Contains(principles, a) {
-			return false
+	want := []authz.Action{
+		// sign-in and session ceremonies
+		authz.ActionCredentialWrite, authz.ActionCredentialProof, authz.ActionSignInWrite,
+		authz.ActionSessionEnd, authz.ActionSessionInvalidate,
+		// a credential or a secret in clear
+		authz.ActionSecretReveal, authz.ActionSecretWrite, authz.ActionSetupConnect,
+		authz.ActionArtifactTicket,
+		// the assistant's own decisions
+		authz.ActionAssistantConverse, authz.ActionAssistantConversationRead,
+		authz.ActionAssistantApprove, authz.ActionAssistantDecline,
+		authz.ActionAssistantAuditRead,
+		// an effect a grant would falsify or hide
+		authz.ActionKnowledgeAnswer, authz.ActionArtifactReady,
+		// an agent seat's own
+		authz.ActionColleagueAsk, authz.ActionSandboxRun,
+	}
+	var got []authz.Action
+	for _, a := range authz.Actions() {
+		if class, _ := authz.AssistOf(a); class == authz.AssistNever {
+			got = append(got, a)
 		}
-		for _, family := range []string{"secrets.", "setup.", "fleet.", "config.",
-			"assistant."} {
-			if strings.HasPrefix(s, family) {
+	}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the human-only list is %v, want %v: a verb joins or leaves it in a "+
+			"reviewed diff here", got, want)
+	}
+	// THE FAMILIES, so a later verb of one is held by its prefix.
+	family := func(a authz.Action) bool {
+		s := string(a)
+		for _, prefix := range []string{"assistant.", "iam.credential.", "iam.session.",
+			"iam.signin."} {
+			if strings.HasPrefix(s, prefix) {
 				return true
 			}
 		}
-		switch {
-		case strings.HasPrefix(s, "iam.") && a != authz.ActionSeatsRead,
-			strings.HasSuffix(s, ".purge"):
-			return true
-		}
-		return slices.Contains([]authz.Action{
-			authz.ActionAuditRead, authz.ActionArtifactTransfer,
-			authz.ActionArtifactForce, authz.ActionArtifactExport,
-			authz.ActionKnowledgeAnswer, authz.ActionSandboxRun,
-			authz.ActionColleagueAsk, authz.ActionCatalogueWrite,
-			authz.ActionSkillPageWrite,
-		}, a)
+		only, _ := authz.SeatOnlyOf(a)
+		return only || a == authz.ActionSessionInvalidate
 	}
-	pinned := 0
 	for _, a := range authz.Actions() {
-		if !never(a) {
+		if !family(a) {
 			continue
 		}
-		pinned++
 		if class, _ := authz.AssistOf(a); class != authz.AssistNever {
-			t.Errorf("%s is on the never list and states %q for the assistant", a, class)
+			t.Errorf("%s is a ceremony or a verb of the assistant's own, and answers %q "+
+				"for the assistant", a, class)
 		}
 		if !strings.HasPrefix(string(a), "assistant.") {
 			continue
@@ -331,44 +347,19 @@ func TestTheAssistantIsNeverOneStepFromTheNeverList(t *testing.T) {
 				"so a machine token may take it", a, presence)
 		}
 	}
-	for _, a := range principles {
+	// AND THE PRINCIPLES ARE STILL DECIDED AS THE DOCUMENT IS: their own
+	// verbs, at the class and window of config.read and config.write.
+	for a, document := range map[authz.Action]authz.Action{
+		authz.ActionPrinciplesRead:  authz.ActionConfigRead,
+		authz.ActionPrinciplesWrite: authz.ActionConfigWrite,
+	} {
 		class, _ := authz.ClassOf(a)
 		recency, _ := authz.RecencyOf(a)
-		document := authz.ActionConfigRead
-		if a == authz.ActionPrinciplesWrite {
-			document = authz.ActionConfigWrite
-		}
-		want, _ := authz.ClassOf(document)
+		wantClass, _ := authz.ClassOf(document)
 		wantRecency, _ := authz.RecencyOf(document)
-		if class != want || recency != wantRecency {
-			t.Errorf("%s is decided by %s at %s, not as %s is (%s at %s): the exception "+
-				"is the assistant's column alone", a, class, recency, document, want,
-				wantRecency)
+		if class != wantClass || recency != wantRecency {
+			t.Errorf("%s is decided by %s at %s, not as %s is (%s at %s)", a, class,
+				recency, document, wantClass, wantRecency)
 		}
-	}
-	if pinned < 20 {
-		t.Fatalf("the never list matched %d verbs; the families no longer name "+
-			"the table's verbs", pinned)
-	}
-
-	approvable := map[authz.Action]bool{}
-	for _, a := range authz.Actions() {
-		if class, _ := authz.AssistOf(a); class == authz.AssistApprove {
-			approvable[a] = true
-		}
-	}
-	want := []authz.Action{
-		authz.ActionWorkCreate, authz.ActionWorkUpdate, authz.ActionWorkComment,
-		authz.ActionWorkRoute, authz.ActionPrioritiesSet, authz.ActionInboxMark,
-		authz.ActionPageCreate, authz.ActionPageSave,
-		authz.ActionSeatPause, authz.ActionSeatResume, authz.ActionTurnSteer,
-		authz.ActionRunAnswer, authz.ActionArtifactShare, authz.ActionArtifactUnshare,
-		authz.ActionPrinciplesWrite,
-	}
-	got := slices.Sorted(maps.Keys(approvable))
-	slices.Sort(want)
-	if !slices.Equal(got, want) {
-		t.Errorf("the writes an approval may carry are %v, want %v: a write joins "+
-			"this list with the catalogue row that offers it", got, want)
 	}
 }

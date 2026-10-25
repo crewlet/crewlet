@@ -63,6 +63,12 @@ type Preview struct {
 	// key ([New] mints it) and no If-Match ([RequestOf] derives it from
 	// SourceRevision).
 	Request exec.Request
+
+	// Act is the verb the request is decided by, for a tool that executes
+	// on whichever route its call names (a generic API change): what the
+	// approval asks the step-up of and the audit names. Empty for every
+	// other tool, whose own act tool or verb it is.
+	Act string
 }
 
 // Check refuses a preview no card is drawn from: a write with no title, no

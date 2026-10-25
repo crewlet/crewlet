@@ -243,12 +243,14 @@ func (v verbProbe) Routes(mux authz.Mux) error {
 // TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant: through the real
 // App.handler, the guard's assistant arm and authz.Decide's assistant column
 // answer one rule between them. A read grant takes an AssistRead verb's GET,
-// and is refused assist_scope on a write method (the guard) and on an
-// AssistApprove verb (the table); assist_refused on an AssistNever verb and
-// on a presence row (the table). An exec grant takes its one bound request,
-// on an approve or a read verb, and nothing else. Every route is first served
-// to the same person's cookie, so each refusal is the assistant's alone.
-// Mutation: drop either layer's check and its rows are served.
+// and is refused assist_scope on a write method (the guard), on an
+// AssistApprove verb and on a presence row (the table); assist_refused on a
+// verb of the human-only list (the table). An exec grant takes its one bound
+// request, on an approve or a read verb and on a presence row (its approval
+// is the person present), and nothing on the human-only list. Every route is
+// first served to the same person's cookie, so each refusal is the
+// assistant's alone. Mutation: drop either layer's check and its rows are
+// served; refuse a presence row to an exec grant and the approved removal is.
 func TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant(t *testing.T) {
 	t.Parallel()
 	probe := verbProbe{
@@ -256,9 +258,11 @@ func TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant(t *testing.T) {
 		"POST /probe/seats":    authz.ActionSeatsRead,    // AssistRead, a write method
 		"GET /probe/create":    authz.ActionWorkCreate,   // AssistApprove
 		"POST /probe/create":   authz.ActionWorkCreate,   // AssistApprove
-		"GET /probe/secrets":   authz.ActionSecretList,   // AssistNever
-		"GET /probe/reveal":    authz.ActionSecretReveal, // a presence row
+		"GET /probe/secrets":   authz.ActionSecretWrite,  // on the human-only list
+		"GET /probe/reveal":    authz.ActionSecretReveal, // listed, beside a presence
 		"DELETE /probe/reveal": authz.ActionSecretReveal,
+		"GET /probe/people":    authz.ActionDirectoryWrite, // a presence row, approvable
+		"DELETE /probe/people": authz.ActionDirectoryWrite,
 	}
 	fx := newAssistApp(t, []iam.Grant{iam.GrantAdmin}, probe)
 
@@ -302,6 +306,7 @@ func TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant(t *testing.T) {
 			{exec.Request{Method: http.MethodGet, Path: "/probe/create"}, http.StatusForbidden, scope},
 			{exec.Request{Method: http.MethodGet, Path: "/probe/secrets"}, http.StatusForbidden, refused},
 			{exec.Request{Method: http.MethodGet, Path: "/probe/reveal"}, http.StatusForbidden, refused},
+			{exec.Request{Method: http.MethodGet, Path: "/probe/people"}, http.StatusForbidden, scope},
 		} {
 			status, reason := answer(t, g, tc.call)
 			if status != tc.status || reason != tc.reason {
@@ -324,6 +329,7 @@ func TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant(t *testing.T) {
 				Body: []byte(`{}`)}, http.StatusOK, ""},
 			{exec.Request{Method: http.MethodGet, Path: "/probe/secrets"}, http.StatusForbidden, refused},
 			{exec.Request{Method: http.MethodDelete, Path: "/probe/reveal"}, http.StatusForbidden, refused},
+			{exec.Request{Method: http.MethodDelete, Path: "/probe/people"}, http.StatusOK, ""},
 		} {
 			g := fx.derive(t, approved(tc.bound))
 			other := tc.bound
