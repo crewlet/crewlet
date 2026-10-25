@@ -920,6 +920,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			Reply:     resumedReply,
 			Publisher: e.backends.Queue,
 			Turn:      turnIdentity,
+			Sessions:  e.sessions,
 			// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
 			// the turn's LATER rounds, not for this one: whether the phase
 			// being re-entered was agentic is the state's own answer (see

@@ -88,7 +88,7 @@ func leadEngine(t *testing.T, prov llm.Provider, standing notify.Standing) *Engi
 		t.Fatalf("queue.Start: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	e := &Engine{backends: &Backends{Queue: q}}
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q}})
 	e.epoch.current.Store(&Company{
 		Org: o, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
