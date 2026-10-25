@@ -7659,28 +7659,16 @@ a.work-cal-chip {
    what say which. */
 
 /* ---- A write control, and what became of its last press ----------------
-   The button and its refusal sit together: the refusal is drawn where the
-   press was made and stays until the next one (lib/useAct.ts), so it wraps
-   under the button rather than widening the row it sits in. */
+   The button and its refusal sit together: the refusal (the kit's
+   RefusalStrip) is drawn where the press was made and stays until the next
+   one (lib/useAct.ts), so it wraps under the button rather than widening the
+   row it sits in. */
 .write-button {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--spacing-1);
   min-width: 0;
-}
-.write-refusal {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-  max-width: 40rem;
-  font-size: var(--font-size-compact);
-  color: var(--color-feedback-danger-ink);
-  overflow-wrap: anywhere;
-}
-.write-refusal .t-caption {
-  color: var(--color-text-secondary);
 }
 /* WHY A LIST OR A BOARD TAKES NO CHANGE FROM THIS READER, said once above it —
    quiet, because it is a standing fact about the reader rather than an answer
