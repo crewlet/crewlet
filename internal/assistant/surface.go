@@ -105,6 +105,8 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return s.navigate(ctx, tool, call.Arguments)
 	case catalog.KindDocs:
 		return s.docs(ctx, tool, call.Arguments)
+	case catalog.KindDeep:
+		return s.deep(ctx, tool, call.Arguments)
 	}
 	return failed(mcp.RefusalInternalError, "This tool cannot be used here."), nil
 }

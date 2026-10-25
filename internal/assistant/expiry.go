@@ -85,12 +85,18 @@ func (s *Service) lapse(ctx context.Context, owner uuid.UUID, row assistantdomai
 		return false, nil
 	}
 	w := expiryWrite(owner, row)
+	// READ BEFORE THE CLOSE, which drops the parked record: a deep-work run
+	// the turn parked on is never continued once it expires.
+	keep, keepErr := s.parkedLoop(ctx, owner, row.ID)
 	state, err := s.closeDerived(ctx, w, row.ID, assistantdomain.TurnEnd{
 		State: wire.TurnExpired, Steps: row.Steps})
 	if err != nil {
 		return false, err
 	}
 	if state == wire.TurnExpired {
+		if keepErr == nil {
+			s.dropParkedDeep(ctx, keep)
+		}
 		s.settleWaiting(ctx, w, waitingSteps(t, row.ID), wire.ProposalExpired, nil, nil)
 		// The frame log this node may hold ends waiting for approval; a
 		// stream of the turn now is answered from the transcript, which

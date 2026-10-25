@@ -332,6 +332,10 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	input = redact.Secrets(input)
 	ts.Page = redactedPage(ts.Page)
+	attached, err := s.attachmentsOf(ctx, ts)
+	if err != nil {
+		return wire.TurnAccepted{}, err
+	}
 	id := TurnID(ts.Key)
 	accepted := wire.TurnAccepted{TurnID: id, StreamURL: StreamPath(ts.Conversation, id)}
 
@@ -455,12 +459,13 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 
 	c, organization := s.company()
-	tools := s.catalogue.Offered(ts.Person, acts)
+	tools := s.withDeep(ctx, s.catalogue.Offered(ts.Person, acts))
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
+	t.deep.attachments = attached
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
 		History: earlier, Page: ts.Page, Boundary: t.boundary, Question: input,
-		Proposable: proposable(tools)}
+		Proposable: proposable(tools), Deep: offersDeep(tools), Attachments: refsOf(attached)}
 	if c != nil {
 		in.Company, in.Zone = c.Name, c.Location()
 	}
@@ -506,12 +511,18 @@ func (s *Service) supersede(ctx context.Context, p iam.Principal, key string,
 	// READ BEFORE THE CLOSE, which drops the parked record: the last seq its
 	// segment told, which the closing frames number after.
 	var floor uint64
-	if keep, err := s.parkedLoop(ctx, p.ID, row.ID); err == nil {
+	keep, keepErr := s.parkedLoop(ctx, p.ID, row.ID)
+	if keepErr == nil {
 		floor = keep.Seq
 	}
 	err := s.records.CloseTurn(ctx, Write{Owner: p.ID, By: iam.ActorFor(p), Key: key,
 		Steps: []string{"supersede"}}, row.ID, assistantdomain.TurnEnd{
 		State: wire.TurnSuperseded, Steps: row.Steps})
+	if err == nil && keepErr == nil {
+		// No approval resumes a turn asked past, so a deep-work run it
+		// parked on is never continued.
+		s.dropParkedDeep(ctx, keep)
+	}
 	var moved *assistantdomain.TurnMoved
 	switch {
 	case errors.As(err, &moved) && moved.State.Final():
@@ -803,6 +814,9 @@ func (s *Service) declineParked(ctx context.Context, p iam.Principal, row assist
 	s.mu.Unlock()
 	if d == nil {
 		return
+	}
+	if keep, err := s.parkedLoop(ctx, p.ID, row.ID); err == nil {
+		s.dropParkedDeep(ctx, keep)
 	}
 	if err := d.DeclineTurn(ctx, approval.Stop{Owner: p.ID, Conversation: row.Conversation,
 		Turn: row.ID, By: iam.ActorFor(p), Key: key}); err != nil {

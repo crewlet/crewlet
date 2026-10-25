@@ -91,6 +91,9 @@ type turn struct {
 	outside  provenance.Source
 	model    string
 	provider string
+	// deep is the turn's deep work (ADR-0053): what this segment hands a
+	// run, and the run in flight.
+	deep deepState
 }
 
 // write is the record caller for this segment, with no step yet.
@@ -149,11 +152,12 @@ func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepR
 	t.mu.Lock()
 	t.steps++
 	index := t.steps
+	parent := t.deep.parent
 	t.mu.Unlock()
 	label := oneLine(redact.Secrets(tool.StepLabel(args)))
 	step := stepClock{started: t.svc.now(), pattern: pattern, StepEvent: wire.StepEvent{
 		StepID: assistantdomain.StepID(t.id, index), TurnID: t.id, Index: index, Tool: tool.Name,
-		Label: label, Request: req, State: wire.StepRunning,
+		Label: label, Request: req, State: wire.StepRunning, Parent: parent,
 	}}
 	step.StartedAt = step.started.UTC()
 	t.firstOutput()
@@ -429,14 +433,24 @@ type loopRun struct {
 	// fresh is a first segment, whose conversation may be titled after it.
 	fresh    bool
 	question string
+	// deep is the deep-work run a resumed segment continues before its
+	// loop, the answer to the call it parked on being that run's end.
+	deep *parkedDeep
 }
 
 // run drives one segment to its end, on its own goroutine.
 func (t *turn) run(r loopRun) {
 	defer close(t.done)
 	defer t.svc.release(t)
-	ctx, cancel := context.WithTimeoutCause(t.ctx, r.timeout, errTurnTimeout)
-	defer cancel()
+	// THE SEGMENT'S CLOCK, which a deep-work run moves later to cover itself
+	// ([segmentClock]); its expiry ends the segment as timed out.
+	ctx, cancel := context.WithCancelCause(t.ctx)
+	defer cancel(nil)
+	clock := startClock(t.svc.now(), r.timeout, func() { cancel(errTurnTimeout) })
+	defer clock.stop()
+	t.mu.Lock()
+	t.deep.clock, t.deep.meter, t.deep.tools = clock, r.meter, r.tools
+	t.mu.Unlock()
 	ctx = llm.WithSeat(ctx, assistantHome(t.person.ID))
 	ctx, span := tracing.Start(ctx, "assistant", "assistant.turn",
 		attribute.String("conversation_id", t.conversation.String()),
@@ -444,6 +458,17 @@ func (t *turn) run(r loopRun) {
 		attribute.String("prompt_version", PromptVersion))
 	defer span.End()
 
+	if r.deep != nil {
+		// A PARKED RUN IS CONTINUED FIRST: its end, not the decision, is
+		// the answer to the call the turn parked on.
+		answered, parkAgain, err := t.answerParkedDeep(ctx, &r)
+		if err != nil || parkAgain {
+			end := t.conclude(ctx, answered, err)
+			span.SetAttributes(attribute.String("outcome", string(end.State)),
+				attribute.Int("steps", end.Steps))
+			return
+		}
+	}
 	surface := newSurface(t, r.tools)
 	progress := &toolloop.Progress{}
 	res, err := toolloop.Run(ctx, toolloop.Config{
@@ -641,6 +666,9 @@ type parked struct {
 	// counted ([parkedTail]): what the segment an approval opens continues
 	// after where no node of the fleet remembers more.
 	Seq uint64 `json:"seq"`
+	// Deep is the deep-work run the turn parked on, continued by the
+	// approval that resumes it; absent for a quick-mode proposal.
+	Deep *parkedDeep `json:"deep,omitempty"`
 }
 
 // parkedTail is how many frames a segment tells after its park record has
@@ -655,7 +683,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	t.mu.Lock()
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
-		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail}
+		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}

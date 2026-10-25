@@ -1398,7 +1398,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// the irreversible things happen. The round's own tokens are
 		// spent already, and the meter records them whichever way it
 		// answers (see [BudgetMeter]).
-		if err = charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
+		if err = Charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
 			// The round is on the failure record: publish it to the
 			// Progress the caller reads on this path, since it is the
 			// round that was refused.
@@ -1731,7 +1731,12 @@ func unparsedArguments(call llm.ToolCall) string {
 		"Call it again with its arguments as one complete JSON object.", call.Name, call.ArgumentsError)
 }
 
-func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
+// Charge records tokens a model call has already spent on meter, and answers a
+// refusal as the loop reads one: a [*BudgetError], or the counter's own error
+// when it could not be reached. Exported for a caller that spends tokens
+// outside this loop and must charge them by the same rule: the Dashboard
+// Assistant's deep-work run, whose tokens are spent in a coding CLI's own loop.
+func Charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if meter == nil || tokens <= 0 {
 		return nil
 	}

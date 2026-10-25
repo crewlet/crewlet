@@ -98,6 +98,11 @@ type promptInput struct {
 	Page     *wire.PageContext
 	Boundary provenance.Boundary
 	Question string
+
+	// Deep says the turn offers deep work, and Attachments are the files
+	// the question carried.
+	Deep        bool
+	Attachments []wire.FileRef
 }
 
 // historyEntry is one earlier message as a turn re-reads it.
@@ -123,6 +128,10 @@ func buildMessages(in promptInput) []llm.Message {
 	system.WriteString(companyBlock(in))
 	system.WriteString("\n\n")
 	system.WriteString(personBlock(in))
+	if in.Deep {
+		system.WriteString("\n\n")
+		system.WriteString(deepBlock)
+	}
 
 	out := []llm.Message{{Role: llm.RoleSystem, Content: system.String()}}
 	if omitted := len(in.History) - HistoryMessages; omitted > 0 {
@@ -231,19 +240,23 @@ func redactedPage(p *wire.PageContext) *wire.PageContext {
 // questionBlock is block 6: the page the question was asked on, fenced, then
 // the question.
 func questionBlock(in promptInput) string {
+	question := in.Question
+	if block := attachmentsBlock(in.Attachments, in.Deep); block != "" {
+		question = block + "\n\n" + question
+	}
 	if in.Page == nil {
-		return in.Question
+		return question
 	}
 	raw, err := json.Marshal(in.Page)
 	if err != nil {
 		// A page context that validated always encodes; one that did not
 		// is left out rather than described.
-		return in.Question
+		return question
 	}
 	fenced := provenance.Fence(in.Boundary, provenance.SourcePageContext,
 		provenance.TrustColleague, nil, string(raw))
 	return "The person is looking at this screen of the dashboard, described by the " +
-		"screen itself:\n" + fenced + "\n\nTheir question:\n" + in.Question
+		"screen itself:\n" + fenced + "\n\nTheir question:\n" + question
 }
 
 // cardSummary is one card as one line of the conversation the model re-reads:
@@ -262,6 +275,12 @@ func cardSummary(c wire.Card) string {
 		return fmt.Sprintf("[refused: %s]", c.Error.Refusal.Code)
 	case wire.CardNotice:
 		return fmt.Sprintf("[notice: %s]", oneLine(c.Notice.Text))
+	case wire.CardFile:
+		names := make([]string, 0, len(c.File.Files))
+		for _, f := range c.File.Files {
+			names = append(names, oneLine(f.Name)+" (file id "+f.FileID.String()+")")
+		}
+		return "[files: " + strings.Join(names, ", ") + "]"
 	}
 	return "[card]"
 }
