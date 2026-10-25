@@ -43,7 +43,7 @@ import (
 //
 // Every member of `llm` must be a text-mode entry whose profile denies the
 // CLI's own local tools AND its own web tools. The assistant's guarantee
-// (ADR-0046) is that it reads only what the person's own requests return; a
+// (ADR-0049) is that it reads only what the person's own requests return; a
 // CLI in agent mode runs its own tool loop whose calls never pass the guard, a
 // shell reads whatever the engine user can, and a web fetch is both text no
 // authority decision ever saw and a way out for whatever the person's data

@@ -101,7 +101,7 @@ const (
 	TransportWork = "work"
 	// TransportAssistant is the Dashboard Assistant carrying out a write the
 	// person approved: the act route reached in process under an exec grant
-	// derived from the approving request (ADR-0047). The record names the
+	// derived from the approving request (ADR-0050). The record names the
 	// person, as every record the write left does; its [AssistantRef] says
 	// which conversation, turn, grant, session and proposal carried it.
 	TransportAssistant = "assistant"

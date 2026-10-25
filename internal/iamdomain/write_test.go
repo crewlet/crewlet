@@ -1455,7 +1455,7 @@ func administrativeGestures(ctx context.Context,
 // A request the Dashboard Assistant makes is its person's own, so an
 // administrator's assistant is composed holding admin, and the authority
 // table's assist column is what refuses it the directory at the route
-// (ADR-0048). This is the record's own refusal, for the machine token's
+// (ADR-0051). This is the record's own refusal, for the machine token's
 // reason: a record is formed by more than the routes that table guards. Over
 // every guarded record, an administrator acting through an assistant grant is
 // refused [iamdomain.ErrAssistRefused] (wrapping [iamdomain.ErrRefused], and

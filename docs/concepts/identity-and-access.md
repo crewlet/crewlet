@@ -2654,7 +2654,7 @@ The Dashboard Assistant acts as the person using it: a request it makes is
 decided exactly as that person's own click is, and the credential it came
 through is recorded beside them as `assist:<grant>`. So the table can only
 take away from what the person holds, never add to it, and every row states
-how far it lets the assistant reach (ADR-0048):
+how far it lets the assistant reach (ADR-0051):
 
 - **read**: a read grant takes the verb, so a turn reads what the person may
   read with nothing for them to approve;

@@ -37,7 +37,7 @@ func TestAnOperationsDigestIsTheCanonicalEncoding(t *testing.T) {
 
 // A REQUEST DIGEST IS THE REQUEST, AND NOTHING ABOUT HOW IT WAS SPELLED.
 //
-// An approval is bound to this value (ADR-0047), so the same request must
+// An approval is bound to this value (ADR-0050), so the same request must
 // digest the same however its body is ordered or spaced, and any change to
 // the method, the object, the query or one argument must move it. Mutation:
 // leave the method out of the hash and the POST and PUT digests agree.

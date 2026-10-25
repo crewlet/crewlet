@@ -319,7 +319,7 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 }
 
 // assistBar is the bar a request made through the Dashboard Assistant meets
-// on this row, and whether it meets one (ADR-0048).
+// on this row, and whether it meets one (ADR-0051).
 //
 // THE CLASS OF THE CREDENTIAL DECIDES, NEVER ITS SPELLING: a principal whose
 // [iam.Principal.Via] names the assistant's class is the assistant's, whether

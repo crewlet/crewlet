@@ -9,7 +9,7 @@ import (
 )
 
 // A VERB THE ASSISTANT READS IS A TOOL THAT ONLY READS, AND ONE IT CARRIES ONLY
-// ON APPROVAL IS ONE THAT WRITES (ADR-0048).
+// ON APPROVAL IS ONE THAT WRITES (ADR-0051).
 //
 // The authority table says which verbs a read grant may take with nothing for
 // the person to approve; the tool's own annotations say whether calling it

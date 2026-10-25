@@ -359,7 +359,7 @@ const (
 	ActionBrandAdopt Action = "artifacts.brand.adopt"
 	ActionBrandClear Action = "artifacts.brand.clear"
 
-	// --- the Dashboard Assistant (ADR-0046 to ADR-0049) ---
+	// --- the Dashboard Assistant (ADR-0049 to ADR-0052) ---
 	//
 	// The assistant's own verbs: using it, reading a conversation,
 	// approving or declining a proposal, and an administrator's audited
@@ -367,9 +367,9 @@ const (
 
 	// ActionAssistantApprove is a person approving one of their own
 	// proposals: `POST /assistant/proposals/{id}/approve`. Everybody's,
-	// because whose proposal it is is the store's answer (ADR-0049) and what
+	// because whose proposal it is is the store's answer (ADR-0052) and what
 	// the write may do is the write's own row, decided again when it is sent.
-	// The write's own step-up is asked by the approval itself (ADR-0047).
+	// The write's own step-up is asked by the approval itself (ADR-0050).
 	ActionAssistantApprove Action = "assistant.approve"
 	// ActionAssistantDecline is a person declining one of their own
 	// proposals.
@@ -417,7 +417,7 @@ func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 
 // AssistClass is what the Dashboard Assistant may do with a verb: take it
 // under a read grant, carry it only as the one approved request an exec grant
-// binds, or never (ADR-0048). See [rule.assist].
+// binds, or never (ADR-0051). See [rule.assist].
 //
 // IT ONLY EVER TAKES AWAY. An assisted principal is the person, composed from
 // their own identity rows, so the class and every relation are decided for
@@ -433,7 +433,7 @@ const (
 	AssistRead AssistClass = "read"
 	// AssistApprove is a verb the assistant may carry only as the one
 	// request a person approved: an exec grant binds the request's digest,
-	// so the write that runs is the preview the person saw (ADR-0047).
+	// so the write that runs is the preview the person saw (ADR-0050).
 	AssistApprove AssistClass = "approve"
 	// AssistNever is a verb no assistant grant takes, whoever approved what.
 	AssistNever AssistClass = "never"
@@ -1086,7 +1086,7 @@ var rules = map[Action]rule{
 	ActionBrandClear: {class: ClassAdmin, humanOnly: true,
 		presence: PresenceRequired, recency: iam.RecencyStepUp, assist: AssistNever},
 
-	// --- the Dashboard Assistant (ADR-0046 to ADR-0049) ---
+	// --- the Dashboard Assistant (ADR-0049 to ADR-0052) ---
 	//
 	// THE ASSISTANT'S OWN VERBS, each NEVER THE ASSISTANT'S, HUMAN-ONLY and
 	// needing a PERSON PRESENT: a grant that could converse, approve or read

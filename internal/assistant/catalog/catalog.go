@@ -13,7 +13,7 @@
 // table), so a new question, tool or route is a red build that says "classify
 // this for the assistant" rather than a surface the assistant silently gains
 // or silently lacks. A verb the authority table keeps from the assistant
-// (ADR-0048) can only be Never, derived from the table rather than a list.
+// (ADR-0051) can only be Never, derived from the table rather than a list.
 //
 // # Only what the person can take now is offered
 //

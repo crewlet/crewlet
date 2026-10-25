@@ -201,7 +201,7 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 
 // Removed answers which of ids carry a removal tombstone, in the order given:
 // the persons whose removal this node has applied. It is what another domain's
-// erasure is reconciled against (ADR-0049's Dashboard Assistant conversations),
+// erasure is reconciled against (ADR-0052's Dashboard Assistant conversations),
 // because a removal is permanent and nothing names a removed person again.
 //
 // AN ORDINARY READ, never identity work ([store.Identity]): it is asked by a

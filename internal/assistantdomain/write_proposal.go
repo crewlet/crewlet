@@ -24,7 +24,7 @@ import (
 var ProposalMethods = []string{"POST", "PUT", "PATCH", "DELETE", "PAGE"}
 
 // NewProposal is one proposal a running turn made: the exact request it would
-// send, the preview's card and the digest that binds them (ADR-0047). The
+// send, the preview's card and the digest that binds them (ADR-0050). The
 // digest is computed by internal/assistant/proposal; this package stores what
 // it is given and seals what is not an identifier.
 type NewProposal struct {

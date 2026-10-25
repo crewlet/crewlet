@@ -174,7 +174,7 @@ type Principal struct {
 	//
 	// `assist:<grant>` ([AssistName]) is the Dashboard Assistant acting for
 	// a person signed in through a session: the person is the author, and
-	// the grant is the credential the request came through (ADR-0046).
+	// the grant is the credential the request came through (ADR-0049).
 	Via string
 
 	// AssistScope is how far the assistant grant named by Via reaches:
@@ -308,7 +308,7 @@ func (p Principal) Validate() error {
 			AssistPrefix)
 	}
 	// AN ASSISTANT GRANT IS A PERSON'S, AND IT SAYS HOW FAR IT REACHES. The
-	// grant is derived only from a person's own session (ADR-0046), so any
+	// grant is derived only from a person's own session (ADR-0049), so any
 	// other kind acting through one is a principal nobody composed, and the
 	// scope travels with the grant and nowhere else.
 	_, assisted := p.Assisted()
