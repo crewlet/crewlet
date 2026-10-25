@@ -130,9 +130,10 @@ type Response struct {
 }
 
 // MaxResponseBytes is the most of one answer a call reads: sixty-four
-// kibibytes, sixteen of answer_knowledge's four-kibibyte sources, which keeps
-// eight steps' results inside an interactive model's context before the
-// model's own cut (16 KiB per result) and the cards' (256 KiB per card) apply.
+// kibibytes, sixteen of answer_knowledge's four-kibibyte sources: what one
+// step reads before the model's own cut (16 KiB per result, which is what
+// keeps a turn's steps inside the model's context) and the cards' (256 KiB per
+// card) apply.
 const MaxResponseBytes = 64 << 10
 
 // Dispatcher sends a request through the API's own handler chain as the

@@ -324,8 +324,8 @@ providers:
 # assistant:
 #   enabled: true
 #   llm: [assistant]
-#   max_steps: 8
-#   turn_timeout_seconds: 120
+#   max_steps: 30
+#   turn_timeout_seconds: 900
 #   proposal_ttl_seconds: 900
 #   retention_days: 30
 #   token_budget: { day: 200000 }

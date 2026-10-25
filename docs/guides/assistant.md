@@ -14,7 +14,7 @@ of its own, so turning it on grants nobody any access they did not already
 have:
 
 - Each question derives a short-lived grant from the asking person's own
-  browser session (five minutes for reads, scoped to read methods). Every tool
+  browser session (for the turn's length at most, scoped to read methods). Every tool
   call is one ordinary API request sent with that grant through the engine's
   own handler, so the guard, the authority table and every route's own checks
   decide it exactly as they decide that person's clicks
@@ -115,8 +115,9 @@ per-round cost is rarely justified for lookups.
 
 Before switching models, run the evaluation suites against the candidate
 (`crewlet assistant eval`, below). Keep `turn_timeout_seconds` at its default
-of 120 seconds unless measurements on your hosts justify another value: a
-three-step read is four rounds, and each round pays the CLI's start time.
+of 900 seconds unless measurements on your hosts justify another value: a
+turn of thirty steps is thirty-one rounds, and each round pays the CLI's start
+time.
 
 ## Budgets and limits
 

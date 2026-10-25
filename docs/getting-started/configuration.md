@@ -347,8 +347,8 @@ providers:
 assistant:
   enabled: true                         # absent or false: off
   llm: [assistant]                      # providers.llm keys, a fallback chain
-  max_steps: 8                          # tool steps per turn, 1..16
-  turn_timeout_seconds: 120             # longest turn, 30..600
+  max_steps: 30                         # tool steps per turn, 1..40
+  turn_timeout_seconds: 900             # longest turn, 30..1200
   proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
   retention_days: 30                    # conversation history, 1..365
   token_budget: { day: 200000 }         # per person, optional
@@ -358,8 +358,8 @@ assistant:
 |---|---|---|
 | `enabled` | off | Runs the assistant. A pointer, so an absent key and `false` both mean off. |
 | `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
-| `max_steps` | 8 | The most tool steps one turn may take. |
-| `turn_timeout_seconds` | 120 | The longest one turn may run. Every round is a CLI launch. |
+| `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
+| `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a CLI launch of fifteen to twenty-five seconds. |
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |

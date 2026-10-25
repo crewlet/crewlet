@@ -17,8 +17,8 @@ import (
 //	assistant:
 //	  enabled: true                 # absent means off
 //	  llm: [assistant]              # providers.llm keys, a fallback chain
-//	  max_steps: 8                  # 1..16
-//	  turn_timeout_seconds: 120     # 30..600
+//	  max_steps: 30                 # 1..40
+//	  turn_timeout_seconds: 900     # 30..1200
 //	  proposal_ttl_seconds: 900     # 60..3600
 //	  retention_days: 30            # 1..365
 //	  token_budget: { day: 200000 } # per person, optional
@@ -57,8 +57,8 @@ type Assistant struct {
 	// the shape a seat's llm_auxiliary takes.
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be a text-mode entry denying local tools and, through overrides.web_tools, web tools."`
 
-	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=16" desc:"Most tool steps one assistant turn may take, 1..16. Absent: 8."`
-	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=600" desc:"Longest one assistant turn may run, 30..600 seconds. Absent: 120."`
+	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most tool steps one assistant turn may take, 1..40. Absent: 30."`
+	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one assistant turn may run, 30..1200 seconds. Absent: 900."`
 	ProposalTTLSeconds int `yaml:"proposal_ttl_seconds,omitempty" json:"proposal_ttl_seconds,omitempty" js:"min=0;max=3600" desc:"How long a proposed change waits for approval, 60..3600 seconds. Absent: 900."`
 	RetentionDays      int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=365" desc:"How long a person's assistant conversations are kept, 1..365 days. Absent: 30."`
 
@@ -77,22 +77,35 @@ type assistantBound struct {
 
 // The four bounds, each anchored where it is consumed:
 //
-//   - max_steps: a step is one tool call and one model round, and a turn that
-//     needs more than sixteen is a task for a seat, not a question in a drawer.
-//     Eight answers a three-read question with room for a correction.
-//   - turn_timeout_seconds: every round is a CLI launch, so a turn of eight
-//     rounds needs about two minutes at the latency the plan measures; thirty
-//     seconds is one slow round, and ten minutes is a seat's coding call.
+//   - max_steps: a step is one tool call and one model round. Thirty lets a
+//     turn look a route up, read the resource and the records around it,
+//     correct a refused call and propose the change, which is what a question
+//     about the person's whole API takes (a seat added to the org reads the
+//     route's documentation, the unit and its seats before it proposes). Forty
+//     is the ceiling because every step's result stays in the conversation the
+//     model re-reads: forty of internal/assistant's sixteen kibibyte results
+//     are about 160,000 tokens, which with the prompt still fits a 200,000
+//     token context, where sixty would not. The budget meters, the person's
+//     and the company's, still stop a turn at its spend whatever its count.
+//   - turn_timeout_seconds: every round is a CLI launch of fifteen to
+//     twenty-five seconds, so thirty rounds need up to twelve and a half
+//     minutes: fifteen is the default, and twenty minutes carries the forty
+//     step ceiling at the same latency. Thirty seconds is one slow round.
 //   - proposal_ttl_seconds: long enough to read a diff and step up, short
 //     enough that what was previewed is still what the write meets.
 //   - retention_days: a month of history by default, a year at most, because
 //     a transcript holds whatever the person's reads returned.
 var (
-	assistantSteps     = assistantBound{key: "max_steps", min: 1, max: 16, def: 8, unit: "steps"}
-	assistantTimeout   = assistantBound{key: "turn_timeout_seconds", min: 30, max: 600, def: 120, unit: "seconds"}
+	assistantSteps     = assistantBound{key: "max_steps", min: 1, max: 40, def: 30, unit: "steps"}
+	assistantTimeout   = assistantBound{key: "turn_timeout_seconds", min: 30, max: AssistantTurnTimeoutCeiling, def: 900, unit: "seconds"}
 	assistantProposal  = assistantBound{key: "proposal_ttl_seconds", min: 60, max: 3600, def: 900, unit: "seconds"}
 	assistantRetention = assistantBound{key: "retention_days", min: 1, max: 365, def: 30, unit: "days"}
 )
+
+// AssistantTurnTimeoutCeiling is the longest any assistant turn may run, in
+// seconds: the top of turn_timeout_seconds' range, and so the longest a turn's
+// read grant has to live (internal/api/auth's AssistReadLifetime).
+const AssistantTurnTimeoutCeiling = 1200
 
 // value is v with its default applied and clamped into range.
 func (b assistantBound) value(v int) int {

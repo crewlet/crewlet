@@ -6917,7 +6917,8 @@ is answered `403 assistant_not_available` with `reason: not_a_person`. The
 assistant acts as the person and nobody else: every tool call a turn makes is an
 ordinary request through this API's own handler, carrying a read grant derived
 from the request that asked the question, which ends with the turn, with the
-session, or after five minutes, whichever is first.
+session, or after twenty minutes (the longest a turn may run), whichever is
+first.
 
 **Any route of this reference, as the person.** Beside its dedicated tools, the
 assistant reaches every route this page documents that the person may use:

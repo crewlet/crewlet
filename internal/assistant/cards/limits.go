@@ -16,8 +16,9 @@ const (
 
 	// ModelBytes is the most of one step's result a model is handed:
 	// sixteen kibibytes, a quarter of the 64 KiB a step reads
-	// (exec.MaxResponseBytes), so eight steps' results fit an interactive
-	// model's context beside the prompt. What does not fit is dropped whole
+	// (exec.MaxResponseBytes), so a turn's forty steps at most
+	// (internal/config's max_steps ceiling) fit a 200,000 token context
+	// beside the prompt. What does not fit is dropped whole
 	// (rows past the bound, an entity's list items) and the summary says
 	// how much, rather than cut mid-value.
 	ModelBytes = 16 << 10

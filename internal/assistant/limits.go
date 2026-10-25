@@ -21,8 +21,9 @@ const (
 
 	// ModelResultBytes is the most of one tool result the model reads:
 	// sixteen kibibytes, a quarter of what a call reads at most
-	// ([exec.MaxResponseBytes]), so eight steps' results fit an interactive
-	// model's context beside the prompt. A card keeps up to its own bound
+	// ([exec.MaxResponseBytes]), so a turn's forty steps at most
+	// (internal/config's max_steps ceiling) fit a 200,000 token context
+	// beside the prompt. A card keeps up to its own bound
 	// separately; the model is handed a summary of it.
 	ModelResultBytes = 16 << 10
 

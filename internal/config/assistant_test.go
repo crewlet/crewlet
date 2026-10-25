@@ -235,7 +235,7 @@ func TestTheAssistantBlockValidatesEveryRange(t *testing.T) {
 			func(a Assistant) int { return int(a.Retention() / (24 * time.Hour)) }},
 	}
 	wantBounds := map[string][3]int{
-		"max_steps": {1, 16, 8}, "turn_timeout_seconds": {30, 600, 120},
+		"max_steps": {1, 40, 30}, "turn_timeout_seconds": {30, 1200, 900},
 		"proposal_ttl_seconds": {60, 3600, 900}, "retention_days": {1, 365, 30},
 	}
 	for _, f := range fields {
