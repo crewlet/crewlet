@@ -47,6 +47,13 @@ const shellProbePrompt = "Using your shell or command-execution tool, run exactl
 	"command and reply with only its output, nothing else: date +%s\n" +
 	"If you have no tool that can run commands, reply with only: " + noLocalToolsReply
 
+// fileProbePrompt asks the CLI to read a file on the engine host, the path
+// substituted for %s. The file holds a value minted for the one run, so a
+// model can echo it only by reading it.
+const fileProbePrompt = "Using your file-reading tool, read the file at %s and reply with " +
+	"only its contents, nothing else.\n" +
+	"If you have no tool that can read files, reply with only: " + noLocalToolsReply
+
 // noLocalToolsReply is what a CLI whose shell is denied is asked to say.
 const noLocalToolsReply = "NO-LOCAL-TOOLS"
 
@@ -267,6 +274,12 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 			}
 		}
 		verdict, problem := p.shellProbe(ctx)
+		if verdict == refusedVerdict {
+			// A refused shell is half the stance: the file tools read
+			// the host as well as a shell does, and the deny list that
+			// refused one says nothing about the other.
+			verdict, problem = p.fileProbe(ctx)
+		}
 		d.LocalTools = stance + " — " + verdict
 		if problem != "" {
 			d.Problems = append(d.Problems, problem)
@@ -500,8 +513,53 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 				"a host you would hand an autonomous agent, or prefer a backend whose "+
 				"profile denies local tools", p.agent, orNone(p.profile.LocalToolsNote))
 	default:
-		return "probe: refused", ""
+		return refusedVerdict, ""
 	}
+}
+
+// refusedVerdict is a probe that found its tool refused.
+const refusedVerdict = "probe: refused"
+
+// fileProbe asks the CLI to read a file the doctor has just written on the
+// engine host, outside the seat's home, and reports whether it did, on the
+// exact argv the Dashboard Assistant runs ([tokenStreamed]). The second
+// return is the problem line, empty when there is none.
+func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
+	dir, err := os.MkdirTemp("", "crewlet-file-probe-")
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			log.WarnContext(ctx, "cli_agent_file_probe_cleanup_failed", "dir", dir, "error", rmErr)
+		}
+	}()
+	token := "crewlet-file-probe-" + newSessionID()
+	path := filepath.Join(dir, "probe.txt")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	comp, err := p.Complete(ctx, tokenStreamed(llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(fileProbePrompt, path)}},
+	}))
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	if !strings.Contains(comp.Content, token) {
+		return refusedVerdict + " (shell and file read)", ""
+	}
+	if p.profile.LocalTools == cliprofile.LocalToolsDenied {
+		return "probe: FILE READ", fmt.Sprintf(
+			"the %q profile says local tools are denied, but the CLI read a file the doctor "+
+				"wrote on the engine host, outside its seat home: its file tools are not "+
+				"off on this build (%s), so it can read the engine's own data; check "+
+				"overrides against the installed version before running seats or the "+
+				"assistant on it", p.agent, orNone(p.profile.WrittenFor))
+	}
+	return "probe: FILE READ", fmt.Sprintf(
+		"the %q CLI reads files on the engine host as the engine user (%s): it can read "+
+			"the engine's own data. Run seats on it only on a host you would hand an "+
+			"autonomous agent", p.agent, orNone(p.profile.LocalToolsNote))
 }
 
 // webStance renders the entry's declared web stance.
