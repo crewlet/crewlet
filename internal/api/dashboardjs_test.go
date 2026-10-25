@@ -1158,8 +1158,13 @@ const (
 	// dot onto its mark, on uilet 0.60.0, took it to 4438.7 KiB: the kit's
 	// card fold and IndicatorAnchor and their rules in the one sheet, and
 	// the panel's fold store and summaries. 4439 KiB, which still refuses a
-	// doubled baseline.
-	treeBudget = 4<<20 + 343<<10
+	// doubled baseline. Drawing the assistant at work with the kit's
+	// ThinkingIndicator in place of the caret and the skeleton, and the new
+	// SendButton's held tint, running arc and glyph cross fade, on uilet
+	// 0.61.0, took it to 4444.1 KiB: their rules in the one sheet, the
+	// Assistant mark in the panel's chunk and the indicator's status words.
+	// 4445 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 349<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
