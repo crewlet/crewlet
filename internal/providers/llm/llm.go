@@ -202,7 +202,9 @@ type Request struct {
 	// after it — the vendor writes that prompt for an agent and moves it
 	// with every model it ships — and replaces it for any other call, whose
 	// system prompt is the whole instruction and whose answer is parsed.
-	// False is a text function, which is every caller but the tool loop.
+	// False is a text function, which is every caller but a seat's tool
+	// loop, and the Dashboard Assistant's loop, whose system prompt is its
+	// whole instruction (toolloop's Config.OwnPrompt).
 	Agent bool
 
 	// OnDelta, when set, asks the backend to stream and calls this as text

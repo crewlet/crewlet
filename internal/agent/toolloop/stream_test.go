@@ -176,6 +176,25 @@ func TestTheTokenStreamIsAskedForOnlyWhenTheLoopSaysSo(t *testing.T) {
 	}
 }
 
+// A SEAT'S ROUND KEEPS THE HARNESS'S PROMPT; A LOOP WITH ITS OWN DOES NOT. Every
+// phase and worker is a seat at work, whose CLI keeps its own system prompt and
+// adds the seat's after it; a loop whose prompt is its whole instruction (the
+// Dashboard Assistant's) is sent as a call that replaces it.
+func TestOnlyALoopWithItsOwnPromptReplacesTheHarnesss(t *testing.T) {
+	t.Parallel()
+	for _, own := range []bool{false, true} {
+		p := &streamingProvider{final: llm.Completion{Content: "hi"}}
+		if _, err := toolloop.Run(t.Context(), toolloop.Config{
+			Provider: p, Surface: &fakeSurface{}, MaxRounds: 2, OwnPrompt: own,
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if p.askedAsASeat == own {
+			t.Errorf("OwnPrompt %v: the round was sent with Agent %v", own, p.askedAsASeat)
+		}
+	}
+}
+
 // Streaming is opt-in per call. Twelve of the thirteen call sites in this
 // engine want an answer, not a running commentary, and must keep taking the
 // unary path untouched.
@@ -198,6 +217,7 @@ type streamingProvider struct {
 	final          llm.Completion
 	askedToStream  bool
 	askedForTokens bool
+	askedAsASeat   bool
 }
 
 func (p *streamingProvider) Model() string { return "streamer" }
@@ -205,6 +225,7 @@ func (p *streamingProvider) Model() string { return "streamer" }
 func (p *streamingProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
 	p.askedToStream = req.Streaming()
 	p.askedForTokens = req.StreamTokens
+	p.askedAsASeat = req.Agent
 	for _, d := range p.fragments {
 		req.Send(d)
 	}
