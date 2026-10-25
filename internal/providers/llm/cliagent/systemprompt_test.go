@@ -153,11 +153,12 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.303 and 2.1.310: --system-prompt-file
-		// 1.0.13, xAI's OWN CLI from x.ai/cli:
-		// --system-prompt-override, string only. NOT the same-named
-		// community package on npm, which has no such flag — both put a
-		// `grok` on PATH and checking the wrong one answers the wrong
-		// question.
+		// 1.0.70, xAI's OWN CLI from x.ai/cli:
+		// --system-prompt-override, string only — a path there is sent as
+		// the text — and --rules the same on the appending channel. NOT
+		// the same-named community package on npm, which has no such
+		// flag — both put a `grok` on PATH and checking the wrong one
+		// answers the wrong question.
 		"grok": "{system}",
 		// A FILE NAMED BY AN ENV VAR, which is the channel `--help` does
 		// not show: GEMINI_SYSTEM_MD / QWEN_SYSTEM_MD. Both were once

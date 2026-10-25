@@ -22,8 +22,8 @@ import (
 // hands a CLI: the seat's identity, the tool catalogue, the conversation and
 // every tool result in it. On argv all of that is readable through
 // /proc/<pid>/cmdline by every account on the machine, and bounded by ARG_MAX
-// (256 KB on macOS) — the ceiling the copilot and grok profiles already live
-// under because their vendors offer nothing else.
+// (256 KB on macOS) — the ceiling a profile lives under only where its vendor
+// offers neither a file nor stdin.
 //
 // Asked from inside the child, because the per-call directory is removed on
 // release: a parent opening the path afterwards would be reading a file the

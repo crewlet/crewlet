@@ -1427,67 +1427,121 @@ grok:
   # and they are different programs: this profile's `.grok/auth.json`,
   # `--sandbox` and `-p` are the official one's, and the npm build has none
   # of them. If `grok --version` prints a 0.0.x, that is the other one.
-  written_for: "Grok Build CLI 1.0.x (`grok --version`) — xAI's OWN, from x.ai/cli"
+  written_for: "Grok Build CLI 1.0.x, measured on 1.0.70 (`grok --version`) — xAI's OWN, from x.ai/cli"
   version_args: ["--version"]
-  # THE DENIAL, THEN THE PROMPT FLAG LAST — see prompt_args below for why `-p`
-  # cannot sit here.
+  # THE WEB TOOLS AND NOTHING ELSE. Measured on 1.0.70 through the engine's
+  # own code path, with the API base at a local stand-in and the state
+  # directory inside a git checkout whose every level holds an AGENTS.md,
+  # CLAUDE.md, GROK.md, .grok/rules, .grok/settings.json with a hook, skills
+  # and MCP configurations: the request offered web_search and web_fetch and
+  # no other tool, none of those files reached it, and no hook or MCP server
+  # ran. Without --trust, which this profile does not pass, a headless run
+  # loads no project rules (the CLI's user guide). It still reads the
+  # enclosing repository's .git/config and HEAD, past the engine's `.git`
+  # file, and nothing of them reached the request.
   #
-  # --disallowed-tools AND NOT --tools, although an allowlist would be the
-  # safer shape in general. Read against the source (xai-org/grok-build,
-  # crates/codegen/xai-grok-agent/src/builder.rs): the allowlist is applied
-  # only `if unresolved.is_empty()` — one entry it does not recognise and the
-  # whole retain is SKIPPED with a warning, leaving every tool enabled. The
-  # deny list always applies its retain and only warns per entry that matched
-  # nothing. So a name this profile gets wrong costs one tool on a denylist
-  # and costs EVERYTHING on an allowlist, and the vendor renaming a tool is
-  # exactly the drift this format expects.
+  #   --tools             the allowlist: the two web tools. It FAILS OPEN — a
+  #                       name that matches no tool makes the CLI warn "other
+  #                       tools stay available" and apply none of the list
+  #                       (measured) — so it names only tools 1.0.70 knows.
+  #                       web_fetch is known whether or not it is enabled.
+  #   --disallowed-tools  every other built-in, which a name it does not know
+  #                       only skips; a denial wins over the allowlist. The
+  #                       deny list alone left twelve tools on offer: write,
+  #                       the four image and video tools, the MCP meta-tools
+  #                       search_tool and use_tool (on even under an
+  #                       allowlist), send_feedback, the plan-mode pair and
+  #                       ask_user_question beside the web tools. Together
+  #                       the two lists fail closed in either direction: a
+  #                       renamed web tool leaves the deny list in force, and
+  #                       a new tool is outside the allowlist.
   #
-  # The names are the built-in ids from that same source (they match on the
-  # short name, `tool_id_eq` = full id or the part after the last colon).
-  # Denied: the shell and its lifecycle, the filesystem and search, the
-  # sub-agent and background-task family — which would otherwise run terminal
-  # commands the direct denial just removed — the scheduler, and the todo
-  # writer. KEPT: web_search and web_fetch, which this backend keeps on for
-  # every seat, plus the plan-mode and ask-user tools, which reach nothing.
-  # Same stance as claude-code's --disallowedTools and gemini's settings
-  # exclude list, expressed in this CLI's vocabulary.
+  # --sandbox is deliberately not used: it restricts the network along with
+  # the filesystem, which would cut the web tools.
   complete_args:
+    - "--tools"
+    - "web_search,web_fetch"
     - "--disallowed-tools"
-    - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list"
+    - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
   local_tools: denied
-  # --sandbox is still not the answer and is deliberately not used: it
-  # restricts the network along with the filesystem, which would cut the web
-  # tools this backend keeps on.
   model_args: ["--model", "{model}"]
-  # Replace, not --rules (which appends): the same reasoning as claude-code
-  # and qwen-code. Inline because this flag takes a string and there is no
-  # file variant, so the seat's prompt is on argv — see the qwen-code note.
+  # BOTH CHANNELS, and both on argv: each flag takes the text itself, and a
+  # path in its place is sent as the text (measured), so a seat's prompt is
+  # readable in /proc/<pid>/cmdline and bounded by ARG_MAX.
+  #
+  #   system_prompt         REPLACES the CLI's prompt: the request's system
+  #                         message is the engine's text alone. The vendor's
+  #                         context moves into user messages ahead of the
+  #                         prompt: the working directory, the date and two
+  #                         built-in rules. For a side pass.
+  #   append_system_prompt  KEEPS it: the text lands at the very end of the
+  #                         system message, in a <human_rules> block after a
+  #                         static vendor prompt of about 4,150 characters
+  #                         that opens "You are Grok released by xAI. You are
+  #                         an autonomous agent that completes software
+  #                         engineering tasks. There is no human operator in
+  #                         this session." Two calls in different directories
+  #                         sent byte-identical system messages, so nothing
+  #                         per call precedes the engine's text. For a seat.
   system_prompt:
     args: ["--system-prompt-override", "{system}"]
-  prompt_mode: argv
-  # `-p` TAKES THE PROMPT AS ITS VALUE, so it has to be the last thing before
-  # the prompt rather than sitting in complete_args. It used to sit there, and
-  # the model flag that follows became the prompt: every call exited on
-  # "a value is required for '--single <PROMPT>' but none was supplied".
-  prompt_args: ["-p"]
+  append_system_prompt:
+    args: ["--rules", "{system}"]
+  # THE TRANSCRIPT IN A FILE, off argv: --prompt-file is a headless single
+  # turn like -p, and the request is the same — the text wrapped in a
+  # <user_query> block. `-p` takes the prompt as its VALUE, and sitting in
+  # complete_args it once turned the model flag into the prompt.
+  prompt_mode: file
+  prompt_args: ["--prompt-file", "{file}"]
   output: text
+  env:
+    # The CLI's own fetch, which ships switched off: without it the request
+    # offered web_search alone.
+    GROK_WEB_FETCH: "1"
+    # Background workflows: off, the 500-character list of them leaves every
+    # request (measured), and with them the scripts the CLI's user guide
+    # says it finds in a repository's or the home's .grok/workflows.
+    GROK_WORKFLOWS: "0"
+    # The "dashboard line": with it on, every call made a second model request
+    # after the answer, summarising the turn; off, none.
+    GROK_TURN_SUMMARY: "0"
+    # Cross-session memory, off for the whole process whatever the account's
+    # remote settings say (read from the CLI's user guide; the measured runs
+    # captured no memory either way).
+    GROK_MEMORY: "0"
+  # One side request remains and no documented switch removes it on 1.0.70:
+  # a session-title request to the session-summary model (grok-4.6 on the
+  # Responses API) carrying the prompt, before the answer.
   credential_paths: [".grok/auth.json"]
-  volatile_paths: [".grok/history", ".grok/sessions"]
+  # What a call leaves in the seat's home, measured on 1.0.70: a session
+  # directory per working directory holding the conversation, the rendered
+  # system prompt and the prompt history, a session-search database, and a
+  # log that grows by about 28 KB a call.
+  volatile_paths: [".grok/sessions", ".grok/logs"]
   host_credential_paths: [".grok/auth.json"]
   # THE CLI'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
   api_key_env: "XAI_API_KEY"
-  # NOT MEASURED, the markers below: generic phrases rather than this CLI's
-  # own sentences, safe to keep only because of WHERE they are matched — on
+  # The CLI's own framing of what the API refused, measured on 1.0.70 with
+  # the API at a local stand-in: a 402 reads "API error (status 402 Payment
+  # Required): …", while a 429 is relayed as the service's own message with
+  # nothing of the CLI's around it, so the rest are its own sentences read
+  # from the 1.0.70 binary ("Rate limited", "You hit your free usage limit.",
+  # "…out of credits or over your spending limit."). They are matched on
   # stderr, in a run the CLI reported failed, or where one OPENS a clean
-  # run's answer, never inside it (cliprofile.MarkerScope). A model writing
-  # about a rate limit is answering. If your CLI reports these differently,
-  # override them.
+  # run's answer, never inside it (cliprofile.MarkerScope).
   limit_markers:
-    - sentinel: "rate limit"
+    - sentinel: "status 402 Payment Required"
+    - sentinel: "Rate limited"
+    - sentinel: "usage limit"
+    - sentinel: "spending limit"
+  # Measured on 1.0.70: signed out, a call exits 1 on "Not signed in. To
+  # authenticate without a browser, run: grok login --device-code"; a key the
+  # API refuses reads "Unauthorized (401) from <url>: …".
   auth_markers:
-    - sentinel: "invalid api key"
+    - sentinel: "Not signed in"
+    - sentinel: "Unauthorized (401)"
 
 muse-code:
   binary: muse

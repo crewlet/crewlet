@@ -777,13 +777,14 @@ type Profile struct {
 	// a file-mode profile with nothing to substitute the path into would
 	// hand the CLI no prompt at all.
 	//
-	// It exists because xAI's grok breaks the assumption the rest of this
-	// format is built on. Its only headless trigger is `-p <PROMPT>`, and a
-	// value is REQUIRED — so with `-p` sitting in complete_args, the model
-	// flag that follows becomes the prompt and the real prompt becomes a
-	// stray positional: `grok -p --model grok-4 "hi"` exits on
-	// "a value is required for '--single <PROMPT>' but none was supplied".
-	// Every call died at argument parsing.
+	// It exists because a CLI can take its prompt as a flag's VALUE, which
+	// breaks the assumption the rest of this format is built on: with such a
+	// flag sitting in complete_args, the model flag that follows becomes the
+	// prompt and the real prompt becomes a stray positional. xAI's grok did
+	// exactly that with `-p <PROMPT>` — `grok -p --model grok-4 "hi"` exits on
+	// "a value is required for '--single <PROMPT>' but none was supplied" —
+	// and every call died at argument parsing; its profile now takes the
+	// file form, `--prompt-file {file}`, through this same field.
 	//
 	// Appended LAST, after the model and system-prompt arguments, because
 	// that is the only position where the flag and its value stay adjacent.
