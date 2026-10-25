@@ -64,8 +64,9 @@ type Reach struct {
 	Record string
 }
 
-// runningArguments is the key of a running tool call's arguments inside
-// [LiveCall.RunningCall]: what the tool was asked to do, which is the body.
+// runningArguments is the key of a running tool call's arguments inside each
+// entry of [LiveCall.RunningCalls]: what the tool was asked to do, which is
+// the body.
 const runningArguments = "arguments"
 
 // MaskCall is THE ONE MASK of a live call, whichever shape carries it: a
@@ -76,9 +77,9 @@ const runningArguments = "arguments"
 // the package produces.
 //
 // With r.Body, the call comes back as it was but for the tracker rule. Without
-// it, the call comes back as a [withheldCall]: no body key at all, a running
-// call without its arguments, every body version zero, and `body_withheld`.
-// Without r.Tracker, either way, it carries no work item.
+// it, the call comes back as a [withheldCall]: no body key at all, every
+// running call without its arguments, every body version zero, and
+// `body_withheld`. Without r.Tracker, either way, it carries no work item.
 //
 // It never writes through to v — see the package's paragraph on that.
 func MaskCall(v any, r Reach) any {
@@ -115,9 +116,9 @@ func maskWhole(c *LiveCall, r Reach) any {
 	if r.Body {
 		return &dup
 	}
-	// THE ROUNDS ARE STATUS and a whole call carries them always, so the
-	// withheld one does too.
-	return withhold(&dup, &dup.Rounds)
+	// THE ROUNDS AND THE RUNS ARE STATUS and a whole call carries them
+	// always, so the withheld one does too.
+	return withhold(&dup, &dup.Rounds, &dup.Invocations)
 }
 
 // maskLean masks the shape an `agents` push carries. c is a copy already —
@@ -136,34 +137,49 @@ func maskLean(c leanCall, r Reach) any {
 		c.LiveCall = &dup
 		return c
 	}
-	// THE ROUNDS AS THE PUSH CARRIED THEM: present only when it carried
-	// them, since a tab holding them at the version the push names keeps
-	// its copy.
-	return withhold(&dup, c.Rounds)
+	// THE ROUNDS AND THE RUNS AS THE PUSH CARRIED THEM: present only when
+	// it carried them, since a tab holding them at the version the push
+	// names keeps its copy.
+	return withhold(&dup, c.Rounds, c.Invocations)
 }
 
 // withhold builds the call a reader without its body receives from dup, a copy
-// of the call it may no longer share with anybody, and the rounds as the input
-// carried them.
+// of the call it may no longer share with anybody, and the rounds and the runs
+// as the input carried them.
 //
 // THE BODY IS CLEARED ON THE COPY TOO, beside the shadows that keep it off
 // the wire: the value is handed out as `any`, and a reader that asserted the
 // embedded call back out of it must not find the transcript there either.
-func withhold(dup *LiveCall, rounds *[]any) withheldCall {
+//
+// EVERY RUNNING CALL IS A FRESH MAP: the list's entries are the projection's
+// own, shared with every other variant of the broadcast, so the arguments are
+// left out of a copy rather than deleted from the entry.
+func withhold(dup *LiveCall, rounds, runs *[]any) withheldCall {
 	dup.Trigger = nil
 	dup.Prompt, dup.PromptMessages, dup.Response = "", nil, ""
 	dup.ToolExecutions, dup.RoundNarration, dup.PartialRound = nil, nil, nil
-	if dup.RunningCall != nil {
-		running := make(map[string]any, len(dup.RunningCall))
-		for k, v := range dup.RunningCall {
-			if k != runningArguments {
-				running[k] = v
+	if dup.RunningCalls != nil {
+		calls := make([]any, 0, len(dup.RunningCalls))
+		for _, entry := range dup.RunningCalls {
+			call, ok := entry.(map[string]any)
+			if !ok {
+				// Nothing the projection keeps (see runningCalls), and
+				// nothing that could be stripped of its arguments.
+				continue
 			}
+			running := make(map[string]any, len(call))
+			for k, v := range call {
+				if k != runningArguments {
+					running[k] = v
+				}
+			}
+			calls = append(calls, running)
 		}
-		dup.RunningCall = running
+		dup.RunningCalls = calls
 	}
-	dup.Versions = CallVersions{Rounds: dup.Versions.Rounds}
-	return withheldCall{LiveCall: dup, Rounds: rounds, BodyWithheld: true}
+	dup.Versions = CallVersions{Rounds: dup.Versions.Rounds,
+		Invocations: dup.Versions.Invocations}
+	return withheldCall{LiveCall: dup, Rounds: rounds, Invocations: runs, BodyWithheld: true}
 }
 
 // withheldCall is a live call as a reader without its seat's body receives it.
@@ -183,8 +199,10 @@ type withheldCall struct {
 	ToolExecutions *struct{} `json:"tool_executions,omitempty"`
 	RoundNarration *struct{} `json:"round_narration,omitempty"`
 	PartialRound   *struct{} `json:"partial_round,omitempty"`
-	// Rounds is carried as the input carried it — see [MaskCall].
-	Rounds *[]any `json:"rounds,omitempty"`
+	// Rounds and Invocations are carried as the input carried them — see
+	// [MaskCall].
+	Rounds      *[]any `json:"rounds,omitempty"`
+	Invocations *[]any `json:"invocations,omitempty"`
 	// BodyWithheld says the call was masked, so a reader draws "not shown
 	// to you" rather than a call that said nothing.
 	BodyWithheld bool `json:"body_withheld"`

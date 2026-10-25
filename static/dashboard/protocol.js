@@ -5,9 +5,9 @@
 * `TestTheDashboardMergesEveryVersionedField`.
 *
 * An `agents` push carries these only when their version moved since the last
-* push for the same call — they move once a round or once a tool call, while
-* the row is pushed five times a second as a round streams — and names every
-* version always. The store keeps the copy it holds of a field the push left
+* push for the same call — they move once a round, once a tool call or once a
+* CLI run, while the row is pushed five times a second as a round streams —
+* and names every version always. The store keeps the copy it holds of a field the push left
 * out, and asks for the call whole (`live_call`) when a push names a version
 * newer than the one it holds: the push that moved it was dropped. A field
 * named here that the engine does not version is one a push never leaves out
@@ -19,7 +19,8 @@ var LIVE_CALL_DETAIL = {
 	response: ["response"],
 	narration: ["round_narration"],
 	executions: ["tool_executions"],
-	rounds: ["rounds"]
+	rounds: ["rounds"],
+	invocations: ["invocations"]
 };
 /**
 * How long a query waits for its answer ONCE SENT.
@@ -43,14 +44,16 @@ var NOTHING_HELD = {
 	response: "",
 	round_narration: null,
 	tool_executions: null,
-	rounds: null
+	rounds: null,
+	invocations: null
 };
 /**
-* The one heavy field that is STATUS — each round's timing and tokens — which
-* a call whose body is withheld from this reader still carries and versions.
-* Every other detail is the seat's BODY (`LiveCall.body_withheld`).
+* The heavy fields that are STATUS — each round's timing and tokens, and each
+* CLI run's — which a call whose body is withheld from this reader still
+* carries and versions. Every other detail is the seat's BODY
+* (`LiveCall.body_withheld`).
 */
-var STATUS_DETAIL = /* @__PURE__ */ new Set(["rounds"]);
+var STATUS_DETAIL = /* @__PURE__ */ new Set(["rounds", "invocations"]);
 /**
 * One seat's live call as a push states it, merged onto the copy a tab holds —
 * and whether the push says the tab missed a change it no longer carries.

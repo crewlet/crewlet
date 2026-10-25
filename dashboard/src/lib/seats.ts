@@ -1471,28 +1471,32 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
 };
 
 /**
- * How many workers a seat's call in flight is running: the tasks of the
- * `delegate` call it is waiting on, or 0 when its running call is anything
- * else, or none.
+ * How many workers a seat's calls in flight are running: the tasks of every
+ * `delegate` call it is waiting on, summed — a CLI runs a response's calls side
+ * by side, so two fan-outs can be out at once — or 0 when none of its running
+ * calls is one.
  *
- * OFF THE CALL'S OWN ARGUMENTS, because that is the one record that exists
+ * OFF THE CALLS' OWN ARGUMENTS, because that is the one record that exists
  * WHILE the workers run: each worker's phase record lands when it finishes and
  * the batch's summary when the last one does, so both describe a fan-out that
  * is over. Arguments that do not read as the tool's schema count nothing
  * rather than a guess.
  */
 export function delegatedWorkers(call: LiveCall | null | undefined): number {
-  const running = call?.running_call;
-  // A WITHHELD BODY carries no arguments, so the workers are not counted
-  // rather than guessed: the call is still `delegate`, and says so.
-  if (!running || running.name !== DELEGATE_TOOL || running.arguments === undefined) return 0;
-  try {
-    const args: unknown = JSON.parse(running.arguments);
-    const tasks = (args as Record<string, unknown> | null)?.[DELEGATE_TASKS];
-    return Array.isArray(tasks) ? tasks.length : 0;
-  } catch {
-    return 0;
+  let workers = 0;
+  for (const running of call?.running_calls ?? []) {
+    // A WITHHELD BODY carries no arguments, so the workers are not counted
+    // rather than guessed: the call is still `delegate`, and says so.
+    if (running.name !== DELEGATE_TOOL || running.arguments === undefined) continue;
+    try {
+      const args: unknown = JSON.parse(running.arguments);
+      const tasks = (args as Record<string, unknown> | null)?.[DELEGATE_TASKS];
+      if (Array.isArray(tasks)) workers += tasks.length;
+    } catch {
+      // Not the tool's schema: counted as none.
+    }
   }
+  return workers;
 }
 
 /**

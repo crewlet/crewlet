@@ -74,7 +74,7 @@ import {
   relTime,
   utf8Bytes,
 } from "~/lib/format.ts";
-import { deliveredLine, rounds, type PhaseRecord } from "~/lib/phases.ts";
+import { deliveredLine, outcomeWords, rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
 import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
@@ -92,6 +92,7 @@ const KIND_LABEL: Record<SpanKind, string> = {
   turn: "Turn",
   context: "Context",
   phase: "Phase",
+  invocation: "CLI run",
   model: "Model call",
   tool: "Tool call",
   worker: "Worker",
@@ -487,6 +488,7 @@ function SpanDetail({
             )}
           </div>
           <Facts rows={offsets} />
+          {span.kind === "invocation" && record && <InvocationDetail span={span} record={record} />}
           {span.kind === "model" && record && <ModelDetail span={span} record={record} />}
           {span.kind === "tool" && record && (
             <ToolDetail span={span} record={record} agent={agent} />
@@ -503,14 +505,73 @@ function SpanDetail({
   );
 }
 
+/**
+ * One CLI run: which entry served it, the rounds it made, whether its CLI
+ * showed them, how it ended and what it spent. The run in flight is on no
+ * record yet, and says so.
+ */
+function InvocationDetail({ span, record }: { span: Span; record: PhaseRecord }) {
+  const run = record.invocations.find((r) => r.run === span.invocation);
+  if (!run) {
+    return (
+      <span className="t-caption">
+        Still running — what it made and spent lands when its CLI exits.
+      </span>
+    );
+  }
+  const made = run.firstRound > 0 ? run.lastRound - run.firstRound + 1 : 0;
+  return (
+    <Facts
+      rows={[
+        ["Entry", run.providerKey],
+        ["Model", run.model],
+        ["Ended", outcomeWords(run.outcome).label],
+        [
+          "Rounds",
+          made === 0
+            ? "none — it made no model request"
+            : made === 1
+              ? `round ${run.firstRound}`
+              : `rounds ${run.firstRound}–${run.lastRound}`,
+        ],
+        [
+          "Requests",
+          run.requestsObserved ? "" : "not shown by its CLI — the whole run is one round",
+        ],
+        [
+          "Tokens",
+          run.inputTokens + run.outputTokens > 0
+            ? `${fmtCount(run.inputTokens)} in · ${fmtCount(run.outputTokens)} out`
+            : "",
+        ],
+        ["Tool calls", String(run.toolCalls)],
+      ]}
+    />
+  );
+}
+
 function ModelDetail({ span, record }: { span: Span; record: PhaseRecord }) {
   const timed = record.timedRounds.find((r) => r.round === span.round);
   const said = rounds(record.tools, record.narration).find((r) => r.round === span.round);
   const words = said?.content.trim() ?? "";
+  const run = record.invocations.find((r) => r.run === span.invocation);
   return (
     <>
       <Facts
         rows={[
+          ["CLI run", span.invocation > 0 ? String(span.invocation) : ""],
+          [
+            "Timed",
+            run && !run.requestsObserved
+              ? "its CLI showed no requests, so this round is the whole run"
+              : "",
+          ],
+          [
+            "Ended",
+            timed?.stopReason === "cap"
+              ? "the CLI’s own turn cap ended its run here, with the model still working"
+              : "",
+          ],
           ["Model", timed?.model || record.model],
           [
             "Tokens",
@@ -537,10 +598,15 @@ function ModelDetail({ span, record }: { span: Span; record: PhaseRecord }) {
 
 function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; agent: string }) {
   const call = span.toolIndex >= 0 ? record.tools[span.toolIndex] : undefined;
-  const round = rounds(record.tools, record.narration).find((r) => r.round === span.round);
-  const asked = round?.tools.length ?? 0;
+  const round = rounds(record.tools, record.narration, null, record.runningCalls).find(
+    (r) => r.round === span.round,
+  );
+  // Asked for: the calls that answered and the ones still running alike.
+  const asked = (round?.tools.length ?? 0) + (round?.running.length ?? 0);
   const why = round?.content.trim() ?? "";
-  const running = !call && record.runningCall?.round === span.round ? record.runningCall : null;
+  // THE CALL THIS SPAN IS, by its own index: a round runs its calls side by
+  // side, so its round alone no longer says which one is running.
+  const running = !call && span.runningIndex >= 0 ? record.runningCalls[span.runningIndex] : null;
   return (
     <>
       <Facts

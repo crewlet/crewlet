@@ -4,7 +4,6 @@ package livestate
 // round, frozen on failure, cleared on a clean completion.
 
 import (
-	"maps"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -34,7 +33,8 @@ func (c *LiveCall) clone() *LiveCall {
 	dup.ToolExecutions = append([]any(nil), c.ToolExecutions...)
 	dup.RoundNarration = append([]any(nil), c.RoundNarration...)
 	dup.Rounds = append([]any(nil), c.Rounds...)
-	dup.RunningCall = maps.Clone(c.RunningCall)
+	dup.Invocations = append([]any(nil), c.Invocations...)
+	dup.RunningCalls = append([]any(nil), c.RunningCalls...)
 	dup.Steers = append([]any(nil), c.Steers...)
 	dup.WorkItem = cloneItem(c.WorkItem)
 	if c.PartialRound != nil {
@@ -87,6 +87,7 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 		ToolExecutions: []any{},
 		RoundNarration: []any{},
 		Rounds:         []any{},
+		Invocations:    []any{},
 		WorkItem:       workItemOf(payload),
 		Node:           str(payload, "node"),
 		RoundNum:       openingRound,
@@ -244,10 +245,11 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		// previous one would leave a finished tool call on screen as
 		// running.
 		Rounds:         list(payload, "rounds"),
+		Invocations:    list(payload, "invocations"),
 		MaxRounds:      num(payload, "max_rounds"),
 		RoundCeiling:   num(payload, "round_ceiling"),
 		RoundStartedAt: str(payload, "round_started_at"),
-		RunningCall:    mapping(payload, "running_call"),
+		RunningCalls:   runningCalls(payload),
 		// NOT carried, for Rounds' reason: every frame states the phase's
 		// whole list.
 		Steers:           list(payload, "steers"),
@@ -319,6 +321,11 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	if narration := list(payload, "round_narration"); len(narration) > 0 {
 		call.RoundNarration = narration
 	}
+	// And the runs, the failed one included: which CLI run died, and on
+	// whose entry, is the first question a failed phase is opened for.
+	if runs := list(payload, "invocations"); len(runs) > 0 {
+		call.Invocations = runs
+	}
 	// The round in flight is NOT frozen — it is over. A partial says "this
 	// text is still arriving", and the last progress frame before a provider
 	// died carries one for a round that will never commit. Left on the frozen
@@ -330,7 +337,7 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	// And for the same reason neither is a call or a round in flight: the
 	// phase is over, and a frozen card still reading "running 2m" against
 	// a tool call that will never return is the streaming caret again.
-	call.RunningCall = nil
+	call.RunningCalls = nil
 	call.RoundStartedAt = ""
 }
 
@@ -375,6 +382,23 @@ func (s *LiveState) finishLiveCall(agent *agentLive, env Envelope, payload map[s
 	if agent.liveCall.sameCall(turnID, phase, iteration) {
 		s.clearCall(agent)
 	}
+}
+
+// runningCalls reads the calls in flight a payload lists, or nil when it lists
+// none.
+//
+// ONLY THE OBJECTS: each entry is masked key by key ([MaskCall] drops its
+// arguments for a reader without the seat's body), and an entry that is not
+// an object has no key to drop — kept, a producer's malformed entry would
+// reach every reader whole.
+func runningCalls(payload map[string]any) []any {
+	var out []any
+	for _, entry := range list(payload, "running_calls") {
+		if call, ok := entry.(map[string]any); ok {
+			out = append(out, call)
+		}
+	}
+	return out
 }
 
 // workItemOf reads the `work_item` a payload names, or nil when it names none

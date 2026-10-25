@@ -394,12 +394,15 @@ const WORKING: Partial<AgentRow> = {
         duration_ms: 85_000,
       },
     ],
-    running_call: {
-      round: 7,
-      name: "sandbox.run",
-      arguments: '{"cmd":"go test ./provisioner/... -run Timeout"}',
-      started_at: "2026-09-21T09:51:31Z",
-    },
+    running_calls: [
+      {
+        id: "call-7",
+        round: 7,
+        name: "sandbox.run",
+        arguments: '{"cmd":"go test ./provisioner/... -run Timeout"}',
+        started_at: "2026-09-21T09:51:31Z",
+      },
+    ],
   } as AgentRow["live_call"],
 };
 
@@ -1694,7 +1697,7 @@ test("a running turn's card stays put, its phases open, across a phase boundary"
           ...WORKING.live_call!,
           phase: "review",
           tool_executions: [],
-          running_call: null,
+          running_calls: null,
           started_at: "2026-09-21T09:52:05Z",
         },
       },

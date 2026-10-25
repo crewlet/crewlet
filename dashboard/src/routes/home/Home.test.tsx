@@ -794,12 +794,15 @@ describe("live now", () => {
             in_progress: true,
             updated_at: "2026-09-22T09:05:00Z",
             work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
-            running_call: {
-              round: 7,
-              name: "sandbox.run",
-              arguments: '{"cmd":"go test ./..."}',
-              started_at: "",
-            },
+            running_calls: [
+              {
+                id: "call-7",
+                round: 7,
+                name: "sandbox.run",
+                arguments: '{"cmd":"go test ./..."}',
+                started_at: "",
+              },
+            ],
           },
         },
       ],

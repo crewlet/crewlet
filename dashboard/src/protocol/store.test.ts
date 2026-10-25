@@ -406,7 +406,15 @@ describe("a live call's heavy fields", () => {
         trigger: null,
         in_progress: true,
         updated_at: "2026-10-06T09:00:00Z",
-        versions: { prompt: 0, response: 0, narration: 0, executions: 0, rounds: 0, ...versions },
+        versions: {
+          prompt: 0,
+          response: 0,
+          narration: 0,
+          executions: 0,
+          rounds: 0,
+          invocations: 0,
+          ...versions,
+        },
         ...carried,
         ...over,
       } as never,
@@ -533,10 +541,12 @@ describe("a live call's heavy fields", () => {
   // A STATUS READER IS NEVER SENT A BODY, so a withheld call — every body
   // version zero, no body key, `body_withheld` — is never behind for one:
   // asked for whole, the engine would answer the same status again. Its
-  // rounds are status and still merge as any call's do. The CONTROL is the
-  // case below, where a version moved past the copy held is fetched.
+  // rounds and its CLI runs are status and still merge as any call's do. The
+  // CONTROL is the case below, where a version moved past the copy held is
+  // fetched.
   // Mutation: count a withheld body field as one the tab is behind on, and a
-  // status reader asks for its call on every push.
+  // status reader asks for its call on every push; treat the runs as body,
+  // and the status reader loses them.
   test("a status reader never refetches a live call", () => {
     const store = seated();
     const socket = new LiveSocket(store);
@@ -544,8 +554,11 @@ describe("a live call's heavy fields", () => {
     const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
     const withheld = (rounds: number) =>
       pushed(
-        { rounds },
-        { rounds: Array.from({ length: rounds }, () => ({})) },
+        { rounds, invocations: rounds },
+        {
+          rounds: Array.from({ length: rounds }, () => ({})),
+          invocations: Array.from({ length: rounds }, () => ({})),
+        },
         {
           body_withheld: true,
         },
@@ -557,8 +570,9 @@ describe("a live call's heavy fields", () => {
     const call = store.state.agents[0]?.live_call;
     expect(call?.body_withheld).toBe(true);
     expect(call?.prompt).toBeUndefined();
-    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0, rounds: 3 });
+    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0, rounds: 3, invocations: 3 });
     expect(call?.rounds).toHaveLength(3);
+    expect(call?.invocations).toHaveLength(3);
   });
 
   // A BODY HELD A MOMENT BEFORE IS NOT KEPT once the engine withholds it: a
@@ -618,7 +632,7 @@ describe("a live_call answer the socket delivers late", () => {
       phase,
       iteration: 0,
       in_progress: true,
-      versions: { prompt: 1, response: 1, narration: 1, executions: 1, rounds: 1 },
+      versions: { prompt: 1, response: 1, narration: 1, executions: 1, rounds: 1, invocations: 1 },
     } as never,
   });
   // The same running call at `seq`, its narration at version `narration`,
@@ -633,7 +647,7 @@ describe("a live_call answer the socket delivers late", () => {
     live_call_seq: seq,
     live_call: {
       ...running(seq).live_call,
-      versions: { prompt: 1, response: 1, narration, executions: 1, rounds: 1 },
+      versions: { prompt: 1, response: 1, narration, executions: 1, rounds: 1, invocations: 1 },
       ...carried,
       ...over,
     } as never,
@@ -646,6 +660,7 @@ describe("a live_call answer the socket delivers late", () => {
     response: "",
     tool_executions: [],
     rounds: [],
+    invocations: [],
     round_narration: Array.from({ length: n }, (_, i) => ({ round: i + 1, content: `r${i + 1}` })),
   });
 

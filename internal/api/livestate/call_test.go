@@ -1,6 +1,7 @@
 package livestate_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -592,27 +593,44 @@ func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
 	}
 }
 
-func TestTheRunningCallAppearsAndClears(t *testing.T) {
+// EVERY CALL IN FLIGHT IS ON THE LIVE CALL, and each goes as its frame stops
+// listing it.
+//
+// The frame before a tool call lists it; the frame after it returns does not.
+// A coding CLI runs a response's calls at once, so a frame lists every call in
+// flight, and one returning leaves the others running. Carrying the previous
+// frame's list forward, like the prompt is carried, would leave a call that
+// returned drawn as running.
+//
+// Mutation: keep only the first call a frame lists, or carry the list from
+// the frame before, and this fails.
+func TestEveryCallInFlightAppearsAndEachClears(t *testing.T) {
 	t.Parallel()
-	// The frame before a tool call names it; the frame after it returns
-	// does not. Carrying the previous frame's value forward, like the
-	// prompt is carried, would leave a call that returned drawn as running.
 	s := livestate.New()
 	base := with(planCall(), map[string]any{"node": "core-1",
 		"work_item": map[string]any{"backend": "native", "id": "t-1", "key": "ENG-1"}})
+	search := map[string]any{"id": "call-1", "round": 1, "name": "search_knowledge",
+		"started_at": "2026-06-14T12:00:02Z"}
+	read := map[string]any{"id": "call-2", "round": 1, "name": "read_file",
+		"started_at": "2026-06-14T12:00:02Z"}
 	s.Apply(env("agent_turn_progress", with(base, map[string]any{
 		"round_num": 0, "max_rounds": 8, "round_ceiling": 24,
 		"round_started_at":  "2026-06-14T12:00:01Z",
 		"cache_read_tokens": 900, "cache_write_tokens": 40,
-		"rounds": []any{map[string]any{"round": 1, "duration_ms": 1200, "tool_calls": 1}},
-		"running_call": map[string]any{
-			"round": 1, "name": "search_knowledge", "started_at": "2026-06-14T12:00:02Z",
-		},
+		"rounds":        []any{map[string]any{"round": 1, "duration_ms": 1200, "tool_calls": 2}},
+		"running_calls": []any{search, read},
 	}), streamOnly, at("2026-06-14T12:00:02Z")))
 
+	names := func(call *livestate.LiveCall) []string {
+		var out []string
+		for _, c := range call.RunningCalls {
+			out = append(out, c.(map[string]any)["name"].(string))
+		}
+		return out
+	}
 	call := liveCallOf(t, s, "Lead")
-	if call.RunningCall == nil || call.RunningCall["name"] != "search_knowledge" {
-		t.Fatalf("running call = %+v, want search_knowledge in flight", call.RunningCall)
+	if got := names(call); !slices.Equal(got, []string{"search_knowledge", "read_file"}) {
+		t.Fatalf("running calls = %v, want both calls of the response in flight", got)
 	}
 	if call.MaxRounds != 8 || call.RoundCeiling != 24 || call.RoundStartedAt != "2026-06-14T12:00:01Z" ||
 		call.CacheReadTokens != 900 || call.CacheWriteTokens != 40 || len(call.Rounds) != 1 ||
@@ -621,14 +639,23 @@ func TestTheRunningCallAppearsAndClears(t *testing.T) {
 		t.Errorf("call = %+v, want every field the frame stated", call)
 	}
 
-	// The call returned: the next frame names none, and names the item and
-	// the node as every frame of the call does.
+	// The search returned and the read still runs.
 	s.Apply(env("agent_turn_progress", with(base, map[string]any{
 		"round_num": 0, "rounds": []any{map[string]any{"round": 1}},
+		"running_calls": []any{read},
 	}), streamOnly, at("2026-06-14T12:00:03Z")))
+	if got := names(liveCallOf(t, s, "Lead")); !slices.Equal(got, []string{"read_file"}) {
+		t.Errorf("running calls = %v, want the read alone once the search returned", got)
+	}
+
+	// Both returned: the next frame lists none, and names the item and the
+	// node as every frame of the call does.
+	s.Apply(env("agent_turn_progress", with(base, map[string]any{
+		"round_num": 0, "rounds": []any{map[string]any{"round": 1}},
+	}), streamOnly, at("2026-06-14T12:00:04Z")))
 	call = liveCallOf(t, s, "Lead")
-	if call.RunningCall != nil {
-		t.Errorf("running call = %+v, want it cleared once the frame stopped naming it", call.RunningCall)
+	if call.RunningCalls != nil {
+		t.Errorf("running calls = %+v, want none once the frame stopped listing them", call.RunningCalls)
 	}
 	if call.Node != "core-1" || call.WorkItem == nil {
 		t.Errorf("node %q item %+v, want both as the frame named them",
@@ -636,26 +663,57 @@ func TestTheRunningCallAppearsAndClears(t *testing.T) {
 	}
 }
 
+// A FROZEN FAILED CALL HAS NO CALL IN FLIGHT, and keeps the runs its failure
+// recorded.
+//
+// The phase is over, and a failed card still reading "running" against a tool
+// call that will never return is the streaming caret again. Which CLI run
+// died, and on whose entry, is what the failure record's runs say — the run
+// that failed is on it and on no progress frame before it.
+//
+// Mutation: leave the running calls on the frozen call, or ignore the
+// failure's runs, and this fails.
 func TestAFrozenFailedCallHasNoCallInFlight(t *testing.T) {
 	t.Parallel()
-	// The phase is over, and a failed card still reading "running" against
-	// a tool call that will never return is the streaming caret again.
 	s := livestate.New()
 	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
 		"round_num":        0,
 		"round_started_at": "2026-06-14T12:00:01Z",
-		"running_call":     map[string]any{"name": "run_sandbox"},
+		"running_calls":    []any{map[string]any{"name": "run_sandbox"}},
 	}), streamOnly, at("2026-06-14T12:00:02Z")))
 	s.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
 		"failed": true, "error": "boom",
+		"invocations": []any{map[string]any{"outcome": "failed", "provider_key": "claude-max"}},
 	}), at("2026-06-14T12:00:03Z")))
 
 	call := liveCallOf(t, s, "Lead")
 	if !call.Failed {
 		t.Fatalf("call = %+v, want it frozen as failed", call)
 	}
-	if call.RunningCall != nil || call.RoundStartedAt != "" {
-		t.Errorf("frozen call keeps %+v in flight since %q", call.RunningCall, call.RoundStartedAt)
+	if call.RunningCalls != nil || call.RoundStartedAt != "" {
+		t.Errorf("frozen call keeps %+v in flight since %q", call.RunningCalls, call.RoundStartedAt)
+	}
+	if len(call.Invocations) != 1 || call.Invocations[0].(map[string]any)["outcome"] != "failed" {
+		t.Errorf("frozen call's runs are %+v, want the failed run its record named", call.Invocations)
+	}
+}
+
+// A RUNNING CALL THAT IS NOT AN OBJECT IS NOT KEPT. The mask drops a call's
+// arguments key by key, and an entry with no keys could not be stripped of
+// them — kept, a producer's malformed entry would reach every reader whole.
+//
+// Mutation: keep every entry the frame lists, and the string reaches the call.
+func TestARunningCallThatIsNotAnObjectIsNotKept(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 0,
+		"running_calls": []any{`{"name":"read_file","arguments":"{\"path\":\"secret\"}"}`,
+			map[string]any{"name": "search_knowledge"}},
+	}), streamOnly, at("2026-06-14T12:00:02Z")))
+	call := liveCallOf(t, s, "Lead")
+	if len(call.RunningCalls) != 1 || call.RunningCalls[0].(map[string]any)["name"] != "search_knowledge" {
+		t.Errorf("running calls = %+v, want the one object alone", call.RunningCalls)
 	}
 }
 

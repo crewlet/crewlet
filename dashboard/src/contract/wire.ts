@@ -44,9 +44,9 @@ export type PushKind =
  * `TestTheDashboardMergesEveryVersionedField`.
  *
  * An `agents` push carries these only when their version moved since the last
- * push for the same call — they move once a round or once a tool call, while
- * the row is pushed five times a second as a round streams — and names every
- * version always. The store keeps the copy it holds of a field the push left
+ * push for the same call — they move once a round, once a tool call or once a
+ * CLI run, while the row is pushed five times a second as a round streams —
+ * and names every version always. The store keeps the copy it holds of a field the push left
  * out, and asks for the call whole (`live_call`) when a push names a version
  * newer than the one it holds: the push that moved it was dropped. A field
  * named here that the engine does not version is one a push never leaves out
@@ -59,6 +59,7 @@ export const LIVE_CALL_DETAIL = {
   narration: ["round_narration"],
   executions: ["tool_executions"],
   rounds: ["rounds"],
+  invocations: ["invocations"],
 } as const;
 
 /**
@@ -146,9 +147,10 @@ export type StoppedReason = "paused" | "unplaced" | "budget" | "provider";
  * The tool an executor hands work to its workers through, and the argument
  * that lists the tasks it hands them.
  *
- * A seat whose running call — `live_call.running_call`, the one call in flight
- * — is this tool is running that many workers, which is what the state line
- * says ("3 workers on ENG-405") instead of the phase. EXACTLY THE ENGINE'S
+ * A seat with a running call — an entry of `live_call.running_calls`, the calls
+ * in flight — to this tool is running that many workers, summed over every
+ * such call, which is what the state line says ("3 workers on ENG-405")
+ * instead of the phase. EXACTLY THE ENGINE'S
  * `subagent.ToolName` and the `tasks` its schema requires, held by
  * `internal/agent/subagent`'s gate: a rename there would otherwise leave every
  * fan-out drawn as an ordinary executor with nothing to say it moved.

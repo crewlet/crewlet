@@ -6,13 +6,16 @@
  * `internal/providers/llm.TestTheDashboardKnowsEveryStopReason`, in both
  * directions.
  *
- * TWO REASONS, because a coding CLI reports two: it is asked for an answer or
- * a set of calls, and both are a round that FINISHED, so the phase card says
- * nothing about either. A CLI that hit its own cap or declined the request
- * returns that as prose, or as a failure the phase's error carries. A reason
- * the engine starts recording that ends a round unfinished needs a sentence
- * on the phase card's round, which is why the gate fails until this union
- * names it. An ABSENT `stop_reason` is a backend that reported none — not
- * reported, never "ended normally" as a fact.
+ * THREE REASONS, the ones a coding CLI can honestly name. `end` and `tool_use`
+ * are a round that FINISHED — the model asked for an answer or for a set of
+ * calls — so the phase card says nothing about either. `cap` is the one that
+ * ends a round unfinished: the CLI's own turn cap stopped its run at this
+ * request with the model still working, and the phase card's round says so
+ * (`CapNote` in components/PhaseCard.tsx). A reason the engine starts
+ * recording needs the same decision — a sentence where it ends a round
+ * unfinished — which is why the gate fails until this union names it. A run
+ * the ENGINE ended is no model's reason and is not here: it is the run's own
+ * outcome (`invocations[].outcome`). An ABSENT `stop_reason` is a backend that
+ * reported none — not reported, never "ended normally" as a fact.
  */
-export type StopReason = "end" | "tool_use";
+export type StopReason = "end" | "tool_use" | "cap";
