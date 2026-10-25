@@ -34,6 +34,17 @@
 // and a session cookie (sessions.go). The first two arrive as a bearer and are
 // told apart by the value's shape; the third arrives as a cookie and yields to
 // any bearer presented beside it.
+//
+// # And one derived credential that never crosses a socket
+//
+// The Dashboard Assistant's grant (assist.go, ADR-0046) is a bearer too, told
+// apart by its shape, but it is no fourth way in: it is DERIVED from a person's
+// session, names that session rather than carrying any authority, and is
+// re-composed through [Lineages] from the identity rows on every request. It is
+// accepted only on a request [Dispatcher] built in process, so presented over
+// the wire it is refused on every path, and it never reaches the credential
+// surface, the sockets, the MCP surfaces, telemetry, webhooks or the
+// assistant's own routes.
 // The guard is mounted UNCONDITIONALLY: mounting it only when Tier A carries
 // tokens would be two independent conditions deciding one security property,
 // coinciding only because every real caller happens to supply both. Tier A
@@ -394,6 +405,11 @@ type Guard struct {
 
 	// audit is where a refused credential is counted. See audit.go.
 	audit Audit
+
+	// delegations is the assistant arm: the grants this guard accepts, or
+	// nil, which refuses every one. Installed by [Guard.BindDelegations];
+	// see assist.go.
+	delegations *Delegations
 }
 
 // BindSeats installs the seams that let a bound credential act as its seat, and
@@ -613,6 +629,14 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 		markNoStore(w, path)
 
+		// AN ASSISTANT GRANT IS JUDGED BEFORE THE EXEMPTION LIST: refused
+		// over the wire on every path, and refused on the surfaces it
+		// never reaches, some of which are exempt and would otherwise
+		// serve it as nobody (assist.go).
+		if IsAssistBearer(g.Credential(r)) && g.assistEdge(w, r) {
+			return
+		}
+
 		// EVERY REQUEST LEAVES HERE CARRYING AN ANSWER, which is what
 		// stops [iam.From] reading a handler nobody wired through this
 		// as [iam.Unknown] — silence is not anonymity, and that
@@ -641,8 +665,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			log.Info("api_auth_refused_resolved",
 				"route", path, "code", refusal.Code,
 				"detail", refusal.Detail, "remote", g.Client(r))
-			httpjson.FailWith(w, refusal.Status, refusal.Code,
-				map[string]string{"detail": refusal.Detail})
+			refusal.write(w)
 			return
 		}
 		if how == iam.Unknown {

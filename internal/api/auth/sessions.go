@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -112,6 +113,22 @@ type Refusal struct {
 	// spares names the routes this refusal does not reach — see
 	// [Refusal.Applies].
 	spares func(r *http.Request) bool
+
+	// fields is the machine-readable detail beside the sentence, or nil:
+	// an assistant grant's refusal carries the authority table's reason
+	// under its own keys ([assistRefusal]).
+	fields httpjson.Detail
+}
+
+// write answers the refusal in the engine's envelope: the sentence as
+// `detail`, and any machine-readable fields beside it.
+//
+// THE ONE WRITER, so a refusal the guard writes looks the same whichever frame
+// decided it.
+func (f *Refusal) write(w http.ResponseWriter) {
+	detail := httpjson.Detail{"detail": f.Detail}
+	maps.Copy(detail, f.fields)
+	httpjson.FailWithFields(w, f.Status, f.Code, detail)
 }
 
 // Applies reports whether this refusal answers r, or whether r is one of the
@@ -457,6 +474,10 @@ type sessionAnswer struct {
 	// lifetime is the served session's absolute deadline, which no
 	// re-issue moves — see [Lifetime].
 	lifetime time.Time
+
+	// session is what the presented bearer says about when it ends besides
+	// its absolute deadline, for an assistant grant derived from it.
+	session presentedSession
 }
 
 // resolve turns a cookie into an answer, or reports that this request carries
@@ -532,7 +553,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 			s.reissue(w, v)
 			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry,
 				via:      iam.SessionName(v.Bearer.Lineage.String()),
-				lifetime: v.Bearer.AbsoluteExpiresAt}
+				lifetime: v.Bearer.AbsoluteExpiresAt, session: presentedOf(v)}
 		}
 	}
 
@@ -590,7 +611,18 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	return sessionAnswer{
 		principal: s.principal(v, binding, admin, proof), how: iam.Resolved,
 		refusal: refusal, presented: true, lifetime: v.Bearer.AbsoluteExpiresAt,
+		session: presentedOf(v),
 	}
+}
+
+// presentedOf is what a validated bearer says about when its session ends,
+// beside its absolute deadline.
+//
+// THE IDLE DEADLINE AS PRESENTED, never the re-issue's: a re-issue only moves it
+// later, so a grant bounded by the presented one never outlives the cookie the
+// browser actually held.
+func presentedOf(v session.Validation) presentedSession {
+	return presentedSession{idle: v.Bearer.IdleExpiresAt, enrolmentOnly: v.EnrolmentOnly()}
 }
 
 // awaitStart waits for this node to apply the start of the session a write

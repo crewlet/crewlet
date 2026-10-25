@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,8 +24,10 @@ import (
 // every way a credential ends, or a node cannot tell, reaches the caller as
 // anonymous or unknown, never confused.
 
-// standings is a fake [auth.SessionStandings].
+// standings is a fake [auth.SessionStandings]. A case states its fields
+// before it asks; the lock is for the requests an assistant case sends at once.
 type standings struct {
+	mu    sync.Mutex
 	owner string
 	live  bool
 	err   error
@@ -32,6 +35,8 @@ type standings struct {
 }
 
 func (s *standings) SessionStanding(_ context.Context, lineage string, _ time.Time) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.asked = append(s.asked, lineage)
 	return s.owner, s.live, s.err
 }
