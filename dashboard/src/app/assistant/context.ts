@@ -472,6 +472,29 @@ export function applyPageAction(
   });
 }
 
+/** What a screen says about a page action it was proposed, for the card the person approves. */
+export interface PageActionPreview {
+  /** Each field it changes, in the screen's own words. */
+  readonly rows: readonly { field: string; next: string; current: string | null }[];
+  /** Why the screen's own gate refuses it, or null where it may. */
+  readonly blocked: string | null;
+}
+
+/**
+ * What the screen under the drawer says about a proposed page action: its
+ * rows and its gate, from the screen's OWN PARSER RUN FIRST over the payload,
+ * which the model wrote and nothing here trusts. Null where no mounted screen
+ * declares the action or its parser refuses the payload: the card then shows
+ * the engine's rows, and the action, if approved, is refused by the screen.
+ */
+export function pageActionPreview(name: string, payload: unknown): PageActionPreview | null {
+  const spec = isPageActionId(name) ? registration?.actions?.[name] : undefined;
+  if (!spec) return null;
+  const parsed = spec.parse(payload);
+  if (!parsed.ok) return null;
+  return { rows: spec.preview(parsed.value), blocked: spec.blocked(parsed.value) };
+}
+
 /**
  * Undo an applied action: `undone` where the screen put the page back,
  * `moved` where the page has changed since (nothing is changed, and the undo
