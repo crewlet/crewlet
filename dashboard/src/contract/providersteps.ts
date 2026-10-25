@@ -21,7 +21,9 @@
  *
  * `-capture-token` stores a headless token in the secret store under the CLI's
  * own token variable, which an entry naming no `auth.token` reads, so the
- * entry needs nothing but its model.
+ * entry needs nothing but its model. With the node stopped it reaches the
+ * fleet's store through the node's own broker — except on a member of a
+ * cluster, which cannot reach it alone and names a running member instead.
  *
  * HELD by `cmd/crewlet.TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds`,
  * which walks these lines in order from the state a create leaves — the store
@@ -43,6 +45,9 @@ providers:
       model: sonnet
 
 # 3. Sign its CLI in to your subscription, and check it end to end
+#    (on a member of a cluster, add -api with a running member's URL
+#    and a Tier A token in CREWLET_API_TOKEN: a member alone cannot
+#    reach the fleet's store)
 crewlet llm login default -capture-token
 crewlet llm doctor default
 
