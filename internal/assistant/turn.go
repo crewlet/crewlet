@@ -72,6 +72,10 @@ type turn struct {
 	streamed []string
 	audit    []types.AssistantAuditStep
 	shown    bool
+	// outside is the source of the last answer this turn read that somebody
+	// the company cannot vouch for wrote, named on any proposal it makes
+	// after (D25).
+	outside  provenance.Source
 	model    string
 	provider string
 }
@@ -100,6 +104,23 @@ func (t *turn) firstOutput() {
 	if !shown {
 		t.svc.metrics.Observe(metrics.AssistantFirstOutputLatency, t.svc.now().Sub(t.started), nil)
 	}
+}
+
+// tainted notes a read whose answer somebody outside the company wrote.
+func (t *turn) tainted(tool catalog.Tool) {
+	if !tool.Fence || !outsideTrusts[tool.Trust] {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.outside = tool.Source
+}
+
+// taint is the outside source a proposal made now names, "" for none.
+func (t *turn) taint() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.outside)
 }
 
 // stepStart opens one tool step: numbered, labelled from the call's safe
@@ -287,7 +308,7 @@ func (t *turn) run(r loopRun) {
 	progress := &toolloop.Progress{}
 	res, err := toolloop.Run(ctx, toolloop.Config{
 		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
-		MaxRounds: r.steps + 1, AllowSuspend: t.svc.proposer != nil, Budget: r.meter,
+		MaxRounds: r.steps + 1, AllowSuspend: true, Budget: r.meter,
 		Fence: t.fence, OnProgress: t.onProgress, Progress: progress,
 	})
 	if res == nil {

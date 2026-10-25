@@ -31,8 +31,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Deps is what a [Service] is built from. Every field but Proposer and Remote
-// is REQUIRED, and a nil is refused by name: the assistant runs beside an
+// Deps is what a [Service] is built from. Every field but Remote and Now is
+// REQUIRED, and a nil is refused by name: the assistant runs beside an
 // engine that holds all of them, so a missing one is a wiring mistake a
 // narrower assistant would hide.
 type Deps struct {
@@ -47,7 +47,6 @@ type Deps struct {
 	Models      Models
 	Budget      Budget
 	Catalogue   Catalogue
-	Cards       Cards
 	Transcripts Transcripts
 	Records     Records
 	Dispatcher  exec.Dispatcher
@@ -55,9 +54,6 @@ type Deps struct {
 	Audit       AuditPublisher
 	Metrics     Metrics
 
-	// Proposer turns a write into a proposal; nil offers no write
-	// (internal/assistant/proposal).
-	Proposer Proposer
 	// Remote follows and stops turns running on other nodes; nil serves
 	// this node's own.
 	Remote Remote
@@ -75,14 +71,12 @@ type Service struct {
 	models      Models
 	budget      Budget
 	catalogue   Catalogue
-	cards       Cards
 	transcripts Transcripts
 	records     Records
 	dispatcher  exec.Dispatcher
 	revoker     Revoker
 	audit       AuditPublisher
 	metrics     Metrics
-	proposer    Proposer
 	remote      Remote
 	now         func() time.Time
 	log         *slog.Logger
@@ -115,7 +109,7 @@ func New(d Deps) (*Service, error) {
 		"Node": strings.TrimSpace(d.Node) == "", "Company": d.Company == nil,
 		"Acts":   d.Acts == nil,
 		"Models": d.Models == nil, "Budget": d.Budget == nil,
-		"Catalogue": d.Catalogue == nil, "Cards": d.Cards == nil,
+		"Catalogue":   d.Catalogue == nil,
 		"Transcripts": d.Transcripts == nil, "Records": d.Records == nil,
 		"Dispatcher": d.Dispatcher == nil, "Revoker": d.Revoker == nil,
 		"Audit": d.Audit == nil, "Metrics": d.Metrics == nil,
@@ -136,9 +130,9 @@ func New(d Deps) (*Service, error) {
 	base, cancel := context.WithCancelCause(context.Background())
 	return &Service{
 		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
-		catalogue: d.Catalogue, cards: d.Cards, transcripts: d.Transcripts,
+		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
-		metrics: d.Metrics, proposer: d.Proposer, remote: d.Remote, now: now,
+		metrics: d.Metrics, remote: d.Remote, now: now,
 		log: logging.Get("assistant"),
 		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL()),
 		limiter: costlimit.New(costlimit.Rates{
@@ -327,7 +321,7 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	tools := s.catalogue.Offered(ts.Person, acts)
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
 		History: historyEntries(history), Page: ts.Page, Boundary: t.boundary, Question: input,
-		Proposable: proposable(tools, s.proposer != nil)}
+		Proposable: proposable(tools)}
 	if c != nil {
 		in.Company, in.Zone = c.Name, c.Location()
 	}
@@ -394,11 +388,8 @@ func historyEntries(t assistantdomain.Transcript) []historyEntry {
 }
 
 // proposable is every write the person may propose: the offered tools that
-// write, where the node has an approval path.
-func proposable(tools []catalog.Tool, approvals bool) []catalog.Tool {
-	if !approvals {
-		return nil
-	}
+// write.
+func proposable(tools []catalog.Tool) []catalog.Tool {
 	var out []catalog.Tool
 	for _, t := range tools {
 		if t.Kind == catalog.KindWrite || t.Kind == catalog.KindPageAction {

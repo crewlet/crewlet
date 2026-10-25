@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
-	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -43,33 +42,13 @@ type Budget interface {
 	Meter(ctx context.Context, person iam.Principal) (toolloop.BudgetMeter, error)
 }
 
-// Catalogue is the curated tool table (internal/assistant/catalog), cut to
-// what this person may be offered now: reads by their question's posture
-// against their grants, writes by the act verbs the authority table admits
-// them to (acts). Offering is a filter and never authority: every call is
-// still decided by the route it sends, as the person.
+// Catalogue is the curated tool table cut to what this person may be offered
+// now: catalog.Offered as written, reads by their apps and writes by the act
+// verbs the authority table admits them to (acts). Offering is a filter and
+// never authority: every call is still decided by the route it sends, as the
+// person.
 type Catalogue interface {
 	Offered(p iam.Principal, acts []string) []catalog.Tool
-}
-
-// Cards turns a tool's answer into the engine-built cards the person sees and
-// the summary the model reads (internal/assistant/cards): a number on a card
-// is the route's own, never the model's.
-type Cards interface {
-	// Read cards a read tool's answer. The summary is what the model is
-	// handed: the turn redacts it, fences it where the tool says its
-	// answer carries somebody else's text, and cuts it to
-	// [ModelResultBytes].
-	Read(t catalog.Tool, args map[string]any, r exec.Response, at time.Time) (Carded, error)
-	// Navigate is a navigation tool's link, and the read whose answer says
-	// whether the person may open it (nil for a link every person may).
-	Navigate(t catalog.Tool, args map[string]any) (wire.Link, *exec.Request, error)
-}
-
-// Carded is a read's cards and its summary for the model.
-type Carded struct {
-	Cards   []wire.Card
-	Summary string
 }
 
 // Transcripts is the read side of the assistant's own domain, every read keyed
@@ -99,6 +78,9 @@ type Records interface {
 	ParkTurn(ctx context.Context, w Write, turn uuid.UUID, parked []byte) error
 	ResumeTurn(ctx context.Context, w Write, turn uuid.UUID, node string) error
 	CloseTurn(ctx context.Context, w Write, turn uuid.UUID, end assistantdomain.TurnEnd) error
+	// CreateProposal records a proposal a write's preview became
+	// ([proposal.New]), as it is.
+	CreateProposal(ctx context.Context, w Write, p assistantdomain.NewProposal) error
 }
 
 // Write is one record's caller: whose conversation, who acts, and the
@@ -175,34 +157,6 @@ type Company func() (*config.Company, *org.Organization)
 type FrameWriter interface {
 	Frame(f wire.Frame) error
 	Keepalive() error
-}
-
-// Proposer turns a write tool's call into a proposal the person approves
-// (internal/assistant/proposal, ADR-0047): the server-side preview, the digest,
-// the `proposal_created` record and the card rendered from the preview, never
-// from what the model wrote. NIL OFFERS NO WRITE: a node whose approval path is
-// not wired offers the model no write or page-action tool at all, so nothing
-// write-shaped can be asked for.
-type Proposer interface {
-	Propose(ctx context.Context, c ProposalCall) (wire.Card, error)
-}
-
-// ProposalCall is one write tool call to turn into a proposal.
-type ProposalCall struct {
-	Person       iam.Principal
-	Conversation uuid.UUID
-	Turn         uuid.UUID
-	// Write is the turn's record caller, for the proposal's own records.
-	Write Write
-	// Index is the step's place in the turn.
-	Index int
-	Tool  catalog.Tool
-	Args  map[string]any
-	// Read is the turn's read grant: the preview reads the object's current
-	// values through it, as the person.
-	Read exec.Grant
-	// Page is the page context the turn was sent with, for a page action.
-	Page *wire.PageContext
 }
 
 // Remote follows and stops a turn running on another node (the fleet's

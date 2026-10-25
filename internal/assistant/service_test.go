@@ -13,16 +13,20 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// peopleTool reads the people list, whose names other people wrote.
-var peopleTool = assistanttest.ReadTool("list_people", "/people", true, iam.GrantTracker)
+// getTask is the catalogue's own task read, whose answer other people wrote.
+func getTask(t *testing.T) catalog.Tool { return assistanttest.Tool(t, "get_task") }
 
-// people answers the people list.
-func people(exec.Request) exec.Response {
-	return assistanttest.JSON([]map[string]any{{"name": "Ada"}, {"name": "Grace"}})
+// task answers ENG-7.
+var task = assistanttest.Routes(map[string]exec.Response{
+	"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "Rotate the signing keys."),
+})
+
+// readTask is a round asking for ENG-7.
+func readTask() assistanttest.Round {
+	return assistanttest.Call("c1", "get_task", map[string]any{"item": "ENG-7"})
 }
 
 // A READ IS ONE REQUEST, THROUGH THE DISPATCHER, ON THE TURN'S GRANT.
@@ -37,9 +41,9 @@ func people(exec.Request) exec.Response {
 // grant) and the sent list goes wrong.
 func TestTheAssistantReachesToolsOnlyAsRequests(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool}, Handler: people,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil),
-			assistanttest.Say("Two people.")}})
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []assistanttest.Round{readTask(),
+			assistanttest.Say("ENG-7 is to rotate the keys.")}})
 	accepted, err := f.Ask("read", "Who works here?", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -49,9 +53,9 @@ func TestTheAssistantReachesToolsOnlyAsRequests(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("sent %d requests, want the one the tool builds: %+v", len(sent), sent)
 	}
-	if got := sent[0]; got.Request.Method != http.MethodGet || got.Request.Path != "/people" ||
+	if got := sent[0]; got.Request.Method != http.MethodGet || got.Request.Path != "/work/ENG-7" ||
 		got.Grant != f.Grant("read").ID() {
-		t.Errorf("sent %+v on grant %s, want GET /people on the question's grant", got.Request, got.Grant)
+		t.Errorf("sent %+v on grant %s, want GET /work/ENG-7 on the question's grant", got.Request, got.Grant)
 	}
 	done := assistanttest.Last(frames, wire.EventDone)
 	if done == nil || done.Done.State != wire.TurnCompleted || done.Done.Steps != 1 {
@@ -85,11 +89,11 @@ func TestTheAssistantReachesToolsOnlyAsRequests(t *testing.T) {
 func TestNoTokenReachesARecordALogOrAPrompt(t *testing.T) {
 	t.Parallel()
 	const key = "ghp_" + "Zq3vT8mN2pL6wR9xK4cB7yH1jD5fG0sA2eQ8"
-	leaky := func(exec.Request) exec.Response {
-		return assistanttest.JSON([]map[string]any{{"name": "token " + key}})
-	}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool}, Handler: leaky,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil),
+	leaky := assistanttest.Routes(map[string]exec.Response{
+		"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "token "+key),
+	})
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: leaky,
+		Rounds: []assistanttest.Round{readTask(),
 			assistanttest.Say("Here it is: " + key)}})
 	accepted, err := f.Ask("leak", "Show me the token "+key, nil)
 	if err != nil {
@@ -171,8 +175,8 @@ func TestOneTurnRunsPerConversation(t *testing.T) {
 // its tool call.
 func TestAStoppedTurnChangesNothing(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool}, Handler: people,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil),
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []assistanttest.Round{readTask(),
 			assistanttest.Say("Two.")}})
 	f.Model.Gate = make(chan struct{})
 	accepted, err := f.Ask("stop", "Who works here?", nil)
@@ -206,8 +210,8 @@ func TestAGrantEndingMidTurnEndsTheTurn(t *testing.T) {
 		return exec.Response{Status: http.StatusUnauthorized,
 			Body: []byte(`{"error":"invalid_token","message":"Sign in again."}`)}
 	}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool}, Handler: signedOut,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil),
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: signedOut,
+		Rounds: []assistanttest.Round{readTask(),
 			assistanttest.Say("never")}})
 	accepted, err := f.Ask("signout", "Who works here?", nil)
 	if err != nil {
@@ -231,8 +235,8 @@ func TestAGrantEndingMidTurnEndsTheTurn(t *testing.T) {
 // so no call rides a grant that lapses while the route serves it.
 func TestAGrantAboutToEndSendsNothing(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool}, Handler: people,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil)}})
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []assistanttest.Round{readTask()}})
 	short := f.Grant("short")
 	short.ExpiresAt = f.Clock.Now().Add(assistant.GrantMargin / 2)
 	accepted, err := f.Svc.Start(t.Context(), assistant.TurnStart{Person: f.Person,
@@ -271,16 +275,13 @@ func TestAPersonsTurnsAreRateLimited(t *testing.T) {
 	}
 }
 
-// AN IDENTITY ARGUMENT IS REFUSED BEFORE ANYTHING IS SENT, whatever the
-// tool's schema declares, and shows as a refused step.
+// AN IDENTITY ARGUMENT IS REFUSED BEFORE ANYTHING IS SENT (the catalogue's
+// own check), and shows as a refused step.
 func TestAnIdentityArgumentIsRefusedBeforeSending(t *testing.T) {
 	t.Parallel()
-	tool := peopleTool
-	tool.Parameters = map[string]any{"type": "object", "properties": map[string]any{
-		"actor": map[string]any{"type": "string"}}}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{tool}, Handler: people,
-		Rounds: []assistanttest.Round{
-			assistanttest.Call("c1", "list_people", map[string]any{"actor": "ada"}),
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)},
+		Handler: task, Rounds: []assistanttest.Round{
+			assistanttest.Call("c1", "get_task", map[string]any{"item": "ENG-7", "actor": "ada"}),
 			assistanttest.Say("I cannot.")}})
 	accepted, err := f.Ask("identity", "Act as Ada", nil)
 	if err != nil {
@@ -294,46 +295,6 @@ func TestAnIdentityArgumentIsRefusedBeforeSending(t *testing.T) {
 	}
 	if sent := f.Dispatcher.Sent(); len(sent) != 0 {
 		t.Errorf("sent %+v", sent)
-	}
-}
-
-// A TOOL THAT BUILDS A ROUTE IT NEVER DECLARED SENDS NOTHING.
-func TestARequestOnAnUndeclaredRouteIsNotSent(t *testing.T) {
-	t.Parallel()
-	tool := peopleTool
-	tool.Build = func(map[string]any) (exec.Request, error) {
-		return exec.Request{Method: http.MethodGet, Path: "/secrets"}, nil
-	}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{tool}, Handler: people,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil),
-			assistanttest.Say("No.")}})
-	accepted, err := f.Ask("stray", "Read the secrets", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Follow(accepted.TurnID, 0)
-	if sent := f.Dispatcher.Sent(); len(sent) != 0 {
-		t.Errorf("a stray route was sent: %+v", sent)
-	}
-}
-
-// WITH NO APPROVAL PATH, NO WRITE IS OFFERED: nothing write-shaped can even be
-// asked for.
-func TestNoWriteIsOfferedWithoutAnApprovalPath(t *testing.T) {
-	t.Parallel()
-	write := catalog.Tool{Name: "create_task", Kind: catalog.KindWrite,
-		Parameters: map[string]any{"type": "object"}}
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool, write},
-		Rounds: []assistanttest.Round{assistanttest.Say("ok")}})
-	accepted, err := f.Ask("offered", "Hi", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Follow(accepted.TurnID, 0)
-	for _, def := range f.Model.Requests()[0].Tools {
-		if def.Name == "create_task" {
-			t.Error("a write tool was offered with no approval path")
-		}
 	}
 }
 
@@ -365,8 +326,8 @@ func isReason(err error, reason wire.ViewerReason) bool {
 // is answered from the transcript.
 func TestAResumedStreamReplaysOnlyWhatItMissed(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool}, Handler: people,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil),
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []assistanttest.Round{readTask(),
 			assistanttest.Say("Two.")}})
 	accepted, err := f.Ask("resume", "Who?", nil)
 	if err != nil {

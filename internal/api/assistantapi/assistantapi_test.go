@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/tabular"
 )
 
 // grants derives a read grant of a fixed id per turn, valid for five minutes.
@@ -42,16 +43,6 @@ func (grants) Exec(context.Context, approval.Exec) (exec.Grant, error) {
 
 func (grants) Revoke(uuid.UUID) {}
 
-// tables writes a table's titles, one per line.
-type tables struct{}
-
-func (tables) CSV(w http.ResponseWriter, t wire.TableCard) error {
-	_, err := io.WriteString(w, t.Title+"\n")
-	return err
-}
-
-func (tables) XLSX(w http.ResponseWriter, t wire.TableCard) error { return tables{}.CSV(w, t) }
-
 // site is the surface over a rig, mounted on a mux.
 type site struct {
 	rig     *assistanttest.Rig
@@ -63,7 +54,7 @@ func newSite(t *testing.T, o assistanttest.RigOptions) *site {
 	t.Helper()
 	rig := assistanttest.NewRig(t, o)
 	surface, err := assistantapi.New(assistantapi.Options{Service: rig.Svc,
-		Grants: grants{now: rig.Clock.Now}, Tables: tables{}, Chart: authz.NoChart{},
+		Grants: grants{now: rig.Clock.Now}, Tables: tabular.Tables{}, Chart: authz.NoChart{},
 		Now: rig.Clock.Now})
 	if err != nil {
 		t.Fatal(err)
@@ -133,9 +124,20 @@ func (s *site) stream(t *testing.T, accepted wire.TurnAccepted, last string) []b
 // client decodes it, and re-encoded with the one value a run cannot fix, the
 // turn's trace id, written as a constant.
 func fixture(t *testing.T, body []byte) []byte {
+	return assistanttest.Stream(t, frames(t, body)...)
+}
+
+// The constants a golden writes a fresh proposal's id and digest as.
+var (
+	fixedProposal = assistanttest.ID("proposal")
+	fixedDigest   = "sha256:" + strings.Repeat("0f", 32)
+)
+
+// frames is a stream as the client decodes it, normalised as [fixture] says.
+func frames(t *testing.T, body []byte) []wire.Frame {
 	t.Helper()
 	dec := wire.NewDecoder(bytes.NewReader(body))
-	var frames []wire.Frame
+	var out []wire.Frame
 	for {
 		f, err := dec.Next()
 		if errors.Is(err, io.EOF) {
@@ -147,28 +149,44 @@ func fixture(t *testing.T, body []byte) []byte {
 		if f.Done != nil && f.Done.TraceID != "" {
 			f.Done.TraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 		}
-		frames = append(frames, f)
+		// A PROPOSAL'S ID AND DIGEST ARE MINTED FRESH (proposal.New), so
+		// the golden writes them as constants; every other byte is the
+		// route's own.
+		if f.Card != nil && f.Card.Card.Proposal != nil {
+			card := *f.Card.Card.Proposal
+			card.ProposalID, card.Digest = fixedProposal, fixedDigest
+			f.Card.Card.Proposal = &card
+		}
+		if f.Action != nil && f.Action.ProposalID != nil {
+			id := fixedProposal
+			f.Action.ProposalID = &id
+		}
+		if f.Action != nil && f.Action.Name == wire.ActionContextInvalidate {
+			// Derived from the proposal's id, so it moves with it.
+			f.Action.ActionID = assistanttest.ID("invalidate")
+		}
+		out = append(out, f)
 	}
-	return assistanttest.Stream(t, frames...)
+	return out
 }
 
-var peopleTool = assistanttest.ReadTool("list_people", "/people", true, iam.GrantTracker)
-
-func people(exec.Request) exec.Response {
-	return assistanttest.JSON([]map[string]any{{"name": "Ada"}, {"name": "Grace"}})
-}
-
-func readTurn() assistanttest.RigOptions {
-	return assistanttest.RigOptions{Tools: []catalog.Tool{peopleTool}, Handler: people,
-		Rounds: []assistanttest.Round{assistanttest.Call("c1", "list_people", nil),
-			assistanttest.Say("There are two people: Ada and Grace.")}}
+// readTurn is a turn that reads ENG-7 through the catalogue's own get_task.
+func readTurn(t *testing.T) assistanttest.RigOptions {
+	return assistanttest.RigOptions{Tools: []catalog.Tool{assistanttest.Tool(t, "get_task")},
+		Handler: assistanttest.Routes(map[string]exec.Response{
+			"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys",
+				"Rotate the signing keys before Friday."),
+		}),
+		Rounds: []assistanttest.Round{
+			assistanttest.Call("c1", "get_task", map[string]any{"item": "ENG-7"}),
+			assistanttest.Say("ENG-7 is to rotate the signing keys before Friday.")}}
 }
 
 // THE READ TURN FIXTURE IS THE ROUTES' OWN: a question asked over the route
 // and its stream read over the route, as the dashboard's suite replays it.
 func TestTheReadTurnFixtureIsTheRoutesOwn(t *testing.T) {
 	t.Parallel()
-	s := newSite(t, readTurn())
+	s := newSite(t, readTurn(t))
 	accepted := s.ask(t, "Who works here?")
 	assistanttest.Golden(t, "testdata/read_turn.sse", fixture(t, s.stream(t, accepted, "")))
 }
@@ -177,7 +195,7 @@ func TestTheReadTurnFixtureIsTheRoutesOwn(t *testing.T) {
 // reconnected with Last-Event-ID is replayed exactly what it missed.
 func TestTheResumeFixtureIsTheRoutesOwn(t *testing.T) {
 	t.Parallel()
-	s := newSite(t, readTurn())
+	s := newSite(t, readTurn(t))
 	accepted := s.ask(t, "Who works here?")
 	s.stream(t, accepted, "")
 	resumed := fixture(t, s.stream(t, accepted, wire.EventID(accepted.TurnID, 3)))
@@ -197,7 +215,7 @@ func TestTheResumeFixtureIsTheRoutesOwn(t *testing.T) {
 // that route answers 200.
 func TestEveryAssistantRouteAnswersNotFoundForAnotherPersonsConversation(t *testing.T) {
 	t.Parallel()
-	s := newSite(t, readTurn())
+	s := newSite(t, readTurn(t))
 	accepted := s.ask(t, "Who works here?")
 	s.stream(t, accepted, "")
 	transcript, err := s.rig.Svc.Transcript(t.Context(), s.rig.Person, s.rig.Conversation)
@@ -237,7 +255,7 @@ func TestEveryAssistantRouteAnswersNotFoundForAnotherPersonsConversation(t *test
 // reload, before anything is started.
 func TestAnotherProtocolVersionIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSite(t, readTurn())
+	s := newSite(t, readTurn(t))
 	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
 		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: 2,
 		Input: wire.TurnInput{Text: "Hi"}}, map[string]string{"Idempotency-Key": opKey})
@@ -253,7 +271,7 @@ func TestAnotherProtocolVersionIsRefused(t *testing.T) {
 // A QUESTION THE BUDGET REFUSES IS A 429 NAMING WHEN THE WINDOW RESETS.
 func TestABudgetRefusalIsATooManyRequestsWithItsReset(t *testing.T) {
 	t.Parallel()
-	o := readTurn()
+	o := readTurn(t)
 	o.Budget = assistanttest.Budget{M: assistanttest.FullMeter{
 		ResetsAt: assistanttest.Epoch.Add(2 * time.Hour)}}
 	s := newSite(t, o)
@@ -305,7 +323,7 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 // handler reads its request: using the assistant needs a person present.
 func TestAMachineTokenIsRefusedEveryRoute(t *testing.T) {
 	t.Parallel()
-	s := newSite(t, readTurn())
+	s := newSite(t, readTurn(t))
 	token := s.rig.Person
 	token.Via = "pat:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("token")).String()
 	for _, path := range []string{"/assistant/conversations",
@@ -314,4 +332,81 @@ func TestAMachineTokenIsRefusedEveryRoute(t *testing.T) {
 			t.Errorf("GET %s with a machine token = %d %s", path, rec.Code, rec.Body)
 		}
 	}
+}
+
+// THE WRITE TURN FIXTURE IS THE ROUTES' OWN: a question that proposes a task
+// through the catalogue's own create_task, parks on the proposal, and, once
+// the approval path hands the turn its receipt, the card and the
+// context.invalidate the approval landed, resumes and answers.
+func TestTheWriteTurnFixtureIsTheRoutesOwn(t *testing.T) {
+	t.Parallel()
+	s := newSite(t, assistanttest.RigOptions{
+		Tools: []catalog.Tool{assistanttest.Tool(t, "create_task")},
+		Acts:  []string{"create_work_item"},
+		Rounds: []assistanttest.Round{
+			assistanttest.Call("c1", "create_task", map[string]any{"title": "Rotate keys"}),
+			assistanttest.Say("I filed ENG-8 to rotate the keys.")}})
+	accepted := s.ask(t, "File a task to rotate the keys")
+	parked := s.stream(t, accepted, "")
+	proposals := s.rig.Store.Proposals()
+	if len(proposals) != 1 {
+		t.Fatalf("the turn recorded %d proposals, want 1", len(proposals))
+	}
+	p := proposals[0]
+	applied := p.Card
+	card := *applied.Proposal
+	card.State = wire.ProposalApplied
+	card.Receipt = &wire.Receipt{Summary: "Created ENG-8.",
+		Position: "CREWLET_TRACKER_LOG@1:42"}
+	applied.Proposal = &card
+	resumed, err := s.rig.Svc.Resume(iam.WithPrincipal(context.Background(), s.rig.Person),
+		approval.Resumption{Owner: s.rig.Person.ID, Conversation: s.rig.Conversation,
+			Turn: accepted.TurnID, Proposal: p.ID, Read: s.rig.Grant("approve"),
+			State: wire.ProposalApplied, Receipt: card.Receipt, Card: applied,
+			Invalidate: &wire.Invalidate{Domain: "tracker", Position: "CREWLET_TRACKER_LOG@1:42"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rest := s.stream(t, wire.TurnAccepted{TurnID: accepted.TurnID, StreamURL: resumed.StreamURL},
+		wire.EventID(accepted.TurnID, resumed.AfterSeq))
+	all := append(frames(t, parked), frames(t, rest)...)
+	if last := all[len(all)-1]; last.Done == nil || last.Done.State != wire.TurnCompleted {
+		t.Fatalf("the write turn ended %+v", last)
+	}
+	assistanttest.Golden(t, "testdata/write_turn.sse", assistanttest.Stream(t, all...))
+}
+
+// THE PAGE ACTION TURN FIXTURE IS THE ROUTES' OWN: a question asked on the
+// open screen proposes a change to it, prepared against the screen's own
+// revision, and parks waiting for the person.
+func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
+	t.Parallel()
+	s := newSite(t, assistanttest.RigOptions{
+		Tools: []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
+		Rounds: []assistanttest.Round{
+			assistanttest.Call("c1", "propose_page_change", map[string]any{
+				"action": "work.filter.apply", "args": map[string]any{"status": "todo"}}),
+			assistanttest.Say("never")}})
+	page := &wire.PageContext{Screen: "work", Title: "Work \u203a Tasks",
+		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
+		SourceRevision: "work@3", Accepts: []string{"work.filter.apply"}}
+	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
+		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion,
+		Input: wire.TurnInput{Text: "Show only what is still to do"}, PageContext: page},
+		map[string]string{"Idempotency-Key": opKey})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("ask = %d %s", rec.Code, rec.Body)
+	}
+	var accepted wire.TurnAccepted
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	body := s.stream(t, accepted, "")
+	card := assistanttest.Last(frames(t, body), wire.EventCard)
+	if card == nil || card.Card.Card.Proposal == nil ||
+		card.Card.Card.Proposal.SourceRevision != "work@3" ||
+		card.Card.Card.Proposal.Scope != wire.ScopePage {
+		t.Fatalf("the page proposal's card = %+v, want one prepared against work@3", card)
+	}
+	assistanttest.Golden(t, "testdata/page_action_turn.sse", fixture(t, body))
 }
