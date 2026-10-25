@@ -485,7 +485,7 @@ func (s *Service) supersede(ctx context.Context, p iam.Principal, key string,
 		return s.writeFailure(err)
 	}
 	row.State = wire.TurnSuperseded
-	if _, err := s.tell(ctx, p, row, s.continuing(ctx, p.ID, row.ID, floor), nil); err != nil {
+	if _, err := s.tell(p, row, s.continuing(ctx, p.ID, row.ID, floor), nil); err != nil {
 		s.log.WarnContext(ctx, "assistant_superseded_untold", "turn", row.ID,
 			"error", redact.Secrets(err.Error()),
 			"detail", "the turn is closed; a stream of it reads the transcript")

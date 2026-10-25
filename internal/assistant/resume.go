@@ -251,7 +251,7 @@ func (s *Service) Emit(ctx context.Context, owner, conversation, turnID uuid.UUI
 		}
 		parkedSeq = keep.Seq
 	}
-	return s.tell(ctx, person, row, s.continuing(ctx, owner, turnID, parkedSeq),
+	return s.tell(person, row, s.continuing(ctx, owner, turnID, parkedSeq),
 		func(t *turn) error {
 			if e.Card != nil {
 				if err := s.showProposal(ctx, t, uuid.Nil, *e.Card); err != nil {
@@ -270,7 +270,7 @@ func (s *Service) Emit(ctx context.Context, owner, conversation, turnID uuid.UUI
 // segment of its stream numbered after floor, what frames writes, then how
 // the turn stands (the waiting status for a parked turn) and the done frame
 // in its state. It answers where the client reads them.
-func (s *Service) tell(ctx context.Context, person iam.Principal, row assistantdomain.Turn,
+func (s *Service) tell(person iam.Principal, row assistantdomain.Turn,
 	floor uint64, frames func(t *turn) error) (wire.TurnAccepted, error) {
 
 	t := s.newTurn(person, row.Conversation, row.ID, "", nil, nil, nil)
@@ -353,7 +353,7 @@ func (s *Service) settledPast(ctx context.Context, person iam.Principal,
 	if err != nil {
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
-	return s.tell(ctx, person, row, s.continuing(ctx, r.Owner, r.Turn, 0), func(t *turn) error {
+	return s.tell(person, row, s.continuing(ctx, r.Owner, r.Turn, 0), func(t *turn) error {
 		t.derived = &Derivation{At: row.StartedAt, Name: "assistant_settled_past",
 			Identity: []string{r.Turn.String(), r.Proposal.String()}}
 		s.settleWaiting(ctx, t.write(), waitingSteps(transcript, r.Turn), r.State, r.Failure,
