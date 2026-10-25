@@ -43,11 +43,10 @@
 // RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
 // where the alias does not exist.
 import { ACTIONS } from "../contract/actions.ts";
-import { ACT_ERRORS } from "../contract/errors.ts";
 import { session, type SessionDomain, type SessionFloors } from "./session.ts";
 import { layoutOpID } from "./gate.ts";
 import { isAbort, rest, RestError } from "./rest.ts";
-import { retryAfterMs } from "./retry.ts";
+import { writeFailed, writeLanded, type ActErrorCode } from "./writeOutcome.ts";
 
 /** A change the dashboard may make: a key of `contract/actions.ts`. */
 export type ActionTool = keyof typeof ACTIONS;
@@ -58,7 +57,7 @@ export type ActionArgs<T extends ActionTool> = {
 };
 
 /** A refusal the act transport can answer with. */
-export type ActErrorCode = keyof typeof ACT_ERRORS;
+export type { ActErrorCode };
 
 // EVERY ROW'S DOMAIN IS A LOG A READ CAN WAIT ON, checked by the compiler: a
 // domain spelled wrong in the table would raise a floor no question reads.
@@ -125,11 +124,6 @@ export interface ActOptions {
   floors?: SessionFloors;
 }
 
-/** Whether a code off the wire is one this build knows. */
-function isActErrorCode(code: string): code is ActErrorCode {
-  return Object.hasOwn(ACT_ERRORS, code);
-}
-
 /**
  * A fresh operation key: a UUIDv7, stamped with the instant the gesture began.
  *
@@ -182,41 +176,21 @@ export async function act<T extends ActionTool>(
     return refusalOf(tool, opId, err, floors);
   }
 
-  const answer = (body ?? {}) as { outcome?: unknown; position?: unknown; receipt?: unknown };
-  const outcome = answer.outcome;
-  if (outcome !== "applied" && outcome !== "pending") {
-    // AN OUTCOME THIS BUILD DOES NOT KNOW IS NOT A SUCCESS — the engine's own
-    // rule for its own answer (`receiptOf`), for the same reason: it is the
-    // one reading that cannot tell a person to stop looking at a change
-    // nobody vouched for.
-    return unknown("The engine accepted the change and could not confirm it landed.");
-  }
-  const position = typeof answer.position === "string" ? answer.position : null;
+  // WHAT THE ANSWER MEANS is the one interpreter's (`writeOutcome.ts`), which
+  // the assistant's approvals read too.
+  const landed = writeLanded(body);
+  if (landed.kind === "unknown") return unknown(landed.reason);
   const { domain, refreshes } = ROWS[tool];
-  floors.written(domain, position, refreshes);
-  return { kind: outcome, tool, opId, position, domain, receipt: answer.receipt };
+  floors.written(domain, landed.position, refreshes);
+  return {
+    kind: landed.kind,
+    tool,
+    opId,
+    position: landed.position,
+    domain,
+    receipt: landed.receipt,
+  };
 }
-
-/**
- * The refusals that say the screen the press was made from is OUT OF DATE:
- * somebody else changed the object since it was drawn (`stale_version`,
- * `conflict`), removed it (`not_found`), made it already (`exists`), answered
- * it (`already_answered`), or moved what the request named so its operation
- * already landed on something else (`invalid_input`). Each asks again every
- * question the write would have moved — without raising a floor, since
- * nothing of this tab's landed — so the page redraws what IS there and the
- * next press is made against it. Without that a task page kept sending the
- * version it was drawn at and was refused `stale_version` on every press
- * until its own poll happened to come round.
- */
-const LOOK_AGAIN = new Set<string>([
-  "stale_version",
-  "conflict",
-  "not_found",
-  "exists",
-  "already_answered",
-  "invalid_input",
-]);
 
 /** What a refusal, or a request that never got an answer, came to. */
 function refusalOf(
@@ -225,48 +199,14 @@ function refusalOf(
   err: RestError,
   floors: SessionFloors,
 ): ActResult {
-  // THE ENGINE SAID IT DOES NOT KNOW: a call interrupted in flight, or a
-  // write whose outcome nobody can establish, answers `outcome: unknown`
-  // beside an `unavailable` that is otherwise what a tool that wrote nothing
-  // answers.
-  if (err.body.outcome === "unknown") {
-    return { kind: "unknown", tool, opId, reason: err.detail || err.code };
-  }
-  // NEVER ANSWERED, OR ANSWERED BY SOMETHING THAT IS NOT THE ENGINE
-  // ([RestError.unanswered]: status 0, a body that is not the engine's JSON,
-  // an answer with no engine code), and a 5xx carrying a code the act
-  // transport never answers with — a gateway that gave up waiting says
-  // nothing about an engine that may have written. All of those are "it may
-  // have landed", never a refusal.
-  const code = isActErrorCode(err.code) ? err.code : "";
-  if (err.unanswered || (err.status >= 500 && code === "")) {
-    return {
-      kind: "unknown",
-      tool,
-      opId,
-      reason: err.detail || `The answer was lost (status ${err.status}).`,
-    };
-  }
-  if (LOOK_AGAIN.has(code)) {
+  const failed = writeFailed(err);
+  if (failed.kind === "unknown") return { kind: "unknown", tool, opId, reason: failed.reason };
+  // THE SCREEN IS OUT OF DATE: ask again every question the write would have
+  // moved, without raising a floor, since nothing of this tab's landed.
+  if (failed.lookAgain) {
     const { domain, refreshes } = ROWS[tool];
     floors.written(domain, null, refreshes);
   }
-  const own = code === "" ? null : ACT_ERRORS[code];
-  const sentence =
-    own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`);
-  return {
-    kind: "refused",
-    tool,
-    opId,
-    code,
-    sentence,
-    hint: err.hint,
-    grants: err.grants,
-    // THE ENGINE SAYS WHETHER WAITING CHANGES IT: a `503` it wrote carries a
-    // `Retry-After` where it does and none where it does not (a full log, a
-    // record this node cannot decode) — read through the one interpreter of
-    // that hint, so a press offered "Try again" is one the engine said could
-    // land.
-    retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
-  };
+  const { lookAgain: _lookAgain, ...refused } = failed;
+  return { ...refused, tool, opId };
 }
