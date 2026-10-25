@@ -456,6 +456,38 @@ const (
 	// default. A purge is days late by design; a node's pushes are not.
 	RetentionPassBudget = statelog.StallGrace
 
+	// RetireGrace is how long a retired pack's row keeps its object from the
+	// collector (code_packs_retired, ADR-0051) before the code-retention
+	// duty's retire_sweep records remove it.
+	//
+	// A DAY, because a reader that began on a pack before it was retired — a
+	// cache that has not synced past the retirement, a clone that started on
+	// the old pack list — may legitimately read the largest bundle a row can
+	// name for objstore.ReadBudget(MaxPackBytes), 21 h 21 min, and the clock
+	// judging the grace is the duty holder's against an instant the broker
+	// stamped (retired_at), which the references gate assumes may disagree by
+	// an hour: 22 h 21 min in all, under a day by 1 h 39 min. The margin past
+	// the longest read alone, RetireGrace − ReadBudget(MaxPackBytes) = 2 h 39
+	// min, is what a duty holder's clock may run ahead of the broker's before
+	// a pack can be deleted under such a read — and nothing in this build
+	// measures that skew, so it rests on every node's clock being kept by NTP
+	// (docs/guides/deployment.md), as the collector's own grace already does.
+	// internal/objstore/references holds the inequality.
+	//
+	// Equal to the collector's PendingGrace by one reason, not by reference —
+	// a day outlives every legal read — since this package does not import
+	// the collector.
+	RetireGrace = 24 * time.Hour
+
+	// RetireSweepRows is the most retired pack rows one retire_sweep record
+	// removes: every row a record's apply may touch (MaxRecordRows) but the
+	// repository's own, whose mark and version the record moves too. A
+	// repository holding more rows past the grace than one record removes is
+	// stepped record by record, each its own transaction, as a purge is; a
+	// retired row is a pack row's width, narrower than the push rows a purge
+	// part removes PurgePartRows of.
+	RetireSweepRows = MaxRecordRows - 1
+
 	// CommitterInbox is how many proposals one repository's committer holds
 	// queued on one node: SIXTEEN FULL RECORDS of the smallest pushes
 	// (MaxPushesPerRecord each), so a burst — a CI fan-out of tag pushes —

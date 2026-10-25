@@ -44,9 +44,10 @@
 // that read. So a retired declaration never lands alone: the gate refuses one
 // without a reviewed entry naming its domain's grace, the largest object its
 // rows name and what sweeps them — a job of the engine's maintenance worker,
-// or a duty whose records delete them — and holds that grace above the
-// longest read of that object ([objstore.ReadBudget]) by more than the clocks
-// stamping and sweeping a row can disagree.
+// or a duty whose records delete them, as the code host's retire_sweep records
+// delete its retired packs — and holds that grace above the longest read of
+// that object ([objstore.ReadBudget]) by more than the clocks stamping and
+// sweeping a row can disagree.
 //
 // A DERIVED ROW OWES NO GRACE, and its declaration no entry: its domain owes
 // every reader of the object a way on without it — reading the rows again for
@@ -97,11 +98,12 @@ import (
 
 // All is every replicated table whose rows keep objects alive, whatever its
 // standing: a project's files, the pack bundles the company's repositories'
-// pushes stored, an artifact's version files and assets, and the files of the
-// company's adopted brand.
+// pushes stored and, for a grace, the ones a record retired, an artifact's
+// version files and assets, and the files of the company's adopted brand.
 var All = []objstore.ReferenceTable{
 	tracker.FileObjectReferences,
 	code.PackReferences,
+	code.RetiredPackReferences,
 	artifactsdomain.ObjectReferences,
 	artifactsdomain.AssetReferences,
 	artifactsdomain.BrandFileReferences,

@@ -129,6 +129,15 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// them with a trimmed record every applier takes at one
 		// position (ADR-0050), and a `<domain>_anchors` job here would
 		// be that second writer back.
+		//
+		// NOR THE CODE HOST'S RETIRED PACKS, `code_packs_retired`, for the
+		// same reason: replicated rows, which the code-retention duty's
+		// retire_sweep records remove once code.RetireGrace has passed —
+		// every applier at one position — and a job here deleting them by
+		// one node's clock would be the second writer again. The
+		// references gate reviews that table's sweep as the duty's, and
+		// TestARetirementIsSweptByARecordTheEngineRuns holds the duty the
+		// engine runs to publishing it.
 		"pages_ops",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —

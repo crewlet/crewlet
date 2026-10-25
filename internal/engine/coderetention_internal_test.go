@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -104,8 +106,8 @@ func retainedFor(days int, repos string) string {
 }
 
 // purgeProbe is the code-retention duty as e builds it, watched: its claims
-// counted, its give-backs counted and answered, its decline lines captured at
-// every level, and its pass run as though a day less a nanosecond had passed since every deletion — the retention the duty reads
+// counted, its give-backs counted and answered, its decline lines and its
+// passes' lines captured at every level, and its pass run as though a day less a nanosecond had passed since every deletion — the retention the duty reads
 // off the epoch, less that, is what both the listing and every purge step
 // judge a deletion's age by, so a day's retention is past at once and a longer
 // one is not. The engine's own loop is stopped, so every turn is the test's.
@@ -133,6 +135,7 @@ func newPurgeProbe(e *Engine) *purgeProbe {
 	}
 	p.duty.declines.log = slog.New(slog.NewJSONHandler(&lockedWriter{mu: &p.mu, w: &p.logs},
 		&slog.HandlerOptions{Level: slog.LevelDebug}))
+	p.duty.log = p.duty.declines.log
 	epochs := p.duty.pass.Retention
 	p.duty.pass.Retention = func() time.Duration { return epochs() - (24*time.Hour - time.Nanosecond) }
 	return p
@@ -170,6 +173,33 @@ func (p *purgeProbe) lines(t *testing.T) []declineLine {
 			t.Fatalf("a decline line is no JSON: %v: %s", err, scanner.Bytes())
 		}
 		if line.Msg == "code_retention_duty_declined" || line.Msg == "code_retention_duty_resumed" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// passLine is one of the duty's `code_retention_pass` lines, with the counts
+// a sweep adds to it.
+type passLine struct {
+	Msg, Level string
+	Sweeps     int `json:"sweeps"`
+	SweptRows  int `json:"swept_rows"`
+}
+
+// passes is every `code_retention_pass` line the duty logged, in order.
+func (p *purgeProbe) passes(t *testing.T) []passLine {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []passLine
+	scanner := bufio.NewScanner(bytes.NewReader(p.logs.Bytes()))
+	for scanner.Scan() {
+		var line passLine
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			t.Fatalf("a duty line is no JSON: %v: %s", err, scanner.Bytes())
+		}
+		if line.Msg == "code_retention_pass" {
 			out = append(out, line)
 		}
 	}
@@ -470,6 +500,89 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 				"DEBUG resume", lines)
 		}
 	})
+}
+
+// A RETIREMENT IS SWEPT BY A RECORD THE ENGINE RUNS. A retired reference keeps
+// its object from the collector only until its domain deletes the row
+// (ADR-0051), and the code host's retired packs are deleted by a retire_sweep
+// record of the code-retention duty — every applier at one position — never
+// by a job of the maintenance worker, whose list
+// (TestTheEngineSweepsEveryShortHorizonTable) holds per-node deletes alone and
+// could not name this one. So the duty the engine builds is held here to it: a
+// pass on a node serving the fleet's revision removes a repository's retired
+// row past code.RetireGrace by one record on the repository's subject, keeps a
+// row still inside the grace, and says what it swept at INFO.
+//
+// THE ROWS ARE SEEDED into the node's estate, a day and an hour old and an
+// hour old by the wall clock, because the duty the engine builds judges the
+// grace by its own clock, which the case does not set, and the broker's
+// instants cannot be moved.
+//
+// Mutation: drop the sweep step from the pass, and the row stays with nothing
+// on the log; drop the sweep's counts from the pass's INFO rule, and the line
+// is DEBUG.
+func TestARetirementIsSweptByARecordTheEngineRuns(t *testing.T) {
+	t.Parallel()
+	doc := retainedFor(7, webRepo(""))
+	e := newSandboxNode(t, parseCompany(t, doc))
+	servesCodeReads(t, e)
+	reconciled(t, e)
+	// SERVING THE FLEET'S REVISION, which a node must to hold the duty at all.
+	epoch := activateRevision(t, e, doc)
+	tickApplies(t, e, fleetReconciler(t, e), epoch)
+	web := mustRepo(t, e, "web").ID
+	now := time.Now()
+	seedRetiredPack(t, e, web, 1, now.Add(-code.RetireGrace-time.Hour))
+	seedRetiredPack(t, e, web, 2, now.Add(-time.Hour))
+
+	p := newPurgeProbe(e)
+	end := codeLogEnd(t, e)
+	report, ran := p.duty.turn(t.Context())
+	if !ran || report.Sweeps != 1 || report.SweptRows != 1 || len(report.Failed) != 0 {
+		t.Fatalf("the duty's turn ran %v and reported %+v; want a pass that swept the one row past "+
+			"its grace", ran, report)
+	}
+	if writes := codeLogWrites(t, e, end); !slices.Equal(writes, []code.Subject{code.RepoSubject(web)}) {
+		t.Fatalf("the pass appended %v to the code log, want one record on web's subject", writes)
+	}
+	var due, inside int
+	if err := e.backends.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT
+			(SELECT COUNT(*) FROM code_packs_retired WHERE repo_id = ?1 AND retired_position = 1),
+			(SELECT COUNT(*) FROM code_packs_retired WHERE repo_id = ?1 AND retired_position = 2)`,
+			web).Scan(&due, &inside)
+	}); err != nil {
+		t.Fatalf("read web's retired packs: %v", err)
+	}
+	if due != 0 || inside != 1 {
+		t.Fatalf("after the pass web holds %d retired row(s) past the grace and %d inside it, "+
+			"want 0 and 1", due, inside)
+	}
+	if lines := p.passes(t); len(lines) != 1 || lines[0].Level != "INFO" || lines[0].Sweeps != 1 ||
+		lines[0].SweptRows != 1 {
+		t.Fatalf("the pass logged %+v, want one INFO code_retention_pass with sweeps 1 and "+
+			"swept_rows 1", lines)
+	}
+}
+
+// seedRetiredPack writes one retired pack row of repository id into e's
+// estate, retired by the record at the packed position and stamped at — the
+// row a compaction's apply writes, which this case needs at an instant the
+// broker never stamps.
+func seedRetiredPack(t *testing.T, e *Engine, id string, position int64, at time.Time) {
+	t.Helper()
+	pack := fmt.Sprintf("%s-retired-%d", id, position)
+	key := objstore.KeyAt(at)
+	if err := e.backends.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO code_packs_retired (repo_id, pack_id, part,
+			object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, added_position,
+			retired_position, retired_at) VALUES (?, ?, 'pack', ?, ?, 100, 0, 0, ?, 1, 'push', 1, ?, ?)`,
+			id, pack, key.String(), string(objstore.HashOf([]byte(pack))), strings.Repeat("0", 40),
+			position, store.EncodeTime(at))
+		return err
+	}); err != nil {
+		t.Fatalf("seed %s's retired pack at %d: %v", id, position, err)
+	}
 }
 
 // codeNodeStore is a node's Tier A over a store and a stream of its own,

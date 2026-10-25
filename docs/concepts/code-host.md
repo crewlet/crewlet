@@ -407,9 +407,11 @@ deleted longer than **`code.deleted_retention_days`** (1 to 365 days; unset is
 the log can replay), the fleet-singleton `code-retention` duty purges it (see
 [Singleton duties](seat-ownership.md#singleton-duties)):
 
-- every 15 minutes, it finishes every purge already begun — whatever the
-  retention, since a purge has no undo — then purges the repositories deleted
-  longest ago first;
+- every 15 minutes, it first removes the rows of the packs a compaction
+  retired more than a day ago, so the collector can take their objects (see
+  [Live, retired and derived references](object-store.md#live-retired-and-derived-references)),
+  then finishes every purge already begun — whatever the retention, since a
+  purge has no undo — then purges the repositories deleted longest ago first;
 - each purge is a sequence of bounded **steps**, each one record removing a
   bounded part of the repository's rows, and the last leaves only a
   **deletion marker**, which drops every later record about the repository on
@@ -454,7 +456,8 @@ committer found, because each has its own remedy:
 | purged | it holds nothing; declaring its name creates a new, empty repository |
 | an id no repository had | it does not exist |
 
-The packs a purged repository named are no longer named by any row, so the
+The packs a purged repository named, the ones it had retired with them, are no
+longer named by any row, so the
 [object collector](object-store.md#collection-and-audit) deletes them a day
 later. The code log itself is trimmed like every other log (see
 [Retention](../guides/retention.md)), and a node whose copy of it is out of
@@ -1508,7 +1511,7 @@ reference](../reference/metrics.md)).
 | `code_repos_interrupted` | `INFO` | The node stopped before its reconcile finished; the next boot reconciles. |
 | `code_repo_not_applied`, `code_repos_not_applied`, `code_repos_not_listed` | `ERROR`, `ERROR`, `WARN` | A reconcile could not apply one repository, any, or delete what the document no longer declares; the node runs the reconcile again (`code_repos_retrying`). Two of a repository's are not run again for, and say what to change instead: its name is held by a repository the configuration does not manage — rename the declaration — or the code log refuses its declaration as written. |
 | `code_repos_retrying` | `INFO` | The reconcile of `activation` left something undone — said in the lines before — and runs again in `retry_in`: five seconds after the first such run, doubling with each run in a row (`attempt`) to five minutes, until one applies or a newer activation replaces it. |
-| `code_retention_pass` | `INFO` | A pass that purged, failed a repository, held a purged name or stopped at its budget (`purged`, `steps`, `remain`, `failed`, `unhanded`); `DEBUG` when nothing was due. |
+| `code_retention_pass` | `INFO` | A pass that swept retired packs, purged, failed a repository, held a purged name or stopped at its budget (`sweeps`, `swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`); `DEBUG` when nothing was due. |
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none), the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |

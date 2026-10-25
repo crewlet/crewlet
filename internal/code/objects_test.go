@@ -82,8 +82,9 @@ func TestThePackReferencesAreReadThroughTheCodeEstate(t *testing.T) {
 
 // A RECORD'S PACK REFERENCES ARE WHAT ITS APPLY WRITES: a push names the row
 // the applier writes for its pack, spelled as the walk spells it; every other
-// record this build reads names none; and a record this build cannot read
-// that may reach a repository refuses — the backup's ADR-0052 contract.
+// record this build reads — a sweep of retired packs among them — names none;
+// and a record this build cannot read that may reach a repository refuses —
+// the backup's ADR-0052 contract.
 func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 	t.Parallel()
 	records := code.PackReferences.Records
@@ -105,6 +106,20 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 		if got, err := records(body); err != nil || len(got) != 0 {
 			t.Errorf("a %s record's references = %+v, %v; want none", kind, got, err)
 		}
+	}
+	// A SWEEP removes rows of code_packs_retired and writes none of
+	// code_packs, so it names no pack row either.
+	through, err := json.Marshal(code.RetireSweep{RepoID: "repo-a",
+		Through: statelog.Position{Stream: code.Domain{}.Stream().Name, Generation: 1, Seq: 4}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sweep := mustEncode(t, code.MutationRecord{RecordEnvelope: code.RecordEnvelope{
+		OpID: "op-5", Subject: code.RepoSubject("repo-a"), Op: code.OpRetireSweep, Gen: 1,
+		Scope: code.Scope{code.RepoPath("repo-a")},
+	}, Mutation: through})
+	if got, err := records(sweep); err != nil || len(got) != 0 {
+		t.Errorf("a sweep's references = %+v, %v; want none", got, err)
 	}
 
 	// A NEWER BUILD'S PUSH: it may name a pack, and this build cannot say

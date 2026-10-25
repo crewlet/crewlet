@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE TYPED PAYLOADS, one per (kind, op), and the closed sets they spell.
@@ -424,6 +425,25 @@ type Purge struct {
 	Reason string `json:"reason"`
 }
 
+// RetireSweep removes a repository's retired pack rows at or below Through,
+// oldest first — the code-retention duty's sweep of what a record retired,
+// once its grace has passed ([Store.RetireSweep]).
+//
+// PURE IN THE RECORD: the duty decides Through by its own clock against each
+// row's retired_at — the broker's instant — and the apply removes the rows at
+// or below it and reads no clock, so every node removes the same rows, and a
+// suite can drive the grace with the duty's clock where the broker's cannot
+// be moved. The skew between the two clocks is the references gate's
+// assumed hour, which [RetireGrace] outlasts.
+type RetireSweep struct {
+	RepoID string `json:"repo_id"`
+	// Through is the highest retired_position whose rows the duty's clock
+	// put past RetireGrace: every row at or below it retired at or before
+	// the decide's now less the grace, and it names whole records'
+	// retirements, never part of one. The apply removes no row above it.
+	Through statelog.Position `json:"through"`
+}
+
 // Activated raises the activation fence to a configuration activation.
 //
 // PINNED AT [GateRecordVersion] FOR EVER, as every gate is: a node that
@@ -484,6 +504,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[PurgePart](rec)
 	case kind == KindRepo && op == OpPurge:
 		return decodePayload[Purge](rec)
+	case kind == KindRepo && op == OpRetireSweep:
+		return decodePayload[RetireSweep](rec)
 	case kind == KindCompany && op == OpActivate:
 		return decodePayload[Activated](rec)
 	case kind == KindEviction && op == OpEviction:

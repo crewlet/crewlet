@@ -22,8 +22,9 @@ import (
 // tables a repository's history lives in — the guards, the applier's reads
 // and writes (the tombstones a push sweeps, oldest first, among them), the
 // lifecycle store's decides, the push decide's reads, the reader's pages in their
-// first and keyset forms, the purge's bounded count and the object store's
-// two statements over code_packs — and holds each to the EXACT seek it names:
+// first and keyset forms, the purge's bounded count, a sweep's decide, apply
+// and listing over the retired packs, and the object store's statements over
+// code_packs and code_packs_retired — and holds each to the EXACT seek it names:
 // the index and every column of it the statement bounds. Seeking an index is
 // not enough — a lookup of one ref that sought repo_id alone read every ref
 // its repository holds (planner.go). The statements are the package's own
@@ -51,7 +52,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
 	covered := []string{"code_repos", "code_names", "code_refs", "code_packs",
-		"code_pushes", "code_protections"}
+		"code_pushes", "code_protections", "code_packs_retired"}
 	used := map[string]bool{}
 	for name, st := range registeredStatements() {
 		t.Run(name, func(t *testing.T) {
@@ -180,6 +181,7 @@ const (
 	pushKey       = "sqlite_autoindex_code_pushes_1"
 	protectionKey = "sqlite_autoindex_code_protections_1"
 	deletionKey   = "sqlite_autoindex_code_deletions_1"
+	retiredKey    = "sqlite_autoindex_code_packs_retired_1"
 )
 
 // registeredStatements is every statement this package issues against the
@@ -225,7 +227,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -265,6 +267,12 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
 		"first live in": {firstLiveInSQL, []any{"repo-1", `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`},
 			[]string{"SCAN json_each AS j", liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
+		"retired oldest":    {retiredOldestSQL, []any{"repo-1", RetireSweepRows + 1}, []string{retiredRepoIdx + " (repo_id=?)"}},
+		"sweep retired":     {sweepRetiredSQL, []any{"repo-1", 1010, RetireSweepRows}, []string{retiredRepoIdx + " (repo_id=? AND retired_position<=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"swept retired":     {sweptRetiredSQL, []any{1010, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"retired due":       {retiredDueSQL, []any{15, -1, -1, "", retentionPage}, []string{"code_packs_retired_due_idx (retired_at>=? AND retired_at<=?)"}},
+		"purge retired":     {purgeRetiredSQL, []any{"repo-1", PurgePartRows}, []string{retiredRepoIdx + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all retired": {purgeAllRetiredSQL, []any{"repo-1"}, []string{retiredRepoIdx + " (repo_id=?)"}},
 	}
 	among, err := PackReferences.ObjectsAmong(3)
 	if err != nil {
@@ -278,12 +286,26 @@ func registeredStatements() map[string]statement {
 	}
 	out["references after"] = statement{after, []any{""},
 		[]string{"code_packs_object_idx (object>?)"}}
+	// THE COLLECTOR'S ONE QUESTION OF THE RETIRED TABLE — the audit's and the
+	// backup's walk is refused for a retired declaration, so this is all of
+	// what the object store asks of it.
+	retired, err := RetiredPackReferences.ObjectsAmong(3)
+	if err != nil {
+		panic(err)
+	}
+	out["retired objects among"] = statement{retired, []any{"k1", "k2", "k3"},
+		[]string{"code_packs_retired_object_idx (object=?)"}}
 	return out
 }
 
+// retiredRepoIdx is code_packs_retired_repo_idx, (repo_id, retired_position,
+// pack_id, part): the order every statement over a repository's retired rows
+// names, so a sweep and a purge remove them alike on every node.
+const retiredRepoIdx = "code_packs_retired_repo_idx"
+
 // seededPlanEstate is an estate holding five repositories of 500 refs, 50
-// packs and 200 pushes each, with no statistics gathered — the state every
-// node's estate is in.
+// packs, 200 pushes and 200 retired packs each, with no statistics gathered —
+// the state every node's estate is in.
 func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -337,6 +359,20 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 				`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
 					received_at, row_bytes) VALUES `, `(?, ?, ?, ?, 'op', 'operator', '[]', 0, 2)`, ``, 200,
 				func(i int) []any { return []any{fmt.Sprintf("%s-push-%06d", id, i), id, i, i} }); err != nil {
+				return err
+			}
+			// TWO HUNDRED RETIRED PACKS ACROSS TWENTY RETIRING RECORDS, each
+			// record's rows sharing its position and its instant, as a
+			// record's retirements do.
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
+					reverse_bytes, git_checksum, objects, kind, added_position, retired_position,
+					retired_at) VALUES `,
+				`(?, ?, 'pack', ?, 'h', 1, 0, 0, 'c', 1, 'push', ?, ?, ?)`, ``, 200,
+				func(i int) []any {
+					return []any{id, fmt.Sprintf("retired-%06d", i),
+						fmt.Sprintf("%s-retired-object-%06d", id, i), i, 1000 + i/10, i / 10}
+				}); err != nil {
 				return err
 			}
 		}

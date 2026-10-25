@@ -43,11 +43,14 @@ passed; the collector's next pass then deletes the object as it deletes
 anything nothing names. No retirement timestamp reaches the collector and it
 still takes no lock — ADR-0027's judgement is unchanged. The declaring domain
 owns the sweep and a grace that outlasts the longest read of what its table
-names. No table is retired yet; the references gate refuses the first one
-declared until it has a reviewed entry naming its grace, the largest object
-its rows name and the job that sweeps them, and holds the grace above the
-longest read of that object. A restore on `s3` brings retired rows back
-without their objects, and nothing is owed them.
+names. The first retired table is `code_packs_retired`, the code host's
+retired packs, swept by the code-retention duty's `retire_sweep` records; the
+references gate refuses any further one declared until it has a reviewed
+entry naming its grace, the largest object its rows name and what sweeps them
+— a job of the engine's maintenance worker, or a duty whose records delete
+them — and holds the grace above the longest read of that object. A restore
+on `s3` brings retired rows back without their objects, and nothing is owed
+them.
 
 A derived row owes **no grace**, because its domain owes every reader of the
 object a way on without it instead: a reader whose read of it fails reads the

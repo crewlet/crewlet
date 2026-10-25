@@ -928,7 +928,19 @@ are:
 A project's files are live rows, and a file never retires one: a replaced
 file's bytes go at the first hourly pass once nothing names them and they were
 uploaded more than a day ago (see
-[One object per upload](#one-object-per-upload)). The decision is
+[One object per upload](#one-object-per-upload)).
+
+The first retired rows are the [code host's](code-host.md): when a compaction
+merges a repository's small packs into a larger one, each pack it replaced
+moves to `code_packs_retired` and keeps its object for **a day** — longer
+than the longest read a clone of the largest pack a row can name is allowed
+(21 hours 21 minutes), with an hour to spare for the clocks of the node
+sweeping and the broker that stamped the retirement — so a git node still
+serving the old pack list, or a clone that began on it, finishes its read.
+The `code-retention` duty then removes the rows past their day — by a record
+on the code log for each repository holding some, which every data node
+applies — and the collector's next pass deletes their objects. A deleted
+repository's purge takes its retired rows with the rest. The decision is
 [ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-retired-reference-keeps-its-object-for-a-grace.md).
 
 ### Unfinished uploads

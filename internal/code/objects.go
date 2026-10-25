@@ -25,6 +25,25 @@ var PackReferences = objstore.ReferenceTable{
 	Records:  packRecordReferences,
 }
 
+// RetiredPackReferences declares code_packs_retired: the packs a record
+// retired, each keeping its object from the collector for [RetireGrace] until
+// the code-retention duty's retire_sweep records remove its row — RETIRED
+// (ADR-0051), the first table any domain declares so, and reviewed with its
+// grace, its largest object and its sweep in internal/objstore/references.
+//
+// The collector asks it as it asks every declared table; the audit and the
+// backup never read it, so it names no Log, Deferred or Records, which
+// [objstore.ReferenceTable.ValidateLog] asks of a Required table alone. A
+// restore whose store lacks a retired object loses nothing anybody can ask
+// for: no cache downloads a retired pack — a cache installs the live rows
+// alone — and the row itself goes at the next sweep.
+var RetiredPackReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "code_packs_retired",
+	Key: "object", Hash: "hash", Size: "size",
+	Owner:    []string{"repo_id", "pack_id", "part"},
+	Standing: objstore.Retired,
+}
+
 // packRecordReferences answers the code_packs rows one record of the code log
 // writes, and the object each names once the record applies —
 // [objstore.ReferenceTable.Records] for [PackReferences].

@@ -103,8 +103,8 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 			var remaining int
 			var pushBytes int64
 			if countErr := tx.QueryRowContext(ctx, remainingSQL, repoID, PurgePartRows+1, repoID,
-				PurgePartRows+1, repoID, PurgePartRows+1, repoID, PurgePartRows+1).Scan(&remaining,
-				&pushBytes); countErr != nil {
+				PurgePartRows+1, repoID, PurgePartRows+1, repoID, PurgePartRows+1, repoID,
+				PurgePartRows+1).Scan(&remaining, &pushBytes); countErr != nil {
 				return statelog.Decision{}, fmt.Errorf("code: count %s's rows: %w", repoID, countErr)
 			}
 			wrote = true
@@ -148,16 +148,20 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 
 // The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
 // the decide needs "more than PurgePartRows", never the total, so each table
-// is counted at most PurgePartRows + 1 deep — and beside it what the push
+// a part deletes from — the pushes, the refs, the packs and the retired packs
+// — is counted at most PurgePartRows + 1 deep, and beside them what the push
 // rows among them weigh, summed over the same depth from code_pushes_repo_idx,
 // which carries every row's width: past PurgePartRows pushes the count alone
-// already forms a part, and short of it the sum is the whole.
+// already forms a part, and short of it the sum is the whole. A table left out
+// of the count is one the final purge's unbounded statement would delete
+// whatever it held.
 const (
 	repoNameSQL  = `SELECT name FROM code_repos WHERE id = ?`
 	remainingSQL = `SELECT
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_pushes WHERE repo_id = ? LIMIT ?))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_refs WHERE repo_id = ? LIMIT ?))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ? LIMIT ?)),
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ? LIMIT ?))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs_retired WHERE repo_id = ? LIMIT ?)),
 		(SELECT COALESCE(SUM(row_bytes), 0) FROM
 			(SELECT row_bytes FROM code_pushes WHERE repo_id = ? LIMIT ?))`
 )

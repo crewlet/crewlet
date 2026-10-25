@@ -244,6 +244,8 @@ var standings = map[string]standing{
 		"a project's file: bytes a person or a seat wrote, which nothing builds again"},
 	"code_packs": {objstore.Required,
 		"a repository's history: the pack bundle a push stored, which every git node's copy is built from"},
+	"code_packs_retired": {objstore.Retired,
+		"a pack a compaction replaced: nothing new reads it, and a read that began on it gets its grace before the row is swept"},
 	"artifact_objects": {objstore.Required,
 		"an artifact version's file, which a retained version serves"},
 	"artifact_assets": {objstore.Required,
@@ -419,11 +421,17 @@ type retirement struct {
 // retirements is every RETIRED declaration in references.All, keyed by its
 // table: the one place a retirement's grace and sweep are reviewed.
 //
-// EMPTY while no domain retires a reference. The gate is two-sided, as
-// skipgate's Always entries are: a retired declaration with no entry here
-// fails, and so does an entry no retired declaration matches, so the list can
-// be neither short nor stale.
-var retirements = map[string]retirement{}
+// The gate is two-sided, as skipgate's Always entries are: a retired
+// declaration with no entry here fails, and so does an entry no retired
+// declaration matches, so the list can be neither short nor stale.
+var retirements = map[string]retirement{
+	// THE CODE HOST'S RETIRED PACKS: a day, over the 21 h 21 min a clone of
+	// the largest bundle a row can name may read it, removed by the
+	// code-retention duty's retire_sweep records and held to that by
+	// internal/engine.TestARetirementIsSweptByARecordTheEngineRuns.
+	code.RetiredPackReferences.Table: {grace: code.RetireGrace, largest: code.MaxPackBytes,
+		sweep: "the code-retention duty's retire_sweep records (code.Store.RetireSweep)"},
+}
 
 // retirementFaults is everything wrong with how declared's RETIRED tables are
 // reviewed in reviewed, as messages naming the table: a retired table with no
@@ -484,10 +492,11 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 // retired row nobody deletes keeps its object for ever, and one deleted before
 // the longest read of its object ends deletes the object under that read.
 //
-// A TRIPWIRE before it is a measurement: while nothing retires a reference the
-// list is empty and so is every fault, so the controls below are what show the
-// gate would fire on the first retired declaration to land without a reviewed
-// entry, and on every way such an entry can be wrong.
+// THE CODE HOST'S RETIRED PACKS ARE THE FIRST, and their entry is measured
+// here: code.RetireGrace (24 h) against objstore.ReadBudget(code.MaxPackBytes)
+// (21 h 21 min) plus the assumed skew (1 h). The controls below show the gate
+// fires on a retired declaration that lands without a reviewed entry, and on
+// every way such an entry can be wrong, whatever the shipped list holds.
 func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 	t.Parallel()
 	retired := tracker.FileObjectReferences
@@ -542,5 +551,10 @@ func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 	for _, fault := range retirementFaults(references.All, retirements) {
 		t.Error(fault)
 	}
-	t.Logf("%d retired tables reviewed", len(retirements))
+	for table, r := range retirements {
+		longest := objstore.ReadBudget(r.largest)
+		t.Logf("%s keeps a retired row %v: the longest read of its largest object takes %v, "+
+			"and with the assumed skew of %v that leaves %v", table, r.grace, longest,
+			assumedClockSkew, r.grace-longest-assumedClockSkew)
+	}
 }

@@ -304,6 +304,8 @@ func TestOnlyTheGateKindsStopTheApplier(t *testing.T) {
 			Kind: string(code.KindRepo), Op: string(code.OpPurgePart)}, false},
 		"a delete, which is reversible": {statelog.Envelope{Kind: string(code.KindRepo),
 			Op: string(code.OpDelete)}, false},
+		"a retire sweep, which removes only rows past their grace": {statelog.Envelope{
+			Kind: string(code.KindRepo), Op: string(code.OpRetireSweep)}, false},
 		"a create": {statelog.Envelope{Kind: string(code.KindName), Op: string(code.OpCreate)}, false},
 		"a kind this build has never heard of": {statelog.Envelope{Kind: "something-new",
 			Op: "something-new"}, false},

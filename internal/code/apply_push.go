@@ -449,15 +449,23 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 }
 
 // applyPurgePart deletes one bounded part of a deleted repository's rows, in a
-// fixed order — its pushes, then its refs, then its packs — so every node
-// deletes the same rows. THE PART IS THE GUARD: only the row's purge_parts + 1
-// deletes anything, so a redelivered or stale part deletes nothing more.
+// fixed order — its pushes, then its refs, then its packs, then the packs a
+// record retired — so every node deletes the same rows. THE PART IS THE
+// GUARD: only the row's purge_parts + 1 deletes anything, so a redelivered or
+// stale part deletes nothing more.
 //
 // BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and push rows
 // only until their row_bytes reach PurgePartBytes — a push row is the
 // estate's one wide row, and deleting one costs its overflow pages, which a
 // count does not see. A part whose pushes were cut by bytes deletes nothing
 // else: the refs and packs wait for a part whose pushes are done.
+//
+// A RETIRED PACK'S ROW GOES WITH ITS REPOSITORY, its grace or not: the grace
+// is for a reader that began on the pack before it was retired, and no read
+// begins on a deleted repository — it is refused to every new one from its
+// deletion, and code.deleted_retention_days, a day at least, outlasts the
+// reads that had begun. Its object is then named by nothing, and the
+// collector takes it as it takes the repository's live packs'.
 func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContext, p PurgePart) (int, error) {
 	var parts int
 	if err := tx.QueryRowContext(ctx, purgePartsSQL, p.RepoID).Scan(&parts); err != nil {
@@ -572,6 +580,15 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 				"a pack this build stores is one row", p.RepoID, n, len(packIDs))
 		}
 		deleted += int(n)
+		budget -= len(packIDs)
+	}
+	if budget > 0 {
+		res, err := tx.ExecContext(ctx, purgeRetiredSQL, p.RepoID, budget)
+		if err != nil {
+			return 0, fmt.Errorf("code: purge %s's retired packs: %w", p.RepoID, err)
+		}
+		n, _ := res.RowsAffected()
+		deleted += int(n)
 	}
 	if _, err := tx.ExecContext(ctx, purgeCountersSQL, p.Part, gone.live, gone.branches, gone.tags,
 		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
@@ -586,15 +603,15 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // redelivery of the marker's own record, which its gate lets through by op id,
 // deletes nothing and inserts nothing. Unbounded statements are safe because
 // the decide forms a purge only once at most PurgePartRows of the
-// repository's pushes, refs and packs remain AND the pushes among them weigh
-// at most PurgePartBytes — a part's own bounds — and it holds at most
-// MaxProtectionsPerRepo rules: with the name claim, the row and the marker
-// that is PurgePartRows + MaxProtectionsPerRepo + 3 rows, which the limits
-// test holds within MaxRecordRows.
+// repository's pushes, refs, packs and retired packs remain AND the pushes
+// among them weigh at most PurgePartBytes — a part's own bounds — and it holds
+// at most MaxProtectionsPerRepo rules: with the name claim, the row and the
+// marker that is PurgePartRows + MaxProtectionsPerRepo + 3 rows, which the
+// limits test holds within MaxRecordRows.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
 	deleted := 0
 	for _, stmt := range []string{
-		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, clearProtectionsSQL,
+		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, clearProtectionsSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {
@@ -762,16 +779,23 @@ const (
 	deletePacksSQL = `DELETE FROM code_packs WHERE rowid IN (SELECT p.rowid
 		FROM json_each(?2) AS j CROSS JOIN code_packs AS p
 		WHERE p.repo_id = ?1 AND p.pack_id = CAST(j.value AS TEXT))`
+	// purgeRetiredSQL is a part's retired packs, oldest retirement first and
+	// no more than the part has left — the sweep's own order.
+	purgeRetiredSQL = `DELETE FROM code_packs_retired WHERE rowid IN (SELECT rowid
+		FROM code_packs_retired INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ?
+		ORDER BY retired_position, pack_id, part LIMIT ?)`
 	purgeCountersSQL = `UPDATE code_repos SET status = 'purging', purge_parts = ?, refs = refs - ?,
 		branches = branches - ?, tags = tags - ?, tombstones = tombstones - ?,
 		live_packs = live_packs - ?, live_bytes = live_bytes - ?, live_objects = live_objects - ?,
 		version = ? WHERE id = ?`
-	releaseNameSQL    = `DELETE FROM code_names WHERE token = ? AND repo_id = ?`
-	purgeAllPushesSQL = `DELETE FROM code_pushes WHERE repo_id = ?`
-	purgeAllRefsSQL   = `DELETE FROM code_refs WHERE repo_id = ?`
-	purgeAllPacksSQL  = `DELETE FROM code_packs WHERE repo_id = ?`
-	removeRepoSQL     = `DELETE FROM code_repos WHERE id = ?`
-	markSQL           = `INSERT INTO code_deletions
+	releaseNameSQL     = `DELETE FROM code_names WHERE token = ? AND repo_id = ?`
+	purgeAllPushesSQL  = `DELETE FROM code_pushes WHERE repo_id = ?`
+	purgeAllRefsSQL    = `DELETE FROM code_refs WHERE repo_id = ?`
+	purgeAllPacksSQL   = `DELETE FROM code_packs WHERE repo_id = ?`
+	purgeAllRetiredSQL = `DELETE FROM code_packs_retired INDEXED BY code_packs_retired_repo_idx
+		WHERE repo_id = ?`
+	removeRepoSQL = `DELETE FROM code_repos WHERE id = ?`
+	markSQL       = `INSERT INTO code_deletions
 			(repo_id, name, at, by, reason, purge_record_id, rejects, last_reject_at, version)
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
 		ON CONFLICT (repo_id) DO NOTHING`

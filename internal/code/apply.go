@@ -433,6 +433,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case Purge:
 		payloadRepo = p.RepoID
+	case RetireSweep:
+		payloadRepo = p.RepoID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository "+
 			"(the record at %s)", at.record.Op, at.position)
@@ -464,6 +466,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyRestore(ctx, tx, at, p)
 	case PurgePart:
 		return a.applyPurgePart(ctx, tx, at, p)
+	case RetireSweep:
+		return a.applyRetireSweep(ctx, tx, at, p)
 	}
 	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
 }

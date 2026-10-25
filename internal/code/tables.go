@@ -21,6 +21,12 @@ var ReproducibleTables = []string{
 	"code_repos", "code_names", "code_refs", "code_packs", "code_pushes",
 	"code_protections",
 
+	// The packs a record retired, each kept from the collector until a
+	// retire_sweep record removes it past RetireGrace — every node derives
+	// the same rows from the same records, so they are state a replay
+	// rebuilds like any other.
+	"code_packs_retired",
+
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.
 	"code_activation",

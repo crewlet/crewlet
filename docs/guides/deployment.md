@@ -98,6 +98,26 @@ running — and a running check's outcome is read with
 `GET /code/repos/{name}/verify/{id}` until it ends
 ([API reference](../reference/api-endpoints.md#post-codereposnameverify)).
 
+**Keep every machine's clock synchronised** — every node's, and every server's
+of an external NATS cluster. Two of the engine's deletions judge an instant
+one machine stamped by another machine's clock, and both assume the two agree
+to well within an hour. The
+[object collector](../concepts/object-store.md#collection-and-audit) deletes an
+object no row names only once its key, minted by the node that uploaded it,
+and the store's own record of when it was written are both more than a day old
+by the clock of the node running the collector; and the code host's
+`code-retention` duty removes a
+[retired pack's](../concepts/object-store.md#live-retired-and-derived-references) row
+once the instant the broker stamped on its retirement is a day old by the
+clock of the node holding the duty. Each day leaves a margin past the longest
+upload or read it has to outlast — twelve hours for the collector, two hours
+and thirty-nine minutes for a retired pack — and a clock running ahead of the
+other by more than that deletes an object a write or a read still needs. NTP
+keeps machines within milliseconds of each other; a host without it drifts,
+and a virtual machine restored from a snapshot can come back hours off.
+Nothing in the engine measures the skew, so run an NTP client (chrony,
+systemd-timesyncd) everywhere the engine or its broker runs.
+
 ### The room the stream's volume needs
 
 The engine keeps eight ordered logs on the stream: the tracker's mutation

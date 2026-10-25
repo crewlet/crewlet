@@ -22,7 +22,8 @@ import (
 // The code host, wired: its settings in force, the seam the API's routes and
 // the host reach it through, its committer's stop, the census term of its git
 // clients, the reconcile of the repositories code.repos declares, and the
-// code-retention duty that purges what was deleted.
+// code-retention duty that sweeps the packs retired past their grace and
+// purges what was deleted.
 //
 // # Every data node commits
 //
@@ -677,8 +678,9 @@ func codeOwners(c *Company) *org.Index {
 }
 
 const (
-	// codeRetentionDutyName is the fleet singleton that purges the
-	// repositories deleted past their retention.
+	// codeRetentionDutyName is the fleet singleton that sweeps the packs
+	// retired past code.RetireGrace and purges the repositories deleted past
+	// their retention.
 	codeRetentionDutyName = "code-retention"
 
 	// codeRetentionDutyTTL is how long the duty outlives a holder that
@@ -716,6 +718,9 @@ type codeRetentionDuty struct {
 	// renewal keeps the duty while a pass runs, and ends the pass when it
 	// cannot.
 	renewal dutyRenewal
+	// log is where each pass's line goes ([logCodeRetention]); nil is the
+	// engine's.
+	log *slog.Logger
 
 	loop *loop
 }
@@ -795,6 +800,10 @@ func (d *codeRetentionDuty) decidesFrom() []string { return []string{code.Domain
 //     merely applying the revision, or starting, asks again a reconcile
 //     interval later ([codeRetentionDuty.wait]), a node that failed it a
 //     [code.RetentionInterval] later, and a purge is days late by design.
+//
+// The pass's sweeps of retired packs are declined with its purges: they
+// decide from the same copy, and a sweep that waits for a node that serves
+// only keeps an object from the collector a while longer.
 func (d *codeRetentionDuty) declined(ctx context.Context) bool {
 	reason, _ := copyDeclineReason(ctx, codeRetentionDecline, d.copies, d.decidesFrom())
 	if reason.key == "" {
@@ -857,16 +866,23 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 		// after another node had taken the duty.
 		d.declines.giveBack(ctx, codeRetentionDecline, d.giveBack)
 	}
-	logCodeRetention(ctx, report, err, ended)
+	logger := d.log
+	if logger == nil {
+		logger = log
+	}
+	logCodeRetention(ctx, logger, report, err, ended)
 	return report, true
 }
 
-// logCodeRetention says what one pass did: at info where it purged, failed,
-// held a name or stopped at its budget, at debug where it found nothing due.
-// A pass ENDED — the engine stopping, the duty lost or declined mid-pass,
-// which the renewal has said — is no failure; any other error is a warning.
-func logCodeRetention(ctx context.Context, report code.RetentionReport, err error, ended bool) {
-	attrs := []any{"purged", report.Purged, "steps", report.Steps, "remain", report.Remain}
+// logCodeRetention says what one pass did: at info where it swept, purged,
+// failed, held a name or stopped at its budget, at debug where it found
+// nothing due. A pass ENDED — the engine stopping, the duty lost or declined
+// mid-pass, which the renewal has said — is no failure; any other error is a
+// warning.
+func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.RetentionReport, err error,
+	ended bool) {
+	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows, "purged", report.Purged,
+		"steps", report.Steps, "remain", report.Remain}
 	if len(report.Failed) > 0 {
 		attrs = append(attrs, "failed", report.Failed)
 	}
@@ -875,12 +891,13 @@ func logCodeRetention(ctx context.Context, report code.RetentionReport, err erro
 	}
 	switch {
 	case err != nil && !ended:
-		log.WarnContext(ctx, "code_retention_pass_failed", append(attrs, "error", err.Error(),
+		logger.WarnContext(ctx, "code_retention_pass_failed", append(attrs, "error", err.Error(),
 			"detail", "the next pass, a tick later, lists what is due again")...)
-	case len(report.Purged) > 0 || len(report.Failed) > 0 || len(report.Unhanded) > 0 || report.Remain:
-		log.InfoContext(ctx, "code_retention_pass", attrs...)
+	case report.Sweeps > 0 || len(report.Purged) > 0 || len(report.Failed) > 0 ||
+		len(report.Unhanded) > 0 || report.Remain:
+		logger.InfoContext(ctx, "code_retention_pass", attrs...)
 	default:
-		log.DebugContext(ctx, "code_retention_pass", attrs...)
+		logger.DebugContext(ctx, "code_retention_pass", attrs...)
 	}
 }
 

@@ -332,12 +332,12 @@
 // [Putter] it is handed, so none lays a bundle out or seals it by a copy of
 // its own.
 //
-// # Three horizons, each a function of the record that applies it
+// # Four horizons, each a function of the record that applies it
 //
-// The applier keeps three horizons inside a record's OWN repository, each
-// chosen by the record's broker instant ([statelog.ApplyOptions.StoredAt]) and
-// never by a sweep, because a sweep would be a second writer of the replicated
-// estate:
+// The applier keeps four horizons inside a record's OWN repository, each
+// chosen by the record's broker instant ([statelog.ApplyOptions.StoredAt]) or
+// by what the record itself names, and never by a node-local sweep, because a
+// sweep would be a second writer of the replicated estate:
 //
 //   - PUSH HISTORY, [PushHistory] (181 days, usage.History): a push record
 //     removes up to [HorizonDeletesPerRecord] of its repository's push rows
@@ -370,8 +370,8 @@
 //     until their bytes reach [PurgePartBytes] ([Store.PurgeStep]), and the
 //     final record — formed only once what is left fits a part — leaves only
 //     its deletion marker, which drops every later record about the
-//     repository on every node, for ever. It is the one horizon no record
-//     of the repository's own can reach, since nothing else is written to a
+//     repository on every node, for ever. It is a horizon no record of the
+//     repository's own can reach, since nothing else is written to a
 //     deleted repository, so the code-retention duty's pass ([Retention])
 //     publishes its steps: every purge already begun first, whatever the
 //     retention, then the deleted oldest first. It publishes RECORDS and
@@ -392,7 +392,23 @@
 //     the earliest the duty begins it, on a tick at or after that instant,
 //     and nothing holds the purge to the instant itself; one being PURGED,
 //     or purged, never comes back, and its name declared again is a new,
-//     empty repository; and an id no repository had is none.
+//     empty repository; and an id no repository had is none;
+//   - RETIRED PACKS, [RetireGrace] (a day): a pack a record retires leaves
+//     code_packs for code_packs_retired, a RETIRED reference
+//     ([RetiredPackReferences], ADR-0051) that keeps its object from the
+//     collector and does nothing else, for longer than the longest legal read
+//     of the largest bundle a row can name — so a reader that began on the
+//     pack before its retirement finishes it. Like a purge it is no record's
+//     own horizon, so the code-retention duty's pass sweeps it, before it
+//     purges anything ([Store.RetireSweep]): a retire_sweep record removes,
+//     oldest first, the rows whose broker instant the duty's clock puts past
+//     the grace — at most [RetireSweepRows] a record, never part of one
+//     retirement — and raises the repository's retired_through mark. The
+//     record names the position it cut at, so the apply reads no clock; the
+//     duty's clock against the broker's is what the grace's margin past the
+//     longest read is for. A purge takes a repository's retired rows with
+//     the rest, whatever their grace, since no read begins on a deleted
+//     repository.
 //
 // # Measured
 //

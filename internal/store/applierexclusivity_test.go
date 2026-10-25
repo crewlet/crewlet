@@ -577,8 +577,9 @@ var allowedReplicatedWriter = []allowance{
 	{
 		Prefix: "internal/code/apply", Kind: mechanism,
 		Why: "The code domain's applier — the record dispatch, a repository's " +
-			"lifecycle and the activation fence, and the push with its " +
-			"horizons and the purge's parts.",
+			"lifecycle and the activation fence, the push with its horizons " +
+			"and the purge's parts, and the sweep of a repository's retired " +
+			"packs past their grace.",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,

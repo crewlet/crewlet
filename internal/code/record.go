@@ -98,12 +98,30 @@ const (
 	// OpTrimmed is the trim's payload-free record that removes the anchors
 	// below a floor (ADR-0050).
 	OpTrimmed OpKind = "trimmed"
+
+	// OpRetireSweep removes a repository's retired pack rows at or below a
+	// position the code-retention duty's clock put past RetireGrace, on the
+	// repository's own subject ([RetireSweep]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this op — none of the domain is on main, so no
+	// image and no release holds it — and while that is so, every build
+	// that meets a retire_sweep record reads it. Once a build without it has
+	// run, a new op is a versionedFields row (a new op is a VALUE of a field
+	// every record carries, statelog.VersionedField.Equals) and this one
+	// takes {Name: "RecordEnvelope.Op retire_sweep", Since: 2, Path:
+	// []string{"op"}, Equals: string(OpRetireSweep)}, with RecordVersion at
+	// 2 and its line under "What each version added", a Carrying record in
+	// the statelogtest candidate, and the op excepted from the stamp test's
+	// base-format loop — an older build would otherwise FAIL on the record
+	// at DecodeMutation's default arm rather than retain it. It is no gate.
+	OpRetireSweep OpKind = "retire_sweep"
 )
 
-// OpKinds are the twelve, in the order they are documented.
+// OpKinds are the thirteen, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
-	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpRetireSweep,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -124,7 +142,7 @@ const (
 	ActorConfig ActorKind = "config"
 
 	// ActorSystem is the engine on its own account: the committer's push
-	// batches and the code-retention pass's purges.
+	// batches and the code-retention pass's sweeps and purges.
 	ActorSystem ActorKind = "system"
 )
 

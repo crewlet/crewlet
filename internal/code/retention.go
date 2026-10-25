@@ -15,8 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE RETENTION PASS: what removes a deleted repository for good, once it has
-// been deleted for longer than the company's code.deleted_retention_days.
+// THE RETENTION PASS: what removes a retired pack's row once its grace has
+// passed, and a deleted repository for good once it has been deleted for
+// longer than the company's code.deleted_retention_days.
 //
 // It is the BODY of the code-retention duty. The duty — a fleet singleton,
 // its lease and its tick ([RetentionInterval]) — is the engine's, because
@@ -26,7 +27,16 @@ import (
 //
 // # What a pass works on
 //
-// Every PURGING repository first, whatever the retention: a purge once begun
+// The RETIRED PACKS first: every repository holding a row of
+// code_packs_retired whose retired_at the pass's clock puts past
+// [RetireGrace] is swept ([Store.RetireSweep]) — one record removing up to
+// [RetireSweepRows] of its rows, the repository stepped again while rows past
+// the grace are left. Sweeps go first because each is cheap and every hour a
+// retired row outlives its grace is an object the collector cannot take;
+// purges keep their order behind them. The listing is a page at a time over
+// its own index, oldest retirement first.
+//
+// Then every PURGING repository, whatever the retention: a purge once begun
 // is always finished, because its rows are already partly gone, its name is
 // held ([ErrPurging]) and nothing restores it — a longer retention saves a
 // repository only while it is still merely deleted. Then every DELETED
@@ -39,16 +49,16 @@ import (
 //
 // # How much of the write lane
 //
-// A pass PACES ITSELF and STOPS ITSELF. Every step is a record EVERY data node
-// applies on the replicated estate's one write lane, and the holder only ever
-// waits for its own apply: taken back to back, a pass held that lane most of
-// the time on every node, and a node applying slower than the holder queued
-// the difference in front of its own pushes and reads. So after each step a
-// pass waits twice as long as the step took ([RetentionLaneShare], a third),
-// and it takes steps for [RetentionPassBudget] at most; the next pass
-// resumes from the rows. limits.go states the arithmetic of both — what a
-// node slower than the holder is left behind by, and how fast a backlog
-// drains.
+// A pass PACES ITSELF and STOPS ITSELF, over a sweep's steps and a purge's
+// alike. Every step is a record EVERY data node applies on the replicated
+// estate's one write lane, and the holder only ever waits for its own apply:
+// taken back to back, a pass held that lane most of the time on every node,
+// and a node applying slower than the holder queued the difference in front
+// of its own pushes and reads. So after each step a pass waits twice as long
+// as the step took ([RetentionLaneShare], a third), and it takes steps for
+// [RetentionPassBudget] at most; the next pass resumes from the rows.
+// limits.go states the arithmetic of both — what a node slower than the
+// holder is left behind by, and how fast a backlog drains.
 //
 // # When a name is handed on
 //
@@ -63,22 +73,24 @@ import (
 // the next pass that can. Held in this process: a duty that moves to another
 // node, or a process that dies, leaves it to the next activation's reconcile.
 
-// retentionPage is how many repositories one read of the listing names: a
-// pass that steps one-step repositories at the measured 83 ms a part reaches
-// about 240 of them in RetentionPassBudget at RetentionLaneShare, so a page
-// is about what one pass consumes, read as one statement over an index.
+// retentionPage is how many repositories one read of the purge listing names,
+// and how many rows one read of the retired listing reads: a pass that steps
+// one-step repositories at the measured 83 ms a part reaches about 240 of them
+// in RetentionPassBudget at RetentionLaneShare, so a page is about what one
+// pass consumes, read as one statement over an index.
 const retentionPage = 256
 
 // retentionIdlePerStep is how many times a step's own duration the pass
 // waits after it: (1 − share) / share, two at a third — exact, as a constant.
 const retentionIdlePerStep = (1 - RetentionLaneShare) / RetentionLaneShare
 
-// Retention is the code-retention pass over the repositories purging or
-// deleted past the current epoch's retention. One value serves every pass of
-// one duty holder: it HOLDS, between its passes, the names it purged and
-// could not yet hand on, so it is used by pointer and never copied.
+// Retention is the code-retention pass over the retired packs past their
+// grace and the repositories purging or deleted past the current epoch's
+// retention. One value serves every pass of one duty holder: it HOLDS,
+// between its passes, the names it purged and could not yet hand on, so it is
+// used by pointer and never copied.
 type Retention struct {
-	// Store takes the purge's steps.
+	// Store takes the sweeps' and the purges' steps.
 	Store *Store
 	// Reader lists what is due and confirms what a purge left in this
 	// node's rows.
@@ -98,8 +110,8 @@ type Retention struct {
 	// is handed on again by a pass whose listing had not yet applied it.
 	// Nil hands it to nobody.
 	OnPurged func(ctx context.Context, name string) error
-	// Now is the clock the listing judges a deletion's age by; nil is the
-	// wall clock.
+	// Now is the clock the pass judges a retired pack's grace and a
+	// deletion's age by; nil is the wall clock.
 	Now func() time.Time
 	// Logger is where a purge is reported; nil is the package's.
 	Logger *slog.Logger
@@ -130,6 +142,13 @@ type heldName struct {
 
 // RetentionReport is what one pass did.
 type RetentionReport struct {
+	// Sweeps counts the retire_sweep records the pass published, across
+	// every repository: each removing up to RetireSweepRows of one
+	// repository's retired pack rows past RetireGrace.
+	Sweeps int `json:"sweeps"`
+	// SweptRows counts the retired pack rows those records remove — each
+	// step's decide's own count of the rows at or below its Through.
+	SweptRows int `json:"swept_rows"`
 	// Purged names every repository whose purge the pass saw through and
 	// handed on — its last record applied in this node's rows and its name
 	// taken by OnPurged — in that order. A name an earlier pass purged and
@@ -141,9 +160,10 @@ type RetentionReport struct {
 	// earlier pass whose last record this node's listing had not yet
 	// applied, and wrote nothing.
 	Steps int `json:"steps"`
-	// Failed maps the name of every repository whose purge failed in this
-	// pass to the failure's sentence. The pass went on past each, and the
-	// next pass asks again.
+	// Failed maps the name of every repository whose sweep or purge failed
+	// in this pass to the failure's sentence — both, joined, where both did —
+	// keyed by the repository's id where this node holds no row to name it
+	// by. The pass went on past each, and the next pass asks again.
 	Failed map[string]string `json:"failed,omitempty"`
 	// Unhanded names every repository purged on the log that the pass HOLDS
 	// at its end for a later pass to hand on: its purge's last record not
@@ -151,24 +171,27 @@ type RetentionReport struct {
 	// before it could be handed on.
 	Unhanded []string `json:"unhanded,omitempty"`
 	// Remain says the pass stopped at its budget with repositories still
-	// due: the designed stop, which the next pass resumes from.
+	// due a sweep or a purge: the designed stop, which the next pass resumes
+	// from.
 	Remain bool `json:"remain,omitempty"`
 }
 
-// Pass hands on what an earlier pass purged and could not, then steps what
-// is due — every purging repository, then every one deleted past the current
+// Pass hands on what an earlier pass purged and could not, sweeps every
+// repository's retired pack rows past [RetireGrace], then steps what is due a
+// purge — every purging repository, then every one deleted past the current
 // retention, each oldest deletion first — until its purge is done, the
 // pass's budget runs out, or the context ends, pacing every step to the
 // pass's share of the write lane.
 //
-// A repository whose purge fails is reported in [RetentionReport.Failed] and
-// the pass goes on to the next: one repository's refusal never holds back
-// another's purge. A repository the listing named that is NO LONGER DUE when
-// its step decides is not a failure either. The listing is a stale read of
-// this node's rows and every step decides again inside its own snapshot, so
-// a repository a later activation restored ([ErrNotDeleted]) — or restored
-// and deleted again, inside its retention once more ([ErrNotYet]) — after
-// the listing read it is simply skipped.
+// A repository whose sweep or purge fails is reported in
+// [RetentionReport.Failed] and the pass goes on to the next: one repository's
+// refusal never holds back another's. A repository the listing named that is
+// NO LONGER DUE when its step decides is not a failure either. The listing is
+// a stale read of this node's rows and every step decides again inside its
+// own snapshot, so a repository a later activation restored ([ErrNotDeleted])
+// — or restored and deleted again, inside its retention once more
+// ([ErrNotYet]) — after the listing read it is simply skipped, and so is one
+// whose retired rows a sweep or a purge removed since.
 //
 // The pass's error is the listing's, a field it cannot work without, or the
 // context's: when ctx ends the pass stops between steps and reports what it
@@ -179,7 +202,7 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	switch {
 	case r.Store == nil:
 		return report, errors.New("code: a retention pass needs the lifecycle store that " +
-			"takes a purge's steps")
+			"takes its sweeps' and its purges' steps")
 	case r.Reader == nil:
 		return report, errors.New("code: a retention pass needs the reader that lists the " +
 			"repositories due")
@@ -204,6 +227,10 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	defer func() { report.Unhanded = r.heldNames() }()
 
 	if err := r.handOnHeld(ctx, &report, log); err != nil {
+		return report, err
+	}
+	if stop, err := r.sweep(ctx, now, pace, &report); err != nil || stop {
+		report.Remain = stop
 		return report, err
 	}
 	page := cmp.Or(r.page, retentionPage)
@@ -232,6 +259,87 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 		}
 		after = &due[len(due)-1]
 	}
+}
+
+// sweep steps every repository the retired listing names — once each, however
+// many of its rows the listing reads — until nothing past the grace is left,
+// the pass's budget runs out (stop) or the context ends (the error).
+//
+// The listing is a stale read and each step decides again inside its own
+// snapshot, so a repository whose rows a sweep removed since the listing read
+// them, or whose purge took them, is simply answered nothing.
+func (r *Retention) sweep(ctx context.Context, now time.Time, pace *pacer,
+	report *RetentionReport) (stop bool, err error) {
+
+	q := retiredQuery{cutoff: now.Add(-RetireGrace), limit: cmp.Or(r.page, retentionPage)}
+	stepped := map[string]bool{}
+	for {
+		page, err := r.Reader.retiredDue(ctx, q)
+		if err != nil {
+			return false, err
+		}
+		for _, id := range page.repos {
+			if stepped[id] {
+				continue
+			}
+			stepped[id] = true
+			if stop, err := r.sweepRepo(ctx, id, now, pace, report); err != nil || stop {
+				return stop, err
+			}
+		}
+		if page.next == nil {
+			return false, nil
+		}
+		q.after = page.next
+	}
+}
+
+// sweepRepo steps one repository's sweep while rows past the grace are left
+// beyond what the last record removed, a step fails, the pass's budget runs
+// out (stop) or the context ends (the error).
+//
+// A STEP WHOSE RECORD RESOLVED PENDING ENDS THE REPOSITORY'S TURN: its rows
+// are removed on the log and not yet in this node's, so a further step would
+// decide from rows that still hold them, and wait for this node to apply what
+// it already appended. The next pass sweeps what is left.
+func (r *Retention) sweepRepo(ctx context.Context, id string, now time.Time, pace *pacer,
+	report *RetentionReport) (stop bool, err error) {
+	for {
+		switch turn, err := pace.wait(ctx); {
+		case err != nil:
+			return false, err
+		case !turn:
+			return true, nil
+		}
+		began := pace.clock()
+		res, err := r.Store.RetireSweep(ctx, id, now)
+		pace.took(began)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			// THE CONTEXT, NOT THE REPOSITORY, as a purge step's.
+			return false, ctx.Err()
+		case err != nil:
+			report.fail(r.nameOf(ctx, id), err.Error())
+			return false, nil
+		case res.Rows == 0:
+			return false, nil
+		}
+		report.Sweeps++
+		report.SweptRows += res.Rows
+		if !res.More || !res.Held() {
+			return false, nil
+		}
+	}
+}
+
+// nameOf is the name a failure of repository id's is reported by: the name
+// this node's rows hold for it, or the id where they hold none — the report is
+// keyed by name, as an operator reads it.
+func (r *Retention) nameOf(ctx context.Context, id string) string {
+	if name, found, err := r.Store.repoName(ctx, id); err == nil && found {
+		return name
+	}
+	return id
 }
 
 // purge steps one repository until its purge is done, a step fails, the
@@ -399,10 +507,15 @@ func (r *Retention) heldNames() []string {
 	return slices.Sorted(maps.Keys(r.held))
 }
 
-// fail records one repository's failure in the report.
+// fail records one repository's failure in the report — beside the one it
+// already holds for that name, since a repository's sweep and its purge can
+// both fail in one pass, and either sentence alone would hide the other.
 func (report *RetentionReport) fail(name, sentence string) {
 	if report.Failed == nil {
 		report.Failed = map[string]string{}
+	}
+	if held, ok := report.Failed[name]; ok {
+		sentence = held + "; " + sentence
 	}
 	report.Failed[name] = sentence
 }
