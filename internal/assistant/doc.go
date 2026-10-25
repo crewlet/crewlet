@@ -37,4 +37,11 @@
 // revision (internal/assistant/proposal), the loop suspends with the call
 // unanswered, and only the person's approval, made from their own browser,
 // sends it, once (ADR-0050).
+//
+// # Deep work
+//
+// A turn may hand its task to a deep-work run (ADR-0053): a coding CLI with
+// its own harness, in a box or confined on the engine host, whose one way into
+// Crewlet is this turn's own surface, bridged ([DeepWork], deep.go). Quick
+// mode's model keeps no tool of its own.
 package assistant

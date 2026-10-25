@@ -59,6 +59,13 @@ profile's `local_tools` claim, since a deny list is always a release behind the
 tools a vendor adds. Codex keeps `apply_patch`, which has no switch and whose
 patch check answers whether a host file holds given lines, so Codex is refused.
 
+**Amended by ADR-0053, for deep work alone.** A turn may hand its task to a
+deep-work run, whose CLI does have tools of its own: it runs only in a box, or
+on the engine host under OS confinement the person accepted, and its one way
+into Crewlet is this turn's own surface, bridged, so every read it makes is
+still a request of the person's under this grant and every write a proposal.
+Quick mode, the turn's own model, keeps no tool of its own.
+
 ## Why the obvious alternatives are wrong
 
 **A seat, or the sandbox bridge, as the assistant's identity.** A seat holds
