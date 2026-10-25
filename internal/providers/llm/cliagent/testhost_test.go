@@ -90,10 +90,10 @@ func (h *testHost) end() { h.doneOnce.Do(func() { close(h.done) }) }
 func (h *testHost) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Served, error) {
 	h.mu.Lock()
 	h.opts = append(h.opts, opts)
-	h.runCtx = ctx
-	h.mu.Unlock()
 	// THE RUN'S CONTEXT, values and all, is what its calls run under — see
 	// the type's doc.
+	h.runCtx = ctx
+	h.mu.Unlock()
 	session, err := h.sessions.Open(ctx, "crewlet", "cliagent test", h)
 	if err != nil {
 		return llm.Served{}, err
@@ -149,7 +149,7 @@ func (h *testHost) Revision() uint64 {
 	return h.revision
 }
 
-func (h *testHost) Call(ctx context.Context, call toolsession.Call) toolsession.Result {
+func (h *testHost) Call(call toolsession.Call) toolsession.Result {
 	h.mu.Lock()
 	h.calls = append(h.calls, hostCall{Name: call.Name, Args: call.Arguments, Meta: call.Meta,
 		ArgsErr: call.ArgumentsError})
@@ -158,6 +158,9 @@ func (h *testHost) Call(ctx context.Context, call toolsession.Call) toolsession.
 		h.tellBusyLocked(true)
 	}
 	fn := h.handlers[call.Name]
+	// The run's values and none of its cancellation, as the tool loop runs
+	// a call: a run that ends cancels nothing a tool is half-way through.
+	ctx := context.WithoutCancel(h.runCtx)
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()

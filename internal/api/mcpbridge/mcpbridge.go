@@ -45,9 +45,10 @@
 //     operation id carries does not depend on which tool finished first.
 //   - A CALL IS THE RUN'S, NOT THE REQUEST'S. It runs under the context the
 //     run was launched with, stripped of that context's cancellation (the
-//     launching turn has suspended), and never under the HTTP request's: a
-//     box that disconnects mid-call abandons only the answer, never a tool
-//     half-way through a write.
+//     launching turn has suspended), and never under the HTTP request's,
+//     which the session does not even hand over: a box that disconnects
+//     mid-call abandons only the answer, never a tool half-way through a
+//     write.
 //   - A PANIC IS CONTAINED. A tool that panics is answered as failed, said in
 //     the log with its stack, and the run's tools are closed to it: the
 //     process stays up, and a defect does not run again on the next call.
@@ -764,9 +765,9 @@ const (
 // Call decides and runs one call a box made. It never fails as a Go error: a
 // call that could not run is a failed result the CLI hands its model.
 //
-// The request's context is deliberately not used — see the package doc, "a
-// call is the run's, not the request's".
-func (o *binding) Call(_ context.Context, in toolsession.Call) toolsession.Result {
+// The request's context is not handed over ([toolsession.Dispatcher.Call]) —
+// see the package doc, "a call is the run's, not the request's".
+func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	s := o.session
 	// THE FENCE BEFORE ANY CALL, outside the lock: it reads the node's own
 	// copy of the seat's grant and pauses, and nothing it answers depends on

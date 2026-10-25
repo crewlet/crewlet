@@ -647,11 +647,12 @@ func (d *dispatcher) offeredLocked(name string) bool {
 
 // Call decides and runs one call the CLI made.
 //
-// The MCP request's context is not this call's: a CLI that gives up on the
-// call, or dies, abandons only the delivery of its answer. The call runs under
-// the phase's context to its end and is recorded, and the session's release
-// waits for it.
-func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Result {
+// The MCP request's context is not this call's, and the session does not hand
+// it over ([toolsession.Dispatcher.Call]): a CLI that gives up on the call, or
+// dies, abandons only the delivery of its answer. The call runs under the
+// phase's context to its end and is recorded ([callContext]), and the
+// session's release waits for it.
+func (d *dispatcher) Call(in toolsession.Call) toolsession.Result {
 	c, refusal := d.admit(in)
 	if refusal != "" {
 		return d.withheld(c.run, toolsession.Result{Output: refusal, Failed: true})

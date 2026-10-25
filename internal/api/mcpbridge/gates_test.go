@@ -347,7 +347,7 @@ func TestACallThatArrivesAfterItsRunEndedIsNotRun(t *testing.T) {
 	g := newGated(t, t.Context())
 	opened := mcpbridge.Dispatcher(g.session)
 	g.bridge.Close("run-1")
-	res := opened.Call(t.Context(), toolsession.Call{Name: "read_page", Arguments: map[string]any{}})
+	res := opened.Call(toolsession.Call{Name: "read_page", Arguments: map[string]any{}})
 	if !res.Failed {
 		t.Fatalf("a call on an ended run ran: %q", res.Output)
 	}
@@ -364,7 +364,7 @@ func TestARecordedCallCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	before := time.Now()
 	callTool(t, dial(t, g.url), "read_page", map[string]any{"text": "one"})
 	opened := mcpbridge.Dispatcher(g.session)
-	res := opened.Call(t.Context(), toolsession.Call{Name: "read_page",
+	res := opened.Call(toolsession.Call{Name: "read_page",
 		ArgumentsError: "unexpected end of JSON input"})
 	if !res.Failed || !strings.Contains(res.Output, "NOT run") {
 		t.Fatalf("a call whose arguments did not parse was answered %q", res.Output)

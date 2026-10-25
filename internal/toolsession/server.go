@@ -37,7 +37,14 @@ type Dispatcher interface {
 	// It never fails as a Go error: a call that could not run is a failed
 	// result the model reads, and a session that can no longer serve is the
 	// dispatcher's state, which it ends the CLI run over itself.
-	Call(ctx context.Context, call Call) Result
+	//
+	// NO CONTEXT, deliberately. The only one a session could hand over is
+	// the MCP request's, and a call must never run under it: a CLI that
+	// gives up on a call, or dies, cancels its request, and a tool half-way
+	// through a write would stop there. So a call runs under the context of
+	// the run the dispatcher serves, which it holds, and the request's is not
+	// even on offer to be used by mistake.
+	Call(call Call) Result
 }
 
 // Tool is one offered tool: what a model is given, and the behavioural hints
@@ -253,7 +260,7 @@ func (s *Server) handler(name string) mcp.ToolHandler {
 			call.ArgumentsError = err.Error()
 		}
 		call.Arguments = args
-		res := s.d.Call(ctx, call)
+		res := s.d.Call(call)
 		// THE CALL MAY HAVE BEEN AN ACTIVATION — see [Server.Sync] — and
 		// its answer then waits for the client's re-list where the client
 		// re-lists ([Server.HoldAnswersForRelist]).

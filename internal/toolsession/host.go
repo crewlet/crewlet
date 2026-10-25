@@ -135,10 +135,9 @@ type Session struct {
 
 // Open starts serving d on a fresh socket.
 //
-// ctx is where every call's context comes from: the SDK keeps a connection's
-// values and drops its cancellation, so a call sees the phase's values (its
-// turn, its trace) whatever the CLI does to the connection. Ending a session is
-// [Session.Retire], never a cancellation.
+// ctx is the connection's own, with its cancellation dropped: ending a session
+// is [Session.Retire], never a cancellation. No call runs under it — d runs
+// each under the context of the run it serves ([Dispatcher.Call]).
 //
 // name is how the CLI lists the server, and title is shown in its handshake.
 func (h *Host) Open(ctx context.Context, name, title string, d Dispatcher) (*Session, error) {

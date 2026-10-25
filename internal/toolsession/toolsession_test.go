@@ -66,7 +66,7 @@ func (d *fakeDispatcher) Revision() uint64 {
 	return d.revision
 }
 
-func (d *fakeDispatcher) Call(_ context.Context, call toolsession.Call) toolsession.Result {
+func (d *fakeDispatcher) Call(call toolsession.Call) toolsession.Result {
 	d.mu.Lock()
 	d.calls = append(d.calls, call)
 	if call.Name == d.activates {
