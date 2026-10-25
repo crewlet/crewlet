@@ -161,28 +161,39 @@ func TestANodeThatCannotReachTheStoreAloneIsSentToItsPeers(t *testing.T) {
 // THE BROKER IT STARTS LISTENS FOR NOBODY, even on a member that has a leaf
 // listener: the fleet's leaves would rejoin a broker that is about to go away.
 //
-// Mutation: pass the node's leaf port through to the broker and the port is
-// taken while the store is open.
+// The node's leaf port is held by the test for the whole case, so a broker that
+// tried to open it would be refused — a member probes its leaf port before it
+// starts ([jetstream.ErrLeafPortTaken]) — and nothing else on the machine can
+// take the port in between, as it could a port merely found free.
+//
+// Mutation: pass the node's leaf port through to the broker and the open is
+// refused with the port taken.
 func TestTheFleetStoreOpensNoLeafListener(t *testing.T) {
 	t.Parallel()
-	port := freePort(t)
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+	defer held.Close()
+	_, port, err := net.SplitHostPort(held.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafPort, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		b.Stream.Leaf.Port = port
+		b.Stream.Leaf.Port = leafPort
 		b.Stream.Leaf.Host = "127.0.0.1"
 	})
 	fs, err := engine.OpenFleetStore(t.Context(), b)
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatalf("a member whose leaf port is taken could not open its fleet store, "+
+			"so the broker opened for it tried to listen there: %v", err)
 	}
-	defer fs.Close()
-	free, err := jetstream.PortAvailable(t.Context(), "127.0.0.1", port)
-	if err != nil {
-		t.Fatalf("probe the leaf port: %v", err)
-	}
-	if !free {
-		t.Errorf("the broker opened for the fleet's store took the node's leaf port %d", port)
-	}
+	fs.Close()
 }
 
 // A NODE ON AN EXTERNAL BROKER DIALS IT, and the store there is the one every
@@ -215,23 +226,4 @@ func TestAnExternalBrokersFleetStoreIsDialled(t *testing.T) {
 	if got := readSecret(t, b, back.Fleet, "JIRA_TOKEN"); got != "on-the-cluster" {
 		t.Errorf("a node on the same broker read %q, want the value the opener wrote", got)
 	}
-}
-
-// freePort is a loopback port nothing held a moment ago.
-func freePort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer l.Close()
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return n
 }
