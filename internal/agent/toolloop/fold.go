@@ -212,10 +212,13 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 			})
 		}
 	}
-	if assistant.Content != "" || len(assistant.ToolCalls) > 0 {
-		out.messages = append(out.messages, assistant)
-		out.messages = append(out.messages, answers...)
-	}
+	// EVERY ROUND IS AN ASSISTANT TURN, an empty one included: it is a reply
+	// the model made, and the corrective that follows it says "your last
+	// reply" — dropped, the conversation runs the task and the corrective
+	// together as two user messages, and the next run reads a correction of a
+	// reply it was never shown.
+	out.messages = append(out.messages, assistant)
+	out.messages = append(out.messages, answers...)
 
 	round := Round{Round: g.round, Model: model, ToolCalls: len(entries)}
 	if g.turn != nil {

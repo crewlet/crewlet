@@ -491,6 +491,9 @@ func TestNoCorrectiveIsAppendedOnTheLastRound(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
+			if got := res.Messages[len(res.Messages)-1]; got.Role == llm.RoleUser {
+				t.Errorf("the conversation ends on a user message %q nothing will answer", got.Content)
+			}
 			if res.RoundsUsed != 1 || len(prov.Seen()) != 1 {
 				t.Errorf("rounds = %d over %d runs, want 1", res.RoundsUsed, len(prov.Seen()))
 			}
