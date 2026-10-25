@@ -42,11 +42,11 @@ func (f fakeBinding) BoundSeat(_ context.Context, login string) (session.PersonR
 // holds that seat.
 func boundOps() (fakeBinding, *fakeChart) {
 	return fakeBinding{row: session.PersonRow{
-			Found: true, Stage: iam.StageActive, Login: opsLogin,
-			Seat: sessionSeat,
-		}}, &fakeChart{seats: map[string]session.Seat{
-			sessionSeat: {Handle: sessionSeat, Kind: "human", Unit: "platform"},
-		}}
+		Found: true, Stage: iam.StageActive, Login: opsLogin,
+		Seat: sessionSeat,
+	}}, &fakeChart{seats: map[string]session.Seat{
+		sessionSeat: {Handle: sessionSeat, Kind: "human", Unit: "platform"},
+	}}
 }
 
 // tokenGuard is a guard over one Tier A token, `ops`, whose binding reads dir

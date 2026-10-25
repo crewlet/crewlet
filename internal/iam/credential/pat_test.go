@@ -105,8 +105,8 @@ func TestOnlyAValueOfThisShapeParsesAsAToken(t *testing.T) {
 		good + "_extra", // a fourth part
 		strings.Replace(good, token.ID, "not-a-uuid", 1),
 		strings.Replace(good, "_7_", "_seven_", 1),
-		good[:len(good)-2],                                            // a short secret
-		good[:len(good)-2] + "zz",                                     // not hex
+		good[:len(good)-2],        // a short secret
+		good[:len(good)-2] + "zz", // not hex
 		strings.Replace(good, token.ID, strings.ToUpper(token.ID), 1), // not canonical
 	} {
 		if _, ok := credential.ParseToken(value); ok {
