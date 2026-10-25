@@ -2,7 +2,7 @@
  * What the page under the assistant tells it about itself, and the actions
  * the page will take from it.
  *
- * # Identifiers, never content
+ * # Identifiers, never content, but the open draft
  *
  * A page context names the screen, the route's own parameters and query, the
  * records in view by kind and id, what is selected, and a revision. It never
@@ -10,6 +10,11 @@
  * through the person's own access, one request at a time, so nothing a screen
  * happened to hold reaches a model by a side door. The engine reads the
  * context as a hint about what the person is looking at, never as permission.
+ *
+ * The one exception is the draft the person has open (`draft.ts`): what they
+ * typed and have not saved exists nowhere a tool could read it, so a screen
+ * with a draft sends its values, redacted and bounded, and the assistant reads
+ * what is open before it searches for it.
  *
  * # Two layers
  *
@@ -45,6 +50,7 @@ import {
   ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS,
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
   type AssistantPageContext,
+  type AssistantPageDraft,
 } from "~/contract/assistant.ts";
 import { pageContextFits } from "~/protocol/assistantWire.ts";
 import { resolve } from "../routes.ts";
@@ -151,6 +157,8 @@ export interface AssistantPageRegistration {
   dataVersion?: string;
   /** The actions this screen takes, by their contract id (`work.filter.apply`). */
   actions?: Readonly<Partial<Record<PageActionId, PageActionSpec<unknown>>>>;
+  /** The draft the screen has open, already redacted and bounded (`useAssistantDraft`). */
+  draft?: AssistantPageDraft;
 }
 
 /** What the frame publishes about every page. */
@@ -269,11 +277,20 @@ function title(text: string): string {
     : runes.slice(0, TITLE_MAX_RUNES).join("");
 }
 
+/** A short, stable name for a text: FNV-1a, because it is compared and never read. */
+export function hashOf(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
 /**
  * A stable, bounded name for what the page shows now: the same page with the
  * same data is the same revision, and any change to its address, its
- * selection or its data is another one. FNV-1a, because a revision is
- * compared and never read.
+ * selection or its data is another one.
  */
 function revisionOf(page: FramePage, reg: AssistantPageRegistration | null): string {
   const parts = [
@@ -286,12 +303,7 @@ function revisionOf(page: FramePage, reg: AssistantPageRegistration | null): str
     reg?.selection ? `${reg.selection.kind}:${reg.selection.id}` : "",
     reg?.dataVersion ?? "",
   ].join("\u0000");
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < parts.length; i++) {
-    hash ^= parts.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return `${page.screen}@${hash.toString(16).padStart(8, "0")}`;
+  return `${page.screen}@${hashOf(parts)}`;
 }
 
 /** The wire context for a page and its registration, held to the engine's bounds. */
@@ -326,11 +338,20 @@ export function buildPageContext(
     source_revision: revisionOf(page, reg),
     accepts,
   };
+  if (reg?.draft) context.draft = { ...reg.draft, fields: [...reg.draft.fields] };
   // OVER ITS BYTE BUDGET, it sheds what matters least first: the query (the
   // screen's resources still say what is in view), then the resources from
-  // the end. The engine's `page_context` frame says `trimmed`.
+  // the end, then the open draft's fields from its end, each counted in its
+  // `more`, and last its help. The engine's `page_context` frame says
+  // `trimmed`.
   if (!pageContextFits(context)) context.query = {};
   while (!pageContextFits(context) && context.resources.length > 0) context.resources.pop();
+  const draft = context.draft;
+  while (draft && !pageContextFits(context) && draft.fields.length > 0) {
+    draft.fields.pop();
+    draft.more += 1;
+  }
+  if (draft && !pageContextFits(context)) delete draft.help;
   return context;
 }
 
@@ -374,8 +395,8 @@ export function setFramePage(page: FramePage | null): void {
  * task list inside it offers the list's filters, each registering what it
  * knows. So the registry merges them rather than keeping the last: the
  * resources of all of them (each record once), the actions of all of them
- * (the newest wins where two declare one id), the newest selection anyone
- * declared, and every data version, so a move in any of them is a move of
+ * (the newest wins where two declare one id), the newest selection and the
+ * newest draft anyone declared, and every data version, so a move in any of them is a move of
  * the page.
  */
 function merged(all: readonly AssistantPageRegistration[]): AssistantPageRegistration | null {
@@ -384,6 +405,7 @@ function merged(all: readonly AssistantPageRegistration[]): AssistantPageRegistr
   const seen = new Set<string>();
   const actions: Record<string, PageActionSpec<unknown>> = {};
   let selection: AssistantPageRegistration["selection"];
+  let draft: AssistantPageDraft | undefined;
   const versions: string[] = [];
   for (const reg of all) {
     for (const r of reg.resources ?? []) {
@@ -394,12 +416,14 @@ function merged(all: readonly AssistantPageRegistration[]): AssistantPageRegistr
     }
     Object.assign(actions, reg.actions ?? {});
     if (reg.selection !== undefined) selection = reg.selection;
+    if (reg.draft) draft = reg.draft;
     if (reg.dataVersion) versions.push(reg.dataVersion);
   }
   return {
     resources,
     actions,
     ...(selection === undefined ? {} : { selection }),
+    ...(draft === undefined ? {} : { draft }),
     ...(versions.length === 0 ? {} : { dataVersion: versions.join("|") }),
   };
 }

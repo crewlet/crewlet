@@ -55,9 +55,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { OrgProjection } from "~/protocol/types.ts";
 import { mayWriteCharter } from "./access.ts";
-import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
-import type { PageActionSpec } from "~/app/assistant/context.ts";
-import { draftWords, parseCharterDraft, type CharterDraft } from "./assistantAction.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { charterDraft } from "./assistantAction.ts";
 import { EDIT_PARAM, editValue, partsIn } from "./address.ts";
 import {
   CHARTER_PARTS,
@@ -252,32 +251,18 @@ export function useCharterEditing(org: OrgProjection): {
   }, []);
 
   // --- assistant page actions (WP12) ---
-  // A NEW DRAFT OF A PART THE PERSON HAS OPEN, through the editor's own
-  // `change`, as typing writes it ([parseCharterDraft]); Save stays theirs.
-  // What is open and what each draft holds is the page's data, so a change
-  // prepared against another draft is stale.
-  useAssistantContext({
-    dataVersion: `charter:${JSON.stringify(CHARTER_PARTS.map((p) => state.sessions[p]?.draft ?? null))}`,
-    actions: {
-      "principles.draft.set": {
-        scope: "The part of the principles you are writing (not saved)",
-        parse: (raw) => parseCharterDraft(raw, stateRef.current),
-        preview: ({ part, value }) => {
-          const now = stateRef.current.sessions[part]?.draft;
-          return [
-            {
-              field: PART_TITLES[part],
-              next: draftWords(value),
-              current: now === undefined ? null : draftWords(now),
-            },
-          ];
-        },
-        blocked: () =>
-          !mayEdit ? "Writing the principles takes Admin." : access.can ? null : access.reason,
-        apply: ({ part, value }) => change(part, value),
-      } satisfies PageActionSpec<CharterDraft>,
-    },
-  });
+  // THE OPEN PARTS, declared once (`useAssistantDraft`): every part's value
+  // reaches the assistant, and a new value for an open part is set through
+  // the editor's own `change`, as typing writes it; Save stays theirs.
+  useAssistantDraft(
+    charterDraft({
+      state,
+      charter,
+      change,
+      blocked: () =>
+        !mayEdit ? "Writing the principles takes Admin." : access.can ? null : access.reason,
+    }),
+  );
   // --- end assistant page actions (WP12) ---
 
   const close = useCallback(

@@ -1,23 +1,18 @@
 // @vitest-environment node
 
-/** A new draft of a page's body is plain Markdown, within what a page holds, and nothing else. */
+/** A new body for the open draft is Markdown within what a page holds. */
 
 import { describe, expect, test } from "vitest";
 import { PAGE_BODY_MAX_BYTES } from "~/contract/pages.ts";
-import { parsePageDraft } from "./assistantAction.ts";
+import { pageBodyProblem } from "./assistantAction.ts";
 
-describe("page.draft.replace", () => {
-  test("takes a body", () => {
-    expect(parsePageDraft({ body: "# Runbook\n\nStep one." })).toEqual({
-      ok: true,
-      value: { body: "# Runbook\n\nStep one." },
-    });
+describe("a proposed page body", () => {
+  test("is taken when it is text a page can hold", () => {
+    expect(pageBodyProblem("# Runbook\n\nStep one.")).toBeNull();
   });
 
-  test("refuses a body past what a page holds, a save smuggled beside it, and what is not text", () => {
-    expect(parsePageDraft({ body: "x".repeat(PAGE_BODY_MAX_BYTES + 1) }).ok).toBe(false);
-    expect(parsePageDraft({ body: "x", base_version: 3 }).ok).toBe(false);
-    expect(parsePageDraft({ body: 3 }).ok).toBe(false);
-    expect(parsePageDraft("body").ok).toBe(false);
+  test("is refused past what a page holds, or carrying a NUL", () => {
+    expect(pageBodyProblem("x".repeat(PAGE_BODY_MAX_BYTES + 1))).toMatch(/longer/);
+    expect(pageBodyProblem("a\u0000b")).toMatch(/Markdown/);
   });
 });

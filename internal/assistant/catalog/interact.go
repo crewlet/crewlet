@@ -53,11 +53,21 @@ var PageActions = []PageAction{
 	view("live.filter.apply", "Changes what Now running shows."),
 	view("turns.filter.apply", "Changes the filters on this list of turns."),
 	view("knowledge.search.set", "Searches the knowledge base."),
+	// THE ONE ACTION INTO AN OPEN DRAFT: every screen with a draft declares
+	// its fields in the page context (`draft`), and this sets the editable
+	// ones by path through the screen's own setters. A structural change
+	// the fields cannot express keeps an action of its own (the org
+	// builder's operations; the ceiling editor, which opens a draft).
+	draft(DraftSet, "Changes the draft open on this screen."),
 	draft("org.draft.apply_ops", "Changes the org builder's draft."),
-	draft("principles.draft.set", "Changes the Principles editor's draft."),
-	draft("page.draft.replace", "Replaces the page editor's draft."),
 	draft("budgets.ceiling.prefill", "Opens the ceiling editor with a new value filled in."),
 }
+
+// DraftSet is the page action that sets fields of the draft a screen has
+// open: `{"values": {"<path>": "<value>"}}`, each path one the page context's
+// draft lists as editable, a list's value an array of strings or one item per
+// line.
+const DraftSet = "draft.set"
 
 // PageActionOf is the page action named id.
 func PageActionOf(id string) (PageAction, bool) {
@@ -105,8 +115,11 @@ func interactionTools() []Tool {
 		Name: "propose_page_change", Kind: KindPageAction, Tier: TierPageLocal,
 		Phrase: "change this screen",
 		Description: "Propose a change to what the person's current screen shows: a filter, " +
-			"a range, a grouping, a tab, or a draft in an open editor. Only an action the page " +
-			"context lists in accepts is valid. Nothing is saved.",
+			"a range, a grouping, a tab, or the draft open in an editor. Only an action the page " +
+			"context lists in accepts is valid. For the open draft, use draft.set with args " +
+			"{\"values\": {\"<path>\": \"<value>\"}}, each path an editable field of the page " +
+			"context's draft and each value in its hint's form. Nothing is saved: the person " +
+			"approves, and saves the draft themselves.",
 		// THE PAYLOAD IS THE SCREEN'S TO READ: its shape is declared by
 		// the screen that mounts the action, so the engine checks only
 		// that it is one bounded object naming nobody, and the page

@@ -92,6 +92,18 @@ an artifact. It only offers the changes your permissions allow.
 fill in a draft in an editor, or select records. These are proposals too, and
 nothing is saved until you save it on that screen as usual.
 
+**Work on what you have open.** Every screen with a draft or a form (the brand
+setup, the Brand page's cards, the principles, a page or a doc being written,
+the org builder, a new artifact) tells the assistant what is open: which draft,
+the step you are on, and its current values, so "check my draft" is answered
+from the draft in front of you rather than a search. Values are sent as you
+typed them, with any password, token or key left out, and only while the page
+chip is attached. A change the assistant proposes to that draft shows each
+field's value now beside the proposed one, applies to the draft once you
+approve it, and is saved when you save. The assistant works with text only: on
+the brand screens it proposes colours, typefaces and the voice, and does not
+make images.
+
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from
 text the model wrote.

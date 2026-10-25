@@ -9,15 +9,19 @@ import (
 )
 
 // PageContext is what a screen tells a turn about itself: WHICH things are on
-// screen, by id, and never their content.
+// screen, by id, and never a record's content; and the draft the person has
+// open, if any, with its current values ([PageDraft]).
 //
-// A HINT TO THE MODEL AND NEVER AUTHORITY. Every fact the model uses comes
-// from a tool call made as the person, so a page can neither leak a row the
-// person could not read nor forge one; nothing here grants, and no grant is
-// sent (the server derives the person from the request). Sent with each
-// question, or null when the person removed the page chip, and fenced as text
-// a colleague may have written when it reaches the prompt, because titles on
-// screen are.
+// A HINT TO THE MODEL AND NEVER AUTHORITY. Every fact the model uses about a
+// record comes from a tool call made as the person, so a page can neither
+// leak a row the person could not read nor forge one; nothing here grants,
+// and no grant is sent (the server derives the person from the request). The
+// draft is the one exception to "ids only", because an unsaved draft exists
+// nowhere a tool could read it: it is what the person typed, sent by their
+// own page, and the model reads it as that. Sent with each question, or null
+// when the person removed the page chip, and fenced as text a colleague may
+// have written when it reaches the prompt, because titles on screen and a
+// draft opened from someone else's version are.
 type PageContext struct {
 	// Screen is the dashboard's screen name (its route table's union).
 	Screen string `json:"screen"`
@@ -38,7 +42,72 @@ type PageContext struct {
 	SourceRevision string `json:"source_revision"`
 	// Accepts are the page actions the screen has mounted now.
 	Accepts []string `json:"accepts"`
+	// Draft is the draft the person has open on the screen, or absent
+	// where the screen edits nothing.
+	Draft *PageDraft `json:"draft,omitempty"`
 }
+
+// PageDraft is what is open in a screen's editor: which draft, where the
+// person is in it, and its current values, redacted and bounded. Every
+// screen that holds an editable draft or form declares one
+// (`useAssistantDraft` in the dashboard), so the assistant reads what is
+// open before it searches for it.
+type PageDraft struct {
+	// Kind says where the values live, and so how a change reaches them.
+	Kind DraftKind `json:"kind"`
+	// ID names the saved record the draft is of (a kit, a page), absent
+	// for a draft nothing is saved of yet.
+	ID string `json:"id,omitempty"`
+	// Revision is the saved record's version the draft was opened on.
+	Revision string `json:"revision,omitempty"`
+	// Step is the step or section the person is on (`colours`).
+	Step string `json:"step,omitempty"`
+	// Help is the screen's own word to the assistant: what it can and
+	// cannot do with this draft.
+	Help string `json:"help,omitempty"`
+	// Fields are the draft's values, in the order the screen draws them.
+	Fields []DraftField `json:"fields"`
+	// More counts the fields left out past [PageDraftMaxFields] or the
+	// context's byte budget.
+	More int `json:"more"`
+}
+
+// DraftField is one value of an open draft.
+type DraftField struct {
+	// Path names the field within the draft (`colors.primary`), in the
+	// page context's key grammar; a change names it.
+	Path string `json:"path"`
+	// Label is the field as the person reads it ("Primary colour").
+	Label string `json:"label"`
+	// Value is the current value as text; a list's items are one per line.
+	// Empty, and Redacted set, for a credential.
+	Value string `json:"value"`
+	// Hint says what a value must be ("a #RRGGBB colour").
+	Hint string `json:"hint,omitempty"`
+	// List marks a field whose value is a list, one item per line.
+	List bool `json:"list,omitempty"`
+	// Editable marks a field the screen's `draft.set` action takes.
+	Editable bool `json:"editable,omitempty"`
+	// Redacted marks a credential, whose value never leaves the page.
+	Redacted bool `json:"redacted,omitempty"`
+	// Truncated marks a value cut at [PageDraftValueMaxRunes].
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// PageDraftSecretPath matches a draft field path that names a credential: a
+// segment (between `.` and `_`) that is a password, a secret, a token, a
+// credential or a key of the kinds that sign or authenticate. Such a field
+// must arrive redacted. A backstop over the path's grammar: a screen marks
+// its credential fields itself, and this catches the one it forgot. Written
+// with no flag and no escape so the dashboard compiles the same text
+// (`ASSISTANT_PAGE_DRAFT_SECRET_PATH`, held equal by the client gate).
+const PageDraftSecretPath = "(^|[._])(password|passphrase|secret|secrets|token|tokens|" +
+	"credential|credentials|(api|private|signing|access|secret)[._]?key)([._]|$)"
+
+var secretPath = regexp.MustCompile(PageDraftSecretPath)
+
+// IsSecretDraftPath reports whether a draft field's path names a credential.
+func IsSecretDraftPath(path string) bool { return secretPath.MatchString(path) }
 
 // Resource is one thing in view, by id.
 type Resource struct {
@@ -136,7 +205,90 @@ func (p PageContext) Validate() error {
 				ErrInvalid, a)
 		}
 	}
+	if p.Draft != nil {
+		return p.Draft.validate()
+	}
 	return nil
+}
+
+// The bounds on a draft's own strings.
+const (
+	draftHintMaxRunes = 200
+	draftIDMaxBytes   = pageIDMaxBytes
+)
+
+// validate holds a draft to its bounds: a known kind, an id for a saved
+// draft, names in the key grammar, each value text of bounded length, and
+// every credential field redacted.
+func (d PageDraft) validate() error {
+	switch {
+	case !d.Kind.Valid():
+		return fmt.Errorf("%w: page context draft kind %q is not one of %v", ErrInvalid, d.Kind,
+			DraftKinds)
+	case d.Kind == DraftServer && d.ID == "":
+		return fmt.Errorf("%w: page context draft is saved and names no id", ErrInvalid)
+	case !plain(d.ID, draftIDMaxBytes) || !plain(d.Revision, draftIDMaxBytes):
+		return fmt.Errorf("%w: page context draft id or revision is not plain text of at most "+
+			"%d bytes", ErrInvalid, draftIDMaxBytes)
+	case d.Step != "" && !keyPattern.MatchString(d.Step):
+		return fmt.Errorf("%w: page context draft step %q is not a name", ErrInvalid, d.Step)
+	case !text(d.Help, PageDraftHelpMaxRunes):
+		return fmt.Errorf("%w: page context draft help is not text of at most %d characters",
+			ErrInvalid, PageDraftHelpMaxRunes)
+	case len(d.Fields) > PageDraftMaxFields:
+		return fmt.Errorf("%w: page context draft lists %d fields, over %d", ErrInvalid,
+			len(d.Fields), PageDraftMaxFields)
+	case d.More < 0:
+		return fmt.Errorf("%w: page context draft counts %d more fields", ErrInvalid, d.More)
+	}
+	seen := make(map[string]bool, len(d.Fields))
+	for _, f := range d.Fields {
+		switch {
+		case !keyPattern.MatchString(f.Path):
+			return fmt.Errorf("%w: page context draft field path %q is not a name", ErrInvalid,
+				f.Path)
+		case seen[f.Path]:
+			return fmt.Errorf("%w: page context draft lists field %q twice", ErrInvalid, f.Path)
+		case !plain(f.Label, 4*pageTitleMaxRunes) ||
+			utf8.RuneCountInString(f.Label) > pageTitleMaxRunes:
+			return fmt.Errorf("%w: page context draft field %q label is not plain text of at "+
+				"most %d characters", ErrInvalid, f.Path, pageTitleMaxRunes)
+		case !text(f.Value, PageDraftValueMaxRunes):
+			return fmt.Errorf("%w: page context draft field %q value is not text of at most %d "+
+				"characters", ErrInvalid, f.Path, PageDraftValueMaxRunes)
+		case !plain(f.Hint, 4*draftHintMaxRunes) ||
+			utf8.RuneCountInString(f.Hint) > draftHintMaxRunes:
+			return fmt.Errorf("%w: page context draft field %q hint is not plain text of at "+
+				"most %d characters", ErrInvalid, f.Path, draftHintMaxRunes)
+		case f.Redacted && (f.Value != "" || f.Editable):
+			return fmt.Errorf("%w: page context draft field %q is redacted and carries a value "+
+				"or takes one", ErrInvalid, f.Path)
+		case IsSecretDraftPath(f.Path) && !f.Redacted:
+			// A CREDENTIAL NEVER REACHES A MODEL: the dashboard redacts a
+			// field by this same rule before it sends, so one that arrives
+			// whole is a page that skipped it.
+			return fmt.Errorf("%w: page context draft field %q names a credential and is not "+
+				"redacted", ErrInvalid, f.Path)
+		}
+		seen[f.Path] = true
+	}
+	return nil
+}
+
+// text reports whether s is valid UTF-8 of at most max runes whose only
+// control characters are line breaks and tabs: a draft's value, which may run
+// over lines. The prompt carries it JSON-encoded inside a fence, so a line
+// break in it is an escape sequence and never a line of the prompt.
+func text(s string, max int) bool {
+	if len(s) > 4*max || !utf8.ValidString(s) || utf8.RuneCountInString(s) > max {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return false
+		}
+	}
+	return true
 }
 
 func (r ResourceRef) validate() error {

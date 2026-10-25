@@ -315,6 +315,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 	}
 	input = redact.Secrets(input)
+	ts.Page = redactedPage(ts.Page)
 	id := TurnID(ts.Key)
 	accepted := wire.TurnAccepted{TurnID: id, StreamURL: StreamPath(ts.Conversation, id)}
 

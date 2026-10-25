@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // THE PROMPT, assembled in cache-friendly order: what is the same for every
@@ -59,6 +60,10 @@ const identityRules = "You are the Crewlet assistant inside the company's dashbo
 	"propose with propose_api_change. Never guess a route or a body: read the route's " +
 	"documentation and the resource first. Take as many steps as the question needs to " +
 	"understand it before you answer or propose.\n" +
+	"- Read the page context first: it is what the person has open. Its draft holds the " +
+	"values they are editing and have not saved, which no tool can read; answer from it " +
+	"rather than searching, and change it with propose_page_change's draft.set when the " +
+	"page accepts it, within what the draft's help says.\n" +
 	"- A refusal of a change is the engine's decision about this person. Only then say " +
 	"they lack access, in the refusal's own words.\n" +
 	"- Lists you read may be filtered by what this person may see. Never suggest " +
@@ -191,6 +196,36 @@ func personBlock(in promptInput) string {
 	}
 	b.WriteString(" Every list you read is filtered by what they may see.")
 	return b.String()
+}
+
+// redactedPage is a validated page context with the engine's secret pass
+// ([redact.Secrets]) over every value a person or a colleague typed: the
+// title, the query and the open draft. The dashboard redacts every field
+// whose path names a credential, and the page context refuses one that is
+// not ([wire.PageContext.Validate]); this is the last line for a credential
+// pasted into a field that does not say so, by its shape.
+func redactedPage(p *wire.PageContext) *wire.PageContext {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	out.Title = redact.Secrets(p.Title)
+	out.Query = make(map[string]string, len(p.Query))
+	for k, v := range p.Query {
+		out.Query[k] = redact.Secrets(v)
+	}
+	if p.Draft != nil {
+		draft := *p.Draft
+		draft.Help = redact.Secrets(p.Draft.Help)
+		draft.Fields = make([]wire.DraftField, len(p.Draft.Fields))
+		for i, f := range p.Draft.Fields {
+			f.Label, f.Hint, f.Value = redact.Secrets(f.Label), redact.Secrets(f.Hint),
+				redact.Secrets(f.Value)
+			draft.Fields[i] = f
+		}
+		out.Draft = &draft
+	}
+	return &out
 }
 
 // questionBlock is block 6: the page the question was asked on, fenced, then

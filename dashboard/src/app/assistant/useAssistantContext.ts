@@ -33,6 +33,7 @@ export function useAssistantContext(registration: AssistantPageRegistration): vo
     registration.selection ?? null,
     registration.dataVersion ?? "",
     Object.keys(registration.actions ?? {}).sort(),
+    registration.draft ?? null,
   ]);
   useEffect(() => {
     const actions: Partial<Record<PageActionId, PageActionSpec<unknown>>> = {};

@@ -39,6 +39,7 @@ func closedSets() map[string][]string {
 		"AssistantActionState":   strs(wire.ActionStates),
 		"AssistantMessageRole":   strs(wire.MessageRoles),
 		"AssistantOpenReason":    strs(wire.OpenReasons),
+		"AssistantDraftKind":     strs(wire.DraftKinds),
 	}
 }
 
@@ -88,6 +89,10 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_PAGE_CONTEXT_MAX_BYTES":     strconv.Itoa(wire.PageContextMaxBytes),
 		"ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES": strconv.Itoa(wire.PageContextMaxResources),
 		"ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS":   strconv.Itoa(wire.PageContextMaxAccepts),
+		"ASSISTANT_PAGE_DRAFT_MAX_FIELDS":      strconv.Itoa(wire.PageDraftMaxFields),
+		"ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES": strconv.Itoa(wire.PageDraftValueMaxRunes),
+		"ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES":  strconv.Itoa(wire.PageDraftHelpMaxRunes),
+		"ASSISTANT_PAGE_DRAFT_SECRET_PATH":     wire.PageDraftSecretPath,
 		"ASSISTANT_AUDIT_REASON_MAX_RUNES":     strconv.Itoa(wire.AuditReasonMaxRunes),
 		"ASSISTANT_KEEPALIVE_SECONDS":          strconv.Itoa(wire.KeepaliveSeconds),
 		"ASSISTANT_ACTION_CONTEXT_INVALIDATE":  wire.ActionContextInvalidate,
@@ -142,6 +147,8 @@ func shapes() map[string]reflect.Type {
 		"AssistantPageContext":         reflect.TypeFor[wire.PageContext](),
 		"AssistantResource":            reflect.TypeFor[wire.Resource](),
 		"AssistantResourceRef":         reflect.TypeFor[wire.ResourceRef](),
+		"AssistantPageDraft":           reflect.TypeFor[wire.PageDraft](),
+		"AssistantDraftField":          reflect.TypeFor[wire.DraftField](),
 		"AssistantVersioned":           reflect.TypeFor[wire.Versioned](),
 		"AssistantTurnRequest":         reflect.TypeFor[wire.TurnRequest](),
 		"AssistantTurnInput":           reflect.TypeFor[wire.TurnInput](),

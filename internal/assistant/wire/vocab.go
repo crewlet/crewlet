@@ -19,16 +19,34 @@ const (
 	InputMaxRunes = 4000
 
 	// PageContextMaxBytes is the most a turn's page context may encode to.
-	// Eight kibibytes: the context names what is on screen by id and never
-	// carries content, and fifty resource ids with their filters fit in a
-	// quarter of it.
-	PageContextMaxBytes = 8 << 10
+	// Sixteen kibibytes: fifty resource ids with their filters take about
+	// four, and an open draft's snapshot ([PageDraft]) the rest, which holds
+	// a brand kit's every field with room over and forty fields averaging
+	// three hundred bytes. A draft past it sheds fields from its end, each
+	// counted in its `more`, rather than the turn being refused.
+	PageContextMaxBytes = 16 << 10
 
 	// PageContextMaxResources is the most resources a page context names.
 	PageContextMaxResources = 50
 
 	// PageContextMaxAccepts is the most page actions a page context offers.
 	PageContextMaxAccepts = 32
+
+	// PageDraftMaxFields is the most fields an open draft's snapshot lists;
+	// the rest are counted in its `more`. Forty: the longest form a screen
+	// draws (a brand kit's, at fifteen) with room over, and few enough that
+	// the model reads each one.
+	PageDraftMaxFields = 40
+
+	// PageDraftValueMaxRunes is the longest value a draft field carries, in
+	// Unicode code points. A longer value is cut there and marked
+	// `truncated`: a field is a name, a sentence or a short list, and a long
+	// body is read in full through the tool that reads its record.
+	PageDraftValueMaxRunes = 1000
+
+	// PageDraftHelpMaxRunes is the longest help a screen gives with its
+	// draft: what the assistant can and cannot do there, in a few sentences.
+	PageDraftHelpMaxRunes = 600
 
 	// AuditReasonMaxRunes is the longest reason an administrator gives for a
 	// compliance read of somebody else's conversation (D06).
@@ -610,3 +628,23 @@ var OpenReasons = []OpenReason{OpenNotPermitted}
 
 // Valid reports whether r is a reason this build knows.
 func (r OpenReason) Valid() bool { return slices.Contains(OpenReasons, r) }
+
+// DraftKind says where an open draft's values live.
+type DraftKind string
+
+const (
+	// DraftClient is a draft whose values live in the page until the person
+	// saves it: a change to it is a page action the screen applies through
+	// its own setters. Its id and revision, when set, name the saved record
+	// the page opened it from.
+	DraftClient DraftKind = "client"
+	// DraftServer is a draft whose every value is saved, at its id and
+	// revision: a change to it is a write to that record's route.
+	DraftServer DraftKind = "server"
+)
+
+// DraftKinds are the two, in declaration order.
+var DraftKinds = []DraftKind{DraftClient, DraftServer}
+
+// Valid reports whether k is a draft kind this build knows.
+func (k DraftKind) Valid() bool { return slices.Contains(DraftKinds, k) }

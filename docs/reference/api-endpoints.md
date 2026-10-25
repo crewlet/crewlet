@@ -6955,9 +6955,22 @@ written against; a version this engine does not speak is
 | `GET` | `/assistant/cards/{id}/export.xlsx` | | `200` the same table as XLSX |
 
 `input.text` is at most 4000 characters, and `page_context` is the open screen
-as the dashboard describes it (at most 8 KiB, 50 resources and 32 page actions)
+as the dashboard describes it (at most 16 KiB, 50 resources and 32 page actions)
 or `null` when the person removed the page chip. The model reads the page
 context fenced as somebody else's words: it is a hint and never an authority.
+
+A screen with a draft or a form open adds `draft`: `{kind, id?, revision?,
+step?, help?, fields, more}`, where `kind` is `client` (the values live in the
+page until saved) or `server` (saved, at `id` and `revision`), and each field is
+`{path, label, value, hint?, list?, editable?, redacted?, truncated?}`. At most
+40 fields, each value at most 1000 characters (a longer one is cut and marked
+`truncated`), and `help` at most 600; fields past the count or the byte budget
+are counted in `more`. A field whose path names a credential (a `password`,
+`secret`, `token` or `credential` segment, or an API, private, signing or access
+key) must arrive `redacted` with an empty value, and is refused `400` otherwise;
+every other value passes the engine's secret redaction before a model reads it.
+The page action `draft.set` (`{"values": {"<path>": "<value>"}}`) changes the
+editable fields through the screen's own setters, after the person approves.
 
 **Before anything is spent.** A question is refused, recording nothing, when the
 company's token budget, or the person's own `assistant.token_budget`, has no

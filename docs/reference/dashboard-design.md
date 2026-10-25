@@ -4012,9 +4012,11 @@ browser (`crewlet.assistant.width`). It stays open across a navigation, and a
 reload brings back what the tab had (`crewlet_assistant_tab`, in the tab's
 own storage, which the hand-over to another person empties).
 
-**What a page tells it is identifiers, never content**
+**What a page tells it is identifiers, never a record's content**
 (`app/assistant/context.ts`): the screen, its parameters and query, the
-records in view by kind and id, what is selected, and a revision. A screen
+records in view by kind and id, what is selected, a revision, and the draft
+the person has open with its values (below), which exists nowhere a tool
+could read it. A screen
 that knows more registers it with `useAssistantContext`, along with the page
 actions it takes from the assistant (each parsed, gated and applied by the
 screen's own code). The page goes with a question as a chip in the composer,
@@ -4047,12 +4049,35 @@ never widening the person `#/me` is about), a project's lens
 window and split (`spend.range.set`, `spend.group.set`), Live's and the Turns
 list's filters (`live.filter.apply`, `turns.filter.apply`) and Doclet's
 search (`knowledge.search.set`). Changes to a draft ask for approval and write
-into the draft only, saving staying the person's: the org builder's draft
+into the draft only, saving staying the person's: the open draft's fields on
+any screen that declares one (`draft.set`, below), the org builder's draft
 (`org.draft.apply_ops`, recorded through the builder's own door so undo, the
-dry run and the review work unchanged), an open part of the principles
-(`principles.draft.set`), the page being edited (`page.draft.replace`) and a
-ceiling filled in for its editor (`budgets.ceiling.prefill`). A page of several
-components offers every one's actions together. The palette offers "Ask the
+dry run and the review work unchanged) and a ceiling filled in for its editor
+(`budgets.ceiling.prefill`). A page of several components offers every one's
+actions together.
+
+**Every screen with a draft says what is open** (`app/assistant/draft.ts`).
+One hook, `useAssistantDraft`, takes the draft, its identity (`client` while
+the values live in the page, `server` where they are saved at an id and a
+revision), the step or section, the screen's help (what the assistant can and
+cannot do there, said by the screen rather than the prompt), and its fields,
+each a `read` from the draft and, where the assistant may set it, a `write`
+that refuses a value in the sentence the field's own control would. The page
+context carries the snapshot redacted (a field marked `secret`, or whose path
+names a credential by the engine's rule, is sent empty) and bounded (forty
+fields, a thousand characters a value, the rest counted in `more`, and fields
+shed from the end before the turn is ever refused). The same hook declares
+`draft.set`, whose card shows each field's value now beside the proposed one,
+which applies through the screen's setter, and which offers Undo while the
+draft still says what the change made of it. A gate
+(`app/assistant/draftGate.test.ts`) fails for a module with draft or form state
+(a leave guard, an editing status, a setup wizard, a rich, inline or list
+editor, a form field) that neither declares a draft nor is listed as part of a
+screen that does, or as a modal or signed-out form with its reason. The brand
+setup and the Brand page share one field list (`lib/brand/assistantDraft.ts`):
+name, tagline, colours, typefaces and voice are settable, logos are read as
+metadata only, and the help tells the assistant it makes no images and offers
+an SVG starting point only when asked. The palette offers "Ask the
 assistant" for a typed question, which the panel asks as its own box would.
 
 **A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):

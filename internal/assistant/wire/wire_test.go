@@ -2,6 +2,7 @@ package wire_test
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -268,6 +269,7 @@ func TestAPageContextIsBoundedPlainAndNamedByID(t *testing.T) {
 		"too many bytes": func(p *wire.PageContext) {
 			for i := range 30 {
 				p.Query["k"+strings.Repeat("x", i)] = strings.Repeat("v", 500)
+				p.Params["k"+strings.Repeat("x", i)] = strings.Repeat("v", 500)
 			}
 		},
 	}
@@ -276,6 +278,79 @@ func TestAPageContextIsBoundedPlainAndNamedByID(t *testing.T) {
 		mutate(&p)
 		if err := p.Validate(); !errors.Is(err, wire.ErrInvalid) {
 			t.Errorf("a page context with %s validated (%v)", what, err)
+		}
+	}
+}
+
+// AN OPEN DRAFT IS BOUNDED, NAMED, AND NEVER CARRIES A CREDENTIAL.
+//
+// The draft is the one part of a page context that carries what the person
+// typed, so it is held to a field count, a value length and the key grammar,
+// and a field whose path names a credential must arrive redacted: the
+// dashboard redacts by the same rule before it sends, so one that arrives
+// whole is refused rather than handed to a model. Mutation: drop the
+// secret-path case and the whole password validates; drop the field count and
+// the forty-first field does.
+func TestAnOpenDraftIsBoundedAndCarriesNoCredential(t *testing.T) {
+	t.Parallel()
+	base := func() wire.PageContext {
+		return wire.PageContext{Screen: "brand-setup", Title: "Brand › Set up",
+			Params: map[string]string{}, Query: map[string]string{},
+			Resources: []wire.Resource{}, SourceRevision: "brand-setup@1",
+			Accepts: []string{"draft.set"},
+			Draft: &wire.PageDraft{Kind: wire.DraftClient, ID: "kit-1", Revision: "3",
+				Step: "type", Help: "Colours, type and voice can be proposed.",
+				Fields: []wire.DraftField{
+					{Path: "colors.primary", Label: "Primary", Value: "#5B21B6",
+						Hint: "a #RRGGBB colour", Editable: true},
+					{Path: "voice.avoid", Label: "Avoid", Value: "Jargon\nHype", List: true,
+						Editable: true},
+					{Path: "api_token", Label: "API token", Redacted: true},
+				}}}
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("an open draft: %v", err)
+	}
+	bad := map[string]func(*wire.PageDraft){
+		"an unknown kind":            func(d *wire.PageDraft) { d.Kind = "local" },
+		"a saved draft with no id":   func(d *wire.PageDraft) { d.Kind, d.ID = wire.DraftServer, "" },
+		"a step outside the grammar": func(d *wire.PageDraft) { d.Step = "Type step" },
+		"a path outside the grammar": func(d *wire.PageDraft) { d.Fields[0].Path = "Colors/Primary" },
+		"a field listed twice":       func(d *wire.PageDraft) { d.Fields[1].Path = "colors.primary" },
+		"a value past its bound": func(d *wire.PageDraft) {
+			d.Fields[0].Value = strings.Repeat("x", wire.PageDraftValueMaxRunes+1)
+		},
+		"a control character in a value": func(d *wire.PageDraft) { d.Fields[0].Value = "a\x1bb" },
+		"help past its bound": func(d *wire.PageDraft) {
+			d.Help = strings.Repeat("h", wire.PageDraftHelpMaxRunes+1)
+		},
+		"too many fields": func(d *wire.PageDraft) {
+			d.Fields = nil
+			for i := range wire.PageDraftMaxFields + 1 {
+				d.Fields = append(d.Fields, wire.DraftField{Path: "f" + strconv.Itoa(i), Label: "F"})
+			}
+		},
+		"a negative count": func(d *wire.PageDraft) { d.More = -1 },
+		"a whole password": func(d *wire.PageDraft) {
+			d.Fields[2] = wire.DraftField{Path: "smtp.password", Label: "Password", Value: "hunter2"}
+		},
+		"a redacted field with a value": func(d *wire.PageDraft) { d.Fields[2].Value = "x" },
+		"a redacted field it may set":   func(d *wire.PageDraft) { d.Fields[2].Editable = true },
+	}
+	for what, mutate := range bad {
+		p := base()
+		mutate(p.Draft)
+		if err := p.Validate(); !errors.Is(err, wire.ErrInvalid) {
+			t.Errorf("a draft with %s validated (%v)", what, err)
+		}
+	}
+	// A credential's name is read by segment, so a field that only mentions
+	// one in passing is not hidden for it.
+	for path, secret := range map[string]bool{"api_key": true, "smtp.password": true,
+		"auth.token": true, "client_secret": true, "signing.key": true,
+		"ceiling": false, "project.key": false, "type.heading": false, "voice.summary": false} {
+		if got := wire.IsSecretDraftPath(path); got != secret {
+			t.Errorf("IsSecretDraftPath(%q) = %v, want %v", path, got, secret)
 		}
 	}
 }

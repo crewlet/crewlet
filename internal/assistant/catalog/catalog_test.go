@@ -228,8 +228,7 @@ func TestAPageActionIsOnlyOneTheScreenAccepts(t *testing.T) {
 	want := []string{"home.range.set", "home.feed.set", "work.filter.apply",
 		"work.filters.clear", "work.arrange.set", "project.lens.set", "item.activity.set",
 		"spend.range.set", "spend.group.set", "live.filter.apply", "turns.filter.apply",
-		"knowledge.search.set", "org.draft.apply_ops", "principles.draft.set",
-		"page.draft.replace", "budgets.ceiling.prefill"}
+		"knowledge.search.set", "draft.set", "org.draft.apply_ops", "budgets.ceiling.prefill"}
 	if !slices.Equal(got, want) {
 		t.Errorf("the page actions are %v, want %v", got, want)
 	}

@@ -23,11 +23,23 @@ export const ASSISTANT_PROTOCOL_VERSION = 1;
 /** The longest question a turn takes, in characters (Unicode code points). */
 export const ASSISTANT_INPUT_MAX_RUNES = 4000;
 /** The most a turn's page context may encode to, in bytes. */
-export const ASSISTANT_PAGE_CONTEXT_MAX_BYTES = 8192;
+export const ASSISTANT_PAGE_CONTEXT_MAX_BYTES = 16384;
 /** The most resources a page context names. */
 export const ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES = 50;
 /** The most page actions a page context offers. */
 export const ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS = 32;
+/** The most fields an open draft's snapshot lists; the rest are counted in its `more`. */
+export const ASSISTANT_PAGE_DRAFT_MAX_FIELDS = 40;
+/** The longest value a draft field carries, in characters; a longer one is cut and marked `truncated`. */
+export const ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES = 1000;
+/** The longest help a screen gives with its draft, in characters. */
+export const ASSISTANT_PAGE_DRAFT_HELP_MAX_RUNES = 600;
+/**
+ * A draft field path that names a credential, read by segment: such a field is
+ * sent redacted whatever the screen said (`wire.PageDraftSecretPath`).
+ */
+export const ASSISTANT_PAGE_DRAFT_SECRET_PATH =
+  "(^|[._])(password|passphrase|secret|secrets|token|tokens|credential|credentials|(api|private|signing|access|secret)[._]?key)([._]|$)";
 /** The longest reason an administrator gives for a compliance read. */
 export const ASSISTANT_AUDIT_REASON_MAX_RUNES = 500;
 /** How often a quiet stream writes a keepalive comment, in seconds. */
@@ -456,7 +468,10 @@ export interface AssistantNoticeCard {
   text: string;
 }
 
-/** What a screen tells a turn about itself, by id and never by content. */
+/**
+ * What a screen tells a turn about itself: what is in view by id, never a
+ * record's content, and the draft the person has open with its values.
+ */
 export interface AssistantPageContext {
   screen: string;
   title: string;
@@ -466,6 +481,33 @@ export interface AssistantPageContext {
   selection: AssistantResourceRef | null;
   source_revision: string;
   accepts: string[];
+  draft?: AssistantPageDraft;
+}
+
+/** Where an open draft's values live: in the page until saved, or saved. */
+export type AssistantDraftKind = "client" | "server";
+
+/** What is open in a screen's editor: which draft, where the person is, and its values. */
+export interface AssistantPageDraft {
+  kind: AssistantDraftKind;
+  id?: string;
+  revision?: string;
+  step?: string;
+  help?: string;
+  fields: AssistantDraftField[];
+  more: number;
+}
+
+/** One value of an open draft; a list's items are one per line. */
+export interface AssistantDraftField {
+  path: string;
+  label: string;
+  value: string;
+  hint?: string;
+  list?: boolean;
+  editable?: boolean;
+  redacted?: boolean;
+  truncated?: boolean;
 }
 
 /** One thing in view, by id. */
@@ -667,8 +709,7 @@ export const ASSISTANT_PAGE_ACTIONS = {
   "live.filter.apply": { confirm: "none" },
   "turns.filter.apply": { confirm: "none" },
   "knowledge.search.set": { confirm: "none" },
+  "draft.set": { confirm: "approve" },
   "org.draft.apply_ops": { confirm: "approve" },
-  "principles.draft.set": { confirm: "approve" },
-  "page.draft.replace": { confirm: "approve" },
   "budgets.ceiling.prefill": { confirm: "approve" },
 } as const satisfies Record<string, { confirm: AssistantActionConfirm }>;

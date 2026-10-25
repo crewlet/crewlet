@@ -1,6 +1,6 @@
 /**
- * What the page editor takes from the assistant: a new draft of the body
- * being edited (`page.draft.replace`).
+ * The rule a new body for the page editor's open draft is held to, when the
+ * assistant proposes one (`draft.set` on its `body`, `Editor.tsx`).
  *
  * INTO THE OPEN DRAFT, NEVER THE PAGE. The body replaces what the editor
  * holds, exactly as typing would, while the editor is open and only then:
@@ -9,28 +9,15 @@
  * person, or a save is in flight, the draft is not theirs to replace either.
  */
 
-import type { PageActionParse } from "~/app/assistant/context.ts";
 import { PAGE_BODY_MAX_BYTES } from "~/contract/pages.ts";
-
-/** A new body for the open draft. */
-export interface PageDraft {
-  readonly body: string;
-}
 
 const encoder = new TextEncoder();
 
-/** Parse a new body, held to the bound the engine stores a page's body at. */
-export function parsePageDraft(raw: unknown): PageActionParse<PageDraft> {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ok: false, reason: "That is not a new draft of the page." };
-  }
-  const { body, ...rest } = raw as Record<string, unknown>;
-  if (Object.keys(rest).length > 0) return { ok: false, reason: "A draft is the page's body." };
-  if (typeof body !== "string" || body.includes("\u0000")) {
-    return { ok: false, reason: "A page's body is Markdown text." };
-  }
+/** Why a proposed body cannot be the draft's, or null where it can. */
+export function pageBodyProblem(body: string): string | null {
+  if (body.includes("\u0000")) return "A page's body is Markdown text.";
   if (encoder.encode(body).length > PAGE_BODY_MAX_BYTES) {
-    return { ok: false, reason: "That body is longer than a page can hold." };
+    return "That body is longer than a page can hold.";
   }
-  return { ok: true, value: { body } };
+  return null;
 }

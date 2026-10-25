@@ -1,12 +1,14 @@
 package assistant_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // pageRig is a rig whose turn proposes action on the Worklet screen, which
@@ -63,7 +65,7 @@ func TestAViewChangeIsAppliedAtOnceWithoutParking(t *testing.T) {
 // parks the turn on its proposal card, exactly as before.
 func TestADraftChangeStillWaitsForApproval(t *testing.T) {
 	t.Parallel()
-	f, frames := pageRig(t, "page.draft.replace")
+	f, frames := pageRig(t, catalog.DraftSet)
 	if done := evals.Last(frames, wire.EventDone); done == nil ||
 		done.Done.State != wire.TurnWaitingForApproval {
 		t.Fatalf("the draft change's turn ended %+v, want waiting for approval", done)
@@ -74,5 +76,48 @@ func TestADraftChangeStillWaitsForApproval(t *testing.T) {
 	if proposals := f.Store.Proposals(); len(proposals) != 1 ||
 		proposals[0].State != wire.ProposalProposed {
 		t.Errorf("the draft change was recorded as %+v, want proposed", proposals)
+	}
+}
+
+// THE OPEN DRAFT REACHES THE MODEL, FENCED, AND A CREDENTIAL PASTED INTO IT
+// NEVER DOES.
+//
+// An unsaved draft exists nowhere a tool could read it, so the page context
+// is how the assistant knows what the person is editing: its step and values
+// reach the question's message inside the page context's fence. A key pasted
+// into a field that does not say it holds one is caught by its shape on the
+// way, by the engine's one secret pass. Mutation: drop redactedPage from
+// Service.Start and the key reaches the prompt; drop the draft from the page
+// context and the colour does not.
+func TestTheOpenDraftReachesTheModelFencedAndRedacted(t *testing.T) {
+	t.Parallel()
+	key := "sk-ant-api03-" + strings.Repeat("x", 40)
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{evals.Say("Noted.")}})
+	page := &wire.PageContext{Screen: "brand-setup", Title: "Brand › Set up",
+		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
+		SourceRevision: "brand-setup@1", Accepts: []string{catalog.DraftSet},
+		Draft: &wire.PageDraft{Kind: wire.DraftClient, ID: "kit-1", Revision: "3", Step: "type",
+			Help: "Propose colours, type and voice; logos are uploaded by the person.",
+			Fields: []wire.DraftField{
+				{Path: "colors.primary", Label: "Primary", Value: "#5B21B6", Editable: true},
+				{Path: "voice.summary", Label: "Voice", Value: "Plain and warm. " + key,
+					Editable: true},
+			}}}
+	accepted, err := f.Ask("page", "Check my draft", page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, 0)
+	prompts := f.Model.Prompts()
+	fence := "source=" + string(provenance.SourcePageContext) + " trust=colleague"
+	at := strings.Index(prompts, fence)
+	switch {
+	case at < 0:
+		t.Fatalf("the page context was not fenced:\n%s", prompts)
+	case !strings.Contains(prompts[at:], `"path":"colors.primary"`) ||
+		!strings.Contains(prompts[at:], "#5B21B6") || !strings.Contains(prompts[at:], `"step":"type"`):
+		t.Errorf("the open draft did not reach the model inside the fence:\n%s", prompts)
+	case strings.Contains(prompts, key):
+		t.Errorf("a key pasted into the draft reached the model:\n%s", prompts)
 	}
 }

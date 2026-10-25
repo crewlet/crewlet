@@ -817,6 +817,12 @@ func pageActionPreview(t Tool) proposal.Previewer {
 		var c changes
 		c.fact("scope", "This screen", action.Scope)
 		payload, _ := args["args"].(map[string]any)
+		if values, ok := payload["values"].(map[string]any); ok && action.ID == DraftSet {
+			// A DRAFT'S FIELDS ONE ROW EACH, by the path the page context's
+			// draft named; the screen draws its own rows over these, with
+			// each field's label and its value now.
+			payload = values
+		}
 		for _, k := range sortedKeys(payload) {
 			c.fact(k, fieldLabel(k), company.valueShown(cards.Text(payload[k])))
 		}

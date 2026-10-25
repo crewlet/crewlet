@@ -58,6 +58,8 @@ import {
 } from "~/lib/brand/setup.ts";
 import { adoptionProblem, partProblem } from "~/lib/brand/validate.ts";
 import { useBrandAssets } from "~/lib/brand/useBrand.ts";
+import { BRAND_ASSISTANT_HELP, brandDraftFields } from "~/lib/brand/assistantDraft.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useBrandDraftSave } from "~/lib/brand/useBrandSave.ts";
 import { BRAND_PAGE } from "~/components/brand.tsx";
 import { BrandPreview } from "../BrandPreview.tsx";
@@ -66,6 +68,9 @@ import { ReviewStep, setupWarnings, warningKey } from "./Review.tsx";
 import { useSetupTarget, type SetupTarget } from "./useSetupTarget.ts";
 
 const TITLE = "Set up your brand";
+
+/** Every part of the brand is the setup's to change, whichever step is open. */
+const SETUP_FIELDS = brandDraftFields(new Set(["identity", "logos", "colours", "type", "voice"]));
 
 /** A step's place in the setup. */
 const indexOf = (id: SetupStepId) => SETUP_STEPS.findIndex((s) => s.id === id);
@@ -328,6 +333,21 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   });
 
   const busy = draftSave.busy || adopt.busy;
+  // WHAT IS OPEN, for the assistant: the draft as it stands, at its step, and
+  // its text and value fields set through the same `setEdit` typing uses;
+  // Continue, Save as draft and the finish stay the person's.
+  useAssistantDraft<BrandEdit>({
+    kind: "client",
+    id: saved.kit,
+    revision: saved.kit ? saved.version : null,
+    step,
+    help: BRAND_ASSISTANT_HELP,
+    scope: "The brand you are setting up (not saved)",
+    value: edit,
+    fields: SETUP_FIELDS,
+    apply: setEdit,
+    blocked: () => (busy ? "The brand is being saved." : null),
+  });
   const spec = stepSpec(step);
   const footer =
     step === "review" ? (
