@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -127,5 +128,44 @@ func TestAChangePreparedAgainstAnOldVersionIsStale(t *testing.T) {
 	if _, err := catalog.Revision(t.Context(), read, "task:ENG-404@1"); !errors.Is(err,
 		catalog.ErrPreviewRead) {
 		t.Errorf("a task the person may not read = %v, want ErrPreviewRead", err)
+	}
+}
+
+// A MARK-INBOX CARD NAMES EVERY NOTICE IT CLEARS, read from the person's own
+// inbox through the grant, so a notice the person did not mean to clear (a
+// security notice a prompt talked the model into marking) is on the card they
+// approve. A notice the inbox does not hold is said to be missing, and a long
+// list names ten and counts the rest. Mutation: preview the counts alone and
+// the named notices are missing.
+func TestAMarkInboxCardNamesEveryNotice(t *testing.T) {
+	t.Parallel()
+	mark, _ := catalog.Lookup("mark_inbox")
+	p, err := mark.Preview(t.Context(), reader(assistanttest.World()),
+		map[string]any{"read": []any{"r1", "r2", "r9"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range p.Changes {
+		got = append(got, c.Label+": "+c.To)
+	}
+	want := []string{"Mark read: ENG-42: Ship it moved to review.",
+		"Mark read: SEC-7: Rotate the signing key.",
+		"Mark read: A notice not in your inbox (r9)"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the card reads %q, want %q", got, want)
+	}
+
+	many := make([]any, 13)
+	for i := range many {
+		many[i] = fmt.Sprintf("x%d", i)
+	}
+	p, err = mark.Preview(t.Context(), reader(assistanttest.World()), map[string]any{"unread": many})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Changes) != 11 || p.Changes[10].To != "And 3 more" {
+		t.Errorf("thirteen notices preview as %d rows ending %+v", len(p.Changes),
+			p.Changes[len(p.Changes)-1])
 	}
 }

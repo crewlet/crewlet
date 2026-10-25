@@ -26,7 +26,10 @@ func World() map[string]any {
 			"comments": []any{map[string]any{"id": "c1", "ask": "pm", "body": "Which day?",
 				"decision": map[string]any{"question": "Which day?", "options": []any{
 					map[string]any{"id": "a", "label": "Monday"}}}}}},
-		"/work/my-work":   map[string]any{"handle": "pm"},
+		"/work/my-work": map[string]any{"handle": "pm"},
+		"/work/inbox": map[string]any{"handle": "pm", "notices": []any{
+			map[string]any{"record_id": "r1", "subject_key": "ENG-42", "excerpt": "Ship it moved to review."},
+			map[string]any{"record_id": "r2", "subject_key": "SEC-7", "excerpt": "Rotate the signing key."}}},
 		"/work/people/pm": map[string]any{"handle": "pm", "version": 7, "priorities": []any{"ENG-9"}},
 		"/agents/pm": map[string]any{"handle": "pm", "role": "Product manager",
 			"live": map[string]any{"activity": "working"}},

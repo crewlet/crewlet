@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // THE PREVIEWS: what each write would change, read by the server from the
@@ -300,25 +301,108 @@ func prioritiesPreview(t Tool) proposal.Previewer {
 // change is bound to.
 const personRoute = "GET /work/people/{handle}"
 
+// inboxPreview names the notices a mark_inbox call marks, read through the
+// grant from the person's own inbox: a card that said "Mark read: 12 notices"
+// could carry a notice the person never meant to clear (a security notice a
+// prompt in some task talked the model into marking) without showing it.
 func inboxPreview(t Tool) proposal.Previewer {
-	return func(_ context.Context, _ proposal.Read, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
-		var c changes
-		if n := len(a.Strings("read")); n > 0 {
-			c.fact("read", "Mark read", strconv.Itoa(n)+" notices")
-		}
-		if n := len(a.Strings("unread")); n > 0 {
-			c.fact("unread", "Mark unread", strconv.Itoa(n)+" notices")
-		}
-		if len(c) == 0 {
+		marked, unmarked := a.Strings("read"), a.Strings("unread")
+		if len(marked)+len(unmarked) == 0 {
 			return proposal.Preview{}, fmt.Errorf("%w: the call marks nothing", ErrInvalidArguments)
 		}
+		names, err := noticeNames(ctx, read, slices.Concat(marked, unmarked))
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		var c changes
+		c.notices("read", "Mark read", marked, names)
+		c.notices("unread", "Mark unread", unmarked, names)
 		return proposal.Preview{Title: "Mark inbox", Target: "Your inbox",
 			ApproveLabel: "Approve and mark", Changes: c.rows(), Request: req}, nil
+	}
+}
+
+const (
+	// inboxNamed is how many notices of one list a mark_inbox card names
+	// one by one before it says how many more: enough to see what a short
+	// list clears, short enough that a card stays readable.
+	inboxNamed = 10
+	// inboxPage and inboxPages bound the reads a mark_inbox preview makes
+	// to find the notices it names: the inbox route's own largest page, at
+	// most five times, which covers the two hundred ids a list may carry.
+	inboxPage  = 200
+	inboxPages = 5
+	// noticeNameBytes bounds one notice's name on the card.
+	noticeNameBytes = 160
+)
+
+// noticeNames reads the person's inbox through the grant until every id in
+// ids is found or the inbox ends, answering each found notice's name by its
+// record id.
+func noticeNames(ctx context.Context, read proposal.Read, ids []string) (map[string]string, error) {
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[string]string{}
+	cursor := ""
+	for range inboxPages {
+		q := url.Values{"limit": {strconv.Itoa(inboxPage)}}
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		doc, err := readGet(ctx, read, "GET /work/inbox", nil, q)
+		if err != nil {
+			return nil, err
+		}
+		notices, _ := cards.Lookup(doc, "notices").([]any)
+		for _, n := range notices {
+			if id := value(n, "record_id"); want[id] {
+				out[id] = noticeName(n)
+			}
+		}
+		if cursor = value(doc, "next_cursor"); cursor == "" || len(out) == len(want) {
+			break
+		}
+	}
+	return out, nil
+}
+
+// noticeName is how a card names one notice: what it is about and what it
+// says, as the inbox shows it.
+func noticeName(n any) string {
+	about := orDefault(value(n, "subject_key"), value(n, "task"))
+	says := orDefault(value(n, "excerpt"), value(n, "reason"))
+	name := strings.TrimSpace(about + ": " + says)
+	switch {
+	case about == "":
+		name = says
+	case says == "":
+		name = about
+	}
+	return textcut.Within(orDefault(name, "A notice"), noticeNameBytes)
+}
+
+// notices adds one row per notice of ids, named where the inbox read found it
+// and said to be missing where it did not, then how many more past
+// [inboxNamed].
+func (c *changes) notices(field, label string, ids []string, names map[string]string) {
+	for i, id := range ids {
+		if i == inboxNamed {
+			c.fact(field+".more", label, fmt.Sprintf("And %d more", len(ids)-inboxNamed))
+			return
+		}
+		name, found := names[id]
+		if !found {
+			name = "A notice not in your inbox (" + id + ")"
+		}
+		c.fact(fmt.Sprintf("%s.%d", field, i+1), label, name)
 	}
 }
 
