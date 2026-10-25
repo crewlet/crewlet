@@ -101,12 +101,12 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 
 // refuseBefore records a call refused before anything was sent, and answers
 // the model why.
-func (s *surface) refuseBefore(tool catalog.Tool, args map[string]any, summary string,
+func (s *surface) refuseBefore(ctx context.Context, tool catalog.Tool, args map[string]any, summary string,
 	err error) toolloop.ToolResult {
 
 	message := redact.Secrets(err.Error())
 	step := s.t.stepStart(tool, args, nil)
-	s.t.stepEnd(step, wire.StepRefused, summary, &wire.Refusal{Code: codeInvalidInput,
+	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: codeInvalidInput,
 		Message: message}, 0, 0)
 	return failed("Refused before anything was sent: " + message)
 }
@@ -115,7 +115,7 @@ func (s *surface) refuseBefore(tool catalog.Tool, args map[string]any, summary s
 func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
 	req, err := tool.Request(args)
 	if err != nil {
-		return s.refuseBefore(tool, args, "Not sent", err), nil
+		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
 	}
 	route, _ := tool.RouteOf(req)
 	step := s.t.stepStart(tool, args, &wire.StepRequest{Method: req.Method, Route: route})
@@ -124,12 +124,12 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		return s.unsent(ctx, step, tool, route, err)
 	}
 	if resp.Status == http.StatusUnauthorized {
-		s.t.stepEnd(step, wire.StepFailed, "Signed out", nil, resp.Status, len(resp.Body))
+		s.t.stepEnd(ctx, step, wire.StepFailed, "Signed out", nil, resp.Status, len(resp.Body))
 		return toolloop.ToolResult{}, errGrantEnded
 	}
 	shaped, err := catalog.Shape(tool, args, resp, s.t.boundary, s.t.svc.now())
 	if err != nil {
-		s.t.stepEnd(step, wire.StepFailed, "Could not be read", nil, resp.Status, len(resp.Body))
+		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be read", nil, resp.Status, len(resp.Body))
 		s.t.svc.log.ErrorContext(ctx, "assistant_step_unreadable", "turn", s.t.id,
 			"tool", tool.Name, "route", route, "error", redact.Secrets(err.Error()))
 		return failed("The answer could not be read. Tell the person it failed."), nil
@@ -140,9 +140,9 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 			state = wire.StepFailed
 		}
 		refusal := *shaped.Refusal
-		s.t.stepEnd(step, state, refusalSummary(resp.Status), &refusal, resp.Status, len(resp.Body))
+		s.t.stepEnd(ctx, step, state, refusalSummary(resp.Status), &refusal, resp.Status, len(resp.Body))
 	} else {
-		s.t.stepEnd(step, wire.StepDone, answerSummary(shaped.Cards), nil, resp.Status,
+		s.t.stepEnd(ctx, step, wire.StepDone, answerSummary(shaped.Cards), nil, resp.Status,
 			len(resp.Body))
 		s.t.tainted(tool)
 	}
@@ -158,10 +158,10 @@ func (s *surface) unsent(ctx context.Context, step stepClock, tool catalog.Tool,
 	err error) (toolloop.ToolResult, error) {
 
 	if ctx.Err() != nil {
-		s.t.stepEnd(step, wire.StepStopped, "Stopped", nil, 0, 0)
+		s.t.stepEnd(ctx, step, wire.StepStopped, "Stopped", nil, 0, 0)
 		return toolloop.ToolResult{}, context.Cause(ctx)
 	}
-	s.t.stepEnd(step, wire.StepFailed, "Could not be sent", nil, 0, 0)
+	s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be sent", nil, 0, 0)
 	s.t.svc.log.ErrorContext(ctx, "assistant_step_not_sent", "turn", s.t.id,
 		"tool", tool.Name, "route", route, "error", redact.Secrets(err.Error()))
 	return failed("The request could not be sent. Tell the person it failed; do not " +
@@ -180,11 +180,11 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 			accepts, pageRevision = s.t.page.Accepts, s.t.page.SourceRevision
 		}
 		if _, err := catalog.PageActionFor(args, accepts); err != nil {
-			return s.refuseBefore(tool, args, "Not proposed", err), nil
+			return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 		}
 	}
 	if err := tool.Check(args); err != nil {
-		return s.refuseBefore(tool, args, "Not proposed", err), nil
+		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
 	step := s.t.stepStart(tool, args, nil)
 	read := func(ctx context.Context, r exec.Request) (exec.Response, error) {
@@ -200,23 +200,23 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 			s.t.write().Step("proposal", strconv.Itoa(step.Index)), drafted)
 	}
 	if err == nil {
-		s.t.stepEnd(step, wire.StepWaiting, "Waiting for approval", nil, 0, 0)
+		s.t.stepEnd(ctx, step, wire.StepWaiting, "Waiting for approval", nil, 0, 0)
 		s.t.emitCard(ctx, drafted.Card, appNames(tool.Apps))
 		return toolloop.ToolResult{Output: "Proposed; the person decides whether to " +
 			"approve it. Nothing has changed yet.", Suspend: true}, nil
 	}
 	switch {
 	case ctx.Err() != nil:
-		s.t.stepEnd(step, wire.StepStopped, "Stopped", nil, 0, 0)
+		s.t.stepEnd(ctx, step, wire.StepStopped, "Stopped", nil, 0, 0)
 		return toolloop.ToolResult{}, context.Cause(ctx)
 	case errors.Is(err, proposal.ErrInvalid), errors.Is(err, proposal.ErrTooLarge),
 		errors.Is(err, catalog.ErrInvalidArguments):
 		message := redact.Secrets(err.Error())
-		s.t.stepEnd(step, wire.StepRefused, "Not proposed", &wire.Refusal{
+		s.t.stepEnd(ctx, step, wire.StepRefused, "Not proposed", &wire.Refusal{
 			Code: codeInvalidInput, Message: message}, 0, 0)
 		return failed("The change could not be prepared: " + message), nil
 	}
-	s.t.stepEnd(step, wire.StepFailed, "Could not be prepared", nil, 0, 0)
+	s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be prepared", nil, 0, 0)
 	s.t.svc.log.ErrorContext(ctx, "assistant_proposal_failed", "turn", s.t.id,
 		"tool", tool.Name, "error", redact.Secrets(err.Error()))
 	return failed("The change could not be prepared. Tell the person it failed."), nil
@@ -246,11 +246,11 @@ func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview propos
 // by their grants for a screen that names no record.
 func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
 	if err := tool.Check(args); err != nil {
-		return s.refuseBefore(tool, args, "Not opened", err), nil
+		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
 	link, probe, err := catalog.Open(args)
 	if err != nil {
-		return s.refuseBefore(tool, args, "Not opened", err), nil
+		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
 	var request *wire.StepRequest
 	if probe != nil {
@@ -265,12 +265,12 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 		resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, *probe)
 		switch {
 		case err != nil && ctx.Err() != nil:
-			s.t.stepEnd(step, wire.StepStopped, "Stopped", nil, 0, 0)
+			s.t.stepEnd(ctx, step, wire.StepStopped, "Stopped", nil, 0, 0)
 			return toolloop.ToolResult{}, context.Cause(ctx)
 		case err != nil:
 			permitted = false
 		case resp.Status == http.StatusUnauthorized:
-			s.t.stepEnd(step, wire.StepFailed, "Signed out", nil, resp.Status, 0)
+			s.t.stepEnd(ctx, step, wire.StepFailed, "Signed out", nil, resp.Status, 0)
 			return toolloop.ToolResult{}, errGrantEnded
 		default:
 			permitted, status, size = cards.Permitted(resp.Status), resp.Status, len(resp.Body)
@@ -280,7 +280,7 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 	if !permitted {
 		summary = "Not permitted"
 	}
-	s.t.stepEnd(step, wire.StepDone, summary, nil, status, size)
+	s.t.stepEnd(ctx, step, wire.StepDone, summary, nil, status, size)
 	s.t.emitCard(ctx, cards.OpenInApp(link, permitted), nil)
 	if !permitted {
 		return toolloop.ToolResult{Output: "The person may not open that, or it does not " +

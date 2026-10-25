@@ -1,6 +1,7 @@
 package live
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -87,7 +88,7 @@ func TestAResumedSegmentContinuesTheNumbering(t *testing.T) {
 		}
 	}
 	l.End()
-	if _, err := l.Append(status()); err != ErrEnded {
+	if _, err := l.Append(status()); !errors.Is(err, ErrEnded) {
 		t.Fatalf("an ended log appended: %v", err)
 	}
 	replay, sub, _ := l.Subscribe(1)

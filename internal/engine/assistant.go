@@ -233,7 +233,7 @@ func (a assistantRecords) ClearConversation(ctx context.Context, w assistant.Wri
 		return assistant.Written{}, err
 	}
 	res, err := a.w.ClearConversation(ctx, c, id)
-	if err := settled(res, err); err != nil {
+	if err = settled(res, err); err != nil {
 		return assistant.Written{}, err
 	}
 	out := assistant.Written{Outcome: string(res.Outcome)}
