@@ -37,7 +37,7 @@ import (
 // cmd/crewlet, which is package main and reachable from no other package, so
 // the end-to-end suite's own wiring could not call them and mounted none of
 // them: every fixture there presented a Tier A bearer to a node serving no
-// /auth, no /iam and no /work. A fleet whose sessions did not cross between
+// /auth, no /iam and no /worklet. A fleet whose sessions did not cross between
 // its members — a cookie minted on one node refused on the next, a revocation
 // one node never heard — left the fleet suite green, because nothing in it had
 // ever signed in. One constructor that `crewlet run` and the suite both call is

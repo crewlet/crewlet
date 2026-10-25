@@ -1098,8 +1098,8 @@ func (o Options) missing() error {
 // admin, and a route mounted without a policy is a boot failure rather than an
 // open door.
 //
-// THE READS TOO — the maintenance status and the reanchor confirmation value
-// — because `/work/retention*` is the deployment's surface whole, which is
+// THE READS TOO (the maintenance status and the reanchor confirmation value),
+// because `/worklet/retention*` is the deployment's surface whole, which is
 // what the `retention` question already declares: a map of which machine
 // holds what, and the value a reanchor must echo, are not the company's
 // working state.

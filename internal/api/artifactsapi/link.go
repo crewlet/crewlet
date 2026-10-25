@@ -64,7 +64,7 @@ type linkBody struct {
 //
 // The ITEM is admitted as a write, `update_work_item` on a task, decided by the
 // authority table's own row ([authz.Decide]) exactly as `PATCH
-// /work/items/{key}` and the tool decide it: putting something on an item's
+// /worklet/items/{key}` and the tool decide it: putting something on an item's
 // card is the item's writers' to do, whatever the caller's role on the
 // artifact.
 //

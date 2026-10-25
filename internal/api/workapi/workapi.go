@@ -1,7 +1,7 @@
-// Package workapi is the HUMAN WRITE SURFACE over the company's own tracker
-// and knowledge base: filing, editing, commenting on, arranging and taking
-// work and pages out of circulation, from a browser or a script, as the person
-// the request resolved to.
+// Package workapi is the HUMAN WRITE SURFACE over Worklet and Doclet, under
+// `/worklet` and `/doclet/pages`: filing, editing, commenting on, arranging
+// and taking work and pages out of circulation, from a browser or a script,
+// as the person the request resolved to.
 //
 // # It is the SAME TOOLS a seat and the operator's assistant hold
 //
@@ -15,7 +15,7 @@
 // own receipt under a status code.
 //
 // The alternative this replaces was the obvious one: a handler per route
-// calling the tracker's writer directly. It would have been the THIRD
+// calling Worklet's writer directly. It would have been the THIRD
 // implementation of "file an item" — the third place a field is trimmed, a
 // default applied, a mention resolved and a refusal worded — and the first
 // one a person uses. Two copies had already drifted on exactly those parts
@@ -23,8 +23,8 @@
 // tests reached, because the tools' suites exercise the tools.
 //
 // A FEW ROUTES HAVE NO TOOL, and are the ones a seat is never given: rewriting
-// one's own remark on a work item, purging a work item, and the knowledge
-// base's four destructive verbs and its rename. Those call the domain's writer
+// one's own remark on a work item, purging a work item, and Doclet's four
+// destructive verbs and its rename. Those call the domain's writer
 // themselves, decide first through the SAME table —
 // [authz.ActionWorkCommentEdit], [authz.ActionWorkPurge],
 // [authz.ActionPageRename], [authz.ActionPageTrash], [authz.ActionPageRestore],
@@ -33,14 +33,14 @@
 // `operator_acted` record the dispatch publishes for a tool
 // ([operator.AuditGesture]), so a verb with no tool is no less recorded. The
 // four page verbs had rules and no caller at all until this surface; the work
-// purge had a route of its own under /work/{id}/purge with an operator check
+// purge had a route of its own under /worklet/{id}/purge with an operator check
 // written beside it, which this replaces. Placing a card on a board used to be
 // one of them; it is `place_work_item` now, and its route an adapter over it.
 //
 // A PROJECT'S FILE BYTES are three more, for a different reason: a seat has
 // file tools, but a tool answers a model a page at a time, and a person's
 // upload or download STREAMS a gibibyte through one request. So
-// `/work/files/{project}/{path}` is decided on the project its path names by
+// `/worklet/files/{project}/{path}` is decided on the project its path names by
 // the rows the file tools are ([authz.ActionFileRead], [authz.ActionFileWrite],
 // [authz.ActionFileRemove]), writes through the file tools' own writer, takes
 // its operation from the request's key and leaves the same record — and keeps
@@ -53,10 +53,10 @@
 // # Authority is decided ONCE, and read identically everywhere
 //
 // Every route is mounted through [authz.Router] with a policy. Where the
-// object is knowable from the PATH — the project in /work/projects/{key} —
+// object is knowable from the PATH (the project in /worklet/projects/{key}),
 // the route decides the verb itself. Where it needs a STORED ROW — which
 // project a work item is filed under, which container a page is in, who wrote
-// a comment, whose record the name in /work/people/{handle} is (a login is its
+// a comment, whose record the name in /worklet/people/{handle} is (a login is its
 // holder's, which only the identity directory can say) — the route admits on
 // the weakest honest precondition and the verb is decided once the row is
 // read: by the tool's own ask, or by this package for a verb that has no tool.
@@ -142,7 +142,7 @@
 // # What is NOT here
 //
 // Sprints and goals. The design this surface was drawn from listed
-// `PUT /work/projects/{key}/sprints` and `PUT /work/goals/{id}`, and the
+// `PUT /worklet/projects/{key}/sprints` and `PUT /worklet/goals/{id}`, and the
 // tracker has neither: both were dropped from the domain (the replicated
 // estate's migrations 0013 and 0015), so there is nothing to route, and a
 // route answering for a verb the domain does not have would be a promise the
@@ -796,7 +796,7 @@ func moveStoppedHere(receipt map[string]any) {
 			"to another node under %s, or leave it: %s.", sameKey, duty)
 	case waits != "":
 		next = fmt.Sprintf("%s is in the trash under it, and the move waits for "+
-			"it: restore it (POST /work/items/%s/restore) or purge it, then send "+
+			"it: restore it (POST /worklet/items/%s/restore) or purge it, then send "+
 			"this request again under %s. Or leave it: once it is restored, %s.",
 			waits, waits, sameKey, duty)
 	}
@@ -944,7 +944,7 @@ func readArgs(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
 // body that names a different one.
 //
 // THE PATH WINS AND A DISAGREEING BODY IS REFUSED rather than overwritten: a
-// caller who sent `PATCH /work/items/ENG-1` with `"item": "ENG-2"` has a bug,
+// caller who sent `PATCH /worklet/items/ENG-1` with `"item": "ENG-2"` has a bug,
 // and writing either one would be guessing which half of it they meant.
 func fromPath(w http.ResponseWriter, args map[string]any, field, value string) bool {
 	if held, ok := args[field]; ok {

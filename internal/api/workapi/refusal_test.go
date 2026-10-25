@@ -105,7 +105,7 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	}
 
 	// AND THIS SURFACE, refusing at the route.
-	fromHTTP := r.do(as(caller), http.MethodPost, "/work/items", args)
+	fromHTTP := r.do(as(caller), http.MethodPost, "/worklet/items", args)
 	if fromHTTP.status != http.StatusForbidden {
 		t.Fatalf("the route answered %d", fromHTTP.status)
 	}
@@ -121,12 +121,12 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	if err := authz.NewRouter(plain, func(req *http.Request, p authz.Policy) authz.Decision {
 		return authz.Decide(req.Context(), caller, p.Action,
 			authz.Object{Kind: authz.KindTask}, chart{}, time.Now())
-	}).Handle("POST /work/items", authz.Policy{Action: authz.ActionWorkCreate},
+	}).Handle("POST /worklet/items", authz.Policy{Action: authz.ActionWorkCreate},
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})); err != nil {
 		t.Fatalf("mount the control: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/work/items", nil))
+	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worklet/items", nil))
 	if httpjson.Sentence(rec.Body.String()) == fromHTTP.detail() {
 		t.Fatal("the control read the same as the tools, so this test cannot " +
 			"tell a surface that wrote its own sentence from one that did not")

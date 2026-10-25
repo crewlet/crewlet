@@ -274,7 +274,7 @@ func wakeBody(record MutationRecord) string {
 // link is where the person a change woke opens the page: the DASHBOARD's
 // address of it ([AddressPrefix]), on the dashboard's base.
 //
-// Never the REST route /pages/<id>, which it used to be: that answers JSON to a
+// Never the REST route /doclet/pages/<id>, which it used to be: that answers JSON to a
 // browser, and behind the guard when anonymous reads are off, so a seat that
 // forwarded the link — as the shipped tool skill teaches it to forward links —
 // handed a person an endpoint rather than a page. And never a base of the

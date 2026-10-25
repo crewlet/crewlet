@@ -282,7 +282,7 @@ func TestThePostureMatrix(t *testing.T) {
 			[len(shapes)]int{unath, unath, ok, forbd, ok, ok, ok, ok, unath, ok, ok, ok, unath, forbd, ok}},
 		// THE CALLER'S OWN RECORD, which is the tracker's too: a relation
 		// arm on a tracker verb takes the tracker.
-		{"a person's own inbox", "GET", "/work/inbox", "",
+		{"a person's own inbox", "GET", "/worklet/inbox", "",
 			[len(shapes)]int{unath, unath, ok, forbd, ok, ok, ok, ok, unath, ok, ok, ok, unath, forbd, ok}},
 		{"the knowledge base's spaces", "GET", "/query/containers", "",
 			[len(shapes)]int{unath, unath, forbd, ok, ok, ok, ok, ok, unath, ok, forbd, ok, unath, forbd, ok}},
@@ -302,30 +302,30 @@ func TestThePostureMatrix(t *testing.T) {
 		// stream is unknown — which is the handler speaking, after the
 		// authority layer let the request through.
 		{"moving the trim's backup floor", "POST",
-			"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
+			"/worklet/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, stepUp}},
 		// ADMITTED AS A 200: every API is handed a node gate — the
 		// engine's core, on every node from boot — and this fixture's
 		// lands every record it is asked for.
-		{"evicting a node", "POST", "/work/retention/evict/n1?confirm=n1", "",
+		{"evicting a node", "POST", "/worklet/retention/evict/n1?confirm=n1", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
-		{"readmitting a node", "POST", "/work/retention/readmit/n1?confirm=n1", "",
+		{"readmitting a node", "POST", "/worklet/retention/readmit/n1?confirm=n1", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
 		// ADMITTED AS A 400: no target named.
-		{"resizing a stream", "POST", "/work/retention/capacity", "",
+		{"resizing a stream", "POST", "/worklet/retention/capacity", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		// ADMITTED AS A 500: this fixture's capacity window cannot be read.
 		{"the maintenance window's state", "GET",
-			"/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, forbd, broken, unath, forbd, forbd, broken, unath, forbd, broken}},
-		{"abandoning a resize", "POST", "/work/retention/maintenance/abandon", "",
+		{"abandoning a resize", "POST", "/worklet/retention/maintenance/abandon", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
-		{"excluding a participant", "POST", "/work/retention/maintenance/exclude", "",
+		{"excluding a participant", "POST", "/worklet/retention/maintenance/exclude", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		{"the value a reanchor must echo", "GET",
-			"/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
+			"/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, absent}},
-		{"re-anchoring a log", "POST", "/work/retention/reanchor", "",
+		{"re-anchoring a log", "POST", "/worklet/retention/reanchor", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 
 		// --- the company's credentials: admin ------------------------ //

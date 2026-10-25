@@ -868,8 +868,8 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 // A DEFERRED SCOPE THIS NODE COULD NOT READ IS REFUSED IN THIS PACKAGE'S
 // WORDS, NEVER THE STORE'S.
 //
-// Every surface that answers a refusal sends its detail to the caller — the
-// query registry in a REST body and a socket frame, `/work` in its own — so a
+// Every surface that answers a refusal sends its detail to the caller (the
+// query registry in a REST body and a socket frame, `/worklet` in its own), so a
 // detail built from the probe's error handed a driver's message or a database
 // path to anybody holding the question's grant. The refusal says what could
 // not be read and where the reason is; the reason goes to the log. The

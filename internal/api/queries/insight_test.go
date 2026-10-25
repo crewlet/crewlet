@@ -1261,7 +1261,7 @@ func (s countingSearcher) Search(context.Context, knowledge.Query) knowledge.Res
 //
 // Mutation: drop the knowledge check and the tracker-only caller is handed a
 // page; drop the refusal and the caller holding nothing is answered.
-func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
+func TestTheKnowledgeQuestionSearchesPagesOnlyWithDoclet(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name     string
@@ -1305,17 +1305,17 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
 			}
 			if c.searched {
 				if len(hits) != 1 || answer["available"] != true {
-					t.Errorf("a knowledge holder was answered %v", answer)
+					t.Errorf("a Doclet holder was answered %v", answer)
 				}
 				return
 			}
 			reason := queries.KnowledgeReason(fmt.Sprint(answer["reason"]))
 			if len(hits) != 0 || answer["available"] != false ||
 				reason != queries.KnowledgeNoAccess || !reason.Valid() {
-				t.Errorf("a tracker-only caller was answered %v, want no hits, "+
+				t.Errorf("a Worklet-only caller was answered %v, want no hits, "+
 					"available false and the no_access reason", answer)
 			}
-			if !strings.Contains(fmt.Sprint(answer["note"]), "Knowledge") {
+			if !strings.Contains(fmt.Sprint(answer["note"]), "Doclet") {
 				t.Errorf("the note %q does not say which access is missing", answer["note"])
 			}
 		})

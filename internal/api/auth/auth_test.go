@@ -112,13 +112,13 @@ func TestEveryGuardedRouteNeedsACredentialWhateverTheMethod(t *testing.T) {
 //   - /operator: the operator MCP surface, which files and moves work and
 //     writes the knowledge base. Deliberately not under /mcp/, which is exempt
 //     wholesale for the sandbox bridge.
-//   - /work and /pages: the human write surface over the tracker and the
+//   - /worklet and /doclet/pages: the human write surface over the tracker and the
 //     knowledge base. A write there with nobody behind it would be a record
 //     with no author, which is the one thing it exists never to write.
 func TestTheCompanysOwnSurfacesAreGuardedEvenForReads(t *testing.T) {
 	t.Parallel()
 	for _, prefix := range []string{
-		"/config", "/secrets", "/setup", "/operator", "/work", "/pages",
+		"/config", "/secrets", "/setup", "/operator", "/worklet", "/doclet/pages",
 	} {
 		for _, path := range []string{
 			prefix, prefix + "/", prefix + "/anything",

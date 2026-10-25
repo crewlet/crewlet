@@ -10,7 +10,7 @@ import (
 
 // The verbs this engine authorizes.
 //
-// NAMED AFTER THE VERB, NOT THE SURFACE. `PATCH /work/items/{key}` and the
+// NAMED AFTER THE VERB, NOT THE SURFACE. `PATCH /worklet/items/{key}` and the
 // `update_work_item` tool are one action asked two ways, so they are one
 // constant — which is the whole of what stops the operator MCP and a seat's
 // own tools answering differently about one write.

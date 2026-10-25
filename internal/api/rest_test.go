@@ -102,20 +102,20 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	// No native knowledge base wired, which is a company on Confluence, so
 	// `pages` is unregistered.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/pages", nil)))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/doclet/pages", nil)))
 	res := rec.Result()
 	if res.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /pages = %d, want the query layer's 404", res.StatusCode)
+		t.Fatalf("GET /doclet/pages = %d, want the query layer's 404", res.StatusCode)
 	}
 	// The mux's own 404 says `no_route`; the query layer's says the
 	// question is unknown. That is how a caller tells them apart — both are
 	// JSON now, so the content type no longer does.
 	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatalf("GET /pages answered no JSON: %v", err)
+		t.Fatalf("GET /doclet/pages answered no JSON: %v", err)
 	}
 	if body["error"] != "unknown_query" {
-		t.Errorf("GET /pages answered %v; the mux's own no_route means the "+
+		t.Errorf("GET /doclet/pages answered %v; the mux's own no_route means the "+
 			"route is not registered at all, which is the bug this covers",
 			body["error"])
 	}
@@ -233,7 +233,7 @@ func TestANamedRouteAgreesWithTheGenericForm(t *testing.T) {
 
 // A DOCUMENTED PATH UNDER A WILDCARD IS THE ONE THAT FAILS SILENTLY.
 //
-// Every literal `/work/<word>` route in the table sits above `/work/{id}`, and
+// Every literal `/worklet/<word>` route in the table sits above `/worklet/{id}`, and
 // one that is registered on the query channel and listed in
 // docs/reference/api-endpoints.md but MISSING from the table fails without a
 // sound: the wildcard matches that path, so the request is answered as a TASK
@@ -254,13 +254,13 @@ func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/views", nil)))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/worklet/views", nil)))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("GET /work/views = %d, want 400: the query refuses a "+
+		t.Fatalf("GET /worklet/views = %d, want 400: the query refuses a "+
 			"missing `container`, and any other status means the path was "+
-			"answered by /work/{id} instead", res.StatusCode)
+			"answered by /worklet/{id} instead", res.StatusCode)
 	}
 	var body map[string]string
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -284,9 +284,9 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet,
-		"/work/views?container=project:ENG", nil)))
+		"/worklet/views?container=project:ENG", nil)))
 	if got := rec.Result().StatusCode; got != http.StatusOK {
-		t.Errorf("GET /work/views?container=project:ENG = %d, want 200", got)
+		t.Errorf("GET /worklet/views?container=project:ENG = %d, want 200", got)
 	}
 }
 
@@ -394,7 +394,7 @@ func (stubWorkReader) Thread(context.Context, worklet.ThreadQuery,
 
 // THE INBOX IS A LITERAL SEGMENT, not a task called "inbox".
 //
-// Same hazard the burndown had, one route later: `/work/{id}` matches the
+// Same hazard the burndown had, one route later: `/worklet/{id}` matches the
 // path, so a table entry with no route behind it answers 404 about a task
 // nobody named. The answer proves the query was reached — `work_inbox` reads
 // the caller's own record, which for the fixture's unbound token is kept under
@@ -407,12 +407,12 @@ func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/inbox", nil)))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/worklet/inbox", nil)))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusOK {
-		t.Fatalf("GET /work/inbox = %d, want 200: any other status means "+
-			"/work/{id} answered the path instead", res.StatusCode)
+		t.Fatalf("GET /worklet/inbox = %d, want 200: any other status means "+
+			"/worklet/{id} answered the path instead", res.StatusCode)
 	}
 	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {

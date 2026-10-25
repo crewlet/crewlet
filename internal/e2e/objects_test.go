@@ -29,7 +29,7 @@ import (
 func upload(t *testing.T, n *node, project, path string, content []byte) (int, map[string]any) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut,
-		fmt.Sprintf("%s/work/files/%s/%s", n.server.URL, project, path), bytes.NewReader(content))
+		fmt.Sprintf("%s/worklet/files/%s/%s", n.server.URL, project, path), bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func upload(t *testing.T, n *node, project, path string, content []byte) (int, m
 func download(t *testing.T, n *node, project, path string) (int, []byte) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		fmt.Sprintf("%s/work/files/%s/%s", n.server.URL, project, path), nil)
+		fmt.Sprintf("%s/worklet/files/%s/%s", n.server.URL, project, path), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

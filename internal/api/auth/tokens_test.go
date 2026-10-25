@@ -428,7 +428,7 @@ func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 			m.row.Owner.Seat = sessionSeat
 			author = sessionSeat
 		}
-		got, _ := present(t, m.guard(nil), http.MethodPost, "/work/items",
+		got, _ := present(t, m.guard(nil), http.MethodPost, "/worklet/items",
 			m.presented.Value())
 		if got.how != iam.Resolved {
 			t.Fatalf("bound=%v: resolution %v (status %d)", bound, got.how,

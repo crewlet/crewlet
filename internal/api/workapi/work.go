@@ -51,8 +51,8 @@ func (s *Service) workRoutes(mount mounter) {
 		}}
 	}
 
-	route("POST /work/items", task(authz.ActionWorkCreate), (*served).postItem)
-	route("PATCH /work/items/{key}", task(authz.ActionWorkUpdate), (*served).patchItem)
+	route("POST /worklet/items", task(authz.ActionWorkCreate), (*served).postItem)
+	route("PATCH /worklet/items/{key}", task(authz.ActionWorkUpdate), (*served).patchItem)
 	// WHO MAY POST TO A THREAD IS A ROW: a tracker holder may say anything
 	// there, and somebody an OPEN ASK on the item names may post the answer
 	// to it and nothing else (internal/authz's asked arm) — and which ask
@@ -61,51 +61,51 @@ func (s *Service) workRoutes(mount mounter) {
 	// exactly as it decides the same call made through the act route or an
 	// assistant. Decided here as `comment_on_work_item` on the bare kind, a
 	// person asked a question without the tracker could never answer it.
-	route("POST /work/items/{key}/comments", task(authz.ActionWorkThread),
+	route("POST /worklet/items/{key}/comments", task(authz.ActionWorkThread),
 		(*served).postItemComment)
 	// WHO WROTE THE REMARK IS A ROW, so the route admits whoever may comment
 	// with the tracker and the handler decides the edit once it has read
 	// the author. An answer is never edited by somebody without it: the
 	// asked arm covers answering an open ask, not rewriting what was said.
-	route("PATCH /work/items/{key}/comments/{cid}", task(authz.ActionWorkComment),
+	route("PATCH /worklet/items/{key}/comments/{cid}", task(authz.ActionWorkComment),
 		(*served).patchItemComment)
 	// A PLACE ON A BOARD IS `place_work_item`, decided on the task's kind
 	// as the tool's own gate decides it.
-	route("POST /work/items/{key}/rank", task(authz.ActionWorkPlace), (*served).postRank)
+	route("POST /worklet/items/{key}/rank", task(authz.ActionWorkPlace), (*served).postRank)
 	// DEPENDING AND RELATING ARE EDITS OF THE ITEM, made through
 	// update_work_item's own set-valued arguments; the routes are narrower
 	// doors onto the same verb.
-	route("POST /work/items/{key}/depend", task(authz.ActionWorkUpdate), (*served).postDepend)
-	route("POST /work/items/{key}/relate", task(authz.ActionWorkUpdate), (*served).postRelate)
+	route("POST /worklet/items/{key}/depend", task(authz.ActionWorkUpdate), (*served).postDepend)
+	route("POST /worklet/items/{key}/relate", task(authz.ActionWorkUpdate), (*served).postRelate)
 	// THE TRASH IS THE ITEM'S PROJECT LEAD'S OR ITS REPORTER'S, and both the
 	// project and the reporter come out of the row: the route admits a
 	// tracker holder — nobody is ASKED to remove an item, so the asked arm
 	// admits nobody here — and the tool decides the verb once it has read
 	// the item. Every arm of that verb needs the tracker too.
-	route("DELETE /work/items/{key}", task(authz.ActionWorkRead), (*served).deleteItem)
-	route("POST /work/items/{key}/restore", task(authz.ActionWorkRead), (*served).postRestore)
+	route("DELETE /worklet/items/{key}", task(authz.ActionWorkRead), (*served).deleteItem)
+	route("POST /worklet/items/{key}/restore", task(authz.ActionWorkRead), (*served).postRestore)
 	// A MOVE IS THE LEAD'S OF THE PROJECT THE ITEM IS IN, which is the row's
 	// for the trash's reason — and a move into the project it is already in
 	// is the retry of one that landed, which the tool answers from the
 	// move's own ledger rather than asking anybody's authority again.
-	route("POST /work/items/{key}/move", task(authz.ActionWorkRead), (*served).postMove)
+	route("POST /worklet/items/{key}/move", task(authz.ActionWorkRead), (*served).postMove)
 	// THE PURGE NEEDS NO ROW TO DECIDE: it is admin's, after a recent
 	// sign-in, and never an agent's, whatever the item is — an author tidies
 	// their own item into the trash and back, never out of the estate.
-	route("POST /work/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
+	route("POST /worklet/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
 		(*served).postPurge)
-	route("PUT /work/projects/{key}", project(authz.ActionProjectWrite), (*served).putProject)
-	route("POST /work/projects/{key}/tags", project(authz.ActionProjectWrite),
+	route("PUT /worklet/projects/{key}", project(authz.ActionProjectWrite), (*served).putProject)
+	route("POST /worklet/projects/{key}/tags", project(authz.ActionProjectWrite),
 		(*served).postProjectTags)
 	// A VIEW'S AUTHORITY IS IN ITS BODY — personal to its owner or shared on
 	// its container — so the route admits a reader of the views and the
 	// tool's own gate decides the save on what the body says.
-	route("POST /work/views", kinded(authz.ActionViewList, authz.KindView), (*served).postView)
-	route("PUT /work/catalogue", authz.Policy{Action: authz.ActionCatalogueWrite},
+	route("POST /worklet/views", kinded(authz.ActionViewList, authz.KindView), (*served).postView)
+	route("PUT /worklet/catalogue", authz.Policy{Action: authz.ActionCatalogueWrite},
 		(*served).putCatalogue)
-	route("PUT /work/people/{handle}/inbox", person(authz.ActionInboxMark), (*served).putInbox)
-	route("PUT /work/people/{handle}/pins", person(authz.ActionPinsSet), (*served).putPins)
-	route("PUT /work/people/{handle}/priorities", person(authz.ActionPrioritiesSet),
+	route("PUT /worklet/people/{handle}/inbox", person(authz.ActionInboxMark), (*served).putInbox)
+	route("PUT /worklet/people/{handle}/pins", person(authz.ActionPinsSet), (*served).putPins)
+	route("PUT /worklet/people/{handle}/priorities", person(authz.ActionPrioritiesSet),
 		(*served).putPriorities)
 }
 

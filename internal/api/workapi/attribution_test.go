@@ -86,11 +86,11 @@ func TestAWriteThroughAMachineTokenIsRecordedAsTheToken(t *testing.T) {
 		return rec.Code
 	}
 
-	if code := send(http.MethodPost, "/work/items",
+	if code := send(http.MethodPost, "/worklet/items",
 		`{"title":"rotate the key","project":"ENG"}`); code/100 != 2 {
 		t.Fatalf("filing an item through the token answered %d", code)
 	}
-	if code := send(http.MethodPost, "/pages/p-1/rename",
+	if code := send(http.MethodPost, "/doclet/pages/p-1/rename",
 		`{"title":"Runbook v2"}`); code/100 != 2 {
 		t.Fatalf("renaming a page through the token answered %d", code)
 	}

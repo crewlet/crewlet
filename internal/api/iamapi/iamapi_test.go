@@ -1982,7 +1982,7 @@ func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 // statelog.ErrConflict, and the same request read again resolves it. This
 // surface answered it `bad_params`, whose contract is a request that can never
 // succeed however often it is sent — so a client following the code would drop
-// a write it only had to retry. `/work` answers the same error `stale`.
+// a write it only had to retry. `/worklet` answers the same error `stale`.
 //
 // Mutation: map the conflict back to `bad_params` and this goes red.
 func TestAWriteThatLostItsRaceIsStale(t *testing.T) {

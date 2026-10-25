@@ -454,7 +454,7 @@ func TestAStatelessNodeAnswersItsProbes(t *testing.T) {
 		{http.MethodGet, "/"}, {http.MethodGet, "/dashboard"}, {http.MethodGet, "/agents"},
 		{http.MethodGet, "/events"}, {http.MethodGet, "/query/viewer"},
 		{http.MethodGet, "/ws/stream"}, {http.MethodGet, "/config"},
-		{http.MethodPost, "/webhooks/github"}, {http.MethodPost, "/work"},
+		{http.MethodPost, "/webhooks/github"}, {http.MethodPost, "/worklet"},
 		{http.MethodPost, "/operator/act/create_work_item"},
 	} {
 		if status, _ := probeAt(t, probes, route[0], route[1]); status != http.StatusNotFound &&

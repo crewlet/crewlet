@@ -43,7 +43,7 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 	t.Helper()
 	n := &fakePurgeNode{status: http.StatusOK, outcome: "applied"}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /work/items/{key}/purge", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /worklet/items/{key}/purge", func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.item, n.query = r.PathValue("key"), r.URL.Query()
 		n.key = r.Header.Get(opkey.Header)

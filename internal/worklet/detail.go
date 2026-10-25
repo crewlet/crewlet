@@ -738,7 +738,7 @@ func keyOpensAnother(key, id string) string {
 //
 // Reading it from the document is what made the published field silently
 // empty while the column behind `sort=status_entered` was maintained
-// correctly: `omitzero` dropped it, and `GET /work/item`, the operator MCP's
+// correctly: `omitzero` dropped it, and `GET /worklet/item`, the operator MCP's
 // `get_work_item` and the dashboard's "In status since" row all showed
 // nothing. Writing it INTO the document instead would mean a second write of
 // the whole document per status change, to store a value that is a function

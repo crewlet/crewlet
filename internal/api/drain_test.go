@@ -85,7 +85,7 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // [drainingApp] is a node with no store, no coordination store and no company,
 // so the three surfaces that need one (/config, /secrets, /setup) and the ones
 // that need a tracker, a knowledge base or an object store (the write surface
-// under /work/items and /pages, a project's file bytes under /work/files,
+// under /worklet/items and /doclet/pages, a project's file bytes under /worklet/files,
 // /operator/mcp and /operator/act/{tool}) are not mounted on it.
 var startsWork = []struct {
 	method, path string
@@ -103,14 +103,14 @@ var startsWork = []struct {
 	{http.MethodDelete, "/secrets/GITHUB_TOKEN", false},
 	{http.MethodPost, "/setup/integrations/github/provision", false},
 	{http.MethodPost, "/backup", true},
-	{http.MethodPost, "/work/retention/ack", true},
+	{http.MethodPost, "/worklet/retention/ack", true},
 	{http.MethodPost, "/fleet/broker/remove/node-c", true},
 	{http.MethodPost, "/fleet/broker/remove-peer/abcdefgh", true},
-	{http.MethodPut, "/work/files/ENG/report.md", false},
-	{http.MethodDelete, "/work/files/ENG/report.md", false},
-	{http.MethodPost, "/work/items/ENG-1/purge", false},
-	{http.MethodPatch, "/work/items/ENG-1", false},
-	{http.MethodPost, "/pages/p-1/restore", false},
+	{http.MethodPut, "/worklet/files/ENG/report.md", false},
+	{http.MethodDelete, "/worklet/files/ENG/report.md", false},
+	{http.MethodPost, "/worklet/items/ENG-1/purge", false},
+	{http.MethodPatch, "/worklet/items/ENG-1", false},
+	{http.MethodPost, "/doclet/pages/p-1/restore", false},
 	{http.MethodPost, "/operator/mcp", false},
 	{http.MethodPost, "/operator/act/create_work_item", false},
 }

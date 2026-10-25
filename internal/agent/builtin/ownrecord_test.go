@@ -346,7 +346,7 @@ func whose(t *testing.T, verb personVerb, person *personSpy, got tools.Result) s
 //
 // Two defects, one cause: the name was never resolved to a record. An
 // administrator naming the unbound `jane.doe` through `set_priorities`, or
-// `PUT /work/people/jane.doe/priorities`, had the login sent through the fuzzy
+// `PUT /worklet/people/jane.doe/priorities`, had the login sent through the fuzzy
 // colleague resolver, which set the priorities of the seat `jane` ("Jane
 // Doe"); and every other verb read or wrote a login LITERALLY, so a person the
 // directory binds to a seat — `j.bound`, who holds `jane` — was read an empty

@@ -133,7 +133,7 @@ func workPurge(environ config.Source, args []string, stdout, stderr io.Writer) e
 		Position string `json:"position"`
 		OpID     string `json:"op_id"`
 	}
-	path := fmt.Sprintf("/work/items/%s/purge?confirm=%s&reason=%s",
+	path := fmt.Sprintf("/worklet/items/%s/purge?confirm=%s&reason=%s",
 		url.PathEscape(item), url.QueryEscape(strings.TrimSpace(*confirm)),
 		url.QueryEscape(strings.TrimSpace(*reason)))
 	// PATIENTLY, for the reason [nodeClient.patiently] names: a purge waits on

@@ -37,8 +37,8 @@
 -- kept". What `stream.tracker_retention` trims is the LOG'S REPLAY WINDOW,
 -- which is a different thing from this SQL table — the table outlives the trim
 -- and travels in every donated snapshot. Every history surface a person or a
--- seat reaches — `task_activity`, `GET /work/activity`, the item page's
--- History and Woke tabs, the admin audit — reads `tracker_history` and has
+-- seat reaches (`task_activity`, `GET /worklet/activity`, the item page's
+-- History and Woke tabs, the admin audit) reads `tracker_history` and has
 -- never read these spans.
 --
 -- # What the recompute was also doing, and still does

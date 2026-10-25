@@ -232,7 +232,7 @@ import (
 
 // Action is one verb this engine authorizes.
 //
-// THE VERB, NOT THE ROUTE. `PATCH /work/items/{key}` and `update_work_item`
+// THE VERB, NOT THE ROUTE. `PATCH /worklet/items/{key}` and `update_work_item`
 // are one action asked two ways, and naming the route would make them two —
 // which is how the operator MCP and a seat's own tools came to answer
 // differently about the same write.

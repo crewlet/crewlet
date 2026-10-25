@@ -263,7 +263,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 	key := statelog.NewOpID(time.Now(), "")
 	var filed map[string]any
 	settle(t, "member "+n.id+" to take a write through the cookie", func() (bool, string) {
-		status, body := b.sendKeyed(n, http.MethodPost, "/work/items", key, map[string]any{
+		status, body := b.sendKeyed(n, http.MethodPost, "/worklet/items", key, map[string]any{
 			"title": "file the fleet session case", "project": "ENG",
 		})
 		switch status {
@@ -273,7 +273,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		case http.StatusServiceUnavailable:
 			return false, ""
 		}
-		return false, fmt.Sprintf("POST /work/items through the cookie answered "+
+		return false, fmt.Sprintf("POST /worklet/items through the cookie answered "+
 			"%d: %v", status, body)
 	})
 	item, _ := filed["key"].(string)

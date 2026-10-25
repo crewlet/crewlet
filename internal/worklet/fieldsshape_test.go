@@ -15,7 +15,7 @@ import (
 // WHOLE map for that row (`record.Fields = nil`) so the feed renders the kind
 // alone — while a task detail's own history decodes the same column into
 // `map[string]any` and cannot fail. So the day a producer writes a value that
-// is not a pair, `#/work/history` and an item's History tab start describing
+// is not a pair, `#/worklet/history` and an item's History tab start describing
 // one record differently, silently, and only on the records that carry the new
 // shape.
 //

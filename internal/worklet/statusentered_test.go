@@ -144,7 +144,7 @@ func TestTheEnteredInstantIsWhatStatusEnteredSortsOn(t *testing.T) {
 // the document BEFORE the stamp runs (the stamp needs the history row, which
 // is written after the upsert), so the document is always written with a zero
 // here, `omitzero` drops it from the JSON, and every reader of the published
-// field got nothing: `GET /work/item`, the operator MCP's `get_work_item`, and
+// field got nothing: `GET /worklet/item`, the operator MCP's `get_work_item`, and
 // the dashboard's "In status since" row, which simply never drew.
 //
 // It is the ONE derived column that is not a cache of the document — every
@@ -170,7 +170,7 @@ func TestTheEnteredInstantReachesThePublishedField(t *testing.T) {
 	}
 	if detail.Task.StatusEnteredAt.IsZero() {
 		t.Fatal("the served task carries no status_entered_at — `omitzero` " +
-			"drops it from the JSON, so GET /work/item, the operator MCP and " +
+			"drops it from the JSON, so GET /worklet/item, the operator MCP and " +
 			"the dashboard's \"In status since\" row all get nothing, while " +
 			"sort=status_entered orders by a column that IS maintained")
 	}

@@ -56,7 +56,7 @@ import (
 //     declare is `409 no_active_revision` — a refusal naming its remedy, never
 //     the 503 no wait would clear.
 //   - The first company is applied, and the apply names the `native` stage.
-//   - The same cookie files work through `/work/items` on the same API, with
+//   - The same cookie files work through `/worklet/items` on the same API, with
 //     nothing rebuilt: the surface reads the halves its request finds, and the
 //     item is recorded as written by the token, under its own login.
 //   - And now the first person is invited onto the founder's seat, signs in,
@@ -94,10 +94,10 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	file := map[string]any{"title": "the first thing we do", "project": "ENG"}
 
 	// THE WRITE SURFACE IS THERE AND SAYS WHY IT CANNOT SERVE YET.
-	status, body := tierA(t, n, http.MethodPost, "/work/items", file)
+	status, body := tierA(t, n, http.MethodPost, "/worklet/items", file)
 	if status != http.StatusServiceUnavailable ||
 		body["error"] != string(httpjson.CodeNoActiveRevision) {
-		t.Fatalf("POST /work/items on a node with no company answered %d %v, "+
+		t.Fatalf("POST /worklet/items on a node with no company answered %d %v, "+
 			"want 503 %s — the route is mounted and its halves are not up yet",
 			status, body, httpjson.CodeNoActiveRevision)
 	}
@@ -213,7 +213,7 @@ func fileWork(t *testing.T, n *node, b *browser, file map[string]any) string {
 		last  string
 	)
 	settle(t, "the write surface to file work", func() (bool, string) {
-		status, body := b.sendKeyed(n, http.MethodPost, "/work/items", key, file)
+		status, body := b.sendKeyed(n, http.MethodPost, "/worklet/items", key, file)
 		last = fmt.Sprintf("%d %v", status, body)
 		switch status {
 		case http.StatusOK, http.StatusAccepted:
@@ -222,7 +222,7 @@ func fileWork(t *testing.T, n *node, b *browser, file map[string]any) string {
 		case http.StatusServiceUnavailable, http.StatusUnprocessableEntity:
 			return false, ""
 		}
-		return false, "POST /work/items answered " + last
+		return false, "POST /worklet/items answered " + last
 	})
 	item, _ := filed["key"].(string)
 	if !strings.HasPrefix(item, "ENG-") {

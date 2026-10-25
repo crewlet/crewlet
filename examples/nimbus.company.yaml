@@ -65,8 +65,8 @@ token_budget:
 # its skills need is where people reach this deployment's dashboard, and the
 # engine injects that itself as ${crewlet_base_url} from ``api.external_url``
 # in the OPERATOR's own Tier A file.  The bundled platform-mentions skill
-# builds every shareable link on it — ${crewlet_base_url}/#/work/ENG-42 and
-# ${crewlet_base_url}/#/knowledge/pages/{page-id} — so there is nothing for
+# builds every shareable link on it (${crewlet_base_url}/#/worklet/ENG-42 and
+# ${crewlet_base_url}/#/doclet/pages/{page-id}), so there is nothing for
 # an operator to keep in step.
 #
 # The name is RESERVED: a company that declares ``crewlet_base_url`` itself

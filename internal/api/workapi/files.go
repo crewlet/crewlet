@@ -26,7 +26,7 @@ import (
 
 // ---- a project's file BYTES -------------------------------------------- //
 //
-// The listing is a question like every other read (`GET /work/files`, the
+// The listing is a question like every other read (`GET /worklet/files`, the
 // `work_files` query). What is here is what cannot be one: a download STREAMS
 // a file back and an upload streams one in — neither holding the file in
 // memory and neither passing through a model. The rows go through the
@@ -53,7 +53,7 @@ import (
 // `412` for a failed If-Match on the resource it names.
 
 // filesPattern is the path every byte route answers on.
-const filesPattern = "/work/files/{project}/{path...}"
+const filesPattern = "/worklet/files/{project}/{path...}"
 
 // ObjectStore is this node's object store as the byte routes stream through
 // it: an upload into a new object ([objstore.Store.Put]), a download out of
@@ -110,7 +110,7 @@ func (s *Service) fileRoutes(mount mounter) {
 // unreachable answers 503 rather than a 200 with an empty body.
 const downloadHead = 32 << 10
 
-// getFile answers GET /work/files/{project}/{path...}: the file's bytes,
+// getFile answers GET /worklet/files/{project}/{path...}: the file's bytes,
 // streamed, as an attachment.
 func (s *served) getFile(w http.ResponseWriter, r *http.Request) {
 	fresh, err := worklet.ParseFreshness(queries.FromQuery(r.URL.Query()))
@@ -195,7 +195,7 @@ func (s *served) sendFile(w http.ResponseWriter, f worklet.File, src io.Reader) 
 
 // ---- the writes --------------------------------------------------------- //
 
-// putFile answers PUT /work/files/{project}/{path...}: the body is the file,
+// putFile answers PUT /worklet/files/{project}/{path...}: the body is the file,
 // streamed into one new object and then recorded.
 func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	project := worklet.ProjectKey(r.PathValue("project"))
@@ -269,7 +269,7 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// deleteFile answers DELETE /work/files/{project}/{path...}: the file is
+// deleteFile answers DELETE /worklet/files/{project}/{path...}: the file is
 // stamped removed and its object dropped.
 func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 	project := worklet.ProjectKey(r.PathValue("project"))

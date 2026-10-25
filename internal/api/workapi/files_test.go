@@ -351,7 +351,7 @@ func content(n int) []byte {
 // the headers given in pairs.
 func (s *fileSurface) upload(body io.Reader, w http.ResponseWriter, headers ...string) {
 	s.t.Helper()
-	req := httptest.NewRequest(http.MethodPut, "/work/files/ENG/reports/q3.bin", body)
+	req := httptest.NewRequest(http.MethodPut, "/worklet/files/ENG/reports/q3.bin", body)
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
 	}
@@ -363,7 +363,7 @@ func (s *fileSurface) upload(body io.Reader, w http.ResponseWriter, headers ...s
 // download GETs reports/q3.bin as an administrator, answering what recovered
 // from the handler.
 func (s *fileSurface) download(w http.ResponseWriter) (panicked any) {
-	req := httptest.NewRequest(http.MethodGet, "/work/files/ENG/reports/q3.bin", nil)
+	req := httptest.NewRequest(http.MethodGet, "/worklet/files/ENG/reports/q3.bin", nil)
 	return s.serve(w, req, admin("ana"))
 }
 
@@ -470,7 +470,7 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 		t.Parallel()
 		fake := newFakeFiles(t)
 		s := filesSurface(t, fake, chart{})
-		req := httptest.NewRequest(http.MethodPut, "/work/files/ENG/big.bin",
+		req := httptest.NewRequest(http.MethodPut, "/worklet/files/ENG/big.bin",
 			&failingReader{err: errors.New("the body was read")})
 		req.ContentLength = worklet.MaxFileBytes + 1
 		rec := httptest.NewRecorder()
@@ -506,7 +506,7 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 		t.Parallel()
 		fake := newFakeFiles(t)
 		s := filesSurface(t, fake, chart{})
-		req := httptest.NewRequest(http.MethodPut, "/work/files/NOPE/a.bin",
+		req := httptest.NewRequest(http.MethodPut, "/worklet/files/NOPE/a.bin",
 			&failingReader{err: errors.New("the body was read")})
 		rec := httptest.NewRecorder()
 		if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
@@ -645,7 +645,7 @@ func TestTheFileWritesAreRecordedAndTheRemovalIsTheLeads(t *testing.T) {
 	s := filesSurface(t, fake, chart{})
 
 	put := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut, "/work/files/ENG/notes.md", strings.NewReader("hi"))
+	req := httptest.NewRequest(http.MethodPut, "/worklet/files/ENG/notes.md", strings.NewReader("hi"))
 	if aborted := s.serve(put, req, colleague("bo")); aborted != nil {
 		t.Fatal(aborted)
 	}
@@ -653,7 +653,7 @@ func TestTheFileWritesAreRecordedAndTheRemovalIsTheLeads(t *testing.T) {
 		t.Fatalf("a colleague's upload answered %d: %s", put.Code, put.Body.String())
 	}
 	refused := httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodDelete, "/work/files/ENG/notes.md", nil)
+	req = httptest.NewRequest(http.MethodDelete, "/worklet/files/ENG/notes.md", nil)
 	if aborted := s.serve(refused, req, colleague("bo")); aborted != nil {
 		t.Fatal(aborted)
 	}
@@ -661,7 +661,7 @@ func TestTheFileWritesAreRecordedAndTheRemovalIsTheLeads(t *testing.T) {
 		t.Fatalf("a colleague's removal answered %d: %s", refused.Code, refused.Body.String())
 	}
 	removed := httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodDelete, "/work/files/ENG/notes.md", nil)
+	req = httptest.NewRequest(http.MethodDelete, "/worklet/files/ENG/notes.md", nil)
 	if aborted := s.serve(removed, req, colleague("cto")); aborted != nil {
 		t.Fatal(aborted)
 	}
@@ -675,7 +675,7 @@ func TestTheFileWritesAreRecordedAndTheRemovalIsTheLeads(t *testing.T) {
 	// A REFUSED DOWNLOAD IS A READ, and leaves no row — as a read refused
 	// through the operator's dispatch leaves none.
 	read := httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/work/files/ENG/notes.md", nil)
+	req = httptest.NewRequest(http.MethodGet, "/worklet/files/ENG/notes.md", nil)
 	if aborted := s.serve(read, req, person("ext")); aborted != nil {
 		t.Fatal(aborted)
 	}

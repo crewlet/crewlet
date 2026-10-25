@@ -20,8 +20,8 @@ import (
 // middleware runs BEFORE the mux matches, so `r.Pattern` is empty there and
 // anything it decided from would be a second router that has to agree with
 // ServeMux about which handler runs. That divergence is not hypothetical: it
-// is the prefix rule this replaces, where `/work/items/` and
-// `/work/items/{key}/purge` were one gate because one is a prefix of the
+// is the prefix rule this replaces, where `/worklet/items/` and
+// `/worklet/items/{key}/purge` were one gate because one is a prefix of the
 // other.
 type Policy struct {
 	// Action is the verb this route asks for. Its zero is invalid and
@@ -272,7 +272,7 @@ func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 // # It is OUTSIDE the mux, and it has to be
 //
 // A gate is worth exactly as much as the agreement between what it matched
-// and what a reader thinks it matched: `/work/items/../config` reaches
+// and what a reader thinks it matched: `/worklet/items/../config` reaches
 // ServeMux as one pattern and reads to a person as another.
 //
 // The obvious home is the per-route wrapper, beside the decision it protects,
@@ -291,11 +291,11 @@ func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 // the first one.
 //
 // BOTH SPELLINGS OF THE PATH ARE CHECKED, because two readers of one request
-// read different ones. The escaped check catches `/work/items/../config` as it
-// was sent. The decoded check catches `/work/items/%2e%2e/config`, whose
+// read different ones. The escaped check catches `/worklet/items/../config` as it
+// was sent. The decoded check catches `/worklet/items/%2e%2e/config`, whose
 // escaped form is already clean — and which ServeMux does NOT redirect
 // (measured on go1.27): it MATCHES on the escaped path, segment by segment, so
-// `/work/items/%2e%2e` reaches the `{key}` route with a key of `..`. What
+// `/worklet/items/%2e%2e` reaches the `{key}` route with a key of `..`. What
 // makes that a hole is everything that decides OUTSIDE the mux on the DECODED
 // `r.URL.Path`: the cross-site write check's exemption list
 // (`auth.Unguarded`) and the drain gate both read `/webhooks/%2e%2e/config`
@@ -319,7 +319,7 @@ func CanonicalPath(next http.Handler) http.Handler {
 
 // cleanPath is path.Clean with the trailing slash kept.
 //
-// KEPT, because ServeMux treats `/work/items/` and `/work/items` as different
+// KEPT, because ServeMux treats `/worklet/items/` and `/worklet/items` as different
 // patterns and path.Clean drops the slash — so comparing against a cleaned
 // path without it would refuse every legitimately slash-terminated route.
 func cleanPath(p string) string {

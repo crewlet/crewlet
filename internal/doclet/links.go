@@ -11,15 +11,15 @@ import (
 //
 // A page is ADDRESSED by its id and by nothing else: a title changes on rename,
 // so a link that named one broke the day somebody fixed a heading, and the
-// dashboard's own address for a page (`#/knowledge/pages/{id}`) carries the id
+// dashboard's own address for a page (`#/doclet/pages/{id}`) carries the id
 // for exactly that reason. A backlink is therefore a statement that one body
 // carries another page's id in an address, and [Links] recognises exactly two:
 //
-//   - `#/knowledge/pages/<uuid>` — the dashboard's address, pasted from its
+//   - `#/doclet/pages/<uuid>`: the dashboard's address, pasted from its
 //     address bar or composed by a seat from [AddressPrefix];
-//   - `/pages/<uuid>` — the same page as a path, which is the REST route and
-//     the tail of any deployment URL a person copies
-//     (`https://crewlet.example.com/#/knowledge/pages/<uuid>` carries both,
+//   - `/doclet/pages/<uuid>`: the same page as a path, which is the REST
+//     route and the tail of any deployment URL a person copies
+//     (`https://crewlet.example.com/#/doclet/pages/<uuid>` carries both,
 //     and is one link).
 //
 // A bare uuid in prose is not a link — it is a value somebody quoted — and
@@ -40,7 +40,7 @@ import (
 // # Percent-encoding
 //
 // An address that crossed a redirect or a chat surface arrives encoded
-// (`%23%2Fknowledge%2Fpages%2F…`), and the id inside it is the same link. Each
+// (`%23%2Fdoclet%2Fpages%2F…`), and the id inside it is the same link. Each
 // run of non-space text is matched both as written and decoded, so an encoded
 // address is found and a malformed escape costs nothing but that decoding.
 
@@ -52,11 +52,11 @@ import (
 // mints the address and the extractor that reads it back are the two halves
 // of one grammar, and a screen that moved its route would otherwise leave
 // every link it minted afterwards invisible to the backlinks.
-const AddressPrefix = "#/knowledge/pages/"
+const AddressPrefix = "#/doclet/pages/"
 
-// pathPrefix is the tail both grammars share. [AddressPrefix] ends in it, so
-// matching it alone finds both — which is the point: `#/knowledge/pages/<id>`
-// and `/pages/<id>` are one link to one page.
+// pathPrefix is the tail both grammars share. [AddressPrefix] and the REST
+// route both end in it, so matching it alone finds both, which is the point:
+// `#/doclet/pages/<id>` and `/doclet/pages/<id>` are one link to one page.
 const pathPrefix = "/pages/"
 
 // linkID is a page id after [pathPrefix], and the character after it must not

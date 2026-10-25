@@ -502,7 +502,7 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 // administrator unsticking a departed person's queue — a person at a screen,
 // never a seat in a turn. So the TOOLS stay narrow, and the one surface that
 // serves that administrator (the HTTP write surface, `PUT
-// /work/people/{handle}/inbox` and `…/pins`) reaches the same parsing, the
+// /worklet/people/{handle}/inbox` and `…/pins`) reaches the same parsing, the
 // same writer and the same receipt through here. Two copies of "read an inbox
 // mark out of a body" would drift on exactly the parts nobody re-reads: which
 // entries are dropped, what a bad reason is refused with.

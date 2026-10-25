@@ -102,7 +102,7 @@ func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 //
 // A write that may have landed and a refusal that wrote nothing are both 503s,
 // and every surface wrote the first for itself: `/iam` said it in
-// a sentence and nowhere else, `/work` carried `outcome` on some routes and
+// a sentence and nowhere else, `/worklet` carried `outcome` on some routes and
 // not others, so a client branching on the field — `crewlet work purge` —
 // told an operator whose purge may have landed that it wrote nothing.
 // httpjson.UnknownOutcome writes `outcome`, `op_id` and `unvouched` together,

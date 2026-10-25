@@ -31,18 +31,18 @@ func (s *Service) pageRoutes(mount mounter) {
 	}
 	page := func(a authz.Action) authz.Policy { return kinded(a, authz.KindPage) }
 
-	route("POST /pages", page(authz.ActionPageCreate), (*served).postPage)
-	route("PUT /pages/{id}", page(authz.ActionPageSave), (*served).putPage)
-	route("POST /pages/{id}/rename", page(authz.ActionPageRead), (*served).postPageRename)
-	route("POST /pages/{id}/comments", page(authz.ActionPageComment), (*served).postPageComment)
-	route("PATCH /pages/{id}/comments/{cid}", page(authz.ActionPageComment),
+	route("POST /doclet/pages", page(authz.ActionPageCreate), (*served).postPage)
+	route("PUT /doclet/pages/{id}", page(authz.ActionPageSave), (*served).putPage)
+	route("POST /doclet/pages/{id}/rename", page(authz.ActionPageRead), (*served).postPageRename)
+	route("POST /doclet/pages/{id}/comments", page(authz.ActionPageComment), (*served).postPageComment)
+	route("PATCH /doclet/pages/{id}/comments/{cid}", page(authz.ActionPageComment),
 		(*served).patchPageComment)
-	route("DELETE /pages/{id}/comments/{cid}", page(authz.ActionPageRead),
+	route("DELETE /doclet/pages/{id}/comments/{cid}", page(authz.ActionPageRead),
 		(*served).deletePageComment)
-	route("DELETE /pages/{id}", page(authz.ActionPageRead), (*served).deletePage)
-	route("POST /pages/{id}/restore", page(authz.ActionPageRead), (*served).postPageRestore)
+	route("DELETE /doclet/pages/{id}", page(authz.ActionPageRead), (*served).deletePage)
+	route("POST /doclet/pages/{id}/restore", page(authz.ActionPageRead), (*served).postPageRestore)
 	// THE PURGE NEEDS NO ROW TO DECIDE, as the work purge does not.
-	route("POST /pages/{id}/purge", authz.Policy{Action: authz.ActionPagePurge},
+	route("POST /doclet/pages/{id}/purge", authz.Policy{Action: authz.ActionPagePurge},
 		(*served).postPagePurge)
 }
 
@@ -287,7 +287,7 @@ func (s *served) pageGesture(w http.ResponseWriter, r *http.Request,
 // THE TOOLS ASK THE SAME QUESTION through [builtin.PageDeps.SkillPage], and
 // this surface's rename, trash, restore and purge reach the store without a
 // tool — so without this a caller refused a tool skill's body by `save_page`
-// could still take the skill out of every seat's turn with `DELETE /pages`.
+// could still take the skill out of every seat's turn with `DELETE /doclet/pages`.
 // Asked AFTER the verb's own decision, so a caller who may not trash the page
 // at all is told that rather than something about skills.
 func (s *served) maySkillPage(w http.ResponseWriter, r *http.Request,

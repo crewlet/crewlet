@@ -943,7 +943,7 @@ func captureAct(t *testing.T, n *node, b *browser) []byte {
 	// THE READ AT THE FLOOR: served at `session`, and holding the write.
 	query := url.Values{"read_level": {"session"}, "min_position": {answer.Position}}
 	status, raw = b.sendRaw(n, http.MethodGet,
-		"/work/people/"+url.PathEscape(handle)+"?"+query.Encode(), "", nil)
+		"/worklet/people/"+url.PathEscape(handle)+"?"+query.Encode(), "", nil)
 	var person struct {
 		Level     string             `json:"read_level"`
 		Favorites []worklet.Favorite `json:"favorites"`
