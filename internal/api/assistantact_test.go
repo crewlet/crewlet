@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -150,4 +152,53 @@ func TestAReadingTurnCannotWrite(t *testing.T) {
 	if _, recorded := audit.take(); len(recorded) != 0 {
 		t.Errorf("a refused read grant left %d audit records of a write", len(recorded))
 	}
+}
+
+// THE ASSISTANT CANNOT APPROVE ITS OWN PROPOSAL, by two locks: no exec grant is
+// ever derived for a decision route, and the turn's own read grant presented to
+// one is refused at the guard's edge, before routing. Mutation: drop
+// `/assistant/` from the refused edges and the read grant reaches the route.
+func TestAnAssistGrantNeverReachesADecisionRoute(t *testing.T) {
+	t.Parallel()
+	fx, _ := actingAssistApp(t)
+	proposal := uuid.Must(uuid.NewV7()).String()
+	digest := `{"protocol_version":1,"digest":"sha256:` + strings.Repeat("a", 64) + `"}`
+	read := fx.derive(t, readTurn())
+	for _, call := range []exec.Request{
+		{Method: http.MethodPost, Path: "/assistant/proposals/" + proposal + "/approve",
+			Body: []byte(digest)},
+		{Method: http.MethodPost, Path: "/assistant/proposals/" + proposal + "/decline",
+			Body: []byte(digest)},
+		{Method: http.MethodPut, Path: "/assistant/actions/" + proposal,
+			Body: []byte(`{"protocol_version":1,"state":"applying","revision":"r1"}`)},
+	} {
+		call.IdempotencyKey = uuid.Must(uuid.NewV7()).String()
+		if err := fx.tryDerive(approvedFor(call, authz.ActionAssistantApprove)); !errors.Is(err, auth.ErrAssistRefused) ||
+			!strings.Contains(err.Error(), "never reaches") {
+			t.Errorf("an exec grant for %s %s was not refused for its path: %v", call.Method,
+				call.Path, err)
+		}
+		resp, err := fx.disp.Do(t.Context(), read, call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Status != http.StatusForbidden ||
+			!strings.Contains(string(resp.Body), string(authz.ReasonAssistRefused)) {
+			t.Errorf("an assistant grant's %s %s answered %d %s", call.Method, call.Path,
+				resp.Status, resp.Body)
+		}
+	}
+}
+
+// tryDerive derives a grant through the App's own guard from the person's
+// cookie, answering the refusal rather than failing the test.
+func (a *assistApp) tryDerive(req auth.AssistRequest) error {
+	var err error
+	h := a.app.Guard().Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, err = a.d.Derive(r.Context(), req)
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/assistant/conversations", nil)
+	r.AddCookie(a.cookie)
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	return err
 }
