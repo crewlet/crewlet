@@ -86,11 +86,6 @@ import (
 // verifies as a grant, nor the other way round.
 const AssistDomain = "crewlet.assistant.grant.v1"
 
-// AssistBearerPrefix marks a bearer as an assistant grant by its SHAPE, so the
-// guard sends it to the assistant arm before any other comparison and the
-// edges can refuse it before routing.
-const AssistBearerPrefix = "cwl_ast_"
-
 // AssistReadLifetime is the longest a turn's read grant lives: the turn's own
 // wall-clock ceiling (internal/assistant's limits), so a grant outlives no turn
 // it could serve.
@@ -146,14 +141,6 @@ func AssistRefusedPath(path string) bool {
 	}
 	return false
 }
-
-// The two refusal reasons the guard's assistant arm answers with, in the
-// authority table's vocabulary (ADR-0048) so a client reads one refusal shape
-// whichever layer refused.
-const (
-	reasonAssistRefused authz.Reason = "assist_refused"
-	reasonAssistScope   authz.Reason = "assist_scope"
-)
 
 // ErrAssistRefused reports a request a grant is not derived for. Every refusal
 // [Delegations.Derive] answers wraps it with the reason.
@@ -384,7 +371,7 @@ func (d *Delegations) Derive(ctx context.Context, req AssistRequest) (exec.Grant
 	if err != nil {
 		return nil, err
 	}
-	token := AssistBearerPrefix + d.signer.Mint(subject, expires.Sub(now))
+	token := iam.AssistBearerPrefix + d.signer.Mint(subject, expires.Sub(now))
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -482,7 +469,7 @@ func (d *Delegations) prune(now time.Time) {
 // open is the claims of a live grant presented as token, or why it is not one:
 // its signature, its expiry and the registry are all required.
 func (d *Delegations) open(token string) (AssistClaims, error) {
-	raw, ok := strings.CutPrefix(token, AssistBearerPrefix)
+	raw, ok := strings.CutPrefix(token, iam.AssistBearerPrefix)
 	if !ok {
 		return AssistClaims{}, errors.New("the bearer is not an assistant grant")
 	}
@@ -652,7 +639,7 @@ func presentedSessionOf(ctx context.Context) (presentedSession, bool) {
 // IsAssistBearer reports a bearer shaped as an assistant grant. Shape only:
 // nothing is admitted on it.
 func IsAssistBearer(candidate string) bool {
-	return strings.HasPrefix(candidate, AssistBearerPrefix)
+	return strings.HasPrefix(candidate, iam.AssistBearerPrefix)
 }
 
 // assistEdge is the guard's first answer to a request presenting a grant,
@@ -671,7 +658,7 @@ func (g *Guard) assistEdge(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if AssistRefusedPath(r.URL.Path) {
 		log.InfoContext(r.Context(), "api_assist_path_refused", "route", r.URL.Path)
-		assistRefusal(reasonAssistRefused, "The assistant can't reach "+
+		assistRefusal(authz.ReasonAssistRefused, "The assistant can't reach "+
 			r.URL.Path+".").write(w)
 		return true
 	}
@@ -721,7 +708,7 @@ func (g *Guard) assist(r *http.Request, candidate string) (*http.Request, *Refus
 	switch claims.Scope {
 	case iam.AssistScopeRead:
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			return assisted(r, p, claims), assistRefusal(reasonAssistScope,
+			return assisted(r, p, claims), assistRefusal(authz.ReasonAssistScope,
 				"The assistant's read access can't send a "+r.Method+" request.")
 		}
 	case iam.AssistScopeExec:
@@ -737,7 +724,7 @@ func (g *Guard) assist(r *http.Request, candidate string) (*http.Request, *Refus
 			subtle.ConstantTimeCompare([]byte(digest), []byte(claims.RequestDigest)) != 1 {
 			log.WarnContext(ctx, "api_assist_request_unbound", "grant", claims.Grant.String(),
 				"route", r.URL.Path)
-			return assisted(r, p, claims), assistRefusal(reasonAssistScope,
+			return assisted(r, p, claims), assistRefusal(authz.ReasonAssistScope,
 				"This request isn't the one that was approved.")
 		}
 		if !d.consume(claims.Grant) {

@@ -24,6 +24,16 @@ import (
 // every trail that records one.
 const AssistPrefix = "assist:"
 
+// AssistBearerPrefix marks a bearer as an assistant grant by its SHAPE, so the
+// request guard sends it to the assistant arm before any other comparison and
+// refuses it before routing when it arrives over the wire (internal/api/auth).
+//
+// HERE, IN THE LEAF, because two packages must agree on it and one of them
+// cannot import the other: the guard reads it, and Tier A refuses a configured
+// token value that starts with it (internal/config), since such a value would
+// always be read as a grant and could never authenticate as itself.
+const AssistBearerPrefix = "cwl_ast_"
+
 // AssistName is how an assistant grant is recorded as the credential a
 // request was made through ([Principal.Via]).
 func AssistName(grant uuid.UUID) string { return AssistPrefix + grant.String() }
