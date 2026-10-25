@@ -720,7 +720,8 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # history costs every data node's disk (internal/code), the code host's
 # commit chain on one and three members (internal/code/codecluster), a push,
 # a warm fetch, cold and warm clones and a blobless clone's lazy blame end to
-# end (internal/code/host), the
+# end (internal/code/host), a seat's reads of a repository by object id on a
+# git node, warm and cold (internal/code/query), the
 # pace a client's connection is held to, on a real connection
 # (internal/api/paced), and what every push pays to start its proc-receive
 # hook (cmd/crewlet). Each package's doc records what it measured, and on what
