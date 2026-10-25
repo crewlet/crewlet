@@ -47,6 +47,7 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
 };
 
 interface Sent {

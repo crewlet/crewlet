@@ -36,6 +36,7 @@ import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
+import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { StopReason } from "../contract/stops.ts";
@@ -4685,6 +4686,11 @@ export interface Viewer {
    *  who manages it — and EMPTY when it is not managed. An anonymous caller
    *  is told none. */
   config_managed_by: string[];
+  /** Whether this caller may ask the Dashboard Assistant, and if not, why:
+   *  the first failing condition (`internal/assistant/wire.ViewerAssistant`).
+   *  Absent from an engine that does not serve the assistant, which the
+   *  client reads as off (`assistantUnavailable`). */
+  assistant?: AssistantViewerAssistant;
 }
 
 // ---------------------------------------------------------------------------
