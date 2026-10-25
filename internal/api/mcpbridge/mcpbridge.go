@@ -678,6 +678,15 @@ var _ toolsession.Dispatcher = (*binding)(nil)
 func newBinding(ctx context.Context, s *Session) *binding {
 	opened := &binding{id: s.Launch, session: s, ctx: context.WithoutCancel(ctx), admitted: s.LastSeq}
 	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
+	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
+	// ([toolsession.Server.HoldAnswersForRelist]): the coding CLIs that run in
+	// a box (Claude Code, OpenCode) re-read their tool list when told it
+	// changed, and answered at once one asks its model again before the
+	// re-list lands, offering the tool it just activated a request late.
+	// Unconditional, because the bridge is told nothing of which CLI dials
+	// it, and the cost on one that never re-lists is the hold's own short
+	// bound on an activation's answer, never a refusal.
+	opened.server.HoldAnswersForRelist()
 	return opened
 }
 

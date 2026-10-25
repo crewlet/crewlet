@@ -648,6 +648,55 @@ func TestTheAdvertisedToolsFollowTheLiveSurface(t *testing.T) {
 	}
 }
 
+// AN ACTIVATION'S ANSWER WAITS FOR THE BOX'S RE-LIST. The coding CLIs that run
+// in a box re-read their tool list when told it changed, and answered at once
+// one asks its model again before that re-list lands, so the tool it just
+// activated reaches the model a request late — a request spent on a model
+// that could not yet call it.
+//
+// Mutation: drop the hold from the bridge's sessions, and the answer comes
+// back before the box could have re-listed.
+func TestAnActivationsAnswerWaitsForTheBoxsRelist(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "read_page", "activate")
+	url := f.open(t)
+	const relistDelay = 300 * time.Millisecond
+	var sess *mcp.ClientSession
+	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"},
+		&mcp.ClientOptions{
+			ToolListChangedHandler: func(ctx context.Context, _ *mcp.ToolListChangedRequest) {
+				// A CLI that re-reads its list a moment after the notice.
+				time.Sleep(relistDelay)
+				_, _ = sess.ListTools(ctx, nil)
+			},
+		})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: url, HTTPClient: httpxtest.Pool(t),
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	if _, err := sess.ListTools(ctx, nil); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	began := time.Now()
+	if res := callTool(t, sess, "activate", nil); res.IsError {
+		t.Fatalf("activate failed: %s", text(res))
+	}
+	// The box re-lists no sooner than relistDelay after the notice, so an
+	// answer that waited for it took at least that — and was let go once
+	// it came, well before the hold's own bound.
+	if took := time.Since(began); took < relistDelay {
+		t.Errorf("answered after %s, before the box could have re-listed", took)
+	} else if took > 1500*time.Millisecond {
+		t.Errorf("answered after %s: the hold outlasted the box's re-list", took)
+	}
+}
+
 // CLOSING A RUN ENDS THE MCP SESSIONS ITS BOX HOLDS, not only the bridge's
 // own map entry. The SDK keeps every session a box opened — transport,
 // server, and through the server's handlers the seat's live surface — until
