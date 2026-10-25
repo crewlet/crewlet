@@ -174,6 +174,11 @@ export function runChipOf(
   switch (turn.phase) {
     case "sending":
     case "thinking":
+      // A LATER ROUND IS WORK: once a step has run, the model thinking
+      // again is the turn still working, not a turn that has not started.
+      if (turn.steps.length > 0) {
+        return { state: RUN_STATE.working, title: "Working", meta: seconds(elapsed) };
+      }
       return { state, title: "Thinking" };
     case "working":
       return { state, title: "Working", meta: seconds(elapsed) };
@@ -250,6 +255,9 @@ export function ReplyProse({
   streaming?: boolean;
   dimmed?: boolean;
 }) {
+  // A SILENT ROUND IS STORED as an empty message its cards hang from, and
+  // draws nothing of its own.
+  if (!streaming && text.trim() === "") return null;
   return (
     // A DIV, NOT PROSE'S DEFAULT PARAGRAPH: rendered Markdown is blocks
     // (paragraphs, lists), which a <p> may not hold. `prose md` is the class

@@ -132,3 +132,49 @@ test("a stopped turn whose page change applied does not say nothing changed", ()
   );
   expect(screen.getByText("Stopped. What was already applied stays applied.")).toBeDefined();
 });
+
+// A SILENT ROUND DRAWS NOTHING OF ITS OWN: its message is stored empty so its
+// cards have an anchor, and the thread draws the cards without an empty
+// paragraph above them. Mutation: draw every reply and an empty prose block
+// appears.
+test("an empty reply draws no prose", () => {
+  const { container } = render(
+    <Router>
+      <Thread
+        view={[...SENT, STOPPED].reduce(reduce, EMPTY)}
+        now={Date.parse("2026-10-24T09:42:00Z")}
+        on={on}
+        opened={new Set()}
+        onRetry={() => {}}
+        onReconnect={() => {}}
+      />
+    </Router>,
+  );
+  const before = container.querySelectorAll(".md").length;
+  cleanup();
+  const silent: TurnEvent = {
+    type: "frame",
+    frame: {
+      v: 1,
+      conversation_id: "c",
+      turn_id: TURN,
+      seq: 1,
+      at: "2026-10-24T09:41:00Z",
+      kind: "delta",
+      delta: { message_id: "m0", text: "" },
+    } as unknown as AssistantNarrowFrame,
+  };
+  const after = render(
+    <Router>
+      <Thread
+        view={[...SENT, silent, STOPPED].reduce(reduce, EMPTY)}
+        now={Date.parse("2026-10-24T09:42:00Z")}
+        on={on}
+        opened={new Set()}
+        onRetry={() => {}}
+        onReconnect={() => {}}
+      />
+    </Router>,
+  );
+  expect(after.container.querySelectorAll(".md").length).toBe(before);
+});

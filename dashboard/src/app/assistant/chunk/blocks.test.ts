@@ -90,6 +90,28 @@ describe("the run chip says the turn's state in words", () => {
     expect(runChipOf(base, at)).toEqual({ state: "working", title: "Working", meta: "3s" });
   });
 
+  // A LATER ROUND IS WORK: the model thinking again after a step has run is
+  // the turn still working. Mutation: title every thinking phase "Thinking"
+  // and this reads as a turn that never started.
+  test("thinking again after a step reads as working", () => {
+    expect(runChipOf({ ...base, phase: "thinking" }, at).title).toBe("Thinking");
+    const later = {
+      ...base,
+      phase: "thinking" as const,
+      steps: [
+        {
+          step_id: "s1",
+          index: 1,
+          tool: "get_task",
+          label: "Read ENG-1",
+          state: "done" as const,
+          started_at: "2026-10-24T09:41:00Z",
+        },
+      ],
+    };
+    expect(runChipOf(later, at)).toEqual({ state: "working", title: "Working", meta: "3s" });
+  });
+
   test("done, with its duration and its steps", () => {
     const done = {
       ...base,
