@@ -56,6 +56,12 @@ type API struct {
 	// file keeps working for both shapes. 0 binds nothing at all, on any
 	// node.
 	//
+	// THE BRIDGE IS BOX MODE'S ALONE. A box is another machine, so its CLI
+	// reaches the seat's tools over HTTP, here; a host-mode CLI runs beside
+	// the engine and reaches them through a unix socket in the engine's own
+	// session directory (internal/toolsession), so a seats node whose seats
+	// run on host-mode entries serves every tool with this at 0.
+	//
 	// So a port is not what makes a node SERVE the API — a port and the
 	// ingress role together are ([Bootstrap.ServesAPI]), and only that pair
 	// asks for the authentication settings below.
