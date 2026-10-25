@@ -21,7 +21,7 @@ import { WorkSearch } from "./WorkSearch.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
 import { BugGlyph } from "@crewlethq/icons/glyphs";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 
@@ -54,19 +54,28 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-const hit = (over: Record<string, unknown>) => ({
+/**
+ * One hit AS THE ENGINE SENDS IT (`tracker.Ranked`), typed so a fixture that
+ * drifts from the wire fails the typecheck: this one had lost the id, the
+ * project and the priority and still carried the `score` the answer dropped,
+ * so every row the grid drew had no key — its `rowKey` is the id — and React
+ * warned on every case with two hits. The id follows the key, one per item.
+ */
+const hit = (over: Partial<WorkRanked>): WorkRanked => ({
+  id: `0196f2a0-0000-7000-8000-${(over.key ?? "ENG-1").replace(/\D/g, "").padStart(12, "0")}`,
   key: "ENG-1",
   title: "Authentication rework",
+  project: "ENG",
   type: "bug",
   status: "in_progress",
+  priority: "medium",
   rank: 1,
-  score: 1,
   snippet: "",
   ...over,
 });
 
 function mount(
-  hits: unknown[],
+  hits: WorkRanked[],
   outcome: Record<string, unknown> = {},
   asked: Record<string, unknown>[] = [],
 ) {
