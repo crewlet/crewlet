@@ -33,9 +33,7 @@ import {
   EmptyState,
   FolderTile,
   LivePreviewBudgetProvider,
-  PrincipalAvatar,
   Section,
-  TableEntityCell,
   describeFolderContents,
   type DataGridColumn,
 } from "@crewlethq/ui";
@@ -47,7 +45,6 @@ import { QueryState } from "~/components/common.tsx";
 import { ARTIFACT_FOLDER_MAX_DEPTH } from "~/contract/artifacts.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
@@ -59,12 +56,17 @@ import {
   DEFAULT_SORT,
   GalleryBar,
   GallerySelectionBar,
+  EditedCell,
+  FolderPathCell,
   GallerySkeleton,
   GalleryToolbar,
   Listing,
+  OwnerCell,
   folderScopeOf,
   listParams,
+  listingFactColumns,
   noMatch,
+  quietCell,
   sortOf,
   useListing,
   useShape,
@@ -117,22 +119,27 @@ export function FolderTiles({
 /**
  * The rows of a place's folders, for a reader who reads lists: the folder
  * glyph and its name over what is inside (`ArtifactNameCell kind="folder"`),
- * who sees it, its owner and when it last changed, then its menu, each row a
- * link to the folder's page. A folder row opens; it never expands in place.
+ * then the place's fact columns, then its menu, each row a link to the
+ * folder's page. A folder row opens; it never expands in place.
+ *
+ * THE PLACE'S ONE COLUMN SET (`listingFactColumns`), for the same view as the
+ * artifacts' grid under it, so Access, Owner and Edited stand in one place in
+ * both. A folder holds no role of its own, so its Your role cell is quiet.
  */
 export function FolderRows({
   folders,
   index,
   label,
+  view,
 }: {
   folders: readonly ArtifactFolderItem[];
   index: FolderIndex;
   label: string;
+  /** The view the artifacts' grid under these rows is drawn for. */
+  view: ListingView;
 }) {
   const words = useVisibilityWords();
-  const people = useArtifactPeople();
-  const viewer = useViewer();
-  const now = useNow();
+  const { people, viewer, now } = view;
   const columns: DataGridColumn<ArtifactFolderItem>[] = [
     {
       key: "name",
@@ -147,44 +154,23 @@ export function FolderRows({
         />
       ),
     },
-    {
-      key: "access",
-      header: "Access",
-      width: "9rem",
-      drop: 3,
-      phoneOmit: true,
-      cell: (folder) => {
+    ...listingFactColumns<ArtifactFolderItem>(view, {
+      access: (folder) => {
         const said = words(folder);
         return <ArtifactAccessLabel access={said.access} label={said.short} title={said.long} />;
       },
-    },
-    {
-      key: "owner",
-      header: "Owner",
-      width: "11rem",
-      drop: 2,
-      phoneOmit: true,
-      cell: (folder) => (
-        <TableEntityCell
-          name={
-            viewer.owner !== "" && folder.owner === viewer.owner
-              ? "You"
-              : people.seatName(folder.owner)
-          }
-          badge={<PrincipalAvatar principal={people.seatPrincipal(folder.owner)} size="xs" />}
-        />
+      owner: (folder) => <OwnerCell owner={folder.owner} viewer={viewer} people={people} />,
+      // WHERE A FOLDER IS KEPT is the folder it is in, drawn while a search
+      // reaches beneath this one.
+      folder: (folder) => (
+        <FolderPathCell words={folder.parent ? index.label(folder.parent) : ""} />
       ),
-    },
-    {
-      key: "updated",
-      header: "Edited",
-      width: "7.5rem",
-      cell: (folder) => (
-        <time className="artifacts-when" dateTime={folder.updated_at} title={folder.updated_at}>
-          {relTime(folder.updated_at, now)}
-        </time>
-      ),
-    },
+      updated: (folder) => <EditedCell at={folder.updated_at} now={now} />,
+      role: quietCell,
+      // A folder is never in the trash: a removed folder's contents move up.
+      trashed: quietCell,
+      purge: quietCell,
+    }),
     {
       key: "actions",
       header: "",
@@ -417,6 +403,7 @@ export function FolderView({
               folders={tiles}
               index={index}
               label={folder ? `Folders in ${name}` : "Folders"}
+              view={view}
             />
           )}
         </Section>

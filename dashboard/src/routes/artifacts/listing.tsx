@@ -565,6 +565,155 @@ function whoWords(
   return viewer.owner !== "" && name === viewer.owner ? "You" : people.seatName(name);
 }
 
+/** An owner's cell, as every listing draws one: the name the reader knows and the badge. */
+export function OwnerCell({
+  owner,
+  viewer,
+  people,
+}: {
+  owner: string;
+  viewer: Pick<ViewerState, "owner">;
+  people: ArtifactPeople;
+}) {
+  // THE OWNER'S BADGE, as the chart draws them: a person's circle and an
+  // agent's character, so the column reads by who as well as by name.
+  return (
+    <TableEntityCell
+      name={whoWords(owner, viewer, people)}
+      badge={<PrincipalAvatar principal={people.seatPrincipal(owner)} size="xs" />}
+    />
+  );
+}
+
+/** Where a row is kept, in words, cut with the whole of it on hover; the top level when blank. */
+export function FolderPathCell({ words }: { words: string }) {
+  return (
+    <span className="artifacts-folder" title={words || TOP_LEVEL}>
+      {words || TOP_LEVEL}
+    </span>
+  );
+}
+
+/** When a row last changed, relative, with the instant on hover. */
+export function EditedCell({ at, now }: { at: string; now: number }) {
+  return (
+    <time className="artifacts-when" dateTime={at} title={at}>
+      {relTime(at, now)}
+    </time>
+  );
+}
+
+/**
+ * A cell a row has nothing to say in: a folder holds no role of its own, so
+ * its row leaves the Your role cell quiet and empty rather than drawing a
+ * word or a control that does nothing.
+ */
+export const quietCell = (): ReactNode => null;
+
+/** What a row says in each fact column. */
+export interface ListingFactCells<T> {
+  access: (row: T) => ReactNode;
+  owner: (row: T) => ReactNode;
+  folder: (row: T) => ReactNode;
+  updated: (row: T) => ReactNode;
+  role: (row: T) => ReactNode;
+  trashed: (row: T) => ReactNode;
+  purge: (row: T) => ReactNode;
+}
+
+/**
+ * THE FACT COLUMNS, ONE SET FOR EVERY GRID OF A PLACE. A place draws its
+ * folders' rows and its artifacts' rows as two grids, one above the other, and
+ * the two used to choose their own columns: the folders' Access track was
+ * wider, they kept an Owner column on Yours and never a Your role, so Access,
+ * Owner and Edited stood at different places in the two. Both grids now take
+ * their columns from here, for the same view, and differ only in what each
+ * row says in a cell.
+ *
+ * ON YOURS EVERY ROW IS THE READER'S, so its owner and their role would say
+ * "You" and "Owner" on every row; the trash's rows say when each went in and
+ * when it goes for good in their place.
+ */
+export function listingFactColumns<T>(
+  view: Pick<ListingView, "trashed" | "own" | "folders">,
+  cells: ListingFactCells<T>,
+): DataGridColumn<T>[] {
+  const { trashed, own } = view;
+  return [
+    // WHO CAN OPEN IT, but not in the trash: a trashed artifact opens for
+    // nobody until it is restored, and its rows say when it goes instead.
+    ...(trashed
+      ? []
+      : [
+          {
+            key: "access",
+            header: "Access",
+            width: TRACK.access,
+            drop: 3,
+            // ON A PHONE the lead already says what it is; the line under it
+            // is when it was edited, and who can open it is its page's to say.
+            phoneOmit: true,
+            cell: cells.access,
+          },
+        ]),
+    ...(own
+      ? []
+      : [
+          {
+            key: "owner",
+            header: "Owner",
+            width: TRACK.owner,
+            drop: 2,
+            // ON A PHONE the row's line is the type and the time: the owner
+            // and the role are the row's own page's to say.
+            phoneOmit: true,
+            cell: cells.owner,
+          },
+        ]),
+    // WHERE IT IS KEPT, as the reader sees it: the folder's path in words, or
+    // the top level for one in no folder (or in a folder the reader cannot
+    // see, which is the top level to them). A folder grants nothing, so the
+    // path is the reader's own view of the tree and never a fact about access.
+    ...(view.folders && !trashed
+      ? [
+          {
+            key: "folder",
+            header: "Folder",
+            width: TRACK.folder,
+            drop: 2,
+            phoneOmit: true,
+            cell: cells.folder,
+          },
+        ]
+      : []),
+    trashed
+      ? { key: "trashed", header: "Trashed", width: TRACK.when, cell: cells.trashed }
+      : { key: "updated", header: "Edited", width: TRACK.when, cell: cells.updated },
+    ...(trashed
+      ? [
+          {
+            key: "purge",
+            header: "Deleted for good",
+            width: TRACK.purge,
+            drop: 1,
+            cell: cells.purge,
+          },
+        ]
+      : own
+        ? []
+        : [
+            {
+              key: "role",
+              header: "Your role",
+              width: TRACK.role,
+              drop: 1,
+              phoneOmit: true,
+              cell: cells.role,
+            },
+          ]),
+  ];
+}
+
 /** One listing, drawn in the shape the reader chose. */
 export function Listing({
   items,
@@ -585,7 +734,7 @@ export function Listing({
     total !== undefined && total > items.length
       ? `${fmtCount(items.length)} of ${fmtCount(total)}`
       : undefined;
-  const { trashed, own, people, viewer, now, onChanged, selection } = view;
+  const { people, viewer, now, onChanged, selection } = view;
   if (view.shape === "grid") {
     return (
       <>
@@ -621,9 +770,8 @@ export function Listing({
       </>
     );
   }
-  // ON YOURS EVERY ROW IS THE READER'S, so its owner and their role would say
-  // "You" and "Owner" on every row; the trash's rows say when each went in
-  // and when it goes for good in their place.
+  // THE FACT COLUMNS ARE THE PLACE'S ONE SET (`listingFactColumns`), shared
+  // with the folders' rows above.
   const columns: DataGridColumn<ArtifactListItem>[] = [
     {
       key: "title",
@@ -644,121 +792,28 @@ export function Listing({
         />
       ),
     },
-    // WHO CAN OPEN IT, but not in the trash: a trashed artifact opens for
-    // nobody until it is restored, and its rows say when it goes instead.
-    ...(trashed
-      ? []
-      : [
-          {
-            key: "access",
-            header: "Access",
-            width: TRACK.access,
-            drop: 3,
-            // ON A PHONE the lead already says what it is; the line under it
-            // is when it was edited, and who can open it is its page's to say.
-            phoneOmit: true,
-            cell: (item: ArtifactListItem) => <ArtifactAccessLabel access={accessOf(item)} />,
-          },
-        ]),
-    ...(own
-      ? []
-      : [
-          {
-            key: "owner",
-            header: "Owner",
-            width: TRACK.owner,
-            drop: 2,
-            // ON A PHONE the row's line is the type and the time: the owner
-            // and the role are the artifact's own page's to say.
-            phoneOmit: true,
-            // THE OWNER'S BADGE, as the chart draws them: a person's circle
-            // and an agent's character, so the column reads by who as well
-            // as by name.
-            cell: (item: ArtifactListItem) => (
-              <TableEntityCell
-                name={whoWords(item.owner, viewer, people)}
-                badge={<PrincipalAvatar principal={people.seatPrincipal(item.owner)} size="xs" />}
-              />
-            ),
-          },
-        ]),
-    // WHERE IT IS KEPT, as the reader sees it: the folder's path in words, or
-    // the top level for one in no folder (or in a folder the reader cannot
-    // see, which is the top level to them). A folder grants nothing, so the
-    // path is the reader's own view of the tree and never a fact about access.
-    ...(view.folders && !trashed
-      ? [
-          {
-            key: "folder",
-            header: "Folder",
-            width: TRACK.folder,
-            drop: 2,
-            phoneOmit: true,
-            cell: (item: ArtifactListItem) => {
-              const words = pathWords(item.folder_path);
-              return (
-                <span className="artifacts-folder" title={words || TOP_LEVEL}>
-                  {words || TOP_LEVEL}
-                </span>
-              );
-            },
-          },
-        ]
-      : []),
-    trashed
-      ? {
-          key: "trashed",
-          header: "Trashed",
-          width: TRACK.when,
-          cell: (item: ArtifactListItem) => (
-            <time dateTime={item.trashed_at} title={item.trashed_at}>
-              {relTime(item.trashed_at, now)}
-            </time>
-          ),
-        }
-      : {
-          key: "updated",
-          header: "Edited",
-          width: TRACK.when,
-          cell: (item: ArtifactListItem) => (
-            <time className="artifacts-when" dateTime={item.updated_at} title={item.updated_at}>
-              {relTime(item.updated_at, now)}
-            </time>
-          ),
-        },
-    ...(trashed
-      ? [
-          {
-            key: "purge",
-            header: "Deleted for good",
-            width: TRACK.purge,
-            drop: 1,
-            cell: (item: ArtifactListItem) => {
-              const at = purgeAt(item.trashed_at);
-              return at ? (
-                <time dateTime={at} title={purgeSentence(item.trashed_at)}>
-                  {fmtDate(at)}
-                </time>
-              ) : (
-                `${TRASH_KEPT} after`
-              );
-            },
-          },
-        ]
-      : own
-        ? []
-        : [
-            {
-              key: "role",
-              header: "Your role",
-              width: TRACK.role,
-              drop: 1,
-              phoneOmit: true,
-              cell: (item: ArtifactListItem) => (
-                <span className="artifacts-role">{ROLE_WORDS[item.role]}</span>
-              ),
-            },
-          ]),
+    ...listingFactColumns<ArtifactListItem>(view, {
+      access: (item) => <ArtifactAccessLabel access={accessOf(item)} />,
+      owner: (item) => <OwnerCell owner={item.owner} viewer={viewer} people={people} />,
+      folder: (item) => <FolderPathCell words={pathWords(item.folder_path)} />,
+      updated: (item) => <EditedCell at={item.updated_at} now={now} />,
+      role: (item) => <span className="artifacts-role">{ROLE_WORDS[item.role]}</span>,
+      trashed: (item) => (
+        <time dateTime={item.trashed_at} title={item.trashed_at}>
+          {relTime(item.trashed_at, now)}
+        </time>
+      ),
+      purge: (item) => {
+        const at = purgeAt(item.trashed_at);
+        return at ? (
+          <time dateTime={at} title={purgeSentence(item.trashed_at)}>
+            {fmtDate(at)}
+          </time>
+        ) : (
+          `${TRASH_KEPT} after`
+        );
+      },
+    }),
     {
       key: "actions",
       header: "",

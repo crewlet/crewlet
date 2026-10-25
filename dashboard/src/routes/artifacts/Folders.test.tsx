@@ -263,6 +263,67 @@ describe("the Folders section", () => {
   });
 });
 
+/**
+ * ONE COLUMN SET FOR A PLACE'S TWO GRIDS. The folders' rows and the artifacts'
+ * rows are two grids, one above the other; with their own columns, Access,
+ * Owner and Edited stood at different places in the two. The headers and the
+ * grid's tracks are read from both, so a column one grid gains or a track it
+ * widens alone fails here.
+ */
+describe("the list shape's columns", () => {
+  function grids() {
+    const folders = within(screen.getByRole("group", { name: /^Folders/ })).getByRole("table");
+    const artifacts = screen
+      .getAllByRole("table")
+      .find((table) => table !== folders) as HTMLElement;
+    const headers = (table: HTMLElement) =>
+      within(table)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent ?? "");
+    return { folders, artifacts, headers };
+  }
+
+  test("the folders and the artifacts under them share one column set and one set of tracks", () => {
+    localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
+    mount(<ArtifactFolders />, "#/artifacts/folders");
+    const { folders, artifacts, headers } = grids();
+    expect(headers(folders)).toEqual(["Name", "Access", "Owner", "Edited", "Your role", ""]);
+    expect(headers(artifacts)).toEqual(headers(folders));
+    expect(folders.style.gridTemplateColumns).not.toBe("");
+    expect(folders.style.gridTemplateColumns).toBe(artifacts.style.gridTemplateColumns);
+  });
+
+  test("a folder's Your role cell is quiet: empty, and never a control", () => {
+    localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
+    mount(<ArtifactFolders />, "#/artifacts/folders");
+    const { folders, headers } = grids();
+    const role = headers(folders).indexOf("Your role");
+    const marketing = within(folders)
+      .getByText("Marketing")
+      .closest(".crewlet-data-grid__row") as HTMLElement;
+    const cell = within(marketing).getAllByRole("cell")[role]!;
+    expect(cell.textContent).toBe("");
+    expect(cell.querySelector("button, a, input, select, [tabindex]")).toBeNull();
+  });
+
+  test("on Yours both grids leave out the owner and the role, and a search gives both the Folder column", () => {
+    localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
+    mount(
+      <ArtifactFolderPage id={MARKETING} />,
+      `#/artifacts/folders/${MARKETING}?scope=mine&q=press`,
+    );
+    const { folders, artifacts, headers } = grids();
+    expect(headers(folders)).toEqual(["Name", "Access", "Folder", "Edited", ""]);
+    expect(headers(artifacts)).toEqual(headers(folders));
+    expect(folders.style.gridTemplateColumns).toBe(artifacts.style.gridTemplateColumns);
+    // A folder found beneath this one names the folder it is in.
+    const press = within(folders)
+      .getByText("Press kit")
+      .closest(".crewlet-data-grid__row") as HTMLElement;
+    expect(press.textContent).toContain("Marketing › Q4 review");
+  });
+});
+
 describe("a folder's page", () => {
   test("its header names it and who sees it, its subfolders come first, and it lists one level by id", () => {
     mount(<ArtifactFolderPage id={Q4} />, `#/artifacts/folders/${Q4}`);
