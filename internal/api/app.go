@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -345,6 +346,18 @@ type Options struct {
 	// over the wire and in process alike.
 	Delegations *auth.Delegations
 	Dispatcher  *auth.Dispatcher
+
+	// --- the Dashboard Assistant's routes (WP8) ---
+
+	// Assistant is the Dashboard Assistant's routes under /assistant/ and
+	// the `assistant` member of `viewer` (internal/api/assistantapi). It
+	// needs the grant pair above: a turn's every call carries a grant the
+	// delegations mint and the dispatcher sends, so an Assistant without
+	// them is refused at New.
+	//
+	// NIL IS AN API WITH NO ASSISTANT: no route under /assistant/, and the
+	// viewer answers it `disabled`.
+	Assistant *assistantapi.Surface
 
 	// AuthEvents is where the guard counts a refused credential.
 	// REQUIRED: the engine
@@ -830,6 +843,12 @@ func New(opts Options) (*App, error) {
 		sources.AssistReads = catalog.ReadsQuestion
 	}
 	a.assistRoute = catalog.ReadsRoute
+	// --- the Dashboard Assistant's routes (WP8) ---
+	// WHETHER THE ASK PILL IS LIT, from the surface whose routes the pill
+	// opens, so the viewer and a refused question cannot disagree.
+	if sources.Assistant == nil && opts.Assistant != nil {
+		sources.Assistant = opts.Assistant.Viewer
+	}
 	// WHO MAY CHANGE THE COMPANY DOCUMENT, from the same Tier A the config
 	// surface enforces it from, so the viewer offers exactly the edits that
 	// surface admits (ADR-0030). A caller that supplied its own keeps it.
@@ -873,6 +892,20 @@ func New(opts Options) (*App, error) {
 	// prefix rather than under /mcp/, which is exempt from the guard
 	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
+	// --- the Dashboard Assistant's routes (WP8) ---
+	// THE ASSISTANT, every route on one of its two verbs. Its grants are
+	// refused under this prefix whatever they carry (auth.AssistantPrefix),
+	// so it can never be reached through itself.
+	if opts.Assistant != nil {
+		if opts.Delegations == nil || opts.Dispatcher == nil {
+			return nil, errors.New("api: Options.Assistant needs Options.Delegations and " +
+				"Options.Dispatcher: every call a turn makes carries a grant they mint " +
+				"and send")
+		}
+		if err := opts.Assistant.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the assistant surface: %w", err)
+		}
+	}
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an

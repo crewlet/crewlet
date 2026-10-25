@@ -365,6 +365,14 @@ const (
 	// approving or declining a proposal, and an administrator's audited
 	// read. Each is dotted, and lands here with the surface that asks it.
 
+	// ActionAssistantConverse is using the assistant at all: starting a
+	// conversation, asking in it, stopping a turn, clearing one. Whose
+	// conversation it is is never this verb's question: the store answers
+	// 404 for anybody but its owner (ADR-0049).
+	ActionAssistantConverse Action = "assistant.converse"
+	// ActionAssistantConversationRead is reading one's own conversations:
+	// the list, a transcript, a turn's live stream and a card's export.
+	ActionAssistantConversationRead Action = "assistant.conversation.read"
 	// ActionAssistantApprove is a person approving one of their own
 	// proposals: `POST /assistant/proposals/{id}/approve`. Everybody's,
 	// because whose proposal it is is the store's answer (ADR-0052) and what
@@ -1094,6 +1102,17 @@ var rules = map[Action]rule{
 	// approving its own proposal is the one gesture the whole design keeps
 	// from it. TestTheAssistantIsNeverOneStepFromTheNeverList holds every
 	// `assistant.` row here to all three.
+	//
+	// EVERYBODY'S BY CLASS, and still only a PERSON's: the surface answers
+	// a machine token, a service account and a Tier A token's session
+	// 403 assistant_not_available through the one predicate the guard
+	// derives grants by (iam.Assistable), because using the assistant is
+	// asking it to act as you, and only a person signed in through their
+	// own browser has a you it may act as (decision D04).
+	ActionAssistantConverse: {class: ClassEverybody, humanOnly: true,
+		presence: PresenceRequired, recency: iam.RecencyAny, assist: AssistNever},
+	ActionAssistantConversationRead: {class: ClassEverybody, humanOnly: true,
+		presence: PresenceRequired, recency: iam.RecencyAny, assist: AssistNever},
 	ActionAssistantApprove: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
 		presence: PresenceRequired, assist: AssistNever},
 	ActionAssistantDecline: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
