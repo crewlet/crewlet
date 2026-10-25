@@ -237,9 +237,9 @@ func (p *Providers) validate(path Path) error {
 // included.
 //
 // The entry is therefore the CLI's own settings and nothing else: which CLI,
-// which model in that CLI's grammar, whether it runs as a text model behind
-// the engine's tool loop or as the executor itself, where its login and
-// per-seat homes live, and how it signs in.
+// which model in that CLI's grammar, whether it runs on this host turn by
+// turn or as the executor detached in a box, where its login and per-seat
+// homes live, and how it signs in.
 type LLMProvider struct {
 	// Agent is which CLI to drive. Empty drives Claude Code.
 	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which coding CLI to drive (default claude-code)."`
@@ -262,9 +262,9 @@ type LLMProvider struct {
 	// two entries and points seats at whichever one is right for them —
 	// which is also how they already choose between two models.
 	//
-	// Read only in agent mode; a value here in text mode configures
+	// Read only in box mode; a value here in host mode configures
 	// nothing and is refused.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where an agent-mode run happens. Empty = providers.sandbox.default_run_in."`
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box-mode run happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
 	// its per-seat homes, under a subdirectory named for the CLI it drives
@@ -737,7 +737,7 @@ func (c *Company) validateLLMModels() error {
 // ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
-// makes — the text calls and an agent-mode run alike, which are handed the
+// makes — the text calls and a box-mode run alike, which are handed the
 // same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid model
 // reference".
 //
@@ -783,7 +783,7 @@ func (l *LLMProvider) validateModel(path Path) error {
 	}
 	p.add(at(path, "model"), ErrConflict,
 		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
-			"slash, so %q %s: every call this entry makes, an agent-mode run included, "+
+			"slash, so %q %s: every call this entry makes, a box-mode run included, "+
 			"would fail inside the CLI %s. Name the provider as the CLI spells it%s, e.g. "+
 			"anthropic/claude-sonnet-5 or openrouter/anthropic/claude-sonnet-5, with that "+
 			"provider's key in env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+

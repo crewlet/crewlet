@@ -572,13 +572,13 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		}
 		if name == BridgeServerName {
 			// The same collision one layer out: the engine writes the
-			// seat's tool bridge into every agent-mode box under this
+			// seat's tool bridge into every box-mode run's box under this
 			// name, and a company server called the same is overwritten
 			// there — its tools gone from the run with nothing saying
 			// why. See [BridgeServerName].
 			p.add(at(path, "name"), ErrConflict,
 				"%q is reserved for the seat's own tool bridge, which every "+
-					"agent-mode box sees under that name; a server called the "+
+					"box-mode run sees under that name; a server called the "+
 					"same would be replaced by it in the box. Rename the server",
 				name)
 		}
@@ -1227,10 +1227,10 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 	}
 	// EVERY BOX A SEAT RUNS IN, placed as the engine places it
 	// ([Company.SeatBoxes]): the run_sandbox box an enabled gate offers, and
-	// the box an agent-mode executor runs in, which its entry places
+	// the box a box-mode executor runs in, which its entry places
 	// whatever the seat's gate says. Walked as two lists — every enabled
-	// gate, then every agent-mode entry — this counted a gate's cell for an
-	// agent-mode seat, which is never offered run_sandbox: a company was
+	// gate, then every box-mode entry — this counted a gate's cell for a
+	// box-mode seat, which is never offered run_sandbox: a company was
 	// refused for want of an image no box would run, and the engine built
 	// that backend for nobody. And the entry's walk is what a cell an
 	// entry names was once missing from: an entry naming `e2b` in a
@@ -1256,18 +1256,18 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 	return reached
 }
 
-// agentModeExecutorKeys are the providers.llm entries some seat's EXECUTOR
-// resolves to that run in agent mode, in key order.
+// boxExecutorKeys are the providers.llm entries some seat's EXECUTOR
+// resolves to that run in box mode, in key order.
 //
 // ONLY ENTRIES A SEAT REACHES, resolved as the phase registry resolves them
-// (see [Company.ExecutorProvider]): an agent-mode entry nobody's executor
+// (see [Company.ExecutorProvider]): a box-mode entry nobody's executor
 // runs on launches nothing, so the cell it names is not reached and the
 // backend behind it is not built — the same rule every gate here follows. It
 // is validated the day a seat points at it, like a seat added later.
 //
 // Sorted, so a message naming "the first seat" or a backend built in this
 // order is the same on every run of the same config.
-func (c *Company) agentModeExecutorKeys() []string {
+func (c *Company) boxExecutorKeys() []string {
 	fallback, ok := c.executorFallback()
 	if !ok {
 		return nil
@@ -1303,7 +1303,7 @@ func (c *Company) agentModeExecutorKeys() []string {
 // fields [org.Role.Validate] refuses on one — so resolving it would answer
 // with whatever entry happens to be declared first and call that entry
 // reached. It is the fallback below that makes this more than a theoretical
-// tidiness: a company whose first-declared entry was an agent-mode CLI was
+// tidiness: a company whose first-declared entry was a box-mode CLI was
 // refused for a box its founder's seat would never run in.
 func (c *Company) ExecutorProvider(role *Role) (string, LLMProvider, bool) {
 	fallback, ok := c.executorFallback()
@@ -1464,7 +1464,7 @@ func CodingAgentMismatch(runner, key, cli string) string {
 // will read, which turns on how the seat's executor runs — so it is asked
 // here, beside the providers, and not of the gate alone.
 //
-// A seat whose executor runs in AGENT MODE is never offered run_sandbox (the
+// A seat whose executor runs in BOX MODE is never offered run_sandbox (the
 // runner's offersSandbox): it already holds a shell, and its one box is the
 // executor's, placed by that entry's `run_in`. So its gate's `run_in`
 // places nothing — `self`, which says exactly that, or nothing at all — and
@@ -1477,7 +1477,7 @@ func CodingAgentMismatch(runner, key, cli string) string {
 // Every other seat's gate is read only when it is enabled, so one that is off
 // with provisioning under it is an operator who configured a sandbox and will
 // watch nothing happen. That rule sat on the gate itself, which cannot see the
-// executor, and so refused an agent-mode seat whose box reads exactly that
+// executor, and so refused a box-mode seat whose box reads exactly that
 // provisioning on every turn, with a remedy — remove the block — that would
 // have taken steps out of the box.
 //
@@ -1497,7 +1497,7 @@ func (c *Company) validateSandboxGates() error {
 			if resolved && entry.Box() {
 				if gate.RunIn != "" && gate.RunIn != PlacementSelf {
 					p.add(at(where, "run_in"), ErrConflict,
-						"this seat's executor runs in agent mode on providers.llm.%s, "+
+						"this seat's executor runs in box mode on providers.llm.%s, "+
 							"which places the one box it works in (its run_in, else "+
 							"providers.sandbox.default_run_in), and such a seat is never "+
 							"offered run_sandbox, so %q here places nothing. Write `self` "+
@@ -1506,7 +1506,7 @@ func (c *Company) validateSandboxGates() error {
 				}
 				if gate.CodingAgent != "" && string(gate.CodingAgent) != entry.AgentName() {
 					p.add(at(where, "coding_agent"), ErrConflict,
-						"this seat's executor runs in agent mode on providers.llm.%s, "+
+						"this seat's executor runs in box mode on providers.llm.%s, "+
 							"which is %s's own run, and such a seat is never offered "+
 							"run_sandbox, so %q here drives nothing. Leave it out",
 						key, entry.AgentName(), gate.CodingAgent)
@@ -1545,7 +1545,7 @@ func (c *Company) validateSandboxPlacement() error {
 		}
 		if hasExecutor {
 			if _, entry, resolved := c.executorProvider(role, fallback); resolved && entry.Box() {
-				// AN AGENT-MODE SEAT'S GATE PLACES NOTHING: such a seat
+				// A BOX-MODE SEAT'S GATE PLACES NOTHING: such a seat
 				// is never offered run_sandbox, and its one box is its
 				// executor's, placed by the entry and asked these same
 				// questions in the loop below. What its gate's run_in
@@ -1566,8 +1566,8 @@ func (c *Company) validateSandboxPlacement() error {
 		run := gate.RunIn
 		if run == PlacementSelf {
 			// CODE WORK INSIDE THE EXECUTOR'S OWN RUN, which only exists
-			// when that executor is a coding CLI in agent mode — and an
-			// agent-mode seat was passed over above. On any other runtime
+			// when that executor is a coding CLI in box mode — and a
+			// box-mode seat was passed over above. On any other runtime
 			// the seat has no shell of its own, so `self` would read as a
 			// working choice and turn code work off — a seat that plans
 			// around a sandbox it is never offered, with nothing anywhere
@@ -1575,8 +1575,8 @@ func (c *Company) validateSandboxPlacement() error {
 			if key, _, resolved := c.ExecutorProvider(role); resolved {
 				p.add(where, ErrConflict,
 					"`self` means code work rides this seat's own executor run, "+
-						"which only a coding CLI in agent mode has. This seat's "+
-						"executor is providers.llm.%s. Set `mode: agent` on a "+
+						"which only a coding CLI in box mode has. This seat's "+
+						"executor is providers.llm.%s. Set `mode: box` on a "+
 						"providers.llm entry and point the seat at it, or name a "+
 						"cell the catalogue configures (%s)",
 					key, names(catalogue.available()))
@@ -1603,20 +1603,20 @@ func (c *Company) validateSandboxPlacement() error {
 		}
 	}
 
-	// THE SAME THREE QUESTIONS FOR AN AGENT-MODE EXECUTOR, whose run is
+	// THE SAME THREE QUESTIONS FOR A BOX-MODE EXECUTOR, whose run is
 	// placed by its entry rather than by a gate: is there a catalogue at
 	// all, is the cell it names configured, and does a silent entry have a
 	// default to fall to. Each was unasked, and each failed at the seat's
 	// first turn — every turn — with a launch error naming a backend no
 	// field in the file appeared to be missing.
-	for _, key := range c.agentModeExecutorKeys() {
+	for _, key := range c.boxExecutorKeys() {
 		entry := c.Providers.LLM[key]
 		where := at(entryPath(key), "run_in")
 		if !catalogue.Enabled() {
 			p.add(at(entryPath(key), "mode"), ErrMissing,
-				"agent mode runs the executor in a box, and this company "+
+				"box mode runs the executor in a box, and this company "+
 					"configures no sandbox. Add providers.sandbox, or set "+
-					"`mode: text` to keep the CLI a subprocess of the engine")
+					"`mode: host` to keep the CLI a subprocess of the engine")
 			continue
 		}
 		run := entry.RunIn
@@ -1626,7 +1626,7 @@ func (c *Company) validateSandboxPlacement() error {
 		switch {
 		case run == "":
 			p.add(where, ErrMissing,
-				"agent mode runs the executor in a box and the catalogue "+
+				"box mode runs the executor in a box and the catalogue "+
 					"offers more than one place to do it (%s), so this entry "+
 					"has to name one: or providers.sandbox.default_run_in has to",
 				names(catalogue.available()))

@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// AGENT MODE IS NAMED, NEVER INFERRED.
+// BOX MODE IS NAMED, NEVER INFERRED.
 //
-// Both modes are defensible for the same CLI on the same seat — text mode is
-// predictable and works with no reachable API, agent mode gets the vendor's
+// Both modes are defensible for the same CLI on the same seat — host mode is
+// predictable and works with no reachable API, box mode gets the vendor's
 // own harness — so a default would be a decision made for the operator on a
 // question they have to answer.
 func TestTheCLIModeIsAClosedSet(t *testing.T) {
@@ -20,26 +20,26 @@ func TestTheCLIModeIsAClosedSet(t *testing.T) {
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Fatalf("want ErrUnknownValue, got %v", err)
 	}
-	// Both spellings load, and an entry that names none is text: the mode
+	// Both spellings load, and an entry that names none is host: the mode
 	// that runs nothing but the CLI itself, so it needs no sandbox to place.
-	for _, mode := range []string{"", "text", "agent"} {
+	for _, mode := range []string{"", "host", "box"} {
 		block := "agent: claude-code\n"
 		if mode != "" {
 			block += "      mode: " + mode + "\n"
 		}
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n"+
 			"      model: sonnet\n      "+block)
-		want := mode == "agent"
+		want := mode == "box"
 		sub := cfg.Providers.LLM["sub"]
 		if got := sub.Box(); got != want {
-			t.Errorf("mode %q reports AgentMode() = %v", mode, got)
+			t.Errorf("mode %q reports Box() = %v", mode, got)
 		}
 	}
 }
 
-// A CELL FOR A RUNTIME THAT RUNS NOWHERE configures nothing: a text-mode CLI
+// A CELL FOR A RUNTIME THAT RUNS NOWHERE configures nothing: a host-mode CLI
 // is a subprocess of this engine, and there is no box to place.
-func TestARunInOnATextModeCLIIsRefused(t *testing.T) {
+func TestARunInOnAHostModeCLIIsRefused(t *testing.T) {
 	t.Parallel()
 	err := rejects(t, "name: Acme\nproviders:\n  llm:\n    sub:\n"+
 		"      agent: claude-code\n      run_in: e2b\n",
@@ -54,7 +54,7 @@ func TestARunInOnATextModeCLIIsRefused(t *testing.T) {
 // On any other runtime the seat has no shell of its own, and `self` would read
 // as a working choice while turning code work off — a seat planning around a
 // sandbox it is never offered, with nothing anywhere saying why.
-func TestSelfNeedsAnAgentModeExecutor(t *testing.T) {
+func TestSelfNeedsABoxModeExecutor(t *testing.T) {
 	t.Parallel()
 	api := "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n" +
 		"      model: claude-golden\n" +
@@ -64,15 +64,15 @@ func TestSelfNeedsAnAgentModeExecutor(t *testing.T) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 
-	// The same seat on an agent-mode entry loads.
+	// The same seat on a box-mode entry loads.
 	mustCompany(t, "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n"+
-		"      model: sonnet\n      agent: claude-code\n      mode: agent\n"+
+		"      model: sonnet\n      agent: claude-code\n      mode: box\n"+
 		"roles:\n  - name: SWE\n    llm: sub\n    sandbox: {enabled: true, run_in: self}\n")
 }
 
 // A COMPANY DEFAULT CANNOT BE `self`.
 //
-// It is meaningful only for a seat whose executor is a coding CLI in agent
+// It is meaningful only for a seat whose executor is a coding CLI in box
 // mode, and as a company-wide answer it would silently turn code work off for
 // every seat that is not.
 func TestSelfIsNotACompanyDefault(t *testing.T) {
@@ -154,15 +154,15 @@ func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 	}
 }
 
-// AN AGENT-MODE ENTRY IS A RUN, placed by its own run_in, and it gets the
+// A BOX-MODE ENTRY IS A RUN, placed by its own run_in, and it gets the
 // same three questions a seat's gate gets: is there a catalogue, is the cell
 // it names configured, and does a silent entry have a default to fall to.
 // Each was unasked, and each failed at the seat's first turn — every turn —
 // with a launch error naming a backend no field in the file appeared to lack.
-func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
+func TestABoxModeEntryIsPlacedLikeASeat(t *testing.T) {
 	t.Parallel()
 	entry := func(runIn string) string {
-		cli := "agent: claude-code\n      mode: agent\n"
+		cli := "agent: claude-code\n      mode: box\n"
 		if runIn != "" {
 			cli += "      run_in: " + runIn + "\n"
 		}
@@ -216,7 +216,7 @@ func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n"+
 			"  llm:\n    main:\n      model: claude-golden\n"+
 			"    sub:\n      model: sonnet\n"+
-			"      agent: claude-code\n      mode: agent\n      run_in: e2b\n"+
+			"      agent: claude-code\n      mode: box\n      run_in: e2b\n"+
 			"roles:\n  - name: SWE\n    llm: main\n")
 		if _, reached := cfg.SandboxPlacements()[PlacementE2B]; reached {
 			t.Error("an unused entry's cell was reached")
@@ -225,13 +225,13 @@ func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
 }
 
 // `self` IS A SEAT'S ANSWER, NOT AN ENTRY'S. It means "my code work rides my
-// executor's own run", and an agent-mode entry IS that run — it has no other
+// executor's own run", and a box-mode entry IS that run — it has no other
 // run to ride and no backend resolves it. Accepted, it validated cleanly and
 // failed at the seat's first turn, every turn.
-func TestSelfIsNotACellAnAgentModeEntryCanName(t *testing.T) {
+func TestSelfIsNotACellABoxModeEntryCanName(t *testing.T) {
 	t.Parallel()
 	err := rejects(t, "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n"+
-		"      model: sonnet\n      agent: claude-code\n      mode: agent\n      run_in: self\n",
+		"      model: sonnet\n      agent: claude-code\n      mode: box\n      run_in: self\n",
 		"providers.llm.sub.run_in")
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Fatalf("want ErrUnknownValue, got %v", err)
@@ -239,7 +239,7 @@ func TestSelfIsNotACellAnAgentModeEntryCanName(t *testing.T) {
 }
 
 // THE BRIDGE'S NAME IS RESERVED. The engine writes the seat's tool bridge into
-// every agent-mode box's server list under it, so a company server of the
+// every box-mode run's server list under it, so a company server of the
 // same name would be replaced there — its tools gone from the run with no
 // error and no log line saying why.
 func TestTheBridgeServerNameIsReserved(t *testing.T) {
@@ -256,20 +256,20 @@ func TestTheBridgeServerNameIsReserved(t *testing.T) {
 // `llm` is one of the fields a human seat may not carry, so its chain is
 // always empty and always falls through to the company-wide fallback — the
 // entry called "default", else the first declared. Resolved rather than
-// refused, that made an agent-mode entry declared first "reached" by a seat
+// refused, that made a box-mode entry declared first "reached" by a seat
 // that is never spawned: a company was refused for a box its founder's seat
 // would never run in, and one with a catalogue built a backend for a run that
 // cannot happen.
 func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
 	t.Parallel()
-	// The agent-mode entry is declared FIRST, so it is the fallback.
+	// The box-mode entry is declared FIRST, so it is the fallback.
 	const providers = "name: Acme\nproviders:\n  llm:\n" +
 		"    coder:\n      model: sonnet\n" +
-		"      agent: claude-code\n      mode: agent\n      run_in: e2b\n" +
+		"      agent: claude-code\n      mode: box\n      run_in: e2b\n" +
 		"    main:\n      model: claude-golden\n"
 	const founder = "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"
 
-	// No catalogue, and none needed: no seat's executor is the agent-mode
+	// No catalogue, and none needed: no seat's executor is the box-mode
 	// entry, so nothing runs in a box.
 	cfg := mustCompany(t, providers+"roles:\n"+founder+"  - name: SWE\n    llm: main\n")
 	if _, _, resolved := cfg.ExecutorProvider(&cfg.Roles[0]); resolved {
@@ -317,7 +317,7 @@ func TestBothPathsToTheExecutorEntryAgree(t *testing.T) {
 	}
 }
 
-// AN AGENT-MODE SEAT'S GATE PLACES NOTHING AND DRIVES NOTHING.
+// A BOX-MODE SEAT'S GATE PLACES NOTHING AND DRIVES NOTHING.
 //
 // Such a seat is never offered run_sandbox: its one box is its executor's,
 // placed by the entry's own run_in, and run by that entry's CLI. So a
@@ -326,12 +326,12 @@ func TestBothPathsToTheExecutorEntryAgree(t *testing.T) {
 // counted as reached, so a company was refused for want of an image no box
 // would ever run. Refused on a write, naming the entry that does place the
 // box; applied with a warning, since the company runs either way.
-func TestAnAgentModeSeatsGatePlacesNothing(t *testing.T) {
+func TestABoxModeSeatsGatePlacesNothing(t *testing.T) {
 	t.Parallel()
 	company := func(gate string) string {
 		return "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
 			"  llm:\n    sub:\n      model: sonnet\n" +
-			"      agent: claude-code\n      mode: agent\n      run_in: direct\n" +
+			"      agent: claude-code\n      mode: box\n      run_in: direct\n" +
 			"roles:\n  - name: SWE\n    llm: sub\n    sandbox: " + gate + "\n"
 	}
 
@@ -353,7 +353,7 @@ func TestAnAgentModeSeatsGatePlacesNothing(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	if _, reached := cfg.SandboxPlacements()[PlacementContainer]; reached {
-		t.Error("an agent-mode seat's gate reached a cell, so the engine builds a backend for nobody")
+		t.Error("a box-mode seat's gate reached a cell, so the engine builds a backend for nobody")
 	}
 
 	err = rejects(t, company("{enabled: true, coding_agent: opencode}"), "roles[0].sandbox.coding_agent")
@@ -378,16 +378,16 @@ func TestAnAgentModeSeatsGatePlacesNothing(t *testing.T) {
 	assertAdmissionOnly(t, company("{enabled: true, run_in: e2b}"), "roles[0].sandbox.run_in")
 }
 
-// AN AGENT-MODE SEAT'S BOX READS ITS GATE WHETHER OR NOT IT IS ENABLED: the
+// A BOX-MODE SEAT'S BOX READS ITS GATE WHETHER OR NOT IT IS ENABLED: the
 // executor's box is given the gate's setup, env and mcp on every turn. So a
 // gate that is off with provisioning under it is refused only where nothing
 // reads it — a seat on any other runtime — and the remedy it gave, "remove the
-// block", would have taken steps out of an agent-mode seat's box.
-func TestAGateThatIsOffIsReadOnAnAgentModeSeat(t *testing.T) {
+// block", would have taken steps out of a box-mode seat's box.
+func TestAGateThatIsOffIsReadOnABoxModeSeat(t *testing.T) {
 	t.Parallel()
 	const providers = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
 		"  llm:\n    main:\n      model: claude-golden\n" +
-		"    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n"
+		"    sub:\n      model: sonnet\n      agent: claude-code\n      mode: box\n"
 	const gate = "    sandbox:\n      enabled: false\n      env: {GITLAB_TOKEN: \"${T}\"}\n" +
 		"      setup:\n        - {name: tools, brief: b}\n"
 

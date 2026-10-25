@@ -33,8 +33,8 @@ const (
 	directAndImg  = "    local: {image: img}\n    default_run_in: direct\n"
 	e2bOnly       = "    e2b: {api_key: k}\n"
 	directAndE2B  = "    local: {}\n    e2b: {api_key: k}\n    default_run_in: direct\n"
-	agentModeLLM  = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n"
-	agentModeE2B  = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n      run_in: e2b\n"
+	boxModeLLM    = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: box\n"
+	boxModeE2B    = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: box\n      run_in: e2b\n"
 	plainSeat     = "  - name: SWE\n    sandbox: {enabled: true}\n"
 	agentSeat     = "  - name: SWE\n    llm: sub\n"
 	seatStepsHead = "  - name: SWE\n    sandbox:\n      enabled: true\n"
@@ -142,19 +142,19 @@ func TestASetupFileALocalBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 				"  - name: SWE\n    sandbox: {enabled: true, run_in: e2b}\n"),
 		},
 		{
-			// An agent-mode seat's gate offers it no box: the executor's,
+			// A box-mode seat's gate offers it no box: the executor's,
 			// in e2b here, is the one its steps reach, and not the direct
 			// one the catalogue's default would give a run_sandbox box.
-			name: "an agent-mode seat's gate falls to a direct default",
-			doc: setupFileDoc(directAndE2B, "", agentModeE2B,
+			name: "a box-mode seat's gate falls to a direct default",
+			doc: setupFileDoc(directAndE2B, "", boxModeE2B,
 				"  - name: SWE\n    llm: sub\n    sandbox:\n      enabled: true\n      setup:\n"+
 					fileStep("        ", "own", "/usr/local/bin/helper")),
 		},
 		{
 			// No gate at all: the executor's own box is placed by its
 			// entry, and given the engine-wide steps.
-			name: "an agent-mode executor's direct box",
-			doc:  setupFileDoc(directOnly, fileStep("      ", "git-auth", "/usr/local/bin/helper"), agentModeLLM, agentSeat),
+			name: "a box-mode executor's direct box",
+			doc:  setupFileDoc(directOnly, fileStep("      ", "git-auth", "/usr/local/bin/helper"), boxModeLLM, agentSeat),
 			path: shared + "/usr/local/bin/helper",
 			says: []string{"runs its executor in one", "providers.llm.sub"},
 		},
@@ -162,15 +162,15 @@ func TestASetupFileALocalBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 			// `self` is no box of its own, so the seat's step reaches only
 			// the executor's — in the cell its entry names.
 			name: "a self seat's step in its executor's direct box",
-			doc: setupFileDoc(directOnly, "", agentModeLLM,
+			doc: setupFileDoc(directOnly, "", boxModeLLM,
 				"  - name: SWE\n    llm: sub\n    sandbox:\n      enabled: true\n      run_in: self\n      setup:\n"+
 					fileStep("        ", "own", "/usr/local/bin/helper")),
 			path: own + "/usr/local/bin/helper",
 			says: []string{"runs its executor in one"},
 		},
 		{
-			name: "an agent-mode executor placed in e2b",
-			doc:  setupFileDoc(directAndE2B, fileStep("      ", "git-auth", "/usr/local/bin/helper"), agentModeE2B, agentSeat),
+			name: "a box-mode executor placed in e2b",
+			doc:  setupFileDoc(directAndE2B, fileStep("      ", "git-auth", "/usr/local/bin/helper"), boxModeE2B, agentSeat),
 		},
 		{
 			name: "the double writes nothing anywhere",
@@ -296,7 +296,7 @@ func TestARefusedSetupFileIsAnAdmissionRule(t *testing.T) {
 // A SEAT'S BOX IS PLACED AS THE ENGINE PLACES IT: the run_sandbox box its gate
 // offers — in the gate's cell, else the catalogue's default, which is how the
 // manager resolves an empty one at launch — or, for a seat whose executor runs
-// in agent mode, the box that executor runs in, placed by its entry, and no
+// in box mode, the box that executor runs in, placed by its entry, and no
 // other: such a seat is never offered run_sandbox. Each is given the
 // engine-wide steps and then the seat's own, as the engine's runEnvironment
 // builds them.
@@ -311,8 +311,8 @@ func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 		"    local: {image: img}\n    e2b: {api_key: k}\n    default_run_in: direct\n"+
 		"    setup:\n      - {name: shared, brief: b}\n"+
 		"  llm:\n    main:\n      model: claude-golden\n"+
-		"    sub:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n      run_in: e2b\n"+
-		"    deflt:\n      model: sonnet\n      agent: claude-code\n      mode: agent\n"+
+		"    sub:\n      model: sonnet\n      agent: claude-code\n      mode: box\n      run_in: e2b\n"+
+		"    deflt:\n      model: sonnet\n      agent: claude-code\n      mode: box\n"+
 		"roles:\n"+
 		// The gate's own cell.
 		"  - name: Named\n    llm: main\n    sandbox:\n      enabled: true\n      run_in: container\n"+
@@ -324,12 +324,12 @@ func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 		// `self` is no box of its own; the executor's entry places it.
 		"  - name: Self\n    llm: sub\n    sandbox:\n      enabled: true\n      run_in: self\n"+
 		"      setup:\n        - {name: own, brief: b}\n"+
-		// An agent-mode seat's enabled gate offers it nothing: its one box
+		// A box-mode seat's enabled gate offers it nothing: its one box
 		// is the executor's, in e2b, not a run_sandbox box in the
 		// catalogue's default — though the box is given the gate's steps.
 		"  - name: Agent\n    llm: sub\n    sandbox:\n      enabled: true\n"+
 		"      setup:\n        - {name: kept, brief: b}\n"+
-		// An agent-mode seat with no gate at all still runs in its
+		// A box-mode seat with no gate at all still runs in its
 		// executor's box, and an entry that names no cell takes the
 		// catalogue's default.
 		"  - name: Bare\n    llm: deflt\n")
