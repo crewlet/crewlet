@@ -156,3 +156,83 @@ func TestACloneOwnsItsWebDenial(t *testing.T) {
 		t.Errorf("an unset denial field came back set: %q", o.WebDenial.CompleteArgs)
 	}
 }
+
+// A WEB DENIAL IS THE SEATS' ARGV WITH THE WEB TAKEN OUT, AND NOTHING ELSE.
+// A denial restates the whole command line, so a confinement flag added to the
+// seats' argv and not to the denial would be dropped from every entry that
+// turns its web off, the assistant's among them. Each built-in denial is held
+// to its seats' argv with exactly its web arguments changed.
+func TestAWebDenialKeepsEverySeatArgumentButTheWeb(t *testing.T) {
+	t.Parallel()
+	webOff := map[string]func([]string) []string{
+		"codex": func(seat []string) []string {
+			out := slices.Clone(seat)
+			out[slices.Index(out, `web_search="live"`)] = `web_search="disabled"`
+			return out
+		},
+		"claude-code": func(seat []string) []string {
+			var out []string
+			for i := 0; i < len(seat); i++ {
+				switch {
+				case seat[i] == "--tools":
+					out = append(out, "--tools", "")
+					i++
+				case seat[i] == "--allowedTools":
+					i += 2
+				default:
+					out = append(out, seat[i])
+				}
+			}
+			return append(out, "WebFetch", "WebSearch")
+		},
+		"pi": slices.Clone[[]string],
+	}
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		if p.WebDenial == nil || p.WebDenial.CompleteArgs == nil {
+			continue
+		}
+		off, ok := webOff[name]
+		if !ok {
+			t.Errorf("%s: its web denial restates the argv, and this test does not say how the two may differ", name)
+			continue
+		}
+		if want := off(p.CompleteArgs); !slices.Equal(p.WebDenial.CompleteArgs, want) {
+			t.Errorf("%s: web_denial.complete_args = %q\nwant the seats' argv with the web taken out: %q",
+				name, p.WebDenial.CompleteArgs, want)
+		}
+	}
+}
+
+// AND A SEEDED DENIAL IS THE SEATS' POLICY WITH ITS WEB RULES TAKEN OUT.
+// OpenCode turns its web off in the seeded policy file rather than on argv, so
+// its denial restates that file, and is held to it the same way: every other
+// setting the seats' file carries is in the denial's, byte for byte.
+func TestASeededWebDenialKeepsEverySeatSettingButTheWeb(t *testing.T) {
+	t.Parallel()
+	const allows = `,{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}`
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		if p.WebDenial == nil || p.WebDenial.SeedFiles == nil {
+			continue
+		}
+		if name != "opencode" {
+			t.Errorf("%s: its web denial restates its seed files, and this test does not say how the two may differ", name)
+			continue
+		}
+		if len(p.SeedFiles) != len(p.WebDenial.SeedFiles) {
+			t.Fatalf("%s: %d seat files, %d denied ones", name, len(p.SeedFiles), len(p.WebDenial.SeedFiles))
+		}
+		for i, seat := range p.SeedFiles {
+			denied := p.WebDenial.SeedFiles[i]
+			if !strings.Contains(seat.Content, allows) {
+				t.Fatalf("%s: the seats' policy no longer allows the web as this test reads it:\n%s", name, seat.Content)
+			}
+			if want := strings.Replace(seat.Content, allows, "", 1); denied.Path != seat.Path ||
+				denied.In != seat.In || denied.Content != want {
+				t.Errorf("%s: the denied %s is\n%s\nwant the seats' policy without its web rules:\n%s",
+					name, denied.Path, denied.Content, want)
+			}
+		}
+	}
+}
