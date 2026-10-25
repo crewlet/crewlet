@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -97,6 +99,9 @@ func (a *Approver) pageMoved(ctx context.Context, d decider, p assistantdomain.P
 	}
 	failure := &wire.Failure{Refusal: wire.Refusal{Code: CodeStale,
 		Message: "The page changed after this was prepared, so nothing was applied."}}
+	if immediate(p) {
+		return wire.ActionAnswer{}, ErrStale
+	}
 	if read, err := a.d.Grants.Read(ctx, p.Conversation, p.Turn); err == nil {
 		a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
 			Turn: p.Turn, Proposal: p.ID, Read: read, State: to, Failure: failure,
@@ -106,6 +111,18 @@ func (a *Approver) pageMoved(ctx context.Context, d decider, p assistantdomain.P
 			"revision", revision, "error", err)
 	}
 	return wire.ActionAnswer{}, ErrStale
+}
+
+// immediate reports whether p is a page action its screen declares
+// `confirm: none` (D11): the turn approved it itself and handed it to the page
+// without parking, so what the page reports settles the proposal and resumes
+// nothing; the turn carried on (or ended) the moment it sent the action.
+func immediate(p assistantdomain.Proposal) bool {
+	if p.Scope != wire.ScopePage {
+		return false
+	}
+	action, ok := catalog.PageActionOf(strings.TrimPrefix(p.Path, proposal.PageActionPath))
+	return ok && action.Confirm == wire.ConfirmNone
 }
 
 // pageEnd is where a page's report takes a claimed action.
@@ -162,6 +179,9 @@ func (a *Approver) reported(ctx context.Context, d decider, p assistantdomain.Pr
 			return wire.ActionAnswer{}, ErrActionClaimed
 		}
 		return wire.ActionAnswer{}, err
+	}
+	if immediate(p) {
+		return wire.ActionAnswer{ActionID: p.ID, State: report.State}, nil
 	}
 	if read, err := a.d.Grants.Read(ctx, p.Conversation, p.Turn); err == nil {
 		a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,

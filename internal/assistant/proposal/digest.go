@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -174,4 +175,16 @@ func hexDigest(s string) bool {
 		}
 	}
 	return true
+}
+
+// PageAction is the `action` frame that hands a page action to the page: its
+// id is the proposal's, so the page's claim and report name the proposal, and
+// it carries the action's name, the revision it was prepared against and the
+// payload the digest binds. confirm says whether the person approved it
+// (approve) or the screen declared it applies at once with an Undo (none).
+func PageAction(id uuid.UUID, path, revision string, payload []byte,
+	confirm wire.ActionConfirm) wire.ActionEvent {
+
+	return wire.ActionEvent{ActionID: id, Name: strings.TrimPrefix(path, PageActionPath),
+		ProposalID: &id, SourceRevision: revision, Payload: payload, Confirm: confirm}
 }

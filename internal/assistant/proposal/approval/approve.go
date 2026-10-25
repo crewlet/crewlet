@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/google/uuid"
 
@@ -353,13 +352,9 @@ func (a *Approver) emit(ctx context.Context, owner uuid.UUID, p assistantdomain.
 // sendToPage sends an approved page action to the page, which claims and
 // reports it ([Approver.Report]). The turn stays parked until it does.
 func (a *Approver) sendToPage(ctx context.Context, d decider, p assistantdomain.Proposal) (wire.ProposalAnswer, error) {
-	id := p.ID
 	card := proposal.CardAt(p, wire.ProposalApproved, nil, nil)
-	at := a.emit(ctx, d.person.ID, p, Emission{Card: &card, Action: &wire.ActionEvent{
-		ActionID: p.ID, Name: strings.TrimPrefix(p.Path, proposal.PageActionPath),
-		ProposalID: &id, SourceRevision: p.SourceRevision, Payload: p.Body,
-		Confirm: wire.ConfirmApprove,
-	}})
+	action := proposal.PageAction(p.ID, p.Path, p.SourceRevision, p.Body, wire.ConfirmApprove)
+	at := a.emit(ctx, d.person.ID, p, Emission{Card: &card, Action: &action})
 	return answer(p, wire.ProposalApproved, at), nil
 }
 

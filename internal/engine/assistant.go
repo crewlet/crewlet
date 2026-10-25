@@ -368,3 +368,13 @@ func (a assistantRecords) CreateProposal(ctx context.Context, w assistant.Write,
 	}
 	return settled(a.w.CreateProposal(ctx, c, p))
 }
+
+func (a assistantRecords) ApproveProposal(ctx context.Context, w assistant.Write,
+	proposal uuid.UUID) error {
+	c, err := a.call(w)
+	if err != nil {
+		return err
+	}
+	return settled(a.w.MoveProposal(ctx, c, proposal, assistantdomain.ProposalMove{
+		From: wire.ProposalProposed, To: wire.ProposalApproved}))
+}

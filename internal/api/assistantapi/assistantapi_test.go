@@ -159,6 +159,10 @@ func frames(t *testing.T, body []byte) []wire.Frame {
 			f.Card.Card.Proposal = &card
 		}
 		if f.Action != nil && f.Action.ProposalID != nil {
+			// A page action's id IS its proposal's (proposal.PageAction).
+			if f.Action.ActionID == *f.Action.ProposalID {
+				f.Action.ActionID = fixedProposal
+			}
 			id := fixedProposal
 			f.Action.ProposalID = &id
 		}
@@ -378,8 +382,9 @@ func TestTheWriteTurnFixtureIsTheRoutesOwn(t *testing.T) {
 }
 
 // THE PAGE ACTION TURN FIXTURE IS THE ROUTES' OWN: a question asked on the
-// open screen proposes a change to it, prepared against the screen's own
-// revision, and parks waiting for the person.
+// open screen changes its view at once (a `confirm: none` action, D11),
+// prepared against the screen's own revision, handed to the page as an action
+// frame with no card and no wait, and the turn answers on.
 func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 	t.Parallel()
 	s := newSite(t, evals.RigOptions{
@@ -387,7 +392,7 @@ func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 		Rounds: []evals.Round{
 			evals.Call("c1", "propose_page_change", map[string]any{
 				"action": "work.filter.apply", "args": map[string]any{"status": "todo"}}),
-			evals.Say("never")}})
+			evals.Say("Showing only the tasks still to do.")}})
 	page := &wire.PageContext{Screen: "work", Title: "Work \u203a Tasks",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
 		SourceRevision: "work@3", Accepts: []string{"work.filter.apply"}}
@@ -403,11 +408,17 @@ func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := s.stream(t, accepted, "")
-	card := evals.Last(frames(t, body), wire.EventCard)
-	if card == nil || card.Card.Card.Proposal == nil ||
-		card.Card.Card.Proposal.SourceRevision != "work@3" ||
-		card.Card.Card.Proposal.Scope != wire.ScopePage {
-		t.Fatalf("the page proposal's card = %+v, want one prepared against work@3", card)
+	drawn := frames(t, body)
+	action := evals.Last(drawn, wire.EventAction)
+	if action == nil || action.Action.Confirm != wire.ConfirmNone ||
+		action.Action.SourceRevision != "work@3" || action.Action.ProposalID == nil {
+		t.Fatalf("the page action = %+v, want one applied at once against work@3", action)
+	}
+	if card := evals.Last(drawn, wire.EventCard); card != nil {
+		t.Errorf("a view change drew a card %+v; its receipt is the page's", card)
+	}
+	if done := evals.Last(drawn, wire.EventDone); done == nil || done.Done.State != wire.TurnCompleted {
+		t.Fatalf("the turn ended %+v, want completed without parking", done)
 	}
 	assistanttest.Golden(t, "testdata/page_action_turn.sse", fixture(t, body))
 }

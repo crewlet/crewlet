@@ -369,6 +369,41 @@ func TestAnApproverWhoLostWhatTheTurnReadSendsNothing(t *testing.T) {
 	}
 }
 
+// A VIEW CHANGE THE TURN APPLIED AT ONCE IS SETTLED BY ITS REPORT AND RESUMES
+// NOTHING (D11): the turn approved a `confirm: none` action itself and carried
+// on without parking, so the page's claim and report settle the proposal and
+// hand no turn anything.
+//
+// Mutation: resume on every page report and a turn that never parked is asked
+// to carry on from a call it never suspended on.
+func TestAViewChangeAppliedAtOnceResumesNothing(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	ctx := approvaltest.As(t.Context(), ada)
+	p := f.Propose(t, ada, func(d *proposal.Draft) {
+		d.Tool, d.Act, d.Scope = "propose_page_change", "", wire.ScopePage
+		d.Preview.SourceRevision, d.PageRevision = "", "r7"
+		d.Preview.Request = exec.Request{Method: proposal.PageMethod,
+			Path: proposal.PageActionPath + "work.filter.apply", Body: []byte(`{"status":"todo"}`)}
+	})
+	p.State = wire.ProposalApproved
+	f.Store.Put(p)
+	for _, report := range []wire.ActionReport{{State: wire.ActionApplying, Revision: "r7"},
+		{State: wire.ActionApplied, Receipt: "Showing to do"}} {
+		if _, err := f.Node(t).Report(ctx, approval.Report{Action: p.ID, Key: uuid.NewString(),
+			Report: report}); err != nil {
+			t.Fatalf("the page's %s report answered %v", report.State, err)
+		}
+	}
+	if f.Store.State(p.ID) != wire.ProposalApplied {
+		t.Errorf("the view change is %s, want applied", f.Store.State(p.ID))
+	}
+	if resumed := f.Turns.Resumed(); len(resumed) != 0 {
+		t.Errorf("a turn that never parked was resumed %+v", resumed)
+	}
+}
+
 // A REFUSED WRITE FAILS IN THE ENGINE'S OWN WORDS, and the turn is told.
 func TestARefusedWriteFailsInTheEnginesWords(t *testing.T) {
 	t.Parallel()

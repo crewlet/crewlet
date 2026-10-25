@@ -175,15 +175,18 @@ func (s *surface) unsent(ctx context.Context, step stepClock, tool catalog.Tool,
 func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
 	scope := wire.ScopeServer
 	pageRevision := ""
+	immediate := false
 	if tool.Kind == catalog.KindPageAction {
 		scope = wire.ScopePage
 		var accepts []string
 		if s.t.page != nil {
 			accepts, pageRevision = s.t.page.Accepts, s.t.page.SourceRevision
 		}
-		if _, err := catalog.PageActionFor(args, accepts); err != nil {
+		action, err := catalog.PageActionFor(args, accepts)
+		if err != nil {
 			return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 		}
+		immediate = action.Confirm == wire.ConfirmNone
 	}
 	if err := tool.Check(args); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
@@ -200,6 +203,9 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 	if err == nil {
 		err = s.t.svc.records.CreateProposal(ctx,
 			s.t.write().Step("proposal", strconv.Itoa(step.Index)), drafted)
+	}
+	if err == nil && immediate {
+		return s.applyAtOnce(ctx, step, drafted)
 	}
 	if err == nil {
 		s.t.stepEnd(ctx, step, wire.StepWaiting, "Waiting for approval", nil, 0, 0)
@@ -222,6 +228,32 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 	s.t.svc.log.ErrorContext(ctx, "assistant_proposal_failed", "turn", s.t.id,
 		"tool", tool.Name, "error", redact.Secrets(err.Error()))
 	return failed("The change could not be prepared. Tell the person it failed."), nil
+}
+
+// applyAtOnce hands a `confirm: none` page action (a pure view change, D11)
+// straight to the page: the turn approves the proposal it just recorded, sends
+// the action frame, and carries on without parking. The page claims and
+// applies it and shows its Undo receipt; its report settles the proposal and
+// resumes nothing (approval's immediate). No proposal card is shown: the
+// receipt is the page's.
+func (s *surface) applyAtOnce(ctx context.Context, step stepClock,
+	drafted assistantdomain.NewProposal) (toolloop.ToolResult, error) {
+
+	if err := s.t.svc.records.ApproveProposal(ctx,
+		s.t.write().Step("proposal", strconv.Itoa(step.Index), "approve"),
+		drafted.Proposal); err != nil {
+		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be applied", nil, 0, 0)
+		s.t.svc.log.ErrorContext(ctx, "assistant_page_action_unapproved", "turn", s.t.id,
+			"proposal", drafted.Proposal, "error", redact.Secrets(err.Error()))
+		return failed("The change to the screen could not be applied. Tell the person it " +
+			"failed."), nil
+	}
+	action := proposal.PageAction(drafted.Proposal, drafted.Path, drafted.SourceRevision,
+		drafted.Body, wire.ConfirmNone)
+	s.t.emit(wire.Frame{Kind: wire.EventAction, Action: &action})
+	s.t.stepEnd(ctx, step, wire.StepDone, "Applied on your screen", nil, 0, 0)
+	return toolloop.ToolResult{Output: "Applied on the person's screen at once; they can " +
+		"undo it there. Nothing was saved."}, nil
 }
 
 // draft is the proposal a write's preview becomes: bound by [proposal.New]

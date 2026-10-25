@@ -89,6 +89,11 @@ type Records interface {
 	// CreateProposal records a proposal a write's preview became
 	// ([proposal.New]), as it is.
 	CreateProposal(ctx context.Context, w Write, p assistantdomain.NewProposal) error
+	// ApproveProposal records the turn's own approval of a proposal it just
+	// made: a page action its screen declares `confirm: none` (D11), which
+	// is applied at once with an Undo receipt rather than asked of the
+	// person, and is recorded as a proposal all the same.
+	ApproveProposal(ctx context.Context, w Write, proposal uuid.UUID) error
 }
 
 // Write is one record's caller: whose conversation, who acts, and the

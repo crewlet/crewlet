@@ -508,6 +508,26 @@ func (s *Store) CreateProposal(_ context.Context, w assistant.Write, p assistant
 	return nil
 }
 
+// ApproveProposal implements [assistant.Records]: a proposal the turn
+// approves itself, from proposed alone.
+func (s *Store) ApproveProposal(_ context.Context, w assistant.Write, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.keep(w, "proposal_approved", id); err != nil {
+		return err
+	}
+	p, ok := s.proposals[id]
+	switch {
+	case !ok || p.Owner != w.Owner:
+		return fmt.Errorf("%w: proposal %s", assistantdomain.ErrNotFound, id)
+	case p.State != wire.ProposalProposed:
+		return &assistantdomain.AlreadyDecided{State: p.State}
+	}
+	p.State, p.DecidedAt = wire.ProposalApproved, s.now().UTC()
+	s.proposals[id] = p
+	return nil
+}
+
 // Repark replaces a parked turn's stored loop, for a suite about a loop this
 // build cannot take back up.
 func (s *Store) Repark(turn uuid.UUID, raw []byte) {
