@@ -54,3 +54,36 @@ func TestASettingsFileIsALoginOnlyOnceItHoldsOne(t *testing.T) {
 		t.Errorf("LoginFiles = %v, want the restored login", files)
 	}
 }
+
+// A LOGIN COMMAND THAT LEFT ONLY THE CLI'S SETTINGS SIGNED NOBODY IN. The
+// carry-out answers whether a home holds a login, which is how `crewlet llm
+// login` tells a sign-in from a command that ended with none — and a Copilot
+// login whose token went to a keychain, or whose plaintext storage was
+// declined, leaves config.json holding firstLaunchAt alone.
+func TestACarryOutOfSettingsAloneHoldsNoLogin(t *testing.T) {
+	t.Parallel()
+	profile := testProfile(t)
+	profile.CredentialPaths = []string{".vendor/config.json"}
+	profile.LoginKeys = map[string]string{"config.json": "tokens"}
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	ws, err := Shared(dir, "fake-cli", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]bool{
+		`{"firstLaunchAt": "2026-10-24T21:08:22.632Z"}`:    false,
+		`{"tokens": {"https://example.com:someone": "x"}}`: true,
+	} {
+		home := t.TempDir()
+		writeFile(t, filepath.Join(home, ".vendor", "config.json"), body)
+		holds, err := ws.syncCredentialsOut(t.Context(), home, t.TempDir(), nil,
+			generation{Mode: syncLogin, Seeded: map[string]string{}})
+		if err != nil {
+			t.Fatalf("syncCredentialsOut: %v", err)
+		}
+		if holds != want {
+			t.Errorf("a home holding %s holds a login = %v, want %v", body, holds, want)
+		}
+	}
+}

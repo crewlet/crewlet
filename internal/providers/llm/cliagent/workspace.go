@@ -1236,8 +1236,14 @@ func (w *Workspace) syncCredentialsOut(
 		if err != nil {
 			return false, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
 		}
-		holds = true
 		name := filepath.Base(rel)
+		// A settings file the CLI also keeps its login in is carried with
+		// the rest, but answers "holds a login" only holding one
+		// ([cliprofile.Profile.HoldsLogin]): a login command that left
+		// just the CLI's own record of itself signed nobody in.
+		if w.profile.HoldsLogin(name, content) {
+			holds = true
+		}
 		if digestOf(content) != gen.Seeded[name] {
 			changed = append(changed, held{name: name, dst: filepath.Join(shared, name), content: content})
 		}
