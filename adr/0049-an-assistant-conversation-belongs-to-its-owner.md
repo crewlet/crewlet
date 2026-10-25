@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistantdomain`
-- **Enforced-by:** nothing
+- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -38,9 +38,6 @@ gone thirty days after it was last used.**
   person's erasure takes their conversations in the same pass. A stored card
   whose app the reader no longer holds is replaced by a notice on every read,
   and its export is not found.
-
-Enforced-by reads `nothing` while the domain is being built on the
-`feat/assistant` integration branch; see `adr.Unenforced`.
 
 ## Why the obvious alternatives are wrong
 
