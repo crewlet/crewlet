@@ -50,6 +50,7 @@ import { takeAction } from "./pageActions.ts";
 import {
   EMPTY,
   activityOf,
+  isOpen,
   openTurn,
   reduce,
   type ConversationView,
@@ -60,6 +61,22 @@ import {
 
 let view: ConversationView = EMPTY;
 let stream: TurnStream | null = null;
+
+/**
+ * The streams of earlier turns followed beside the conversation's own: a
+ * decision on a card of a turn the next question superseded resumes nothing,
+ * and its receipt arrives on that turn's stream, which is read here rather
+ * than in place of the turn now running.
+ */
+const asides = new Set<TurnStream>();
+
+/** End every stream this tab reads: the conversation's and the asides. */
+function closeStreams(): void {
+  stream?.close();
+  stream = null;
+  for (const aside of asides) aside.close();
+  asides.clear();
+}
 /** Bumped by every gesture that replaces the conversation, so a late answer for the last one is dropped. */
 let generation = 0;
 const listeners = new Set<() => void>();
@@ -105,7 +122,7 @@ function refusalWords(err: RestError): string {
     case "assistant_busy":
       return "Question limit reached.";
     case "assistant_turn_running":
-      return "An answer is still running in this conversation. Stop it, or wait for it to finish.";
+      return "An answer is still running in this conversation. Wait for it to finish.";
     case "assistant_protocol_mismatch":
       return "Crewlet was updated. Reload the page to keep asking.";
     case "assistant_unavailable":
@@ -168,11 +185,31 @@ function stopped(reason: StreamStop): TurnEvent {
 /** Read the turn at `streamUrl`, resuming after `lastEventId` where one is held. */
 function follow(streamUrl: string, lastEventId: string | undefined): void {
   stream?.close();
+  stream = read(streamUrl, lastEventId, true);
+}
+
+/**
+ * Read an earlier turn's stream beside the conversation's own, until it ends.
+ * Its frames reduce as any turn's do; the connection state the drawer shows
+ * stays the running turn's.
+ */
+function followAside(streamUrl: string, lastEventId: string | undefined): void {
+  const aside = read(streamUrl, lastEventId, false, () => asides.delete(aside));
+  asides.add(aside);
+}
+
+/** One turn stream, its frames dispatched while this conversation is open. */
+function read(
+  streamUrl: string,
+  lastEventId: string | undefined,
+  own: boolean,
+  ended?: () => void,
+): TurnStream {
   const mine = generation;
   const live = (event: TurnEvent) => {
     if (mine === generation) dispatch(event);
   };
-  stream = openTurnStream(
+  return openTurnStream(
     streamUrl,
     {
       frame: (frame) => {
@@ -181,8 +218,13 @@ function follow(streamUrl: string, lastEventId: string | undefined): void {
         dispatch({ type: "frame", frame });
         pageAction(frame);
       },
-      state: (state, since) => live({ type: "stream", state, since }),
-      stop: (reason) => live(stopped(reason)),
+      state: (state, since) => {
+        if (own) live({ type: "stream", state, since });
+        if (state === "closed") ended?.();
+      },
+      stop: (reason) => {
+        if (own) live(stopped(reason));
+      },
     },
     lastEventId === undefined ? {} : { lastEventId },
   );
@@ -263,8 +305,7 @@ export async function stop(): Promise<void> {
 /** Leave the conversation for the home; it stays in Conversations. */
 export function newConversation(): void {
   generation += 1;
-  stream?.close();
-  stream = null;
+  closeStreams();
   dispatch({ type: "reset" });
   writeTab({ conversation: null });
 }
@@ -273,8 +314,7 @@ export function newConversation(): void {
 export async function openConversation(id: string): Promise<void> {
   generation += 1;
   const mine = generation;
-  stream?.close();
-  stream = null;
+  closeStreams();
   const transcript = await call("GET /assistant/conversations/{id}", null, { id });
   if (mine !== generation) return;
   dispatch({ type: "transcript", transcript });
@@ -344,10 +384,15 @@ function decided(proposal: AssistantProposalCard, answer: AssistantProposalAnswe
     state: answer.proposal.state,
   });
   if (answer.stream_url) {
-    follow(
-      answer.stream_url,
-      answer.after_seq ? assistantEventId(answer.turn_id, answer.after_seq) : undefined,
-    );
+    const after = answer.after_seq ? assistantEventId(answer.turn_id, answer.after_seq) : undefined;
+    // A CARD OF AN EARLIER TURN, superseded by the question now running:
+    // its receipt is read beside that turn, never in place of it.
+    const current = view.turns.at(-1);
+    if (current && current.id !== "" && current.id !== answer.turn_id && isOpen(current.phase)) {
+      followAside(answer.stream_url, after);
+    } else {
+      follow(answer.stream_url, after);
+    }
   }
 }
 
@@ -471,8 +516,7 @@ export function resetSessionForTest(): void {
   asked.clear();
   approvals.clear();
   declines.clear();
-  stream?.close();
-  stream = null;
+  closeStreams();
   view = EMPTY;
   setAssistantActivity("idle");
 }

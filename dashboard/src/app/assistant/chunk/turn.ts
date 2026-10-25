@@ -445,12 +445,24 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
           },
         ],
       };
-    case "accepted":
-      return withTurn(
+    case "accepted": {
+      const accepted = withTurn(
         view,
         (t) => t.key === event.key && t.phase === "sending",
         (t) => ({ ...t, id: event.turnId, seq: event.afterSeq, phase: "thinking" }),
       );
+      // THE NEXT QUESTION SUPERSEDES A TURN WAITING ON A CARD: its loop is
+      // over (the engine records it `superseded`, which this tab hears only
+      // if it follows that turn again), and its cards keep their own states,
+      // so a proposal in it stays approvable until it expires.
+      if (accepted === view) return view;
+      const turns = accepted.turns.map((t) =>
+        t.key !== event.key && t.phase === "awaiting_approval"
+          ? { ...t, phase: "completed" as const }
+          : t,
+      );
+      return { ...accepted, turns };
+    }
     case "refused":
       return withTurn(
         view,
