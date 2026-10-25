@@ -61,6 +61,7 @@ import type {
   AssistantTurnAccepted,
   AssistantTurnRequest,
   AssistantVersioned,
+  AssistantModelNotice,
   AssistantViewerAssistant,
   AssistantViewerReason,
 } from "../contract/assistant.ts";
@@ -155,10 +156,37 @@ export function narrowCard(card: AssistantCard): AssistantNarrowCard | null {
  */
 export function assistantUnavailable(
   viewer: AssistantViewerAssistant | undefined,
-): AssistantViewerReason | null {
+): AssistantAccessReason | null {
   if (viewer === undefined) return "disabled";
-  if (viewer.available) return null;
+  if (viewer.available || viewer.reason === "model_not_ready") return null;
   return viewer.reason ?? "disabled";
+}
+
+/**
+ * A reason the reader may not use the assistant at all, which draws the Ask
+ * pill disabled: every viewer reason but the model's state, which is the
+ * drawer's notice ([assistantModelNotice]).
+ */
+export type AssistantAccessReason = Exclude<AssistantViewerReason, "model_not_ready">;
+
+/**
+ * What the reader is told of the assistant's model before they ask, or null
+ * when nothing is known to be wrong with it. NOT a reason the Ask pill is drawn
+ * disabled: the drawer still opens, with the conversation readable, and says
+ * this above its composer with Send off ([assistantUnavailable] lets it
+ * through). A `model_not_ready` answer with no notice is an older engine's,
+ * read as a model that cannot answer for no named reason.
+ */
+export function assistantModelNotice(
+  viewer: AssistantViewerAssistant | undefined,
+): AssistantModelNotice | null {
+  if (viewer === undefined || viewer.available || viewer.reason !== "model_not_ready") return null;
+  return (
+    viewer.model ?? {
+      code: "model_unavailable",
+      message: "The assistant's model cannot answer right now.",
+    }
+  );
 }
 
 /** A frame's SSE id, `<turn_id>.<seq>`, which a resume sends as Last-Event-ID. */

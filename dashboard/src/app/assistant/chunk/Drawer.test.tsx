@@ -24,7 +24,7 @@ import { withDerived } from "~/test/org.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
 import { queueQuestion, takeQueuedQuestion } from "../control.ts";
-import type { AssistantUnavailable } from "../availability.ts";
+import type { AssistantModelProblem, AssistantUnavailable } from "../availability.ts";
 import { Drawer } from "./Drawer.tsx";
 import { conversation, resetSessionForTest } from "./session.ts";
 
@@ -95,7 +95,11 @@ function engine() {
   return sent;
 }
 
-function mount(unavailable: AssistantUnavailable | null = null) {
+function mount(
+  unavailable: AssistantUnavailable | null = null,
+  model: AssistantModelProblem | null = null,
+  admin = false,
+) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
   const socket = new LiveSocket(store);
@@ -108,6 +112,8 @@ function mount(unavailable: AssistantUnavailable | null = null) {
             <LayerHost>
               <Drawer
                 unavailable={unavailable}
+                model={model}
+                admin={admin}
                 onClose={() => {}}
                 initialFocus="composer"
                 name="Ada Lovelace"
@@ -229,4 +235,58 @@ test("the panel's body is flush for the thread and scrolls for the offline notic
   });
   expect(screen.getByText("The assistant is off for Nimbus")).toBeDefined();
   expect(document.querySelector(".crewlet-side-panel__body--flush")).toBeNull();
+});
+
+const SIGNED_OUT: AssistantModelProblem = {
+  code: "model_signed_out",
+  short: "The assistant's model is signed out",
+  title: "The assistant's model is signed out, so it cannot answer.",
+  body: "Ask an administrator to sign the assistant's model in again.",
+};
+
+// A MODEL THE ENGINE KNOWS CANNOT ANSWER is said before the reader asks: the
+// panel stays open with the conversation readable, the notice stands above the
+// composer in the engine's words, and Send is off with the reason, so nothing
+// is sent and nothing imitates a working assistant.
+test("a model that cannot answer is said above the composer, and Send stays off", async () => {
+  const sent = engine();
+  mount(null, SIGNED_OUT);
+  expect(screen.getByText(SIGNED_OUT.title)).toBeDefined();
+  expect(screen.getByText(SIGNED_OUT.body)).toBeDefined();
+  // Not the offline state: the home is drawn and the composer is there.
+  expect(
+    screen.getByRole("heading", { name: /^Good (morning|afternoon|evening), Ada$/ }),
+  ).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
+
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  fireEvent.change(box, { target: { value: "Who spent most?" } });
+  const send = screen.getByRole("button", { name: /send/i });
+  expect(send.getAttribute("aria-disabled")).toBe("true");
+  expect(document.body.textContent).toContain(SIGNED_OUT.short);
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.click(send);
+  });
+  expect(sent.some((r) => new URL(r.url).pathname.endsWith("/turns"))).toBe(false);
+});
+
+// AN ADMINISTRATOR'S NOTICE OPENS THE MODELS' SETTINGS, where each model's
+// sign-in is shown; anybody else is told whom to ask instead.
+test("an administrator's model notice opens the models' settings", () => {
+  engine();
+  mount(null, SIGNED_OUT, true);
+  expect(screen.getByRole("button", { name: "Model settings" })).toBeDefined();
+});
+
+// A READY MODEL DRAWS NO NOTICE and Send works as before.
+test("a ready model draws no notice", () => {
+  engine();
+  mount();
+  expect(screen.queryByText(SIGNED_OUT.title)).toBeNull();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  fireEvent.change(box, { target: { value: "Who spent most?" } });
+  expect(screen.getByRole("button", { name: /send/i }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
 });

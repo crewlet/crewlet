@@ -14,15 +14,23 @@
  * Two more are the frame's own: nobody signed in, and a viewer answer still
  * on its way, which is drawn as "checking" rather than as any of the four, so
  * a reader is never told the assistant is off for the second it takes to ask.
+ *
+ * THE MODEL'S STATE IS NOT ONE OF THEM. A model the engine knows cannot answer
+ * now (signed out, its plan spent, its CLI unable to start) leaves the Ask
+ * button lit and the drawer open, with the conversation readable: the drawer
+ * says so above its composer and keeps Send off ([assistantModelFor]), in the
+ * engine's own sentence, the one a failed answer would have carried.
  */
 
-import type { AssistantViewerReason } from "~/contract/assistant.ts";
+import type { AssistantErrorCode } from "~/contract/assistant.ts";
+import type { AssistantAccessReason } from "~/protocol/assistantWire.ts";
+import { fmtMinute } from "~/lib/format.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 
 /** Why the reader may not ask, in the words each surface draws. */
 export interface AssistantUnavailable {
   /** The engine's reason, or the frame's own. */
-  reason: AssistantViewerReason | "anonymous" | "checking";
+  reason: AssistantAccessReason | "anonymous" | "checking";
   /** After the Ask button's name and in its tooltip: one short sentence. */
   short: string;
   /** The drawer's empty state: a title and what it means for the reader. */
@@ -32,7 +40,7 @@ export interface AssistantUnavailable {
 
 /** The sentences for each of the engine's reasons, given the company's name. */
 function words(
-  reason: AssistantViewerReason,
+  reason: AssistantAccessReason,
   company: string,
 ): Omit<AssistantUnavailable, "reason"> {
   switch (reason) {
@@ -89,4 +97,49 @@ export function assistantUnavailableFor(
   }
   if (viewer.assistant === null) return null;
   return { reason: viewer.assistant, ...words(viewer.assistant, company || "this company") };
+}
+
+/** Why the assistant's model cannot answer now, as the drawer draws it. */
+export interface AssistantModelProblem {
+  /** The error code a question would fail with. */
+  code: AssistantErrorCode;
+  /** Send's reason, after its name and in its tooltip: a short phrase. */
+  short: string;
+  /** The notice's heading: the engine's sentence. */
+  title: string;
+  /** What to do, the engine's hint for this reader, with the reset where one is known. */
+  body: string;
+}
+
+/** Send's reason for each code the engine can know before a question. */
+function shortFor(code: AssistantErrorCode): string {
+  switch (code) {
+    case "model_signed_out":
+      return "The assistant's model is signed out";
+    case "model_busy":
+      return "The assistant's model is at its usage limit";
+    default:
+      return "The assistant's model cannot answer right now";
+  }
+}
+
+/**
+ * Why the assistant's model cannot answer now, or null when nothing is known
+ * to be wrong with it. The heading and the hint are the engine's (an
+ * administrator is handed the command that fixes it, anybody else whom to
+ * ask); the reset of a spent plan is drawn in the reader's own time.
+ */
+export function assistantModelFor(
+  viewer: Pick<ViewerState, "assistantModel">,
+): AssistantModelProblem | null {
+  const notice = viewer.assistantModel;
+  if (notice === null) return null;
+  const parts = [notice.hint ?? ""];
+  if (notice.retry_at) parts.push(`You can ask again from ${fmtMinute(notice.retry_at)}.`);
+  return {
+    code: notice.code,
+    short: shortFor(notice.code),
+    title: notice.message,
+    body: parts.filter((p) => p !== "").join(" "),
+  };
 }

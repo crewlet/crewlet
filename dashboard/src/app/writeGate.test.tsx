@@ -226,6 +226,7 @@ const NOBODY: ViewerState = {
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",
+  assistantModel: null,
 };
 
 const READERS: readonly {

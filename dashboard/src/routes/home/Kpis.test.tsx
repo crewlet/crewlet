@@ -44,6 +44,7 @@ const VIEWER: ViewerState = {
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",
+  assistantModel: null,
 };
 
 function draw(figures?: readonly KpiId[]) {

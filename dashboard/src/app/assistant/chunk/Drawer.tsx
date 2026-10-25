@@ -16,7 +16,11 @@
  * The FOOT is the composer, with the page attached to the next question as a
  * chip inside its edge (removing it sends the question with no page, until
  * the reader adds it back or opens another page, which attaches itself), and
- * the one line that says the assistant can be wrong.
+ * the one line that says the assistant can be wrong. Above it, while the
+ * engine knows the model cannot answer (signed out, its plan spent, its CLI
+ * unable to start), a notice says so in the engine's words and Send stays off
+ * with that reason: the reader is told before they ask, never after a wait.
+ * An administrator's notice also opens the models' settings.
  *
  * # Keys
  *
@@ -66,6 +70,7 @@ import {
 import { ASSISTANT_INPUT_MAX_RUNES } from "~/contract/assistant.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
 import { relTime } from "~/lib/format.ts";
+import { rereadViewer } from "~/lib/viewer.ts";
 import { matchesRow } from "../../keymap.ts";
 import { on as onBus, emit } from "../bus.ts";
 import { usePageSnapshot } from "../context.ts";
@@ -75,7 +80,7 @@ import {
   useQueuedQuestion,
   type AssistantFocus,
 } from "../control.ts";
-import type { AssistantUnavailable } from "../availability.ts";
+import type { AssistantModelProblem, AssistantUnavailable } from "../availability.ts";
 import { readTab } from "../tab.ts";
 import { useToastInset } from "../../toastInset.tsx";
 import type { AssistantShape } from "../../layout.ts";
@@ -103,6 +108,10 @@ import { openTurn } from "./turn.ts";
 export interface DrawerProps {
   /** Why the reader may not ask, or null where they may. */
   unavailable: AssistantUnavailable | null;
+  /** Why the assistant's model cannot answer now, or null when nothing is known to be wrong. */
+  model: AssistantModelProblem | null;
+  /** The reader holds admin: the model notice also opens the models' settings. */
+  admin: boolean;
   /** Close the panel; focus goes back to the Ask button. */
   onClose: () => void;
   /** Where focus goes as the panel opens. */
@@ -134,7 +143,15 @@ interface Recent {
   updated_at: string;
 }
 
-export function Drawer({ unavailable, onClose, initialFocus, name, shape }: DrawerProps) {
+export function Drawer({
+  unavailable,
+  model,
+  admin,
+  onClose,
+  initialFocus,
+  name,
+  shape,
+}: DrawerProps) {
   const modal = shape !== "column";
   const view = useConversation();
   const page = usePageSnapshot();
@@ -164,6 +181,11 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
     return () => observer.disconnect();
   }, [shape, unavailable]);
   useToastInset("panel", shape === "sheet" && footHeight > 0 ? { block: footHeight } : null);
+
+  // THE MODEL'S STATE IS ASKED AGAIN AS THE PANEL OPENS, rather than read
+  // from the frame's slow poll: a model signed in again since is not refused,
+  // and one that went out since is said before the reader asks.
+  useEffect(() => rereadViewer(), []);
 
   // THE CONVERSATION THIS TAB WAS ON comes back after a reload, read again
   // from the engine under this session.
@@ -205,10 +227,11 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
 
   const disabledReason = useMemo(() => {
     if (view.fault === "protocol_mismatch") return "Reload to keep asking";
+    if (model !== null) return model.short;
     if (view.stream === "reconnecting") return "Offline";
     if (waitSeconds > 0) return `You can ask again in ${waitSeconds} seconds`;
     return undefined;
-  }, [view.fault, view.stream, waitSeconds]);
+  }, [view.fault, model, view.stream, waitSeconds]);
 
   // THE PERSON'S OWN QUESTION IS ALWAYS SHOWN: the thread follows only while
   // it is read at its end, so a question sent while scrolled up would land out
@@ -374,6 +397,32 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
         footer={
           offline ? undefined : (
             <div ref={foot}>
+              {model ? (
+                <Callout
+                  variant="warning"
+                  className="assistant-model-notice"
+                  title={model.title}
+                  action={
+                    admin ? (
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        onClick={() =>
+                          emit("assistant.navigation.open", {
+                            path: ["settings", "models"],
+                            query: {},
+                            mode: "here",
+                          })
+                        }
+                      >
+                        Model settings
+                      </Button>
+                    ) : undefined
+                  }
+                >
+                  {model.body}
+                </Callout>
+              ) : null}
               <Composer
                 ref={composer}
                 id={ASSISTANT_COMPOSER_ID}
@@ -462,6 +511,7 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
                   openHere: (target) => openHere(target),
                   undo: undoAction,
                 }}
+                retryDisabledReason={disabledReason}
                 onRetry={(text) => ask(text)}
                 onReconnect={reconnect}
               />

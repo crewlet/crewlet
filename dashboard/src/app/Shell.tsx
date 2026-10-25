@@ -101,7 +101,7 @@ import {
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { ownName } from "~/lib/viewer.ts";
-import { assistantUnavailableFor } from "./assistant/availability.ts";
+import { assistantModelFor, assistantUnavailableFor } from "./assistant/availability.ts";
 import {
   ASSISTANT_COMPOSER_ID,
   AssistantControlContext,
@@ -635,6 +635,7 @@ function Frame({ children }: { children: ReactNode }) {
   );
   const org = useOrg();
   const assistantUnavailable = assistantUnavailableFor(viewer, org?.name ?? "");
+  const assistantModel = assistantModelFor(viewer);
   const assistantControl = useMemo(
     () => ({
       open: assistantOpen,
@@ -744,6 +745,8 @@ function Frame({ children }: { children: ReactNode }) {
                 <AsideBoundary onClose={() => showAssistant(false)}>
                   <AssistantDrawer
                     unavailable={assistantUnavailable}
+                    model={assistantModel}
+                    admin={viewer.admin}
                     onClose={() => showAssistant(false)}
                     initialFocus={assistantFocus}
                     shape={assistantShape}

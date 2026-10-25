@@ -137,6 +137,7 @@ describe("one row per move of the state machine", () => {
       refusal: {
         code: "assistant_busy",
         sentence: "Question limit reached.",
+        hint: null,
         retryAfterSeconds: 30,
       },
     });

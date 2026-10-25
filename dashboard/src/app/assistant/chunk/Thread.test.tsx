@@ -55,7 +55,7 @@ const card: AssistantCardEvent = {
 /** The shimmer, as the design system draws it: a skeleton hidden from assistive technology. */
 const SHIMMER = '[class*="crewlet-skeleton"]';
 
-function draw(t: TurnView) {
+function draw(t: TurnView, retryDisabledReason?: string) {
   return render(
     <Router>
       <Thread
@@ -64,6 +64,7 @@ function draw(t: TurnView) {
         on={on}
         opened={new Set()}
         onRetry={() => {}}
+        retryDisabledReason={retryDisabledReason}
         onReconnect={() => {}}
       />
     </Router>,
@@ -90,4 +91,49 @@ test("a run that took no step has no count and nothing to open", () => {
   });
   expect(container.textContent).not.toContain("0 steps");
   expect(container.querySelector("[aria-expanded]")).toBeNull();
+});
+
+const failed = (error: NonNullable<TurnView["error"]>): TurnView => ({
+  ...turn,
+  phase: "failed",
+  done: { state: "failed", duration_ms: 1000, steps: 0 },
+  error,
+});
+
+// A MODEL FAILURE IS TOLD IN THE ENGINE'S WORDS, with its hint, and Try again
+// is offered only where asking again can help: not for a signed-out model.
+test("a signed-out model says so with its hint and offers no Try again", () => {
+  draw(
+    failed({
+      code: "model_signed_out",
+      message: "The assistant's model is signed out, so it cannot answer.",
+      hint: "Ask an administrator to sign the assistant's model in again.",
+      retryable: false,
+    }),
+  );
+  expect(
+    screen.getByText("The assistant's model is signed out, so it cannot answer."),
+  ).toBeTruthy();
+  expect(document.body.textContent).toContain(
+    "Ask an administrator to sign the assistant's model in again.",
+  );
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+});
+
+test("a model that took too long offers Try again, held off while Send is", () => {
+  const timeout = failed({
+    code: "model_timeout",
+    message: "The assistant's model took too long to answer.",
+    hint: "Ask again, or ask a narrower question.",
+    retryable: true,
+  });
+  const { unmount } = draw(timeout);
+  expect(screen.getByRole("button", { name: "Try again" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
+  unmount();
+  draw(timeout, "The assistant's model is signed out");
+  expect(screen.getByRole("button", { name: /Try again/ }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
 });

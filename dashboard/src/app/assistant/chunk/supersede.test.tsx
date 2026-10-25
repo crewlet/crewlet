@@ -119,6 +119,8 @@ function mount() {
             <LayerHost>
               <Drawer
                 unavailable={null}
+                model={null}
+                admin={false}
                 onClose={() => {}}
                 initialFocus="composer"
                 name="Ada Lovelace"

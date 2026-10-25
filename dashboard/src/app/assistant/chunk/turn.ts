@@ -101,6 +101,8 @@ export interface SendRefusal {
   code: string;
   /** The sentence a person is shown. */
   sentence: string;
+  /** What to do, where the engine said: a model that is not ready names its fix. */
+  hint: string | null;
   /** Seconds the engine said to wait, where it said. */
   retryAfterSeconds: number | null;
 }

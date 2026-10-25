@@ -137,11 +137,7 @@ type AssistantResourceKind =
 
 /** Why the assistant is not available to the viewer. */
 export type AssistantViewerReason =
-  | "disabled"
-  | "no_model"
-  | "not_a_person"
-  | "no_permission"
-  | "model_not_ready";
+  "disabled" | "no_model" | "not_a_person" | "no_permission" | "model_not_ready";
 
 /** Whether a page action asks for the person's approval. */
 type AssistantActionConfirm = "approve" | "none";

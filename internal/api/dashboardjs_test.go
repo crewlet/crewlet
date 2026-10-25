@@ -1150,8 +1150,11 @@ const (
 	// drawer's one prop: the release drops the result table's first column
 	// truncation and a flush side panel body's scrolling, and the drawer
 	// keeps a scrolling body for its offline notice. 4433 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 337<<10
+	// refuses a doubled baseline. Telling a person the assistant's model
+	// cannot answer before they ask took it to 4434.2 KiB: the drawer's
+	// notice, its words and the viewer's model member, in the panel's chunk
+	// and the frame's. 4435 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 339<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
