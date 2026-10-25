@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** nothing
+- **Enforced-by:** `internal/authz.TestEveryRowDecidesTheAssistant`, `internal/authz.TestAnAssistNeverRowRefusesAnAssistedPrincipal`, `internal/authz.TestAPresenceRowRefusesAnAssistedPrincipal`, `internal/authz.TestAReadGrantTakesOnlyAssistReadRows`, `internal/authz.TestTheAssistantIsNeverOneStepFromTheNeverList`, `internal/agent/builtin.TestAnAssistReadVerbIsAToolThatOnlyReads`, `internal/iamdomain.TestAnAdministrativeRecordIsNeverWrittenThroughTheAssistant`, `internal/iamdomain.TestATokenIsNeverMintedThroughTheAssistant`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -18,10 +18,15 @@ recency.
 - **Checked inside `authz.Decide`**, beside the machine-token presence check
   and before the class: a principal acting through an assistant grant on an
   `AssistNever` row, or on any row whose `presence` needs a person at the
-  keyboard, is refused. After the class admits, the grant's scope refuses an
-  `AssistApprove` row under a read grant. Both refusals name a reason of their
-  own, so an assistant is told it is the assistant rather than that the person
-  lacks a permission they plainly hold.
+  keyboard, is refused, and the grant's scope refuses an `AssistApprove` row
+  under a read grant. Both refusals name a reason of their own
+  (`assist_refused`, `assist_scope`), so an assistant is told it is the
+  assistant rather than that the person lacks a permission they plainly hold.
+  Both are asked before the class because no answer the chart could give
+  would lift either: asked after it, a node that could not read its chart
+  would answer "ask me again" to a grant that can never take the verb. The
+  bar reads the credential's class, never its spelling, and reads a zero
+  class as never.
 - **`AssistNever` covers what a model must never be one step from**: every
   credential, secret and setup verb, the company document's writes, fleet
   operations, every identity directory write and proof, session control, every
@@ -35,9 +40,6 @@ recency.
 Layers only subtract. The person's own authority decision is still the whole
 decision: no assistant field can admit what the person's grants and relations
 refuse.
-
-Enforced-by reads `nothing` while the field is being added to the table on the
-`feat/assistant` integration branch; see `adr.Unenforced`.
 
 ## Why the obvious alternatives are wrong
 

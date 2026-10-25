@@ -103,16 +103,6 @@ var Unenforced = []Exemption{
 			"opposite of the decision: a field is explicitly not a bump.",
 	},
 	{
-		ID: "ADR-0048",
-		Why: "The gate is the authority table's completeness walk over a field " +
-			"the table does not carry until the assistant's authority work lands " +
-			"on the feat/assistant integration branch: a walk over a missing " +
-			"field would certify nothing. This entry is removed in the commit " +
-			"that adds the field and names its walks in the record, which the " +
-			"two-sided check in this package's tests forces, and no " +
-			"assistant record may reach main while it is listed here.",
-	},
-	{
 		ID: "ADR-0049",
 		Why: "The gates read the assistant's state-log domain, its applier and " +
 			"its owner-keyed reads, which do not exist until the domain lands " +
