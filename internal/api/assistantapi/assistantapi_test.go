@@ -64,8 +64,7 @@ func newSite(t *testing.T, o assistanttest.RigOptions) *site {
 	rig := assistanttest.NewRig(t, o)
 	surface, err := assistantapi.New(assistantapi.Options{Service: rig.Svc,
 		Grants: grants{now: rig.Clock.Now}, Tables: tables{}, Chart: authz.NoChart{},
-		Acts: func(context.Context, iam.Principal) ([]string, error) { return nil, nil },
-		Now:  rig.Clock.Now})
+		Now: rig.Clock.Now})
 	if err != nil {
 		t.Fatal(err)
 	}

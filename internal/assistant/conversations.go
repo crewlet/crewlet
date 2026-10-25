@@ -78,6 +78,16 @@ func (s *Service) Transcript(ctx context.Context, p iam.Principal, id uuid.UUID)
 	if err != nil {
 		return wire.Transcript{}, s.readFailure(err)
 	}
+	return s.render(t, p), nil
+}
+
+// render is a conversation as reader is shown it: its messages, steps and
+// cards, the turn still open and every compliance read of it, with every card
+// built from an app the reader no longer holds replaced by a notice and every
+// proposal card at its state now. The owner's reload and an administrator's
+// compliance read are rendered by this one rule.
+func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wire.Transcript {
+	id := t.Conversation.ID
 	out := wire.Transcript{Conversation: t.Conversation.Summary(), Messages: []wire.Message{},
 		Steps: []wire.StepEvent{}, Cards: []wire.CardEvent{}, AuditReads: []wire.AuditRead{}}
 	for _, m := range t.Messages {
@@ -90,7 +100,7 @@ func (s *Service) Transcript(ctx context.Context, p iam.Principal, id uuid.UUID)
 	for _, pr := range t.Proposals {
 		proposals[pr.ID] = pr
 	}
-	held := iam.Expand(p.Grants)
+	held := iam.Expand(reader.Grants)
 	for _, c := range t.Cards {
 		out.Cards = append(out.Cards, s.shown(c, held, proposals))
 	}
@@ -111,7 +121,7 @@ func (s *Service) Transcript(ctx context.Context, p iam.Principal, id uuid.UUID)
 		out.OpenTurn = &wire.OpenTurn{TurnID: open, State: state,
 			StreamURL: StreamPath(id, open), AfterSeq: after}
 	}
-	return out, nil
+	return out
 }
 
 // shown is a stored card as a reader holding held is shown it now.

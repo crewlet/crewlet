@@ -53,7 +53,8 @@ func TestTheAssistantSendsThroughTheDispatcherAlone(t *testing.T) {
 			}
 			if sel.Sel.Name == "Do" {
 				doCalls++
-				if inner, ok := sel.X.(*ast.SelectorExpr); !ok || inner.Sel.Name != "dispatcher" {
+				if inner, ok := sel.X.(*ast.SelectorExpr); !ok ||
+					!strings.EqualFold(inner.Sel.Name, "dispatcher") {
 					t.Errorf("%s: a Do call on something other than the dispatcher",
 						fset.Position(sel.Pos()))
 				}

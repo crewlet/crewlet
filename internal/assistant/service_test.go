@@ -179,7 +179,7 @@ func TestAStoppedTurnChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := f.Svc.Stop(t.Context(), f.Person.ID, accepted.TurnID)
+	answer, err := f.Svc.Stop(t.Context(), f.Person.ID, accepted.TurnID, assistanttest.Key("stopping"))
 	if err != nil || answer.State != wire.TurnStopped {
 		t.Fatalf("stop = %+v, %v", answer, err)
 	}

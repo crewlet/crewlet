@@ -1,0 +1,297 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/textcut"
+)
+
+// THE APPROVAL PATH'S HOOKS INTO A PARKED TURN (ADR-0047): what became of a
+// proposal is handed back to the turn that proposed it, which carries on from
+// the call it suspended on; a decision that leaves the turn parked (an
+// approved page action the page has not reported yet) appends its frames to
+// the turn's stream; and a Stop of a parked turn declines what it waits on.
+// internal/assistant/proposal/approval decides; the Service owns every
+// goroutine a turn runs on, so a decision never runs a turn itself.
+
+var _ approval.Turns = (*Service)(nil)
+
+// Decliner declines every proposal a stopped turn waits on:
+// *approval.Approver's DeclineTurn.
+type Decliner interface {
+	DeclineTurn(ctx context.Context, s approval.Stop) error
+}
+
+// BindDecliner installs the approval path a Stop of a parked turn declines
+// through. ONCE, at wiring time: the approver is built over this service as
+// its [approval.Turns], so the two cannot be handed to each other at
+// construction.
+func (s *Service) BindDecliner(d Decliner) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case d == nil:
+		return errors.New("assistant: bind no decliner")
+	case s.decliner != nil:
+		return errors.New("assistant: a decliner is already bound")
+	}
+	s.decliner = d
+	return nil
+}
+
+// Resume takes a parked turn back up on this node with what became of its
+// proposal, on the read grant the deciding request derived, and answers where
+// its stream continues. ONCE: the resume record is arbitrated, so two
+// decisions of one proposal resume it at most once.
+//
+// The person is the deciding request's, and must be the turn's owner: a
+// decision is never another person's.
+func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnAccepted, error) {
+	started := false
+	defer func() {
+		if !started && r.Read != nil {
+			s.revoker.Revoke(r.Read.ID())
+		}
+	}()
+	person, how := iam.From(ctx)
+	switch {
+	case how != iam.Resolved || person.ID != r.Owner:
+		return wire.TurnAccepted{}, fmt.Errorf("%w: a turn resumes on its owner's own "+
+			"decision", ErrNotFound)
+	case r.Read == nil:
+		return wire.TurnAccepted{}, errors.New("assistant: a resumed turn needs the read " +
+			"grant derived from the deciding request")
+	}
+	if err := s.eligible(person); err != nil {
+		return wire.TurnAccepted{}, err
+	}
+	row, err := s.transcripts.Turn(ctx, r.Owner, r.Turn)
+	if err != nil {
+		return wire.TurnAccepted{}, s.readFailure(err)
+	}
+	if row.State != wire.TurnWaitingForApproval || row.Conversation != r.Conversation {
+		return wire.TurnAccepted{}, ErrTurnRunning
+	}
+	raw, err := s.transcripts.Parked(ctx, r.Owner, r.Turn)
+	if err != nil {
+		return wire.TurnAccepted{}, s.readFailure(err)
+	}
+	var keep parked
+	if err := json.Unmarshal(raw, &keep); err != nil || keep.V != parkedVersion {
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: turn %s parked a loop this build "+
+			"does not read (version %d): %w", r.Turn, keep.V, err)
+	}
+	acts, err := s.acts(ctx, person)
+	if err != nil {
+		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+	}
+	if err := s.admit(person); err != nil {
+		return wire.TurnAccepted{}, err
+	}
+	admitted := true
+	defer func() {
+		if admitted {
+			s.unadmit(person.ID)
+		}
+	}()
+	meter, err := s.budget.Meter(ctx, person)
+	if err != nil {
+		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+	}
+	if refusal := budgetRefusal(ctx, meter); refusal != nil {
+		return wire.TurnAccepted{}, refusal
+	}
+	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTurn,
+		TurnID: r.Turn.String()}
+	provider, key, err := s.models.Chain(ctx, person, use)
+	if err != nil {
+		return wire.TurnAccepted{}, &Unavailable{Cause: err}
+	}
+	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, nil, acts)
+	t.derived = &Derivation{At: row.StartedAt, Name: "assistant_resume",
+		Identity: []string{r.Turn.String(), r.Proposal.String()}}
+	if provenance.Boundary(keep.Boundary).Valid() {
+		t.boundary = provenance.Boundary(keep.Boundary)
+	}
+	if err := s.records.ResumeTurn(ctx, t.write().Step("resume"), r.Turn, s.node); err != nil {
+		t.cancel(nil)
+		return wire.TurnAccepted{}, s.writeFailure(err)
+	}
+	t.steps, t.cards, t.messages = keep.Steps, keep.Cards, keep.Count+1
+	t.answer = assistantdomain.MessageID(r.Turn, t.messages)
+	messages := append(keep.Messages, llm.Message{Role: llm.RoleTool, Name: keep.PendingTool,
+		ToolCallID: keep.PendingCall, Content: resultOf(r, t.boundary),
+		Failed: r.State != wire.ProposalApplied})
+
+	conversation, err := s.transcripts.Conversation(ctx, r.Owner, r.Conversation)
+	if err != nil {
+		t.cancel(nil)
+		return wire.TurnAccepted{}, s.readFailure(err)
+	}
+	after := s.openStream(t, conversation, true)
+	if r.Card.Type != "" {
+		if err := s.showProposal(ctx, t, r.Proposal, r.Card); err != nil {
+			s.log.WarnContext(ctx, "assistant_proposal_card_unshown", "turn", r.Turn,
+				"proposal", r.Proposal, "error", redact.Secrets(err.Error()))
+		}
+	}
+	if r.Invalidate != nil {
+		t.emit(wire.Frame{Kind: wire.EventAction, Action: &wire.ActionEvent{
+			ActionID: uuid.NewSHA1(r.Proposal, []byte(wire.ActionContextInvalidate)),
+			Name:     wire.ActionContextInvalidate, Invalidate: r.Invalidate}})
+	}
+	c, _ := s.company()
+	assistantCfg := config.Assistant{}
+	if c != nil {
+		assistantCfg = c.Assistant
+	}
+	admitted, started = false, true
+	s.track(t)
+	go t.run(loopRun{messages: messages, provider: provider, key: key, meter: meter,
+		tools: s.catalogue.Offered(person, acts), steps: assistantCfg.Steps(),
+		timeout: assistantCfg.TurnTimeout()})
+	return wire.TurnAccepted{TurnID: r.Turn, StreamURL: StreamPath(r.Conversation, r.Turn),
+		AfterSeq: after}, nil
+}
+
+// resultOf is the answer to the call a turn suspended on, as its model reads
+// it: the engine's own words for what became of the proposal; the route's
+// answer to a write that was sent, fenced as an API answer, since it carries
+// text other people wrote; and a page's own report fenced as the page's,
+// never as the engine's, since the engine cannot verify it.
+func resultOf(r approval.Resumption, b provenance.Boundary) string {
+	var out strings.Builder
+	switch r.State {
+	case wire.ProposalApplied:
+		out.WriteString("The person approved the change and it was applied.")
+	case wire.ProposalDeclined:
+		out.WriteString("The person declined the change. Nothing was sent.")
+	case wire.ProposalStale:
+		out.WriteString("The record changed after the change was proposed, so nothing " +
+			"was sent. Read it again before proposing anything else.")
+	default:
+		fmt.Fprintf(&out, "The change ended %s.", r.State)
+	}
+	if r.Failure != nil {
+		fmt.Fprintf(&out, " Refusal: %s (%s).", redact.Secrets(r.Failure.Refusal.Message),
+			r.Failure.Refusal.Code)
+	}
+	if r.Receipt != nil && !r.ClientReported {
+		fmt.Fprintf(&out, " %s", redact.Secrets(r.Receipt.Summary))
+	}
+	if len(r.Answer) > 0 {
+		answer := redact.Secrets(string(r.Answer))
+		if len(answer) > ModelResultBytes {
+			answer = textcut.Within(answer, ModelResultBytes)
+		}
+		out.WriteString("\n" + provenance.Fence(b, provenance.SourceAPIAnswer,
+			provenance.TrustColleague, nil, answer))
+	}
+	if r.ClientReported && r.Receipt != nil {
+		out.WriteString("\n" + provenance.Fence(b, provenance.SourcePageContext,
+			provenance.TrustPage, nil, redact.Secrets(r.Receipt.Summary)))
+	}
+	return out.String()
+}
+
+// Emit appends frames to a turn that stays parked: the proposal card at its
+// state now and, for an approved page action, the action the page applies;
+// then the segment ends again, waiting for approval, so the client's stream
+// closes cleanly. It answers where the client reads them.
+func (s *Service) Emit(ctx context.Context, owner, conversation, turn uuid.UUID,
+	e approval.Emission) (wire.TurnAccepted, error) {
+
+	row, err := s.transcripts.Turn(ctx, owner, turn)
+	if err != nil {
+		return wire.TurnAccepted{}, s.readFailure(err)
+	}
+	if row.Conversation != conversation || row.State != wire.TurnWaitingForApproval {
+		return wire.TurnAccepted{}, ErrTurnRunning
+	}
+	person, how := iam.From(ctx)
+	if how != iam.Resolved || person.ID != owner {
+		return wire.TurnAccepted{}, fmt.Errorf("%w: frames are emitted on the owner's own "+
+			"decision", ErrNotFound)
+	}
+	t := s.newTurn(person, conversation, turn, "", nil, nil, nil)
+	defer t.cancel(nil)
+	t.log = s.hub.Open(conversation, turn)
+	after := t.log.Last()
+	if e.Card != nil {
+		if err := s.showProposal(ctx, t, uuid.Nil, *e.Card); err != nil {
+			t.log.End()
+			return wire.TurnAccepted{}, err
+		}
+	}
+	if e.Action != nil {
+		action := *e.Action
+		t.emit(wire.Frame{Kind: wire.EventAction, Action: &action})
+	}
+	t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
+		State: wire.StatusWaitingForApproval, StepsDone: row.Steps}})
+	t.emit(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{
+		State: wire.TurnWaitingForApproval, Steps: row.Steps}})
+	t.log.End()
+	return wire.TurnAccepted{TurnID: turn, StreamURL: StreamPath(conversation, turn),
+		AfterSeq: after}, nil
+}
+
+// showProposal streams a proposal card at its state now under the id the
+// card was first shown with, so the drawer replaces it in place. It records
+// nothing: the transcript renders a stored proposal card at its state now on
+// every read, so a second copy would be a second card for one proposal.
+// proposal names it, or the card's own proposal where it is uuid.Nil.
+func (s *Service) showProposal(ctx context.Context, t *turn, proposal uuid.UUID,
+	card wire.Card) error {
+
+	if card.Type != wire.CardProposal || card.Proposal == nil {
+		return fmt.Errorf("assistant: a decision handed the turn a %s card, not a "+
+			"proposal's", card.Type)
+	}
+	if proposal == uuid.Nil {
+		proposal = card.Proposal.ProposalID
+	}
+	transcript, err := s.transcripts.Transcript(ctx, t.person.ID, t.conversation)
+	if err != nil {
+		return s.readFailure(err)
+	}
+	for _, c := range transcript.Cards {
+		if c.Card.Type == wire.CardProposal && c.Card.Proposal != nil &&
+			c.Card.Proposal.ProposalID == proposal {
+			t.emit(wire.Frame{Kind: wire.EventCard, Card: &wire.CardEvent{
+				CardID: c.ID, MessageID: c.Message, Card: card}})
+			return nil
+		}
+	}
+	return fmt.Errorf("assistant: no card of turn %s shows proposal %s", t.id, proposal)
+}
+
+// Render is a conversation as the reader the context resolves is shown it:
+// the transcript a compliance read answers (internal/api/assistantapi's
+// audited read) rendered by the same rule as the owner's own reload, so a
+// card built from an app the reader does not hold is a notice for them too.
+func (s *Service) Render(ctx context.Context, t assistantdomain.Transcript) (wire.Transcript, error) {
+	reader, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return wire.Transcript{}, errors.New("assistant: a transcript is rendered for a " +
+			"resolved reader")
+	}
+	return s.render(t, reader), nil
+}
