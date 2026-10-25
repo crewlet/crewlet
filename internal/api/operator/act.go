@@ -1,15 +1,11 @@
 package operator
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 
@@ -210,14 +206,9 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 				"socket or its REST route", name)})
 		return
 	}
-	// JSON AND NOTHING ELSE, which is what shuts the door a browser leaves
-	// open: a cross-site HTML form can post `text/plain`,
-	// `application/x-www-form-urlencoded` or `multipart/form-data` without a
-	// preflight, and a body that happens to parse as JSON would otherwise
-	// reach a write. `application/json` from another origin needs a
-	// preflight, which the CORS allow-list answers — and the cross-site
-	// write gate in front of every guarded route refuses its Origin anyway.
-	if !declaresJSON(r.Header.Get("Content-Type")) {
+	// JSON AND NOTHING ELSE, which shuts the door a cross-site form leaves
+	// open ([httpjson.DeclaresJSON]).
+	if !httpjson.DeclaresJSON(r.Header.Get("Content-Type")) {
 		httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
 			httpjson.CodeUnsupportedMediaType, httpjson.Detail{"tool": name,
 				"detail": "the body must be declared Content-Type: application/json"})
@@ -324,17 +315,6 @@ func RefuseOperationArg(w http.ResponseWriter, tool string) {
 			"returned as the header"})
 }
 
-// declaresJSON reports whether a Content-Type is JSON in UTF-8, which is the
-// only charset JSON has.
-func declaresJSON(header string) bool {
-	media, params, err := mime.ParseMediaType(header)
-	if err != nil || media != "application/json" {
-		return false
-	}
-	charset, named := params["charset"]
-	return !named || strings.EqualFold(charset, "utf-8")
-}
-
 // decodeAct reads the body as exactly one JSON object naming only the field the
 // transport takes.
 //
@@ -344,16 +324,13 @@ func declaresJSON(header string) bool {
 // an operation it did not, and its retry would be a second write.
 func decodeAct(raw []byte) (actRequest, error) {
 	var req actRequest
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	switch err := httpjson.DecodeStrict(raw, &req); {
+	case errors.Is(err, httpjson.ErrTrailingData):
+		return actRequest{}, err
+	case err != nil:
 		return actRequest{}, fmt.Errorf("the body must be one JSON object "+
 			"{\"args\": {…}}, with the operation in the %s header: %w",
 			opkey.Header, err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return actRequest{}, errors.New("the body carries something after its " +
-			"JSON object; send exactly one")
 	}
 	return req, nil
 }
