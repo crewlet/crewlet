@@ -133,4 +133,9 @@ func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 		t.Errorf("streaming %v, token stream %v: the turn did not ask its model for its token stream",
 			req.Streaming(), req.StreamTokens)
 	}
+	// Its prompt is its whole instruction, so it replaces the CLI's own
+	// rather than running under a coding agent's.
+	if f.Model.Requests()[0].Agent {
+		t.Error("the turn was sent as a seat's call, which keeps the CLI's coding-agent prompt")
+	}
 }

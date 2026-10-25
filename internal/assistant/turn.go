@@ -343,6 +343,9 @@ func (t *turn) run(r loopRun) {
 		// that cannot stream never sends a fragment, and its round arrives
 		// whole when it commits, as before.
 		StreamPartials: true, StreamTokens: true,
+		// The assistant's prompt is its whole instruction: it replaces a
+		// CLI's own coding-agent prompt rather than running under it.
+		OwnPrompt: true,
 	})
 	if res == nil {
 		snap := progress.Snapshot()
