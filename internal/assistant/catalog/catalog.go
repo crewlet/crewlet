@@ -29,13 +29,44 @@
 // a login, an operation id or an operator: identity is the forwarded grant and
 // nothing else. An argument naming a person or a seat names the SUBJECT of a
 // read the authority table then decides, never "act as".
+//
+// # One place shapes what the model reads
+//
+// [Shape] is the whole path from a read's answer to the two things made of it:
+// every string through redact.Secrets, the card by the tool's declared spec
+// (internal/assistant/cards), and a summary of whole rows within
+// cards.ModelBytes with the fence included, fenced under the turn's boundary
+// with the tool's Source and Trust where the answer carries text somebody
+// wrote (ADR-0040) and with every marker defused where it does not. A second
+// copy of any step elsewhere is a step that can be skipped.
+//
+// # A write is previewed from the object as it is now
+//
+// Every write and page action carries its Preview (internal/assistant/proposal):
+// the object read through the turn's grant, the change rows, the revision it
+// binds and the exact request the approval sends, which is the one the tool
+// builds. [Revision] re-reads a recorded revision, so an approval refuses a
+// change prepared against a version the object has left.
+//
+// # The registry is gated by the same table
+//
+// [ReadsQuestion] and [ReadsRoute] are what an assisted principal may ask the
+// question registry and the overview routes (ADR-0048): an Everybody or a
+// Requires question never reaches the authority table, so its assistant
+// column cannot keep the assistant from one, and internal/api wires these as
+// the gate instead.
 package catalog
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // As is what the assistant does with one surface.
@@ -54,10 +85,15 @@ const (
 	AsNavigateOnly As = "navigate_only"
 	// AsNever keeps it from the assistant, for the reason the row states.
 	AsNever As = "never"
+	// AsPreviewRead offers no tool: the question is read only by the named
+	// write tool's preview, or an approval's re-read of the revision that
+	// preview recorded (a person's tracker record, which a priority change
+	// is bound to).
+	AsPreviewRead As = "preview_read"
 )
 
-// Ases are the five, in declaration order.
-var Ases = []As{AsReadTool, AsWriteTool, AsPageAction, AsNavigateOnly, AsNever}
+// Ases are the six, in declaration order.
+var Ases = []As{AsReadTool, AsWriteTool, AsPageAction, AsNavigateOnly, AsNever, AsPreviewRead}
 
 // Valid reports whether a is a decision this build knows.
 func (a As) Valid() bool { return slices.Contains(Ases, a) }
@@ -147,11 +183,141 @@ type Tool struct {
 	// stored card is withheld from a person who no longer holds one.
 	Apps []iam.Grant
 	// Fence marks an answer that carries text somebody else wrote, fenced
-	// under the turn's boundary before the model reads it (ADR-0040).
+	// under the turn's boundary before the model reads it (ADR-0040), with
+	// Source and Trust as its label.
 	Fence bool
+	// Source is the surface a read's answer is labelled as in its fence:
+	// provenance.SourceAPIAnswer for every route's answer.
+	Source provenance.Source
+	// Trust is how far the model may rely on a read's answer: the least
+	// its writers earn (a route's answer names no writer per field, so
+	// colleague for the company's own records).
+	Trust provenance.Trust
 	// Label renders the step's sentence from the call's safe arguments.
 	Label func(args map[string]any) string
 	// Build turns the call's arguments into the one request it sends, on
-	// one of Routes.
+	// one of Routes. Call it through [Tool.Request], which checks the
+	// arguments against the schema first and the request against Routes
+	// after.
 	Build func(args map[string]any) (exec.Request, error)
+
+	// Cards are how a read's answer becomes a card, by variant: the one
+	// spec under "" for a tool with one shape of answer, else one per value
+	// [Tool.Variant] answers (a section, a grouping).
+	Cards map[string]cards.Spec
+	// Variant names which of Cards a call's answer is carded by; nil is
+	// always "".
+	Variant func(args Args) string
+	// Destructive is the act tool's own MCP hint (internal/agent/builtin's
+	// annotations), stated here because this package may not import the
+	// builtins; the catalogue walk holds it to the hint, and it is one of
+	// the three inputs a write's tier is derived from.
+	Destructive bool
+	// Preview is a write's or a page action's preview: what the call would
+	// change, read from the object as it is now, and the exact request
+	// the approval sends (internal/assistant/proposal).
+	Preview proposal.Previewer
+
+	// StepUp reports a call whose effect asks the approver to confirm who
+	// they are on top of whatever the verb's own row asks: a share to the
+	// whole company (D09). Nil asks nothing more. The approval asks the
+	// verb's row (authz.RecencyOf) as well, always.
+	StepUp func(args Args) bool
+
+	// schema is Parameters as this package checks it.
+	schema *schema
+}
+
+// Check reports what is wrong with a call's arguments, wrapping
+// [ErrInvalidArguments]: an argument the schema does not declare, an
+// identity argument ([IdentityArguments]), a missing required one, or a value
+// of the wrong kind or out of its range.
+func (t Tool) Check(args map[string]any) error {
+	if t.schema == nil {
+		return fmt.Errorf("%w: %s declares no schema", ErrInvalidArguments, t.Name)
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	if err := t.schema.check(t.Name, args); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	}
+	return nil
+}
+
+// Request is the one request a call sends: its arguments checked, the request
+// built, and the request held to one of the tool's Routes, so a Build that
+// strayed is refused here rather than sent.
+func (t Tool) Request(args map[string]any) (exec.Request, error) {
+	if err := t.Check(args); err != nil {
+		return exec.Request{}, err
+	}
+	if t.Build == nil {
+		return exec.Request{}, fmt.Errorf("catalog: %s sends no request", t.Name)
+	}
+	req, err := t.Build(args)
+	if err != nil {
+		return exec.Request{}, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	}
+	if t.Kind == KindPageAction {
+		if req.Method != PageMethod || !strings.HasPrefix(req.Path, PageActionPrefix) {
+			return exec.Request{}, fmt.Errorf("catalog: %s built %s %s, which is not a page "+
+				"action", t.Name, req.Method, req.Path)
+		}
+		return req, nil
+	}
+	if _, ok := t.RouteOf(req); !ok {
+		return exec.Request{}, fmt.Errorf("catalog: %s built %s %s, which is none of its "+
+			"routes %v", t.Name, req.Method, req.Path, t.Routes)
+	}
+	return req, nil
+}
+
+// RouteOf is the Routes entry req was built on.
+func (t Tool) RouteOf(req exec.Request) (string, bool) {
+	for _, route := range t.Routes {
+		if matches(route, req.Method, req.Path) {
+			return route, true
+		}
+	}
+	return "", false
+}
+
+// CardFor is the spec a call's answer is carded by.
+func (t Tool) CardFor(args Args) (cards.Spec, bool) {
+	variant := ""
+	if t.Variant != nil {
+		variant = t.Variant(args)
+	}
+	spec, ok := t.Cards[variant]
+	return spec, ok
+}
+
+// matches reports whether method and path are a request route, "METHOD
+// /pattern", serves: each `{name}` a single non-empty segment, a trailing
+// `{name...}` the rest.
+func matches(route, method, path string) bool {
+	m, pattern, ok := strings.Cut(route, " ")
+	if !ok || m != method {
+		return false
+	}
+	want, got := strings.Split(pattern, "/"), strings.Split(path, "/")
+	for i, segment := range want {
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "...}") {
+			return i < len(got) && got[i] != ""
+		}
+		if i >= len(got) {
+			return false
+		}
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
+			if got[i] == "" {
+				return false
+			}
+			continue
+		}
+		if segment != got[i] {
+			return false
+		}
+	}
+	return len(got) == len(want)
 }

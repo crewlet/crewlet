@@ -1,0 +1,253 @@
+package catalog
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"math"
+	"slices"
+	"strings"
+	"unicode/utf8"
+)
+
+// IdentityArguments are the argument names no assistant tool may declare,
+// because each names who acts, where, or which operation a write is: the
+// company, a principal, an actor, a login, a credential or an operation id.
+// Identity is the grant the call is sent under and nothing else (ADR-0046).
+// An argument naming a person or a seat as the SUBJECT of a read (`handle`) is
+// not one of these: the authority table decides that read.
+var IdentityArguments = []string{
+	"company", "company_id", "principal", "person_id", "actor", "as", "login",
+	"op_id", "operator", "operator_id", "via", "on_behalf_of", "idempotency_key",
+}
+
+// ErrInvalidArguments is a call whose arguments the tool's schema refuses: an
+// argument it does not declare, an identity argument, a missing required one,
+// or a value of the wrong kind or out of its range. Nothing is sent.
+var ErrInvalidArguments = errors.New("catalog: the arguments are refused")
+
+// schema is the subset of JSON Schema a catalogue tool's arguments are written
+// in, checked here before anything is built so a tool never sends a request
+// its own schema would refuse.
+type schema struct {
+	kind        string // string, integer, number, boolean, array, object
+	description string
+	enum        []string
+	// maxLen bounds a string in bytes, maxItems an array; min and max an
+	// integer. Zero is unbounded except where hasMin is set.
+	maxLen, maxItems int
+	min, max         int
+	hasMin, hasMax   bool
+	items            *schema
+	properties       map[string]*schema
+	required         []string
+	// freeform is an object whose members its reader declares (a page
+	// action's payload): any member is taken, an identity name excepted.
+	freeform bool
+}
+
+// JSON is the schema as the model is handed it.
+func (s *schema) JSON() map[string]any {
+	out := map[string]any{"type": s.kind}
+	if s.description != "" {
+		out["description"] = s.description
+	}
+	if len(s.enum) > 0 {
+		out["enum"] = slices.Clone(s.enum)
+	}
+	if s.maxLen > 0 {
+		out["maxLength"] = s.maxLen
+	}
+	if s.maxItems > 0 {
+		out["maxItems"] = s.maxItems
+	}
+	if s.hasMin {
+		out["minimum"] = s.min
+	}
+	if s.hasMax {
+		out["maximum"] = s.max
+	}
+	if s.items != nil {
+		out["items"] = s.items.JSON()
+	}
+	if s.kind == "object" && !s.freeform {
+		props := map[string]any{}
+		for name, p := range s.properties {
+			props[name] = p.JSON()
+		}
+		out["properties"] = props
+		out["additionalProperties"] = false
+		if len(s.required) > 0 {
+			out["required"] = slices.Clone(s.required)
+		}
+	}
+	return out
+}
+
+// check reports what is wrong with v as this schema reads it.
+func (s *schema) check(path string, v any) error {
+	switch s.kind {
+	case "string":
+		str, ok := v.(string)
+		switch {
+		case !ok:
+			return fmt.Errorf("%s is a string", path)
+		case s.maxLen > 0 && len(str) > s.maxLen:
+			return fmt.Errorf("%s is %d bytes and the most it takes is %d", path, len(str),
+				s.maxLen)
+		case !utf8.ValidString(str):
+			return fmt.Errorf("%s is not valid UTF-8", path)
+		case len(s.enum) > 0 && !slices.Contains(s.enum, str):
+			return fmt.Errorf("%s is one of %s, not %q", path, strings.Join(s.enum, ", "), str)
+		}
+	case "integer", "number":
+		n, ok := number(v)
+		if !ok || (s.kind == "integer" && n != math.Trunc(n)) {
+			return fmt.Errorf("%s is %s", path, map[string]string{"integer": "a whole number",
+				"number": "a number"}[s.kind])
+		}
+		if (s.hasMin && n < float64(s.min)) || (s.hasMax && n > float64(s.max)) {
+			return fmt.Errorf("%s is from %d to %d", path, s.min, s.max)
+		}
+	case "boolean":
+		if _, ok := v.(bool); !ok {
+			return fmt.Errorf("%s is true or false", path)
+		}
+	case "array":
+		list, ok := v.([]any)
+		if !ok {
+			return fmt.Errorf("%s is a list", path)
+		}
+		if s.maxItems > 0 && len(list) > s.maxItems {
+			return fmt.Errorf("%s holds at most %d entries", path, s.maxItems)
+		}
+		for i, e := range list {
+			if err := s.items.check(fmt.Sprintf("%s[%d]", path, i), e); err != nil {
+				return err
+			}
+		}
+	case "object":
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s is an object", path)
+		}
+		for _, name := range slices.Sorted(maps.Keys(obj)) {
+			if slices.Contains(IdentityArguments, name) {
+				return fmt.Errorf("%s names %q, and identity is the person's own and never "+
+					"an argument", path, name)
+			}
+			if s.freeform {
+				continue
+			}
+			p, declared := s.properties[name]
+			if !declared {
+				return fmt.Errorf("%s takes no %q; it takes %s", path, name,
+					strings.Join(slices.Sorted(maps.Keys(s.properties)), ", "))
+			}
+			if err := p.check(path+"."+name, obj[name]); err != nil {
+				return err
+			}
+		}
+		for _, name := range s.required {
+			if _, ok := obj[name]; !ok {
+				return fmt.Errorf("%s needs %q", path, name)
+			}
+		}
+	default:
+		return fmt.Errorf("%s has no type this catalogue checks", path)
+	}
+	return nil
+}
+
+// number is a JSON number however it was decoded.
+func number(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
+}
+
+// The builders the catalogue's schemas are written with.
+
+func object(required []string, props map[string]*schema) *schema {
+	return &schema{kind: "object", properties: props, required: required}
+}
+
+func text(description string, maxLen int) *schema {
+	return &schema{kind: "string", description: description, maxLen: maxLen}
+}
+
+func oneOf(description string, values ...string) *schema {
+	return &schema{kind: "string", description: description, enum: values}
+}
+
+func whole(description string, lo, hi int) *schema {
+	return &schema{kind: "integer", description: description, min: lo, max: hi,
+		hasMin: true, hasMax: true}
+}
+
+func flag(description string) *schema {
+	return &schema{kind: "boolean", description: description}
+}
+
+func texts(description string, maxItems, maxLen int) *schema {
+	return &schema{kind: "array", description: description, maxItems: maxItems,
+		items: &schema{kind: "string", maxLen: maxLen}}
+}
+
+// The bounds every catalogue string is held to, in bytes.
+const (
+	// nameBytes bounds an identifier: a task key, a handle, an id.
+	nameBytes = 128
+	// queryBytes is knowledge.MaxQueryBytes, the one bound on a ranked
+	// search's text: a search on part of a question answers another one.
+	queryBytes = 400
+	// lineBytes bounds a title or a one-line reason.
+	lineBytes = 500
+	// bodyBytes bounds a comment, a note or a page body a write proposes:
+	// the act route's own body ceiling is twice the largest page plus
+	// headroom, so a proposal never carries what the route would refuse.
+	bodyBytes = 256 << 10
+)
+
+// Args reads one argument as the type its schema declares, after [Tool.Check].
+type Args map[string]any
+
+// String is a string argument, "" when absent.
+func (a Args) String(name string) string {
+	s, _ := a[name].(string)
+	return strings.TrimSpace(s)
+}
+
+// Int is a whole-number argument, and false when absent.
+func (a Args) Int(name string) (int, bool) {
+	n, ok := number(a[name])
+	return int(n), ok
+}
+
+// Bool is a boolean argument, false when absent.
+func (a Args) Bool(name string) bool {
+	b, _ := a[name].(bool)
+	return b
+}
+
+// Strings is a list-of-strings argument.
+func (a Args) Strings(name string) []string {
+	list, _ := a[name].([]any)
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, strings.TrimSpace(s))
+		}
+	}
+	return out
+}
