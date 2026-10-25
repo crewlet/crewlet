@@ -60,13 +60,7 @@ import { useBrandAssets } from "~/lib/brand/useBrand.ts";
 import { useBrandDraftSave } from "~/lib/brand/useBrandSave.ts";
 import { BRAND_PAGE } from "~/components/brand.tsx";
 import { BrandPreview } from "../BrandPreview.tsx";
-import {
-  ColoursStep,
-  IdentityStep,
-  LogosStep,
-  TypographyStep,
-  VoiceStep,
-} from "./steps.tsx";
+import { ColoursStep, IdentityStep, LogosStep, TypographyStep, VoiceStep } from "./steps.tsx";
 import { ReviewStep, setupWarnings, warningKey } from "./Review.tsx";
 import { useSetupTarget, type SetupTarget } from "./useSetupTarget.ts";
 

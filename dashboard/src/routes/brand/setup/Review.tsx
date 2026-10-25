@@ -133,7 +133,7 @@ function SummaryCard({
   const label = stepSpec(part).label;
   const status = STATUS[partStatus(part, doc)];
   return (
-    <Card as="section" aria-label={label} className="brand-review-card">
+    <Card as="section" aria-label={label}>
       <Card.Header
         actions={
           <span className="brand-review-card-actions">
@@ -258,7 +258,7 @@ export function ReviewStep({
             </Text>
           </SummaryCard>
         </div>
-        <div className="brand-review-preview">
+        <div>
           <BrandPreview
             document={doc}
             assets={assets}
@@ -268,7 +268,7 @@ export function ReviewStep({
           />
         </div>
       </div>
-      <Card as="section" aria-label="Before you adopt" className="brand-review-before">
+      <Card as="section" aria-label="Before you adopt">
         <Card.Header>
           <Card.Title>Before you adopt</Card.Title>
         </Card.Header>

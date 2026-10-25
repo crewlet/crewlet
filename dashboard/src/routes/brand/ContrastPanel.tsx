@@ -12,7 +12,7 @@
  */
 
 import { useId } from "react";
-import { Button, ColorChip, ContrastBadge, Tag, Text } from "@crewlethq/ui";
+import { Button, ColorChip, ContrastBadge, ContrastHelp, Tag, Text } from "@crewlethq/ui";
 import { CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
 import {
@@ -44,6 +44,8 @@ export function ContrastPanel({
         <Text as="span" variant="label" id={heading}>
           Contrast
         </Text>
+        {/* BESIDE THE HEADING, never in it, so the list stays named "Contrast". */}
+        <ContrastHelp />
       </div>
       <ul className="brand-contrast-pairs" aria-labelledby={heading}>
         {results.map((pair) => {
@@ -92,7 +94,7 @@ export function ContrastPanel({
                     <Button
                       key={offer.key}
                       size="small"
-                      variant="secondary"
+                      variant="outline"
                       leadingIcon={<ColorChip value={offer.color} size="xs" />}
                       onClick={() => onApply?.(offer.set)}
                     >

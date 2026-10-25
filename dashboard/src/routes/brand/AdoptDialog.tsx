@@ -9,8 +9,8 @@
  * draft that lacks a primary logo or colour holds it too, saying which.
  */
 
-import type { ReactNode } from "react";
-import { Button, Callout, Modal, Tag, Text, VisuallyHidden } from "@crewlethq/ui";
+import { useId, type ReactNode } from "react";
+import { Button, Callout, ContrastHelp, Modal, Tag, Text, VisuallyHidden } from "@crewlethq/ui";
 import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
 import {
@@ -53,6 +53,7 @@ export function AdoptDialog({
   onConfirm,
 }: AdoptDialogProps) {
   const changes = brandChanges(before, after, digests);
+  const warningsHeading = useId();
   const results = brandContrast(after.colors);
   // WHAT HOLDS THE ADOPTION, in the engine's order: a missing primary logo or
   // colour, then the one pair that refuses.
@@ -115,7 +116,15 @@ export function AdoptDialog({
           </Callout>
         ) : null}
         {warnings.length > 0 ? (
-          <ul className="brand-warnings" aria-label="Contrast warnings">
+          <div className="brand-contrast-head">
+            <Text as="span" variant="label" id={warningsHeading}>
+              Contrast warnings
+            </Text>
+            <ContrastHelp />
+          </div>
+        ) : null}
+        {warnings.length > 0 ? (
+          <ul className="brand-warnings" aria-labelledby={warningsHeading}>
             {warnings.map((w) => (
               <li key={`${w.foreground}/${w.ground}`}>
                 <Tag size="sm" variant="warning" leadingIcon={<TriangleAlertGlyph size="xs" />}>

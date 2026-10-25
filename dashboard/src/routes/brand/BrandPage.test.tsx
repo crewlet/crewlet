@@ -236,7 +236,7 @@ test("an administrator edits one card at a time, and a colour that would be refu
   const logos = screen.getByRole("button", { name: "Edit Logos" });
   expect(logos.getAttribute("aria-disabled") ?? logos.getAttribute("disabled")).not.toBeNull();
   const text = screen.getByRole("textbox", { name: /^Text/ });
-  fireEvent.change(text, { target: { value: "#9aa3ad" } });
+  fireEvent.change(text, { target: { value: "9aa3ad" } });
   await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/must reach 4\.5:1/));
   const save = screen.getByRole("button", { name: "Save" });
   expect(save.getAttribute("aria-disabled") ?? save.getAttribute("disabled")).not.toBeNull();

@@ -79,14 +79,11 @@ export function BrandPreview({
    */
   placement?: "sticky" | "inline";
 }) {
+  const held = placement !== "inline";
   const [kind, setKind] = useState<BrandSampleKind>("doc");
   const [mode, setMode] = useState<BrandSampleMode>("light");
   return (
-    <Card
-      as="section"
-      className={placement === "sticky" ? "brand-preview" : undefined}
-      aria-label={title}
-    >
+    <Card as="section" className={held ? "brand-preview" : undefined} aria-label={title}>
       <Card.Header
         actions={
           <span className="brand-preview-controls">
