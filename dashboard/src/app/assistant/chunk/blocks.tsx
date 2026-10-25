@@ -1,0 +1,484 @@
+/**
+ * The wire's closed sets as the design system's components draw them, and
+ * the cards an answer carries.
+ *
+ * ONE MODULE MAPS EVERY WIRE STATE TO EXACTLY ONE COMPONENT STATE: a step's
+ * state to `StepList`'s, a turn's phase to `RunChip`'s, a proposal's state to
+ * `ProposalCard`'s, a change's kind to `ChangeList`'s row and a word's op to
+ * its mark. Each map is a `Record` over the wire's union, so a member the
+ * engine adds is a compile error here until it is drawn, and `blocks.test.ts`
+ * holds each value to the component's own list.
+ *
+ * TWO RULES THE MAPPING KEEPS: an `unknown` proposal offers Retry under the
+ * same operation key and no other failed one does; and a step-up the engine
+ * asks of an approval is confirmed by the dashboard's one step-up dialog
+ * (`protocol/rest.ts` replays the approval), never drawn as a failure.
+ *
+ * EVERY CARD IS THE ENGINE'S: built from tool results and its own route
+ * table, never from the model's words. Only prose is the model's, and it is
+ * drawn inert (`ASSISTANT_WORDS` in `lib/markdown.ts`): no live link and no
+ * picture. A card this build cannot draw is a sentence saying so.
+ */
+
+import { type ReactNode } from "react";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  CopyButton,
+  EntityList,
+  OpenInAppCard,
+  PropertyList,
+  ProposalCard,
+  Prose,
+  RefusalCard,
+  ResultTableCard,
+  StatusCard,
+  type ChangeListRow,
+  type ProposalState,
+  type RunState,
+  type StepListStep,
+  type StepState,
+} from "@crewlethq/ui";
+import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import type {
+  AssistantCardEvent,
+  AssistantProposalCard,
+  AssistantStepEvent,
+  AssistantTableCard,
+} from "~/contract/assistant.ts";
+import { narrowCard } from "~/protocol/assistantWire.ts";
+import { exportFile } from "~/protocol/assistant.ts";
+import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
+import { fmtCount, fmtDateTime, fmtDuration, fmtExact } from "~/lib/format.ts";
+import { youNeedWords } from "~/lib/access.ts";
+import { crumbsFor } from "../../crumbs.ts";
+import { href as hrefOf } from "../../router.tsx";
+import { openInApp, type InAppTarget } from "./openInApp.ts";
+import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
+
+type WireStepState = AssistantStepEvent["state"];
+type WireProposalState = AssistantProposalCard["state"];
+type WireChangeKind = AssistantProposalCard["changes"][number]["kind"];
+type WireWordOp = NonNullable<AssistantProposalCard["changes"][number]["words"]>[number]["op"];
+type WireColumnType = AssistantTableCard["columns"][number]["type"];
+
+/** A step's state as `StepList` draws it. */
+export const STEP_STATE: Record<WireStepState, StepState> = {
+  running: "running",
+  done: "done",
+  failed: "failed",
+  refused: "refused",
+  stopped: "stopped",
+  waiting: "waiting",
+};
+
+/** A turn's phase as `RunChip` draws it. */
+export const RUN_STATE: Record<TurnPhase, RunState> = {
+  sending: "thinking",
+  thinking: "thinking",
+  working: "working",
+  awaiting_approval: "waiting",
+  applying: "applying",
+  unconfirmed: "failed",
+  refused: "refused",
+  completed: "done",
+  stopped: "stopped",
+  failed: "failed",
+  interrupted: "failed",
+  expired: "stopped",
+  budget_exhausted: "failed",
+};
+
+/** A proposal's wire state as `ProposalCard` draws it. */
+export const PROPOSAL_STATE: Record<WireProposalState, ProposalState> = {
+  proposed: "pending",
+  approved: "applying",
+  executing: "applying",
+  applying: "applying",
+  applied: "applied",
+  failed: "failed",
+  // NOBODY CAN SAY WHETHER IT LANDED: drawn failed, and the one failed
+  // proposal that offers Retry, under the same operation key.
+  unknown: "failed",
+  declined: "declined",
+  expired: "expired",
+  stale: "stale",
+};
+
+/** A change's wire kind as `ChangeList`'s row kind. */
+export const CHANGE_KIND: Record<WireChangeKind, ChangeListRow["kind"]> = {
+  fact: "fact",
+  changed: "changed",
+  added: "added",
+  removed: "removed",
+  text: "text",
+};
+
+/** A word's op as `ChangeList`'s word mark. */
+export const WORD_OP: Record<WireWordOp, "=" | "+" | "-"> = {
+  same: "=",
+  added: "+",
+  removed: "-",
+};
+
+/** How a table's cell is written, by its column's type. */
+const CELL: Record<WireColumnType, (value: string | number | boolean | null) => string> = {
+  text: (v) => (v === null ? "" : String(v)),
+  number: (v) => (typeof v === "number" ? fmtExact(v) : v === null ? "" : String(v)),
+  tokens: (v) => (typeof v === "number" ? fmtCount(v) : v === null ? "" : String(v)),
+  duration: (v) => (typeof v === "number" ? fmtDuration(v) : v === null ? "" : String(v)),
+  datetime: (v) => (typeof v === "string" ? fmtDateTime(v) : v === null ? "" : String(v)),
+};
+
+/** A number of seconds, as the run chip says it. */
+function seconds(ms: number): string {
+  return ms < 10_000 ? `${(ms / 1000).toFixed(ms < 1000 ? 1 : 0)}s` : `${Math.round(ms / 1000)}s`;
+}
+
+const steps = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;
+
+/** The run chip for a turn: its state, the words it says, and what it says beside them. */
+export function runChipOf(
+  turn: TurnView,
+  now: number,
+): { state: RunState; title: string; meta?: string } {
+  const elapsed = turn.done?.duration_ms ?? Math.max(0, now - Date.parse(turn.askedAt));
+  const taken = turn.done?.steps ?? turn.steps.length;
+  const state = RUN_STATE[turn.phase];
+  switch (turn.phase) {
+    case "sending":
+    case "thinking":
+      return { state, title: "Thinking" };
+    case "working":
+      return { state, title: "Working", meta: seconds(elapsed) };
+    case "applying":
+      return { state, title: "Applying", meta: steps(taken) };
+    case "awaiting_approval":
+      return { state, title: "Waiting for your approval", meta: steps(taken) };
+    case "completed":
+      return { state, title: `Done in ${seconds(elapsed)}`, meta: steps(taken) };
+    case "stopped":
+    case "expired": {
+      const done = turn.steps.filter((s) => s.state === "done").length;
+      return {
+        state,
+        title: `Stopped after ${seconds(elapsed)}`,
+        meta: taken > 0 ? `${done} of ${steps(taken)}` : undefined,
+      };
+    }
+    case "refused":
+      return { state, title: "Not permitted", meta: steps(taken) };
+    case "unconfirmed":
+      return { state, title: "Could not confirm the change" };
+    case "failed":
+    case "interrupted":
+    case "budget_exhausted": {
+      const at = turn.steps.find((s) => s.state === "failed" || s.state === "refused");
+      const refused = at?.state === "refused";
+      if (refused) return { state: "refused", title: "Not permitted", meta: steps(taken) };
+      return { state, title: at ? `Failed at step ${at.index}` : "Failed" };
+    }
+  }
+}
+
+/** A turn's steps as `StepList` draws them: the label, the request it made in mono, its time. */
+export function stepsOf(turn: TurnView): StepListStep[] {
+  return turn.steps.map((step) => ({
+    id: step.step_id,
+    label: step.label,
+    state: STEP_STATE[step.state],
+    ...(step.duration_ms === undefined ? {} : { duration: seconds(step.duration_ms) }),
+    detail: step.request
+      ? `${step.tool} · ${step.request.method} ${step.request.route}`
+      : step.tool,
+  }));
+}
+
+/** A model's prose, drawn inert. `streaming` while deltas arrive; `dimmed` for an abandoned attempt. */
+export function ReplyProse({
+  text,
+  streaming = false,
+  dimmed = false,
+}: {
+  text: string;
+  streaming?: boolean;
+  dimmed?: boolean;
+}) {
+  return (
+    <Prose measure="narrow" streaming={streaming} dimmed={dimmed} className="md">
+      {renderMarkdown(text, ASSISTANT_WORDS)}
+    </Prose>
+  );
+}
+
+/** A proposal's change rows in `ChangeList`'s grammar (D10). */
+export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
+  return proposal.changes.map((change): ChangeListRow => {
+    const note = change.note;
+    const base = note === undefined ? { label: change.label } : { label: change.label, note };
+    switch (CHANGE_KIND[change.kind]) {
+      case "fact":
+        return { ...base, kind: "fact", value: change.to ?? change.from ?? "" };
+      case "changed":
+        return { ...base, kind: "changed", from: change.from ?? "", to: change.to ?? "" };
+      case "added":
+        return { ...base, kind: "added", to: change.to ?? "", isNew: change.new === true };
+      case "removed":
+        return { ...base, kind: "removed", from: change.from ?? "" };
+      case "text":
+        return {
+          ...base,
+          kind: "text",
+          words: (change.words ?? []).map((w) => ({ op: WORD_OP[w.op], text: w.text })),
+        };
+    }
+  });
+}
+
+/** What the person does with a proposal: the drawer's session answers each. */
+export interface ProposalHandlers {
+  approve: (proposal: AssistantProposalCard) => void;
+  decline: (proposal: AssistantProposalCard) => void;
+}
+
+/** What the person does with a card that leads somewhere. */
+export interface CardHandlers extends ProposalHandlers {
+  /** Go to an address the engine built, already checked to be this dashboard's own. */
+  openHere: (target: InAppTarget) => void;
+}
+
+/** A proposal card, at its state now. */
+function Proposal({
+  proposal,
+  local,
+  on,
+}: {
+  proposal: AssistantProposalCard;
+  local: ProposalLocal | undefined;
+  on: ProposalHandlers;
+}) {
+  const unknown = proposal.state === "unknown";
+  const stale = local?.pageMoved === true && proposal.state === "proposed";
+  const state: ProposalState = stale ? "stale" : PROPOSAL_STATE[proposal.state];
+  const failure =
+    local?.failure ??
+    (proposal.failure
+      ? proposal.failure.refusal.message
+      : unknown
+        ? "Could not confirm. It may have landed."
+        : undefined);
+  return (
+    <ProposalCard
+      title={proposal.title}
+      subtitle={proposal.scope === "page" ? "This page only" : "Saved for the company"}
+      scope={proposal.scope}
+      state={state}
+      changes={changeRowsOf(proposal)}
+      note={proposal.note}
+      approveLabel={proposal.approve_label}
+      onApprove={() => on.approve(proposal)}
+      onDecline={() => on.decline(proposal)}
+      onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
+      receipt={proposal.receipt?.summary}
+      failure={failure}
+    />
+  );
+}
+
+/** A table card with its downloads from the stored snapshot. */
+function Table({
+  table,
+  cardId,
+  on,
+}: {
+  table: AssistantTableCard;
+  cardId: string;
+  on: CardHandlers;
+}) {
+  const align = table.columns.map((c) => c.align ?? (c.type === "text" ? "start" : "end"));
+  const cells = (row: (string | number | boolean | null)[]) =>
+    row.map((value, i) => CELL[table.columns[i]?.type ?? "text"](value));
+  const base =
+    table.title
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase() || cardId;
+  const downloads = table.exports
+    ? [
+        { label: "CSV", filename: `${base}.csv`, file: () => exportFile(table.exports!.csv) },
+        { label: "XLSX", filename: `${base}.xlsx`, file: () => exportFile(table.exports!.xlsx) },
+      ]
+    : undefined;
+  return (
+    <ResultTableCard
+      title={table.title}
+      window={table.window}
+      headers={table.columns.map((c) => c.label)}
+      rows={table.rows.map(cells)}
+      align={align}
+      total={table.total ? cells(table.total) : undefined}
+      downloads={downloads}
+      link={table.open ? <EngineLink link={table.open} on={on} /> : undefined}
+      emptyMessage="No rows match."
+    />
+  );
+}
+
+/** A link the engine built, followed only where it is one of this dashboard's own routes. */
+function EngineLink({ link, on }: { link: { label: string; href: string }; on: CardHandlers }) {
+  const target = openInApp(link.href);
+  if (!target) return <span>{link.label}</span>;
+  return (
+    <ButtonLink
+      size="small"
+      variant="ghost"
+      href={hrefOf(target.path, target.query)}
+      trailingIcon={<ArrowUpRightGlyph size="sm" />}
+      onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        on.openHere(target);
+      }}
+    >
+      {link.label}
+    </ButtonLink>
+  );
+}
+
+/** Where an address goes, as a trail of the dashboard's own crumbs. */
+function placeOf(target: InAppTarget): string {
+  return crumbsFor(target.path)
+    .map((c) => c.label)
+    .join(" › ");
+}
+
+/** The words a refusal says about the person's own access. */
+function refusalBody(grants: readonly string[] | undefined, message: string): string {
+  return grants && grants.length > 0 ? youNeedWords(grants) : message;
+}
+
+/** One card of an answer, drawn as the design system's component for its kind. */
+export function CardBlock({
+  event,
+  local,
+  on,
+  opened,
+}: {
+  event: AssistantCardEvent;
+  local: ProposalLocal | undefined;
+  on: CardHandlers;
+  /** Whether this card's place was opened beside the conversation. */
+  opened: boolean;
+}): ReactNode {
+  const card = narrowCard(event.card);
+  if (card === null) {
+    return (
+      <Callout variant="neutral">
+        This answer carries a card this version of the dashboard cannot draw. Reload to see it.
+      </Callout>
+    );
+  }
+  switch (card.type) {
+    case "table":
+      return <Table table={card.table} cardId={event.card_id} on={on} />;
+    case "proposal":
+      return <Proposal proposal={card.proposal} local={local} on={on} />;
+    case "entity": {
+      const entity = card.entity;
+      if (entity.items && entity.items.length > 0) {
+        return (
+          <EntityList
+            title={entity.title}
+            items={entity.items.map((item) => ({
+              id: `${item.kind}:${item.id}`,
+              name: item.label,
+              ...(item.fact === undefined ? {} : { fact: item.fact }),
+              ...(item.open ? { action: <EngineLink link={item.open} on={on} /> } : {}),
+            }))}
+          />
+        );
+      }
+      return (
+        <StatusCard
+          title={entity.title}
+          subtitle={entity.subtitle}
+          actions={entity.open ? <EngineLink link={entity.open} on={on} /> : undefined}
+          actionsAlign="start"
+        >
+          {entity.facts && entity.facts.length > 0 ? (
+            <PropertyList
+              groups={[
+                {
+                  items: entity.facts.map((fact) => ({
+                    label: fact.label,
+                    value: fact.mono ? <code>{fact.value}</code> : fact.value,
+                  })),
+                },
+              ]}
+            />
+          ) : null}
+          {entity.text ? <ReplyProse text={entity.text} /> : null}
+        </StatusCard>
+      );
+    }
+    case "open_in_app": {
+      const { link, permitted } = card.open_in_app;
+      const target = permitted ? openInApp(link.href) : null;
+      if (!target) {
+        return (
+          <RefusalCard title={link.label} heading="You cannot open this from here.">
+            {permitted
+              ? "The address is not one of this dashboard's pages."
+              : "Your access does not include it."}
+          </RefusalCard>
+        );
+      }
+      return (
+        <OpenInAppCard
+          icon={<LayoutDashboardGlyph size="md" />}
+          title={link.label}
+          path={placeOf(target)}
+          href={hrefOf(target.path, target.query)}
+          onOpenHere={() => on.openHere(target)}
+          state={opened ? "opened" : "ready"}
+        />
+      );
+    }
+    case "error": {
+      const { refusal, phrase, hint } = card.error;
+      return (
+        <RefusalCard
+          title={phrase ? `You do not have permission to ${phrase}.` : "Not permitted"}
+          heading={phrase ? `You do not have permission to ${phrase}.` : undefined}
+          actions={
+            <CopyButton
+              size="small"
+              text={`Please grant me the access I need${phrase ? ` to ${phrase}` : ""}. ${refusalBody(refusal.grants, refusal.message)}`}
+              label="Copy a request to an admin"
+            />
+          }
+        >
+          {refusalBody(refusal.grants, refusal.message)}
+          {hint ? ` ${hint}` : ""} The assistant acts with your access only, so it cannot make this
+          change for you.
+        </RefusalCard>
+      );
+    }
+    case "notice":
+      return (
+        <Callout variant={card.notice.tone === "warning" ? "warning" : "info"}>
+          {card.notice.text}
+        </Callout>
+      );
+  }
+}
+
+/** A Try again for a turn that failed for a reason the engine says may pass. */
+export function RetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Button size="small" variant="secondary" onClick={onRetry}>
+      Try again
+    </Button>
+  );
+}

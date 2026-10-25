@@ -1,0 +1,259 @@
+/**
+ * A conversation's turns, drawn from the reducer's state and nothing else.
+ *
+ * ONE TURN IS: the person's question in a bubble, with the page it carried
+ * under it; the run chip, which says the turn's state in words and opens on
+ * the steps it took (each with the ordinary request it made, in mono); the
+ * answer as prose with no container round it; the engine's cards; and, once
+ * the turn has ended, a foot with when it was and Copy. No answer rating: in
+ * a self-hosted engine nothing would read one.
+ *
+ * THE THREAD IS A LOG WITH ITS LIVE REGION OFF: a streaming answer is not
+ * read out token by token. What is announced, once, through the one polite
+ * announcer, is each transition a reader acts on: an answer ready, a change
+ * waiting on them, a turn stopped.
+ */
+
+import { useEffect, useRef } from "react";
+import {
+  Callout,
+  CopyButton,
+  MessageBubble,
+  RelativeTime,
+  RunChip,
+  Skeleton,
+  StepList,
+  Tag,
+  VisuallyHidden,
+  Button,
+  Inline,
+  Stack,
+  announce,
+} from "@crewlethq/ui";
+import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import { CardBlock, ReplyProse, runChipOf, stepsOf, type CardHandlers } from "./blocks.tsx";
+import { isOpen, type ConversationView, type TurnView } from "./turn.ts";
+
+/** How long a reconnect may run before the drawer offers to try again by hand. */
+export const RECONNECT_PATIENCE_MS = 30_000;
+
+export interface ThreadProps {
+  view: ConversationView;
+  now: number;
+  on: CardHandlers;
+  /** The cards whose place the reader opened beside the conversation. */
+  opened: ReadonlySet<string>;
+  /** Send a question again, for a turn that failed on something that may pass. */
+  onRetry: (text: string) => void;
+  /** Dial the running turn's stream again. */
+  onReconnect: () => void;
+}
+
+/** The page a question carried, as the read-only chip under its bubble. */
+function SentWith({ title }: { title: string }) {
+  return (
+    <Tag size="xs" appearance="outline" leadingIcon={<LayoutDashboardGlyph size="xs" />}>
+      <VisuallyHidden>Sent with </VisuallyHidden>
+      {title}
+    </Tag>
+  );
+}
+
+/** What an ended turn's foot copies: the answer as Markdown. */
+function answerText(turn: TurnView): string {
+  return turn.replies.map((r) => r.text).join("\n\n");
+}
+
+/** One turn. */
+function Turn({
+  turn,
+  now,
+  on,
+  opened,
+  onRetry,
+  last,
+}: {
+  turn: TurnView;
+  now: number;
+  on: CardHandlers;
+  opened: ReadonlySet<string>;
+  onRetry: (text: string) => void;
+  last: boolean;
+}) {
+  const open = isOpen(turn.phase);
+  const chip = runChipOf(turn, now);
+  const steps = stepsOf(turn);
+  const thinking =
+    (turn.phase === "sending" || turn.phase === "thinking") && turn.replies.length === 0;
+  const placed = new Set(turn.replies.map((r) => r.id));
+  const cardsOf = (messageId: string) => turn.cards.filter((c) => c.message_id === messageId);
+  const loose = turn.cards.filter((c) => !placed.has(c.message_id));
+  const card = (event: (typeof turn.cards)[number]) => {
+    const proposal = event.card.type === "proposal" ? event.card.proposal : undefined;
+    return (
+      <CardBlock
+        key={event.card_id}
+        event={event}
+        local={proposal ? turn.proposals[proposal.proposal_id] : undefined}
+        on={on}
+        opened={opened.has(event.card_id)}
+      />
+    );
+  };
+  return (
+    <>
+      <MessageBubble
+        from="self"
+        attachment={turn.page ? <SentWith title={turn.page.title} /> : undefined}
+      >
+        {turn.question}
+      </MessageBubble>
+      {turn.refusal ? (
+        <Callout
+          variant={turn.refusal.code === "assistant_busy" ? "warning" : "neutral"}
+          role="status"
+          title={turn.refusal.sentence}
+        >
+          {turn.refusal.retryAfterSeconds !== null
+            ? `You can ask again in ${turn.refusal.retryAfterSeconds} seconds, and your question is back in the box below.`
+            : "Nothing changed."}
+        </Callout>
+      ) : (
+        <RunChip state={chip.state} title={chip.title} meta={chip.meta} defaultOpen={open}>
+          {steps.length > 0 ? <StepList label="Steps" steps={steps} /> : undefined}
+        </RunChip>
+      )}
+      {thinking ? <Skeleton variant="text" rows={3} label="Thinking" /> : null}
+      {turn.replies.map((reply, i) => (
+        <Stack key={reply.id} gap={3}>
+          <ReplyProse
+            text={reply.text}
+            streaming={open && last && i === turn.replies.length - 1 && turn.phase === "working"}
+            dimmed={turn.phase === "stopped"}
+          />
+          {cardsOf(reply.id).map(card)}
+        </Stack>
+      ))}
+      {loose.map(card)}
+      {turn.phase === "stopped" ? <ReplyProse text="Stopped. Nothing changed." dimmed /> : null}
+      {turn.error ? (
+        <Callout
+          variant="danger"
+          role="alert"
+          title={turn.error.message}
+          action={
+            turn.error.retryable ? (
+              <Button size="small" variant="secondary" onClick={() => onRetry(turn.question)}>
+                Try again
+              </Button>
+            ) : undefined
+          }
+        >
+          {turn.error.hint ? `${turn.error.hint} ` : ""}Nothing changed.
+        </Callout>
+      ) : null}
+      {!open && !turn.refusal ? (
+        <Inline gap={2} align="center">
+          <RelativeTime value={turn.askedAt} now={now} />
+          {turn.replies.length > 0 ? (
+            <CopyButton size="small" variant="ghost" text={() => answerText(turn)} />
+          ) : null}
+        </Inline>
+      ) : null}
+    </>
+  );
+}
+
+/** What a turn moving into `phase` announces, once, or null for a move nobody acts on. */
+function announcement(turn: TurnView): string | null {
+  switch (turn.phase) {
+    case "awaiting_approval": {
+      const waiting = turn.cards.find(
+        (c) => c.card.type === "proposal" && c.card.proposal?.state === "proposed",
+      );
+      return `Needs your approval: ${waiting?.card.proposal?.title ?? "a change"}`;
+    }
+    case "completed":
+      return "Answer ready";
+    case "stopped":
+      return "Stopped. Nothing changed.";
+    case "failed":
+      return turn.error?.message ?? "The answer failed. Nothing changed.";
+    default:
+      return null;
+  }
+}
+
+/** Announce each transition of the last turn once. */
+function useAnnouncements(view: ConversationView): void {
+  const said = useRef<string>("");
+  const last = view.turns.at(-1);
+  const key = last ? `${last.key}:${last.phase}` : "";
+  useEffect(() => {
+    if (!last || said.current === key) return;
+    const first = said.current === "";
+    said.current = key;
+    // A CONVERSATION OPENED FROM HISTORY is not news: nothing is said for
+    // the turn it was opened on.
+    if (first) return;
+    const words = announcement(last);
+    if (words) announce(words);
+  }, [key, last]);
+}
+
+export function Thread({ view, now, on, opened, onRetry, onReconnect }: ThreadProps) {
+  useAnnouncements(view);
+  const reconnecting = view.stream === "reconnecting";
+  const patient =
+    view.reconnectingSince !== null && now - view.reconnectingSince > RECONNECT_PATIENCE_MS;
+  return (
+    <>
+      {view.turns.map((turn, i) => (
+        <Turn
+          key={turn.key}
+          turn={turn}
+          now={now}
+          on={on}
+          opened={opened}
+          onRetry={onRetry}
+          last={i === view.turns.length - 1}
+        />
+      ))}
+      {reconnecting ? (
+        <Callout
+          variant="info"
+          role="status"
+          title="Reconnecting"
+          action={
+            patient ? (
+              <Button size="small" variant="secondary" onClick={onReconnect}>
+                Try again
+              </Button>
+            ) : undefined
+          }
+        >
+          The connection dropped. Your question keeps running in Crewlet, and the answer continues
+          here once you are back online.
+        </Callout>
+      ) : null}
+      {view.fault === "protocol_mismatch" ? (
+        <Callout
+          variant="warning"
+          role="alert"
+          title="Crewlet was updated"
+          action={
+            <Button size="small" variant="primary" onClick={() => location.reload()}>
+              Reload
+            </Button>
+          }
+        >
+          Reload the page to keep asking. Your conversation is kept.
+        </Callout>
+      ) : view.fault !== null ? (
+        <Callout variant="warning" role="alert" title="The answer could not be followed">
+          Open the conversation again from Conversations to see where it stands.
+        </Callout>
+      ) : null}
+    </>
+  );
+}
