@@ -2386,6 +2386,14 @@ func (p *Profile) ValidateCredentials(name string) error {
 	}
 	if p.MCP != nil {
 		for _, env := range slices.Sorted(maps.Keys(p.MCP.Env)) {
+			if p.MCP.mintedByServer(p.MCP.Env[env]) {
+				// A VALUE THE CLI'S OWN SERVER MINTS — the password
+				// OpenCode's `serve` prints as it starts — rendered into
+				// each run and never written anywhere: the profile holds
+				// a placeholder, which is no secret, and the rule below
+				// exists for a secret the profile would hold.
+				continue
+			}
 			// Set on every run with tools whatever auth.mode says, and
 			// stored unredacted like the rest of overrides.
 			if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {

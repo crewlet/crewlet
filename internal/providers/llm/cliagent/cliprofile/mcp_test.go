@@ -251,6 +251,38 @@ func TestTheToolRoutesEnvCarriesNoCredential(t *testing.T) {
 	}
 }
 
+// A VALUE THE CLI'S OWN SERVER MINTS IS NO STORED CREDENTIAL. OpenCode's
+// `serve` prints a password as it starts, and the run is handed it in
+// OPENCODE_PASSWORD: the profile holds only the placeholder, so the rule above —
+// about a secret the profile would hold — does not apply to it. A placeholder
+// with anything written beside it is a value the profile holds again.
+func TestAPasswordTheCLIsServerMintsMayRideTheRoutesEnv(t *testing.T) {
+	t.Parallel()
+	served := func(value string) map[string]any {
+		return map[string]any{"mcp": map[string]any{
+			"lifecycle": "serve",
+			"serve": map[string]any{
+				"args":  []any{"serve"},
+				"ready": []any{map[string]any{"prefix": "server password", "as": "password"}},
+			},
+			"env": map[string]any{"OPENCODE_PASSWORD": value},
+		}}
+	}
+	for _, tc := range []struct {
+		value string
+		ok    bool
+	}{{"{password}", true}, {"hunter2", false}, {"x{password}", false}} {
+		p, err := load(served(tc.value))
+		if err != nil {
+			t.Fatalf("%q: Load: %v", tc.value, err)
+		}
+		err = p.ValidateCredentials("custom")
+		if (err == nil) != tc.ok {
+			t.Errorf("OPENCODE_PASSWORD=%q: err = %v, want refused %v", tc.value, err, !tc.ok)
+		}
+	}
+}
+
 // A RUN'S VALUES ARE SUBSTITUTED AS THE FORMAT NEEDS THEM: raw on argv, and as
 // JSON — which a TOML document reads as well — inside a configuration file,
 // with nothing a shell or a parser would read twice.

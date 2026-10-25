@@ -205,6 +205,21 @@ type Serve struct {
 	Poll *ServePoll `yaml:"poll,omitempty"`
 }
 
+// mintedByServer reports whether value is wholly one of the values the CLI's
+// server prints as it starts — `{<as>}` of a [Serve.Ready] entry — and so
+// carries nothing the profile itself holds.
+func (m *MCP) mintedByServer(value string) bool {
+	if m == nil || m.Serve == nil {
+		return false
+	}
+	for _, r := range m.Serve.Ready {
+		if r.As != "" && value == "{"+r.As+"}" {
+			return true
+		}
+	}
+	return false
+}
+
 // ReadyValue is one value a server prints when it is up.
 type ReadyValue struct {
 	// Prefix is what the line begins with.
