@@ -145,6 +145,7 @@ func (p Profile) Clone() Profile {
 	out.MarkerEvents = append([]string(nil), p.MarkerEvents...)
 	out.MarkerPath = append(Path(nil), p.MarkerPath...)
 	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)
+	out.KeySeedFiles = append([]SeedFile(nil), p.KeySeedFiles...)
 	out.ConfigEnv = cloneMap(p.ConfigEnv)
 	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
 	out.IsolationEnv = cloneMap(p.IsolationEnv)

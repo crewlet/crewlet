@@ -869,6 +869,19 @@ gemini-cli:
   # every api-key call on the login instead of its key.
   subscription_env:
     GOOGLE_GENAI_USE_GCA: "true"
+  # THE KEY IS CHOSEN BY THE SETTINGS, under a key sign-in. Naming no sign-in
+  # in its settings, the CLI takes one from its environment, and
+  # GOOGLE_GEMINI_BASE_URL — an operator's gateway in front of the API, in the
+  # entry's env — outranks GEMINI_API_KEY there: it selects the CLI's gateway
+  # sign-in, which 0.65.0 then refuses, exit 41 "Invalid auth method selected",
+  # before any request (read from the bundle; measured through the engine with
+  # the base URL at a local stand-in). Settings outrank the environment, so a
+  # key home's own settings name the key sign-in: the call then goes to the
+  # base URL with its key. Not in seed_files, where it would put every
+  # subscription call on a key it does not have.
+  key_seed_files:
+    - path: .gemini/settings.json
+      content: '{"privacy":{"usageStatisticsEnabled":false},"security":{"auth":{"selectedType":"gemini-api-key"}}}'
   model_args: ["--model", "{model}"]
   # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
   # the request's whole systemInstruction — no identity line of the vendor's
