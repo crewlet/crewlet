@@ -30,7 +30,6 @@ const SENT: TurnEvent[] = [
   {
     type: "send",
     key: "k1",
-    opKey: "op1",
     text: "Rename it",
     page: null,
     at: "2026-10-24T09:41:00Z",

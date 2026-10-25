@@ -67,7 +67,6 @@ describe("the run chip says the turn's state in words", () => {
   const base: TurnView = {
     key: "k",
     id: "t",
-    opKey: "o",
     phase: "working",
     seq: 0,
     question: "q",

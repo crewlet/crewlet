@@ -205,17 +205,19 @@ async function ensureConversation(): Promise<string> {
 
 /**
  * Ask `text`, with the page attached where the person left it attached.
- * The question is sent under one operation key, minted here, so a retry the
- * person makes is the same question to the engine.
+ * Each send is a new question under its own operation key, minted here and
+ * kept as the turn's key in the drawer: "Try again" after a failure asks
+ * again rather than replaying the turn that failed, which the same key would
+ * answer. A question whose answer was lost and is sent again cannot run
+ * twice, since a conversation holds one running turn (409
+ * `assistant_turn_running`).
  */
 export async function send(text: string, page: PageSnapshot | null): Promise<void> {
-  const opKey = newActOpID();
-  const key = opKey;
+  const key = newActOpID();
   const mine = generation;
   dispatch({
     type: "send",
     key,
-    opKey,
     text,
     page: page ? { title: page.title, screen: page.context.screen } : null,
     at: new Date().toISOString(),
@@ -225,7 +227,7 @@ export async function send(text: string, page: PageSnapshot | null): Promise<voi
     const accepted = await call(
       "POST /assistant/conversations/{id}/turns",
       { ...versioned, input: { text }, page_context: page ? page.context : null },
-      { id, opKey },
+      { id, opKey: key },
     );
     if (mine !== generation) return;
     asked.add(accepted.turn_id);

@@ -119,8 +119,6 @@ export interface TurnView {
   key: string;
   /** The engine's turn id; empty while the question is on its way. */
   id: string;
-  /** The operation the question was sent under; a retry sends it again. */
-  opKey: string;
   phase: TurnPhase;
   /** The last frame applied. */
   seq: number;
@@ -182,7 +180,7 @@ export const EMPTY: ConversationView = {
 
 /** Every way a conversation moves. */
 export type TurnEvent =
-  | { type: "send"; key: string; opKey: string; text: string; page: PageChip | null; at: string }
+  | { type: "send"; key: string; text: string; page: PageChip | null; at: string }
   | { type: "created"; id: string; title: string }
   | { type: "accepted"; key: string; turnId: string; afterSeq: number }
   | { type: "refused"; key: string; refusal: SendRefusal }
@@ -342,7 +340,6 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
       turn = {
         key: message.turn_id,
         id: message.turn_id,
-        opKey: "",
         phase: open?.turn_id === message.turn_id ? phaseOf(open.state) : "completed",
         seq: open?.turn_id === message.turn_id ? open.after_seq : 0,
         question: "",
@@ -413,7 +410,6 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
           {
             key: event.key,
             id: "",
-            opKey: event.opKey,
             phase: "sending",
             seq: 0,
             question: event.text,

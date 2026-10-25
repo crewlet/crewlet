@@ -13,8 +13,9 @@
  * `AssistantRoutes` (`assistantWire.ts`) names each route with the body it
  * takes and the answer it gives, and [call] is the one function that sends
  * one, so a route and its shapes are named together once. Every body carries
- * the protocol version, and a turn or an approval carries its operation key
- * in `Idempotency-Key`, minted per gesture and sent again unchanged on a retry.
+ * the protocol version, and a question or a decision carries its operation
+ * key in `Idempotency-Key`, minted per gesture; a decision sends its key again
+ * unchanged on a retry.
  *
  * # The stream
  *

@@ -113,7 +113,6 @@ test("a pending card does not offer Prepare it again", () => {
 const base: TurnView = {
   key: "k",
   id: "t",
-  opKey: "o",
   phase: "completed",
   seq: 1,
   question: "q",

@@ -25,7 +25,6 @@ const on: CardHandlers = {
 const turn: TurnView = {
   key: "k",
   id: "t",
-  opKey: "o",
   phase: "thinking",
   seq: 1,
   question: "Which agents spent the most?",
