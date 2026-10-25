@@ -1,7 +1,7 @@
 /**
- * The ONE place an `Intl` date or number formatter is built: once per
- * locale, zone and options, and kept until something its key cannot see
- * changes.
+ * The ONE place an `Intl` date or number formatter, or a collator, is built:
+ * once per locale, zone and options, and kept until something its key cannot
+ * see changes.
  *
  * # Why a cache, and why here
  *
@@ -12,6 +12,10 @@
  * screen of rows built a formatter or two a row on every render, and reading
  * the zone they wrote in built one more each time. Kept here, a page of rows
  * builds each shape once whatever its length, and a re-render builds none.
+ *
+ * A COLLATOR IS THE SAME COST IN A SORT. `localeCompare` handed a locale or
+ * options builds an `Intl.Collator` on every comparison, and a sort makes
+ * n log n of them, where one built here orders a whole list.
  *
  * ONE CACHE, NOT ONE PER MODULE. `format.ts`'s wall clock and `range.ts`'s
  * clocks each kept a map of their own beside a dozen sites that kept nothing;
@@ -50,6 +54,7 @@ export type DateShape = Omit<Intl.DateTimeFormatOptions, "timeZone">;
 
 const dates = new Map<string, Intl.DateTimeFormat>();
 const numbers = new Map<string, Intl.NumberFormat>();
+const collators = new Map<string, Intl.Collator>();
 
 /** The formatter writing `shape` in `zone` for `locale` (the browser's language when undefined). */
 export function dateTimeFormat(
@@ -80,15 +85,27 @@ export function numberFormat(
   return built;
 }
 
-/** Drop every kept formatter, so the next ask builds it afresh. */
+/** The collator ordering strings by `options` for `locale` (the browser's language when undefined). */
+export function collator(locale: string | undefined, options: Intl.CollatorOptions): Intl.Collator {
+  const key = `${locale ?? ""}\u0000${JSON.stringify(options)}`;
+  let built = collators.get(key);
+  if (!built) {
+    built = new Intl.Collator(locale, options);
+    collators.set(key, built);
+  }
+  return built;
+}
+
+/** Drop every kept formatter and collator, so the next ask builds it afresh. */
 export function forgetFormatters(): void {
   dates.clear();
   numbers.clear();
+  collators.clear();
 }
 
-/** How many formatters are kept — for a suite holding the cache to its bound. */
+/** How many formatters and collators are kept — for a suite holding the cache to its bound. */
 export function keptFormattersForTest(): number {
-  return dates.size + numbers.size;
+  return dates.size + numbers.size + collators.size;
 }
 
 // A suite in the node environment has no window.

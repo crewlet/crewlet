@@ -10,6 +10,7 @@
 
 import { afterEach, expect, test, vi } from "vitest";
 import {
+  collator,
   dateTimeFormat,
   forgetFormatters,
   keptFormattersForTest,
@@ -66,6 +67,19 @@ test("a number shape is built once, and kept apart from the dates", () => {
   expect(numberFormat(undefined, { maximumFractionDigits: 1 })).not.toBe(two);
   expect(built).toHaveBeenCalledTimes(2);
   expect(two.format(1234.567)).toBe("1,234.57");
+});
+
+// A SORT ORDERS ITS WHOLE LIST WITH ONE COLLATOR, where `localeCompare` handed
+// options built one a comparison.
+test("a collation is built once, kept apart from the formatters, and orders a whole sort", () => {
+  const built = vi.spyOn(Intl, "Collator");
+  const order = { sensitivity: "base", numeric: true } as const;
+  const names = ["item 10", "Item 9", "alpha", "Beta"];
+  names.sort((a, b) => collator(undefined, order).compare(a, b));
+  expect(names).toEqual(["alpha", "Beta", "Item 9", "item 10"]);
+  expect(collator(undefined, { numeric: true })).not.toBe(collator(undefined, order));
+  expect(built).toHaveBeenCalledTimes(2);
+  expect(keptFormattersForTest()).toBe(2);
 });
 
 // A ZONE OFF THE WIRE — a company's — can be one this runtime cannot read: the

@@ -35,6 +35,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { ARTIFACT_FOLDER_NAME_MAX_BYTES } from "~/contract/artifacts.ts";
 import type { ArtifactFolderItem, ArtifactFolderVisibility } from "~/protocol/index.ts";
 import { utf8Bytes } from "../format.ts";
+import { collator } from "../formatters.ts";
 import { useQuery } from "../useQuery.ts";
 
 /**
@@ -168,9 +169,12 @@ export function indexFolders(folders: readonly ArtifactFolderItem[]): FolderInde
   };
 }
 
+/** How siblings are ordered: by the reader's own collation, case apart and numbers by value. */
+const NAME_ORDER: Intl.CollatorOptions = { sensitivity: "base", numeric: true };
+
 /** Siblings A to Z, as the engine orders them, by the reader's own collation. */
 function byName(a: ArtifactFolderItem, b: ArtifactFolderItem): number {
-  return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+  return collator(undefined, NAME_ORDER).compare(a.name, b.name);
 }
 
 /**

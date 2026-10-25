@@ -1108,18 +1108,20 @@ test("every kit button in the page bar is the bar's small size", () => {
 });
 
 /**
- * Where a node builds an `Intl` date or number formatter: `new
- * Intl.DateTimeFormat(…)` or `Intl.NumberFormat(…)` called bare, or a
- * `toLocaleString`, `toLocaleDateString` or `toLocaleTimeString` handed a locale
- * or options, which builds one on every call. Null for anything else — a call
- * with no arguments reads the runtime's own cached default and builds nothing.
+ * Where a node builds an `Intl` date or number formatter, or a collator: `new
+ * Intl.DateTimeFormat(…)`, `Intl.NumberFormat(…)` or `Intl.Collator(…)` called
+ * bare, a `toLocaleString`, `toLocaleDateString` or `toLocaleTimeString` handed
+ * a locale or options, or a `localeCompare` handed one beside the string it
+ * compares with, each of which builds one on every call. Null for anything
+ * else — a call with no locale and no options reads the runtime's own cached
+ * default and builds nothing.
  */
 function formatterBuild(node: Node): string | null {
   if (node.type === "NewExpression" || node.type === "CallExpression") {
     const callee = node.callee as Node;
     const name = memberName(callee);
     if (
-      (name === "DateTimeFormat" || name === "NumberFormat") &&
+      (name === "DateTimeFormat" || name === "NumberFormat" || name === "Collator") &&
       (callee.object as Node).type === "Identifier" &&
       (callee.object as Node).name === "Intl"
     ) {
@@ -1133,6 +1135,13 @@ function formatterBuild(node: Node): string | null {
       (node.arguments as Node[]).length > 0
     ) {
       return `${name}(…)`;
+    }
+    if (
+      node.type === "CallExpression" &&
+      name === "localeCompare" &&
+      (node.arguments as Node[]).length > 1
+    ) {
+      return "localeCompare(…)";
     }
   }
   return null;
@@ -1153,14 +1162,16 @@ function formatterBuilds(path: string, text: string, lang: Lang): string[] {
 // shape. Building one is the expensive half of writing a date or a number, and
 // a `toLocaleString` with options, or an `Intl.DateTimeFormat` built where it is
 // used, builds one on every call: a list built one or two a row on every
-// render, and reading the zone each was written in built another. The only
-// other build is `lib/prefs.ts`'s read of the browser's zone, made once and
-// kept. Mutation: a date drawn with `toLocaleDateString(undefined, …)` in any
-// module is named here.
-test("every date and number formatter is built through lib/formatters.ts", () => {
+// render, and reading the zone each was written in built another. A
+// `localeCompare` with options builds a collator on every comparison of a
+// sort. The only other build is `lib/prefs.ts`'s read of the browser's zone,
+// made once and kept. Mutations: a date drawn with `toLocaleDateString(undefined,
+// …)`, or the folders sorted with `localeCompare` and options, in any module is
+// named here.
+test("every date and number formatter, and every collator, is built through lib/formatters.ts", () => {
   const allowed: Record<string, number> = {
-    // The cache's own two constructions.
-    "lib/formatters.ts": 2,
+    // The cache's own three constructions.
+    "lib/formatters.ts": 3,
     // The browser's zone, read once and kept.
     "lib/prefs.ts": 1,
   };
@@ -1170,7 +1181,7 @@ test("every date and number formatter is built through lib/formatters.ts", () =>
   });
   expect(
     offenders,
-    "build a date or number formatter through dateTimeFormat or numberFormat (lib/formatters.ts)",
+    "build a date or number formatter or a collator through dateTimeFormat, numberFormat or collator (lib/formatters.ts)",
   ).toEqual([]);
 });
 
@@ -1181,9 +1192,13 @@ test("the formatter reading sees every way to build one, and nothing that builds
     'at.toLocaleDateString(undefined, { month: "short" });',
     'at.toLocaleString("en-GB");',
     "at.toLocaleTimeString(undefined, {});",
+    "new Intl.Collator(undefined, { numeric: true });",
+    'a.localeCompare(b, undefined, { sensitivity: "base" });',
     "n.toLocaleString();",
     "at.toLocaleDateString();",
+    "a.localeCompare(b);",
     "dateTimeFormat(undefined, zone, shape).format(at);",
+    "collator(undefined, order).compare(a, b);",
   ].join("\n");
   expect(formatterBuilds("x.ts", snippet, "ts")).toEqual([
     "x.ts:1 Intl.DateTimeFormat",
@@ -1191,5 +1206,7 @@ test("the formatter reading sees every way to build one, and nothing that builds
     "x.ts:3 toLocaleDateString(…)",
     "x.ts:4 toLocaleString(…)",
     "x.ts:5 toLocaleTimeString(…)",
+    "x.ts:6 Intl.Collator",
+    "x.ts:7 localeCompare(…)",
   ]);
 });
