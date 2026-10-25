@@ -19,3 +19,18 @@
  * reported none — not reported, never "ended normally" as a fact.
  */
 export type StopReason = "end" | "tool_use" | "cap";
+
+/**
+ * How one CLI run of a phase ended — `invocations[].outcome` on a phase record,
+ * the engine's `toolloop.InvocationOutcome`.
+ *
+ * HELD AGAINST `toolloop.InvocationOutcomes` by
+ * `internal/agent/toolloop.TestTheDashboardKnowsEveryInvocationOutcome`, in both
+ * directions, and the phase card's words for them (`OUTCOME_WORDS` in
+ * lib/phases.ts) are typed over this union, so an outcome the engine starts
+ * recording fails the gate until it is named here and fails the typecheck
+ * until it has words. A value the wire carries that this build does not know
+ * is still read as itself (`outcomeWords`), because an older dashboard meets a
+ * newer engine.
+ */
+export type InvocationOutcome = "end" | "cap" | "stopped" | "failed";

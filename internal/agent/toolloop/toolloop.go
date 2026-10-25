@@ -75,6 +75,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -387,6 +388,14 @@ const (
 	// OutcomeFailed is a run that failed — its CLI's error, or no CLI.
 	OutcomeFailed InvocationOutcome = "failed"
 )
+
+// InvocationOutcomes is the closed set, in a fresh slice.
+func InvocationOutcomes() []InvocationOutcome {
+	return []InvocationOutcome{OutcomeEnd, OutcomeCap, OutcomeStopped, OutcomeFailed}
+}
+
+// Valid reports whether o is one of [InvocationOutcomes].
+func (o InvocationOutcome) Valid() bool { return slices.Contains(InvocationOutcomes(), o) }
 
 // RunningCall is the tool call in flight: named on the live view BEFORE the
 // surface runs it and cleared once it returns.

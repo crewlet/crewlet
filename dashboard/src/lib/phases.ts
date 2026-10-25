@@ -37,6 +37,7 @@ import type {
 import { fmtBytes, fmtExact, plural, tsKey } from "./format.ts";
 import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
+import type { InvocationOutcome } from "~/contract/stops.ts";
 
 export interface ToolCall {
   name: string;
@@ -495,7 +496,7 @@ export function invocations(raw: unknown): Invocation[] {
  * over the engine's four outcomes (`toolloop.InvocationOutcome`), with the
  * value itself for one this build does not know ([outcomeWords]).
  */
-export const OUTCOME_WORDS: Record<string, { label: string; tone: Tone }> = {
+export const OUTCOME_WORDS: Record<InvocationOutcome, { label: string; tone: Tone }> = {
   end: { label: "the model finished", tone: "neutral" },
   cap: { label: "the CLI’s own turn cap stopped it", tone: "caution" },
   stopped: { label: "the engine ended it", tone: "neutral" },
@@ -505,7 +506,7 @@ export const OUTCOME_WORDS: Record<string, { label: string; tone: Tone }> = {
 /** A run's outcome in words, or the value itself for one this build does not know. */
 export function outcomeWords(outcome: string): { label: string; tone: Tone } {
   return Object.hasOwn(OUTCOME_WORDS, outcome)
-    ? OUTCOME_WORDS[outcome]!
+    ? OUTCOME_WORDS[outcome as InvocationOutcome]
     : { label: outcome ? `ended “${outcome}”` : "ended", tone: "neutral" };
 }
 
