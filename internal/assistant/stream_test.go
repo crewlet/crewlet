@@ -128,7 +128,8 @@ func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 	if len(deltas) != 1 || deltas[0].Text != "The keys rotate weekly." || deltas[0].Restart {
 		t.Errorf("deltas = %+v, want the round once, whole", deltas)
 	}
-	if !f.Model.Requests()[0].Streaming() {
-		t.Error("the turn did not ask its model to stream")
+	if req := f.Model.Requests()[0]; !req.Streaming() || !req.StreamTokens {
+		t.Errorf("streaming %v, token stream %v: the turn did not ask its model for its token stream",
+			req.Streaming(), req.StreamTokens)
 	}
 }
