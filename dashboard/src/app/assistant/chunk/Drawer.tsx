@@ -52,7 +52,7 @@ import {
   useToast,
   type MenuEntry,
 } from "@crewlethq/ui";
-import { ProductMark } from "@crewlethq/icons";
+import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   LayoutDashboardGlyph,
   LockGlyph,
@@ -68,7 +68,12 @@ import { relTime } from "~/lib/format.ts";
 import { matchesRow } from "../../keymap.ts";
 import { on as onBus, emit } from "../bus.ts";
 import { usePageSnapshot } from "../context.ts";
-import { ASSISTANT_COMPOSER_ID, type AssistantFocus } from "../control.ts";
+import {
+  ASSISTANT_COMPOSER_ID,
+  takeQueuedQuestion,
+  useQueuedQuestion,
+  type AssistantFocus,
+} from "../control.ts";
 import type { AssistantUnavailable } from "../availability.ts";
 import { readTab } from "../tab.ts";
 import { useToastInset } from "../../toastInset.tsx";
@@ -212,6 +217,23 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
     },
     [attached],
   );
+
+  // A QUESTION TYPED ELSEWHERE (the palette's row) is asked at once where
+  // this panel could ask it now, and otherwise waits in the box for the
+  // person to send when the running answer ends.
+  const queued = useQueuedQuestion();
+  useEffect(() => {
+    if (queued === null) return;
+    const question = takeQueuedQuestion();
+    if (question === null) return;
+    if (running === null && disabledReason === undefined && questionFits(question.trim())) {
+      ask(question);
+    } else {
+      fill(question);
+    }
+    // `fill` is a fresh closure each render over the same setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queued, running, disabledReason, ask]);
 
   const fill = (text: string) => {
     setDraft(text);

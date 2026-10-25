@@ -23,6 +23,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
+import { queueQuestion, takeQueuedQuestion } from "../control.ts";
 import { Drawer } from "./Drawer.tsx";
 import { conversation, resetSessionForTest } from "./session.ts";
 
@@ -194,4 +195,18 @@ test("the page goes with a question until the reader removes it", async () => {
   );
   const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
   expect(JSON.parse(String(turn.init.body)).page_context).toBeNull();
+});
+
+// A QUESTION TYPED IN THE PALETTE is asked as the panel would ask it, once
+// the panel is drawn, and then it is the panel's: nothing waits behind it.
+test("a question queued from elsewhere is asked once the panel draws", async () => {
+  const sent = engine();
+  queueQuestion("Who spent most this week?");
+  mount();
+  await waitFor(() =>
+    expect(sent.some((r) => new URL(r.url).pathname.endsWith("/turns"))).toBe(true),
+  );
+  const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
+  expect(JSON.parse(String(turn.init.body)).input).toEqual({ text: "Who spent most this week?" });
+  expect(takeQueuedQuestion()).toBeNull();
 });
