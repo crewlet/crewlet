@@ -26,6 +26,7 @@
  */
 
 import { parseHash, type Navigator } from "../router.tsx";
+import { parseWindow, windowLabel, windowParam, type Offer } from "~/lib/range.ts";
 import type { PageActionParse, PageActionSpec } from "./context.ts";
 
 /** How a screen writes a key: a filter replaces the history entry, a section pushes one. */
@@ -41,6 +42,12 @@ export interface UrlActionKey {
   check?: (value: string) => string | null;
   /** The value, in the screen's own words. Unset: the value as written. */
   words?: (value: string) => string;
+  /**
+   * The value the screen reads when the key is absent, as `useParam`'s
+   * fallback: written as a clear, so the address keeps no key nobody chose,
+   * and shown as the current value where the address holds none.
+   */
+  fallback?: string;
 }
 
 /** A change to the address: a key to its new value, or null to clear it. */
@@ -138,7 +145,7 @@ export function parseUrlPatch(
     }
     const refused = key.check?.(value) ?? null;
     if (refused !== null) return { ok: false, reason: refused };
-    out[name] = value === "" ? null : value;
+    out[name] = value === "" || value === key.fallback ? null : value;
   }
   return { ok: true, value: out };
 }
@@ -153,8 +160,10 @@ export function urlAction(
 ): Record<string, PageActionSpec<UrlPatch>> {
   const { keys, nav } = options;
   const words = (name: string, value: string | null) => {
-    if (value === null) return null;
-    return keyOf(keys, name)?.words?.(value) ?? value;
+    const key = keyOf(keys, name);
+    const read = value ?? key?.fallback ?? null;
+    if (read === null) return null;
+    return key?.words?.(read) ?? read;
   };
   const spec: PageActionSpec<UrlPatch> = {
     scope: options.scope,
@@ -189,4 +198,43 @@ export function urlAction(
     ...(options.confirm === undefined ? {} : { confirm: options.confirm }),
   };
   return { [id]: spec };
+}
+
+/**
+ * The `window=` key a screen's time range writes, held to the screen's own
+ * offer: a window the screen would silently replace with its fallback is
+ * refused, since the card would otherwise promise a window the page will not
+ * show. A section, as `useTimeRange` writes it.
+ */
+export function windowKey(offer: Offer, now: () => number): UrlActionKey {
+  return {
+    label: "Window",
+    history: "section",
+    fallback: offer.fallback,
+    check: (value) =>
+      windowParam(parseWindow(value, offer, now())) === value
+        ? null
+        : "This screen does not offer that window.",
+    words: (value) => windowLabel(parseWindow(value, offer, now())),
+  };
+}
+
+/**
+ * A key that takes one of a closed set of values, worded as the control that
+ * offers them words each: a chart's grouping, a screen's tab.
+ */
+export function choiceKey(
+  label: string,
+  options: readonly { value: string; label: string }[],
+  history: UrlKeyHistory,
+  fallback?: string,
+): UrlActionKey {
+  return {
+    label,
+    history,
+    ...(fallback === undefined ? {} : { fallback }),
+    check: (value) =>
+      options.some((o) => o.value === value) ? null : `${label} has no "${value}" option.`,
+    words: (value) => options.find((o) => o.value === value)?.label ?? value,
+  };
 }
