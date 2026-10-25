@@ -100,6 +100,20 @@ describe("the run chip says the turn's state in words", () => {
     expect(runChipOf(done, at)).toEqual({ state: "done", title: "Done in 5s", meta: "2 steps" });
   });
 
+  test("done, with no step count when it took no step", () => {
+    const done = {
+      ...base,
+      phase: "completed" as const,
+      done: { state: "completed" as const, duration_ms: 1000, steps: 0 },
+    };
+    expect(runChipOf(done, at)).toEqual({ state: "done", title: "Done in 1s", meta: undefined });
+  });
+
+  test("done, read back from a transcript, says no duration it does not know", () => {
+    const reloaded = { ...base, phase: "completed" as const, askedAt: "2026-10-24T09:00:00Z" };
+    expect(runChipOf(reloaded, at).title).toBe("Done");
+  });
+
   test("waiting for the person's approval", () => {
     expect(runChipOf({ ...base, phase: "awaiting_approval" }, at).title).toBe(
       "Waiting for your approval",

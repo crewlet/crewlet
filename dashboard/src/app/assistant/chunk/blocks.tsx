@@ -142,6 +142,9 @@ function seconds(ms: number): string {
 
 const steps = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;
 
+/** A run's step count as the chip's meta: none for a turn that took no step. */
+const stepMeta = (n: number) => (n > 0 ? steps(n) : undefined);
+
 /** The run chip for a turn: its state, the words it says, and what it says beside them. */
 export function runChipOf(
   turn: TurnView,
@@ -157,11 +160,17 @@ export function runChipOf(
     case "working":
       return { state, title: "Working", meta: seconds(elapsed) };
     case "applying":
-      return { state, title: "Applying", meta: steps(taken) };
+      return { state, title: "Applying", meta: stepMeta(taken) };
     case "awaiting_approval":
-      return { state, title: "Waiting for your approval", meta: steps(taken) };
+      return { state, title: "Waiting for your approval", meta: stepMeta(taken) };
     case "completed":
-      return { state, title: `Done in ${seconds(elapsed)}`, meta: steps(taken) };
+      // A TURN READ BACK FROM ITS TRANSCRIPT carries no duration; the time
+      // since it was asked is not how long it ran, so it says Done alone.
+      return {
+        state,
+        title: turn.done ? `Done in ${seconds(turn.done.duration_ms)}` : "Done",
+        meta: stepMeta(taken),
+      };
     case "stopped":
     case "expired": {
       const done = turn.steps.filter((s) => s.state === "done").length;
@@ -172,7 +181,7 @@ export function runChipOf(
       };
     }
     case "refused":
-      return { state, title: "Not permitted", meta: steps(taken) };
+      return { state, title: "Not permitted", meta: stepMeta(taken) };
     case "unconfirmed":
       return { state, title: "Could not confirm the change" };
     case "failed":
@@ -180,7 +189,7 @@ export function runChipOf(
     case "budget_exhausted": {
       const at = turn.steps.find((s) => s.state === "failed" || s.state === "refused");
       const refused = at?.state === "refused";
-      if (refused) return { state: "refused", title: "Not permitted", meta: steps(taken) };
+      if (refused) return { state: "refused", title: "Not permitted", meta: stepMeta(taken) };
       return { state, title: at ? `Failed at step ${at.index}` : "Failed" };
     }
   }
