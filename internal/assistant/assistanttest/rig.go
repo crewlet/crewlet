@@ -2,8 +2,8 @@ package assistanttest
 
 import (
 	"context"
+	"fmt"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,7 +18,7 @@ import (
 // Rig is one suite's assistant: a real [assistant.Service] over this
 // package's fakes, a person, and a conversation of theirs.
 type Rig struct {
-	t            testing.TB
+	t            TB
 	Svc          *assistant.Service
 	Clock        *Clock
 	Store        *Store
@@ -43,6 +43,18 @@ type RigOptions struct {
 	Company assistant.Company
 	// Acts are the writes the rig's person may propose.
 	Acts []string
+	// Catalogue replaces the fixed Tools: catalog.Curated offers each
+	// person the curated table as a running node does.
+	Catalogue assistant.Catalogue
+	// Person replaces grace, who holds the tracker on the seat grace.
+	Person *iam.Principal
+	// Dispatcher and Revoker replace the recording fakes with the real
+	// grant machinery (internal/api/auth's Dispatcher and Delegations), for
+	// a suite that drives the App's own handler; the rig's Dispatcher and
+	// Revoker are then nil, and its questions carry a grant derived through
+	// the App's guard ([Rig.AskWith]).
+	Dispatcher exec.Dispatcher
+	Revoker    assistant.Revoker
 	// Node is the rig's node id; empty is "node-a".
 	Node string
 	// Store is shared with another rig, for a suite about two nodes of one
@@ -57,8 +69,28 @@ type RigOptions struct {
 // NewRig builds a rig and closes its service when the suite ends. Its person is
 // grace, holding the tracker, on the human seat grace; ada is a second human
 // seat.
-func NewRig(t testing.TB, o RigOptions) *Rig {
+func NewRig(t TB, o RigOptions) *Rig {
 	t.Helper()
+	if o.Company == nil {
+		o.Company = Company(t, !o.Off, "grace", "ada")
+	}
+	r, err := assemble(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.t = t
+	t.Cleanup(func() {
+		if err := r.close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	return r
+}
+
+// assemble builds a rig over o, whose Company is set: the one construction
+// [NewRig] and [RunSuite] share, so an evaluation case runs on exactly the
+// service a suite does.
+func assemble(o RigOptions) (*Rig, error) {
 	clock := NewClock()
 	store := o.Store
 	if store == nil {
@@ -68,39 +100,51 @@ func NewRig(t testing.TB, o RigOptions) *Rig {
 	if node == "" {
 		node = "node-a"
 	}
-	r := &Rig{t: t, Clock: clock, Store: store, Model: NewModel(o.Rounds...),
-		Dispatcher: &Dispatcher{Handler: o.Handler}, Revoker: &Revoker{}, Audit: &Audit{},
-		Person:       Person("grace", "grace", iam.GrantTracker),
+	r := &Rig{Clock: clock, Store: store, Model: NewModel(o.Rounds...),
+		Audit: &Audit{}, Person: Person("grace", "grace", iam.GrantTracker),
 		Conversation: ID("conversation/one"),
+	}
+	if o.Person != nil {
+		r.Person = *o.Person
+	}
+	var dispatcher exec.Dispatcher = o.Dispatcher
+	if dispatcher == nil {
+		r.Dispatcher = &Dispatcher{Handler: o.Handler}
+		dispatcher = r.Dispatcher
+	}
+	var revoker assistant.Revoker = o.Revoker
+	if revoker == nil {
+		r.Revoker = &Revoker{}
+		revoker = r.Revoker
 	}
 	models := Models{Model: r.Model, Key: "assistant"}
 	if o.Models != nil {
 		models = *o.Models
 	}
-	company := o.Company
-	if company == nil {
-		company = Company(t, !o.Off, "grace", "ada")
+	var offered assistant.Catalogue = Catalogue(o.Tools)
+	if o.Catalogue != nil {
+		offered = o.Catalogue
 	}
 	svc, err := assistant.New(assistant.Deps{
-		Node: node, Company: company, Remote: o.Remote, Rate: o.Rate,
+		Node: node, Company: o.Company, Remote: o.Remote, Rate: o.Rate,
 		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
-		Models: models, Budget: o.Budget, Catalogue: Catalogue(o.Tools),
-		Transcripts: r.Store, Records: r.Store, Dispatcher: r.Dispatcher, Revoker: r.Revoker,
+		Models: models, Budget: o.Budget, Catalogue: offered,
+		Transcripts: r.Store, Records: r.Store, Dispatcher: dispatcher, Revoker: revoker,
 		Audit: r.Audit, Metrics: Metrics{}, Now: clock.Now,
 	})
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := svc.Close(ctx); err != nil {
-			t.Errorf("close: %v", err)
-		}
-	})
 	r.Svc = svc
 	r.Store.Seed(r.Person.ID, r.Conversation, "")
-	return r
+	return r, nil
+}
+
+// close stops every turn the rig's service runs.
+func (r *Rig) close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return r.Svc.Close(ctx)
 }
 
 // Grant is a fresh read grant for one question, valid for five minutes, with
@@ -114,12 +158,19 @@ func (r *Rig) Grant(name string) Grant {
 // internal/api/opkey scopes one to a person.
 func Key(name string) string { return "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a12.k" + name }
 
-// Ask starts a turn of the rig's person under key name.
+// Ask starts a turn of the rig's person under key name, on a fake read grant.
 func (r *Rig) Ask(name, text string, page *wire.PageContext) (wire.TurnAccepted, error) {
-	r.t.Helper()
+	return r.AskWith(name, text, page, r.Grant(name))
+}
+
+// AskWith starts a turn of the rig's person under key name on the read grant
+// given: a real one derived through the App's guard, when the rig sends
+// through the App's own dispatcher.
+func (r *Rig) AskWith(name, text string, page *wire.PageContext, read exec.Grant) (
+	wire.TurnAccepted, error) {
+
 	return r.Svc.Start(context.Background(), assistant.TurnStart{Person: r.Person,
-		Conversation: r.Conversation, Key: Key(name), Input: text, Page: page,
-		Read: r.Grant(name)})
+		Conversation: r.Conversation, Key: Key(name), Input: text, Page: page, Read: read})
 }
 
 // Collector is a stream as a suite reads it, refusing a frame the protocol
@@ -155,16 +206,26 @@ func (c *Collector) Frames() []wire.Frame {
 // Follow reads a turn's stream from after seq after until it ends.
 func (r *Rig) Follow(turn uuid.UUID, after uint64) []wire.Frame {
 	r.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	frames, err := r.follow(turn, after, 10*time.Second)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return frames
+}
+
+// follow reads a turn's stream from after seq after until it ends, or fails
+// when it has not ended within patience.
+func (r *Rig) follow(turn uuid.UUID, after uint64, patience time.Duration) ([]wire.Frame, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), patience)
 	defer cancel()
 	c := &Collector{}
 	if err := r.Svc.Stream(ctx, r.Person.ID, r.Conversation, turn, after, c); err != nil {
-		r.t.Fatalf("stream: %v", err)
+		return nil, fmt.Errorf("stream: %w", err)
 	}
 	if ctx.Err() != nil {
-		r.t.Fatal("the stream never ended")
+		return nil, fmt.Errorf("the stream never ended within %s", patience)
 	}
-	return c.Frames()
+	return c.Frames(), nil
 }
 
 // Last is the final frame of kind in frames, or nil.
