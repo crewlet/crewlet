@@ -136,6 +136,9 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 	type entry struct {
 		call   llm.ToolCall
 		record *callRec
+		// offered is false for a call naming a tool the phase did not
+		// offer, which the CLI refused itself.
+		offered bool
 	}
 	var entries []entry
 	if g.turn != nil {
@@ -154,8 +157,9 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 				id = rec.id
 			}
 			entries = append(entries, entry{
-				call:   llm.ToolCall{ID: id, Name: tc.Name, Arguments: tc.Arguments},
-				record: rec,
+				call:    llm.ToolCall{ID: id, Name: tc.Name, Arguments: tc.Arguments},
+				record:  rec,
+				offered: g.turn.expect[i],
 			})
 		}
 	}
@@ -164,8 +168,9 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 			continue
 		}
 		entries = append(entries, entry{
-			call:   llm.ToolCall{ID: c.id, Name: c.name, Arguments: c.args},
-			record: c,
+			call:    llm.ToolCall{ID: c.id, Name: c.name, Arguments: c.args},
+			record:  c,
+			offered: true,
 		})
 	}
 
@@ -190,10 +195,13 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 		switch {
 		case rec == nil:
 			// A call the model asked for that never reached the phase:
-			// the run ended before the CLI made it.
+			// one the CLI refused itself, or the run ended before it.
+			why := notRun(e.call.Name)
+			if !e.offered {
+				why = notOffered(e.call.Name)
+			}
 			answers = append(answers, llm.Message{
-				Role: llm.RoleTool, ToolCallID: e.call.ID, Name: e.call.Name, Failed: true,
-				Content: notRun(e.call.Name),
+				Role: llm.RoleTool, ToolCallID: e.call.ID, Name: e.call.Name, Failed: true, Content: why,
 			})
 		case rec == d.suspended:
 			// THE PARKED CALL STAYS UNANSWERED — exactly one dangling

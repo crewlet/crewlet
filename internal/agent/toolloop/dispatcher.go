@@ -126,6 +126,11 @@ func notRun(name string) string {
 	return name + " was NOT run: the run ended before it could run. Call it again if it is still needed."
 }
 
+// notOffered is the record of a call naming a tool this phase does not offer.
+func notOffered(name string) string {
+	return name + " was NOT run: it is not one of the tools offered here."
+}
+
 // callRec is one call that reached the dispatcher.
 type callRec struct {
 	seq   int
@@ -168,6 +173,10 @@ type observedTurn struct {
 	calls []llm.TurnCall
 	// joined marks a call that reached the host as this slot.
 	joined []bool
+	// expect marks a call the CLI will make to the host: one of the host's
+	// tools, offered when the response was read. A CLI refuses any other name
+	// itself, so nothing waits for it.
+	expect []bool
 	model  string
 	stop   llm.StopReason
 	usage  *llm.Usage
@@ -178,7 +187,7 @@ type observedTurn struct {
 // awaiting reports a call of the response the CLI has yet to make.
 func (t *observedTurn) awaiting(except int, skip func(name string) bool) bool {
 	for i, tc := range t.calls {
-		if i == except || !tc.Host || t.joined[i] {
+		if i == except || !t.expect[i] || t.joined[i] {
 			continue
 		}
 		if skip != nil && skip(tc.Name) {
@@ -242,6 +251,11 @@ type dispatcher struct {
 	// invCalls, invRuns and invTurns are where the current run's calls, CLI
 	// runs and responses start in calls, runs and turns.
 	invCalls, invRuns, invTurns int
+
+	// offeredRev and offeredNames are the surface's names at a revision, so
+	// a call is checked against what is offered without rendering it.
+	offeredRev   uint64
+	offeredNames map[string]struct{}
 
 	// folded is how much of turns and calls the loop has already turned
 	// into conversation, so [dispatcher.Pending] and the next fold start
@@ -330,7 +344,7 @@ func (d *dispatcher) Observe(t llm.Turn) {
 			grown := &observedTurn{calls: t.Calls}
 			d.expectLocked(grown)
 			copy(grown.joined, turn.joined)
-			turn.calls, turn.joined = t.Calls, grown.joined
+			turn.calls, turn.joined, turn.expect = t.Calls, grown.joined, grown.expect
 		}
 		if t.Text != "" {
 			turn.text = t.Text
@@ -364,9 +378,13 @@ func (d *dispatcher) Observe(t llm.Turn) {
 	d.frame()
 }
 
-// expectLocked readies a response's record of which of its calls have come.
+// expectLocked marks which of a response's calls the CLI will make to the host.
 func (d *dispatcher) expectLocked(t *observedTurn) {
 	t.joined = make([]bool, len(t.calls))
+	t.expect = make([]bool, len(t.calls))
+	for i, c := range t.calls {
+		t.expect[i] = c.Host && d.offeredLocked(c.Name)
+	}
 }
 
 // modelStartLocked is when the model began the response observed at now: the
@@ -457,6 +475,22 @@ func (d *dispatcher) Offered() []toolsession.Tool {
 
 // Revision is the surface's.
 func (d *dispatcher) Revision() uint64 { return d.cfg.Surface.Revision() }
+
+// offeredLocked reports whether the surface offers name now. Read through the
+// surface's revision, so a call costs one integer unless the offer moved —
+// rendering it deep-clones every active tool's schema.
+func (d *dispatcher) offeredLocked(name string) bool {
+	rev := d.cfg.Surface.Revision()
+	if d.offeredNames == nil || rev != d.offeredRev {
+		names := map[string]struct{}{}
+		for _, def := range d.cfg.Surface.ToolDefs() {
+			names[def.Name] = struct{}{}
+		}
+		d.offeredNames, d.offeredRev = names, rev
+	}
+	_, ok := d.offeredNames[name]
+	return ok
+}
 
 // Call decides and runs one call the CLI made.
 //

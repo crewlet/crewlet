@@ -87,6 +87,38 @@ func TestTwoDetachedRunsInOneResponseParkOnOne(t *testing.T) {
 	}
 }
 
+// A CALL NAMING A TOOL THE SESSION NEVER OFFERED never runs, and the response it
+// is part of is not held for it: the CLI refuses it itself, so nothing waits for
+// it to arrive. On the last round the budget allows, the response's other call
+// is the last to come, and the run ends after it — the CLI asks nothing more.
+// The record answers the call as the model's, not run, saying why.
+func TestACallNamingAToolNeverOfferedIsNotWaitedFor(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("post")
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{{ID: "x", Name: "nonexistent"}, {ID: "p", Name: "post"}}},
+		calling("", "post"),
+	))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 1})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := surf.calls(); !slices.Equal(got, []string{"post"}) {
+		t.Errorf("the surface ran %v, want only the offered call", got)
+	}
+	if late := prov.Late(); late != 0 {
+		t.Errorf("the CLI asked its model %d time(s) past the last round", late)
+	}
+	if !res.ExhaustedRounds || res.RoundsUsed != 1 {
+		t.Errorf("rounds %d exhausted %v, want the one round the budget allows, exhausted",
+			res.RoundsUsed, res.ExhaustedRounds)
+	}
+	x := toolResults(res.Messages)["x"]
+	if !x.Failed || !strings.Contains(x.Content, "nonexistent") || !strings.Contains(x.Content, "not one of") {
+		t.Errorf("the unknown call is answered %+v, want not run because nothing of that name is offered", x)
+	}
+}
+
 // A CALL THE CLI GAVE UP ON STILL RUNS OUT UNDER THE PHASE, AND IS RECORDED. The
 // CLI's cancel abandons only the delivery: the tool is not cut short half-way
 // through a write — its context is the phase's, which the CLI cannot cancel —
