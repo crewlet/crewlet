@@ -323,6 +323,26 @@ export function assistantMaxWidth(width: number, frame: Frame, peekColumn = fals
 }
 
 /**
+ * What the assistant takes from the window's end edge while it is a column
+ * or stands over the page, so the toast stack stands beside it rather than
+ * over it: its width (an overlay's is capped at the window less a strip of
+ * the page, as the kit draws it) and the inset holding it off the edge. A
+ * sheet is the whole window and takes the stack's foot instead.
+ */
+export function assistantOccupied(
+  shape: AssistantShape,
+  width: number,
+  viewport: number,
+  scale: number,
+): number {
+  if (shape === "sheet") return 0;
+  const inset = px(size.shell.inset) * scale;
+  const drawn =
+    shape === "overlay" ? Math.min(width, viewport - px(spacing["10"]) - 2 * inset) : width;
+  return Math.max(0, Math.round(drawn + inset));
+}
+
+/**
  * The narrowest window Settings' column stands beside its section at, with
  * the assistant's track (if any) taken first: [SECTION_COLUMN_MIN] plus it.
  */

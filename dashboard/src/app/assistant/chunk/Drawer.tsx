@@ -26,7 +26,15 @@
  * empty composer brings back the last question.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import {
   Button,
   Callout,
@@ -63,6 +71,8 @@ import { usePageSnapshot } from "../context.ts";
 import { ASSISTANT_COMPOSER_ID, type AssistantFocus } from "../control.ts";
 import type { AssistantUnavailable } from "../availability.ts";
 import { readTab } from "../tab.ts";
+import { useToastInset } from "../../toastInset.tsx";
+import type { AssistantShape } from "../../layout.ts";
 import type { InAppTarget } from "./openInApp.ts";
 import {
   approve,
@@ -92,11 +102,11 @@ export interface DrawerProps {
   /** The reader's own name, for the greeting. */
   name: string;
   /**
-   * Whether the panel is a modal over the page (an overlay, or the whole
-   * window on a phone), where the page's own keys stand aside and the
-   * panel answers ⌘. itself.
+   * Where the panel stands. As an overlay or the whole window it is a modal,
+   * where the page's own keys stand aside and the panel answers ⌘. itself;
+   * as the whole window its foot is where a toast would otherwise land.
    */
-  modal: boolean;
+  shape: AssistantShape;
 }
 
 /** A clock for the run chip and the message feet: each second while a turn runs, each minute otherwise. */
@@ -116,7 +126,8 @@ interface Recent {
   updated_at: string;
 }
 
-export function Drawer({ unavailable, onClose, initialFocus, name, modal }: DrawerProps) {
+export function Drawer({ unavailable, onClose, initialFocus, name, shape }: DrawerProps) {
+  const modal = shape !== "column";
   const view = useConversation();
   const page = usePageSnapshot();
   const toast = useToast();
@@ -129,6 +140,22 @@ export function Drawer({ unavailable, onClose, initialFocus, name, modal }: Draw
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const running = openTurn(view);
   const now = useNow(running !== null);
+
+  // ON A PHONE THE PANEL IS THE WHOLE WINDOW, and its foot (the composer and
+  // the line under it) is where a toast would land: the stack stands above it.
+  const foot = useRef<HTMLDivElement>(null);
+  const [footHeight, setFootHeight] = useState(0);
+  useLayoutEffect(() => {
+    const element = foot.current?.closest<HTMLElement>(".crewlet-side-panel__foot");
+    if (shape !== "sheet" || !element) return undefined;
+    const measure = () => setFootHeight(Math.round(element.getBoundingClientRect().height));
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [shape, unavailable]);
+  useToastInset("panel", shape === "sheet" && footHeight > 0 ? { block: footHeight } : null);
 
   // THE CONVERSATION THIS TAB WAS ON comes back after a reload, read again
   // from the engine under this session.
@@ -305,7 +332,7 @@ export function Drawer({ unavailable, onClose, initialFocus, name, modal }: Draw
         }
         footer={
           offline ? undefined : (
-            <>
+            <div ref={foot}>
               <Composer
                 ref={composer}
                 id={ASSISTANT_COMPOSER_ID}
@@ -363,7 +390,7 @@ export function Drawer({ unavailable, onClose, initialFocus, name, modal }: Draw
               <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
                 The assistant can be wrong. Check before you approve.
               </Text>
-            </>
+            </div>
           )
         }
       >

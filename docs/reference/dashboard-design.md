@@ -4040,7 +4040,10 @@ names, never an anchor; a picture is its alt text, never fetched
 (`ASSISTANT_WORDS` in `lib/markdown.ts`). The assistant moves the page only
 through an engine-built Open in app card, whose address the drawer checks is
 one of this dashboard's own framed routes before it follows it. There is no
-answer rating, and the one toast is "Conversation cleared".
+answer rating, and the one toast is "Conversation cleared". The toast stack
+keeps clear of the panel (`app/toastInset.tsx`): beside it while it is a
+column or over the page, above its composer while it is the whole window on a
+phone.
 
 **The panel is a chunk of its own**: the first paint carries the Ask button,
 the page context registry, the bus and the one-word status the button reads,
