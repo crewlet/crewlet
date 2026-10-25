@@ -1753,7 +1753,7 @@ or is full — the edge is stamped **permanently** one-sided and never retried.
 Both states are in the attention queue: `flag=one_sided` is the repair still
 pending, `flag=one_sided_final` the one a person has to resolve. The `flag`
 filter takes any number of values and matches a task carrying **any** of them.
-The duty logs under `component=tracker`: `tracker_one_sided_repaired` with how
+The duty logs under `component=worklet`: `tracker_one_sided_repaired` with how
 many edges a pass settled (`edges`), split into those it mirrored (`mirrored`)
 and those it stamped permanently one-sided (`final`);
 `tracker_one_sided_final` for each edge it stamped, with the reason; and
