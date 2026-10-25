@@ -39,6 +39,7 @@ package assistantapi
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -71,8 +72,8 @@ var _ Service = (*assistant.Service)(nil)
 // Tables writes a table card's stored snapshot as a file a person downloads,
 // one format per method (internal/tabular, through one formula rule).
 type Tables interface {
-	CSV(w http.ResponseWriter, t wire.TableCard) error
-	XLSX(w http.ResponseWriter, t wire.TableCard) error
+	CSV(w io.Writer, t wire.TableCard) error
+	XLSX(w io.Writer, t wire.TableCard) error
 }
 
 // Options configure the surface. Every field but Now is REQUIRED.

@@ -27,6 +27,7 @@ type Store struct {
 	conversations map[uuid.UUID]*storedConversation
 	turns         map[uuid.UUID]*storedTurn
 	parked        map[uuid.UUID][]byte
+	proposals     map[uuid.UUID]assistantdomain.Proposal
 	records       []string
 	ops           map[string]bool
 }
@@ -50,7 +51,8 @@ var (
 func NewStore(now func() time.Time) *Store {
 	return &Store{now: now, conversations: map[uuid.UUID]*storedConversation{},
 		turns: map[uuid.UUID]*storedTurn{}, parked: map[uuid.UUID][]byte{},
-		ops: map[string]bool{}}
+		proposals: map[uuid.UUID]assistantdomain.Proposal{},
+		ops:       map[string]bool{}}
 }
 
 // Records is every record the store was handed, each as JSON.
@@ -137,6 +139,11 @@ func (s *Store) Transcript(_ context.Context, owner, id uuid.UUID) (assistantdom
 		Cards: slices.Clone(c.cards)}
 	for _, turn := range c.turns {
 		t.Turns = append(t.Turns, s.turns[turn].Turn)
+	}
+	for _, p := range s.proposals {
+		if p.Conversation == id {
+			t.Proposals = append(t.Proposals, p)
+		}
 	}
 	return t, nil
 }
@@ -369,4 +376,35 @@ func (s *Store) CloseTurn(_ context.Context, w assistant.Write, turn uuid.UUID, 
 	c.OpenTurn = uuid.Nil
 	delete(s.parked, turn)
 	return nil
+}
+
+// CreateProposal keeps a proposal a turn of the owner's made.
+func (s *Store) CreateProposal(_ context.Context, w assistant.Write, p assistantdomain.NewProposal) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.keep(w, "proposal_created", p); err != nil {
+		return err
+	}
+	c, _, err := s.child(w.Owner, p.Turn)
+	if err != nil {
+		return err
+	}
+	s.proposals[p.Proposal] = assistantdomain.Proposal{ID: p.Proposal, Conversation: c.ID,
+		Turn: p.Turn, Owner: w.Owner, Tool: p.Tool, Act: p.Act, Scope: p.Scope,
+		Method: p.Method, Path: p.Path, Query: p.Query, Body: p.Body,
+		RequestDigest: p.RequestDigest, Digest: p.Digest, OpKey: p.OpKey,
+		SourceRevision: p.SourceRevision, StepUp: p.StepUp, Card: p.Card,
+		State: wire.ProposalProposed, ExpiresAt: p.ExpiresAt, CreatedAt: s.now().UTC()}
+	return nil
+}
+
+// Proposals is every proposal the store keeps.
+func (s *Store) Proposals() []assistantdomain.Proposal {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]assistantdomain.Proposal, 0, len(s.proposals))
+	for _, p := range s.proposals {
+		out = append(out, p)
+	}
+	return out
 }

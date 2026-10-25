@@ -2,6 +2,7 @@ package assistantapi
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -201,7 +202,7 @@ func (s *Surface) exportXLSX(w http.ResponseWriter, r *http.Request) {
 // export writes one of the caller's table cards from the snapshot the
 // conversation stored, never a fresh read.
 func (s *Surface) export(w http.ResponseWriter, r *http.Request, ext, contentType string,
-	write func(http.ResponseWriter, wire.TableCard) error) {
+	write func(io.Writer, wire.TableCard) error) {
 
 	id, ok := pathID(w, r)
 	if !ok {

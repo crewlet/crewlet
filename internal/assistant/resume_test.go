@@ -6,41 +6,24 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// createTask is a write tool, which a turn never sends.
-var createTask = catalog.Tool{Name: "create_task", Kind: catalog.KindWrite,
-	Tier: catalog.TierReversible, Act: "create_work_item",
-	Parameters: map[string]any{"type": "object", "properties": map[string]any{
-		"title": map[string]any{"type": "string"}}}}
-
-// proposalID is the one proposal the fake proposer makes.
-var proposalID = assistanttest.ID("proposal/one")
-
-// proposalCard is the proposal's card in state.
-func proposalCard(state wire.ProposalState) wire.Card {
-	return wire.Card{Type: wire.CardProposal, Proposal: &wire.ProposalCard{
-		ProposalID: proposalID, Scope: wire.ScopeServer, Tool: "create_task",
-		Title: "Create a task", Digest: "sha256:" + strings.Repeat("ab", 32),
-		ExpiresAt: assistanttest.Epoch.Add(15 * time.Minute), State: state,
-		ApproveLabel: "Create", Changes: []wire.Change{{Kind: wire.ChangeAdded,
-			Field: "title", Label: "Title", To: "Rotate keys", New: true}}}}
-}
-
-// proposer turns every write into the one proposal.
-type proposer struct{}
-
-func (proposer) Propose(context.Context, assistant.ProposalCall) (wire.Card, error) {
-	return proposalCard(wire.ProposalProposed), nil
+// cardAt is a proposal's own card in state.
+func cardAt(p assistantdomain.Proposal, state wire.ProposalState) wire.Card {
+	card := p.Card
+	proposal := *card.Proposal
+	proposal.State = state
+	card.Proposal = &proposal
+	return card
 }
 
 // decliner records every Stop it was handed.
@@ -56,11 +39,13 @@ func (d *decliner) DeclineTurn(_ context.Context, s approval.Stop) error {
 	return nil
 }
 
-// parkedRig is a rig whose turn proposed a task and parked on it.
-func parkedRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted) {
+// parkedRig is a rig whose turn proposed a task through the catalogue's own
+// create_task, and parked on the proposal, which it answers.
+func parkedRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted, assistantdomain.Proposal) {
 	t.Helper()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{Tools: []catalog.Tool{createTask},
-		Proposer: proposer{}, Acts: []string{"create_work_item"},
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{
+		Tools: []catalog.Tool{assistanttest.Tool(t, "create_task")},
+		Acts:  []string{"create_work_item"},
 		Rounds: []assistanttest.Round{
 			assistanttest.Call("c1", "create_task", map[string]any{"title": "Rotate keys"}),
 			assistanttest.Say("Created it.")}})
@@ -72,7 +57,11 @@ func parkedRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted) {
 	if done == nil || done.Done.State != wire.TurnWaitingForApproval {
 		t.Fatalf("the proposing turn ended %+v, want waiting_for_approval", done)
 	}
-	return f, accepted
+	proposals := f.Store.Proposals()
+	if len(proposals) != 1 {
+		t.Fatalf("the turn recorded %d proposals, want 1", len(proposals))
+	}
+	return f, accepted, proposals[0]
 }
 
 // AN APPROVAL RESUMES THE PARKED TURN where it stopped: the call it suspended
@@ -83,16 +72,16 @@ func parkedRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted) {
 // model never reads that the change was applied.
 func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 	t.Parallel()
-	f, accepted := parkedRig(t)
+	f, accepted, p := parkedRig(t)
 	if sent := f.Dispatcher.Sent(); len(sent) != 0 {
 		t.Fatalf("a proposing turn sent %+v", sent)
 	}
 	ctx := iam.WithPrincipal(context.Background(), f.Person)
 	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
-		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: proposalID,
+		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
 		Read: f.Grant("approve"), State: wire.ProposalApplied,
 		Receipt: &wire.Receipt{Summary: "Created ENG-7."},
-		Card:    proposalCard(wire.ProposalApplied)})
+		Card:    cardAt(p, wire.ProposalApplied)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,12 +114,12 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 // owner's own request.
 func TestAnotherPersonCannotResumeATurn(t *testing.T) {
 	t.Parallel()
-	f, accepted := parkedRig(t)
+	f, accepted, p := parkedRig(t)
 	ada := assistanttest.Person("ada", "ada", iam.GrantTracker)
 	_, err := f.Svc.Resume(iam.WithPrincipal(context.Background(), ada), approval.Resumption{
 		Owner: f.Person.ID, Conversation: f.Conversation, Turn: accepted.TurnID,
-		Proposal: proposalID, Read: f.Grant("ada"), State: wire.ProposalApplied,
-		Card: proposalCard(wire.ProposalApplied)})
+		Proposal: p.ID, Read: f.Grant("ada"), State: wire.ProposalApplied,
+		Card: cardAt(p, wire.ProposalApplied)})
 	if !errors.Is(err, assistant.ErrNotFound) {
 		t.Fatalf("ada resuming grace's turn: err = %v, want not found", err)
 	}
@@ -143,7 +132,7 @@ func TestAnotherPersonCannotResumeATurn(t *testing.T) {
 // Stop's own operation.
 func TestStoppingAParkedTurnDeclinesItsProposals(t *testing.T) {
 	t.Parallel()
-	f, accepted := parkedRig(t)
+	f, accepted, _ := parkedRig(t)
 	d := &decliner{}
 	if err := f.Svc.BindDecliner(d); err != nil {
 		t.Fatal(err)
@@ -167,9 +156,9 @@ func TestStoppingAParkedTurnDeclinesItsProposals(t *testing.T) {
 // still waiting, so the client's stream ends cleanly.
 func TestAnEmissionClosesStillWaiting(t *testing.T) {
 	t.Parallel()
-	f, accepted := parkedRig(t)
+	f, accepted, p := parkedRig(t)
 	ctx := iam.WithPrincipal(context.Background(), f.Person)
-	card := proposalCard(wire.ProposalApproved)
+	card := cardAt(p, wire.ProposalApproved)
 	at, err := f.Svc.Emit(ctx, f.Person.ID, f.Conversation, accepted.TurnID,
 		approval.Emission{Card: &card})
 	if err != nil {

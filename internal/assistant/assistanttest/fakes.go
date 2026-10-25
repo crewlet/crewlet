@@ -3,10 +3,10 @@ package assistanttest
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"slices"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
-	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -115,59 +114,16 @@ type Catalogue []catalog.Tool
 
 func (c Catalogue) Offered(iam.Principal, []string) []catalog.Tool { return slices.Clone(c) }
 
-// Cards cards every answer as one table of its rows: the answer is a JSON
-// array of objects, and the columns are Columns.
-type Cards struct {
-	Title   string
-	Columns []string
-	At      time.Time
-}
-
-var _ assistant.Cards = Cards{}
-
-func (c Cards) Read(t catalog.Tool, _ map[string]any, r exec.Response, at time.Time) (assistant.Carded, error) {
-	var rows []map[string]any
-	if err := json.Unmarshal(r.Body, &rows); err != nil {
-		return assistant.Carded{}, fmt.Errorf("assistanttest: %s answered no rows: %w", t.Name, err)
+// Tool is the catalogue's own tool of that name, the one a suite drives a
+// turn through: its schema, its routes, its card and its preview are the ones
+// a running node uses, so a suite cannot pass on a tool of its own invention.
+func Tool(t testing.TB, name string) catalog.Tool {
+	t.Helper()
+	tool, ok := catalog.Lookup(name)
+	if !ok {
+		t.Fatalf("assistanttest: the catalogue has no tool %q", name)
 	}
-	table := &wire.TableCard{Title: c.Title, RowCount: len(rows), AsOf: at.UTC(),
-		Rows: [][]any{}}
-	for _, col := range c.Columns {
-		table.Columns = append(table.Columns, wire.Column{Key: col, Label: col,
-			Type: wire.ColumnText})
-	}
-	var summary string
-	for _, row := range rows {
-		cells := make([]any, 0, len(c.Columns))
-		for _, col := range c.Columns {
-			cells = append(cells, row[col])
-			summary += fmt.Sprintf("%s=%v ", col, row[col])
-		}
-		table.Rows = append(table.Rows, cells)
-		summary += "\n"
-	}
-	return assistant.Carded{Cards: []wire.Card{{Type: wire.CardTable, Table: table}},
-		Summary: summary}, nil
-}
-
-func (c Cards) Navigate(catalog.Tool, map[string]any) (wire.Link, *exec.Request, error) {
-	return wire.Link{}, nil, fmt.Errorf("assistanttest: no link")
-}
-
-// ReadTool is a read tool on one route: `GET <path>`, whose answer carries
-// text somebody wrote when fence is set.
-func ReadTool(name, path string, fence bool, apps ...iam.Grant) catalog.Tool {
-	return catalog.Tool{
-		Name: name, Description: "Reads " + path + ".", Phrase: "read this",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"q": map[string]any{"type": "string"}}},
-		Kind: catalog.KindRead, Tier: catalog.TierRead, Routes: []string{"GET " + path},
-		Apps: apps, Fence: fence,
-		Label: func(map[string]any) string { return "Read " + path },
-		Build: func(args map[string]any) (exec.Request, error) {
-			return exec.Request{Method: http.MethodGet, Path: path}, nil
-		},
-	}
+	return tool
 }
 
 // Models answers every chain with one model.
@@ -234,3 +190,23 @@ type Metrics struct{}
 func (Metrics) Add(string, uint64, metrics.Attrs)            {}
 func (Metrics) Observe(string, time.Duration, metrics.Attrs) {}
 func (Metrics) Set(string, float64, metrics.Attrs)           {}
+
+// Task is GET /work/{id}'s answer for one task, as the route writes it.
+func Task(key, title, body string) exec.Response {
+	return JSON(map[string]any{"task": map[string]any{"id": ID("task/" + key).String(),
+		"key": key, "title": title, "status": "todo", "priority": "none",
+		"assignee": "ada", "reporter": "grace", "project": "ENG", "type": "task",
+		"body": body, "version": 3, "updated_at": Epoch.Format(time.RFC3339)}})
+}
+
+// Routes answers each request by its method and path, "GET /work/ENG-7", and
+// 404 in the engine's envelope for any other.
+func Routes(answers map[string]exec.Response) func(exec.Request) exec.Response {
+	return func(r exec.Request) exec.Response {
+		if resp, ok := answers[r.Method+" "+r.Path]; ok {
+			return resp
+		}
+		return exec.Response{Status: http.StatusNotFound,
+			Body: []byte(`{"error":"not_found","message":"There is no such record here."}`)}
+	}
+}

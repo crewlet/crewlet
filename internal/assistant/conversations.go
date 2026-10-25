@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -11,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -100,9 +100,8 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 	for _, pr := range t.Proposals {
 		proposals[pr.ID] = pr
 	}
-	held := iam.Expand(reader.Grants)
 	for _, c := range t.Cards {
-		out.Cards = append(out.Cards, s.shown(c, held, proposals))
+		out.Cards = append(out.Cards, shown(c, reader, proposals))
 	}
 	for _, a := range t.AuditReads {
 		out.AuditReads = append(out.AuditReads, a.Wire())
@@ -124,13 +123,16 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 	return out
 }
 
-// shown is a stored card as a reader holding held is shown it now.
-func (s *Service) shown(c assistantdomain.Card, held []iam.Grant,
+// shown is a stored card as reader is shown it now: a notice in its place
+// when they no longer hold every app it was built from ([cards.Visible]), and a
+// proposal card at its proposal's state now.
+func shown(c assistantdomain.Card, reader iam.Principal,
 	proposals map[uuid.UUID]assistantdomain.Proposal) wire.CardEvent {
 
 	ev := c.Event()
-	if !holdsApps(held, c.Apps) {
-		ev.Card = withheldCard()
+	visible, ok := cards.Visible(c.Apps, ev.Card, reader)
+	ev.Card = visible
+	if !ok {
 		return ev
 	}
 	if ev.Card.Type == wire.CardProposal && ev.Card.Proposal != nil {
@@ -141,23 +143,6 @@ func (s *Service) shown(c assistantdomain.Card, held []iam.Grant,
 		}
 	}
 	return ev
-}
-
-// holdsApps reports whether held covers every app a card needs.
-func holdsApps(held []iam.Grant, apps []string) bool {
-	for _, app := range apps {
-		if !slices.Contains(held, iam.Grant(app)) {
-			return false
-		}
-	}
-	return true
-}
-
-// withheldCard is what a card becomes for a reader who no longer holds an app
-// it was built from.
-func withheldCard() wire.Card {
-	return wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
-		Text: "This result is hidden because you no longer have access to the app it came from."}}
 }
 
 // Table is one of p's table cards, for its export: from the snapshot the
@@ -171,10 +156,11 @@ func (s *Service) Table(ctx context.Context, p iam.Principal, card uuid.UUID) (w
 	if err != nil {
 		return wire.TableCard{}, s.readFailure(err)
 	}
-	if c.Card.Type != wire.CardTable || c.Card.Table == nil || !holdsApps(iam.Expand(p.Grants), c.Apps) {
+	visible, ok := cards.Visible(c.Apps, c.Card, p)
+	if !ok || visible.Type != wire.CardTable || visible.Table == nil {
 		return wire.TableCard{}, ErrNotFound
 	}
-	return *c.Card.Table, nil
+	return *visible.Table, nil
 }
 
 // Clear purges one of p's conversations at once, the Clear gesture: a turn of
