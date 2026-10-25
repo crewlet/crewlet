@@ -57,7 +57,7 @@ export const FONT_WEIGHTS: readonly number[] = Array.from(
 );
 
 /** What a logo slot says it takes, under its picker. */
-export const LOGO_HINT = `SVG up to ${boundWords(BRAND_SVG_MAX_BYTES)}, or PNG or WebP up to ${boundWords(BRAND_IMAGE_MAX_BYTES)} and ${BRAND_IMAGE_MAX_SIDE} pixels a side.`;
+export const LOGO_HINT = `SVG up to ${boundWords(BRAND_SVG_MAX_BYTES)}. PNG or WebP up to ${boundWords(BRAND_IMAGE_MAX_BYTES)} and ${BRAND_IMAGE_MAX_SIDE} px.`;
 
 /** What the face files may be, beside their picker. */
 export const FONT_HINT = `Up to ${BRAND_FONT_FILES_MAX} WOFF2 files of at most ${boundWords(BRAND_FONT_FILE_MAX_BYTES)} each.`;

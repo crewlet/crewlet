@@ -23,6 +23,7 @@ import {
   Input,
   ListInput,
   LogoSlot,
+  LogoSlotGroup,
   Select,
   Text,
   Textarea,
@@ -143,6 +144,10 @@ export function IdentityFields({ edit, onEdit }: Omit<BrandEditorProps, "assets"
  * The three logos, each on its own ground with a picker. `purposes` says
  * under each where it appears and whether an adoption needs it, as the setup
  * does; `refused` carries the engine's own refusal of a logo, by slot.
+ *
+ * ONE ROW OF SLOTS THAT LINE UP (`LogoSlotGroup`): names, descriptions,
+ * grounds, notes and buttons each share a row across the three whatever their
+ * copy, and the formats a file may take are said once under the row.
  */
 export function LogoFields({
   edit,
@@ -176,7 +181,7 @@ export function LogoFields({
     onEdit({ document: { ...doc, logos }, files });
   };
   return (
-    <div className="brand-logo-slots">
+    <LogoSlotGroup label="Logos" hint={LOGO_HINT}>
       {BRAND_LOGO_SLOTS.map((spec) => (
         <LogoSlot
           key={spec.slot}
@@ -196,10 +201,9 @@ export function LogoFields({
           onFile={(file) => pick(spec.slot, file)}
           {...(spec.slot === "primary" && !purposes ? {} : { onRemove: () => remove(spec.slot) })}
           emptyNote={spec.slot === "primary" ? undefined : spec.emptyNote}
-          labels={{ hint: LOGO_HINT }}
         />
       ))}
-    </div>
+    </LogoSlotGroup>
   );
 }
 
