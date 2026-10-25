@@ -29,15 +29,23 @@ var apiRoutes = []catalog.Route{
 	{Pattern: "GET /config", Action: authz.ActionConfigRead},
 	{Pattern: "PATCH /config", Action: authz.ActionOrgWrite},
 	{Pattern: "GET /config/units/{id}", Action: authz.ActionOrgRead},
-	{Pattern: "PUT /config/units/{id}", Action: authz.ActionOrgWrite},
+	{Pattern: "PUT /config/units/{id}", Action: authz.ActionOrgWrite,
+		Absent: authz.AddedElsewhere(unitsElsewhere)},
+	{Pattern: "GET /config/mcp-servers/{id}", Action: authz.ActionConfigRead},
+	{Pattern: "PUT /config/mcp-servers/{id}", Action: authz.ActionConfigWrite,
+		Absent: authz.CreatesWhenAbsent()},
 	{Pattern: "GET /worklet/files/{project}/{path...}", Action: authz.ActionFileRead},
-	{Pattern: "PUT /worklet/files/{project}/{path...}", Action: authz.ActionFileWrite},
+	{Pattern: "PUT /worklet/files/{project}/{path...}", Action: authz.ActionFileWrite,
+		Absent: authz.CreatesWhenAbsent()},
 	{Pattern: "GET /worklet/projects/{key}", Action: authz.ActionProjectRead},
 	{Pattern: "PUT /worklet/projects/{key}", Action: authz.ActionProjectWrite},
 	{Pattern: "DELETE /worklet/items/{key}", Action: authz.ActionWorkRead},
 	{Pattern: "POST /worklet/items", Action: authz.ActionWorkCreate},
 	{Pattern: "POST /iam/invitations", Action: authz.ActionSignInWrite},
 }
+
+// unitsElsewhere is where the API says a unit is added.
+const unitsElsewhere = "a member of units is added by replacing the unit it sits in"
 
 // generic are the three generic tools over apiRoutes for p, whose act route
 // writes are acts.
@@ -384,21 +392,21 @@ func TestAGenericChangeToNothingIsACreateOrNoCard(t *testing.T) {
 	t.Parallel()
 	_, _, change := generic(t, admin)
 	nothing := resource("/elsewhere", "", nil)
-	unit := map[string]any{"id": "research", "name": "Research"}
+	unit := map[string]any{"name": "linear", "command": "linear-mcp"}
 	p, err := change.Preview(t.Context(), nothing, wednesday, map[string]any{
-		"route": "PUT /config/units/{id}", "path": map[string]any{"id": "research"},
+		"route": "PUT /config/mcp-servers/{id}", "path": map[string]any{"id": "linear"},
 		"body": unit})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := proposal.Revision{Kind: proposal.RevisionCreate, ID: "/config/units/research",
+	want := proposal.Revision{Kind: proposal.RevisionCreate, ID: "/config/mcp-servers/linear",
 		Version: proposal.VersionAbsent}.String()
 	if p.SourceRevision != want || p.Title != "Create through the API" {
 		t.Errorf("the create is %q bound to %q, want a create bound to %q", p.Title,
 			p.SourceRevision, want)
 	}
 	got := rows(p)
-	for _, field := range []string{"id", "name"} {
+	for _, field := range []string{"name", "command"} {
 		if got[field].Kind != wire.ChangeAdded || got[field].From != "" {
 			t.Errorf("row %s is %+v, want it added", field, got[field])
 		}
@@ -412,10 +420,29 @@ func TestAGenericChangeToNothingIsACreateOrNoCard(t *testing.T) {
 		now != p.SourceRevision {
 		t.Errorf("a path still empty re-read as %q (%v), want the create's own", now, err)
 	}
-	filled := resource("/config/units/research", `"rev-9"`, unit)
+	filled := resource("/config/mcp-servers/linear", `"rev-9"`, unit)
 	if now, err := catalog.Revision(t.Context(), filled, p.SourceRevision); err != nil ||
 		now == p.SourceRevision {
 		t.Errorf("a path filled since re-read as %q (%v), the create's own", now, err)
+	}
+
+	// A PUT OF NOTHING ON A ROUTE THAT DOES NOT CREATE BY ADDRESS, a PUT on
+	// a route that declares nothing, and the person would approve a write
+	// the API is certain to refuse: no card, and the step says where one is
+	// added, in the route's own words.
+	for _, c := range []struct{ route, wildcard, hint string }{
+		{"PUT /config/units/{id}", "id", unitsElsewhere},
+		{"PUT /worklet/projects/{key}", "key", "does not say it creates what it names"},
+	} {
+		route, hint := c.route, c.hint
+		_, err := change.Preview(t.Context(), nothing, wednesday, map[string]any{
+			"route": route, "path": map[string]any{c.wildcard: "research"},
+			"body": map[string]any{"name": "Research"}})
+		var refused *catalog.PreviewRefusal
+		if !errors.As(err, &refused) || refused.Refusal.Code != "not_creatable" ||
+			!strings.Contains(refused.Refusal.Hint, hint) {
+			t.Errorf("%s of nothing answered %v, want not_creatable hinting %q", route, err, hint)
+		}
 	}
 
 	// A PATCH OF NOTHING, and a read the route refuses: no card.

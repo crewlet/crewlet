@@ -663,6 +663,8 @@ func (s *Service) entityPrecondition(w http.ResponseWriter, r *http.Request, act
 // `If-None-Match: *`, which a seat and a unit then refuse `not_creatable`: a
 // caller following the hint for a seat met a second refusal before it was
 // told where a seat is added.
+//
+// [EntityAbsent] declares the same fact on the route itself.
 func howToAdd(kind string) string {
 	if entityKinds[kind].create != nil {
 		return "to add one, send the same request with If-None-Match: *"
@@ -670,6 +672,18 @@ func howToAdd(kind string) string {
 	return "a member of " + kind + " has a place in the company the path cannot " +
 		"name, so it is added by replacing the unit it sits in (PUT /config/units/{id}), " +
 		"or through PUT /config, where the place is visible"
+}
+
+// EntityAbsent is what a PUT to kind's address does where it holds nothing,
+// as the route is mounted with it ([authz.Absent]): a create where the kind
+// creates by address, and otherwise refused with [howToAdd]'s sentence, which
+// is what the handler answers such a create. One table decides both.
+func EntityAbsent(kind string) *authz.Absent {
+	if entityKinds[kind].create != nil {
+		return authz.CreatesWhenAbsent()
+	}
+	// As the refusal's envelope spells it, so the two read alike.
+	return authz.AddedElsewhere(httpjson.Sentence(howToAdd(kind)))
 }
 
 // refuseEntity answers an entity write's own refusals, and every other one as

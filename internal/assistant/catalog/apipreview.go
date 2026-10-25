@@ -89,7 +89,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 			switch {
 			case err != nil:
 				return proposal.Preview{}, err
-			case rep.absent != nil && req.Method == http.MethodPut:
+			case rep.absent != nil && req.Method == http.MethodPut && route.createsWhenAbsent():
 				// NOTHING IS THERE, SO THE PUT IS A CREATE, and says so:
 				// sent under `If-None-Match: *` ([proposal.RevisionCreate]),
 				// the API's one spelling of "add this", which a route that
@@ -99,6 +99,12 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 				revision = proposal.Revision{Kind: proposal.RevisionCreate, ID: req.Path,
 					Version: proposal.VersionAbsent}.String()
 				creates = true
+			case rep.absent != nil && req.Method == http.MethodPut:
+				// A ROUTE THAT DOES NOT CREATE BY ADDRESS is never a card for
+				// an address that holds nothing: the person would approve a
+				// write the API is certain to refuse. The step is refused
+				// with where one is added, as the route declares it.
+				return proposal.Preview{}, notCreatable(route, req.Path)
 			case rep.absent != nil:
 				// A PATCH OR A DELETE OF NOTHING cannot apply, so it is never
 				// a card: the read's own 404 is the step's refusal.

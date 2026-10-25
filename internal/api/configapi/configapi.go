@@ -228,6 +228,22 @@ func (s *Service) Routes(mux authz.Mux) error {
 			failures = append(failures, err)
 		}
 	}
+	// AN ENTITY'S WRITE SAYS WHAT IT DOES AT AN EMPTY ADDRESS, from the
+	// same table its handler decides by ([EntityAbsent]).
+	entityPolicy := func(kind string, a authz.Action) authz.Policy {
+		p := authz.Policy{Action: a}
+		if inOrgChart(kind) {
+			p.Object = func(*http.Request) authz.Object {
+				return authz.Object{Kind: authz.KindUnit, Unresolved: true}
+			}
+		}
+		return p.WhenAbsent(EntityAbsent(kind))
+	}
+	entity := func(pattern string, p authz.Policy, h http.HandlerFunc) {
+		if err := router.Handle(pattern, p, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	read("GET /config", s.getActive)
 	org("PUT /config", authz.ActionOrgWrite, s.put)
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
@@ -271,11 +287,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 		// round-trips with nothing in between.
 		if inOrgChart(kind) {
 			org("GET /config/"+kind+"/{id}", authz.ActionOrgRead, s.getEntity(kind))
-			org("PUT /config/"+kind+"/{id}", authz.ActionOrgWrite, s.putEntity(kind))
+			entity("PUT /config/"+kind+"/{id}", entityPolicy(kind, authz.ActionOrgWrite),
+				s.putEntity(kind))
 			continue
 		}
 		read("GET /config/"+kind+"/{id}", s.getEntity(kind))
-		write("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+		entity("PUT /config/"+kind+"/{id}", entityPolicy(kind, authz.ActionConfigWrite),
+			s.putEntity(kind))
 	}
 	// AND THOSE TWO ARE JSON, like every other answer here: see
 	// [httpjson.Mux].

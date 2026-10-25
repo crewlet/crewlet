@@ -118,7 +118,9 @@ model's description of it.
   change lands, the change is refused rather than replacing it, and nothing
   changes.
 - A change the engine can already tell will not apply (the record it edits
-  does not exist, or you may not read it) is never shown as a card. The step
+  does not exist, you may not read it, or it would add something at an
+  address that cannot add one, such as a role, which is added to its unit
+  instead) is never shown as a card. The step
   says why, and the assistant is told the same reason, so it can prepare a
   change that can apply.
 - Some changes ask you to **confirm your identity** first (a step-up), the

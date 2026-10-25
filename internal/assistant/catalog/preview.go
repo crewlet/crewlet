@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -54,6 +55,27 @@ func (e *PreviewRefusal) Error() string {
 
 // Is makes a refusal [ErrPreviewRead].
 func (e *PreviewRefusal) Is(target error) bool { return target == ErrPreviewRead }
+
+// notCreatableCode is the API's own code for a create a route does not take,
+// which a preview answers before the person is asked rather than after.
+const notCreatableCode = "not_creatable"
+
+// notCreatable is the refusal of a PUT to path, which holds nothing, on a
+// route that does not create by address: in the route's own words about where
+// one is added ([authz.Absent]), or, for a route that declares nothing, that
+// it creates nothing a preview could propose.
+func notCreatable(route Route, path string) *PreviewRefusal {
+	hint := route.Pattern + " does not say it creates what it names, so nothing is " +
+		"proposed. Add it through the route that creates it."
+	if route.Absent != nil && route.Absent.Elsewhere != "" {
+		hint = route.Absent.Elsewhere
+	}
+	return &PreviewRefusal{Status: http.StatusNotFound, Refusal: wire.Refusal{
+		Code:    notCreatableCode,
+		Message: "Nothing is at " + path + ", and " + route.Pattern + " does not add one by its address.",
+		Hint:    hint,
+	}}
+}
 
 // refusedRead is a read the route refused, as a [PreviewRefusal].
 func refusedRead(resp exec.Response) error {

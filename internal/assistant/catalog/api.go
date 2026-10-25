@@ -74,7 +74,15 @@ type Route struct {
 	// decides inside its handler: a question (its registered posture), an
 	// overview read (the push table) or the act route (each tool's own verb).
 	Action authz.Action
+	// Absent is what a PUT here does at an address that holds nothing, as
+	// the route was mounted with it ([authz.Absent]); nil for every other
+	// route, and for a PUT that declares nothing, which then creates
+	// nothing a preview would propose.
+	Absent *authz.Absent
 }
+
+// createsWhenAbsent reports a route that creates what an empty address names.
+func (r Route) createsWhenAbsent() bool { return r.Absent != nil && r.Absent.Creates }
 
 // Method is the route's method.
 func (r Route) Method() string {

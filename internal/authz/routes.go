@@ -35,6 +35,63 @@ type Policy struct {
 	// reads a field of an absent object refuses with [ReasonUnnamed] rather
 	// than guessing.
 	Object func(*http.Request) Object
+
+	// Absent is what a PUT to this route's address does where the address
+	// holds nothing: it creates it, or it is refused and the member is added
+	// elsewhere. Nil for every other route. See [Absent].
+	Absent *Absent
+}
+
+// Absent is a PUT route's answer to an address that holds nothing, DECLARED
+// WHERE THE ROUTE IS MOUNTED so the handler that decides it and every reader
+// of the route table say the same thing.
+//
+// The reader it exists for is the Dashboard Assistant's preview of a generic
+// change (internal/assistant/catalog): a PUT whose read found nothing is
+// proposed as a create only where the route creates, and refused at once,
+// with the route's own sentence about where one is added, where it does not.
+// Learned only from the write, the difference was a proposal the person
+// approved and the API then refused, every time: `PUT /config/roles/{id}`
+// never adds a seat, which has a place in the chart its path cannot name.
+//
+// The alternative, asking the route itself with `dry_run=true`, would put a
+// PUT on a read grant, whose whole guarantee is that it sends nothing but GET
+// and HEAD (ADR-0049); a route that ignored the flag would then write.
+type Absent struct {
+	// Creates says a write there creates what it names, sent create-only
+	// (`If-None-Match: *`) by a caller that must not replace one a racer
+	// added.
+	Creates bool
+	// Elsewhere is where a member is added instead, for a route that does
+	// not create by address: the sentence its handler refuses with.
+	Elsewhere string
+}
+
+// CreatesWhenAbsent declares a PUT route that creates what its address names.
+func CreatesWhenAbsent() *Absent { return &Absent{Creates: true} }
+
+// AddedElsewhere declares a PUT route that does not create by address, and
+// where a member is added instead.
+func AddedElsewhere(where string) *Absent { return &Absent{Elsewhere: where} }
+
+// WhenAbsent is p declaring what a PUT to an empty address does.
+func (p Policy) WhenAbsent(a *Absent) Policy {
+	p.Absent = a
+	return p
+}
+
+// absentProblem says why a route's [Absent] cannot be mounted, or "".
+func absentProblem(pattern string, a *Absent) string {
+	method, _, _ := strings.Cut(pattern, " ")
+	switch {
+	case a == nil:
+		return ""
+	case method != http.MethodPut:
+		return "declares what an empty address does, which only a PUT's address has"
+	case a.Creates == (strings.TrimSpace(a.Elsewhere) != ""):
+		return "declares an empty address both created and added elsewhere, or neither"
+	}
+	return ""
 }
 
 // Guard decides a request, and is what [Handle] wraps a route with.
@@ -270,6 +327,9 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 	if _, known := rules[p.Action]; !known {
 		return newPolicyError(pattern,
 			"names the action "+string(p.Action)+", which this build has no rule for")
+	}
+	if problem := absentProblem(pattern, p.Absent); problem != "" {
+		return newPolicyError(pattern, problem)
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -277,7 +277,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// THE METADATA'S VERB, and a reveal asks the value's on top — see
 	// [Service.get]. The pattern cannot see `?reveal=true`.
 	mount("GET /secrets/{name}", authz.ActionSecretList, s.get)
-	mount("PUT /secrets/{name}", authz.ActionSecretWrite, s.put)
+	// A PUT STORES OR ROTATES, so an empty name is created ([Service.put]).
+	if err := router.Handle("PUT /secrets/{name}", authz.Policy{Action: authz.ActionSecretWrite}.
+		WhenAbsent(authz.CreatesWhenAbsent()), http.HandlerFunc(s.put)); err != nil {
+		failures = append(failures, err)
+	}
 	mount("DELETE /secrets/{name}", authz.ActionSecretWrite, s.delete)
 	return errors.Join(failures...)
 }

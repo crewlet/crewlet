@@ -117,6 +117,17 @@ func TestARouteWithNoPolicyIsRefusedAtTheMount(t *testing.T) {
 		{"a verb with no rule", "GET /worklet/items",
 			authz.Policy{Action: "invent_a_verb"}, "no rule for"},
 		{"no pattern", "", authz.Policy{Action: authz.ActionWorkList}, "needs a pattern"},
+		// WHAT AN EMPTY ADDRESS DOES is a PUT's alone, and says one thing.
+		{"an empty address on a read", "GET /worklet/items",
+			authz.Policy{Action: authz.ActionWorkList}.WhenAbsent(authz.CreatesWhenAbsent()),
+			"only a PUT's address has"},
+		{"an empty address that says nothing", "PUT /config/units/{id}",
+			authz.Policy{Action: authz.ActionOrgWrite}.WhenAbsent(&authz.Absent{}),
+			"or neither"},
+		{"an empty address that says both", "PUT /config/units/{id}",
+			authz.Policy{Action: authz.ActionOrgWrite}.WhenAbsent(
+				&authz.Absent{Creates: true, Elsewhere: "PUT /config"}),
+			"or neither"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
-	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 )
@@ -31,50 +32,116 @@ func prepareChange(t *testing.T, fx *assistApp, read exec.Grant,
 		SourceRevision: p.SourceRevision})
 }
 
-// THE ROLE THE PERSON ASKED FOR IS PREPARED AS A CREATE, AND THE ROUTE SAYS
-// WHERE A SEAT IS ADDED.
+// THE ROLE THE PERSON ASKED FOR IS REFUSED AT ITS PREVIEW, AND THE UNIT WRITE
+// THAT ADDS IT APPLIES.
 //
 // The request that found this: "add a new agent role of 'senior software
-// engineer' and name it crewlet-swe", proposed as PUT /config/roles/crewlet-swe
-// with the seat's handle and name. Its read answers 404, so the preview draws
-// a create (every field added) bound to that absence, and the approval sends it
-// under `If-None-Match: *`. It used to be drawn as an edit and sent as a plain
-// PUT, refused `404 no_such_entity` after the person approved it, with a hint
-// to send the create header. A seat, though, has a place in the chart its path
-// cannot name, so the route answers the create `400 not_creatable` with the
-// write that adds one (the unit it sits in), which the turn is handed, and no
-// seat is added. Mutation: preview the 404 as an edit, or answer a missing
-// seat's PUT with the create-only hint, and this fails.
-func TestTheAskedForRoleIsPreparedAsACreate(t *testing.T) {
+// engineer' and name it crewlet-swe", proposed as PUT /config/roles/crewlet-swe.
+// A seat has a place in the chart its path cannot name, so the route never
+// creates one by address, and a proposal of it was a card the person approved
+// only for the API to refuse it `400 not_creatable`, every time. The route
+// declares that where it is mounted ([authz.Absent], from the table its handler
+// decides by), so the preview refuses the step at once, with the route's own
+// sentence about where a seat is added, and draws no card. The model's next
+// plan, the unit the seat sits in with the seat added, is a proposal bound to
+// the unit's revision that applies once approved. Mutation: propose a create
+// for every 404 again, or let the route declare nothing, and this fails.
+func TestTheAskedForRoleIsRefusedAtPreviewAndItsUnitWriteApplies(t *testing.T) {
 	t.Parallel()
 	fx, read := principlesApp(t)
+	_, err := genericTools(t, fx)[catalog.ProposeAPIChangeTool].Preview(t.Context(),
+		readOver(fx, read), time.Now(), map[string]any{
+			"route": "PUT /config/roles/{id}", "path": map[string]any{"id": "crewlet-swe"},
+			"body": map[string]any{"handle": "crewlet-swe", "name": "Senior Software Engineer"}})
+	var refused *catalog.PreviewRefusal
+	if !errors.As(err, &refused) || refused.Refusal.Code != string(httpjson.CodeNotCreatable) ||
+		!strings.Contains(refused.Refusal.Hint, "PUT /config/units/{id}") {
+		t.Fatalf("the role's preview answered %v, want %s naming the unit write",
+			err, httpjson.CodeNotCreatable)
+	}
+
+	// THE PREVIEW SAYS WHAT THE ROUTE WOULD HAVE SAID: the same create, had
+	// the person approved it, is refused with the same sentence.
+	create := exec.Request{Method: http.MethodPut, Path: "/config/roles/crewlet-swe",
+		IfNoneMatch: exec.AnyRepresentation,
+		Body:        []byte(`{"handle":"crewlet-swe","name":"Senior Software Engineer","_summary":"add"}`)}
+	answer, err := fx.disp.Do(t.Context(), fx.derive(t, approvedFor(create, authz.ActionOrgWrite)), create)
+	if err != nil || answer.Status != http.StatusBadRequest ||
+		exec.RefusalOf(answer).Hint != refused.Refusal.Hint {
+		t.Errorf("the route answered the create %d %s, not the preview's %q", answer.Status,
+			answer.Body, refused.Refusal.Hint)
+	}
+
+	unit := map[string]any{"id": "engineering", "name": "Engineering", "roles": []any{
+		map[string]any{"name": "CTO", "handle": "cto", "llm": "zulu"},
+		map[string]any{"name": "Senior Software Engineer", "handle": "crewlet-swe", "llm": "zulu"},
+	}, "_summary": "add the senior software engineer"}
 	p, req := prepareChange(t, fx, read, map[string]any{
-		"route": "PUT /config/roles/{id}", "path": map[string]any{"id": "crewlet-swe"},
-		"body": map[string]any{"handle": "crewlet-swe", "name": "Senior Software Engineer"}})
-
+		"route": "PUT /config/units/{id}", "path": map[string]any{"id": "engineering"},
+		"body": unit})
 	if r, err := proposal.ParseRevision(p.SourceRevision); err != nil ||
-		r.Kind != proposal.RevisionCreate || req.IfNoneMatch != exec.AnyRepresentation ||
-		req.IfMatch != "" || p.Title != "Create through the API" {
-		t.Fatalf("the role is %q bound to %q, sent under If-Match %q and If-None-Match %q",
-			p.Title, p.SourceRevision, req.IfMatch, req.IfNoneMatch)
+		r.Kind == proposal.RevisionCreate || req.IfMatch == "" {
+		t.Fatalf("the unit write is bound to %q under If-Match %q, want the unit's revision",
+			p.SourceRevision, req.IfMatch)
 	}
-	for _, c := range p.Changes {
-		if c.Kind != wire.ChangeFact && c.Kind != wire.ChangeAdded {
-			t.Errorf("the create draws %s as %s, want every field added", c.Field, c.Kind)
-		}
-	}
-
 	resp, err := fx.disp.Do(t.Context(), fx.derive(t, approvedFor(req, authz.Action(p.Act))), req)
-	refusal := exec.RefusalOf(resp)
-	if err != nil || resp.Status != http.StatusBadRequest ||
-		refusal.Code != string(httpjson.CodeNotCreatable) ||
-		!strings.Contains(refusal.Hint, "PUT /config/units/{id}") {
-		t.Fatalf("the approved role answered %d %s, %v, want 400 %s naming the unit write",
-			resp.Status, resp.Body, err, httpjson.CodeNotCreatable)
+	if err != nil || (resp.Status != http.StatusOK && resp.Status != http.StatusCreated) {
+		t.Fatalf("the approved unit write answered %d %s, %v", resp.Status, resp.Body, err)
 	}
-	if status, _ := fx.asPerson(t, exec.Request{Method: http.MethodGet,
-		Path: "/config/roles/crewlet-swe"}); status != http.StatusNotFound {
-		t.Errorf("GET /config/roles/crewlet-swe = %d after a refused create, want 404", status)
+	if status, body := fx.asPerson(t, exec.Request{Method: http.MethodGet,
+		Path: "/config/roles/crewlet-swe"}); status != http.StatusOK ||
+		!strings.Contains(string(body), "Senior Software Engineer") {
+		t.Errorf("GET /config/roles/crewlet-swe = %d %s after the unit write", status, body)
+	}
+}
+
+// EVERY PUT A PREVIEW CAN FIND EMPTY SAYS WHAT IT DOES THERE.
+//
+// A preview reads a PUT's path through its GET twin, and when nothing is there
+// it proposes a create only where the route declares that it creates
+// ([authz.Absent]). So every PUT the assistant may name whose path holds an
+// address and whose GET twin exists declares one or the other, here, as the
+// App mounts it: a route added without it would be refused at every empty
+// address, a create it does take included. And for /config's entities the
+// declaration is held to the handler: a create-only write at a missing id is
+// refused `not_creatable` exactly where the route says it adds elsewhere.
+// Mutation: drop a route's declaration, or declare a seat creatable, and this
+// names the route.
+func TestEveryPUTAPreviewCanFindEmptyDeclaresWhatItDoes(t *testing.T) {
+	t.Parallel()
+	routes := everySurfaceApp(t).AssistantRoutes()
+	fx, _ := principlesApp(t)
+	gets := map[string]bool{}
+	for _, r := range routes {
+		gets[r.Pattern] = true
+	}
+	for _, r := range routes {
+		if r.Method() != http.MethodPut || !strings.Contains(r.Path(), "{") ||
+			!gets[http.MethodGet+" "+r.Path()] {
+			continue
+		}
+		if r.Absent == nil {
+			t.Errorf("%s declares nothing about an empty address (authz.Policy.Absent)", r.Pattern)
+			continue
+		}
+		kind, entity := strings.CutPrefix(r.Path(), "/config/")
+		if !entity {
+			continue
+		}
+		kind = strings.TrimSuffix(kind, "/{id}")
+		create := exec.Request{Method: http.MethodPut, Path: "/config/" + kind + "/nobody-here",
+			Query: url.Values{"dry_run": {"true"}}, IfNoneMatch: exec.AnyRepresentation,
+			Body: []byte(`{"name":"nobody-here"}`)}
+		answer, err := fx.disp.Do(t.Context(), fx.derive(t, approvedFor(create, r.Action)), create)
+		if err != nil {
+			t.Fatalf("%s: %v", r.Pattern, err)
+		}
+		refusedHere := exec.RefusalOf(answer).Code == string(httpjson.CodeNotCreatable)
+		if refusedHere == r.Absent.Creates ||
+			(refusedHere && exec.RefusalOf(answer).Hint != r.Absent.Elsewhere) {
+			t.Errorf("%s declares %+v, and its handler answered a create %d %s",
+				r.Pattern, *r.Absent, answer.Status, answer.Body)
+		}
 	}
 }
 
