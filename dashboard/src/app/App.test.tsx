@@ -503,14 +503,21 @@ describe("a section, for a reader holding none of its grants", () => {
     );
   });
 
-  test("every such section draws the one refusal naming its grant, and not a figure", async () => {
-    // `403`, NEVER `401`: this reader is signed in and holds too little, and a
-    // `401` says nobody is — which sends the tab to the sign-in instead.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
-    );
-    for (const section of everywhere) {
+  // ONE CASE A SECTION, for this and for the failed viewer read below. Each
+  // mounted every section in turn inside one case, so one case did a dozen
+  // screens' work inside the runner's per-case bound, and a failure named no
+  // section until its message was read; a section's own case does its own
+  // screen's work. The suite's `afterEach` unmounts the screen and undoes the
+  // stubbed fetch, so a case that fails hands neither on.
+  test.each(everywhere)(
+    "$key draws the one refusal naming its grant, and not a figure",
+    async (section) => {
+      // `403`, NEVER `401`: this reader is signed in and holds too little, and a
+      // `401` says nobody is — which sends the tab to the sign-in instead.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
+      );
       location.hash = buildHash(section.path);
       // HOLDING NO ACCESS AT ALL, which the socket serves the overview: what
       // such a reader lacks is the section's own access, which is what its
@@ -520,27 +527,21 @@ describe("a section, for a reader holding none of its grants", () => {
       // THE CLOSED THING IS NAMED: the section, or — for a section in a
       // workspace the reader cannot open at all — the workspace.
       const closed = closedBy(section.path, [])!;
-      expect(closed, section.key).not.toBeNull();
-      expect(
-        await screen.findByText(`You need ${accessNames(closed.needs)} access`),
-        section.key,
-      ).toBeDefined();
+      expect(closed).not.toBeNull();
+      expect(await screen.findByText(`You need ${accessNames(closed.needs)} access`)).toBeDefined();
       // THE COMMON WAY OUT IS HOME, and switching account the other, never a
       // token; the reader is named, from the reading the refusal was decided on.
       expect(screen.getByRole("link", { name: "Go to Home" })).toBeDefined();
       expect(screen.getByRole("button", { name: "Switch account" })).toBeDefined();
-      expect(content().textContent, section.key).toMatch(/Signed in as reader/);
+      expect(content().textContent).toMatch(/Signed in as reader/);
       // NOTHING THE SCREEN WOULD HAVE COUNTED: no tile, no chip in the header
       // slot, no empty state claiming the section holds nothing.
-      expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
-      expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent, section.key).toBe("");
-      expect(content().textContent, section.key).not.toMatch(/\b0 (nodes?|credentials?)\b/);
-      expect(content().textContent, section.key).not.toMatch(/No nodes are reporting/);
-      view.unmount();
-      cleanup();
-    }
-    vi.unstubAllGlobals();
-  });
+      expect(content().querySelector(".crewlet-statcard")).toBeNull();
+      expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent).toBe("");
+      expect(content().textContent).not.toMatch(/\b0 (nodes?|credentials?)\b/);
+      expect(content().textContent).not.toMatch(/No nodes are reporting/);
+    },
+  );
 
   // THE FIRST ANSWER IS WAITED FOR. A cold load of a guarded section sent its
   // guarded reads before the frame knew who was asking, was refused, and drew
@@ -571,30 +572,35 @@ describe("a section, for a reader holding none of its grants", () => {
   // until the next poll — so the screen mounts, and ITS refused reads are its
   // to say. They say it without a figure: a refused read is not "0 nodes",
   // "0 credentials held" or "0 of 6 configured".
-  test("a viewer read that failed mounts the screen, which counts nothing it was refused", async () => {
-    // `403`: a `401` says nobody is signed in, which sends the tab to the
-    // sign-in rather than leaving the screen to say what it was refused.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
-    );
-    for (const section of guarded) {
+  test.each(guarded)(
+    "$key mounts for a viewer read that failed, and counts nothing it was refused",
+    async (section) => {
+      // `403`: a `401` says nobody is signed in, which sends the tab to the
+      // sign-in rather than leaving the screen to say what it was refused.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
+      );
       location.hash = buildHash(section.path);
       const { view } = mountAs(Promise.reject(new QueryError("timeout")));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
-      // THE FAILED READ'S RENDER IS AWAITED INSIDE `act`, which flushes the
-      // update the rejection schedules. Awaited outside it, the render waited
-      // on React's scheduler, and a timer tick only usually came after it: on
-      // a loaded runner the screen still said "Checking your access".
-      for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+      // THE SCREEN'S OWN REFUSAL IS WAITED FOR, and only then is anything
+      // counted. This counted eight turns of `act` instead, which is a guess
+      // at how many hops the chain takes: the viewer's failure re-renders the
+      // frame, the screen it mounts asks its reads from an effect, and each
+      // stubbed refusal is read off its response body and re-renders the
+      // screen again. A hop added anywhere in that chain — the transport
+      // reading one more promise, a screen asking one read after another —
+      // left the count short, and the checks below then ran against a screen
+      // still Loading, which could not have drawn a figure and so could not
+      // fail on one. Every section draws its refused read in one of two
+      // sentences: no access, or — for an answer naming no access — sign in.
       expect(
-        screen.queryByText(`You need ${accessNames(section.grants!)} access`),
-        section.key,
-      ).toBeNull();
-      expect(
-        screen.queryByText(`Checking your access to ${section.label}`),
-        section.key,
-      ).toBeNull();
+        (await screen.findAllByText(/You don’t have access to this\.|Sign in to see this\./))
+          .length,
+      ).toBeGreaterThan(0);
+      expect(screen.queryByText(`You need ${accessNames(section.grants!)} access`)).toBeNull();
+      expect(screen.queryByText(`Checking your access to ${section.label}`)).toBeNull();
       // A COUNT IN THE HEADER IS A TAG ("0 nodes", "0 credentials held",
       // "0 of 6 configured"); a time-range control there is not a figure.
       // Tools' figures are the registry the socket pushes every reader — no
@@ -602,15 +608,11 @@ describe("a section, for a reader holding none of its grants", () => {
       if (section.key !== "mcp-tools") {
         expect(
           document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
-          section.key,
         ).toBeNull();
-        expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
+        expect(content().querySelector(".crewlet-statcard")).toBeNull();
       }
-      view.unmount();
-      cleanup();
-    }
-    vi.unstubAllGlobals();
-  });
+    },
+  );
 
   // SETTINGS LISTS ONLY WHAT LIVES IN IT, in its four groups, and for a reader
   // holding no permission it is not nothing but locks: Spend's readings are
