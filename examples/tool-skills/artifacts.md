@@ -201,8 +201,8 @@ refused at publish naming every field to fix, never dropped.
   write it into the spec: declare the dataset and let the board compute it.
 - **Every viewer sees their own rows.** An engine dataset is answered as the
   person viewing the board, by the same rules as the screens they already
-  use: `scope: "mine"` is each viewer's own work, and somebody without the
-  tracker sees that the figure is closed to them. Sharing a board never
+  use: `scope: "mine"` is each viewer's own work, and somebody without
+  Worklet sees that the figure is closed to them. Sharing a board never
   shares the data behind it, so publish one board for everybody rather than
   one per person.
 - **Integration data arrives through the store.** Crewlet holds no

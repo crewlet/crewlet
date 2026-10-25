@@ -13,8 +13,8 @@ trigger:
 phases: [execute]
 title: Mentioning teammates
 summary: |
-  How a mention reaches somebody on each surface (the company's own
-  tracker and pages, and Mattermost) + shareable link shapes. Resolve IDs
+  How a mention reaches somebody on each surface (Worklet, Doclet and
+  Mattermost) + shareable link shapes. Resolve IDs
   via lookup_colleague before writing.
 ---
 
