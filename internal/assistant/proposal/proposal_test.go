@@ -165,9 +165,20 @@ func TestAPageActionIsNeverSent(t *testing.T) {
 	if _, err := proposal.New(d); err != nil {
 		t.Errorf("a page action was refused: %v", err)
 	}
+	page, err := proposal.New(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref := page.Card.Proposal.PageAction; ref == nil || ref.Name != "work.filters" ||
+		string(ref.Payload) != `{"status":"open"}` {
+		t.Errorf("a page proposal's card names its action as %+v", ref)
+	}
 	d.Scope = wire.ScopeServer
 	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrInvalid) {
 		t.Errorf("a server write with a page request was proposed: %v", err)
+	}
+	if server, err := proposal.New(draft()); err != nil || server.Card.Proposal.PageAction != nil {
+		t.Errorf("a server write's card names a page action: %v", err)
 	}
 }
 
