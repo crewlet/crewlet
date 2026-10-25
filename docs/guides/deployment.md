@@ -77,9 +77,10 @@ has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine keeps seven ordered logs on the stream: the tracker's mutation
+The engine keeps eight ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the identity estate's
-log, the usage log, the artifacts log and the artifact datastore's log. Each
+log, the usage log, the artifacts log, the artifact datastore's log and the
+Dashboard Assistant's log. Each
 log's byte ceiling is **reserved** on the volume holding `stream.store_dir`
 when its stream is created: the embedded broker grants a ceiling in full, up
 front, or refuses to create the stream at all. Its limit is
@@ -104,14 +105,15 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The artifact datastore's log | 1 GiB | `stream.artifact_data_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
-| **The seven logs together** | **6.50 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.17 GiB at the minimum | `store.objects.nats_max_bytes` |
+| The Dashboard Assistant's log (a fixed default) | 1 GiB | `stream.assistant_log_max_bytes` |
+| **The eight logs together** | **7.50 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.50 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **8.67 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **11.56 GiB
-free** on the volume holding `stream.store_dir` (about 12.4 GB). With the
+So the broker needs a limit of at least **10.00 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **13.33 GiB
+free** on the volume holding `stream.store_dir` (about 14.3 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 6.50 GiB alone needs 8.67 GiB free. These are the least that **boots**:
+logs' 7.50 GiB alone needs 10.00 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -124,7 +126,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **7.50 GiB**, which three quarters of **10.00 GiB free** reaches.
+  limit of **8.50 GiB**, which three quarters of **11.33 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
@@ -133,9 +135,10 @@ configuration reserves, split into the logs and the bucket.
   logs at every start) warn when a data node's embedded broker is given less
   than the minimum for its configuration.
 
-The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes` and
-`stream.usage_log_max_bytes` accept 64 MiB. The other five fields accept no
-less than 1 GiB, so setting them only moves the figure up.
+The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes`,
+`stream.usage_log_max_bytes` and `stream.assistant_log_max_bytes` accept
+64 MiB. The other five fields accept no less than 1 GiB, so setting them only
+moves the figure up.
 - **A floor is per log, not universal.** The identity estate's and the
   usage log's fields go down to 64 MiB, far below the others, because the
   identity log grows with headcount and sign-ins, and the usage log is a census of
@@ -614,10 +617,10 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the seven state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the eight state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_ARTIFACTS_LOG`,
-`CREWLET_ARTIFACT_DATA_LOG`), a stream per extra subject namespace a company
+`CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), the twenty-one `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty

@@ -1,8 +1,8 @@
 # Replication
 
-Crewlet's own tracker, knowledge base, identity directory, artifacts and
-artifact datastores are **replicated state machines**: seven domains on one
-framework, the embeddings
+Crewlet's own tracker, knowledge base, identity directory, artifacts,
+artifact datastores and Dashboard Assistant conversations are **replicated
+state machines**: eight domains on one framework, the embeddings
 and each node's usage history riding it as
 [compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day).
 One ordered stream per domain is the write-ahead log; every data node applies it
@@ -914,8 +914,8 @@ counting what the broker's streams already hold there.
 stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
 into what the state logs that already exist leave of their share of the
 broker, and it goes no lower than 1073741824 bytes. Give the broker more room;
-a fresh node of this configuration reserves at least 9305762474 bytes of the
-broker: 6979321856 for the state logs at their floors and 2326440618 for the
+a fresh node of this configuration reserves at least 10737418239 bytes of the
+broker: 8053063680 for the state logs at their floors and 2684354559 for the
 nats object bucket, a quarter of the broker's limit unless
 store.objects.nats_max_bytes sets it; the state logs that already exist keep
 the ceilings they were created with, and no Tier A setting changes them: …
