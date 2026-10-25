@@ -720,11 +720,11 @@ func (o *binding) Call(_ context.Context, in toolsession.Call) toolsession.Resul
 	}
 	// ITS PLACE IN THE RUN'S CALL LOG, fixed here, under the lock that
 	// orders admissions — see [tools.Surface.Admit].
-	admission := s.Surface.Admit(in.Name, args)
+	admitted := s.Surface.Admit(in.Name, args)
 	o.mu.Unlock()
 
 	started := time.Now()
-	res, broke, err := o.execute(admission, in.Name, args)
+	res, broke, err := o.execute(admitted, in.Name, args)
 	took := time.Since(started)
 	switch {
 	case broke != nil:
@@ -769,15 +769,14 @@ func (o *binding) Call(_ context.Context, in toolsession.Call) toolsession.Resul
 
 // execute runs one admitted call as the run's seat, under the run's context,
 // and contains a panic — broke is it, recovered.
-func (o *binding) execute(a tools.Admission, name string, args map[string]any,
+func (o *binding) execute(admitted toolloop.Admitted, name string, args map[string]any,
 ) (res toolloop.ToolResult, broke *turn.PanicError, err error) {
 	defer func() {
 		if broke = turn.Recovered(recover()); broke != nil {
 			res, err = toolloop.ToolResult{}, nil
 		}
 	}()
-	res, err = o.session.Surface.ExecuteAdmitted(o.actingAs(o.ctx), a,
-		llm.ToolCall{Name: name, Arguments: args})
+	res, err = admitted(o.actingAs(o.ctx), llm.ToolCall{Name: name, Arguments: args})
 	return res, nil, err
 }
 

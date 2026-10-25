@@ -101,7 +101,10 @@ func (s *surface) Detached(name string) bool {
 }
 func (s *surface) Phase() string { return "execute" }
 
-func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+// Admit admits a call to a surface that keeps no call log: it runs as it is.
+func (s *surface) Admit(string, map[string]any) toolloop.Admitted { return s.execute }
+
+func (s *surface) execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
 	s.mu.Lock()
 	hook := s.hook
 	s.mu.Unlock()

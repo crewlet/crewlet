@@ -175,6 +175,11 @@ type callRec struct {
 	// with it and never run.
 	argsErr string
 
+	// exec is the call as the surface admitted it, bound to its place in the
+	// run's call log ([Surface.Admit]) — nil for a call whose arguments did
+	// not parse, which nothing runs.
+	exec Admitted
+
 	started time.Time
 	took    time.Duration
 	result  ToolResult
@@ -721,6 +726,17 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if c.args == nil {
 		c.args = map[string]any{}
 	}
+	if c.argsErr == "" {
+		// ITS PLACE IN THE RUN'S CALL LOG, fixed here, in the order the calls
+		// arrived — see [Surface.Admit]. AT ARRIVAL, before the wait that
+		// joins the call to its response: two calls of one response that
+		// both wait for the CLI's record wake together and take this lock
+		// again in whichever order the scheduler picks, which is the racing
+		// order this exists to remove. So a call refused below is in the log
+		// too; that can only raise a later count, and a raised count is a
+		// fresh operation rather than a write collapsed onto another.
+		c.exec = d.cfg.Surface.Admit(c.name, c.args)
+	}
 	c.id = callIDFromMeta(in.Meta, c.run)
 	d.placeLocked(c)
 	if c.id == "" {
@@ -1045,7 +1061,7 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	if c.run != nil {
 		ctx = newCallContext(c.run.ctx, d.ctx)
 	}
-	out, err := d.cfg.Surface.Execute(withCallRound(ctx, c.round), llm.ToolCall{
+	out, err := c.exec(withCallRound(ctx, c.round), llm.ToolCall{
 		ID: c.id, Name: c.name, Arguments: c.args,
 	})
 	if err != nil {
