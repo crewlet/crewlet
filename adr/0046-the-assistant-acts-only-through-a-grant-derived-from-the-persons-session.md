@@ -1,0 +1,66 @@
+# ADR-0046: The assistant acts only through a grant derived from the person's session
+
+- **Status:** accepted
+- **Authority:** `internal/assistant`
+- **Enforced-by:** nothing
+- **Cost-when-tried:** the one existing path that runs a model against the company's tools on somebody's behalf, the sandbox MCP bridge, replaces the request's principal with the SEAT (`internal/api/mcpbridge`'s `actingAs`), and a seat holds every app, so a person without the tracker app routed through it would read the tracker; and the agent turn context falls back to a seat's principal when none is set
+- **Tag-status:** unreleased
+
+## The decision
+
+**The Dashboard Assistant has no identity of its own and holds no credential
+that opens product data.** Every read it makes and every write it executes is
+an ordinary request through the API's one handler chain (the same page policy,
+canonical path, guard, cross-site check, drain gate, route and authority row as
+a click in the dashboard), carrying an **assistant grant**:
+
+- **Derived only from a person's own session.** `internal/api/auth` mints it
+  from a request the guard resolved to a person acting through `session:`, and
+  from nothing else: a machine token, a Tier A token's session and a service
+  account are refused the assistant (decision D04).
+- **Re-composed on every request.** The grant names the session it came from,
+  and the guard resolves that session through the identity rows each time, as
+  the artifact view ticket does (ADR-0035), so a sign-out, a revocation, a
+  suspension or a seat move stops the assistant at its next step. The person
+  is the author of every row it writes and `assist:<grant>` is the credential
+  in its operator column.
+- **Useless outside the process.** It is accepted only on a request carrying an
+  in-process marker the API's own dispatcher sets; over the wire it is refused,
+  and it is never fresher than the request that derived it (its step-up instant is
+  clamped to the deriving request's).
+- **Narrowing, never widening.** A read grant reaches only reads, and an exec
+  grant only the one approved request its proposal binds (ADR-0047). The
+  person's own authority decision is still the whole decision; the grant's
+  scope and the authority table's assistant column (ADR-0048) only subtract.
+
+The orchestrator holds a grant as a handle it can name and time but never
+present (`internal/assistant/exec`'s `Grant`), and no package under
+`internal/assistant` may import the store, another domain's writer or reader,
+the operator surface, the question registry, the tool registry, the builtins,
+the MCP bridge, the agent turn context or the credential owner.
+
+## Why the obvious alternatives are wrong
+
+**A seat, or the sandbox bridge, as the assistant's identity.** A seat holds
+every app and is the author of what it writes, so a person would read through
+the assistant what their own grants keep from them, and the audit trail would
+name an agent for a person's gesture.
+
+**A minted bearer usable over the wire, or a loopback HTTP call to the API
+port.** Either makes the grant a network credential: a proxy log, a local
+process or a misconfigured bind captures it, and it works from anywhere until
+it expires. In process, the same handler is called without a credential ever
+crossing a socket, and a request that did not come through the dispatcher
+cannot carry the marker at all.
+
+**Calling the operator dispatch or the question registry directly.** That is a
+fourth transport into the tools, beside MCP, the act route and the human write
+surface, which a later change can let drift from the other three: the exact
+failure `internal/api/operator`'s package doc exists to prevent.
+
+## What this does not decide
+
+How a write waits for the person (ADR-0047), how each verb says what the
+assistant may do with it (ADR-0048) and where conversations live (ADR-0049).
+The grant's token format, lifetimes and revocation registry are
+`internal/api/auth`'s own doc.
