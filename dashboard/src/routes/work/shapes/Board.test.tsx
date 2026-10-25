@@ -455,7 +455,7 @@ describe("moving a card", () => {
     await settle();
     expect(laneOf("ENG-1")).toBe("To do");
     expect(cardOf("ENG-1").getAttribute("data-pending")).toBeNull();
-    expect(document.querySelector(".write-refusal")?.textContent).toContain(
+    expect(document.querySelector(".crewlet-refusal-strip")?.textContent).toContain(
       "Changed by somebody else since you opened it",
     );
   });

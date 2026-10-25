@@ -257,7 +257,7 @@ test("a refusal is drawn beside the control and stays until the next press", asy
   );
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  const refusal = () => document.querySelector(".write-refusal");
+  const refusal = () => document.querySelector(".crewlet-refusal-strip");
   await waitFor(() => expect(refusal()?.textContent).toContain("views: v9 is not a view"));
   expect(refusal()?.getAttribute("role")).toBe("alert");
   await new Promise((r) => setTimeout(r, 50));
@@ -302,7 +302,7 @@ test("a refusal on authority carries the grants the engine named, and draws them
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  const refusal = () => document.querySelector(".write-refusal");
+  const refusal = () => document.querySelector(".crewlet-refusal-strip");
   await waitFor(() => expect(refusal()).not.toBeNull());
   expect(seen).toMatchObject({ grants: ["tracker"] });
   expect(refusal()?.textContent).toContain("You need Tracker access for this. Ask an admin.");
@@ -321,9 +321,9 @@ test("a refusal that is not on authority carries no grants", async () => {
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  await waitFor(() => expect(document.querySelector(".write-refusal")).not.toBeNull());
+  await waitFor(() => expect(document.querySelector(".crewlet-refusal-strip")).not.toBeNull());
   expect(seen).toMatchObject({ grants: [] });
-  expect(document.querySelector(".write-refusal")?.textContent).not.toContain("Needs");
+  expect(document.querySelector(".crewlet-refusal-strip")?.textContent).not.toContain("Needs");
 });
 
 // OFFLINE IS DISABLED, NEVER QUEUED.

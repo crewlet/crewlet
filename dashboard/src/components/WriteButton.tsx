@@ -23,7 +23,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, type ButtonProps } from "@crewlethq/ui";
+import { Button, RefusalStrip, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
@@ -126,25 +126,21 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
   const { refusal, busy } = write;
   if (!refusal) return null;
   return (
-    // ABOVE A GRID ROW'S LINK (`data-above-row`), so its sentence can be
-    // selected and its link followed rather than opening the row.
-    <span className="write-refusal" role="alert" data-above-row="">
+    // THE KIT'S ONE DRAWING OF A REFUSAL, inline under the control that
+    // caused it. ABOVE A GRID ROW'S LINK (`data-above-row`), so its sentence
+    // can be selected and its link followed rather than opening the row.
+    <RefusalStrip
+      data-above-row=""
+      hint={refusal.hint || undefined}
+      onRetry={refusal.retryable ? () => void write.retry() : undefined}
+      retrying={busy}
+      onDismiss={write.dismiss}
+    >
       {/* ONE SENTENCE where access would admit: the refusal and its remedy
           said the same thing twice. */}
-      <span>
-        {refusal.grants.length > 0
-          ? `${youNeedWords(refusal.grants)} Ask an admin.`
-          : marked(refusal.sentence, "inherit")}
-      </span>
-      {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
-      {refusal.retryable && (
-        <Button size="small" variant="ghost" loading={busy} onClick={() => void write.retry()}>
-          Try again
-        </Button>
-      )}
-      <Button size="small" variant="ghost" onClick={write.dismiss}>
-        Dismiss
-      </Button>
-    </span>
+      {refusal.grants.length > 0
+        ? `${youNeedWords(refusal.grants)} Ask an admin.`
+        : marked(refusal.sentence, "inherit")}
+    </RefusalStrip>
   );
 }
