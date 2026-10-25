@@ -70,6 +70,10 @@ type Company struct {
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
 
+	// Assistant is whether the Dashboard Assistant runs for this company,
+	// on which models, and the bounds of one turn. See [Assistant].
+	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -273,7 +277,8 @@ func (c *Company) ValidateRunnable() error {
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
 // seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key.
+// handle nor a key. And the `assistant:` block ([Company.validateAssistant]),
+// whose chain is held to its rules again wherever it is handed out.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -286,7 +291,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMCredentials(), c.validateLLMModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateFileRules())
+		c.validateRunOptionalKeys(), c.validateFileRules(), c.validateAssistant())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
