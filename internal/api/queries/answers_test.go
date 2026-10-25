@@ -109,7 +109,7 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	t.Parallel()
 	// Unknown rather than a failure, which is the honest answer for a
 	// source the registry was never given (a company on the vendor tracker
-	// has no native board), and distinct from an empty one: a dashboard
+	// has no Worklet board), and distinct from an empty one: a dashboard
 	// drawing "no events" for "nothing here reads the event log" would
 	// report a quiet company that is not quiet.
 	r := registryOver(t, queries.Sources{})

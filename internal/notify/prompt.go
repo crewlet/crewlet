@@ -139,7 +139,7 @@ type Prompt interface {
 	// the durable thread; those delegate in one line. Two cut the
 	// partition finer, and each one's doc shows the invariant deciding the
 	// answer: [ChatPrompt], where a direct conversation is one conversation
-	// however its replies are threaded, and the native tracker's, whose
+	// however its replies are threaded, and Worklet's, whose
 	// partition is the task's identity cut by the surface a wake owes its
 	// reply on — so a merge of two wakes owing two surfaces never has to
 	// drop one of the promises, while every turn about the task still
@@ -228,8 +228,8 @@ type Parties interface {
 
 	// ByHandle resolves a seat's own identity.
 	//
-	// FOR THE FIRST-PARTY SOURCES, whose actor IS a handle: nothing on the
-	// engine's own tracker or knowledge base authenticates as an account
+	// FOR THE FIRST-PARTY SOURCES, whose actor IS a handle: nothing on
+	// Worklet or Doclet authenticates as an account
 	// somewhere else, so there is no external id to scope and asking for
 	// one would mean registering every seat's handle as its own external
 	// id in a namespace that exists only to satisfy this call.

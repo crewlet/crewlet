@@ -61,7 +61,7 @@ func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 	t.Parallel()
 	refused := []byte(`{"error":"unauthorized","message":"The credential you ` +
-		`presented does not carry the access (Admin, Tracker or Knowledge) ` +
+		`presented does not carry the access (Admin, Worklet, Doclet or Artifacts) ` +
 		`this request needs.","reason":"no_grant","grants":["admin"]}`)
 	config := &configClient{base: "http://node"}
 	secrets := &secretsClient{base: "http://node"}

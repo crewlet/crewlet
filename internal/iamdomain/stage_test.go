@@ -83,7 +83,7 @@ func TestEditingASuspendedPersonLeavesThemSuspended(t *testing.T) {
 	if _, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
 		PersonID: id, OpID: "op-narrow", Reason: "narrow a leaver",
 		Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-			p.Grants = []iam.Grant{iam.GrantTracker}
+			p.Grants = []iam.Grant{iam.GrantWorklet}
 			return p, nil
 		},
 	}); err != nil {
@@ -160,7 +160,7 @@ func TestAnEditMovesNeitherAPersonsKindNorTheirStage(t *testing.T) {
 		_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
 			PersonID: id, OpID: operationKey(), Reason: "narrowed",
 			Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-				p.Grants = []iam.Grant{iam.GrantTracker}
+				p.Grants = []iam.Grant{iam.GrantWorklet}
 				return p, nil
 			},
 		})
@@ -179,7 +179,7 @@ func enrolSarah(t *testing.T, rig *writeRig, id string) {
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-" + id, Reason: "the joiner",
 		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
-		Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+		Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}

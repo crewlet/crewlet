@@ -59,7 +59,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Engine is one process running a company.
@@ -208,7 +208,7 @@ type Engine struct {
 
 	// onInbox is told whose inbox each committed tracker batch moved on
 	// this node. Nil tells nobody — see [Engine.SetOnInboxMoved].
-	onInbox atomic.Pointer[func([]tracker.InboxMovement)]
+	onInbox atomic.Pointer[func([]worklet.InboxMovement)]
 
 	// onInboxGap is told that the movements onInbox hears have a gap. Nil
 	// tells nobody — see [Engine.SetOnInboxGap].
@@ -1494,7 +1494,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// this one is the recovery to measure.
 	log.InfoContext(ctx, "engine_recovered", "node", nodeID,
 		"detail", "what this node holds is open and recovered; what its company "+
-			"configures (sandboxes, native halves, tool servers) starts next")
+			"configures (sandboxes, Worklet and Doclet, tool servers) starts next")
 	if opts.Recovered != nil {
 		opts.Recovered()
 	}
@@ -1516,7 +1516,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
 		// BEFORE equip too, and for exactly the same reason: the ten
-		// native tracker and knowledge tools are registered only where
+		// Worklet and Doclet tools are registered only where
 		// their halves exist, so a node that equipped first would run a
 		// company on the native backends whose seats have no way to read
 		// or write them.

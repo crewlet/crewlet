@@ -79,7 +79,7 @@ func TestADecidedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 func TestARecheckWithdrawsOnlyTheWatchItDecided(t *testing.T) {
 	t.Parallel()
 	hub := NewHub()
-	client := NewClient(NewAudience(trackerPrincipal, nil))
+	client := NewClient(NewAudience(workletPrincipal, nil))
 	hub.Register(client)
 	chart := &heldChart{asked: make(chan struct{}), release: make(chan struct{})}
 	w := &watching{hub: hub, client: client, chart: chart, holders: blindHolders{}}

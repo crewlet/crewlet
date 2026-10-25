@@ -1,6 +1,6 @@
 /**
  * How a page's readers are said: one line per seat and way of reading, in the
- * words the approved Knowledge page uses ("turn 2 on ENG-412", `search:
+ * words the approved Doclet page uses ("turn 2 on ENG-412", `search:
  * “DHCP lease”`), and who a tool skill reached.
  *
  * PURE, like `lib/seats.ts`: the counts are the engine's (`page_reads`), and

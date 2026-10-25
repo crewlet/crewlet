@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A SEAT MAY DECLARE A TAG AND NOTHING ELSE, which is the one reason this verb
@@ -25,7 +25,7 @@ func TestWriteProjectLetsAnySeatDeclareATag(t *testing.T) {
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartRefuses)
 
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project":  "ENG",
 		"tags_add": []any{map[string]any{"slug": "regression"}},
 	})
@@ -64,7 +64,7 @@ func TestWriteProjectCarriesTheLeadAnswer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			trk := newFakeTracker()
 			reg := projectRegistry(t, trk, tc.chart)
-			got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectTool,
+			got := callWorkAs(colleagueCaller(), t, reg, worklet.WriteProjectTool,
 				map[string]any{
 					"project":     "ENG",
 					"tags_rename": map[string]any{"api": "Public API"},
@@ -98,7 +98,7 @@ func TestWriteProjectResolvesTheLeadOnce(t *testing.T) {
 	trk := newFakeTracker()
 	asked := 0
 	reg := projectRegistry(t, trk, countingChart{asked: &asked})
-	got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectTool,
+	got := callWorkAs(colleagueCaller(), t, reg, worklet.WriteProjectTool,
 		map[string]any{
 			"project":          "ENG",
 			"tags_add":         []any{map[string]any{"slug": "regression"}},
@@ -135,7 +135,7 @@ func TestWriteProjectTellsAbsentFromEmpty(t *testing.T) {
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartLeads)
 
-	callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG", "default_assignee": "",
 	})
 	if len(trk.projectEdits) != 1 || trk.projectEdits[0].DefaultAssignee == nil {
@@ -146,7 +146,7 @@ func TestWriteProjectTellsAbsentFromEmpty(t *testing.T) {
 	// on [authz.ActionProjectArchive] says — see
 	// [TestAnAgentNeverArchivesAProject].
 	callWorkAs(personHolding(iam.AllGrants...), t, reg,
-		tracker.WriteProjectTool, map[string]any{
+		worklet.WriteProjectTool, map[string]any{
 			"project": "ENG", "archived": true,
 		})
 	if len(trk.projectEdits) != 2 || trk.projectEdits[1].DefaultAssignee != nil {
@@ -168,7 +168,7 @@ func TestAnAgentNeverArchivesAProject(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartLeads)
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG", "archived": true,
 	})
 	if !got.Failed {
@@ -180,7 +180,7 @@ func TestAnAgentNeverArchivesAProject(t *testing.T) {
 
 	// AND THE SAME SEAT KEEPS THE POLICY, which is what makes the bar a
 	// property of the VERB rather than of the caller.
-	if got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	if got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG", "default_assignee": "alice",
 	}); got.Failed {
 		t.Fatalf("the lead could not set the default assignee: %q", got.Output)
@@ -195,14 +195,14 @@ func TestAnAgentNeverArchivesAProject(t *testing.T) {
 			ProjectWriter:  func(builtin.Actor) builtin.ProjectWriter { return operator },
 			DefaultProject: func(string) string { return "ENG" },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Authorize: builtin.Decide(chartLeads),
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	entry, _ := opReg.Lookup(tracker.WriteProjectTool)
+	entry, _ := opReg.Lookup(worklet.WriteProjectTool)
 	if got, err := entry.Tool.Call(personHolding(iam.AllGrants...),
 		map[string]any{"project": "ENG", "archived": true}); err != nil {
 
@@ -224,7 +224,7 @@ func TestWriteProjectCarriesTheTagWarnings(t *testing.T) {
 	trk.tagWarnings = []string{"apis is within a typo of api"}
 	reg := projectRegistry(t, trk, chartRefuses)
 
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG", "tags_add": []any{map[string]any{"slug": "apis"}},
 	})
 	if got.Failed {
@@ -241,7 +241,7 @@ func TestWriteProjectRefusesAnEmptyCall(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartLeads)
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{"project": "ENG"})
+	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{"project": "ENG"})
 	if !got.Failed {
 		t.Fatal("a call setting nothing was accepted")
 	}
@@ -259,7 +259,7 @@ func TestWriteProjectFallsBackToTheSeatsOwnProject(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"tags_add": []any{map[string]any{"slug": "regression"}},
 	})
 	if got.Failed {
@@ -276,7 +276,7 @@ func TestWriteProjectFallsBackToTheSeatsOwnProject(t *testing.T) {
 	// AND A SEAT WHOSE UNIT OWNS NONE IS REFUSED naming the lookup rather
 	// than writing to an empty key.
 	unowned := projectRegistry(t, newFakeTracker(), chartRefuses)
-	if got := callWork(t, unowned, tracker.WriteProjectTool, map[string]any{
+	if got := callWork(t, unowned, worklet.WriteProjectTool, map[string]any{
 		"tags_add": []any{map[string]any{"slug": "regression"}},
 	}); !got.Failed {
 		t.Fatal("a seat with no project wrote to an empty key")
@@ -307,7 +307,7 @@ func TestLabelsAreDeclaredOnlyWhenTheCallerSaysSo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			trk := newFakeTracker()
 			reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
-			got := callWork(t, reg, tracker.CreateWorkItemTool, tc.args)
+			got := callWork(t, reg, worklet.CreateWorkItemTool, tc.args)
 			if got.Failed {
 				t.Fatalf("create failed: %q", got.Output)
 			}
@@ -328,7 +328,7 @@ func TestADeclaredLabelIsReportedBack(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
-	got := callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
+	got := callWork(t, reg, worklet.CreateWorkItemTool, map[string]any{
 		"title": "A task", "labels": []any{"regresion"},
 		"labels_create_missing": true,
 	})
@@ -354,7 +354,7 @@ func TestLabelsAreDeclaredBeforeTheTaskIsFiled(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
-	callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
+	callWork(t, reg, worklet.CreateWorkItemTool, map[string]any{
 		"title": "A task", "labels": []any{"regression"},
 		"labels_create_missing": true,
 	})
@@ -384,19 +384,19 @@ func TestARefusedWriteDeclaresNoLabel(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		"create with a decision asked of nobody": {tracker.CreateWorkItemTool,
+		"create with a decision asked of nobody": {worklet.CreateWorkItemTool,
 			labels(map[string]any{"title": "Which?", "decision": decisionArg()})},
-		"create with a malformed decision": {tracker.CreateWorkItemTool,
+		"create with a malformed decision": {worklet.CreateWorkItemTool,
 			labels(map[string]any{"title": "Which?", "ask": "pm",
 				"decision": map[string]any{"question": "Which?", "options": []any{}}})},
-		"create waiting on an item that does not exist": {tracker.CreateWorkItemTool,
+		"create waiting on an item that does not exist": {worklet.CreateWorkItemTool,
 			labels(map[string]any{"title": "A task", "waiting_on": []any{"ENG-99"}})},
-		"create waiting on work with no dependency writer": {tracker.CreateWorkItemTool,
+		"create waiting on work with no dependency writer": {worklet.CreateWorkItemTool,
 			labels(map[string]any{"title": "A task", "waiting_on": []any{"ENG-2"}})},
 		"update re-routed by somebody who does not lead the project": {
-			tracker.UpdateWorkItemTool,
+			worklet.UpdateWorkItemTool,
 			labels(map[string]any{"item": "ENG-1", "routing_unit": "platform"})},
-		"update waiting on work with no dependency writer": {tracker.UpdateWorkItemTool,
+		"update waiting on work with no dependency writer": {worklet.UpdateWorkItemTool,
 			labels(map[string]any{"item": "ENG-1",
 				"waiting_on": map[string]any{"add": []any{"ENG-2"}}})},
 	} {
@@ -436,7 +436,7 @@ func TestARefusedWriteDeclaresNoLabel(t *testing.T) {
 func TestWriteProjectIsDeclaredDestructive(t *testing.T) {
 	t.Parallel()
 	reg := projectRegistry(t, newFakeTracker(), chartRefuses)
-	entry, ok := reg.Snapshot().Lookup(tracker.WriteProjectTool)
+	entry, ok := reg.Snapshot().Lookup(worklet.WriteProjectTool)
 	if !ok {
 		t.Fatal("write_project is not registered")
 	}
@@ -549,7 +549,7 @@ func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartUnknown)
-	got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectTool,
+	got := callWorkAs(colleagueCaller(), t, reg, worklet.WriteProjectTool,
 		map[string]any{
 			"project":     "ENG",
 			"tags_rename": map[string]any{"api": "Public API"},
@@ -592,7 +592,7 @@ func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
 			trk := newFakeTracker()
 			reg := projectRegistry(t, trk, chartLeads)
 			tc.args["project"] = "ENG"
-			if got := callWork(t, reg, tracker.WriteProjectTool, tc.args); got.Failed {
+			if got := callWork(t, reg, worklet.WriteProjectTool, tc.args); got.Failed {
 				t.Fatalf("write_project failed: %q", got.Output)
 			}
 			if len(trk.projectEdits) != 1 {
@@ -607,7 +607,7 @@ func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
 
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartLeads)
-	if got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	if got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG", "target_date": 20261218,
 	}); !got.Failed || !strings.Contains(got.Output, "target_date") {
 		t.Errorf("a number for a date answered %+v, want a failure naming the "+
@@ -616,7 +616,7 @@ func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
 
 	trk.projectWarnings = []string{"the target date holds a date and not a " +
 		"time, so 2026-12-18T20:00:00Z was stored as 2026-12-19"}
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG", "target_date": "2026-12-18T20:00:00Z",
 	})
 	if got.Failed || !strings.Contains(got.Output, "2026-12-19") {

@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE CHANGE FEED IS THE SECOND READER OF A SIGNED LOG, and these cases are
@@ -185,12 +185,12 @@ func TestEveryRegisteredDomainsFeedIsTheOneItDeclares(t *testing.T) {
 
 // pagesOnTrackersGroup is the knowledge base declaring the tracker's
 // consumer, which is the answer the trim used to give on its behalf.
-type pagesOnTrackersGroup struct{ pages.Domain }
+type pagesOnTrackersGroup struct{ doclet.Domain }
 
-func (pagesOnTrackersGroup) FeedGroup() string { return tracker.FeedGroup }
+func (pagesOnTrackersGroup) FeedGroup() string { return worklet.FeedGroup }
 
 // pagesWithoutFeed is the knowledge base declaring no feed while one runs.
-type pagesWithoutFeed struct{ pages.Domain }
+type pagesWithoutFeed struct{ doclet.Domain }
 
 func (pagesWithoutFeed) FeedGroup() string { return "" }
 

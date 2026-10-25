@@ -310,8 +310,8 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 		}
 		// EVERY RESOLVED PRINCIPAL WHOSE STAGE MAY ACT OPENS THE SOCKET
 		// (ADR-0033): what it carries is the overview, which is
-		// everybody's, and what of it a reader may not read — a seat's
-		// body, the audit trail, an inbox without the tracker — is withheld
+		// everybody's, and what of it a reader may not read (a seat's
+		// body, the audit trail, an inbox without Worklet) is withheld
 		// per kind and per payload by the audience the client is built with
 		// below, never by refusing the socket. It used to refuse a caller
 		// without the board's read grant, which left a person invited with

@@ -57,8 +57,8 @@ var alarmMeaning = map[Kind]string{
 	KindLogHeadroom: "A log is within a tenth of the byte ceiling its " +
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
-		"rather than dropping records; on every log that claims identity (the " +
-		"tracker's, the knowledge base's and the identity estate's) an " +
+		"rather than dropping records; on every log that claims identity " +
+		"(Worklet's, Doclet's and the identity estate's) an " +
 		"eviction still lands in the gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup has been recorded, or the newest is " +
 		"older than the policy asks for. The trim does not advance either way, " +
@@ -77,8 +77,8 @@ var alarmMeaning = map[Kind]string{
 	KindDeferredOld: "This node has been holding a record it cannot apply on " +
 		"a log for longer than the thirty-minute deferral grace. One alarm " +
 		"names every log that is, leading with the one held longest. Where a " +
-		"log judges this node's copy of the estate (the tracker's and the " +
-		"knowledge base's do), the node no longer serves its copy, and its " +
+		"log judges this node's copy of the estate (Worklet's and Doclet's " +
+		"do), the node no longer serves its copy, and its " +
 		"seats read the estate from the other data nodes.",
 	KindFloorUnknown: "This node has been unable to read a log's trim floor " +
 		"for four heartbeats, so every read of that log here refuses. One " +

@@ -81,7 +81,7 @@ func tierA(t *testing.T, tr *trail) *auth.Guard {
 	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{{
 		ID: "break-glass", Token: "the-break-glass-token-value",
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	}}
 	return auth.New(&b).WithAudit(tr)
 }

@@ -96,8 +96,8 @@ func TestACompletedTurnBecomesAnEpisode(t *testing.T) {
 }
 
 // AN EPISODE IS FILED AGAINST THE ITEM ITS TURN WAS CHARGED TO, as the
-// backend-qualified ref — a native task id and a Jira issue id are drawn from
-// different spaces, so the bare id would make two items one — and a turn on
+// backend-qualified ref (a Worklet task id and a Jira issue id are drawn from
+// different spaces, so the bare id would make two items one), and a turn on
 // nothing files against nothing rather than against an empty ref.
 func TestAnEpisodeRecordsTheTurnsItem(t *testing.T) {
 	t.Parallel()

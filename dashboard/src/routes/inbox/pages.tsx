@@ -3,7 +3,7 @@
  * two quiet links (Snoozed and Earlier).
  *
  * PAGED FORWARD, NEVER CUT. The engine answers fifty notices at a time
- * (`tracker.MaxInboxRows`) with a cursor behind a full page, so a list that
+ * (`worklet.MaxInboxRows`) with a cursor behind a full page, so a list that
  * read one page and stopped would hide the fifty-first snooze for as long as
  * the first fifty stood. Each "Show more" reads the page after the last one
  * shown, and the pages are kept in the order they were read.

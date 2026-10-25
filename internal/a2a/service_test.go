@@ -639,9 +639,9 @@ func TestAnAskCarriesTheAskersItem(t *testing.T) {
 	for name, tc := range map[string]struct {
 		item *types.WorkItem
 	}{
-		"an asker on a task":  {&types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}},
+		"an asker on a task":  {&types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}},
 		"an asker on nothing": {nil},
-		"an item with no id":  {&types.WorkItem{Backend: types.WorkNative, Key: "ENG-1"}},
+		"an item with no id":  {&types.WorkItem{Backend: types.WorkWorklet, Key: "ENG-1"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

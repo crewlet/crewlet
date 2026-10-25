@@ -56,8 +56,8 @@ func TestAQuestionIsAnsweredOnlyToThePostureItDeclares(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	r.Register("config", queries.Requires(iam.GrantAdmin), answersWith("the company"))
-	r.Register("work_items", queries.Requires(iam.GrantTracker), answersWith("the board"))
-	r.Register("pages", queries.Requires(iam.GrantKnowledge), answersWith("the pages"))
+	r.Register("work_items", queries.Requires(iam.GrantWorklet), answersWith("the board"))
+	r.Register("pages", queries.Requires(iam.GrantDoclet), answersWith("the pages"))
 	r.Register("budgets", queries.Everybody(), answersWith("the caps"))
 
 	for _, tc := range []struct {
@@ -68,13 +68,13 @@ func TestAQuestionIsAnsweredOnlyToThePostureItDeclares(t *testing.T) {
 		{"config", []iam.Grant{iam.GrantAdmin}, true},
 		{"config", slices.Clone(iam.Apps), false},
 		{"config", nil, false},
-		{"work_items", []iam.Grant{iam.GrantTracker}, true},
+		{"work_items", []iam.Grant{iam.GrantWorklet}, true},
 		{"work_items", []iam.Grant{iam.GrantAdmin}, true},
-		{"work_items", []iam.Grant{iam.GrantKnowledge}, false},
+		{"work_items", []iam.Grant{iam.GrantDoclet}, false},
 		{"work_items", nil, false},
-		{"pages", []iam.Grant{iam.GrantKnowledge}, true},
+		{"pages", []iam.Grant{iam.GrantDoclet}, true},
 		{"pages", []iam.Grant{iam.GrantAdmin}, true},
-		{"pages", []iam.Grant{iam.GrantTracker}, false},
+		{"pages", []iam.Grant{iam.GrantWorklet}, false},
 		{"budgets", nil, true},
 	} {
 		_, err := r.Answer(asking(t, tc.holding...), tc.what, nil)
@@ -95,14 +95,14 @@ func TestAQuestionIsAnsweredOnlyToThePostureItDeclares(t *testing.T) {
 func TestARefusalNamesThePermissionTheQuestionDeclares(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("work_items", queries.Requires(iam.GrantTracker), answersWith(nil))
-	_, err := r.Answer(asking(t, iam.GrantKnowledge), "work_items", nil)
+	r.Register("work_items", queries.Requires(iam.GrantWorklet), answersWith(nil))
+	_, err := r.Answer(asking(t, iam.GrantDoclet), "work_items", nil)
 	var refusal *queries.Refusal
 	if !errors.As(err, &refusal) {
 		t.Fatalf("err = %v, want a *queries.Refusal", err)
 	}
-	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
-		t.Errorf("the refusal names %v, want exactly [tracker]", refusal.Grants)
+	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
+		t.Errorf("the refusal names %v, want exactly [worklet]", refusal.Grants)
 	}
 }
 
@@ -201,7 +201,7 @@ func TestNobodyAskingIsADifferentRefusalFromLackingThePermission(t *testing.T) {
 		}
 	}
 
-	_, narrow := r.Answer(asking(t, iam.GrantTracker), "events", nil)
+	_, narrow := r.Answer(asking(t, iam.GrantWorklet), "events", nil)
 	if !errors.Is(narrow, queries.ErrUnauthorized) {
 		t.Errorf("a principal lacking the permission is not ErrUnauthorized: %v", narrow)
 	}
@@ -280,18 +280,18 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
 		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
 
-		"work_items": "tracker", "work_comments": "tracker",
-		"work_item_turns": "tracker", "work_views": "tracker",
-		"work_saved_views": "tracker", "work_projects": "tracker",
-		"work_project": "tracker", "work_workload": "tracker",
-		"work_activity": "tracker", "work_my_work": "tracker",
-		"work_inbox": "tracker", "work_routing": "tracker",
-		"work_catalogue": "tracker", "work_person": "tracker",
-		"work_flow": "tracker", "work_files": "tracker", "work_search": "tracker",
+		"work_items": "worklet", "work_comments": "worklet",
+		"work_item_turns": "worklet", "work_views": "worklet",
+		"work_saved_views": "worklet", "work_projects": "worklet",
+		"work_project": "worklet", "work_workload": "worklet",
+		"work_activity": "worklet", "work_my_work": "worklet",
+		"work_inbox": "worklet", "work_routing": "worklet",
+		"work_catalogue": "worklet", "work_person": "worklet",
+		"work_flow": "worklet", "work_files": "worklet", "work_search": "worklet",
 
-		"pages": "knowledge", "page": "knowledge", "containers": "knowledge",
-		"page_activity": "knowledge", "page_revision": "knowledge",
-		"page_reads": "knowledge",
+		"pages": "doclet", "page": "doclet", "containers": "doclet",
+		"page_activity": "doclet", "page_revision": "doclet",
+		"page_reads": "doclet",
 
 		"work_item":       "decided_by:" + string(authz.ActionWorkRead),
 		"turns":           "decided_by:" + string(authz.ActionSeatTrailRead),

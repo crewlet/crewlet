@@ -523,7 +523,7 @@ for where each stage's spend is drawn:
 | `internal/learning/memread` | Reads a seat's memory — and its conversation ledger — from the node that HOLDS the seat, which is the one copy memsync keeps current: the reader follows the seat's lease, answers here, asks the holding incarnation on an ephemeral scatter, or answers empty for a seat no node holds, and every answer names who gave it (`held_by`). Every node answers for the seats it holds. The OVERVIEW (`memory_overview`) is the same rule for every agent at once, in one round: one listing of the seat leases, one scatter naming each holder's seats, one reply per holder, and a `coverage` naming any holder that did not answer. See [A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it). |
 | `internal/learning` | The reflect dispatcher (`Reflector`) and its per-turn workers (`PersistDecider`, `Episodist`, `Profiler`, `SkillUse`, `Synthesizer`, `Refiner`), the background passes behind `Background` (episode `Lifecycle`, the skill curator, clustered synthesis, cross-agent `Promoter`), `Skills` for synthesis and refinement, `Diary`, and the onboarding marker store. The turn-start prefetches are `internal/agent/prefetch`. |
 | `internal/config` | `learning:` block — per-role enable flag, reflection budget, promotion thresholds, lifecycle knobs. See [Configuration](../getting-started/configuration.md). |
-| `internal/api` | `GET /agents/{id}/memory` (and the `agent_memory` query) serves the diary, the episodes, the synthesized skills and the counterparty profiles — each a page with its counted total — plus the latest reflection and when the seat onboarded, for the seat page's **Memory** tab, its Overview and one agent's page under **Knowledge › Agent diaries**; the `memory_overview` query serves that screen's list — every agent seat's totals and newest note, each counted by its holder; the rows are projected by `memread` rather than marshalled from the domain types. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
+| `internal/api` | `GET /agents/{id}/memory` (and the `agent_memory` query) serves the diary, the episodes, the synthesized skills and the counterparty profiles (each a page with its counted total), plus the latest reflection and when the seat onboarded, for the seat page's **Memory** tab, its Overview and one agent's page under **Doclet › Agent diaries**; the `memory_overview` query serves that screen's list: every agent seat's totals and newest note, each counted by its holder; the rows are projected by `memread` rather than marshalled from the domain types. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
 
 ---
 
@@ -542,7 +542,7 @@ A seat's handle is its identity, and it is immutable: a document that changes on
 | `counterparty_profiles` | One row per `(observer, subject, platform)` | composite |
 | `agent_onboarding_markers` | `mark_onboarded` bookkeeping | `agent_id` (PK) |
 
-Shared knowledge has no table *here*: natively it is rows in the REPLICATED estate — the pages themselves, and the vectors derived from them — and on Confluence there is no local copy at all, only a live query (see [Knowledge System](knowledge-system.md)).
+Shared knowledge has no table *here*: on Doclet it is rows in the REPLICATED estate (the pages themselves, and the vectors derived from them), and on Confluence there is no local copy at all, only a live query (see [Knowledge System](knowledge-system.md)).
 
 ---
 

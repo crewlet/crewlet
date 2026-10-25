@@ -17,7 +17,7 @@ import (
 //
 // The links are rows of THIS NODE's index (`page_links`, node migration 0036),
 // written by [Indexer.Upsert] from exactly the bodies it tokenises, through the
-// grammar `pages.Links` owns. So what a page lists is what this node's index
+// grammar `doclet.Links` owns. So what a page lists is what this node's index
 // holds: a body saved a moment ago lists its links once the indexer's next lap
 // has read it, which is the same staleness a search over the same index has —
 // and a node still building its index says so through the searcher's own

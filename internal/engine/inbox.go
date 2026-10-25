@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/crewlet/crewlet/internal/tracker"
+import "github.com/crewlet/crewlet/internal/worklet"
 
 // SetOnInboxMoved registers what this node does when a committed tracker batch
 // moved somebody's inbox — which, beside the engine, is the API pushing an
@@ -11,7 +11,7 @@ import "github.com/crewlet/crewlet/internal/tracker"
 // An agent is woken by the change feed. A person has no turn to wake, and a
 // Crewlet-only person has no Slack or Jira either: the dashboard is their
 // delivery surface. The tracker's applier says, after every committed batch,
-// whose inbox it moved (internal/tracker/inboxmove.go), and this is where the
+// whose inbox it moved (internal/worklet/inboxmove.go), and this is where the
 // engine hands that on. EVERY DATA NODE APPLIES EVERY RECORD, and every node
 // that serves sockets is a data node (ingress requires `data`), so each hears
 // every movement from its own applier and tells its own sockets — WHILE ITS
@@ -28,7 +28,7 @@ import "github.com/crewlet/crewlet/internal/tracker"
 // fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, or the relay follower's, with
 // the next batch waiting behind it, so it must not block: the stream's fan-out
 // it is built for never does.
-func (e *Engine) SetOnInboxMoved(fn func([]tracker.InboxMovement)) {
+func (e *Engine) SetOnInboxMoved(fn func([]worklet.InboxMovement)) {
 	e.onInbox.Store(&fn)
 }
 
@@ -51,7 +51,7 @@ func (e *Engine) SetOnInboxGap(fn func()) {
 // answers a follower only while its copy serves ([inboxRelay.answerNow]) — and
 // handed to this node's own sockets only while they are not being relayed a
 // peer's: one source at a time.
-func (e *Engine) inboxMoved(moved []tracker.InboxMovement) {
+func (e *Engine) inboxMoved(moved []worklet.InboxMovement) {
 	relay := e.inboxRelay.Load()
 	if relay != nil {
 		relay.record(moved)
@@ -70,7 +70,7 @@ func (e *Engine) inboxListening() bool {
 }
 
 // deliverInbox hands one batch's movements to whatever this node registered.
-func (e *Engine) deliverInbox(moved []tracker.InboxMovement) {
+func (e *Engine) deliverInbox(moved []worklet.InboxMovement) {
 	fn := e.onInbox.Load()
 	if fn == nil || *fn == nil {
 		return

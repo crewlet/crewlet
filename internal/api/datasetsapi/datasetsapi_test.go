@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tokens"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // sampleAnswers are each bound question's answer built from the domain's OWN
@@ -30,12 +30,12 @@ func sampleAnswers(t *testing.T) map[string]any {
 	t.Helper()
 	due := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
 	return map[string]any{
-		"tracker.items": map[string]any{"items": []tracker.TaskRow{{
+		"tracker.items": map[string]any{"items": []worklet.TaskRow{{
 			Key: "ENG-1", Title: "Ship it", Status: "in_progress", StatusGroup: "active",
 			Priority: "high", Assignee: "ana", Project: "ENG", Due: &due, Updated: due,
 			Points: 3, Blocked: true, Overdue: true,
 		}}},
-		"tracker.workload": tracker.WorkloadAnswer{Rows: []tracker.WorkloadRow{{
+		"tracker.workload": worklet.WorkloadAnswer{Rows: []worklet.WorkloadRow{{
 			Handle: "ana", Open: 4, Points: 9, Blocked: 1, Overdue: 2, Unscheduled: 1}}},
 		"spend.seats": tokens.Rollup{ByAgent: []tokens.AgentRow{{Role: "Ana", Handle: "ana",
 			Person: true, Bucket: tokens.Bucket{TotalTokens: 30, InputTokens: 20, OutputTokens: 10, Calls: 2}}}},
@@ -121,7 +121,7 @@ func TestABindingToAPerRecordQuestionIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "work_items") {
 		t.Fatalf("a per-record question was bound: %v", err)
 	}
-	q.postures["work_items"] = queries.Requires(iam.GrantTracker)
+	q.postures["work_items"] = queries.Requires(iam.GrantWorklet)
 	if _, err := New(Options{Boards: nopBoards{}, Chart: authz.NoChart{}, Questions: q, Data: nopData{}}); err != nil {
 		t.Fatalf("a grant-decided question is bound: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestMineIsTheViewersOwnRecord(t *testing.T) {
 // so a grant revoked, a seat rebound or a stage suspended is a new key at once.
 func TestThePrincipalKeyChangesWithEveryAuthorityFact(t *testing.T) {
 	base := iam.Principal{ID: uuid.New(), Login: "ana.lee", Kind: iam.KindPerson, Seat: "ana",
-		Grants: []iam.Grant{iam.GrantTracker}, Position: "eng", Stage: iam.StageActive}
+		Grants: []iam.Grant{iam.GrantWorklet}, Position: "eng", Stage: iam.StageActive}
 	k := principalKey(base)
 	for name, change := range map[string]func(p *iam.Principal){
 		"id":       func(p *iam.Principal) { p.ID = uuid.New() },
@@ -163,7 +163,7 @@ func TestThePrincipalKeyChangesWithEveryAuthorityFact(t *testing.T) {
 		}
 	}
 	reordered := base
-	reordered.Grants = []iam.Grant{iam.GrantTracker, iam.GrantTracker}
+	reordered.Grants = []iam.Grant{iam.GrantWorklet, iam.GrantWorklet}
 	if principalKey(reordered) != k {
 		t.Error("the same effective grants made a second key")
 	}
@@ -193,8 +193,8 @@ func TestTheCataloguesSpendBoundsAreTheUsageDomains(t *testing.T) {
 			tokens.DefaultSeriesGroups)
 	}
 	for _, src := range dashspec.Catalogue() {
-		if src.Domain == dashspec.DomainTracker && src.MaxRows > tracker.PageMax {
-			t.Errorf("%s answers %d rows and the tracker pages %d", src.Name, src.MaxRows, tracker.PageMax)
+		if src.Domain == dashspec.DomainTracker && src.MaxRows > worklet.PageMax {
+			t.Errorf("%s answers %d rows and the tracker pages %d", src.Name, src.MaxRows, worklet.PageMax)
 		}
 	}
 }

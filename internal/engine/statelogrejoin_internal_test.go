@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE THAT FALLS BELOW THE FLOOR WHILE RUNNING ADOPTS WITHOUT A RESTART.
@@ -130,7 +130,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	// the adopter holds its donor's rows and inherits its donor's watermark —
 	// which says nothing lost, on a donor that never swept. An adopter that
 	// recorded a loss here would answer its own backlog `unknown`.
-	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), tracker.Domain{}.Stream())
+	rows, err := worklet.NewRows(back.Store.Replicated().Reader(), worklet.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}
@@ -308,13 +308,13 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	running *runningLog, at statelog.Position, log *jetstream.DomainLog, last uint64) {
 
 	t.Helper()
-	spec := tracker.Domain{}.Stream()
+	spec := worklet.Domain{}.Stream()
 	log, err := q.DomainLog(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
 	s := e.core.Load().log
-	running = s.Domain(tracker.Domain{}.Name())
+	running = s.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -353,7 +353,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		info, err := cons.Info(t.Context())
 		return err == nil && info.NumWaiting == 0
 	})
-	body, err := tracker.EncodeBarrier(statelog.Envelope{
+	body, err := worklet.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,
 		Scope: statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
@@ -389,7 +389,7 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 		t.Fatalf("open the copy: %v", err)
 	}
 	moveCheckpoint(t, running.log, copyDB, statelog.Position{
-		Stream: tracker.Domain{}.Stream().Name, Generation: at.Generation, Seq: last,
+		Stream: worklet.Domain{}.Stream().Name, Generation: at.Generation, Seq: last,
 	}, running.runner.StreamCreatedAt())
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
@@ -632,7 +632,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 			if err != nil {
 				t.Fatalf("open a JetStream handle: %v", err)
 			}
-			cons, err := js.Consumer(t.Context(), tracker.Domain{}.Stream().Name,
+			cons, err := js.Consumer(t.Context(), worklet.Domain{}.Stream().Name,
 				running.consumer.Name())
 			if err != nil {
 				t.Fatalf("look up the tracker's consumer: %v", err)
@@ -836,7 +836,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	name := running.domain.Name()
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {

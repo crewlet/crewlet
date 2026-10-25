@@ -10,14 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE REGISTER: every domain this build runs, and everything the engine has to
@@ -253,42 +253,42 @@ type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 func register() []registration {
 	return slices.Concat([]registration{
 		{
-			Domain: tracker.Domain{},
+			Domain: worklet.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
 				// THE INBOX LISTENER, which is how a person learns they
 				// have work: the apply is the one thing that sees every
 				// notice on every data node, and each tells its own
 				// sockets — a node without `data` serves none, since
 				// `ingress` requires `data`. See
-				// internal/tracker/inboxmove.go.
-				return tracker.NewApplier(s.nodeID, s.inboxMoved), nil
+				// internal/worklet/inboxmove.go.
+				return worklet.NewApplier(s.nodeID, s.inboxMoved), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := tracker.NewRows(s.estate().Reader(), spec)
+				rows, err := worklet.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := tracker.NewFence(s.estate().Reader(), s.nodeID)
-				name := tracker.Domain{}.Name()
+				fence := worklet.NewFence(s.estate().Reader(), s.nodeID)
+				name := worklet.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: tracker.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
+					Gates: worklet.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
-			Barrier:    tracker.EncodeBarrier,
-			Generation: tracker.GenerationRecord{},
+			Barrier:    worklet.EncodeBarrier,
+			Generation: worklet.GenerationRecord{},
 			NewGate: func(s *stateLog, running *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
-				w, err := tracker.NewWriter(tracker.WriterDeps{
+				w, err := worklet.NewWriter(worklet.WriterDeps{
 					Publisher: publisher, DB: s.estate().Reader(), NodeID: s.nodeID,
 					Drain: running.runner.Drain, Metrics: s.metrics,
 					// THE NODE'S OWN IDENTITY, replaced per gesture with
-					// the operator who ran it — see [tracker.Writer.As].
-					Actor: s.nodeID, ActorKind: tracker.AuthorSystem,
+					// the operator who ran it (see [worklet.Writer.As]).
+					Actor: s.nodeID, ActorKind: worklet.AuthorSystem,
 				})
 				if err != nil {
 					return nil, err
@@ -297,8 +297,8 @@ func register() []registration {
 					readmit bool) (statelog.Result, error) {
 
 					a := iam.ActorFor(by)
-					as := w.As(a.Name, tracker.AuthorKind(a.Kind),
-						tracker.Provenance{OperatorID: a.OperatorID})
+					as := w.As(a.Name, worklet.AuthorKind(a.Kind),
+						worklet.Provenance{OperatorID: a.OperatorID})
 					gate := as.EvictNode
 					if readmit {
 						gate = as.ReadmitNode
@@ -311,7 +311,7 @@ func register() []registration {
 			// a question — derived from the log rather than published by
 			// the writer's goroutine. See domainfeed.go.
 			Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
-				return tracker.NewTranslator(), tracker.FeedSource{Log: records}
+				return worklet.NewTranslator(), worklet.FeedSource{Log: records}
 			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
@@ -361,7 +361,7 @@ func register() []registration {
 			},
 		},
 		{
-			Domain: pages.Domain{},
+			Domain: doclet.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
 				// THE PARSER AND THE NUDGE COME FROM HERE, because the
 				// apply is what notices a tool-skill page arriving or
@@ -370,29 +370,29 @@ func register() []registration {
 				// knowledge base's native half exists: it is a
 				// non-blocking send that returns when there is nothing
 				// to send to.
-				return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
+				return doclet.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := pages.NewRows(s.estate().Reader(), spec)
+				rows, err := doclet.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := pages.NewFence(s.estate().Reader(), s.nodeID)
-				name := pages.Domain{}.Name()
+				fence := doclet.NewFence(s.estate().Reader(), s.nodeID)
+				name := doclet.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: pages.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
+					Gates: doclet.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
-			Barrier:    pages.EncodeBarrier,
-			Generation: pages.GenerationRecord{},
+			Barrier:    doclet.EncodeBarrier,
+			Generation: doclet.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
-				kb, err := pages.NewStore(pages.Options{Publisher: publisher,
+				kb, err := doclet.NewStore(doclet.Options{Publisher: publisher,
 					DB: s.estate().Reader()})
 				if err != nil {
 					return nil, err
@@ -417,7 +417,7 @@ func register() []registration {
 			// container LIVE off the epoch: `knowledge.skills_container`
 			// is Tier B, and the feed outlives every revision.
 			Feed: func(e *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
-				return pages.NewTranslator(e.skillsContainer), pages.FeedSource{Log: records}
+				return doclet.NewTranslator(e.skillsContainer), doclet.FeedSource{Log: records}
 			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {

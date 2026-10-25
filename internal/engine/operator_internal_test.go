@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // peerCopy is a peer data node's copy of the estate, answering what an
@@ -33,19 +33,19 @@ func (p *peerCopy) For(context.Context) (estate.Backend, bool) {
 // peerBoard is the peer's tracker reads.
 type peerBoard struct{ estate.TrackerReader }
 
-func (peerBoard) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
-	return tracker.Answer{TotalHint: 42}, nil
+func (peerBoard) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
+	return worklet.Answer{TotalHint: 42}, nil
 }
 
-func (peerBoard) Inbox(context.Context, tracker.InboxQuery, time.Time) (tracker.InboxAnswer, error) {
-	return tracker.InboxAnswer{Unread: 3}, nil
+func (peerBoard) Inbox(context.Context, worklet.InboxQuery, time.Time) (worklet.InboxAnswer, error) {
+	return worklet.InboxAnswer{Unread: 3}, nil
 }
 
 // peerPages is the peer's knowledge-base reads.
 type peerPages struct{ estate.PageReader }
 
-func (peerPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {
-	return []pages.ContainerListing{{Key: "ENG"}}, nil
+func (peerPages) Containers(context.Context, statelog.Freshness) ([]doclet.ContainerListing, error) {
+	return []doclet.ContainerListing{{Key: "ENG"}}, nil
 }
 
 // peerWriter is the peer's tracker writer, acting as one party.
@@ -55,11 +55,11 @@ type peerWriter struct {
 	actor estate.Actor
 }
 
-func (w *peerWriter) PurgeTask(_ context.Context, opID, _, _, _ string) (tracker.WriteResult, error) {
+func (w *peerWriter) PurgeTask(_ context.Context, opID, _, _, _ string) (worklet.WriteResult, error) {
 	w.peer.mu.Lock()
 	w.peer.purged = append(w.peer.purged, w.actor)
 	w.peer.mu.Unlock()
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}, nil
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}, nil
 }
 
 // twoDataNodes names this node and a peer as the data nodes.
@@ -101,8 +101,8 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	e := &Engine{backends: &Backends{}, mode: statelog.ModeNormal}
 	// A DATA NODE: its core runs, and the copy it holds is judged.
 	withCore(e)
-	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
-		writer: &tracker.Writer{}, pages: &pages.Store{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}, pageReader: &doclet.Reader{},
+		writer: &worklet.Writer{}, pages: &doclet.Store{}})
 	e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict {
 		if faulted.Load() {
 			return copyVerdict{fault: "tracker", answers: true}
@@ -124,19 +124,19 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 
 	work, ok := OperatorWork(e)
 	if !ok {
-		t.Fatal("a data node running the native tracker hands its operator no tracker")
+		t.Fatal("a data node running Worklet hands its operator no Worklet")
 	}
-	if answer, err := work.Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil ||
+	if answer, err := work.Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil ||
 		answer.TotalHint != 42 {
 		t.Fatalf("the board read (%+v, %v), want the peer's answer", answer, err)
 	}
-	if inbox, err := work.Inbox(t.Context(), tracker.InboxQuery{}, time.Now()); err != nil ||
+	if inbox, err := work.Inbox(t.Context(), worklet.InboxQuery{}, time.Now()); err != nil ||
 		inbox.Unread != 3 {
 		t.Fatalf("a person's inbox read (%+v, %v), want the peer's answer", inbox, err)
 	}
 	kb, ok := OperatorPages(e)
 	if !ok {
-		t.Fatal("a data node running the native knowledge base hands its operator none")
+		t.Fatal("a data node running Doclet hands its operator none")
 	}
 	if containers, err := kb.Containers(t.Context(), statelog.Freshness{}); err != nil ||
 		len(containers) != 1 || containers[0].Key != "ENG" {
@@ -146,15 +146,15 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	if !ok {
 		t.Fatal("a publishing data node hands its operator no tracker writer")
 	}
-	operator := estate.Actor{Handle: "founder", Kind: tracker.AuthorOperator,
-		Provenance: tracker.Provenance{OperatorID: "founder"}}
+	operator := estate.Actor{Handle: "founder", Kind: worklet.AuthorOperator,
+		Provenance: worklet.Provenance{OperatorID: "founder"}}
 	if _, err := as(operator).PurgeTask(t.Context(), "op-purge", "t-1", "ENG", ""); err != nil {
 		t.Fatalf("an operator's purge on a node whose copy is wrong: %v", err)
 	}
 	peer.mu.Lock()
 	purged := peer.purged
 	peer.mu.Unlock()
-	if len(purged) != 1 || purged[0].Handle != "founder" || purged[0].Kind != tracker.AuthorOperator ||
+	if len(purged) != 1 || purged[0].Handle != "founder" || purged[0].Kind != worklet.AuthorOperator ||
 		purged[0].Provenance.OperatorID != "founder" {
 		t.Fatalf("the peer purged as %+v, want the operator", purged)
 	}
@@ -176,9 +176,9 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	vendors := &Engine{router: router}
 	vendors.remote.Store(&remoteNative{})
 	if _, ok := OperatorWork(vendors); ok {
-		t.Error("a company on a vendor tracker was handed the native one")
+		t.Error("a company on a vendor tracker was handed Worklet")
 	}
 	if _, ok := OperatorPages(vendors); ok {
-		t.Error("a company on a vendor knowledge base was handed the native one")
+		t.Error("a company on a vendor knowledge base was handed Doclet")
 	}
 }

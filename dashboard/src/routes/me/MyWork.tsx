@@ -53,8 +53,8 @@
  *
  * # Two sections are the work list, narrowed to one person
  *
- * The Queue and Asked by me are `routes/work/ItemsView.tsx`, the same
- * component `#/work/tasks` and a project's Tasks lens are, held here by an
+ * The Queue and Asked by me are `routes/worklet/ItemsView.tsx`, the same
+ * component `#/worklet/tasks` and a project's Tasks lens are, held here by an
  * [ItemsHost] that fixes the one thing the section IS (who holds the work; who
  * is waiting on an answer about it) and what it opens on, and leaves the shape,
  * the grouping, the order, the columns and every other filter to the reader,
@@ -115,7 +115,7 @@ import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { askedByParams, pageCount, type Scope, itemPath } from "~/lib/work.ts";
-import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
+import { ItemsView, type ItemsHost } from "~/routes/worklet/ItemsView.tsx";
 import type {
   WorkClaimTotal,
   WorkMyWork,
@@ -354,7 +354,7 @@ export function MyWork({ section }: { section: MeSection }) {
   // two links the bar draws inline everywhere wider.
   usePageMenu([
     { key: "inbox", label: "Inbox", onSelect: () => nav.to(["inbox"]) },
-    { key: "all-work", label: "All work", onSelect: () => nav.to(["work", "tasks"]) },
+    { key: "all-work", label: "All work", onSelect: () => nav.to(["worklet", "tasks"]) },
   ]);
   const setBy = person.data?.priorities_set_by;
   const setByName = setBy ? (chrome.seatName?.(setBy) ?? setBy) : "";
@@ -424,7 +424,7 @@ export function MyWork({ section }: { section: MeSection }) {
           <a className="t-link" href={href(["inbox"])}>
             Inbox →
           </a>
-          <a className="t-link" href={href(["work", "tasks"])}>
+          <a className="t-link" href={href(["worklet", "tasks"])}>
             All work →
           </a>
         </span>
@@ -565,7 +565,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   <>
                     <ChecklistClaims
                       rows={mine.checklist_items}
-                      hrefOf={(address) => href(["work", address])}
+                      hrefOf={(address) => href(["worklet", address])}
                     />
                     <PageFoot
                       shown={mine.checklist_items.length}
@@ -796,7 +796,7 @@ function figures(all: Record<string, string>): Record<string, string> {
  * How many things are behind one section, as its tab spells it.
  *
  * THE BLOCKS ARE PAGES AND THE COUNTS ARE NOT. Each block comes back capped at
- * the engine's `tracker.MyWorkRows`, so a bare length is the CEILING on anybody
+ * the engine's `worklet.MyWorkRows`, so a bare length is the CEILING on anybody
  * busy; the engine counts every block in full beside its page (`totals`), by
  * the predicate that drew it, and that is the number a tab carries. The Queue
  * and Asked by me ask the tracker, whose `total_hint` is the count over the
@@ -832,7 +832,7 @@ function countFor(
  * A PAGE IS LABELLED AS A PAGE, never as the whole: the tab above says 130, and
  * twenty rows under it with nothing said would read as the tab being wrong. The
  * ORDER is named because it is what decided which twenty these are — the
- * engine's own, per block (`internal/tracker/mywork.go`).
+ * engine's own, per block (`internal/worklet/mywork.go`).
  */
 function PageFoot({
   shown,

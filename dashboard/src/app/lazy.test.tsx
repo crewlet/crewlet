@@ -75,14 +75,14 @@ describe("which chunk draws a screen", () => {
         "brand",
         "home",
         "inbox",
-        "knowledge",
+        "doclet",
         "live",
         "me",
         "org",
         "palette",
         "settings",
         "spend",
-        "work",
+        "worklet",
       ].sort(),
     );
     // EVERY SIDEBAR ROW'S LANDING is drawn by one of them.
@@ -111,7 +111,7 @@ describe("which chunk draws a screen", () => {
     expect(at("company")).toBe("settings");
     expect(at("company", "budgets")).toBe("spend");
     expect(at("settings", "spend")).toBe("spend");
-    expect(at("work", "ENG-4")).toBe("work");
+    expect(at("worklet", "ENG-4")).toBe("worklet");
   });
 
   test("each kind's create page is a chunk of its own, and none is prefetched", () => {

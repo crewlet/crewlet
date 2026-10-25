@@ -35,7 +35,7 @@ func TestAConnectingTabLeavesTheTicksPushToTheOpenOnes(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	t.Cleanup(s.Stop)
-	open := NewClient(NewAudience(trackerPrincipal, nil))
+	open := NewClient(NewAudience(workletPrincipal, nil))
 	s.Hub().Register(open)
 
 	s.Ingest(livestate.Envelope{

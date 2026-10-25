@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // SubjectPrefix prefixes every serving node's subject.
@@ -27,8 +27,8 @@ func Subject(nodeID string) string {
 
 // Actor is who a write is attributed to, as it crosses the wire: the author
 // (Handle), what sort of author it is (Kind), and in its provenance the
-// CREDENTIAL the write was made through ([tracker.Provenance.OperatorID]) —
-// the triple every record carries, as [iam.ActorFor] writes it — beside the
+// CREDENTIAL the write was made through ([worklet.Provenance.OperatorID]):
+// the triple every record carries, as [iam.ActorFor] writes it, beside the
 // turn and chain that produced it.
 //
 // The tracker's rule is that a writer acts as exactly one party, derived from
@@ -40,12 +40,12 @@ func Subject(nodeID string) string {
 // can name one.
 type Actor struct {
 	Handle     string             `json:"handle"`
-	Kind       tracker.AuthorKind `json:"kind"`
-	Provenance tracker.Provenance `json:"provenance"`
+	Kind       worklet.AuthorKind `json:"kind"`
+	Provenance worklet.Provenance `json:"provenance"`
 
 	// Records asks the serving node to answer which work items the write
 	// committed to ([reply.Written]), because the asker's provenance holds
-	// a turn's [tracker.WriteLog] — a set in the asking process that no
+	// a turn's [worklet.WriteLog], a set in the asking process that no
 	// wire carries. Set by the router itself wherever that log is present.
 	Records bool `json:"records,omitempty"`
 }
@@ -184,7 +184,7 @@ type reply struct {
 	// Written is every work item the operation's writes COMMITTED to on
 	// this node, for a request whose actor asked ([Actor.Records]) — what a
 	// writer in the asking process would have reported into the turn's
-	// [tracker.WriteLog] itself. Reported whatever the answer, an error
+	// [worklet.WriteLog] itself. Reported whatever the answer, an error
 	// included, since a walking gesture's earlier steps committed whether
 	// or not a later one failed.
 	Written []types.WorkItem `json:"written,omitempty"`
@@ -306,8 +306,8 @@ func (o op[A, R]) ungated() op[A, R] {
 
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
 // arguments say so: a page write whose actor carries the caller's own
-// operation key ([pages.Actor.OpKey]) — or a comment carrying its turn's
-// ([pages.NewComment.TurnKey]) — derives its operation id, and a create its
+// operation key ([doclet.Actor.OpKey]), or a comment carrying its turn's
+// ([doclet.NewComment.TurnKey]), derives its operation id, and a create its
 // page's id, from that key and what the write says rather than minting one per
 // call, so a repeat under it is the same operation and the ledger answers it
 // with the first copy's outcome. Such a call fails over as an

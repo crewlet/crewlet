@@ -7,13 +7,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY DOMAIN'S SHIPPED DDL ACCEPTS THE STATEMENTS THE FRAMEWORK GENERATES.
@@ -41,7 +41,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	t.Parallel()
 
 	for _, domain := range []statelog.Domain{
-		tracker.Domain{}, pages.Domain{}, iamdomain.Domain{},
+		worklet.Domain{}, doclet.Domain{}, iamdomain.Domain{},
 		search.Domain{}, usage.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {

@@ -29,7 +29,7 @@ import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { TRACKER } from "~/lib/access.ts";
+import { WORKLET } from "~/lib/access.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -50,7 +50,7 @@ import { useTab } from "~/app/frame/tabs.ts";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 const VIEWS = ["seats", "workload"] as const;
-/** The views a company running no Crewlet Works is offered: the workload is its open tasks. */
+/** The views a company running no Worklet is offered: the workload is its open tasks. */
 const SEATS_ONLY = ["seats"] as const;
 
 const GROUPINGS = ["state", "unit", "flat"] as const;
@@ -68,12 +68,12 @@ type Grouping = (typeof GROUPINGS)[number];
  * absolute number that is "full".
  */
 function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
-  // THE TRACKER'S QUESTION, asked only of a reader holding Tracker: who holds
-  // how much open work is the tracker's to say.
+  // WORKLET'S QUESTION, asked only of a reader holding Worklet: who holds
+  // how much open work is Worklet's to say.
   const viewer = useViewer();
   const answer = useQuery("work_workload", undefined, {
     pollMs: 60_000,
-    enabled: viewer.tracker,
+    enabled: viewer.worklet,
   });
   // THE BAR'S "FIND A SEAT" NARROWS THIS VIEW TOO, by the fields a load row
   // has: who it is and where they sit. The bar stays the same field whichever
@@ -93,8 +93,8 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
   // rather than per row, so every track on the table is drawn against the
   // same number.
   const heaviest = useMemo(() => rows.reduce((n, load) => Math.max(n, load.open), 0), [rows]);
-  if (!viewer.loading && !viewer.tracker) {
-    return <GrantRequired grants={[TRACKER]} reader={viewer.login} size="compact" />;
+  if (!viewer.loading && !viewer.worklet) {
+    return <GrantRequired grants={[WORKLET]} reader={viewer.login} size="compact" />;
   }
   return (
     <QueryState
@@ -245,7 +245,7 @@ function bucketOf(seat: Seat | null, agent: AgentRow | undefined): string {
 export function People() {
   const agents = useAgents();
   const org = useOrg();
-  // THE WORKLOAD IS CREWLET WORKS' OPEN TASKS, and not offered where the
+  // THE WORKLOAD IS WORKLET'S OPEN TASKS, and not offered where the
   // company runs none: the roster is its seats alone.
   const runs = useServicesRun();
   const [view, setView] = useTab<(typeof VIEWS)[number]>("view", runs.tracker ? VIEWS : SEATS_ONLY);

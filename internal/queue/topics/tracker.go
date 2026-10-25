@@ -1,6 +1,6 @@
 package topics
 
-// The native tracker's own log, and why its grammar lives here.
+// Worklet's own log, and why its grammar lives here.
 //
 // The tracker's mutations are a state log: one ordered stream per domain,
 // every record published to the subject of the object it mutates, and the
@@ -43,7 +43,7 @@ const (
 // makes this package worth having derives its markers from these constants:
 // a dotless one is matched by shape, so exporting "task" from here would fail
 // the build on every string literal in the engine that happens to be the word
-// task. The kinds are therefore a typed enum in internal/tracker, which is the
+// task. The kinds are therefore a typed enum in internal/worklet, which is the
 // package that switches on them; what lives here is the GRAMMAR they are
 // composed into, which is the half two processes have to agree about.
 

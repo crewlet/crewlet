@@ -49,9 +49,9 @@
  * backpressure or a reconnect is never re-sent and a node that cannot decide
  * the watch sends none until it can.
  *
- * # Only with Tracker
+ * # Only with Worklet
  *
- * The inbox is the tracker's, so a reader without Tracker is asked nothing
+ * The inbox is Worklet's, so a reader without Worklet is asked nothing
  * and has no count: the sidebar draws the Inbox row locked instead of a
  * figure the engine would refuse.
  */
@@ -78,7 +78,7 @@ export interface InboxCounts {
  * viewer's own is: a push for any other never reaches the tab.
  */
 function useInboxRead(owner: string, enabled: boolean, watched: boolean): InboxCounts {
-  // THE NOTICES ARE CREWLET WORKS': where the company runs another tracker or
+  // THE NOTICES ARE WORKLET'S: where the company runs another tracker or
   // none the engine refuses the read, and it was asked on a timer behind every
   // screen of every tab all the same.
   const ask = useServicesAsk();
@@ -107,7 +107,7 @@ const Reading = createContext<InboxCounts | null>(null);
  */
 export function InboxCountsProvider({ children }: { children: ReactNode }) {
   const viewer = useViewer();
-  const counts = useInboxRead(viewer.owner, viewer.tracker, true);
+  const counts = useInboxRead(viewer.owner, viewer.worklet, true);
   return createElement(Reading.Provider, { value: counts }, children);
 }
 
@@ -136,7 +136,7 @@ export function useInboxCounts(): InboxCounts {
  * figure on your own profile and the badge in the sidebar are one answer and
  * cannot name two numbers. Anybody else's (a lead or an admin reading a
  * colleague's day) is the same question asked of their inbox, which the
- * engine answers only to them, with Tracker; `enabled` is the caller's word
+ * engine answers only to them, with Worklet; `enabled` is the caller's word
  * that this reader may ask. It used to be the length of the person record's `unread` list, which
  * is not a count at all: it holds the EXCEPTIONS below the read mark, notices
  * marked unread again, so a person with fifty waiting read "Unread 0".

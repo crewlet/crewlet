@@ -242,7 +242,7 @@ func (s *served) settled(t *testing.T, n int64) {
 
 func person(handle string) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: handle, Kind: iam.KindPerson,
-		Seat: handle, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: handle, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 }
 
 // sessionOf is what a person's session socket was opened with.
@@ -344,7 +344,7 @@ func TestASocketIsOpenedWithWhatItsHandshakeResolved(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token-long-enough",
-		Grants: []iam.Grant{iam.GrantTracker}}}
+		Grants: []iam.Grant{iam.GrantWorklet}}}
 	b.API.Auth.Admin = iam.AdminServe
 	r := httptest.NewRequest(http.MethodGet, auth.SocketPath, nil)
 	r.Header.Set("Authorization", "Bearer a-tier-a-token-long-enough")
@@ -825,7 +825,7 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 		after func(p iam.Principal) iam.Principal
 	}{
 		{"the same actor (the control)", func(p iam.Principal) iam.Principal {
-			p.Grants = []iam.Grant{iam.GrantTracker, iam.GrantTracker}
+			p.Grants = []iam.Grant{iam.GrantWorklet, iam.GrantWorklet}
 			return p
 		}},
 		{"unbound from the seat", func(p iam.Principal) iam.Principal {
@@ -841,7 +841,7 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 			return p
 		}},
 		{"given a permission", func(p iam.Principal) iam.Principal {
-			p.Grants = []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+			p.Grants = []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
 			return p
 		}},
 		{"its last permission taken", func(p iam.Principal) iam.Principal {

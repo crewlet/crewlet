@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHAT A MAINTENANCE-MODE NODE DOES, AND WHAT IT REFUSES TO DO.
@@ -299,7 +299,7 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 	return e.mode.Publishes() && e.StateLogHydrated(ctx)
 }
 
-// writeSide is this node's own tracker writer and knowledge-base store — nil
+// writeSide is this node's own Worklet writer and Doclet store: nil
 // where the runtime runs neither, and nil in a mode that does not publish.
 //
 // ONE GATE FOR EVERY SURFACE THAT WRITES THE COMPANY'S RECORDS through this
@@ -310,7 +310,7 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 // surface is a list somebody maintains, and the surface it forgets is a publish
 // during the window the mode exists to rule out, into a log whose usage a
 // resize is being decided against.
-func (e *Engine) writeSide() (*tracker.Writer, *pages.Store) {
+func (e *Engine) writeSide() (*worklet.Writer, *doclet.Store) {
 	n := e.native.Load()
 	if n == nil || !e.mode.Publishes() {
 		return nil, nil

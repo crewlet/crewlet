@@ -25,40 +25,40 @@ import (
 // operation carries any more fails too, so the list is never a record of a
 // type that has since changed.
 var carriedByServer = map[string]string{
-	"tracker.Query.Units":              "the serving node attaches its own chart (opTasks)",
-	"tracker.ViewQuery.Units":          "the serving node attaches its own chart (opViews)",
-	"tracker.ProjectQuery.Units":       "the serving node attaches its own chart (opProjects)",
-	"tracker.ProjectDetailQuery.Units": "the serving node attaches its own chart (opProject)",
-	"tracker.DetailWants.Units":        "the serving node attaches its own chart (opTask)",
-	"tracker.WorkloadQuery.Units":      "the serving node attaches its own chart (opWorkload)",
-	"tracker.EveryViewQuery.Units":     "the serving node attaches its own chart (opEveryView)",
+	"worklet.Query.Units":              "the serving node attaches its own chart (opTasks)",
+	"worklet.ViewQuery.Units":          "the serving node attaches its own chart (opViews)",
+	"worklet.ProjectQuery.Units":       "the serving node attaches its own chart (opProjects)",
+	"worklet.ProjectDetailQuery.Units": "the serving node attaches its own chart (opProject)",
+	"worklet.DetailWants.Units":        "the serving node attaches its own chart (opTask)",
+	"worklet.WorkloadQuery.Units":      "the serving node attaches its own chart (opWorkload)",
+	"worklet.EveryViewQuery.Units":     "the serving node attaches its own chart (opEveryView)",
 
-	"tracker.TaskPatch.Watch":     "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Relate":    "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Depend":    "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Checklist": "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Watch":     "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Relate":    "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Depend":    "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Checklist": "carried beside the patch, in updateTaskArgs",
 
-	"tracker.DayClock.Zone":       "carried beside the wants by name, in taskArgs",
-	"tracker.ViewQuery.Zone":      "carried beside the query by name, in viewsArgs",
-	"tracker.EveryViewQuery.Zone": "carried beside the query by name, in everyViewArgs",
+	"worklet.DayClock.Zone":       "carried beside the wants by name, in taskArgs",
+	"worklet.ViewQuery.Zone":      "carried beside the query by name, in viewsArgs",
+	"worklet.EveryViewQuery.Zone": "carried beside the query by name, in everyViewArgs",
 
-	"tracker.Total.instant": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.instant": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.rank": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.rank": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.ranked": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.ranked": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.value": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.value": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.rankArgs": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.rankArgs": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
 
-	"tracker.PlaceResult.Unplaced": "carried beside the result as a wire error, in placedTask",
+	"worklet.PlaceResult.Unplaced": "carried beside the result as a wire error, in placedTask",
 
-	"tracker.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
+	"worklet.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
 		"answers what it committed to in reply.Written, and the router adds it there",
 
-	"pages.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
+	"doclet.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
 		"an answer carries its result as SavedBy and SavedAt",
 }
 

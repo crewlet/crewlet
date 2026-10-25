@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY ALARM WHOSE INPUT A NODE ASSEMBLES FOR ITSELF FIRES THROUGH THE WIRING
@@ -257,17 +257,17 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		says    string
 	}{
 		{
-			domain: tracker.Domain{}.Name(), version: tracker.RecordVersion,
+			domain: worklet.Domain{}.Name(), version: worklet.RecordVersion,
 			record: func(generation uint32) (statelog.Subject, []byte, error) {
-				subject := tracker.TaskSubject("t-from-a-newer-build")
-				payload, err := tracker.MutationRecord{
-					RecordEnvelope: tracker.RecordEnvelope{
-						V: tracker.RecordVersion + 1, OpID: "op-from-a-newer-build",
-						Subject: subject, Op: tracker.OpCreate, Gen: generation,
+				subject := worklet.TaskSubject("t-from-a-newer-build")
+				payload, err := worklet.MutationRecord{
+					RecordEnvelope: worklet.RecordEnvelope{
+						V: worklet.RecordVersion + 1, OpID: "op-from-a-newer-build",
+						Subject: subject, Op: worklet.OpCreate, Gen: generation,
 						CreatedAt: time.Now().UTC(), Writer: "node-b",
-						Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
+						Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
 					},
-					Mutation: []byte(`{}`), Actor: "ana", ActorKind: tracker.AuthorHuman,
+					Mutation: []byte(`{}`), Actor: "ana", ActorKind: worklet.AuthorHuman,
 				}.Encode()
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
@@ -358,7 +358,7 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		version int
 		says    string
 	}{
-		{tracker.Domain{}.Name(), tracker.RecordVersion,
+		{worklet.Domain{}.Name(), worklet.RecordVersion,
 			"at which this node stops serving its copy of the estate"},
 		{iamdomain.Domain{}.Name(), iamdomain.RecordVersion,
 			"this log does not judge this node's copy of the estate, " +
@@ -407,7 +407,7 @@ func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
 	if r.floors == nil {
 		t.Fatal("the node's retention loop keeps no floor watch")
 	}
-	name := tracker.Domain{}.Name()
+	name := worklet.Domain{}.Name()
 	generation := r.state.Domain(name).runner.Committed().Generation
 	ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,
 		At: time.Now().UTC(), By: "node-b"}

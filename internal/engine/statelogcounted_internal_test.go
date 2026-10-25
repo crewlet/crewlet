@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE SNAPSHOT LOOP COUNTS WHAT THE TRIM COUNTS.
@@ -54,14 +54,14 @@ func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 
 	if err := s.fleet.PutPositions(ctx, coord.NodePositions{
 		NodeID: "node-gone", At: now.UTC(),
-		Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): {Seq: 1}},
+		Domains: map[string]coord.DomainPosition{worklet.Domain{}.Name(): {Seq: 1}},
 	}); err != nil {
 		t.Fatalf("publish node-gone's row: %v", err)
 	}
 	if got := count(now); got != before+2 {
 		t.Fatalf("with node-gone's row the fleet counts %d, want %d", got, before+2)
 	}
-	mustApply(t, "evict node-gone", func() (tracker.WriteResult, error) {
+	mustApply(t, "evict node-gone", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.EvictNode(ctx, statelog.NewOpID(now, "evict-node-gone"), "node-gone")
 	})
 	if got := count(now); got != before+2 {
@@ -120,7 +120,7 @@ func newCountedFleet(t *testing.T, nodes ...string) coord.Fleet {
 	for _, id := range nodes {
 		if err := fleet.PutPositions(t.Context(), coord.NodePositions{
 			NodeID: id, At: time.Now().UTC(),
-			Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): {Seq: 1}},
+			Domains: map[string]coord.DomainPosition{worklet.Domain{}.Name(): {Seq: 1}},
 		}); err != nil {
 			t.Fatalf("publish %s's row: %v", id, err)
 		}

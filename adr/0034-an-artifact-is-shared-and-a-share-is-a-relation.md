@@ -72,12 +72,12 @@ switch nothing compared.
 
 ## Why the obvious alternatives are wrong
 
-**Riding the `knowledge` app** reads as economy and is two decisions wearing
-one name. The knowledge app reads every page in the company; an artifact is a
+**Riding the `doclet` app** reads as economy and is two decisions wearing one
+name. The Doclet app reads every page in the company; an artifact is a
 per-object list of who may see it. One permission meaning both would let
-"uses the knowledge base" silently mean "publishes script that runs in every
-colleague's browser", and an engineer who uses only the tracker could not
-build a review table for their own work. The tool-skill pages taught the same
+"uses Doclet" silently mean "publishes script that runs in every colleague's
+browser", and an engineer who uses only Worklet could not build a review
+table for their own work. The tool-skill pages taught the same
 lesson: a write's reach decides its gate.
 
 **No app at all, relations only**, is the shape ADR-0033 already rejected for

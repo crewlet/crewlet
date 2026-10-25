@@ -47,14 +47,14 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 	t.Helper()
 	n := &fakeCapacityNode{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /work/retention/capacity", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /worklet/retention/capacity", func(w http.ResponseWriter, r *http.Request) {
 		n.stream = r.URL.Query().Get("stream")
 		n.bytes = r.URL.Query().Get("bytes")
 		n.confirm = r.URL.Query().Get("confirm")
 		n.assert = r.URL.Query().Get("assert_excluded") == "true"
 		reply(w, map[string]any{"mode": "maintenance", "operation": n.op()})
 	})
-	mux.HandleFunc("GET /work/retention/maintenance", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /worklet/retention/maintenance", func(w http.ResponseWriter, r *http.Request) {
 		n.stream = r.URL.Query().Get("stream")
 		body := n.status
 		if body == nil {
@@ -75,7 +75,7 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		}
 		reply(w, body)
 	})
-	mux.HandleFunc("GET /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /worklet/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
 		body := map[string]any{
 			"stream": r.URL.Query().Get("stream"), "generation": 0,
 			"created_at": "2031-04-02T03:00:00Z",
@@ -95,7 +95,7 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		}
 		reply(w, body)
 	})
-	mux.HandleFunc("POST /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /worklet/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(n.reanchorTakes)
 		n.reanchorConfirm = r.URL.Query().Get("confirm")
 		n.reanchorDiscard = r.URL.Query().Get("discard") == "true"

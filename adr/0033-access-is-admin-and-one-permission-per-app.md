@@ -10,8 +10,8 @@
 
 There are three permissions. **`admin`** runs the company and the engine: its
 configuration, its credentials, its people, its deployment and its
-company-wide trail. **`tracker`** and **`knowledge`** each use one APP — the
-native work tracker and the native knowledge base, reading and writing.
+company-wide trail. **`worklet`** and **`doclet`** each use one APP, Worklet
+and Doclet, reading and writing.
 `iam.Apps` is the one place an app is declared, and admin includes every app
 through `iam.Expand`, which every comparison of permissions goes through.
 
@@ -44,7 +44,7 @@ them was a person being given too much — each was the engine refusing what
 everybody involved intended, or granting nothing while looking like it did.
 
 A finer vocabulary also cannot say what a company actually decides about a
-colleague. "Uses the tracker", "uses the knowledge base" and "runs the place"
+colleague. "Uses Worklet", "uses Doclet" and "runs the place"
 are the three questions a founder answers when somebody joins; a reader of the
 trail, a manager of people and an operator of the deployment were three grants
 nobody could tell apart, and they are one.

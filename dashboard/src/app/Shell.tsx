@@ -313,8 +313,8 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
 /**
  * Say that this screen's own menu carries the page's star, so the frame draws
  * none: one control per action on screen, and a screen whose design keeps the
- * star with its other page actions (Knowledge's page) would otherwise show it
- * twice. Knowledge's landing says the same, because its design keeps the star
+ * star with its other page actions (Doclet's page) would otherwise show it
+ * twice. Doclet's landing says the same, because its design keeps the star
  * in each page's own menu and none in its bar, where the frame's would offer
  * the workspace the sidebar already lists. Cleared when the screen goes, for
  * the reason [usePageLabels] gives.
@@ -374,8 +374,9 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <SessionReading>
       <FrameReadings>
-        {/* WORK'S SCOPE SWITCHER: the panel the trail's last crumb opens on
-            Work's pages, and the same panel centred for G then P anywhere. */}
+        {/* WORKLET'S SCOPE SWITCHER: the panel the trail's last crumb opens
+            on Worklet's pages, and the same panel centred for G then P
+            anywhere. */}
         <ProjectSwitcherProvider>
           <Frame>{children}</Frame>
         </ProjectSwitcherProvider>
@@ -458,13 +459,13 @@ function Frame({ children }: { children: ReactNode }) {
   // navigated away, and the sidebar's badge (`lib/useInboxCounts.ts`) is what
   // has to stay current. UNDER `owner` — the seat when bound, the login when
   // not — because that is the record the engine pushes about. The socket
-  // re-sends it on every reconnect. ONLY WITH TRACKER: `inbox_changed` is the
-  // tracker's push, and a watch from anybody else is a refusal on every
+  // re-sends it on every reconnect. ONLY WITH WORKLET: `inbox_changed` is
+  // Worklet's push, and a watch from anybody else is a refusal on every
   // reconnect.
-  // AND ONLY OF A COMPANY RUNNING CREWLET WORKS, whose push it is.
+  // AND ONLY OF A COMPANY RUNNING WORKLET, whose push it is.
   const runs = useServicesRun();
   const ask = useServicesAsk();
-  const watchesInbox = viewer.owner !== "" && viewer.tracker && ask.tracker;
+  const watchesInbox = viewer.owner !== "" && viewer.worklet && ask.tracker;
   useEffect(() => {
     if (!watchesInbox) return;
     socket.watch(viewer.owner);
@@ -531,7 +532,7 @@ function Frame({ children }: { children: ReactNode }) {
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 
   // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
-  // them apart: on Work's scope pages, the lens and then the scope.
+  // them apart: on Worklet's scope pages, the lens and then the scope.
   const where = titleOf(crumbs);
   const tab = titleOf(crumbs, scopeAt(route.path, route.query));
   useEffect(() => {
@@ -677,9 +678,9 @@ function Frame({ children }: { children: ReactNode }) {
             />
           </LayerBoundary>
         )}
-        {/* THE SHEET'S CODE IS THE WORK WORKSPACE'S CHUNK — it is a Work form,
-          and the frame's own entry stays the frame — so it is mounted only
-          while open, through the same loader every screen uses. */}
+        {/* THE SHEET'S CODE IS THE WORKLET WORKSPACE'S CHUNK (it is a Worklet
+          form, and the frame's own entry stays the frame), so it is mounted
+          only while open, through the same loader every screen uses. */}
         {newTask !== null && (
           <LayerBoundary title="New task" onClose={() => setNewTask(null)}>
             <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
@@ -691,8 +692,8 @@ function Frame({ children }: { children: ReactNode }) {
   );
 }
 
-/** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
-const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);
+/** The New task sheet, out of the Worklet chunk. See [LayerBoundary]. */
+const NewTaskSheet = lazyScreen("worklet", (module) => module.NewTaskSheet);
 
 /** The command palette, out of a chunk of its own (`lazyScreen.ts`). See [LayerBoundary]. */
 const CommandPalette = lazyScreen("palette", (module) => module.CommandPalette);

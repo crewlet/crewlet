@@ -182,7 +182,7 @@ func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
 
 	edit(func(held []iam.Grant) []iam.Grant {
 		return slices.DeleteFunc(slices.Clone(held),
-			func(g iam.Grant) bool { return g == iam.GrantKnowledge })
+			func(g iam.Grant) bool { return g == iam.GrantDoclet })
 	})
 	if !opens() {
 		t.Fatal("an edit that only took a permission away revoked the link — " +

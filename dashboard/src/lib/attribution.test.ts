@@ -50,7 +50,7 @@ describe("the latest change to each property", () => {
     // "set by" under a value that is not there — it would claim a record of
     // somebody setting nothing — and a change that took the value AWAY is a
     // record the log genuinely holds, which reads "cleared by" instead.
-    // `tracker.Delta` carries `From` and `To` with no `omitempty`, so an
+    // `worklet.Delta` carries `From` and `To` with no `omitempty`, so an
     // emptied field is `to: ""` rather than an absent key.
     const who = attribution([
       change({
@@ -161,7 +161,7 @@ test("every field name is one the engine writes, spelled its way", () => {
   // The rail labels it "Estimate" and the task row calls the number
   // `estimate_minutes`; the history bag calls it `estimate`. "Watching" is
   // `watchers` and "Routes to" is `routing_unit`. Held against
-  // `tracker.TaskDeltas` by `internal/tracker/attribution_test.go` — this half
+  // `worklet.TaskDeltas` by `internal/worklet/attribution_test.go`; this half
   // only pins the shape so a rename here is visible in the diff.
   expect([...CHANGE_FIELDS]).toEqual([
     "title",
@@ -185,7 +185,7 @@ test("every field name is one the engine writes, spelled its way", () => {
 test("the people and routing rows can be attributed", () => {
   // THE ROWS THE RAIL DRAWS WITHOUT A LINE ARE THE POINT. Reporter,
   // Collaborators, Watching and "Routes to" rendered no provenance at all
-  // until `tracker.TaskDeltas` started comparing those fields — a watcher
+  // until `worklet.TaskDeltas` started comparing those fields: a watcher
   // arrived and the rail could not say who added them, which is the one thing
   // this product can answer that a tracker cannot.
   const who = attribution([

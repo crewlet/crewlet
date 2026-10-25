@@ -19,7 +19,7 @@ type LexicalQuery struct {
 	Text string
 
 	// Containers narrows to these containers. Empty is every one, which on
-	// the native backend means the whole company — the engine IS the
+	// Worklet and Doclet means the whole company: the engine IS the
 	// boundary here, and there is no second account to launder a read
 	// through.
 	Containers []string

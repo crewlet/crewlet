@@ -274,9 +274,9 @@ test("a source whose page stops inside the window says so", async () => {
   mount();
   await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
   // AND IT NAMES WHICH SOURCE. "Some of this may be missing" is a caption
-  // nobody can act on; "Knowledge shows only its newest rows" says where to
+  // nobody can act on; "Doclet shows only its newest rows" says where to
   // look.
-  expect(screen.getByText(/newest rows/).textContent).toBe("Knowledge shows only its newest rows.");
+  expect(screen.getByText(/newest rows/).textContent).toBe("Doclet shows only its newest rows.");
 });
 
 // THE EXPORT IS WHAT IS ON SCREEN.
@@ -744,7 +744,7 @@ test("two sources whose pages filled are named together", async () => {
   mount();
   await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
   expect(screen.getByText(/newest rows/).textContent).toBe(
-    "Knowledge and Configuration show only their newest rows.",
+    "Doclet and Configuration show only their newest rows.",
   );
 });
 

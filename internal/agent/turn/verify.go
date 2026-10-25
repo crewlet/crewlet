@@ -187,7 +187,7 @@ const (
 // The rule this replaces was an ORIGIN test — server-backed and not a known
 // read — and it was right for as long as every shared surface belonged to
 // somebody else. It stopped being right when the tracker moved in-process:
-// commenting on a native work item reaches the person who asked, and a gate
+// commenting on a Worklet work item reaches the person who asked, and a gate
 // keyed on origin judged that turn to have answered nobody and looped it to
 // failure. What has NOT changed is that a diary write still does not deliver:
 // the engine declares which of its own tools reach anybody, one at a time.
@@ -315,7 +315,7 @@ func Record(earlier []ledger.Iteration, current []ledger.Call) []ledger.Call {
 // IT NAMES THE TOOLS, because the sentence it replaced named a MECHANISM —
 // "`list_mcp_server_tools` and `activate_tool` will find it" — and the
 // mechanism is right for only one kind of surface. A vendor's tools sit behind
-// discovery; the engine's own tracker and knowledge base are answered by
+// discovery; Worklet and Doclet are answered by
 // first-party tools the executor already holds, which no discovery call
 // lists. A seat woken by a work-item comment was sent to discovery, found the
 // one MCP server it held, and posted its answer in the team's chat channel: a

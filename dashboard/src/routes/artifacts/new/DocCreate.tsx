@@ -82,7 +82,7 @@ const DOC_BRIEFS = [
     key: "onboarding",
     label: "Onboarding guide",
     brief:
-      "A one-page guide for new engineers on how we review incidents: the timeline, the roles and the follow-ups. Draw on the last three reviews in Knowledge.",
+      "A one-page guide for new engineers on how we review incidents: the timeline, the roles and the follow-ups. Draw on the last three reviews in Doclet.",
   },
   {
     key: "proposal",
@@ -199,7 +199,7 @@ export function DocCreate() {
       seat: who.seat,
       project: who.project,
     });
-    if (filed?.item) nav.to(["work", filed.item]);
+    if (filed?.item) nav.to(["worklet", filed.item]);
     // STILL HERE: the engine refused, and its sentence is in the panel.
     released.current = false;
   };

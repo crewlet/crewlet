@@ -22,13 +22,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A FLEET, end to end: n engines, each embedding its own broker, clustered.
@@ -794,7 +794,7 @@ func claimARecordOneNodeWritesReachesEveryNodesRows(t *testing.T, c *cluster) {
 		var last error
 		for time.Now().Before(deadline) {
 			detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-				tracker.DetailWants{}, statelog.Freshness{Level: statelog.ReadSession})
+				worklet.DetailWants{}, statelog.Freshness{Level: statelog.ReadSession})
 			if err == nil && detail.Task.Title == task.Title {
 				last = nil
 				break
@@ -841,7 +841,7 @@ func claimEveryNodeMintsIntoOneKeySpace(t *testing.T, c *cluster) {
 			// filing twice.
 			opID := fmt.Sprintf("cluster-mint-%d", i)
 			task := newTask("ENG", fmt.Sprintf("filed by member %d", i))
-			var got tracker.WriteResult
+			var got worklet.WriteResult
 			var err error
 			deadline := time.Now().Add(clusterSettle)
 			for time.Now().Before(deadline) {
@@ -1147,7 +1147,7 @@ func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 				"the table does not partition the buckets the pages hash to",
 				written, len(covered), len(table), covered)
 		}
-		page, err := writer.Create(t.Context(), pageOperator(), pages.NewPage{
+		page, err := writer.Create(t.Context(), pageOperator(), doclet.NewPage{
 			Container: "ENG",
 			Title:     fmt.Sprintf("Runbook %02d", written),
 			Body:      "when a deploy hangs on rollback, drain the node before retrying",
@@ -1168,9 +1168,9 @@ func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 		if err := n.engine.WaitCommitted(t.Context(), last); err != nil {
 			t.Fatalf("member %d never applied the corpus: %v", i, err)
 		}
-		searcher := n.engine.NativeSearcher()
+		searcher := n.engine.DocletSearcher()
 		if searcher == nil {
-			t.Fatalf("member %d runs no native searcher", i)
+			t.Fatalf("member %d runs no Doclet searcher", i)
 		}
 		waitFor(t, fmt.Sprintf("member %d's first index build", i), func() bool {
 			return !searcher.Building(t.Context())
@@ -1300,7 +1300,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 			written.Outcome)
 	}
 	page, err := c.nodes[0].engine.PagesStore().Create(t.Context(), pageOperator(),
-		pages.NewPage{
+		doclet.NewPage{
 			Container: "ENG", Title: "Fleet rollback runbook",
 			Body: "when a deploy hangs on rollback, drain the node before retrying",
 		})
@@ -1322,7 +1322,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	// would pass on a build with no barrier at all.
 	for i, n := range c.nodes {
 		detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-			tracker.DetailWants{}, statelog.Freshness{Level: statelog.ReadLinearizable})
+			worklet.DetailWants{}, statelog.Freshness{Level: statelog.ReadLinearizable})
 		if err != nil {
 			t.Fatalf("member %d refused a linearizable read of %s: %v — a read "+
 				"level that cannot be served on a healthy fleet is a promise "+
@@ -1339,8 +1339,8 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	// member answering `session` to a linearizable question has answered a
 	// different question and said nothing about it.
 	for i, n := range c.nodes {
-		answer, err := n.engine.Tracker().Tasks(t.Context(), tracker.Query{
-			Scope: tracker.Scope{Workspace: true},
+		answer, err := n.engine.Tracker().Tasks(t.Context(), worklet.Query{
+			Scope: worklet.Scope{Workspace: true},
 			Level: statelog.ReadLinearizable, Limit: 200,
 		}, time.Now())
 		if err != nil {

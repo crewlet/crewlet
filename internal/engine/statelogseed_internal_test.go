@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE WITH NO CHECKPOINT TAKES THE FLEET'S GENERATION, AND ADOPTS.
@@ -62,8 +62,8 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	// waits for an in-flight tick, so after it returns nothing else writes.
 	e.stopRetention()
 
-	name := tracker.Domain{}.Name()
-	stream := tracker.Domain{}.Stream().Name
+	name := worklet.Domain{}.Name()
+	stream := worklet.Domain{}.Stream().Name
 
 	// THE FLEET HAS RE-ANCHORED: an operator moved it to generation 3, and
 	// the trim has published a floor there.

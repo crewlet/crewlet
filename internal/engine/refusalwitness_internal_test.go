@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A RECORD ON A STATE LOG SIGNED UNDER A KEY THIS NODE LACKS REACHES THE AUDIT
@@ -58,7 +58,7 @@ func TestARecordUnderAnUnknownKeyReachesTheAuditFeed(t *testing.T) {
 
 	// A FRAME UNDER A KEY NOBODY IN THIS FLEET HOLDS, appended the way
 	// anything that can reach the broker could.
-	domain := tracker.Domain{}
+	domain := worklet.Domain{}
 	stranger, err := statelog.NewSigner(domain.Name(),
 		statelog.OneKey("stranger", "material-no-node-holds"))
 	if err != nil {

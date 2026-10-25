@@ -61,12 +61,12 @@ token_budget:
 
 # Skill variables — generic name->value facts substituted into tool-skill
 # text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is
-# what running the engine's own tracker and wiki buys here: the one address
+# what running Worklet and Doclet buys here: the one address
 # its skills need is where people reach this deployment's dashboard, and the
 # engine injects that itself as ${crewlet_base_url} from ``api.external_url``
 # in the OPERATOR's own Tier A file.  The bundled platform-mentions skill
-# builds every shareable link on it — ${crewlet_base_url}/#/work/ENG-42 and
-# ${crewlet_base_url}/#/knowledge/pages/{page-id} — so there is nothing for
+# builds every shareable link on it (${crewlet_base_url}/#/worklet/ENG-42 and
+# ${crewlet_base_url}/#/doclet/pages/{page-id}), so there is nothing for
 # an operator to keep in step.
 #
 # The name is RESERVED: a company that declares ``crewlet_base_url`` itself
@@ -435,19 +435,19 @@ integrations:
   # check_interval_seconds: 600
 
   # NO TRACKER OR WIKI INTEGRATION, and that is the point of this example:
-  # Nimbus runs the engine's OWN work tracker and knowledge base, so there
-  # is no third-party account to provision, no per-seat vendor token to
-  # paste, and no webhook to register for either of them.  A company that
-  # wants Jira or Confluence instead adds ``integrations.jira`` /
-  # ``integrations.confluence`` here and names that vendor in the
-  # ``tracker`` / ``knowledge`` blocks below — the two axes are
-  # independent, so one may be native while the other is not.  Naming a
-  # vendor AND ``native`` is refused: work would be filed in two places
-  # with nothing keeping them in step.
+  # Nimbus runs Worklet and Doclet, so there is no third-party account to
+  # provision, no per-seat vendor token to paste, and no webhook to
+  # register for either of them.  A company that wants Jira or Confluence
+  # instead adds ``integrations.jira`` / ``integrations.confluence`` here
+  # and names that vendor in the ``tracker`` / ``knowledge`` blocks below.
+  # The two axes are independent, so one may be Worklet or Doclet while the
+  # other is a vendor.  Naming a vendor AND ``worklet`` or ``doclet`` is
+  # refused: work would be filed in two places with nothing keeping them
+  # in step.
   # See docs/integrations/jira.md and docs/integrations/confluence.md.
 
-  # Chat.  Nimbus runs a self-hosted code host (GitLab) and the engine's
-  # own tracker and wiki, and its chat is Mattermost, running beside GitLab
+  # Chat.  Nimbus runs a self-hosted code host (GitLab), Worklet and
+  # Doclet, and its chat is Mattermost, running beside GitLab
   # in this repo's docker-compose.  Slack is equally supported and the
   # config shape is nearly identical; see docs/integrations/slack.md to
   # run this org on Slack instead.
@@ -537,33 +537,33 @@ integrations:
       token_scopes: [api]
 
 # Which tracker and which knowledge base this company runs.  Nimbus runs
-# the engine's OWN on both axes — its work items and its pages live in the
-# fleet's own store, replicated to every node, with no third-party account
-# behind either.  ONE OF EACH: naming ``native`` beside an
+# Worklet and Doclet: its work items and its pages live in the fleet's own
+# store, replicated to every node, with no third-party account behind
+# either.  ONE OF EACH: naming ``worklet`` or ``doclet`` beside an
 # ``integrations.jira`` or ``integrations.confluence`` block is refused,
 # because work would be filed in two places with nothing keeping them in
-# step.  The two axes are independent — a company may run a native tracker
-# against a Confluence wiki, or the reverse.
+# step.  The two axes are independent: a company may run Worklet against a
+# Confluence wiki, or Jira against Doclet.
 #
 # An unset ``backend`` DERIVES the same answer from the absence of the
 # vendor block, so both fields could be dropped; they are written out here
 # because this is the reference example and a reader should see the choice
 # rather than infer it.
 tracker:
-  backend: native
+  backend: worklet
 
-  # The engine's own tracker's policy is one setting, and it is left at
-  # its default here: ``native: {inbox_retention_days: 365}`` — a year.
-  # It is the one horizon that deletes anything, and what it deletes is a
-  # DERIVED inbox row rather than the history it points at, which answers
-  # for ever.  The clock the tracker's dates mean is the company's own
-  # ``timezone`` at the top of this file.
+  # Worklet's policy is one setting, and it is left at its default here:
+  # ``worklet: {inbox_retention_days: 365}``, a year.  It is the one
+  # horizon that deletes anything, and what it deletes is a DERIVED inbox
+  # row rather than the history it points at, which answers for ever.  The
+  # clock Worklet's dates mean is the company's own ``timezone`` at the top
+  # of this file.
 
 knowledge:
-  backend: native
+  backend: doclet
 
-  # Read scope deliberately omitted (``scope`` unset), and on the native
-  # backend that is the ordinary case rather than a decision: the pages
+  # Read scope deliberately omitted (``scope`` unset), and on Doclet that
+  # is the ordinary case rather than a decision: the pages
   # are the company's own, every seat reads them through the engine, and
   # there is no third-party permission model underneath to mirror.  Set
   # ``scope: [...]`` to narrow the turn-start search to a curated set of
@@ -582,10 +582,9 @@ knowledge:
 # backend the PM and DevRel call (their "use web search" guideline is
 # unenforceable without it; swap for Brave/Exa if preferred).
 #
-# THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: the
-# engine's own tracker and knowledge base are BUILTIN tools, granted to
-# every seat without a server to run, a process to supervise or a token to
-# mint.  A company on Jira and Confluence adds the community
+# THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: Worklet
+# and Doclet are BUILTIN tools, granted to every seat without a server to
+# run, a process to supervise or a token to mint.  A company on Jira and Confluence adds the community
 # ``mcp-atlassian`` server here and a per-seat credential in each role's
 # ``mcp_env``; see docs/integrations/jira.md.
 mcp_servers:
@@ -719,9 +718,10 @@ units:
         # no better recipient (unassigned items, page changes nobody was
         # mentioned in) routes to the unit lead (Agent CEO), and the
         # container is the team's write / skill-promotion home.  The keys
-        # are VENDOR-NEUTRAL: they name a native project and space, or a
-        # Jira project and Confluence space, depending on which backend the
-        # company runs — the org chart does not change when it switches.
+        # are VENDOR-NEUTRAL: they name a Worklet project and a Doclet space,
+        # or a Jira project and a Confluence space, depending on which
+        # backends the company runs; the org chart does not change when it
+        # switches.
         # NEITHER is a tool credential (those are per-agent under role
         # ``mcp_env`` below) and neither scopes knowledge reads.
         project: "LEAD"

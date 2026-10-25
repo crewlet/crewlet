@@ -12,14 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The streams of the tracker's and the knowledge base's logs, as a floor names
@@ -41,11 +41,11 @@ type fakeNode struct {
 	floors    []statelog.Position
 	actors    []Actor
 	opIDs     []string
-	patches   []tracker.TaskPatch
-	turns     []tracker.TurnRecord
+	patches   []worklet.TaskPatch
+	turns     []worklet.TurnRecord
 	keys      []string
 	queries   []knowledge.Query
-	units     tracker.Units
+	units     worklet.Units
 	notReady  bool
 	behind    bool
 	abandoned bool
@@ -110,28 +110,28 @@ func (f *fakeNode) set(change func(*fakeNode)) {
 	change(f)
 }
 
-func (f *fakeNode) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+func (f *fakeNode) Tasks(_ context.Context, q worklet.Query, _ time.Time) (worklet.Answer, error) {
 	f.note("tasks")
 	if q.Units != f.units {
-		return tracker.Answer{}, errors.New("the serving node's chart was not attached")
+		return worklet.Answer{}, errors.New("the serving node's chart was not attached")
 	}
 	if f.failWith != nil {
-		return tracker.Answer{}, f.failWith
+		return worklet.Answer{}, f.failWith
 	}
-	return tracker.Answer{TotalHint: 7}, nil
+	return worklet.Answer{TotalHint: 7}, nil
 }
 
-func (f *fakeNode) CreateTask(_ context.Context, opID string, task tracker.Task,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+func (f *fakeNode) CreateTask(_ context.Context, opID string, task worklet.Task,
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	f.note("create")
 	f.mu.Lock()
 	f.opIDs = append(f.opIDs, opID)
 	unvouched, refusal := f.unvouched, f.refusal
 	f.mu.Unlock()
 	if refusal != nil {
-		return tracker.WriteResult{}, refusal
+		return worklet.WriteResult{}, refusal
 	}
-	out := tracker.WriteResult{Key: task.Project + "-1"}
+	out := worklet.WriteResult{Key: task.Project + "-1"}
 	out.Result = statelog.Result{Outcome: statelog.OutcomeApplied, Position: f.written, OpID: opID}
 	if unvouched {
 		out.Result = statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID, Unvouched: true}
@@ -140,26 +140,26 @@ func (f *fakeNode) CreateTask(_ context.Context, opID string, task tracker.Task,
 }
 
 func (f *fakeNode) RecordTurn(_ context.Context, opID string,
-	turn tracker.TurnRecord) (tracker.WriteResult, error) {
+	turn worklet.TurnRecord) (worklet.WriteResult, error) {
 	f.note("record_turn")
 	f.mu.Lock()
 	f.opIDs = append(f.opIDs, opID)
 	f.turns = append(f.turns, turn)
 	f.mu.Unlock()
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
-	patch tracker.TaskPatch, _ tracker.ChangeKind, _ *tracker.Notify) (tracker.WriteResult, error) {
+	patch worklet.TaskPatch, _ worklet.ChangeKind, _ *worklet.Notify) (worklet.WriteResult, error) {
 	f.note("update")
 	f.mu.Lock()
 	f.patches = append(f.patches, patch)
 	f.mu.Unlock()
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
-func (f *fakeNode) Comment(_ context.Context, actor pages.Actor, _ string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (f *fakeNode) Comment(_ context.Context, actor doclet.Actor, _ string,
+	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	f.note("comment")
 	// THE TURN'S KEY FIRST, the order the pages store derives a comment's
 	// id in.
@@ -168,7 +168,7 @@ func (f *fakeNode) Comment(_ context.Context, actor pages.Actor, _ string,
 	} else {
 		f.keyed(actor.OpKey)
 	}
-	return pages.Comment{Body: in.Body}, pages.Written{}, nil
+	return doclet.Comment{Body: in.Body}, doclet.Written{}, nil
 }
 
 func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Result, error) {
@@ -383,10 +383,10 @@ func (s silencer) Serve(ctx context.Context, subject string, h queue.AnswerFunc)
 	})
 }
 
-type namedChart struct{ tracker.Units }
+type namedChart struct{ worklet.Units }
 
 // chartOf is a chart value distinguishable per node, compared by identity.
-func chartOf(string) tracker.Units { return &namedChart{} }
+func chartOf(string) worklet.Units { return &namedChart{} }
 
 // first is the node r asks first, which is the rendezvous winner among the
 // nodes the placement names.
@@ -410,7 +410,7 @@ func (f *fleet) other(n *fakeNode) *fakeNode {
 	return nil
 }
 
-var swe = Actor{Handle: "swe", Kind: tracker.AuthorAgent}
+var swe = Actor{Handle: "swe", Kind: worklet.AuthorAgent}
 
 // A READ IS ANSWERED BY A DATA NODE, with the serving node's own chart
 // attached — the asking node's chart cannot cross a wire, and
@@ -418,7 +418,7 @@ var swe = Actor{Handle: "swe", Kind: tracker.AuthorAgent}
 func TestAReadIsAnsweredWithTheServingNodesChart(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	answer, err := f.client.Work().Tasks(t.Context(), tracker.Query{Units: chartOf("mine")}, time.Now())
+	answer, err := f.client.Work().Tasks(t.Context(), worklet.Query{Units: chartOf("mine")}, time.Now())
 	if err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
@@ -432,10 +432,10 @@ func TestAReadIsAnsweredWithTheServingNodesChart(t *testing.T) {
 func TestAServingNodesErrorKeepsItsIdentity(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	f.nodes["data-a"].failWith = errors.Join(errors.New("while reading"), tracker.ErrNoTask)
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	if !errors.Is(err, tracker.ErrNoTask) {
-		t.Fatalf("err = %v, want tracker.ErrNoTask through the wire", err)
+	f.nodes["data-a"].failWith = errors.Join(errors.New("while reading"), worklet.ErrNoTask)
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
+	if !errors.Is(err, worklet.ErrNoTask) {
+		t.Fatalf("err = %v, want worklet.ErrNoTask through the wire", err)
 	}
 }
 
@@ -447,7 +447,7 @@ func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	firstName, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("a read with a live second node failed: %v", err)
 	}
 	if next, _ := f.first(t, f.client); next == firstName {
@@ -471,7 +471,7 @@ func TestAnUnknownPlacementIsNotAnEmptyFleet(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	f.placement.set(func(p *fakePlacement) { p.err = errors.New("the leases could not be listed") })
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if err == nil || errors.As(err, &unserved) {
 		t.Fatalf("an unknown placement answered %v, want the placement's own error", err)
@@ -491,8 +491,8 @@ func TestANodeThatRanNothingIsPassedOverForEveryClass(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.notReady = true })
-	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1",
-		pages.NewComment{Body: "hi"}); err != nil {
+	if _, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p1",
+		doclet.NewComment{Body: "hi"}); err != nil {
 		t.Fatalf("a page write with a serving second node failed: %v", err)
 	}
 	if first.askedFor("comment") {
@@ -507,7 +507,7 @@ func TestAnUnansweredPageWriteIsUnknownAndNotRepeated(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
-	_, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1", pages.NewComment{Body: "hi"})
+	_, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p1", doclet.NewComment{Body: "hi"})
 	if !errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("err = %v, want ErrOutcomeUnknown", err)
 	}
@@ -525,7 +525,7 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
 	written, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-7",
-		tracker.Task{Project: "ENG"}, nil)
+		worklet.Task{Project: "ENG"}, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -550,11 +550,11 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	node := f.nodes["data-a"]
 	node.written = statelog.Position{Stream: trackerStream, Generation: 1, Seq: 99}
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-1",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	node.set(func(n *fakeNode) { n.floors = nil })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if len(node.floors) != 1 || node.floors[0] != node.written {
@@ -563,7 +563,7 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	// ANOTHER DOMAIN'S LOG: a page write does not depend on the tracker's
 	// rows, so it carries no floor on its log.
 	node.set(func(n *fakeNode) { n.floors = nil })
-	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{}); err != nil {
+	if _, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p", doclet.NewComment{}); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
 	if len(node.floors) != 0 {
@@ -574,7 +574,7 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	// operation is about.
 	f.client.Observe(statelog.Position{Stream: "CREWLET_OTHER_LOG", Generation: 1, Seq: 3})
 	node.set(func(n *fakeNode) { n.floors = nil })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	for _, at := range node.floors {
@@ -596,11 +596,11 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	node.set(func(n *fakeNode) { n.behindOn = pagesStream })
 	f.client.Observe(statelog.Position{Stream: pagesStream, Generation: 1, Seq: 9})
 
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("a tracker read behind a pages floor = %v, want it answered", err)
 	}
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-1",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("a tracker write behind a pages floor = %v, want it written", err)
 	}
 	node.mu.Lock()
@@ -620,7 +620,7 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	// LONGER THAN THE HOLDER'S FLOOR WAIT, so it says it is behind before
 	// the asker stops listening.
 	f.client.writeBudget = statelog.ReadBudget + time.Second
-	_, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
+	_, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p", doclet.NewComment{})
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||
 		node.askedFor("comment") {
@@ -637,7 +637,7 @@ func TestEveryDataNodeBehindTheFloorIsAnUnservedEstate(t *testing.T) {
 	f := newFleet(t, "data-a")
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 	f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.HasPrefix(unserved.Detail, "data-a: ") {
 		t.Fatalf("err = %v, want ErrUnserved naming data-a", err)
@@ -655,7 +655,7 @@ func TestAFloorNoNodeCanReachIsForgotten(t *testing.T) {
 	f := newFleet(t, "data-a")
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 	f.nodes["data-a"].set(func(n *fakeNode) { n.abandoned = true })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if floors := f.client.Session().Floors([]string{trackerStream}); len(floors) != 0 {
@@ -691,9 +691,9 @@ func TestTheSessionForgetsOnlyTheFloorItWasTold(t *testing.T) {
 func TestAPatchsGesturesCross(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	patch := tracker.TaskPatch{
-		Watch:  &tracker.WatchIntent{Handle: "ana", Watch: true},
-		Relate: &tracker.RelationIntent{},
+	patch := worklet.TaskPatch{
+		Watch:  &worklet.WatchIntent{Handle: "ana", Watch: true},
+		Relate: &worklet.RelationIntent{},
 	}
 	if _, err := f.client.WriterAs(swe).
 		UpdateTask(t.Context(), "op", "ENG-1", "ENG", 0, patch, "", nil); err != nil {
@@ -714,7 +714,7 @@ func TestAWriteThatNamesNobodyIsRefused(t *testing.T) {
 	f := newFleet(t, "data-a")
 	local := &fakeNode{name: "data-self", units: chartOf("self")}
 	for _, r := range []*Router{f.client, f.router(t, "data-self", local)} {
-		if _, err := r.WriterAs(Actor{}).CreateTask(t.Context(), "op", tracker.Task{}, nil); err == nil {
+		if _, err := r.WriterAs(Actor{}).CreateTask(t.Context(), "op", worklet.Task{}, nil); err == nil {
 			t.Fatal("a write naming nobody was run")
 		}
 	}
@@ -757,7 +757,7 @@ func TestAKnowledgeSearchKeepsItsExclusionAndTakesTheServersScope(t *testing.T) 
 func TestNoServingNodeSaysSo(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) {
 		t.Fatalf("err = %v, want ErrUnserved", err)
@@ -776,10 +776,10 @@ func TestATurnsSpendCrossesAndRepeatsUnderItsOperation(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
-	turn := tracker.TurnRecord{
+	turn := worklet.TurnRecord{
 		Task: "task-1", Seat: "swe", TurnID: "run-1", Outcome: "delivered",
 		Phases: []string{"execute"},
-		Spend: tracker.TurnSpend{Turns: 1, Rounds: 2, Input: 900, Output: 100,
+		Spend: worklet.TurnSpend{Turns: 1, Rounds: 2, Input: 900, Output: 100,
 			CacheRead: 400, WallMs: 3100},
 	}
 	if _, err := f.client.WriterAs(swe).RecordTurn(t.Context(), "op-turn", turn); err != nil {
@@ -807,7 +807,7 @@ func TestADataNodeAnswersItself(t *testing.T) {
 	f := newFleet(t, "data-a")
 	local := &fakeNode{name: "data-self", units: chartOf("self")}
 	r := f.router(t, "data-self", local)
-	answer, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	answer, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	if err != nil || answer.TotalHint != 7 {
 		t.Fatalf("tasks = (%+v, %v)", answer, err)
 	}
@@ -836,7 +836,7 @@ func TestALocalReadWaitsForTheNodesOwnFloor(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		done <- err
 	}()
 	select {
@@ -865,7 +865,7 @@ func TestALocalCopyBehindItsFloorAsksAnotherHolder(t *testing.T) {
 	r := f.router(t, "data-self", local)
 	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 42}
 	r.Observe(floor)
-	answer, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	answer, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	if err != nil || answer.TotalHint != 7 {
 		t.Fatalf("tasks = (%+v, %v)", answer, err)
 	}
@@ -898,7 +898,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	first.set(func(n *fakeNode) { n.notReady = true })
 
 	// A HOLDER WHOSE COPY DOES NOT LAG IS PREFERRED.
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks with one copy lagging: %v", err)
 	}
 	if first.askedFor("tasks") || !second.askedFor("tasks") {
@@ -912,7 +912,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	}
 	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 9}
 	f.client.Observe(floor)
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks with every copy lagging: %v", err)
 	}
 	for _, n := range f.nodes {
@@ -924,11 +924,11 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 		}
 	}
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-lag",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("a tracker write with every copy lagging: %v", err)
 	}
-	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1",
-		pages.NewComment{Body: "hi"}); err != nil {
+	if _, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p1",
+		doclet.NewComment{Body: "hi"}); err != nil {
 		t.Fatalf("a page write with every copy lagging: %v", err)
 	}
 
@@ -936,11 +936,11 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	// answered, not refused as though nobody held the estate.
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	alone := newFleet(t).router(t, "data-self", local)
-	if _, err := alone.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := alone.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("the only copy, lagging, refused its own seat's read: %v", err)
 	}
 	if _, err := alone.WriterAs(swe).CreateTask(t.Context(), "op-own",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("the only copy, lagging, refused its own seat's write: %v", err)
 	}
 
@@ -948,7 +948,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	peered := newFleet(t, "data-a")
 	own := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	r := peered.router(t, "data-self", own)
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if own.askedFor("tasks") || !peered.nodes["data-a"].askedFor("tasks") {
@@ -973,7 +973,7 @@ func TestASearchThatReachedNothingSaysItDidNotRun(t *testing.T) {
 	}
 	// AND THE ITEM SEARCH IS AN ERROR, never an empty list.
 	if answer, err := f.client.Work().Search(t.Context(),
-		tracker.SearchQuery{Text: "deploys", Limit: 5}); err == nil {
+		worklet.SearchQuery{Text: "deploys", Limit: 5}); err == nil {
 		t.Fatalf("an item search nothing answered = %+v, want its error", answer)
 	}
 }
@@ -1036,7 +1036,7 @@ func TestASearchThatFailsNamesItsOperation(t *testing.T) {
 	f.placement.set(func(p *fakePlacement) {
 		p.err = errors.New("the presence view answers unknown")
 	})
-	_, err := f.client.Work().Search(t.Context(), tracker.SearchQuery{Text: "deploys", Limit: 5})
+	_, err := f.client.Work().Search(t.Context(), worklet.SearchQuery{Text: "deploys", Limit: 5})
 	const want = "estate: tracker.search: read who holds the estate: the presence view answers unknown"
 	if err == nil || err.Error() != want {
 		t.Errorf("a search the placement could not route = %v, want %q", err, want)
@@ -1060,7 +1060,7 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 	r := f.router(t, "data-self", own)
 	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 4}
 	r.Observe(floor)
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("a lagging copy of its own refused this node's read: %v", err)
 	}
 	own.mu.Lock()
@@ -1071,14 +1071,14 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 			"to the node's floor", own.asked, own.floors)
 	}
 	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-blind",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("a lagging copy of its own refused this node's write: %v", err)
 	}
 
 	// A COPY OUT OF SERVICE is no node to ask at all, and the answer is the
 	// placement's own reason — never "nobody serves it".
 	own.set(func(n *fakeNode) { n.outOfService = true })
-	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if err == nil || errors.As(err, &unserved) ||
 		!strings.Contains(err.Error(), "the presence view answers unknown") {
@@ -1097,7 +1097,7 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 	f := newFleet(t, "data-a")
 	peer := f.nodes["data-a"]
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if !peer.askedFor("tasks") || peer.askedFor("admits") {
@@ -1107,7 +1107,7 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
 	r := newFleet(t).router(t, "data-self", local)
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks on this node's own copy: %v", err)
 	}
 	if !local.askedFor("tasks") || local.askedFor("admits") {
@@ -1134,7 +1134,7 @@ func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 	winnerName, winner := f.first(t, r)
 	runnerUp := f.other(winner)
 	read := func() error {
-		_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		return err
 	}
 
@@ -1180,7 +1180,7 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	r := f.router(t, "data-self", local)
 	_, first := f.first(t, r)
 	first.set(func(n *fakeNode) { n.outOfService = true })
-	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-9", tracker.Task{Project: "ENG"}, nil)
+	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-9", worklet.Task{Project: "ENG"}, nil)
 	if err != nil || written.Key != "ENG-1" {
 		t.Fatalf("create = (%+v, %v)", written, err)
 	}
@@ -1211,7 +1211,7 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 	first.set(func(n *fakeNode) { n.unvouched = true })
 	second := f.other(first)
 
-	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-u", tracker.Task{Project: "ENG"}, nil)
+	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-u", worklet.Task{Project: "ENG"}, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -1227,7 +1227,7 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 
 	// NOBODY VOUCHES: the answer is the unknown, never an unserved estate.
 	second.set(func(n *fakeNode) { n.unvouched = true })
-	written, err = r.WriterAs(swe).CreateTask(t.Context(), "op-v", tracker.Task{Project: "ENG"}, nil)
+	written, err = r.WriterAs(swe).CreateTask(t.Context(), "op-v", worklet.Task{Project: "ENG"}, nil)
 	if err != nil || written.Outcome != statelog.OutcomeUnknown || !written.Unvouched {
 		t.Fatalf("with no holder vouching the write answered (%+v, %v), want the unvouched unknown",
 			written.Result, err)
@@ -1246,7 +1246,7 @@ func TestARefusalOfAnotherNodesCopyIsFinal(t *testing.T) {
 		n.refusal = &statelog.Unavailable{Reason: statelog.ReasonEvicted, OpID: "op-c",
 			CopyWriter: "data-z"}
 	})
-	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-c", tracker.Task{Project: "ENG"}, nil)
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-c", worklet.Task{Project: "ENG"}, nil)
 	var refusal *statelog.Unavailable
 	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvicted ||
 		refusal.CopyWriter != "data-z" {

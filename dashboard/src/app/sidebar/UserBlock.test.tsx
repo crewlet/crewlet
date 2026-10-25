@@ -78,8 +78,8 @@ const nobody: ViewerState = {
   login: "",
   grants: [],
   admin: false,
-  tracker: false,
-  knowledge: false,
+  worklet: false,
+  doclet: false,
   handle: "",
   owner: "",
   name: "",
@@ -96,7 +96,7 @@ const nobody: ViewerState = {
 const ada: ViewerState = {
   ...nobody,
   login: "ada.lovelace",
-  grants: ["tracker"],
+  grants: ["worklet"],
   handle: "ada",
   owner: "ada",
   name: "Ada Lovelace",
@@ -180,14 +180,14 @@ describe("who the block says this is", () => {
     expect(whoLine(ada, "Founder", own)).toEqual({
       name: "Ada Lovelace",
       detail: "ada.lovelace · Founder",
-      grants: "Tracker",
+      grants: "Worklet",
     });
     // NO NAME OF THEIR OWN: their login, and the seat under it — never the
     // seat's name in their place.
     expect(whoLine(ada, "Founder", { login: "ada.lovelace" })).toEqual({
       name: "ada.lovelace",
       detail: "Founder",
-      grants: "Tracker",
+      grants: "Worklet",
     });
     // A seat named as the person adds nothing to the login.
     expect(whoLine(ada, "Ada Lovelace", own).detail).toBe("ada.lovelace");
@@ -301,9 +301,9 @@ describe("who the block says this is", () => {
         login: "erin.ng",
         name: "Erin Ng",
         seat: "erin",
-        grants: ["tracker"],
+        grants: ["worklet"],
       }),
-    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Tracker" });
+    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Worklet" });
     // A SESSION BOUND TO NO SEAT says so, as the answered arm does.
     expect(whoLine({ ...nobody, loading: true }, "", { login: "token:ops" }).detail).toBe(
       "No seat",
@@ -385,7 +385,7 @@ describe("who the block says this is", () => {
     expect(row.getAttribute("title")).toBe("Your account and signing out");
     // THE ACCESS IS SAID IN THE MENU, never as the row's title, which would
     // answer a question the reader had not asked.
-    expect(row.getAttribute("title")).not.toMatch(/Tracker/);
+    expect(row.getAttribute("title")).not.toMatch(/Worklet/);
   });
 
   // THE MENU SAYS ONLY WHAT THE ROW DOES NOT: the reader's access above the
@@ -396,7 +396,7 @@ describe("who the block says this is", () => {
     fireEvent.click(screen.getByRole("button", { name: /your menu/ }));
     const menu = await screen.findByRole("menu", { name: "Your account" });
     const header = menu.querySelector(".crewlet-menu__header")!;
-    expect(header.textContent).toBe("AccessTracker");
+    expect(header.textContent).toBe("AccessWorklet");
     expect(menu.getAttribute("aria-describedby")).toBe(header.id);
     expect(menu.textContent).not.toContain("Signed in as");
     expect(header.textContent).not.toContain("ada.lovelace");
@@ -426,7 +426,7 @@ describe("who the block says this is", () => {
     expect(person.getAttribute("title")).toBe("Your account and signing out");
     fireEvent.click(person);
     const own = await screen.findByRole("menu", { name: "Your account" });
-    expect(own.querySelector(".crewlet-menu__header")!.textContent).toBe("AccessTracker");
+    expect(own.querySelector(".crewlet-menu__header")!.textContent).toBe("AccessWorklet");
   });
 
   // THE BLOCK IS THE ACCOUNT'S ROW, so on the Account it is current as a
@@ -591,10 +591,12 @@ describe("what the account offers", () => {
   });
 
   test("nobody at all is offered a way to sign in, back to where they are", async () => {
-    location.hash = "#/work";
+    location.hash = "#/worklet";
     actions({ kind: "nobody" });
     fireEvent.click(screen.getByRole("menuitem", { name: "Sign in" }));
-    await waitFor(() => expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/work")}`));
+    await waitFor(() =>
+      expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/worklet")}`),
+    );
   });
 
   // THE PROOF GESTURES LIVE ON THE ACCOUNT PAGE, and the menu opens it
@@ -640,7 +642,7 @@ function MenuRow({
   account: Account;
   onSignOutEverywhere: () => void;
 }) {
-  const menu = useAccountMenu(account, "Tracker", onSignOutEverywhere);
+  const menu = useAccountMenu(account, "Worklet", onSignOutEverywhere);
   return <AccountRow avatar={<span />} name="Ada Lovelace" menu={menu} />;
 }
 

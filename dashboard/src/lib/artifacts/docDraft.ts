@@ -12,7 +12,7 @@
  *
  * A MERGE BY TAB. A save refused because somebody published since is moved
  * onto their version tab by tab: a tab's text by line (`lib/merge.ts`, as a
- * Knowledge page's), its title and the tabs' order each as one value, the
+ * Doclet page's), its title and the tabs' order each as one value, the
  * order through the deck's own rules (`orderMerge.ts`). What both changed
  * differently is the person's to settle before saving again; nothing is
  * guessed.

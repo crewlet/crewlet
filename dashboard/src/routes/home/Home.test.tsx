@@ -37,7 +37,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -327,7 +327,7 @@ describe("the figures", () => {
   // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader without
   // Admin gets the fact, not a link to a screen that would refuse them.
   test("a reader who cannot set a budget is told there is none, with no way in", async () => {
-    mount({ viewer: { ...JANE, grants: ["tracker"] }, budget: UNCAPPED });
+    mount({ viewer: { ...JANE, grants: ["worklet"] }, budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");
@@ -669,7 +669,7 @@ describe("the decisions", () => {
   // on them.
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
-      viewer: { ...JANE, grants: ["tracker"], acts: ["comment_on_work_item"] },
+      viewer: { ...JANE, grants: ["worklet"], acts: ["comment_on_work_item"] },
       agents: [
         {
           id: "devrel",

@@ -56,7 +56,7 @@ type Providers struct {
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
 	// Embeddings powers every vector this engine computes: the semantic half
-	// of a native knowledge search and the similarity halves of diary and
+	// of a Doclet knowledge search and the similarity halves of diary and
 	// episode recall. Nil disables them — a search is keyword only, and
 	// episodes are still written, but nothing searches them by similarity.
 	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for semantic knowledge search and for diary and episode recall."`
@@ -1070,7 +1070,7 @@ var EmbeddingProviderTypes = []EmbeddingProviderType{EmbeddingOpenAI, EmbeddingO
 
 // EmbeddingProvider is the vector backend, and it has four callers: the
 // fleet-singleton duty that embeds the company's own pages and work items for
-// the semantic half of a native knowledge search, each such search's query
+// the semantic half of a Doclet knowledge search, each such search's query
 // vector, and the similarity halves of diary and episode recall.
 type EmbeddingProvider struct {
 	Type    EmbeddingProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|openai-compatible" desc:"openai (default) or openai-compatible."`

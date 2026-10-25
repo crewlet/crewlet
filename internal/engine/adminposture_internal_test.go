@@ -48,7 +48,7 @@ func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 	serving.API.Auth.Admin = iam.AdminRefuse
 	serving.API.Auth.Tokens = []config.APIToken{{
 		ID: "ops", Token: "a-token-value-nobody-reads-here",
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	}}
 	if !serving.ServesAPI() {
 		t.Fatal("the serving bootstrap serves no API, so this half certifies nothing")

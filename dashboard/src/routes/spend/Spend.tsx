@@ -163,7 +163,7 @@ export function Spend() {
             <div className="spend-side">
               <ByModel rollup={rollup} loading={tokens.loading} words={words} />
               <ByUnit params={params} words={words} />
-              {/* WHERE THE COMPANY RUNS NO CREWLET WORKS there are no tasks to
+              {/* WHERE THE COMPANY RUNS NO WORKLET there are no tasks to
                   rank, and the auxiliary model's card joins this column
                   rather than standing alone in a row of its own. */}
               {!runs.tracker && <Workers rollup={rollup} loading={tokens.loading} words={words} />}

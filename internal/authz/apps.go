@@ -21,14 +21,14 @@ import (
 // that cites it, a seat's current task — carries rows of more than one kind
 // to readers who may use only one of the apps, and each of those surfaces
 // asking "which app is this row?" for itself is how one of them comes to show
-// a task to somebody without the tracker. Asked here, the answer is one
+// a task to somebody without Worklet. Asked here, the answer is one
 // function over the same kinds the authority table decides on.
 func AppFor(k ObjectKind) iam.Grant {
 	switch k {
 	case KindTask, KindProject, KindView:
-		return iam.GrantTracker
+		return iam.GrantWorklet
 	case KindPage, KindContainer:
-		return iam.GrantKnowledge
+		return iam.GrantDoclet
 	}
 	return ""
 }

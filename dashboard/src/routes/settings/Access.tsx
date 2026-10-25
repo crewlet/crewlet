@@ -91,10 +91,10 @@
  *
  * # Access is a line, not a list
  *
- * A row's ACCESS column says what it amounts to — "Admin" (which includes
- * every app), the apps it holds ("Tracker · Knowledge"), or "Overview only" —
+ * A row's ACCESS column says what it amounts to: "Admin" (which includes
+ * every app), the apps it holds ("Worklet · Doclet"), or "Overview only",
  * through `lib/access.ts`'s one reading, so a row stored as `[admin]` and one
- * stored as `[admin, tracker, knowledge]` read the same, as the engine treats
+ * stored as `[admin, worklet, doclet]` read the same, as the engine treats
  * them.
  */
 

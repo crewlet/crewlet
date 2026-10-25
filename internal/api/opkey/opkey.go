@@ -5,8 +5,8 @@
 //
 // # Why one package, and not a copy per surface
 //
-// Two surfaces take a key — `/iam` and the human write surface (`/work`,
-// `/pages`) — and a script retrying a write on this engine is one
+// Two surfaces take a key, `/iam` and the human write surface (`/worklet`,
+// `/doclet/pages`), and a script retrying a write on this engine is one
 // script whichever of them it wrote to: an `unknown` answer carries the key,
 // and the route accepts it back under the same header, held to the same
 // grammar and refused with the same code. Each surface carried its own copy of

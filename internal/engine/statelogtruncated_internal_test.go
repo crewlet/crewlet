@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // publishLoaded boots a node, waits for its tracker to stand at the checkpoint
@@ -22,7 +22,7 @@ import (
 func publishLoaded(t *testing.T, d divergedBroker, want statelog.Position) {
 	t.Helper()
 	e, back := bootNode(t, &d.a, d.cfg)
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	waitUntil(t, 10*time.Second, "node A's tracker to load its checkpoint", func() bool {
 		return running.runner.Committed() == want
 	})
@@ -62,7 +62,7 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
 	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
-	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := eb.core.Load().log.Domain(worklet.Domain{}.Name())
 	eb.core.Load().log.publishPositions(t.Context())
 	if err := running.runner.Truncated(); !errors.Is(err, statelog.ErrLogTruncated) {
 		t.Fatalf("node B's truncation is %v, want node A's position past the end", err)
@@ -72,7 +72,7 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 	}
 	title := "refused"
 	_, err := eb.native.Load().writer.UpdateTask(t.Context(), "op-b-refused", "t-1", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+		worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 	requireTruncatedRefusal(t, err, d.a.Node.ID)
 
 	// THE OPERATOR EVICTS A, from B.
@@ -87,10 +87,10 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 	if err := running.runner.Truncated(); err != nil {
 		t.Fatalf("with node A evicted, node B's writes still refuse: %v", err)
 	}
-	mustApply(t, "node B's write once node A is evicted", func() (tracker.WriteResult, error) {
+	mustApply(t, "node B's write once node A is evicted", func() (worklet.WriteResult, error) {
 		title := "after the eviction"
 		return eb.native.Load().writer.UpdateTask(t.Context(), "op-b-after", "t-1", "ENG",
-			tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+			worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 	})
 }
 
@@ -107,7 +107,7 @@ func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
 	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
-	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := eb.core.Load().log.Domain(worklet.Domain{}.Name())
 	eb.core.Load().log.publishPositions(t.Context())
 	err := running.runner.Truncated()
 	if !errors.Is(err, statelog.ErrLogTruncated) || !strings.Contains(err.Error(), "another record") {
@@ -115,7 +115,7 @@ func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 	}
 	title := "refused"
 	_, err = eb.native.Load().writer.UpdateTask(t.Context(), "op-b-refused", "t-1", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+		worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 	requireTruncatedRefusal(t, err, d.a.Node.ID)
 }
 
@@ -131,7 +131,7 @@ func TestWhichPeersHoldWhatTheLogLost(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	for i := range 3 {
 		if res, err := e.native.Load().writer.EvictNode(t.Context(), fmt.Sprintf("op-%d", i),
 			fmt.Sprintf("gone-%d", i)); err != nil || res.Outcome != statelog.OutcomeApplied {
@@ -152,7 +152,7 @@ func TestWhichPeersHoldWhatTheLogLost(t *testing.T) {
 		}
 		return []coord.NodePositions{{
 			NodeID:  "node-peer",
-			Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): pos},
+			Domains: map[string]coord.DomainPosition{worklet.Domain{}.Name(): pos},
 		}}
 	}
 	for name, tc := range map[string]struct {
@@ -223,7 +223,7 @@ func (f *heldFleet) arm(node string, gen uint32) {
 }
 
 func (f *heldFleet) PutPositions(ctx context.Context, row coord.NodePositions) error {
-	gen := row.Domains[tracker.Domain{}.Name()].Generation
+	gen := row.Domains[worklet.Domain{}.Name()].Generation
 	f.mu.Lock()
 	if f.node == "" || row.NodeID != f.node {
 		f.mu.Unlock()
@@ -290,7 +290,7 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 	js := jetStreamOn(t, back)
 
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	spec := running.spec
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
@@ -389,7 +389,7 @@ func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write: %+v, %v", res, err)
@@ -403,7 +403,7 @@ func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 		t.Helper()
 		if err := register.PutPositions(t.Context(), coord.NodePositions{
 			NodeID: "node-peer",
-			Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): {
+			Domains: map[string]coord.DomainPosition{worklet.Domain{}.Name(): {
 				Seq: stats.LastSeq + 5, Generation: gen,
 				StreamCreatedAt: running.runner.KeyedTo(),
 			}},

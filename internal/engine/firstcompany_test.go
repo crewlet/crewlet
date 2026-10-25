@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS ITS NATIVE BACKENDS UP WITH THE
@@ -52,7 +52,7 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 	// THE RUNTIME AND ITS TOOLS.
 	writer := e.TrackerWriter()
 	if writer == nil || e.PagesStore() == nil || e.Pages() == nil {
-		t.Fatal("the first company's apply left the node with no native tracker " +
+		t.Fatal("the first company's apply left the node with no Worklet " +
 			"or knowledge base")
 	}
 	for _, tool := range []string{builtin.CreateWorkItemTool, builtin.WritePageTool} {
@@ -81,10 +81,10 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	filed, err := writer.CreateTask(t.Context(), statelog.NewOpID(time.Now(), "create"),
-		tracker.Task{
-			V: tracker.DocumentVersion, ID: "t-first", Project: "ENG",
-			Title: "the first task", Status: tracker.StatusTodo,
-			Priority: tracker.PriorityNormal,
+		worklet.Task{
+			V: worklet.DocumentVersion, ID: "t-first", Project: "ENG",
+			Title: "the first task", Status: worklet.StatusTodo,
+			Priority: worklet.PriorityNormal,
 		}, nil)
 	if err != nil {
 		t.Fatalf("a task filed into the chart's project: %v", err)

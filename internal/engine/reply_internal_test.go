@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // wake builds one inbox trigger of the given type, THE WAY ITS PRODUCER
@@ -177,7 +177,7 @@ func TestAnInformedAnswerOwesTheChatSurface(t *testing.T) {
 	answered := func(addressed bool, owes string) *events.Event {
 		salient := "Chose “Hold”: the audit first"
 		return events.New(types.ExternalNotification{
-			NotificationSource: tracker.Source, SourceEventType: "comment",
+			NotificationSource: worklet.Source, SourceEventType: "comment",
 			Sender: "ana", Body: "enriched prompt", SalientBody: &salient,
 			Addressed: addressed, Owes: owes,
 		}, events.TraceContext{})
@@ -189,7 +189,7 @@ func TestAnInformedAnswerOwesTheChatSurface(t *testing.T) {
 		t.Errorf("an owed wake its source read as unaddressed owes %+v — the "+
 			"promise is the obligation", got)
 	}
-	if got := ReplyFor([]*events.Event{answered(true, "")}); got != turn.ToolReply(tracker.Source) {
+	if got := ReplyFor([]*events.Event{answered(true, "")}); got != turn.ToolReply(worklet.Source) {
 		t.Errorf("an answer owing no chat surface owes %+v, want the tracker", got)
 	}
 

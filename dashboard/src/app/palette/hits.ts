@@ -89,7 +89,7 @@ export const SEARCH_MIN = 2;
  *
  * EIGHT in the scope: a ranked answer is opened, not scrolled — the person's
  * next move is one or two of the top rows, and past eight the full search
- * screen (`#/work/search`, one row away) is where the rest belong. THREE in
+ * screen (`#/worklet/search`, one row away) is where the rest belong. THREE in
  * All, where tasks share the list with pages, agents and actions and the
  * approved palette draws two or three of each.
  */
@@ -308,7 +308,7 @@ export type Standing = { anonymous: true } | { anonymous: false; grants: readonl
  * use for, and was drawn beside every guarded row for a reader who already
  * held the access. To a reader NOBODY SIGNED IN it says "needs sign-in", the
  * step before any access — naming one would tell them to hold something before
- * they are anybody. To a reader who is, it names the access ("needs Tracker
+ * they are anybody. To a reader who is, it names the access ("needs Worklet
  * access").
  */
 export function destinationHits(
@@ -325,7 +325,7 @@ export function destinationHits(
   return rankedInTiers(offered, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => {
     // A WORKSPACE'S OWN ENTRY OPENS WHERE ITS ROW DOES ([landingPath]), and
     // is locked as its row is (`workspaceMissing`): Settings is no lock to a
-    // reader holding Tracker, whose Token spend it opens on.
+    // reader holding Worklet, whose Token spend it opens on.
     const row = d.key === d.workspace ? workspaceRow(d.workspace) : undefined;
     const path = row ? landingPath(row, held, runs) : d.path;
     const needs = row ? workspaceNeeds(row) : d.grants;
@@ -517,7 +517,7 @@ export function searchHits(term: string, nav: Navigator, runs: ServicesRun): Hit
             icon: "search",
             label: `Search all work for “${term}”`,
             hint: "ranked as an agent ranks it",
-            go: () => nav.to(["work", "search"], { q: term }),
+            go: () => nav.to(["worklet", "search"], { q: term }),
           } satisfies Hit,
         ]
       : []),
@@ -531,11 +531,11 @@ export function searchHits(term: string, nav: Navigator, runs: ServicesRun): Hit
     ...(runs.knowledge
       ? [
           {
-            id: "search-knowledge",
+            id: "search-doclet",
             icon: "book-open",
-            label: `Knowledge search for “${term}”`,
+            label: `Search Doclet for “${term}”`,
             hint: "every mode, every container",
-            go: () => nav.to(["knowledge"], { q: term }),
+            go: () => nav.to(["doclet"], { q: term }),
           } satisfies Hit,
         ]
       : []),
@@ -642,7 +642,7 @@ export function commandHits(
 }
 
 /**
- * The switcher, as a row: it opens the panel Work's trail opens, from
+ * The switcher, as a row: it opens the panel Worklet's trail opens, from
  * wherever the palette was, rather than going anywhere itself.
  */
 export function switchProjectHit(open: () => void): Hit {

@@ -1032,7 +1032,7 @@ describe("who holds a person's seat", () => {
 
   test("a reader without Admin reads the holding and is offered no gesture", async () => {
     vi.stubGlobal("fetch", seats);
-    edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["tracker", "knowledge"]) });
+    edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["worklet", "doclet"]) });
     const person = await screen.findByRole("region", { name: "Person" });
     expect(await within(person).findByText("This seat is open.")).toBeDefined();
     expect(within(person).queryByRole("button")).toBeNull();

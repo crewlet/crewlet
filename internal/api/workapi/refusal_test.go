@@ -32,8 +32,8 @@ import (
 // sentence and nowhere else to write one.
 //
 // So the three are asked the SAME question by a caller holding the same
-// access — create an item, holding the knowledge base and not the tracker —
-// and the three texts compared byte for byte. The HTTP surface is the one that refuses at
+// access (create an item, holding Doclet and not Worklet), and the three
+// texts compared byte for byte. The HTTP surface is the one that refuses at
 // its ROUTE, before any tool runs, which is exactly why it is the one that
 // could drift. Its `detail` is the same text written as a sentence, which the
 // API boundary ([httpjson.Sentence]) does to every detail it answers.
@@ -43,7 +43,7 @@ import (
 // comparison above is one that can fail.
 func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	t.Parallel()
-	grants := []iam.Grant{iam.GrantKnowledge}
+	grants := []iam.Grant{iam.GrantDoclet}
 	r := newRig(t, chart{})
 	deps := r.halves().Work
 	args := map[string]any{"title": "rotate the key", "project": "ENG"}
@@ -105,7 +105,7 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	}
 
 	// AND THIS SURFACE, refusing at the route.
-	fromHTTP := r.do(as(caller), http.MethodPost, "/work/items", args)
+	fromHTTP := r.do(as(caller), http.MethodPost, "/worklet/items", args)
 	if fromHTTP.status != http.StatusForbidden {
 		t.Fatalf("the route answered %d", fromHTTP.status)
 	}
@@ -121,12 +121,12 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	if err := authz.NewRouter(plain, func(req *http.Request, p authz.Policy) authz.Decision {
 		return authz.Decide(req.Context(), caller, p.Action,
 			authz.Object{Kind: authz.KindTask}, chart{}, time.Now())
-	}).Handle("POST /work/items", authz.Policy{Action: authz.ActionWorkCreate},
+	}).Handle("POST /worklet/items", authz.Policy{Action: authz.ActionWorkCreate},
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})); err != nil {
 		t.Fatalf("mount the control: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/work/items", nil))
+	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worklet/items", nil))
 	if httpjson.Sentence(rec.Body.String()) == fromHTTP.detail() {
 		t.Fatal("the control read the same as the tools, so this test cannot " +
 			"tell a surface that wrote its own sentence from one that did not")

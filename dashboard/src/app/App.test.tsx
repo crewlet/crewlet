@@ -41,7 +41,7 @@ const ADMIN_VIEWER = {
   login: "founder",
   owner: "jane",
   handle: "jane",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
 };
 
 /**
@@ -153,8 +153,8 @@ describe("the shell", () => {
       "Schedules",
       "Integrations",
       "Budgets",
-      "Work",
-      "Knowledge",
+      "Worklet",
+      "Doclet",
       "Artifacts",
       "Live",
     ]) {
@@ -282,9 +282,9 @@ describe("routing", () => {
   test("the working chip is in Home's page bar and in no other", async () => {
     for (const [hash, drawn] of [
       ["#/", true],
-      ["#/work", false],
+      ["#/worklet", false],
       ["#/company/org", false],
-      ["#/work/ENG", false],
+      ["#/worklet/ENG", false],
       ["#/company/org/seats/agent-swe", false],
     ] as const) {
       location.hash = hash;
@@ -307,7 +307,7 @@ describe("routing", () => {
     const visited = DESTINATIONS.map((item) => buildHash(item.path));
     // The two-level routes are the reason the list is derived: a hand-written
     // one would not have them.
-    expect(visited).toContain(buildHash(["work", "views"]));
+    expect(visited).toContain(buildHash(["worklet", "views"]));
     expect(visited).toContain(buildHash(["live", "turns"]));
     for (const hash of visited) {
       location.hash = hash;
@@ -344,8 +344,8 @@ describe("routing", () => {
       ["company", "schedules", "role", "ceo", "standup"],
       ["company", "org", "seats", "ada"],
       ["company", "org", "teams", "platform"],
-      ["work", "ENG-42"],
-      ["knowledge", "pages", "66666666-6666-4666-8666-666666666666"],
+      ["worklet", "ENG-42"],
+      ["doclet", "pages", "66666666-6666-4666-8666-666666666666"],
       ["settings", "nodes", "node-a"],
       ["company", "integrations", "slack"],
       ["settings", "secrets", "SLACK_SIGNING_SECRET"],
@@ -648,7 +648,7 @@ describe("a section, for a reader holding none of its grants", () => {
     await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/Needs Admin/));
     expect(row("#/settings/mcp-tools")?.textContent).toMatch(/Needs Admin access/);
     expect(row("#/settings/limits")?.textContent).toMatch(/Needs Admin access/);
-    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/Needs Tracker access/);
+    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/Needs Worklet access/);
     expect(row("#/settings/spend")?.textContent).toBe("Token spend");
   });
 
@@ -658,7 +658,7 @@ describe("a section, for a reader holding none of its grants", () => {
       Promise.resolve({
         login: "ops",
         owner: "ops",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
       }),
     );
     expect(await screen.findByRole("navigation", { name: "Related" })).toBeDefined();
@@ -676,7 +676,7 @@ describe("a section, for a reader holding none of its grants", () => {
     overview.view.unmount();
     cleanup();
     location.hash = buildHash(["settings", "mcp-tools"]);
-    mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["tracker"] }));
+    mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["worklet"] }));
     expect(await screen.findByText("You need Admin access")).toBeDefined();
   });
 });
@@ -996,7 +996,7 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
       Promise.resolve({
         login: "ops",
         owner: "ops",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
       }),
     );
   const settle = async () => {
@@ -1038,7 +1038,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   // A STAR IS KEPT FOR THE TAB'S READER (`lib/starred.ts`).
   noteReader("p-1");
   resetStarsForTest();
-  location.hash = "#/work/ENG";
+  location.hash = "#/worklet/ENG";
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   store.applyOrg(withDerived({ name: "Acme", roles: [] }));
@@ -1060,7 +1060,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
     if (what === "viewer") {
       return Promise.resolve({
         login: "U0FOUNDER",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
         handle: "jane",
         owner: "jane",
         name: "Jane Founder",
@@ -1088,7 +1088,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
 
   // A TASK'S OWN "MORE" JOINS IT rather than standing as a second ellipsis
   // beside the frame's, and its entry still goes where the inline one does.
-  location.hash = "#/work/ENG-42";
+  location.hash = "#/worklet/ENG-42";
   const task = {
     task: { id: "t-1", key: "ENG-42", project: "ENG", title: "Fix it", status: "todo", version: 3 },
     reassignment_budget: 8,
@@ -1099,7 +1099,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
       return Promise.resolve({
         login: "U0FOUNDER",
         owner: "U0FOUNDER",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
       });
     if (what === "work_item") return Promise.resolve(task);
     if (what === "work_project") return Promise.resolve(project);
@@ -1119,17 +1119,17 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
     "Keep in Starred",
   ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));
-  expect(location.hash).toContain("#/work/ENG");
+  expect(location.hash).toContain("#/worklet/ENG");
   expect(location.hash).toContain("peek=");
 });
 
 // A COLD LOAD OF A SERVICE'S PAGE WAITS FOR THE PROJECTION: mounted on the
-// guess, Knowledge asked its spaces, its pages and its activity on a company
+// guess, Doclet asked its spaces, its pages and its activity on a company
 // running none, was refused all three, then gave way to the notice. It waits,
 // asks nothing, and says what the company runs once it knows. Mutation: mount
 // the screen before the org and `containers` is asked.
 test("a cold load of a service's page asks nothing until the company says what it runs", async () => {
-  location.hash = "#/knowledge";
+  location.hash = "#/doclet";
   const asked: string[] = [];
   const reader = { login: "ana", owner: "ana", handle: "ana", grants: ["admin"], acts: [] };
   const store = new Store();
@@ -1149,7 +1149,7 @@ test("a cold load of a service's page asks nothing until the company says what i
   expect(asked.filter((w) => w === "containers" || w === "pages")).toEqual([]);
   act(() =>
     store.applyOrg(
-      withDerived({ name: "Acme", roles: [], services: { tracker: "native", knowledge: "none" } }),
+      withDerived({ name: "Acme", roles: [], services: { tracker: "worklet", knowledge: "none" } }),
     ),
   );
   expect(await screen.findByText("This company runs no knowledge base")).toBeTruthy();

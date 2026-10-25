@@ -63,7 +63,7 @@ func TestAPhaseRecordsTimingSurvivesTheWire(t *testing.T) {
 		TurnID: "t1", Phase: PhaseExecute, StartedAt: at,
 		CacheReadTokens: 800, CacheWriteTokens: 50, MaxRounds: 12, RoundCeiling: 48,
 		LaunchID: "launch-2",
-		WorkItem: &WorkItem{Backend: WorkNative, ID: "task-7", Key: "ENG-7"},
+		WorkItem: &WorkItem{Backend: WorkWorklet, ID: "task-7", Key: "ENG-7"},
 		Rounds: []PhaseRound{{
 			Round: 1, StartedAt: at, DurationMS: 2300, Model: "m",
 			InputTokens: 1000, OutputTokens: 40, CacheReadTokens: 800, CacheWriteTokens: 50, ToolCalls: 2,

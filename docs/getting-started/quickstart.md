@@ -62,8 +62,7 @@ stream:
                           #   who sign in, whom every node keeps on a
                           #   state log whatever backends the company
                           #   names, and its items and pages, which are on
-                          #   the engine's own tracker and knowledge base
-                          #   here. The engine
+                          #   Worklet and Doclet here. The engine
                           #   REFUSES to boot without one rather than lose
                           #   them at the first restart
 
@@ -197,8 +196,8 @@ units:
     lead: pm                    # the lead seat's HANDLE
     purpose: "Define what gets built and why"
     # A unit's identity on the tracker and the knowledge base. Both default
-    # to the engine's own backends, so these two keys are all it takes to
-    # give the team somewhere to file work and write things down — no site,
+    # to Worklet and Doclet, so these two keys are all it takes to
+    # give the team somewhere to file work and write things down: no site,
     # no project to create, no per-seat account. They name a Jira project and
     # a Confluence space just as well if you switch the backend later, which
     # is why they are not called `jira_project` / `confluence_space`.
@@ -475,8 +474,8 @@ from the keyboard, and on the seat's page). Press **Invite** — the dialog is
 for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
-- **your access** — tick **Admin**, which ticks and locks both apps (Tracker
-  and Knowledge) beside it. The founder token holds `admin`, and nobody can
+- **your access**: tick **Admin**, which ticks and locks every app (Worklet,
+  Doclet and Artifacts) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
@@ -542,7 +541,7 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `tracker`, `knowledge`, `artifacts` or `none`, and left out on an
+`admin`, `worklet`, `doclet`, `artifacts` or `none`, and left out on an
 invitation it sends every app and not admin.
 
 ```
@@ -565,7 +564,7 @@ greeting.
 
 The sidebar reads top to bottom: Home, Inbox and My work; the Company group
 (Overview, Policies, Org chart, Schedules, Integrations and Budgets); the
-Workspace group (Work, Knowledge, Artifacts and Live); and Settings at its
+Workspace group (Worklet, Doclet, Artifacts and Live); and Settings at its
 foot. Each workspace's sections are tabs in its page header. `g` then a
 letter jumps between them, and `?` lists every key.
 While an agent is working, the Live row counts the seats at work and a
@@ -587,13 +586,13 @@ phase that finishes updates in place rather than moving, so you can read one
 while the next is running. [Turn Engine](../concepts/turn-engine.md) is what
 each one does.
 
-Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
-`tracker.backend` and `knowledge.backend` default to `native`, so your company
+Follow the turn to **Worklet** and **Doclet**. Both are the engine's own:
+`tracker.backend` defaults to `worklet` and `knowledge.backend` to `doclet`, so your company
 has a tracker and a wiki from its first minute with nothing to set up. A seat
 files with `create_work_item` and writes with `write_page`; a row opens the
-item beside the list, and ⌘-click opens its page. Work opens as a **list** —
-one line per item, which reads the same on your first task as on your five
-hundredth — and **Filter** and **Display** in the bar decide what is on it and
+item beside the list, and ⌘-click opens its page. Worklet opens as a **list**
+(one line per item, which reads the same on your first task as on your five
+hundredth), and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
@@ -691,10 +690,10 @@ so you can sign in on it with the founder token before any company exists. You
 cannot invite yourself yet — there is no seat to put you on, so an invitation
 there answers `409 no_active_revision` — and the company comes first: import
 or create it with your human seat in it, then invite yourself onto that seat
-as above. The work tracker's and the knowledge base's routes
+as above. Worklet's and Doclet's routes
 answer `503 no_active_revision` until the first revision arrives. That
-revision brings up everything the company needs, the engine's own tracker and
-knowledge base included, with their projects and spaces, and the
+revision brings up everything the company needs, Worklet and Doclet
+included, with their projects and spaces, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
 `providers.sandbox` — under the same API, with nothing restarted:
 

@@ -1,4 +1,4 @@
--- Goals leave the native tracker: the object, its owners, its targets and the
+-- Goals leave Worklet: the object, its owners, its targets and the
 -- references those targets counted work through.
 --
 -- # What went, and why it went whole

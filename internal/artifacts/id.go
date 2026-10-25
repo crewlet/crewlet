@@ -20,7 +20,7 @@ var ErrInvalidID = errors.New("artifacts: not an artifact id")
 // IDFor is the id the operation opID creates: a NAME-BASED UUID over the
 // operation, so the retry an unknown outcome asks for names the artifact its
 // first attempt created rather than one nothing will ever find. The rule is
-// internal/pages' pageIDOf rule, for the same reason.
+// internal/doclet's pageIDOf rule, for the same reason.
 func IDFor(opID string) ID { return ID(uuid.NewSHA1(IDNamespace, []byte(opID))) }
 
 // IsZero reports the zero id, which names no artifact: every derived id is a

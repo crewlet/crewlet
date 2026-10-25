@@ -29,14 +29,14 @@ import { itemPath } from "~/lib/work.ts";
 import { askQuestion } from "~/routes/inbox/model.ts";
 import type { WorkClaimTotal, WorkMyWork, WorkSummary } from "~/protocol/index.ts";
 import { WidgetCard, WidgetNote, defineWidgets } from "~/routes/home/board/kit.tsx";
-import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/work/taskRows.tsx";
+import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/worklet/taskRows.tsx";
 
 /** The reader's own day, as My work asks it. */
 function useMyWork() {
   const viewer = useViewer();
   const whose = viewer.owner;
   const read = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
-    enabled: whose !== "" && viewer.tracker,
+    enabled: whose !== "" && viewer.worklet,
     pollMs: 30_000,
     refetchOnInboxOf: whose,
   });

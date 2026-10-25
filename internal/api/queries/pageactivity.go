@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 )
 
 // pageActivity answers a page of the wiki's change feed.
@@ -22,18 +22,18 @@ func (s Sources) pageActivity(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	q := pages.PageActivityQuery{
+	q := doclet.PageActivityQuery{
 		Page: strings.TrimSpace(p.String("page")),
 		// CANONICAL BEFORE THE READ, for [Sources.pageList]'s reason: the
 		// deferral scope is composed from what this is handed.
-		Container: pages.ContainerKey(p.String("container")),
+		Container: doclet.ContainerKey(p.String("container")),
 		Limit:     p.Int("limit", 0),
 		Freshness: fresh,
 	}
 	for _, name := range splitList(p.String("kinds")) {
-		kind := pages.ChangeKind(name)
+		kind := doclet.ChangeKind(name)
 		if !kind.Valid() {
-			return nil, badParams("kinds", name, names(pages.ChangeKinds()))
+			return nil, badParams("kinds", name, names(doclet.ChangeKinds()))
 		}
 		q.Kinds = append(q.Kinds, kind)
 	}
@@ -43,9 +43,9 @@ func (s Sources) pageActivity(ctx context.Context, p Params) (any, error) {
 	// of, because a filter silently ignored answers a wider question than
 	// the caller asked and looks exactly like one that worked.
 	for _, name := range splitList(p.String("actor_kinds")) {
-		kind := pages.AuthorKind(name)
+		kind := doclet.AuthorKind(name)
 		if !kind.Valid() {
-			return nil, badParams("actor_kinds", name, names(pages.AuthorKinds()))
+			return nil, badParams("actor_kinds", name, names(doclet.AuthorKinds()))
 		}
 		q.ActorKinds = append(q.ActorKinds, kind)
 	}

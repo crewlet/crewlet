@@ -185,7 +185,7 @@ const params = (what: string) => asks.filter((a) => a.what === what).map((a) => 
 
 const VIEWER = {
   login: "op-1",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -432,7 +432,7 @@ test("the cache tile divides the engine's counts, and is absent when none were r
 
 // THE MEDIAN TASK IS THE TRACKER'S, over the tasks FINISHED in the window, and
 // on a company whose tracker is not the engine's there is no tile at all.
-test("the median task tile asks the tracker, and is absent on a non-native tracker", async () => {
+test("the median task tile asks the tracker, and is absent on a tracker other than Worklet", async () => {
   mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     viewer: VIEWER,
@@ -470,11 +470,11 @@ test("the median task tile asks the tracker, and is absent on a non-native track
 });
 
 // THE OVERVIEW IS EVERYBODY'S AND A TASK IS THE TRACKER'S: a reader without
-// Tracker is asked nothing about tasks, and both task readings say what would
+// Worklet is asked nothing about tasks, and both task readings say what would
 // open them rather than drawing the engine's refusal — whose callout offered
 // "Sign in" to somebody already signed in. Mutation: enable the card's
 // question on `ready` alone and it is asked, and the lock is never drawn.
-test("a reader without Tracker is asked no task question on the overview", async () => {
+test("a reader without Worklet is asked no task question on the overview", async () => {
   mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     viewer: { ...VIEWER, grants: [] },
@@ -483,7 +483,7 @@ test("a reader without Tracker is asked no task question on the overview", async
   await settle();
   expect(params("work_items")).toEqual([]);
   const card = screen.getByText("Most expensive tasks").closest(".spend-card") as HTMLElement;
-  expect(within(card).getByText("Needs Tracker access")).toBeTruthy();
+  expect(within(card).getByText("Needs Worklet access")).toBeTruthy();
   expect(within(card).queryByText("All")).toBeNull();
   expect(within(card).queryByText(/This answer needs|This needs access/)).toBeNull();
   expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
@@ -856,9 +856,9 @@ test("the ranked lists stand in the narrow track, beside the seats and the tasks
   expect(row("Most expensive tasks")!.firstElementChild).toBe(card("Most expensive tasks"));
 });
 
-// WITHOUT CREWLET WORKS THERE ARE NO TASKS TO RANK, and the auxiliary model's
+// WITHOUT WORKLET THERE ARE NO TASKS TO RANK, and the auxiliary model's
 // card joins the side column rather than standing alone in a row of its own.
-test("where the company runs no Crewlet Works, the auxiliary model joins the side column", async () => {
+test("where the company runs no Worklet, the auxiliary model joins the side column", async () => {
   mount(
     "#/settings/spend?window=30d",
     <Spend />,
@@ -868,7 +868,7 @@ test("where the company runs no Crewlet Works, the auxiliary model joins the sid
         withDerived({
           timezone: "UTC",
           roles: [{ name: "CEO", handle: "ceo" }],
-          services: { tracker: "jira", knowledge: "native" },
+          services: { tracker: "jira", knowledge: "doclet" },
         }),
       ),
   );

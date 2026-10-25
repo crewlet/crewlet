@@ -60,12 +60,12 @@ export const ITEM_KEY_SHAPE = /^[A-Z][A-Z0-9_]*-\d+$/;
  */
 export const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
- * A knowledge container key: whatever the engine keeps, which is UPPERCASED on
- * every path that writes one (`pages.Store` uppercases the key a page is
+ * A Doclet container key: whatever the engine keeps, which is UPPERCASED on
+ * every path that writes one (`doclet.Store` uppercases the key a page is
  * created in and the key `EnsureContainer` makes), so it never holds a
  * lowercase letter. Looser than [KEY_SHAPE] on purpose — a unit's `space:` may
  * carry a dash or start with a digit — and exactly as strict where it matters:
- * every reserved segment is lowercase, so `#/knowledge/skills` can never be
+ * every reserved segment is lowercase, so `#/doclet/skills` can never be
  * read as a container called `skills`.
  */
 export const CONTAINER_SHAPE = /^[^a-z]+$/;
@@ -190,11 +190,11 @@ export type FramedScreen =
   | { screen: "home" }
   | { screen: "inbox" }
   | { screen: "me"; section: MeSection }
-  | { screen: "work-projects" }
-  | { screen: "work-tasks" }
-  | { screen: "work-views"; id?: string }
-  | { screen: "work-history" }
-  | { screen: "work-search" }
+  | { screen: "worklet-projects" }
+  | { screen: "worklet-tasks" }
+  | { screen: "worklet-views"; id?: string }
+  | { screen: "worklet-history" }
+  | { screen: "worklet-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
   | { screen: "principles" }
@@ -216,7 +216,7 @@ export type FramedScreen =
   | { screen: "trace"; id: string }
   | { screen: "events" }
   | { screen: "event"; id: string }
-  | { screen: "knowledge" }
+  | { screen: "doclet" }
   | { screen: "container"; key: string }
   | { screen: "page"; id: string }
   | { screen: "new-page" }
@@ -267,7 +267,7 @@ export interface Unresolved {
   resolved: false;
   /** The workspace the head names, or "" when it names none. */
   workspace: Workspace | "";
-  /** What was asked for, in words: `“views/x/y” under Work`. */
+  /** What was asked for, in words: `“views/x/y” under Worklet`. */
   what: string;
   /** Why there is nothing here, where the product knows. */
   hint?: string;
@@ -319,12 +319,12 @@ export function resolve(path: string[]): Route {
     }
     case "company":
       return company(rest, screen, under);
-    case "work":
-      return work(rest, screen, under);
+    case "worklet":
+      return worklet(rest, screen, under);
     case "live":
       return live(rest, screen, under);
-    case "knowledge":
-      return knowledge(rest, screen, under);
+    case "doclet":
+      return doclet(rest, screen, under);
     case "artifacts":
       return artifactsRoute(rest, screen, under);
     case "settings":
@@ -361,26 +361,30 @@ function signIn(route: FramelessRoute, rest: string[]): Route {
 }
 type Under = (label: string) => string;
 
-function work(rest: string[], screen: Make, under: Under): Route {
+function worklet(rest: string[], screen: Make, under: Under): Route {
   const [first, second] = rest;
-  // WORK OPENS ON ITS PROJECTS: the landing is All projects' first lens, and
-  // the company's task list is the lens beside it.
-  if (first === undefined) return screen({ screen: "work-projects" });
+  // WORKLET OPENS ON ITS PROJECTS: the landing is All projects' first lens,
+  // and the company's task list is the lens beside it.
+  if (first === undefined) return screen({ screen: "worklet-projects" });
   if (first === "views") {
-    if (rest.length > 2) return missing("work", under("Work"));
-    return screen(second ? { screen: "work-views", id: second } : { screen: "work-views" });
+    if (rest.length > 2) return missing("worklet", under("Worklet"));
+    return screen(second ? { screen: "worklet-views", id: second } : { screen: "worklet-views" });
   }
   // THE WORKSPACE-LEVEL LISTS TAKE NO TAIL. Each answers a question about the
   // whole company, so there is nothing under them to address: a project has
   // its own route, and a change is a record on the item it changed.
   if (first === "tasks" || first === "history" || first === "search") {
-    if (rest.length > 1) return missing("work", under("Work"));
+    if (rest.length > 1) return missing("worklet", under("Worklet"));
     return screen({
       screen:
-        first === "tasks" ? "work-tasks" : first === "history" ? "work-history" : "work-search",
+        first === "tasks"
+          ? "worklet-tasks"
+          : first === "history"
+            ? "worklet-history"
+            : "worklet-search",
     });
   }
-  if (rest.length > 1) return missing("work", under("Work"));
+  if (rest.length > 1) return missing("worklet", under("Worklet"));
   // A PROJECT OR AN ITEM, decided by the SHAPE of the key rather than by a
   // lookup, so the route resolves before any answer arrives. A key or an id
   // BOTH resolve to an item, because the reader has whichever they were shown.
@@ -388,11 +392,11 @@ function work(rest: string[], screen: Make, under: Under): Route {
   if (ITEM_KEY_SHAPE.test(first) || ID_SHAPE.test(first)) {
     return screen({ screen: "item", id: first });
   }
-  // AND ANYTHING ELSE IS NOTHING HERE. Read as an item id, a word — a reserved
-  // one for a section Work does not have (`turns`), or one for a section still
-  // to come — asked the tracker for an item called that and drew its refusal
+  // AND ANYTHING ELSE IS NOTHING HERE. Read as an item id, a word (a reserved
+  // one for a section Worklet does not have, `turns`, or one for a section
+  // still to come) asked Worklet for an item called that and drew its refusal
   // under a trail naming a page that does not exist.
-  return missing("work", under("Work"));
+  return missing("worklet", under("Worklet"));
 }
 
 /**
@@ -486,20 +490,16 @@ function live(rest: string[], screen: Make, under: Under): Route {
   }
 }
 
-function knowledge(rest: string[], screen: Make, under: Under): Route {
+function doclet(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "knowledge" });
+  if (first === undefined) return screen({ screen: "doclet" });
   // ONE ADDRESS PER PAGE, BY ITS ID. A page was addressed by its container
   // and title, and a title changes on rename — so every link anybody had
   // copied broke the day somebody fixed a heading.
   if (first === "pages") {
     const [id] = tail;
     if (tail.length !== 1 || id === undefined || !ID_SHAPE.test(id)) {
-      return missing(
-        "knowledge",
-        under("Knowledge"),
-        "a page is opened from a search or its container",
-      );
+      return missing("doclet", under("Doclet"), "a page is opened from a search or its container");
     }
     return screen({ screen: "page", id });
   }
@@ -513,14 +513,14 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
   if (first === "diaries") {
     if (tail.length === 0) return screen({ screen: "diaries" });
     if (tail.length === 1 && tail[0]) return screen({ screen: "diary", handle: tail[0] });
-    return missing("knowledge", under("Knowledge"), "a diary is opened from the diaries list");
+    return missing("doclet", under("Doclet"), "a diary is opened from the diaries list");
   }
   // A CONTAINER BY ITS SHAPE, like a project: a lowercase segment here is a
   // reserved word or nothing, and never a container the engine could have
-  // minted — so a knowledge section that has not landed yet answers Not Found
+  // minted, so a Doclet section that has not landed yet answers Not Found
   // rather than a container screen asking the engine for a key it cannot hold.
   if (reserved(first) || tail.length > 0 || !CONTAINER_SHAPE.test(first)) {
-    return missing("knowledge", under("Knowledge"));
+    return missing("doclet", under("Doclet"));
   }
   return screen({ screen: "container", key: first });
 }

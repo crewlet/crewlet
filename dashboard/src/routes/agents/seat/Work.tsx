@@ -2,15 +2,15 @@
  * What is on a seat's plate — an agent's or a person's.
  *
  * TWO HALVES, AND THEY ARE NOT THE SAME READ. The list is `work_items
- * {assignee}`, which every Tracker holder gets — the tab is drawn only for
- * one (`Seat.tsx`) — and it is the floor. The blocks under it are
+ * {assignee}`, which every Worklet holder gets (the tab is drawn only for
+ * one, `Seat.tsx`), and it is the floor. The blocks under it are
  * `work_my_work`, which the engine answers to the record's owner, to whoever
  * leads them and to an admin, so they are asked for those readers
  * ([mayReadRecord]). One tab, because the question a
  * reader has is "what is this seat doing", and the answer is simply fuller
  * when they are entitled to more of it.
  *
- * THE TRACKER'S OWN ROW AND THE PERSON'S OWN BLOCKS, imported rather than
+ * WORKLET'S OWN ROW AND THE PERSON'S OWN BLOCKS, imported rather than
  * redrawn: `components/work.tsx` states the rule — one renderer, screens pick
  * the density — and a per-seat list that drew its own columns is exactly how
  * the board came to know a task could be blocked while the personal page did
@@ -91,8 +91,8 @@ export function Work({
               work.data ? `${work.data.total_hint}${work.data.total_capped ? "+" : ""}` : undefined
             }
             actions={
-              <a className="t-link" href={href(["work", "tasks"], { assignee: handle })}>
-                Open in Work
+              <a className="t-link" href={href(["worklet", "tasks"], { assignee: handle })}>
+                Open in Worklet
               </a>
             }
           >
@@ -152,7 +152,7 @@ export function Work({
           />
           <ChecklistClaims
             rows={mine.data?.checklist_items ?? []}
-            hrefOf={(address) => href(["work", address])}
+            hrefOf={(address) => href(["worklet", address])}
           />
         </>
       ) : (

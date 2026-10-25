@@ -16,16 +16,16 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // capacityFixture is one node's half of the handshake: an engine with an
@@ -373,7 +373,7 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 	// AND THE RETENTION REPORT SAYS IT, which is the banner `crewlet
 	// retention status` leads with while the window holds the fleet.
 	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
-		&runningLog{domain: tracker.Domain{}, spec: tracker.Domain{}.Stream()})}
+		&runningLog{domain: worklet.Domain{}, spec: worklet.Domain{}.Stream()})}
 	row := r.openMaintenance(ctx)
 	if row == nil {
 		t.Fatal("the report shows no window while one is open")
@@ -613,7 +613,7 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 		}, current, unstatedRoom)
 		return err
 	}
-	for _, domain := range []statelog.Domain{tracker.Domain{}, pages.Domain{}} {
+	for _, domain := range []statelog.Domain{worklet.Domain{}, doclet.Domain{}} {
 		stream := domain.Stream().Name
 		reservation, field, _ := capacityBounds(stream)
 		err := open(stream, target)
@@ -1020,7 +1020,7 @@ func (budgetHost) DomainConsumer(context.Context, string, string, uint64) (*jets
 func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, string) {
 	t.Helper()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
-	domain := tracker.Domain{}
+	domain := worklet.Domain{}
 	e.backends.Queue = host
 	s := &stateLog{volume: t.TempDir()}
 	runsLogs(s, &runningLog{domain: domain, spec: domain.Stream()})

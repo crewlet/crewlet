@@ -935,7 +935,7 @@ func TestASharedMetadataMapIsNotStampedInPlace(t *testing.T) {
 // A PRODUCER'S OWN WAKE ID SURVIVES ONTO THE EVENT, so a duplicate is
 // recognisable as one.
 //
-// The engine's own producers — the native tracker and knowledge base — derive
+// The engine's own producers, Worklet and Doclet, derive
 // their wake ids from the change and the recipient, because their first
 // dedupe layer FAILS OPEN by design: a coordination store that cannot be
 // reached must not silently stop notifications. What slips through it is

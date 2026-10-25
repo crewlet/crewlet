@@ -205,7 +205,7 @@ describe("the legend", () => {
   });
 
   // A KEY TO A PLACE THE COMPANY DOES NOT RUN IS NOT LISTED: the jumps to
-  // Work and My work, and the project switcher, where it runs no Crewlet Works.
+  // Worklet and My work, and the project switcher, where it runs no Worklet.
   test("leaves out the keys to a service the company does not run", () => {
     render(
       <LayerHost>
@@ -213,10 +213,10 @@ describe("the legend", () => {
       </LayerHost>,
     );
     const has = (id: string) => document.querySelector(`[data-key-row="${id}"]`) !== null;
-    expect(has("go.work")).toBe(false);
+    expect(has("go.worklet")).toBe(false);
     expect(has("go.me")).toBe(false);
     expect(has("project")).toBe(false);
-    expect(has("go.knowledge")).toBe(true);
+    expect(has("go.doclet")).toBe(true);
     expect(has("go.inbox")).toBe(true);
   });
 

@@ -265,7 +265,7 @@ test("Ask an agent opens the hand-off beside the grid, files a task with the bri
   expect(within(panel).queryByText(/columns?$/)).toBeNull();
   fireEvent.click(within(panel).getByRole("button", { name: "Hiring pipeline" }));
   fireEvent.click(ask);
-  await waitFor(() => expect(location.hash).toBe("#/work/ENG-42"));
+  await waitFor(() => expect(location.hash).toBe("#/worklet/ENG-42"));
   expect(fileArtifactTask).toHaveBeenCalledWith({
     kind: "sheet",
     title: "Hiring pipeline",

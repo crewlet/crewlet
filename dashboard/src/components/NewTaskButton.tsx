@@ -10,7 +10,7 @@
  * What the screen knows about the task goes with it — a project's page knows
  * its project — and nothing else: see `app/newTask.ts`.
  *
- * NOT DRAWN WHERE THE COMPANY RUNS NO CREWLET WORKS (`lib/services.ts`):
+ * NOT DRAWN WHERE THE COMPANY RUNS NO WORKLET (`lib/services.ts`):
  * there is no tracker to file the task in, so this is no locked door with a
  * reason behind it but no door at all.
  */

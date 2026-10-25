@@ -71,7 +71,7 @@ const BaseRecordVersion = 1
 // a raised version it would be deferred — the licence above.
 //
 // The rule is the framework's ([statelog.VersionedField.Gate]) and every
-// strict domain's — internal/tracker's GateRecordVersion states it at length —
+// strict domain's (internal/worklet's GateRecordVersion states it at length),
 // and this domain's three gates take the same pin.
 const GateRecordVersion = 1
 

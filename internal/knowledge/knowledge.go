@@ -13,15 +13,15 @@
 // ancestor exclusions — never a CQL fragment, a space key or a project list.
 //
 // TWO IMPLEMENTATIONS SHIP, which is what the seam was built for and is now
-// the argument for it rather than a promise about one: the engine's own pages
-// ([internal/pages.Searcher], the default) and Confluence. The interface is
+// the argument for it rather than a promise about one: Doclet
+// ([internal/doclet.Searcher], the default) and Confluence. The interface is
 // declared by its CONSUMERS, so the second backend was one new implementation
-// rather than a rewrite of everything that searches — and a caller that knew
+// rather than a rewrite of everything that searches, and a caller that knew
 // Confluence's own narrowing vocabulary would have been a caller to rewrite
-// the day a company ran the native one.
+// the day a company ran Doclet.
 //
 // [engine.Knowledge] is what picks between them, and it is a NIL CHECK rather
-// than a preference: a company on `backend: confluence` has no native
+// than a preference: a company on `backend: confluence` has no Doclet
 // searcher at all, and the config refuses a company that configures both.
 //
 // # The rules every backend honours

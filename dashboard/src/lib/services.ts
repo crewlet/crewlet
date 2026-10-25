@@ -3,10 +3,10 @@
  *
  * # Two services, three answers each
  *
- * A company runs Crewlet Works (the engine's own tracker: projects, tasks,
- * the Inbox's updates and My work) or another tracker in its place, Jira, or
- * none at all; and Crewlet Knowledge (the engine's own pages) or Confluence,
- * or none. The engine resolves which from the company document and hands it
+ * A company runs Worklet (the engine's own tracker: projects, tasks, the
+ * Inbox's updates and My work) or another tracker in its place, Jira, or none
+ * at all; and Doclet (the engine's own knowledge base: spaces and pages) or
+ * Confluence, or none. The engine resolves which from the company document and hands it
  * to every reader on the org projection (`services`, `contract/services.ts`):
  * the socket's first frame, every `org` push and `GET /org`. So nothing here
  * probes for it, and a company that switches a backend is drawn anew on the
@@ -30,12 +30,18 @@
  * refused on a guess either.
  */
 
-import type { ServicesRun } from "~/app/nav.ts";
+import type { Service, ServicesRun } from "~/app/nav.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { useOrg } from "./store-hooks.ts";
 
 export type { Service, ServicesRun } from "~/app/nav.ts";
 export type { OrgServices } from "~/contract/services.ts";
+
+/** Each of Crewlet's own services by its product name, as every screen says it. */
+export const SERVICE_NAMES: Readonly<Record<Service, string>> = {
+  tracker: "Worklet",
+  knowledge: "Doclet",
+};
 
 /**
  * The four answers, each ONE object, so a memo keyed on what runs moves only
@@ -51,7 +57,7 @@ const RUN: Readonly<Record<`${boolean}/${boolean}`, ServicesRun>> = {
 /** Which services run, from what the engine said: every one, until it has said. */
 export function servicesRun(services: OrgServices | null | undefined): ServicesRun {
   if (!services) return RUN["true/true"];
-  return RUN[`${services.tracker === "native"}/${services.knowledge === "native"}`];
+  return RUN[`${services.tracker === "worklet"}/${services.knowledge === "doclet"}`];
 }
 
 /** What the engine said the company runs, or null until it has. */

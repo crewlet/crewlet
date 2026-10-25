@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The set-valued arguments, and why a bare list is refused.
@@ -145,9 +145,9 @@ func (d WorkDeps) resolveRefs(ctx context.Context, tool, field string,
 // right counterparty. A whole-set gesture that reached the writer as a set
 // would give it no way to tell one from the other.
 func (d WorkDeps) dependencyChange(ctx context.Context, tool string,
-	args map[string]any, task tracker.Task) (tracker.DependencyChange, *tools.Result) {
+	args map[string]any, task worklet.Task) (worklet.DependencyChange, *tools.Result) {
 
-	change := tracker.DependencyChange{Task: task.ID, Project: task.Project}
+	change := worklet.DependencyChange{Task: task.ID, Project: task.Project}
 	change.Note = strings.TrimSpace(argString(args, "dependency_note"))
 	for _, side := range []struct {
 		name        string
@@ -178,10 +178,10 @@ func (d WorkDeps) dependencyChange(ctx context.Context, tool string,
 }
 
 // waitingOn is the ids a task's own dependency edges name.
-func waitingOn(task tracker.Task) []string {
+func waitingOn(task worklet.Task) []string {
 	out := make([]string, 0, len(task.Relations))
 	for _, relation := range task.Relations {
-		if relation.Kind == tracker.RelationWaitingOn {
+		if relation.Kind == worklet.RelationWaitingOn {
 			out = append(out, relation.Other)
 		}
 	}
@@ -218,17 +218,17 @@ func delta(have, want []string) (add, remove []string) {
 // pages log at all — which is why it is a separate argument rather than a
 // `kind` on one list.
 func (d WorkDeps) inertRelations(ctx context.Context, tool string,
-	args map[string]any, task tracker.Task) (*tracker.RelationIntent, *tools.Result) {
+	args map[string]any, task worklet.Task) (*worklet.RelationIntent, *tools.Result) {
 
-	intent := &tracker.RelationIntent{}
+	intent := &worklet.RelationIntent{}
 	touched := false
 	for _, side := range []struct {
 		name    string
-		kind    tracker.RelationKind
+		kind    worklet.RelationKind
 		resolve bool
 	}{
-		{"linked", tracker.RelationLinked, true},
-		{"linked_pages", tracker.RelationPage, false},
+		{"linked", worklet.RelationLinked, true},
+		{"linked_pages", worklet.RelationPage, false},
 	} {
 		stated, held, bad := parseSetArg(args, side.name)
 		if bad != "" {
@@ -257,12 +257,12 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 			// authors with the actor it is already acting as — and a
 			// second rule stating the same handle is how one of them
 			// comes to state a different one.
-			intent.Add = append(intent.Add, tracker.Relation{
+			intent.Add = append(intent.Add, worklet.Relation{
 				Kind: side.kind, Other: id,
 			})
 		}
 		for _, id := range stated.Remove {
-			intent.Remove = append(intent.Remove, tracker.Relation{
+			intent.Remove = append(intent.Remove, worklet.Relation{
 				Kind: side.kind, Other: id,
 			})
 		}
@@ -284,8 +284,8 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 			return nil, refusal
 		}
 		touched = true
-		intent.Add = append(intent.Add, tracker.Relation{
-			Kind: tracker.RelationDuplicates, Other: id,
+		intent.Add = append(intent.Add, worklet.Relation{
+			Kind: worklet.RelationDuplicates, Other: id,
 		})
 	}
 	if !touched || (len(intent.Add) == 0 && len(intent.Remove) == 0) {
@@ -295,7 +295,7 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 }
 
 // othersOfKind is the ids this task's relations of one kind name.
-func othersOfKind(task tracker.Task, kind tracker.RelationKind) []string {
+func othersOfKind(task worklet.Task, kind worklet.RelationKind) []string {
 	out := make([]string, 0, len(task.Relations))
 	for _, relation := range task.Relations {
 		if relation.Kind == kind {
@@ -311,8 +311,8 @@ func othersOfKind(task tracker.Task, kind tracker.RelationKind) []string {
 // finished edge — so an ordinary edit costs no read at all. The gate is
 // computed from the same two values the router's own gate reads, which is what
 // stops this tool paying for a lookup whose answer would be dropped.
-func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
-	patch tracker.TaskPatch) *tracker.TaskParty {
+func (d WorkDeps) parentParty(ctx context.Context, task worklet.Task,
+	patch worklet.TaskPatch) *worklet.TaskParty {
 
 	if patch.Status == nil || task.Parent == nil || *task.Parent == "" || d.Reader == nil {
 		return nil
@@ -320,7 +320,7 @@ func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
 	if task.StatusGroup.Finished() == patch.Status.Group().Finished() {
 		return nil
 	}
-	got, err := d.Reader.Task(ctx, *task.Parent, tracker.DetailWants{}, seatRead)
+	got, err := d.Reader.Task(ctx, *task.Parent, worklet.DetailWants{}, seatRead)
 	if err != nil {
 		// BEST EFFORT, like every other routing lookup: a parent this
 		// node cannot read is a parent's assignee who is not told, and
@@ -329,7 +329,7 @@ func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
 		// all still routed from the snapshot.
 		return nil
 	}
-	return &tracker.TaskParty{
+	return &worklet.TaskParty{
 		Task: got.Task.ID, Key: got.Task.Key, Assignee: got.Task.Assignee,
 	}
 }
@@ -345,10 +345,10 @@ func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
 // refuses the second — and the refusal is the reader's own text, which already
 // names the candidates when the ask is ambiguous.
 func (d WorkDeps) resolveThread(ctx context.Context,
-	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
+	q worklet.ThreadQuery) (worklet.ResolvedThread, *tools.Result) {
 
 	if d.Reader == nil {
-		return tracker.ResolvedThread{}, refusalOf(unconfigured(CommentOnWorkTool))
+		return worklet.ResolvedThread{}, refusalOf(unconfigured(CommentOnWorkTool))
 	}
 	if q.ReplyTo == "" && q.Answers == "" && q.Ask == "" {
 		// NOTHING TO RESOLVE. A top-level remark that asks nobody and
@@ -366,18 +366,18 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 // this way, because there an inference nobody could make is not a remark that
 // answers nothing — it is the whole of what would have admitted the caller.
 func (d WorkDeps) readThread(ctx context.Context,
-	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
+	q worklet.ThreadQuery) (worklet.ResolvedThread, *tools.Result) {
 
 	resolved, err := d.Reader.Thread(ctx, q, seatRead)
 	if err != nil {
-		var ambiguous *tracker.ErrAmbiguousAnswer
+		var ambiguous *worklet.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {
-			return tracker.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
+			return worklet.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
 		}
 		if refusal, ok := answerRefusal(err); ok {
-			return tracker.ResolvedThread{}, refusalOf(refusal)
+			return worklet.ResolvedThread{}, refusalOf(refusal)
 		}
-		return tracker.ResolvedThread{}, refusalOf(readFailure(ctx, CommentOnWorkTool, err))
+		return worklet.ResolvedThread{}, refusalOf(readFailure(ctx, CommentOnWorkTool, err))
 	}
 	return resolved, nil
 }
@@ -398,13 +398,13 @@ func (d WorkDeps) readThread(ctx context.Context,
 func answerRefusal(err error) (tools.Result, bool) {
 	var class tools.Refusal
 	switch {
-	case errors.Is(err, tracker.ErrNoComment):
+	case errors.Is(err, worklet.ErrNoComment):
 		class = tools.RefusalNotFound
-	case errors.Is(err, tracker.ErrForbidden):
+	case errors.Is(err, worklet.ErrForbidden):
 		class = tools.RefusalForbidden
-	case errors.Is(err, tracker.ErrAlreadyAnswered):
+	case errors.Is(err, worklet.ErrAlreadyAnswered):
 		class = tools.RefusalAlreadyAnswered
-	case errors.Is(err, tracker.ErrInvalid):
+	case errors.Is(err, worklet.ErrInvalid):
 		class = tools.RefusalInvalid
 	default:
 		return tools.Result{}, false
@@ -414,7 +414,7 @@ func answerRefusal(err error) (tools.Result, bool) {
 		// question simply has its answer — and the reader's sentence
 		// names who gave it and when, which is where to look.
 		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing "+
-			"was posted.", CommentOnWorkTool, tracker.Sentence(err))), true
+			"was posted.", CommentOnWorkTool, worklet.Sentence(err))), true
 	}
 	// THE ARGUMENT THE SENTENCE NAMES, not always `answers`: a choice
 	// that is not one of the ask's options is refused through this same
@@ -422,26 +422,26 @@ func answerRefusal(err error) (tools.Result, bool) {
 	// the one argument that was right.
 	return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing was "+
 		"posted — change the argument this names (`answers`, or `choice`) "+
-		"and comment again.", CommentOnWorkTool, tracker.Sentence(err))), true
+		"and comment again.", CommentOnWorkTool, worklet.Sentence(err))), true
 }
 
 // inferOnly is the top-level case: no thread to read, but an open ask
 // addressed to this author still closes.
 func (d WorkDeps) inferOnly(ctx context.Context,
-	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
+	q worklet.ThreadQuery) (worklet.ResolvedThread, *tools.Result) {
 
 	resolved, err := d.Reader.Thread(ctx, q, seatRead)
 	if err != nil {
-		var ambiguous *tracker.ErrAmbiguousAnswer
+		var ambiguous *worklet.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {
-			return tracker.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
+			return worklet.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
 		}
 		// BEST EFFORT ON THIS PATH ALONE. The caller asked for no
 		// answer and named no thread, so a read failure costs an
 		// inference nobody requested — failing their comment for it
 		// would refuse a write for a reason unrelated to what they
 		// asked.
-		return tracker.ResolvedThread{}, nil
+		return worklet.ResolvedThread{}, nil
 	}
 	return resolved, nil
 }
@@ -450,7 +450,7 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 // whole before it names the rest by id.
 //
 // Eight kibibytes: a structured ask's question is at most
-// [tracker.MaxDecisionQuestion] and always carried, and an ask in prose is
+// [worklet.MaxDecisionQuestion] and always carried, and an ask in prose is
 // carried whole while they fit — the refusal is read as a tool result, and
 // five questions at their 32 KiB cap would be most of an answer spent on
 // asking which one.
@@ -462,14 +462,14 @@ const ambiguousQuestionBytes = 8 << 10
 // EACH QUESTION WHOLE OR BY REFERENCE, never cut. It used to show the first
 // hundred and twenty characters of each, unmarked — so two questions that
 // opened the same way read as one question asked twice.
-func ambiguousText(e *tracker.ErrAmbiguousAnswer) string {
+func ambiguousText(e *worklet.ErrAmbiguousAnswer) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d open questions on this item are addressed to you, so "+
 		"which one this answers cannot be inferred. Pass `answers` with one "+
 		"of these comment ids:", len(e.Asks))
 	room := ambiguousQuestionBytes
 	for i, ask := range e.Asks {
-		if i == tracker.MaxOpenAsksNamed {
+		if i == worklet.MaxOpenAsksNamed {
 			fmt.Fprintf(&b, "\n  … and more — read the item with "+
 				"get_work_item to see the rest.")
 			break

@@ -22,13 +22,13 @@
  * keyboard. A task named on a row or in a byline opens beside the inbox, in
  * the frame's side panel.
  *
- * # Where the company runs no Crewlet Works
+ * # Where the company runs no Worklet
  *
- * Updates, Snoozed and Earlier are the tracker's notices, and Mark all read
+ * Updates, Snoozed and Earlier are Worklet's notices, and Mark all read
  * marks them, so where the company runs another tracker or none
  * (`lib/services.ts`) none of them is asked for or drawn: one line says where
  * asks and mentions go instead ([elsewhereLine]). Needs you stays, because
- * what fills it without the tracker still arrives: the seats stopped on a
+ * what fills it without Worklet still arrives: the seats stopped on a
  * spent budget and the engine's conditions (the agents and budget pushes) and
  * the coding runs parked on a question (`decisions`, which answers them
  * whatever runs the tracker).
@@ -156,7 +156,7 @@ export function Inbox() {
   // reconnect is never sent again.
   const owner = viewer.owner;
   const bound = owner !== "";
-  // THE NOTICES ARE CREWLET WORKS', and asked only where the company runs it:
+  // THE NOTICES ARE WORKLET'S, and asked only where the company runs it:
   // elsewhere the engine refuses every one of these reads.
   const runs = useServicesRun();
   const backends = useBackends();
@@ -332,7 +332,7 @@ export function Inbox() {
 
   return (
     <div className="inbox-frame" data-phone-pane={phone && named ? "true" : undefined}>
-      {/* MARK ALL READ IS THE TRACKER'S: hidden where the company runs none,
+      {/* MARK ALL READ IS WORKLET'S: hidden where the company runs none,
           and otherwise drawn for every reader, held with its reason where
           there is nothing of theirs to mark. */}
       {runs.tracker && (
@@ -448,7 +448,7 @@ export function Inbox() {
 }
 
 /**
- * Where asks and mentions go where the company runs no Crewlet Works, as far
+ * Where asks and mentions go where the company runs no Worklet, as far
  * as the engine has said which tracker it runs.
  */
 export function elsewhereLine(tracker: OrgServices["tracker"] | null): string {
@@ -461,7 +461,7 @@ export function elsewhereLine(tracker: OrgServices["tracker"] | null): string {
 
 /**
  * What the reading pane says with nothing open where the company runs no
- * Crewlet Works: "All clear. New updates open here." promised updates that
+ * Worklet: "All clear. New updates open here." promised updates that
  * cannot arrive. It says where asks and mentions go instead, and what still
  * comes here.
  */

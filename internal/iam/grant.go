@@ -16,8 +16,8 @@ import "slices"
 // they USE, so that is the vocabulary:
 //
 //   - [GrantAdmin] runs the company and the engine, and includes every app;
-//   - [GrantTracker] uses the native work tracker, read and write;
-//   - [GrantKnowledge] uses the native knowledge base, read and write;
+//   - [GrantWorklet] uses Worklet, read and write;
+//   - [GrantDoclet] uses Doclet, read and write;
 //   - [GrantArtifacts] authors artifacts: creates them, publishes their
 //     versions and shapes their data.
 //
@@ -69,18 +69,18 @@ const (
 	// and every credential the chart names are this permission's alone.
 	GrantAdmin Grant = "admin"
 
-	// GrantTracker uses the native work tracker: every tracker read and
-	// write, a project's files, the views and the catalogue, and the
-	// holder's own inbox, queue and person view — plus a report's, as their
-	// lead, which internal/authz decides on the relation.
-	GrantTracker Grant = "tracker"
+	// GrantWorklet uses Worklet: every Worklet read and write, a project's
+	// files, the views and the catalogue, and the holder's own inbox, queue
+	// and person view, plus a report's, as their lead, which internal/authz
+	// decides on the relation.
+	GrantWorklet Grant = "worklet"
 
-	// GrantKnowledge uses the native knowledge base: reading, searching,
-	// writing, saving and commenting on the company's own pages. A page is
-	// an ADDRESS other pages and prompts resolve, so a write here changes
-	// what every seat reads next turn — which is why the tool-skill pages,
-	// injected into every seat's prompt, are [GrantAdmin]'s and not this.
-	GrantKnowledge Grant = "knowledge"
+	// GrantDoclet uses Doclet: reading, searching, writing, saving and
+	// commenting on the company's own pages. A page is an ADDRESS other pages
+	// and prompts resolve, so a write here changes what every seat reads next
+	// turn, which is why the tool-skill pages, injected into every seat's
+	// prompt, are [GrantAdmin]'s and not this.
+	GrantDoclet Grant = "doclet"
 
 	// GrantArtifacts authors artifacts: creating one, publishing a version,
 	// renaming it, adding an asset, changing its datastore's schema, and
@@ -102,7 +102,7 @@ const (
 // Named AllGrants rather than Grants because [Principal.Grants] is the field a
 // reader meets first, and one name for the company's whole vocabulary and for
 // one principal's slice of it is a sentence that reads wrong either way.
-var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge, GrantArtifacts}
+var AllGrants = []Grant{GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts}
 
 // Apps are the permissions that open one APP each, and THE ONE PLACE AN APP IS
 // DECLARED.
@@ -116,7 +116,7 @@ var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge, GrantArtifacts
 // The dashboard's own copy is held to this one by a gate, so an app added here
 // and nowhere else fails the build rather than shipping a permission no screen
 // offers.
-var Apps = []Grant{GrantTracker, GrantKnowledge, GrantArtifacts}
+var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts}
 
 // Valid reports whether a permission off the wire is one this build knows.
 //

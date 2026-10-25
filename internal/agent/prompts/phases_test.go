@@ -8,7 +8,7 @@ import (
 // -- Onboarding ----------------------------------------------------------
 
 // The one-time pass points at the team's knowledge-base tools by capability,
-// not by product and not by tool name: on the native backend they are
+// not by product and not by tool name: on Doclet they are
 // first-party tools to activate, on Confluence an MCP server's, and the same
 // header has to read correctly on either. It once said they were always MCP
 // tools, which on the default backend sent every seat to list a server for a

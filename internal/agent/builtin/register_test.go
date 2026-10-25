@@ -4,9 +4,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE DELIVERY SURFACE AND THE FEED SOURCE ARE ONE VOCABULARY, and nothing
@@ -14,7 +14,7 @@ import (
 //
 // The gate compares a delivery's declared surface against the
 // NotificationSource an inbound wake carried. The native feeds publish under
-// [tracker.Source] and [pages.Source]; registering their writes under any
+// [worklet.Source] and [doclet.Source]; registering their writes under any
 // other spelling makes every native obligation unreachable, and the check then
 // falls back to "any delivery counts" — silently, with a passing suite, which
 // is exactly what `tracker`/`pages` did in place of `work`/`page`.
@@ -34,8 +34,8 @@ func TestTheNativeWritesDeliverToTheirOwnFeedSource(t *testing.T) {
 		names []string
 		want  string
 	}{
-		{builtin.WorkWrites(), tracker.Source},
-		{builtin.PageWrites(), pages.Source},
+		{builtin.WorkWrites(), worklet.Source},
+		{builtin.PageWrites(), doclet.Source},
 	} {
 		for _, name := range c.names {
 			if got := deliveries[name]; got != c.want {

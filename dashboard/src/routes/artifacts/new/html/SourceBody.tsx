@@ -187,7 +187,7 @@ export function SourceBody() {
       seat: who.seat,
       project: who.project,
     });
-    if (filed) nav.to(["work", filed.item]);
+    if (filed) nav.to(["worklet", filed.item]);
   };
   const used = CAPABILITY_CHOICES.filter((c) => capabilities.includes(c.capability));
 

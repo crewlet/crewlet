@@ -29,7 +29,7 @@ import (
 //
 //	model:     text-embedding-3-large
 //	width:     3072 (the model's native dimension)
-//	corpus:    a company's own knowledge base and work items
+//	corpus:    a company's Doclet pages and Worklet work items
 //	documents: 5 000 sampled sources
 //	fitted:    2026-09
 //	how:       crewlet search eval --fit

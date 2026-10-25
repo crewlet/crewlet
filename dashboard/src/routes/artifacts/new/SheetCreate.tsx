@@ -301,7 +301,7 @@ export function SheetCreate() {
       seat: who.seat,
       project: who.project || undefined,
     });
-    if (filed?.item) nav.to(["work", filed.item]);
+    if (filed?.item) nav.to(["worklet", filed.item]);
   };
 
   const filledRows = draft ? draft.rows.filter((row) => !isBlankRow(row)).length : 0;

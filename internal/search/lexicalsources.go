@@ -104,7 +104,7 @@ func DefaultLexicalSources() []LexicalSource {
 	return []LexicalSource{PageSource{}, TaskSource{}}
 }
 
-// PageSource is the knowledge base.
+// PageSource is Doclet.
 type PageSource struct{}
 
 // Source implements [LexicalSource].
@@ -162,7 +162,7 @@ func (PageSource) Count(ctx context.Context, tx *sql.Tx) (int, error) {
 	return n, err
 }
 
-// TaskSource is the native work tracker.
+// TaskSource is Worklet.
 //
 // # What a work item's text IS
 //

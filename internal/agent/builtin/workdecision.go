@@ -9,9 +9,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A DECISION IS AN ARGUMENT OF TWO TOOLS, stated once.
@@ -40,13 +40,13 @@ func decisionSchema() map[string]any {
 			"label": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("The option as a button would "+
-					"say it, at most %d bytes.", tracker.MaxOptionLabel),
+					"say it, at most %d bytes.", worklet.MaxOptionLabel),
 			},
 			"detail": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("What choosing it means — its "+
 					"cost, its risk, what happens next. At most %d bytes.",
-					tracker.MaxOptionDetail),
+					worklet.MaxOptionDetail),
 			},
 		},
 		"required": []any{"id", "label"},
@@ -57,9 +57,9 @@ func decisionSchema() map[string]any {
 			"kind": map[string]any{
 				"type": "string",
 				"enum": []any{
-					string(tracker.EvidenceTask), string(tracker.EvidencePage),
-					string(tracker.EvidenceTurn), string(tracker.EvidenceRun),
-					string(tracker.EvidenceURL),
+					string(worklet.EvidenceTask), string(worklet.EvidencePage),
+					string(worklet.EvidenceTurn), string(worklet.EvidenceRun),
+					string(worklet.EvidenceURL),
 				},
 			},
 			"ref": map[string]any{
@@ -86,13 +86,13 @@ func decisionSchema() map[string]any {
 				"type": "string",
 				"description": fmt.Sprintf("What is being decided, in one "+
 					"sentence of at most %d bytes. The context goes in `body`.",
-					tracker.MaxDecisionQuestion),
+					worklet.MaxDecisionQuestion),
 			},
 			"options": map[string]any{
 				"type": "array",
 				"description": fmt.Sprintf("%d to %d choices — two to four "+
-					"is what a person weighs well.", tracker.MinDecisionOptions,
-					tracker.MaxDecisionOptions),
+					"is what a person weighs well.", worklet.MinDecisionOptions,
+					worklet.MaxDecisionOptions),
 				"items": option,
 			},
 			"recommended": map[string]any{
@@ -102,17 +102,17 @@ func decisionSchema() map[string]any {
 			"rationale": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("Why you recommend it, at most %d "+
-					"bytes.", tracker.MaxDecisionRationale),
+					"bytes.", worklet.MaxDecisionRationale),
 			},
 			"evidence": map[string]any{
 				"type": "array",
 				"description": fmt.Sprintf("What you looked at, at most %d. A "+
-					"work item or page must exist.", tracker.MaxDecisionEvidence),
+					"work item or page must exist.", worklet.MaxDecisionEvidence),
 				"items": evidence,
 			},
 			"role": map[string]any{
 				"type": "string",
-				"enum": []any{string(tracker.RoleApprover), string(tracker.RoleContributor)},
+				"enum": []any{string(worklet.RoleApprover), string(worklet.RoleContributor)},
 				"description": "`approver` when their answer IS the decision; " +
 					"`contributor` when it is an input to one somebody else makes.",
 			},
@@ -126,7 +126,7 @@ func decisionSchema() map[string]any {
 				"properties": map[string]any{
 					"surface": map[string]any{
 						"type": "string",
-						"enum": []any{string(tracker.InformMattermost), string(tracker.InformSlack)},
+						"enum": []any{string(worklet.InformMattermost), string(worklet.InformSlack)},
 					},
 					"channel": map[string]any{"type": "string"},
 				},
@@ -146,10 +146,10 @@ func decisionSchema() map[string]any {
 //
 // THE WORLD IS CHECKED HERE, before anything is published: a task the
 // evidence names is resolved to its id and a page must exist
-// ([tracker.ValidateDecision]). A lookup that FAILS is the node's condition,
+// ([worklet.ValidateDecision]). A lookup that FAILS is the node's condition,
 // and is answered as one.
 func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
-	raw any, pageReader PageReader) (*tracker.Decision, *tools.Result) {
+	raw any, pageReader PageReader) (*worklet.Decision, *tools.Result) {
 
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -158,20 +158,20 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	var decision tracker.Decision
+	var decision worklet.Decision
 	if err = decoder.Decode(&decision); err != nil {
 		return nil, refusalOf(failed(fmt.Sprintf("%s: `decision` does not have "+
 			"the shape its schema describes (%v). It takes question, options "+
 			"[{id, label, detail}], recommended, rationale, evidence [{kind, ref, "+
 			"label}], role and inform {surface, channel}.", tool, err)))
 	}
-	checked, err := tracker.ValidateDecision(ctx, decision, evidenceLookup{
+	checked, err := worklet.ValidateDecision(ctx, decision, evidenceLookup{
 		work: d, pages: pageReader,
 	})
 	switch {
-	case errors.Is(err, tracker.ErrInvalid):
+	case errors.Is(err, worklet.ErrInvalid):
 		return nil, refusalOf(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(
-			"%s was refused: %s. Nothing was posted.", tool, tracker.Sentence(err))))
+			"%s was refused: %s. Nothing was posted.", tool, worklet.Sentence(err))))
 	case err != nil:
 		return nil, refusalOf(readFailure(ctx, tool, err))
 	}
@@ -194,7 +194,7 @@ type ChannelDirectory interface {
 	// because a promise to post where the seat has no identity is one it
 	// can never keep, and the engine would hold its turn open for a post
 	// no tool of its can make.
-	ChatSurfaces(handle string) []tracker.InformSurface
+	ChatSurfaces(handle string) []worklet.InformSurface
 
 	// UnitChannels is every channel a unit of the chart declares, as the
 	// chart spells it.
@@ -207,8 +207,8 @@ type ChannelDirectory interface {
 // # An agent seat's alone
 //
 // THE ENGINE ENFORCES AN INFORM: the asker's answered turn is held open until
-// a tool on the named surface has run ([tracker.Owes]). A person — a bound
-// operator at the dashboard, an assistant on their credential — has no turn
+// a tool on the named surface has run ([worklet.Owes]). A person (a bound
+// operator at the dashboard, an assistant on their credential) has no turn
 // to hold, so an inform they asked for would put "posts it to #channel" on the
 // answering person's card as a promise nothing keeps. That is refused as
 // FORBIDDEN rather than invalid: no spelling of the argument makes it right
@@ -221,9 +221,9 @@ type ChannelDirectory interface {
 // channel nobody checked the seat's bot is in. A leading `#` is accepted and
 // the chart's own spelling is stored, so the card and the prompt render the
 // name the company uses.
-func (d WorkDeps) checkInform(tool string, actor Actor, inform tracker.Inform) (tracker.Inform, *tools.Result) {
-	if actor.Kind != tracker.AuthorAgent {
-		return tracker.Inform{}, refusalOf(refused(tools.RefusalForbidden,
+func (d WorkDeps) checkInform(tool string, actor Actor, inform worklet.Inform) (worklet.Inform, *tools.Result) {
+	if actor.Kind != worklet.AuthorAgent {
+		return worklet.Inform{}, refusalOf(refused(tools.RefusalForbidden,
 			fmt.Sprintf("%s: `decision.inform` asks the engine to hold the "+
 				"asker's turn until the outcome is posted in %s, and only an "+
 				"agent seat has a turn to hold. Ask without `inform`, and post "+
@@ -231,7 +231,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform tracker.Inform) (
 				tool, clip(inform.Channel))))
 	}
 	if d.Channels == nil {
-		return tracker.Inform{}, refusalOf(failed(fmt.Sprintf("%s: this "+
+		return worklet.Inform{}, refusalOf(failed(fmt.Sprintf("%s: this "+
 			"surface has no chart to check `decision.inform` against, so it "+
 			"cannot promise a post. Ask without `inform`. Nothing was posted.",
 			tool)))
@@ -246,7 +246,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform tracker.Inform) (
 			}
 			held = strings.Join(names, ", ")
 		}
-		return tracker.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
+		return worklet.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
 			"`decision.inform.surface` is %q, which you cannot post on — the "+
 			"chat surfaces you hold a bot on here are: %s. Name one of them, "+
 			"or ask without `inform`. Nothing was posted.", tool,
@@ -264,7 +264,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform tracker.Inform) (
 	if len(declared) > 0 {
 		listed = strings.Join(declared, ", ")
 	}
-	return tracker.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
+	return worklet.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
 		"`decision.inform.channel` is %q, which no team in the org chart "+
 		"declares — the channels it does are: %s. Name one of them, or ask "+
 		"without `inform`. Nothing was posted.", tool, clip(inform.Channel),
@@ -272,22 +272,22 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform tracker.Inform) (
 }
 
 // evidenceLookup is the world a decision's evidence is checked against: this
-// surface's own tracker reader and knowledge-base reader.
+// surface's own Worklet reader and Doclet reader.
 type evidenceLookup struct {
 	work  WorkDeps
 	pages PageReader
 }
 
-var _ tracker.EvidenceLookup = evidenceLookup{}
+var _ worklet.EvidenceLookup = evidenceLookup{}
 
 // TaskID resolves a key or an id through the same point read every other
 // reference in these tools takes.
 func (l evidenceLookup) TaskID(ctx context.Context, ref string) (string, error) {
 	if l.work.Reader == nil {
-		return "", errors.New("this surface has no tracker reader to check " +
+		return "", errors.New("this surface has no Worklet reader to check " +
 			"a work item against")
 	}
-	got, err := l.work.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+	got, err := l.work.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	if err != nil {
 		return "", err
 	}
@@ -296,24 +296,24 @@ func (l evidenceLookup) TaskID(ctx context.Context, ref string) (string, error) 
 
 // PageID resolves a page by id or by address to a live page's id.
 //
-// A COMPANY WITH NO NATIVE KNOWLEDGE BASE CANNOT CITE A PAGE by kind: there is
+// A COMPANY WITHOUT DOCLET CANNOT CITE A PAGE by kind: there is
 // nothing to check it against, and a reference nothing checked is the dead
 // link the check exists to prevent. That is the caller's to change — cite it
 // as a url — so it is refused as invalid rather than reported as a failure.
 // A trashed page is not live: it is where nobody deciding can read it.
 func (l evidenceLookup) PageID(ctx context.Context, ref string) (string, bool, error) {
 	if l.pages == nil {
-		return "", false, fmt.Errorf("%w: this company has no native knowledge "+
-			"base, so a `page` cannot be checked — cite it as a `url`",
-			tracker.ErrInvalid)
+		return "", false, fmt.Errorf("%w: this company does not run Doclet, "+
+			"so a `page` cannot be checked; cite it as a `url`",
+			worklet.ErrInvalid)
 	}
 	detail, err := l.pages.Get(ctx, strings.TrimSpace(ref), seatRead)
 	switch {
-	case errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, doclet.ErrNotFound):
 		return "", false, nil
 	case err != nil:
 		return "", false, err
-	case detail.Page.Status == pages.StatusTrashed:
+	case detail.Page.Status == doclet.StatusTrashed:
 		return "", false, nil
 	}
 	return detail.Page.ID, true, nil

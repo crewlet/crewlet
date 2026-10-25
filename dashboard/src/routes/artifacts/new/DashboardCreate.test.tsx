@@ -36,7 +36,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "artifacts"],
+  grants: ["admin", "worklet", "artifacts"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -320,7 +320,7 @@ test("an agent asked with nothing on the board gets a task with the brief, and t
   expect(within(panel).queryByText(/^The board, with/)).toBeNull();
   const ask = await within(panel).findByRole("button", { name: "Ask Agent Analyst" });
   fireEvent.click(ask);
-  await waitFor(() => expect(location.hash).toBe("#/work/OPS-4"));
+  await waitFor(() => expect(location.hash).toBe("#/worklet/OPS-4"));
   expect(filed()?.args).toMatchObject({ title: "Team load", assignee: "analyst" });
   expect(filed()?.args.body).toContain("Who is carrying the most work.");
   expect(sent.some((r) => r.method === "POST" && r.path === "/artifacts")).toBe(false);
