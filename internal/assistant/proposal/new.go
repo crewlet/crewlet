@@ -34,6 +34,14 @@ type Draft struct {
 	// which must name its audience (D09).
 	ChangesVisibility bool
 
+	// PageRevision is the open screen's revision, the turn's page context
+	// `source_revision`: what a page action is prepared against. Only the
+	// turn sees the page, so a page action's previewer leaves its own
+	// revision empty and the turn names it here. Required for a page-scope
+	// proposal, because a page action with nothing to compare against could
+	// never be found stale.
+	PageRevision string
+
 	// Taint names the outside source the turn read before it proposed
 	// (D25), shown on the card.
 	Taint string
@@ -67,6 +75,19 @@ func New(d Draft) (assistantdomain.NewProposal, error) {
 			"its method is an HTTP verb", ErrInvalid)
 	case d.Now.IsZero():
 		return assistantdomain.NewProposal{}, fmt.Errorf("%w: a draft names its instant", ErrInvalid)
+	case d.Scope == wire.ScopePage && d.PageRevision == "":
+		return assistantdomain.NewProposal{}, fmt.Errorf("%w: a page action is prepared "+
+			"against the open screen's revision, and the turn's page context names none",
+			ErrInvalid)
+	case d.Scope == wire.ScopePage && p.SourceRevision != "" && p.SourceRevision != d.PageRevision:
+		return assistantdomain.NewProposal{}, fmt.Errorf("%w: the preview read revision %q "+
+			"and the open screen is at %q", ErrInvalid, p.SourceRevision, d.PageRevision)
+	case d.Scope == wire.ScopeServer && d.PageRevision != "":
+		return assistantdomain.NewProposal{}, fmt.Errorf("%w: a server write is judged "+
+			"against its record's revision, never the screen's", ErrInvalid)
+	}
+	if d.Scope == wire.ScopePage {
+		p.SourceRevision = d.PageRevision
 	}
 	id, err := uuid.NewV7()
 	if err != nil {

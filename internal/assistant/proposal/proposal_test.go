@@ -162,9 +162,21 @@ func TestAPageActionIsNeverSent(t *testing.T) {
 	}
 	d.Preview.Request = exec.Request{Method: proposal.PageMethod,
 		Path: proposal.PageActionPath + "work.filters", Body: []byte(`{"status":"open"}`)}
-	if _, err := proposal.New(d); err != nil {
-		t.Errorf("a page action was refused: %v", err)
+	d.Preview.SourceRevision = ""
+	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrInvalid) {
+		t.Errorf("a page action naming no page revision was proposed: %v", err)
 	}
+	d.PageRevision = "url:3f9c1a0e"
+	if n, err := proposal.New(d); err != nil || n.SourceRevision != d.PageRevision ||
+		n.Card.Proposal.SourceRevision != d.PageRevision {
+		t.Errorf("a page action is not prepared against the page's revision: %v", err)
+	}
+	d.Preview.SourceRevision = "url:0000"
+	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrInvalid) {
+		t.Errorf("a page action whose preview read another revision than the page's "+
+			"was proposed: %v", err)
+	}
+	d.Preview.SourceRevision = ""
 	page, err := proposal.New(d)
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +185,7 @@ func TestAPageActionIsNeverSent(t *testing.T) {
 		string(ref.Payload) != `{"status":"open"}` {
 		t.Errorf("a page proposal's card names its action as %+v", ref)
 	}
-	d.Scope = wire.ScopeServer
+	d.Scope, d.PageRevision = wire.ScopeServer, ""
 	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrInvalid) {
 		t.Errorf("a server write with a page request was proposed: %v", err)
 	}
@@ -195,7 +207,7 @@ func TestEveryProposalMoveIsOneTheStateMachineAllows(t *testing.T) {
 		},
 		wire.ProposalApproved: {
 			proposal.EventExecute: wire.ProposalExecuting, proposal.EventClaim: wire.ProposalApplying,
-			proposal.EventUnknown: wire.ProposalUnknown,
+			proposal.EventUnknown: wire.ProposalUnknown, proposal.EventPageStale: wire.ProposalStale,
 		},
 		wire.ProposalExecuting: {
 			proposal.EventApplied: wire.ProposalApplied, proposal.EventRefused: wire.ProposalFailed,
