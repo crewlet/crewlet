@@ -417,6 +417,9 @@ func Drive(ctx context.Context, req llm.Request, opts ConnOptions,
 	if err != nil {
 		return nil, err
 	}
+	// A next that panics — a case modelling a backend that falls over —
+	// still leaves its run released, as a CLI that died is.
+	defer c.Close()
 	for !c.Stopped() {
 		r, err := next(c)
 		if err != nil {
