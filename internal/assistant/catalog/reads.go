@@ -118,7 +118,7 @@ func readTools() []Tool {
 			schema: object(nil, map[string]*schema{
 				"project":     text("A project key, ENG for example.", nameBytes),
 				"assignee":    text("A seat's handle.", nameBytes),
-				"status":      &schema{kind: "array", description: "Statuses to keep.", maxItems: len(statuses), items: oneOf("", statuses...)},
+				"status":      {kind: "array", description: "Statuses to keep.", maxItems: len(statuses), items: oneOf("", statuses...)},
 				"priority":    oneOf("A priority to keep.", priorities...),
 				"type":        text("A task type from the workspace's catalogue.", nameBytes),
 				"tag":         text("A tag the project declares.", nameBytes),
