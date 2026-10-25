@@ -12,9 +12,19 @@
 // other sends, which is how a dialog came to read a field its route had
 // stopped writing (internal/api's gate answer); so neither side types one.
 //
-// It is the package the orchestrator's scripted provider, the fake guarded
-// handler and the evaluation runner are added to as they are built, so every
+// It holds the orchestrator's scripted provider ([Model]), its seams' fakes,
+// the [Rig] every suite drives a turn through, the small company every write
+// previews against ([World]) and the evaluation runner ([RunSuite]), so every
 // suite that drives a turn drives it through one harness.
+//
+// # It links no testing package
+//
+// `crewlet assistant eval` runs its cases through this same harness from the
+// binary, so nothing here imports `testing` (helpers take [TB], which a
+// *testing.T satisfies) or net/http/httptest, which imports it. A case runs
+// the assistant a node runs, scripted or against a real model; the API's
+// authority is never what an evaluation measures, since the deterministic
+// suites in internal/api hold it.
 package assistanttest
 
 import (

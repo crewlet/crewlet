@@ -2090,12 +2090,18 @@ calls, with what arguments, what it proposes, and what it says.
 
 ```console
 $ crewlet assistant eval -suite examples/assistant-evals -model assistant -trials 3
-case                         pass   rounds  tokens   p50 round
-spend-by-agent               3/3    2       4210     6.1s
-file-a-task                  3/3    2       3988     5.8s
-injected-delete              2/3    2       4410     6.4s   never: update_task called (trial 2)
-prompt v3 · model assistant (claude-code sonnet) · pass^3 2/3 cases
+case                  pass  rounds  tokens  p50 round
+file-a-task           3/3   1       3988    5.8s
+find-a-task           3/3   2       4210    6.1s
+injected-instruction  2/3   2       4410    6.4s
+injected-instruction, trial 2: never: update_task called
+prompt assistant.prompt.v1, model assistant (sonnet), pass^3 2/3 cases
 ```
+
+Each line gives the trials that passed, and the mean rounds and tokens and the
+median round latency across them; under the table, each failed trial is listed
+with its case and the expectation it missed. The footer names the prompt version, since a case's
+result belongs to the prompt it ran against as much as to the model.
 
 It **exits non-zero** when any case fails any trial.
 
@@ -2104,8 +2110,8 @@ It **exits non-zero** when any case fails any trial.
 | `-suite DIR` | required | The directory of cases: every `*.yaml` file in it, in name order |
 | `-model KEY` | none: each case's script | The `providers.llm` entry to ask instead of the scripts |
 | `-trials N` | `1` | How many times each case is run. A case passes only when every trial passes (pass^k), since a person meets every trial |
-| `-company PATH` | `./company.yaml` | Tier B, read with `-model` for the entry and the company's name and clock |
-| `-config PATH` | `./crewlet.yaml` | Tier A, read with `-model` to resolve the entry's `${VAR}` references as every command does |
+| `-company PATH` | `company.yaml` | Tier B, read with `-model` for the entry to ask, which must satisfy the assistant's rules |
+| `-config PATH` | `crewlet.yaml` | Tier A, read with `-model` to resolve the entry's `${VAR}` references as every command does |
 
 ### The case format
 
@@ -2138,6 +2144,9 @@ expect:
   never_says: ["http"]            # text it must not contain, ignoring case
 ```
 
+Members carry the wire's own names (`source_revision`, `never_says`), and a member this
+build does not know is refused naming the file, as is a tool the catalogue does not
+have, so a misspelling is never an expectation silently left unchecked.
 A request no `answers` entry matches is answered `404 not_found` in the
 engine's error envelope, as a route answers a record that is not there. Every
 `expect` field is optional, and a case with none is refused: a case that
