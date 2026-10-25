@@ -1243,10 +1243,10 @@ const modelPlaceholder = "{model}"
 //
 // ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
 // `model` is written in its CLI's own grammar and every reader of it has to
-// see the same string: a text call's argv, an agent-mode or code-sandbox run
+// see the same string: a host-mode run's argv, a box-mode or code-sandbox run
 // of the same CLI in a box, and the config rule that judges the value as that
 // CLI reads it. A run that rebuilt the value its own way named one model to
-// the box and another to every text call on the same entry.
+// the box and another to every host-mode run on the same entry.
 //
 // THE VALUE, NOT THE ELEMENT. A box's runner writes its own flag
 // (`--model <value>`), so an element that spells flag and value as one —

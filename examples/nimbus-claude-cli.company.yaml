@@ -442,9 +442,10 @@ providers:
 #     seat that has to discover its way around four servers and 50-150
 #     tools; a chat turn here is discover, activate, post, submit — well
 #     inside 12.
-#   - On a coding CLI EVERY ROUND IS A PROCESS LAUNCH.  A Node runtime
-#     costs seconds before the first byte, so 24 rounds is minutes of pure
-#     launch overhead on a turn that needed six.
+#   - EVERY ROUND RE-SENDS THE WHOLE CONVERSATION.  The CLI's own loop
+#     sends the prompt and everything since with each request, and the
+#     budget charges cached input in full, so each round a thrashing turn
+#     spends past the six it needed costs more than the one before.
 #
 # The ceiling stays 2x the base, which is what an extension is for: a
 # phase that is genuinely progressing gets a second budget, and one that

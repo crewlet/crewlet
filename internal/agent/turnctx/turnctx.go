@@ -370,7 +370,7 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 // one, its auxiliary calls tallied on spend rather than on [Turn.AuxSpend].
 //
 // One caller, and the shape of the problem it solves is the reason it exists:
-// an agent-mode executor hands its tool surface to a coding CLI over the
+// a box-mode executor hands its tool surface to a coding CLI over the
 // bridge, and the CLI goes on calling those tools after the segment that
 // launched it has ended and charged what it spent. Tallied on that segment's
 // tally, every one of those calls was added to a number nothing read again.

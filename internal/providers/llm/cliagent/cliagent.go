@@ -244,10 +244,10 @@ func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.mod
 // branch is.
 func (p *Provider) Box() bool { return p.box }
 
-// CodingAgent is the sandbox runner that drives this CLI in agent mode.
+// CodingAgent is the sandbox runner that drives this CLI in box mode.
 //
 // It is the CLI's own name, because the runner registry is keyed on exactly
-// that: agent mode reuses the coding-agent runners rather than growing a
+// that: box mode reuses the coding-agent runners rather than growing a
 // second way to invoke the same binary with the same flags. A CLI with no
 // registered runner is refused where the run is built, by a message that
 // names what IS registered — see [sandbox.Manager.RunnerFor].
