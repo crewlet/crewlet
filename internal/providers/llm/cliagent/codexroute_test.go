@@ -162,25 +162,27 @@ func TestCodexsRunIsReadFromItsOwnRollout(t *testing.T) {
 	}
 }
 
-// A RUN WITH TOOLS KEEPS EVERY FLAG THAT CONFINES A TEXT FUNCTION, and adds
-// --ignore-user-config. The route's argv replaces the profile's — it drops
-// --ephemeral, whose absence writes the rollout the record is read from — so a
-// confinement flag added to one and not the other would hold for half the
-// calls; and the home's config.toml declares MCP servers of its own, which
-// started beside the seat's until the route ignored it (measured on 0.164.0).
+// A RUN WITH TOOLS KEEPS EVERY FLAG THAT CONFINES A TEXT FUNCTION, and both
+// keep the home's config.toml out. The route's argv replaces the profile's — it
+// drops --ephemeral, whose absence writes the rollout the record is read from —
+// so a confinement flag added to one and not the other would hold for half the
+// calls. And a config.toml in the seat's home declares MCP servers of its own:
+// read, it handed a text function codex's MCP-resource tools reaching them,
+// and started them beside the seat's in a run with tools (measured on 0.164.0).
 //
-// Mutation: drop a -c from the route's argv, or --ignore-user-config, and this
-// names it.
+// Mutation: drop a -c from the route's argv, or --ignore-user-config from
+// either, and this names it.
 func TestCodexsToolRouteKeepsEveryConfinementFlag(t *testing.T) {
 	t.Parallel()
 	p, _ := cliprofile.Builtin("codex")
 	want := slices.DeleteFunc(slices.Clone(p.CompleteArgs), func(a string) bool { return a == "--ephemeral" })
-	got := slices.DeleteFunc(slices.Clone(p.MCP.CompleteArgs), func(a string) bool { return a == "--ignore-user-config" })
-	if !slices.Equal(got, want) {
+	if !slices.Equal(p.MCP.CompleteArgs, want) {
 		t.Errorf("the route's argv is %q, want the profile's own less --ephemeral: %q", p.MCP.CompleteArgs, want)
 	}
-	if !slices.Contains(p.MCP.CompleteArgs, "--ignore-user-config") {
-		t.Errorf("the route's argv %q reads the home's config.toml and the servers it declares", p.MCP.CompleteArgs)
+	for name, argv := range map[string][]string{"complete_args": p.CompleteArgs, "mcp.complete_args": p.MCP.CompleteArgs} {
+		if !slices.Contains(argv, "--ignore-user-config") {
+			t.Errorf("%s %q reads the home's config.toml and the servers it declares", name, argv)
+		}
 	}
 }
 

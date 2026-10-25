@@ -408,6 +408,11 @@ codex:
   #     bundled skills out of the home; --ignore-rules loads no `.rules` file;
   #     features.hooks, features.apps and features.plugins switch off hooks, a
   #     ChatGPT login's connectors and the plugin marketplace.
+  #   - --ignore-user-config reads no config.toml from the seat's home, and so
+  #     none of the MCP servers one declares: without it, a server declared
+  #     there gave every call codex's three MCP-resource tools reaching it, and
+  #     a run with tools started it (measured on 0.164.0). The login is still
+  #     read from CODEX_HOME; everything this profile sets, it sets with -c.
   #   - --ephemeral writes no session; features.memories=false keeps memories
   #     off (the default, stated so that a release flipping it changes
   #     nothing); features.shell_snapshot=false writes no snapshot of the
@@ -452,6 +457,7 @@ codex:
     - "--json"
     - "--skip-git-repo-check"
     - "--ephemeral"
+    - "--ignore-user-config"
     - "--ignore-rules"
     - "--sandbox"
     - "read-only"
@@ -571,15 +577,14 @@ codex:
   # and codex's three MCP-resource readers (which reach only the servers codex
   # runs — this one, which serves no resources), and no other server started.
   #
-  #   complete_args            the profile's own, less --ephemeral — the
+  #   complete_args            the profile's own, less --ephemeral: the
   #                            rollout file a run without it writes is the
   #                            record below; the sessions directory is
-  #                            volatile, so it goes with the generation — and
-  #                            with --ignore-user-config, which keeps the
-  #                            home's config.toml out (its own servers
-  #                            included: without it the home's server
-  #                            started). The login is still read from
-  #                            CODEX_HOME.
+  #                            volatile, so it goes with the generation. Its
+  #                            --ignore-user-config keeps the home's
+  #                            config.toml out here too, and the servers it
+  #                            declares with it (without it, the home's server
+  #                            started beside the seat's).
   #   tool_timeout_sec         codex's per-call timeout (300 seconds of its
   #                            own); a 4 here gave a slow call up at 4.0s.
   #   supports_parallel_tool_calls
