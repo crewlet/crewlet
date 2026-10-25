@@ -1,0 +1,502 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/live"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/tracing"
+)
+
+// The reasons a turn's context ends, read back with context.Cause.
+var (
+	errStopped     = errors.New("assistant: the person stopped the turn")
+	errTurnTimeout = errors.New("assistant: the turn ran past its time")
+	errDraining    = errors.New("assistant: this node is shutting down")
+	errGrantEnding = errors.New("assistant: the turn's grant is about to end")
+)
+
+// turn is one segment of one turn, running on this node.
+type turn struct {
+	svc          *Service
+	person       iam.Principal
+	by           iam.Actor
+	conversation uuid.UUID
+	id           uuid.UUID
+	// key is the operation every record of this segment is published under.
+	key      string
+	log      *live.Log
+	read     exec.Grant
+	page     *wire.PageContext
+	acts     []string
+	boundary provenance.Boundary
+	started  time.Time
+
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	done   chan struct{}
+
+	mu sync.Mutex
+	// steps, cards and messages count what the turn has written across its
+	// segments, so a resumed segment's ids continue its first one's.
+	steps, cards, messages int
+	// answer is this segment's answer message; streamed is what its deltas
+	// have drawn so far.
+	answer   uuid.UUID
+	streamed []string
+	audit    []types.AssistantAuditStep
+	shown    bool
+	model    string
+	provider string
+}
+
+// write is the record caller for this segment, with no step yet.
+func (t *turn) write() Write {
+	return Write{Owner: t.person.ID, By: t.by, Key: t.key}
+}
+
+// emit appends one frame to the turn's log. A frame the log refuses is a
+// fault in the code that built it, logged, and never sent half-formed.
+func (t *turn) emit(f wire.Frame) {
+	if _, err := t.log.Append(f); err != nil && !errors.Is(err, live.ErrEnded) {
+		t.svc.log.Error("assistant_frame_refused", "turn", t.id, "kind", string(f.Kind),
+			"error", err)
+	}
+}
+
+// firstOutput records how long the person waited for the first thing the
+// drawer shows: a step or a word.
+func (t *turn) firstOutput() {
+	t.mu.Lock()
+	shown := t.shown
+	t.shown = true
+	t.mu.Unlock()
+	if !shown {
+		t.svc.metrics.Observe(metrics.AssistantFirstOutputLatency, t.svc.now().Sub(t.started), nil)
+	}
+}
+
+// stepStart opens one tool step: numbered, labelled from the call's safe
+// fields by its descriptor, and shown as running.
+func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepRequest) stepClock {
+	t.mu.Lock()
+	t.steps++
+	index := t.steps
+	t.mu.Unlock()
+	label := tool.Name
+	if tool.Label != nil {
+		if l := strings.TrimSpace(tool.Label(args)); l != "" {
+			label = oneLine(redact.Secrets(l))
+		}
+	}
+	step := stepClock{started: t.svc.now(), StepEvent: wire.StepEvent{
+		StepID: assistantdomain.StepID(t.id, index), TurnID: t.id, Index: index, Tool: tool.Name,
+		Label: label, Request: req, State: wire.StepRunning,
+	}}
+	step.StartedAt = step.started.UTC()
+	t.firstOutput()
+	t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
+		State: wire.StatusWorking, StepsDone: index - 1}})
+	ev := step.StepEvent
+	t.emit(wire.Frame{Kind: wire.EventStep, Step: &ev})
+	return step
+}
+
+// stepEnd closes a step in its final state: shown, recorded in the
+// transcript, counted and kept for the turn's audit record. status and bytes
+// are the route's answer, zero for a step that sent nothing.
+func (t *turn) stepEnd(step stepClock, state wire.StepState, summary string,
+	refusal *wire.Refusal, status, bytes int) {
+
+	ev := step.StepEvent
+	ev.State, ev.Summary, ev.Refusal = state, summary, refusal
+	ev.DurationMS = t.svc.now().Sub(step.started).Milliseconds()
+	t.emit(wire.Frame{Kind: wire.EventStep, Step: &ev})
+	t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
+		State: wire.StatusThinking, StepsDone: ev.Index}})
+	t.record("step", func(ctx context.Context, w Write) error {
+		return t.svc.records.RecordStep(ctx, w.Step("step", strconv.Itoa(ev.Index)), t.id, ev)
+	})
+	t.svc.metrics.Add(metrics.AssistantSteps, 1, metrics.Attrs{"state": string(state)})
+	audit := types.AssistantAuditStep{Tool: ev.Tool, Outcome: string(state), Status: status,
+		Bytes: bytes}
+	if ev.Request != nil {
+		audit.Method, audit.Route = ev.Request.Method, ev.Request.Route
+	}
+	if refusal != nil {
+		audit.Refusal = refusal.Code
+	}
+	t.mu.Lock()
+	t.audit = append(t.audit, audit)
+	t.mu.Unlock()
+}
+
+// emitCard shows one card with the segment's answer and records it with the
+// apps a reader must hold to be shown it again.
+func (t *turn) emitCard(ctx context.Context, card wire.Card, apps []string) {
+	if err := card.Validate(); err != nil {
+		t.svc.log.ErrorContext(ctx, "assistant_card_refused", "turn", t.id,
+			"type", string(card.Type), "error", err)
+		return
+	}
+	t.mu.Lock()
+	t.cards++
+	n := t.cards
+	message := t.answer
+	t.mu.Unlock()
+	ev := wire.CardEvent{CardID: assistantdomain.CardID(t.id, n), MessageID: message, Card: card}
+	t.emit(wire.Frame{Kind: wire.EventCard, Card: &ev})
+	t.record("card", func(ctx context.Context, w Write) error {
+		return t.svc.records.RecordCard(ctx, w.Step("card", strconv.Itoa(n)), t.id, ev, apps)
+	})
+}
+
+// record writes one transcript record on a context that outlives the turn's
+// own, since what it records already happened. A record that fails is logged
+// and never fails the turn: the person saw it live, and only a reload will
+// miss it.
+func (t *turn) record(what string, write func(context.Context, Write) error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.ctx), recordTimeout)
+	defer cancel()
+	if err := write(ctx, t.write()); err != nil {
+		t.svc.log.WarnContext(ctx, "assistant_record_failed", "turn", t.id, "record", what,
+			"error", redact.Secrets(err.Error()),
+			"detail", "the person saw it live; the transcript a reload reads is missing it")
+	}
+}
+
+// recordTimeout bounds one transcript record: the state log's own resolve
+// budget for a write, and well inside a turn.
+const recordTimeout = 10 * time.Second
+
+// onProgress streams the loop's prose as it commits each round: every new
+// round's narration, redacted, as a delta on the segment's answer.
+func (t *turn) onProgress(res toolloop.Result) {
+	t.mu.Lock()
+	var fresh []string
+	for i := len(t.streamed); i < len(res.Narration); i++ {
+		text := strings.TrimSpace(redact.Secrets(res.Narration[i].Content))
+		t.streamed = append(t.streamed, text)
+		if text != "" {
+			fresh = append(fresh, text)
+		}
+	}
+	prior := len(t.streamed) - len(fresh)
+	answer := t.answer
+	if res.Model != "" {
+		t.model = res.Model
+	}
+	if res.ProviderKey != "" {
+		t.provider = res.ProviderKey
+	}
+	t.mu.Unlock()
+	for i, text := range fresh {
+		if prior+i > 0 {
+			text = "\n\n" + text
+		}
+		t.firstOutput()
+		t.emit(wire.Frame{Kind: wire.EventDelta, Delta: &wire.DeltaEvent{
+			MessageID: answer, Text: text}})
+	}
+}
+
+// answerText is the segment's answer as the person was shown it.
+func (t *turn) answerText() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	parts := make([]string, 0, len(t.streamed))
+	for _, p := range t.streamed {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// fence is checked by the loop before every round and every call: a stopped
+// turn, a draining node and a grant about to end each stop it before anything
+// more is sent.
+func (t *turn) fence() error {
+	if cause := context.Cause(t.ctx); cause != nil {
+		return cause
+	}
+	if t.read != nil && t.read.Expires().Sub(t.svc.now()) < GrantMargin {
+		return errGrantEnding
+	}
+	return nil
+}
+
+// stop ends the turn as the person asked.
+func (t *turn) stop() { t.cancel(errStopped) }
+
+// loopRun is what a segment runs: its starting conversation and what it runs
+// on.
+type loopRun struct {
+	messages []llm.Message
+	provider llm.Provider
+	key      string
+	meter    toolloop.BudgetMeter
+	tools    []catalog.Tool
+	steps    int
+	timeout  time.Duration
+	// fresh is a first segment, whose conversation may be titled after it.
+	fresh    bool
+	question string
+}
+
+// run drives one segment to its end, on its own goroutine.
+func (t *turn) run(r loopRun) {
+	defer close(t.done)
+	defer t.svc.release(t)
+	ctx, cancel := context.WithTimeoutCause(t.ctx, r.timeout, errTurnTimeout)
+	defer cancel()
+	ctx = llm.WithSeat(ctx, assistantHome(t.person.ID))
+	ctx, span := tracing.Start(ctx, "assistant", "assistant.turn",
+		attribute.String("conversation_id", t.conversation.String()),
+		attribute.String("turn_id", t.id.String()),
+		attribute.String("prompt_version", PromptVersion))
+	defer span.End()
+
+	surface := newSurface(t, r.tools)
+	progress := &toolloop.Progress{}
+	res, err := toolloop.Run(ctx, toolloop.Config{
+		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
+		MaxRounds: r.steps + 1, AllowSuspend: t.svc.proposer != nil, Budget: r.meter,
+		Fence: t.fence, OnProgress: t.onProgress, Progress: progress,
+	})
+	if res == nil {
+		snap := progress.Snapshot()
+		res = &snap
+	}
+	t.onProgress(*res)
+	end := t.conclude(ctx, res, err)
+	span.SetAttributes(attribute.String("outcome", string(end.State)),
+		attribute.Int("steps", end.Steps))
+	if end.State == wire.TurnFailed {
+		tracing.Fail(span, err)
+	}
+	if r.fresh && end.State == wire.TurnCompleted {
+		t.svc.title(t, r.question, t.answerText(), r.meter)
+	}
+}
+
+// conclude ends the segment: it records the answer, parks or closes the turn,
+// tells the stream how it ended, and leaves its audit record.
+func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) assistantdomain.TurnEnd {
+	text := t.answerText()
+	if len(text) > MessageMaxBytes {
+		text = textcut.Within(text, MessageMaxBytes)
+	}
+	state, failure := t.outcome(ctx, res, err)
+	end := assistantdomain.TurnEnd{State: state, Steps: t.stepCount(),
+		InputTokens: int64(res.InputTokens), OutputTokens: int64(res.OutputTokens),
+		CacheRead: int64(res.CacheRead)}
+	if failure != nil {
+		end.ErrorCode = string(failure.Code)
+	}
+
+	var answer *uuid.UUID
+	if text != "" {
+		t.mu.Lock()
+		id := t.answer
+		t.mu.Unlock()
+		answer = &id
+		t.record("answer", func(ctx context.Context, w Write) error {
+			return t.svc.records.RecordMessage(ctx, w.Step("message", "answer"), t.id,
+				assistantdomain.NewMessage{ID: id, Role: wire.RoleAssistant, Text: text})
+		})
+	}
+
+	if state == wire.TurnWaitingForApproval {
+		if parkErr := t.park(res); parkErr != nil {
+			t.svc.log.ErrorContext(ctx, "assistant_park_failed", "turn", t.id,
+				"error", redact.Secrets(parkErr.Error()))
+			state, failure = wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorInternal,
+				Message: "The change could not be held for your approval. Ask again."}
+			end.State, end.ErrorCode = state, string(failure.Code)
+		}
+	}
+	if state != wire.TurnWaitingForApproval {
+		t.record("close", func(ctx context.Context, w Write) error {
+			return t.svc.records.CloseTurn(ctx, w.Step("close"), t.id, end)
+		})
+	} else {
+		t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
+			State: wire.StatusWaitingForApproval, StepsDone: end.Steps}})
+	}
+	if t.read != nil {
+		t.svc.revoker.Revoke(t.read.ID())
+	}
+	if failure != nil {
+		t.emit(wire.Frame{Kind: wire.EventError, Error: failure})
+	}
+	duration := t.svc.now().Sub(t.started)
+	t.emit(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{State: state,
+		DurationMS: duration.Milliseconds(), Steps: end.Steps, MessageID: answer,
+		TraceID: tracing.TraceOf(ctx).TraceID}})
+	t.log.End()
+
+	attrs := metrics.Attrs{"outcome": string(state)}
+	t.svc.metrics.Add(metrics.AssistantTurns, 1, attrs)
+	t.svc.metrics.Observe(metrics.AssistantTurnDuration, duration, attrs)
+	t.publishAudit(ctx, state, end.ErrorCode, duration)
+	t.svc.log.InfoContext(ctx, "assistant_turn_ended", "turn", t.id,
+		"conversation", t.conversation, "state", string(state), "error_code", end.ErrorCode,
+		"steps", end.Steps, "duration_ms", duration.Milliseconds(),
+		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens)
+	return end
+}
+
+// outcome is how a segment ended, and the turn-level failure the person reads,
+// if any.
+func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wire.TurnState, *wire.ErrorEvent) {
+	cause := context.Cause(ctx)
+	switch {
+	case err == nil && res.Suspended:
+		return wire.TurnWaitingForApproval, nil
+	case err == nil && res.ExhaustedRounds:
+		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorStepLimit,
+			Message:   "This question needed more steps than a turn may take. Ask a narrower one.",
+			Retryable: true}
+	case err == nil:
+		return wire.TurnCompleted, nil
+	case errors.Is(err, errStopped) || errors.Is(cause, errStopped):
+		return wire.TurnStopped, nil
+	case errors.Is(err, toolloop.ErrBudgetExhausted):
+		failure := &wire.ErrorEvent{Code: wire.ErrorBudgetExhausted,
+			Message: "The company's token budget for this window is spent."}
+		var budget *toolloop.BudgetError
+		if errors.As(err, &budget) && !budget.ResetsAt.IsZero() {
+			failure.Hint = "It resets " + budget.ResetsAt.UTC().Format(time.RFC3339) + "."
+		}
+		return wire.TurnBudgetExhausted, failure
+	case errors.Is(err, errGrantEnded) || errors.Is(err, errGrantEnding):
+		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorGrantEnded,
+			Message: "Your session ended, so the assistant stopped acting for you.",
+			Hint:    "Sign in again, then ask again.", Retryable: true}
+	case errors.Is(err, errDraining) || errors.Is(cause, errDraining):
+		return wire.TurnInterrupted, &wire.ErrorEvent{Code: wire.ErrorTurnInterrupted,
+			Message:   "The node answering you restarted before the turn finished.",
+			Retryable: true}
+	case errors.Is(cause, errTurnTimeout):
+		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorTurnTimeout,
+			Message:   "The turn took longer than it may. Ask again, or ask a narrower question.",
+			Retryable: true}
+	case isModelFailure(err):
+		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorModelUnavailable,
+			Message: "The assistant's model did not answer.", Retryable: true,
+			RetryAfterSeconds: modelRetrySeconds}
+	}
+	t.svc.log.ErrorContext(ctx, "assistant_turn_failed", "turn", t.id,
+		"error", redact.Secrets(err.Error()))
+	return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorInternal,
+		Message: "Something went wrong inside the engine. The reason is in this node's log."}
+}
+
+// modelRetrySeconds is how long a person is told to wait after the model chain
+// failed: long enough for a rate limit's bench or a CLI's restart.
+const modelRetrySeconds = 10
+
+// isModelFailure reports whether err is the provider chain's: every model in
+// it failed or sat out.
+func isModelFailure(err error) bool {
+	var failure *llm.Error
+	return errors.As(err, &failure)
+}
+
+// stepCount is how many steps the turn has taken.
+func (t *turn) stepCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.steps
+}
+
+// parked is what a segment that suspended on a proposal keeps of its loop, so
+// the approval that resumes it, on any node, continues the same conversation
+// with the call answered.
+type parked struct {
+	V        int           `json:"v"`
+	Messages []llm.Message `json:"messages"`
+	// PendingCall and PendingTool are the call the loop suspended on,
+	// unanswered.
+	PendingCall string `json:"pending_call"`
+	PendingTool string `json:"pending_tool"`
+	// Steps, Cards and Messages are what the turn has written so far, so a
+	// resumed segment's ids continue its first one's.
+	Steps    int    `json:"steps"`
+	Cards    int    `json:"cards"`
+	Count    int    `json:"message_count"`
+	Boundary string `json:"boundary"`
+}
+
+// parkedVersion is the parked loop's format. A reshape takes a new number.
+const parkedVersion = 1
+
+// park records the suspended loop beside the turn.
+func (t *turn) park(res *toolloop.Result) error {
+	t.mu.Lock()
+	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
+		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
+		Boundary: string(t.boundary)}
+	t.mu.Unlock()
+	raw, err := json.Marshal(keep)
+	if err != nil {
+		return fmt.Errorf("encode the parked loop: %w", err)
+	}
+	if len(raw) > ParkedMaxBytes {
+		return fmt.Errorf("the parked loop is %d bytes, over the %d a turn may park",
+			len(raw), ParkedMaxBytes)
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.ctx), recordTimeout)
+	defer cancel()
+	return t.svc.records.ParkTurn(ctx, t.write().Step("park"), t.id, raw)
+}
+
+// publishAudit leaves the segment's runtime audit record: who, which steps on
+// which routes and how each ended, never an argument or an answer.
+func (t *turn) publishAudit(ctx context.Context, state wire.TurnState, code string,
+	duration time.Duration) {
+
+	t.mu.Lock()
+	steps := append([]types.AssistantAuditStep(nil), t.audit...)
+	model, provider := t.model, t.provider
+	t.mu.Unlock()
+	data := types.NewAssistantTurnCompleted(types.AssistantTurnCompleted{
+		ActorName: t.by.Name, ActorKind: string(t.by.Kind), OperatorID: t.by.OperatorID,
+		ConversationID: t.conversation.String(), TurnID: t.id.String(), State: string(state),
+		ErrorCode: code, PromptVersion: PromptVersion, Model: model, ProviderKey: provider,
+		DurationMS: duration.Milliseconds(), Steps: steps,
+	})
+	ev := events.NewFrom(data, tracing.TraceOf(ctx))
+	ev.Source = types.OperatorSource
+	publish, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+	if err := t.svc.audit.Publish(publish, topics.Event(ev.Type), ev); err != nil {
+		t.svc.log.ErrorContext(ctx, "assistant_audit_not_published", "turn", t.id,
+			"error", err, "detail", "the turn ran and its answer was shown; only its "+
+				"runtime audit record is missing from this node's event log")
+	}
+}

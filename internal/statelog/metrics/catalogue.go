@@ -775,6 +775,45 @@ func Catalogue() []Instrument {
 				"after each committed batch. Read against `artifacts.limits.data_bytes`: " +
 				"a store or a company at its limit refuses every write that grows it.",
 		},
+		// ---- the Dashboard Assistant -------------------------------------
+		{
+			Name: AssistantTurns, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Assistant turn segments this node ran, by how each ended " +
+				"(`completed`, `waiting_for_approval`, `stopped`, `failed`, " +
+				"`interrupted`, `budget_exhausted`). A climb in `failed` is a model " +
+				"chain or a tool route failing people; in `budget_exhausted`, the " +
+				"company's windows refusing the assistant.",
+		},
+		{
+			Name: AssistantTurnDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long an assistant turn segment runs from the question to its " +
+				"end, by outcome. A three-step read is held to 15 s at the median; a " +
+				"distribution reaching the turn's own timeout is a model or a CLI too " +
+				"slow for an interactive drawer.",
+		},
+		{
+			Name: AssistantFirstOutputLatency, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Shows: "How long a person waits from asking to the first step or text the " +
+				"drawer shows. Held to 4 s at the median; a rise is a CLI's cold start " +
+				"or its slots queued behind other turns.",
+		},
+		{
+			Name: AssistantSteps, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"state"},
+			Shows: "Assistant tool steps by how each ended (`done`, `failed`, " +
+				"`refused`, `stopped`, `waiting`). A climb in `refused` is the model " +
+				"asking for what its people may not read; in `failed`, a route or the " +
+				"dispatcher breaking under the assistant.",
+		},
+		{
+			Name: AssistantStreamsActive, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Assistant live streams this node is serving. Each holds a " +
+				"connection and a subscription to one turn's frame log; a count that " +
+				"never falls is streams whose clients went away without the " +
+				"connection closing.",
+		},
 		// ---- presence and the artifact rooms' pushes ----------------------
 		{
 			Name: PresenceFrames, Kind: KindCounter, Unit: UnitCount,
