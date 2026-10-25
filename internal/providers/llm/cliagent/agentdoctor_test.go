@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // agentEntry builds an entry in the named mode over the `custom` profile, so
@@ -12,16 +14,23 @@ func agentEntry(t *testing.T, agent string, mode bool) *Provider {
 	t.Helper()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
+	overrides := map[string]any{
+		"binary": "crewlet-no-such-cli-binary", "complete_args": []any{"-p"},
+		// A text stream has no events to tell apart, so a profile that
+		// picks its answer out of one by event type drops the filter too.
+		"output": "text", "event_type_path": []any{}, "text_events": []any{},
+		"model_args": []any{},
+	}
+	// And everything else that reads such a stream: its requests, its
+	// failure events, the cap's signature in it.
+	if builtin, _ := cliprofile.Builtin(agent); builtin.MCP != nil {
+		overrides["requests"] = nil
+		overrides["cap"] = nil
+		overrides["mcp"] = map[string]any{"failure_events": []any{}}
+	}
 	p, err := New(Config{
 		Key: "sub", Agent: agent, Box: mode, StateDir: dir,
-		Timeout: time.Second, MaxConcurrent: 1,
-		Overrides: map[string]any{
-			"binary": "crewlet-no-such-cli-binary", "complete_args": []any{"-p"},
-			// A text stream has no events to tell apart, so a profile that
-			// picks its answer out of one by event type drops the filter too.
-			"output": "text", "event_type_path": []any{}, "text_events": []any{},
-			"model_args": []any{},
-		},
+		Timeout: time.Second, MaxConcurrent: 1, Overrides: overrides,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

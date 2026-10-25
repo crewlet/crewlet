@@ -14,43 +14,38 @@ claude-code:
   binary: claude
   written_for: "Claude Code CLI 2.1.x, measured on 2.1.303 and 2.1.310 (`claude --version`)"
   version_args: ["--version"]
-  # EVERY FLAG BELOW KEEPS THE CLI TO ITS CALL. Measured on 2.1.303 and
-  # 2.1.310 through the engine's own code path, with the state directory
-  # inside a git checkout and every level above the call holding a CLAUDE.md,
-  # CLAUDE.local.md, .claude/CLAUDE.md, .claude/rules, AGENTS.md, a skill, a
-  # custom agent, hooks, an .mcp.json, settings files and a .env: none of
-  # them reached a request, no hook or MCP server ran, and the two web tools
-  # were the only tools offered. 2.1.263 accepted every flag here and held
-  # the same through the same path.
+  # EVERY FLAG BELOW KEEPS THE CLI TO ITS CALL. Measured on 2.1.310 through
+  # the engine's own code path, with the state directory inside a git
+  # checkout whose root holds a CLAUDE.md, CLAUDE.local.md, .claude/CLAUDE.md,
+  # .claude/rules, an AGENTS.md, a skill, a custom agent, hooks in
+  # .claude/settings.json and an .mcp.json: none of them reached a request, no
+  # hook or other MCP server ran, and the tools the model was offered were the
+  # two web tools and the seat's own, served as the `crewlet` MCP server.
   #
-  #   --safe-mode               keeps the project files out. Without it every
-  #                             CLAUDE.md of every level arrived ahead of the
-  #                             prompt — every AGENTS.md where there was no
-  #                             CLAUDE.md — and a memory section naming a
-  #                             per-project path sat before the engine's text.
-  #                             The `.git` file the engine writes into the
-  #                             call's directory does not end this CLI's walk
-  #                             for those files; this flag does. A machine-wide
-  #                             managed settings file, which only an
-  #                             administrator of the host can write, still
-  #                             applies.
-  #   --strict-mcp-config       no MCP server but the ones --mcp-config names,
-  #                             and it names none.
+  #   --setting-sources ""      no user, project or local settings file: the
+  #                             hooks, permissions, MCP servers and plugins an
+  #                             ancestor's .claude/settings.json would add stay
+  #                             out. The CLAUDE.md family is NOT a setting
+  #                             source, so the two switches in isolation_env
+  #                             below keep it out. A machine-wide managed
+  #                             settings file, which only an administrator of
+  #                             the host can write, still applies.
+  #                             It replaces --safe-mode, which kept all of this
+  #                             out and the --mcp-config servers with it: under
+  #                             --safe-mode a run lists no MCP server at all.
+  #   --strict-mcp-config       no MCP server but the ones --mcp-config names:
+  #                             none on a text function, the seat's `crewlet`
+  #                             server on a run with tools (mcp below).
   #   --disable-slash-commands  no skill or command.
   #   --no-session-persistence  no transcript on disk for a later call to find.
-  #   --tools                   the tools that EXIST for the call: the two web
-  #                             tools and nothing else. The deny list alone
-  #                             does not get there — with every file and shell
-  #                             tool denied, 2.1.303 still offered fourteen
-  #                             tools (scheduling, worktrees, agent messaging,
-  #                             workflows), and a CronCreate the model asked
-  #                             for ran; 2.1.310 offered the same set, most of
-  #                             it behind ToolSearch, WebFetch and WebSearch
-  #                             included. With --tools both builds offer
-  #                             exactly WebFetch and WebSearch, directly (2.1.310
-  #                             adds an inert placeholder its own description
-  #                             says never to call), and any other tool a
-  #                             model asks for is "No such tool available".
+  #   --tools                   the BUILT-IN tools that exist for the call: the
+  #                             two web tools and nothing else. The deny list
+  #                             alone does not get there — with every file and
+  #                             shell tool denied, 2.1.303 still offered
+  #                             fourteen tools (scheduling, worktrees, agent
+  #                             messaging, workflows), and a CronCreate the
+  #                             model asked for ran. MCP tools are not built-in
+  #                             and are not limited by it.
   #   --allowedTools            the web tools have to be ALLOWED as well as
   #                             present: print mode never prompts, and a
   #                             permission-gated tool that is not on the allow
@@ -58,7 +53,8 @@ claude-code:
   #                             could fetch would have found it could not. A
   #                             fetch is a read — it never gates delivery — and
   #                             a subscription seat must not have less reach
-  #                             than the same CLI at a terminal.
+  #                             than the same CLI at a terminal. The seat's own
+  #                             tools are allowed by mcp.allow_args.
   #   --disallowedTools         beside the allowlist, the file, shell and
   #                             subagent tools, by the names these builds give
   #                             them: Agent is the subagent tool (Task, its
@@ -66,15 +62,29 @@ claude-code:
   #                             TodoWrite are offered by neither build and are
   #                             not listed.
   #
-  # Crewlet's own tools ride the prompt envelope, and a CLI editing files in
-  # its own sandbox would be invisible to the tool registry, the permission
-  # model and redaction — which is why only the web stays on.
+  # THE RECORD IS stream-json, read line by line as the run goes (requests
+  # below): every model request's prose, calls and counts, the moment the CLI
+  # writes them, which is what a phase's round budget and token budget are
+  # gated on while its CLI drives its own loop. --verbose is what stream-json
+  # requires in print mode, and --include-partial-messages is what makes the
+  # counts true: without it the assistant events carry an output count of 1
+  # whatever the model wrote (measured on 2.1.310), and only the raw
+  # message_start and message_delta events carry the request's real input and
+  # output. A text function reads the same stream's last event, `result`,
+  # which carries what `--output-format json` did.
+  #
+  # A CLI editing files in its own sandbox would be invisible to the tool
+  # registry and the permission model, which is why only the web stays on
+  # among its own tools.
   complete_args:
     - "-p"
     - "--output-format"
-    - "json"
+    - "stream-json"
+    - "--verbose"
+    - "--include-partial-messages"
     - "--no-session-persistence"
-    - "--safe-mode"
+    - "--setting-sources"
+    - ""
     - "--strict-mcp-config"
     - "--disable-slash-commands"
     - "--tools"
@@ -148,9 +158,12 @@ claude-code:
   append_system_prompt:
     args: ["--exclude-dynamic-system-prompt-sections", "--append-system-prompt-file", "{file}"]
   prompt_mode: stdin
-  output: json
+  output: jsonl
+  event_type_path: ["type"]
+  text_events: ["result"]
   text_paths: [["result"]]
   error_paths: [["is_error"]]
+  # The result event's counts: the whole run's, every request summed.
   usage:
     input: [["usage", "input_tokens"]]
     output: [["usage", "output_tokens"]]
@@ -181,6 +194,104 @@ claude-code:
     # says "Is a git repository: true", which is the CLI reading the `.git`
     # file and nothing more.
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1"
+  # The two switches that keep the CLAUDE.md family out, which
+  # --setting-sources "" does not (it is no setting source): without them every
+  # CLAUDE.md, CLAUDE.local.md and .claude/rules file above the call's
+  # directory reached the request under the CLI's "These instructions OVERRIDE
+  # any default behavior" banner, and the auto-memory section named a
+  # per-project path in it. Switches, not settings, so an entry's env cannot
+  # turn them off (measured on 2.1.310).
+  isolation_env:
+    CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1"
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
+  # THE SEAT'S TOOLS: one stdio server in a configuration file written into
+  # the call's own directory, named only by --mcp-config, so --strict-mcp-config
+  # admits it and nothing else. Its key, `crewlet`, is how the model sees the
+  # tools — `mcp__crewlet__<name>` — and the allowlist admits every tool of it
+  # by that prefix, a tool activated mid-run included: Claude Code re-reads
+  # the list when the server says it changed (measured on 2.1.310), so the
+  # wildcard is what lets the model call one the argv never named.
+  #
+  # The server's `timeout` is Claude Code's per-call tool timeout, in
+  # milliseconds (a 5000 there timed a slow call out at "after 5s", measured on
+  # 2.1.310). Ten minutes: Gemini CLI's and Qwen Code's own default, and twice
+  # the 300 seconds a seat's external MCP call is bounded by
+  # (internal/mcp.DefaultRequestTimeout), so a call the engine bounds itself
+  # finishes before the engine answers it "still running" a tenth ahead of
+  # this — which is for a call that would outlast it.
+  mcp:
+    seed:
+      - path: crewlet-mcp.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"type":"stdio","command":{relay_command_json},"args":{relay_args_json},"timeout":{tool_timeout_ms}}}}'
+    args: ["--mcp-config", "{work}/crewlet-mcp.json"]
+    allow_args: ["--allowedTools", "mcp__crewlet__*"]
+    tool_timeout_seconds: 600
+    relists: true
+    # A response asking for several calls has them made beside each other
+    # only where every one is to a tool annotated read-only; any other call
+    # is made alone, once the one before it is answered (measured on 2.1.310).
+    concurrency: read_only
+    # A failed run's result event says why, by field: its subtype, the API
+    # status it relayed, its errors and its message. The assistant and user
+    # events around it carry every call and result, and are never quoted.
+    failure_events:
+      - match:
+          - {path: ["type"], equals: "result"}
+          - {path: ["is_error"], equals: true}
+        fields: [["subtype"], ["api_error_status"], ["errors"], ["result"]]
+  # EACH REQUEST, from the stream: message_start opens it with its id, its
+  # model and its input counts; the text deltas stream its prose; each
+  # assistant event carries ONE content block of it, prose or a call; and
+  # message_delta closes it with its stop reason and its true output count.
+  # A call Claude Code makes to the server carries the call's tool_use id in
+  # the request's _meta (`claudecode/toolUseId`), the id the assistant event
+  # names, which is how a call is joined to its request (measured on 2.1.310).
+  # The init event lists the tools the model is offered, which the doctor
+  # reports.
+  requests:
+    source: stdout
+    host_prefix: "mcp__crewlet__"
+    stops: {end_turn: end, stop_sequence: end, tool_use: tool_use}
+    events:
+      - match: [{path: ["type"], equals: "system"}, {path: ["subtype"], equals: "init"}]
+        tools: ["tools"]
+      - match: [{path: ["type"], equals: "stream_event"}, {path: ["event", "type"], equals: "message_start"}]
+        opens: true
+        id: ["event", "message", "id"]
+        model: ["event", "message", "model"]
+        usage:
+          input: [["event", "message", "usage", "input_tokens"]]
+          cache_read: [["event", "message", "usage", "cache_read_input_tokens"]]
+          cache_write: [["event", "message", "usage", "cache_creation_input_tokens"]]
+      - match:
+          - {path: ["type"], equals: "stream_event"}
+          - {path: ["event", "type"], equals: "content_block_delta"}
+          - {path: ["event", "delta", "type"], equals: "text_delta"}
+        delta: ["event", "delta", "text"]
+      - match: [{path: ["type"], equals: "assistant"}]
+        id: ["message", "id"]
+        model: ["message", "model"]
+        blocks:
+          path: ["message", "content"]
+          each:
+            - match: [{path: ["type"], equals: "text"}]
+              text: ["text"]
+            - match: [{path: ["type"], equals: "tool_use"}]
+              call: {id: ["id"], name: ["name"], args: ["input"]}
+      - match: [{path: ["type"], equals: "stream_event"}, {path: ["event", "type"], equals: "message_delta"}]
+        stop: ["event", "delta", "stop_reason"]
+        usage:
+          input: [["event", "usage", "input_tokens"]]
+          output: [["event", "usage", "output_tokens"]]
+          cache_read: [["event", "usage", "cache_read_input_tokens"]]
+          cache_write: [["event", "usage", "cache_creation_input_tokens"]]
+  # --max-turns, where an operator adds it: the run exits 1 with a result
+  # event of subtype error_max_turns and is_error set (measured on 2.1.310).
+  # That is the CLI's cap, not a failure — the run stops with what it did.
+  cap:
+    exit_code: 1
+    match: [{path: ["type"], equals: "result"}, {path: ["subtype"], equals: "error_max_turns"}]
   credential_paths: [".claude/.credentials.json"]
   # The `claude-<uid>/fswatch-probe-*` directory Claude Code leaves in TMPDIR
   # on almost every call (measured on 2.1.303 and 2.1.310) goes with the
@@ -1765,7 +1876,7 @@ muse-code:
     env: "TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE"
   # --prompt-file IS the reason this profile is prompt_mode: file. The prompt
   # a phase renders is the whole flattened transcript — the conversation and
-  # every tool result in it, and the tool catalogue — and on argv that is
+  # every tool result in it — and on argv that is
   # readable through /proc/<pid>/cmdline by every account on the machine and
   # bounded by ARG_MAX (256 KB on macOS). This CLI is the first built-in
   # profile whose vendor offers a path instead, so it takes it.
@@ -1913,10 +2024,11 @@ kimi-code:
   # ANSWER rather than the failure classification (the opposite of muse-code's
   # `--json`). The default `text` output is a TRANSCRIPT, not a reply: the
   # vendor's own reference says assistant text is "prefixed with `• `" and
-  # "wrapped lines are indented by two spaces". Crewlet's tool calls ride a
-  # JSON envelope inside that text, so a bullet on every line and a hard wrap
-  # through the middle of it destroys the envelope and the prose together.
-  # stream-json prints one JSON object per line and leaves the reply intact.
+  # "wrapped lines are indented by two spaces". A bullet on every line and a
+  # hard wrap through the middle of a sentence is not the reply the model
+  # wrote, and an answer that is a JSON document — a side pass's — no longer
+  # parses. stream-json prints one JSON object per line and leaves the reply
+  # intact.
   #
   # Nothing else belongs here. `--yolo`, `--auto` and `--plan` are REFUSED
   # alongside `--prompt` at startup, and print mode already runs under the

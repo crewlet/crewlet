@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -591,6 +592,48 @@ func (c *Checkout) Release(ctx context.Context) error {
 	}
 	pruneErr := c.ws.prune(c.Home)
 	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
+}
+
+// carryRefreshed carries a login the CLI refreshed WHILE ITS CALL GOES ON back
+// to the shared directory, and moves the generation's baseline to what landed
+// there — on disk too, so a later carry-out compares against it.
+//
+// A call is a seat's whole phase now, its CLI alive through every tool it
+// calls, and a generation stays open for as long as any call of the seat runs:
+// carried out only at the last release, a token the CLI refreshed an hour into
+// a phase would sit in this home while every other seat seeded from the shared
+// login the vendor had already rotated away, and failed its own refresh. So it
+// is carried at each tool call the CLI makes, which is when its process waits
+// on the engine rather than writing to its home.
+//
+// THE BASELINE MOVES WITH THE WRITE: the shared file now holds what this home
+// holds, and the next carry — another refresh, or the release — is judged
+// against that, under the same compare-and-swap. Left on the old baseline, the
+// release would find the shared file changed since the seed, by this very
+// write, and drop the second refresh as superseded.
+//
+// A key home carries nothing ([Workspace.AcquireForKey]).
+func (c *Checkout) carryRefreshed(ctx context.Context) error {
+	if c == nil || c.keyed || c.released {
+		return nil
+	}
+	c.seat.mu.Lock()
+	defer c.seat.mu.Unlock()
+	_, landed, err := c.ws.carryChanged(ctx, c.Home, c.Cache, c.store, c.seat.gen)
+	if err != nil || len(landed) == 0 {
+		return err
+	}
+	gen := c.seat.gen
+	gen.Seeded = maps.Clone(gen.Seeded)
+	if gen.Seeded == nil {
+		gen.Seeded = map[string]string{}
+	}
+	maps.Copy(gen.Seeded, landed)
+	if err := writeGeneration(c.record, gen); err != nil {
+		return err
+	}
+	c.seat.gen = gen
+	return nil
 }
 
 // seatState returns the share of the home in a seat directory, creating it
@@ -1217,24 +1260,35 @@ func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record 
 func (w *Workspace) syncCredentialsOut(
 	ctx context.Context, home, cache string, store loginStore, gen generation,
 ) (bool, error) {
+	holds, _, err := w.carryChanged(ctx, home, cache, store, gen)
+	return holds, err
+}
+
+// carryChanged is [Workspace.syncCredentialsOut], reporting besides which of the
+// home's changed login files the shared directory now holds — written, or
+// found there already — by name, with the digest of what it holds: the
+// baseline a generation that goes on running carries out from next
+// ([Checkout.carryRefreshed]).
+func (w *Workspace) carryChanged(
+	ctx context.Context, home, cache string, store loginStore, gen generation,
+) (holds bool, landed map[string]string, err error) {
 	type held struct {
 		name, dst string
 		content   []byte
 	}
 	var changed []held
-	holds := false
 	shared := w.CredentialsDir()
 	for _, rel := range w.profile.CredentialPaths {
 		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		content, err := os.ReadFile(src) //nolint:gosec // path is rooted by cliprofile.UnderRoot
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return false, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
+			return false, nil, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
 		}
 		name := filepath.Base(rel)
 		// A settings file the CLI also keeps its login in is carried with
@@ -1250,12 +1304,12 @@ func (w *Workspace) syncCredentialsOut(
 	}
 	if w.profile.CredentialStore != nil {
 		if store == nil {
-			return false, fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
+			return false, nil, fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
 				"home was released with no way to export it", w.agent)
 		}
 		document, err := store.exportLogin(ctx, home, cache)
 		if err != nil {
-			return false, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
+			return false, nil, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
 		}
 		if holdsLogin(document) {
 			holds = true
@@ -1267,7 +1321,7 @@ func (w *Workspace) syncCredentialsOut(
 		}
 	}
 	if len(changed) == 0 {
-		return holds, nil
+		return holds, nil, nil
 	}
 	who := ""
 	if store != nil {
@@ -1275,7 +1329,7 @@ func (w *Workspace) syncCredentialsOut(
 	}
 	unlock, err := w.lockShared(ctx)
 	if err != nil {
-		return holds, err
+		return holds, nil, err
 	}
 	defer unlock()
 	if gen.Mode == syncLogin && gen.After != nil {
@@ -1284,18 +1338,23 @@ func (w *Workspace) syncCredentialsOut(
 		// [generation.After].
 		epoch, err := w.loginEpoch()
 		if err != nil {
-			return holds, err
+			return holds, nil, err
 		}
 		if epoch != *gen.After {
 			for _, h := range changed {
 				w.superseded(ctx, who, h.dst, "replaced")
 			}
-			return holds, nil
+			return holds, nil, nil
 		}
 	}
+	landed = map[string]string{}
 	for _, h := range changed {
-		if err := w.carry(ctx, who, gen, h.name, h.dst, h.content); err != nil {
-			return holds, err
+		there, err := w.carry(ctx, who, gen, h.name, h.dst, h.content)
+		if err != nil {
+			return holds, landed, err
+		}
+		if there {
+			landed[h.name] = digestOf(h.content)
 		}
 	}
 	if gen.Mode == syncLogin {
@@ -1303,25 +1362,28 @@ func (w *Workspace) syncCredentialsOut(
 		// configured bundle restores again into a directory left empty later
 		// ([Workspace.markLoggedOut]). Under the lock, with the write.
 		if err := w.clearLoggedOut(); err != nil {
-			return holds, err
+			return holds, landed, err
 		}
 	}
-	return holds, nil
+	return holds, landed, nil
 }
 
 // carry is one changed login file's write, made under the shared login's lock
 // so that the comparison and the replacement are one step against every other
 // writer — a seat in this process, a `crewlet llm` command in another, or a
-// local sandbox's teardown.
-func (w *Workspace) carry(ctx context.Context, who string, gen generation, name, dst string, content []byte) error {
+// local sandbox's teardown. It reports whether the shared directory now holds
+// content: written, or there already.
+func (w *Workspace) carry(
+	ctx context.Context, who string, gen generation, name, dst string, content []byte,
+) (bool, error) {
 	current, present, err := readShared(dst)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if present && bytes.Equal(current, content) {
 		// Already there: two homes that refreshed to the same login, or a
 		// carry repeated after a write that landed before it failed.
-		return nil
+		return true, nil
 	}
 	switch gen.Mode {
 	case syncLogin:
@@ -1335,24 +1397,24 @@ func (w *Workspace) carry(ctx context.Context, who string, gen generation, name,
 			// a seat's call happened to leave behind is not the
 			// operator's to inherit. If somebody has signed in since,
 			// theirs is the login, and this one is no refresh of it.
-			return nil
+			return false, nil
 		case !present:
 			w.superseded(ctx, who, dst, "removed")
-			return nil
+			return false, nil
 		case digestOf(current) != base:
 			w.superseded(ctx, who, dst, "changed")
-			return nil
+			return false, nil
 		}
 	default:
-		return fmt.Errorf("cli-agent: carrying %q out under an unknown mode %q", dst, gen.Mode)
+		return false, fmt.Errorf("cli-agent: carrying %q out under an unknown mode %q", dst, gen.Mode)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return fmt.Errorf("cli-agent: preparing %q: %w", filepath.Dir(dst), err)
+		return false, fmt.Errorf("cli-agent: preparing %q: %w", filepath.Dir(dst), err)
 	}
 	if err := hostbox.ReplaceFile(dst, bytes.NewReader(content)); err != nil {
-		return fmt.Errorf("cli-agent: writing the refreshed login %q: %w", dst, err)
+		return false, fmt.Errorf("cli-agent: writing the refreshed login %q: %w", dst, err)
 	}
-	return nil
+	return true, nil
 }
 
 // superseded logs a changed login dropped because the shared one moved past
