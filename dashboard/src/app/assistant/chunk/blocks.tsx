@@ -350,9 +350,7 @@ function Proposal({
   const failure =
     local?.failure ??
     (proposal.failure
-      ? // THE ROUTE'S NEXT STEP after its sentence, until ProposalCard's
-        // `failureHint` draws it on its own line in the failure strip.
-        [proposal.failure.refusal.message, proposal.failure.refusal.hint].filter(Boolean).join(" ")
+      ? proposal.failure.refusal.message
       : unknown
         ? "Could not confirm. It may have landed."
         : undefined);
@@ -363,17 +361,19 @@ function Proposal({
       scope={proposal.scope}
       state={state}
       changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
-      // THE SCREEN'S GATE, said where the card says its consequence, until
-      // ProposalCard's `approveBlocked` holds Approve with it: Approve stays
-      // pressable meanwhile, and the page checks the gate again when it
-      // applies the change and reports `blocked`, so nothing it refuses lands.
-      note={screen?.blocked ?? proposal.note}
+      note={proposal.note}
+      // THE SCREEN'S GATE HOLDS APPROVE, with its sentence, before the person
+      // presses anything; the page checks it again when it applies the change.
+      approveBlocked={screen?.blocked ?? undefined}
       approveLabel={proposal.approve_label}
       onApprove={() => on.approve(proposal)}
       onDecline={() => on.decline(proposal)}
       onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
       receipt={proposal.receipt?.summary}
       failure={failure}
+      // THE ROUTE'S NEXT STEP, on its own line in the failure strip, where the
+      // engine's own refusal is shown (never beside the drawer's own words).
+      failureHint={local?.failure ? undefined : proposal.failure?.refusal.hint}
     />
   );
 }
