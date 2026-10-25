@@ -1482,7 +1482,9 @@ in when an administrator has locked themselves out. Each entry states its own
 where it is pinned, naming only `admin`, `tracker`, `knowledge` and `artifacts`
 (an unknown name is refused naming the set, and `admin` on a `refuse` node is refused
 too) — and its value must be at least 26 characters, checked on what the
-`${VAR}` resolves to.
+`${VAR}` resolves to. A value may not start with `cwl_ast_`, the prefix the
+engine reserves for the Dashboard Assistant's in-process grants: the request
+guard reads that shape as a grant, so such a token could never authenticate.
 
 **`secrets.keys` is required on every node**, whether or not a port is set.
 Every record on every state log is signed and verified under the keyring, the
