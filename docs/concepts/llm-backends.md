@@ -2398,10 +2398,12 @@ about the login the engine would run with; `login`, `logout` and `import` do
 not, since each replaces or removes that login. `crewlet validate` never does:
 checking a document writes nothing onto the host.
 The [secret store](secret-store.md) is the fleet's, so every node of the company
-reads the same bundle (one written while the engine is stopped lands in that
-node's own table and reaches the fleet at its next start), and each restores it
-into its own empty directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
-or whatever variable the entry's `auth.credential_bundle` names. Each node then
+reads the same bundle (one exported while this node's engine is stopped goes
+to that same store, which the command reaches itself through the node's own
+broker or the external one — a cluster member's goes through a running member
+named with `-api`), and each restores it into its own empty directory:
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention, or whatever variable the
+entry's `auth.credential_bundle` names. Each node then
 holds its own copy of one refresh token, so where the vendor rotates refresh
 tokens two nodes fork it exactly as `-from-host` forks yours — a headless token
 (option 2) or a key (option 5) is the better answer for a fleet. The blob is
@@ -2953,20 +2955,32 @@ are resolved in the process running `crewlet llm` — the secret store first,
 then *that shell's* environment — and the variables `inherit-env` forwards
 come from that shell's environment alone, as the engine forwards its own and
 never the store's; so run it with the engine's environment to get the
-engine's answer. Beside a
-running engine the store is the fleet's and is read through the engine's API,
-so every `crewlet llm` command runs while the seats do. It reveals only what
-the entries it works on read — `login`, `status`, `logout`, `export`,
-`import` and a `doctor` that names a key resolve and build that one entry,
-and `list` and a bare `doctor` every entry — so signing in `plan` reveals
-`plan`'s token, key or bundle and the `${VAR}`s its model and `env` name,
-and no other entry's credentials, not even an entry keyed `plan.fast`, nor
-any vendor's. Each reveal is logged by
+engine's answer. The store is the fleet's whether or not this node's engine
+runs; the engine decides only the way in. Beside a running engine it is read
+through the engine's API, so every `crewlet llm` command runs while the seats
+do. It reveals only what the entries it works on read — `login`, `status`,
+`logout`, `export`, `import` and a `doctor` that names a key resolve and build
+that one entry, and `list` and a bare `doctor` every entry — so signing in
+`plan` reveals `plan`'s token, key or bundle and the `${VAR}`s its model and
+`env` name, and no other entry's credentials, not even an entry keyed
+`plan.fast`, nor any vendor's. Each reveal is logged by
 name on the node and takes `admin` and a person present, so
 `CREWLET_API_TOKEN` holds one of Tier A's tokens for it
-([CLI reference](../reference/cli.md#commands)). A `seats` node holds no
-data, so there `-api URL` names a node that does, which the values are read
-through and a captured token is stored in.
+([CLI reference](../reference/cli.md#commands)). With the engine stopped the
+command reaches the store itself — through a solo node's own broker on
+`stream.store_dir`, or the external broker a `stream.type: nats` node dials —
+and reads the same values, and only those, with nothing logged on any node:
+it holds the node's Tier A, whose keyring and the broker's own files or
+credentials open every value without any API, so a line it wrote about itself
+would record nothing its holder could not do unrecorded. It keeps the engine
+from starting until it is done, an interactive sign-in included. A token it
+captures, or a bundle `export -secret-store` writes, is stored there under the
+`llm-login` source with the shell's user as its author; through a running node
+the row records the route's `api` and the credential the call authenticated
+with. A member of a cluster cannot reach the store alone with its engine
+stopped, and a `seats` node holds no data, so on either `-api URL` names a
+running node that does, which the values are read through and a captured
+token is stored in.
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to

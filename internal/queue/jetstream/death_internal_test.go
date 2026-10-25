@@ -28,18 +28,25 @@ import (
 //
 // # The input
 //
-// A store directory that is a FILE. nats-server refuses it ("storage directory
-// is not a directory") whoever runs the test — a directory made read-only
-// would be writable anyway to a suite running as root, and pass for the wrong
-// reason.
+// A store whose `jetstream` directory is a FILE. nats-server refuses it ("not a
+// directory") whoever runs the test — a directory made read-only would be
+// writable anyway to a suite running as root, and pass for the wrong reason.
+// The store directory itself is a directory, so the lock taken in it
+// ([StoreDirLock]) lets the start through to nats-server, which is the refusal
+// this case is about; a store directory that is itself a file is refused by the
+// lock instead, and has a case of its own.
 func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 	t.Parallel()
 	for _, clustered := range []bool{false, true} {
 		t.Run("clustered="+strconv.FormatBool(clustered), func(t *testing.T) {
 			t.Parallel()
 			store := filepath.Join(t.TempDir(), "store")
-			if err := os.WriteFile(store, []byte("not a directory"), 0o600); err != nil {
-				t.Fatalf("plant a file where the store goes: %v", err)
+			if err := os.MkdirAll(store, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(store, "jetstream"),
+				[]byte("not a directory"), 0o600); err != nil {
+				t.Fatalf("plant a file where the store's jetstream directory goes: %v", err)
 			}
 			cfg := Config{StoreDir: store}
 			if clustered {

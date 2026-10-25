@@ -20,7 +20,7 @@ import (
 func TestASourceIsAWritePathsWordAndNothingElse(t *testing.T) {
 	t.Parallel()
 	for _, s := range []Source{SourceAPI, SourceSetup, SourceProvision,
-		SourceMigrated, SourceCLI, SourceLLMLogin, SourceIAM} {
+		SourceCLI, SourceLLMLogin, SourceIAM} {
 		if !s.Valid() {
 			t.Errorf("%q is a write path's word and is not Valid", s)
 		}
@@ -28,7 +28,7 @@ func TestASourceIsAWritePathsWordAndNothingElse(t *testing.T) {
 			t.Errorf("CheckSource(%q) = %v, want it admitted", s, err)
 		}
 	}
-	for _, s := range []Source{"", "gitlab-provision", "operator", "API", "rekey"} {
+	for _, s := range []Source{"", "gitlab-provision", "operator", "API", "rekey", "migrated"} {
 		if s.Valid() {
 			t.Errorf("%q is no write path's word and is Valid", s)
 		}

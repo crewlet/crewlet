@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/flock"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -200,6 +202,10 @@ type embeddedServer struct {
 	// scratch is a private directory this server owns and deletes on
 	// shutdown, used when no StoreDir was configured. See startEmbedded.
 	scratch string
+	// dirLock is this server's hold on its configured StoreDir, released
+	// once it has stopped writing there — see [StoreDirLock]. Nil for a
+	// scratch store and a leaf, which have no directory anyone else names.
+	dirLock *flock.Lock
 	// clustered records whether this member has peers, which decides
 	// whether anything has to wait for a metadata leader.
 	clustered bool
@@ -778,8 +784,19 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		}
 	}
 
+	// THE STORE DIRECTORY IS TAKEN BEFORE THE SERVER EXISTS — see
+	// [StoreDirLock]. A scratch store is a directory this process made for
+	// itself, and a leaf has none.
+	var dirLock *flock.Lock
+	if scratch == "" && opts.StoreDir != "" {
+		if dirLock, err = lockStoreDir(opts.StoreDir); err != nil {
+			return nil, err
+		}
+	}
+
 	ns, err := server.NewServer(opts)
 	if err != nil {
+		dirLock.Release()
 		removeScratch(scratch)
 		return nil, fmt.Errorf("configure embedded server: %w", err)
 	}
@@ -839,12 +856,61 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	})
 	if err != nil {
 		shutdownAndClean(ns, started, scratch)
+		dirLock.Release()
 		return nil, err
 	}
 	return &embeddedServer{
 		ns: ns, started: started, death: death, inProcess: inProcess,
-		scratch: scratch, clustered: clustered, leaf: leaf, system: system,
+		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
+		system: system,
 	}, nil
+}
+
+// StoreDirLock is the lock file an embedded member holds inside its configured
+// store directory for as long as its broker runs.
+//
+// # Why the directory needs a lock of its own
+//
+// nats-server takes none. Two servers started on one store directory both
+// recover it and both write it — its streams, its buckets, its metadata — and
+// the second is ACCEPTED rather than refused (measured, nats-server v2.15.1),
+// so the corruption is silent until a read meets it. The node's database lock
+// could not stand in for this one: the engine starts its broker before it opens
+// that database, and the two are independent settings (`store.path`,
+// `stream.store_dir`) that no rule makes one node's.
+//
+// So the directory is locked here, in the one function every embedded member
+// starts through — the engine's, a `crewlet` command reaching the fleet's store
+// with the engine stopped, and every test that stands a broker up — before the
+// server is even built, and released only once it has stopped. A second
+// broker on the directory, in this process or another, is refused with
+// [ErrStoreDirHeld] naming the holder, before it has read anything.
+//
+// INSIDE the directory rather than beside it: a store directory can be the
+// root of its own volume, whose parent a non-root engine on a read-only root
+// filesystem cannot write. nats-server keeps everything under its own
+// `jetstream` subdirectory and reads nothing else here.
+const StoreDirLock = "crewlet-broker.lock"
+
+// ErrStoreDirHeld reports that another broker — in another process, or another
+// in this one — holds this store directory ([StoreDirLock]).
+var ErrStoreDirHeld = errors.New("jetstream: the stream store directory is held by another broker")
+
+// lockStoreDir takes dir's [StoreDirLock], or says who holds it.
+func lockStoreDir(dir string) (*flock.Lock, error) {
+	lock, err := flock.Try(filepath.Join(dir, StoreDirLock))
+	var held *flock.HeldError
+	switch {
+	case errors.As(err, &held):
+		return nil, fmt.Errorf("%w: stream.store_dir %s is in use by %s. Two "+
+			"brokers on one store directory corrupt it, so stop that one — a "+
+			"running engine, or a crewlet command reaching the fleet's store "+
+			"while the engine is stopped — before starting this one",
+			ErrStoreDirHeld, dir, held.Holder)
+	case err != nil:
+		return nil, fmt.Errorf("lock stream.store_dir %s: %w", dir, err)
+	}
+	return lock, nil
 }
 
 // bootWait is what [awaitBoot] waits on.
@@ -1299,7 +1365,17 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 	return nc, nil
 }
 
-func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.started, e.scratch) }
+// shutdown stops the server, then lets its store directory go.
+//
+// THE LOCK OUTLIVES THE SERVER, never the reverse: released before the server
+// had stopped, the next broker could start on a directory this one was still
+// writing. What it cannot cover is the one write [Server.Shutdown] says can
+// land after the server reports it has stopped — a consumer's state write
+// already in flight — which nats-server itself gives no way to wait for.
+func (e *embeddedServer) shutdown() {
+	shutdownAndClean(e.ns, e.started, e.scratch)
+	e.dirLock.Release()
+}
 
 // stoppable is the half of a nats-server that [shutdownAndClean] drives, and
 // the seam its order is tested at.

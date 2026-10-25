@@ -133,7 +133,7 @@ Afterwards: invite each bot to its channels (`/invite @handle`) and restart `cre
 
 The same three-way choice every provisioning command in Crewlet takes, and there is **no default** — a run with nowhere to put what it mints would create live credentials and print none of them:
 
-- `-secret-store` — the node's [encrypted secret store](../concepts/secret-store.md). The running engine rebuilds its resolver on apply, so re-activate the current revision afterwards ([`crewlet config activate`](../reference/cli.md#crewlet-config-activate)).
+- `-secret-store` — the fleet's [encrypted secret store](../concepts/secret-store.md), written through this node's engine while it runs and, with it stopped, reached by the command itself through the node's own broker or the external one ([Which store the CLI writes](../concepts/secret-store.md#which-store-the-cli-writes)); `-config` names this node, and `-api` a running node to write through instead. A running engine resolves through a snapshot of the store it rebuilds at each configuration apply, so re-activate the current revision afterwards with `POST /config/reload` to a node that is up — [`crewlet config activate`](../reference/cli.md#crewlet-config-activate), the same gesture offline, opens the node's database and so runs only while its engine is stopped; a stopped engine reads the values when it starts.
 - `-env-file PATH` — a `.env` file, which then has to be sourced and the engine restarted.
 - `-print` — stdout, for moving the values into a password manager or a deployment system this binary knows nothing about.
 
@@ -165,6 +165,8 @@ Slack requires HTTPS for both URLs — for local development put a tunnel (ngrok
 |------|-------------|
 | `-public-url URL` | Public HTTPS base URL of the Crewlet API. **Required**: every app's request URL and redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, no default. |
+| `-config PATH` | Tier A config naming this node's store and secret keyring (default `crewlet.yaml`): what `-secret-store` reaches the fleet's store through, and seals each value under. |
+| `-api URL` | A running node to record credentials through, and to read back each seat's recorded token before deciding whether to install again. Default: this node's engine when it runs, and the fleet's store itself when it is stopped. Name one from a node that holds no data, from a member of a cluster whose engine is stopped, or from a machine that is not a node, with one of its Tier A tokens in `CREWLET_API_TOKEN` — each read is a reveal, which a machine token is refused. |
 | `-config-token TOKEN` | The app-configuration **refresh** token; empty reads `$SLACK_CONFIG_REFRESH_TOKEN`. **Bootstrap only** — see [The ledger beats the shell](#the-ledger-beats-the-shell). |
 | `-ledger PATH` | The app ledger (default: `slack-apps.json` beside the company YAML). |
 | `-handles a,b` | Only provision these handles. Worth having against a method that allows about one request a minute: fixing one seat in a company of twenty should not cost twenty minutes. |

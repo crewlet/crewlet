@@ -75,10 +75,10 @@ Usage:
 Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
-  -api URL       The node holding data to read stored values through and store
-                 a token or bundle in; default is this node's store, or the
-                 running engine holding it. A seats node, which holds no data,
-                 names one
+  -api URL       A running node to read stored values through and store a
+                 token or bundle in; default is this node's engine when it
+                 runs, and the fleet's store itself when it is stopped. A
+                 seats node, which holds no data, names one
   -home PATH     Read a host login from somewhere other than this user's home
   -no-smoke      Skip doctor's real completions (the tool call and both probes)
   -print-token   Write a captured token to stdout instead of the store (login only)
@@ -105,12 +105,12 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	// and needed here for the node they rarely run on: a seats node holds
 	// no data, its store is scratch, and the logins of the seats it runs
 	// are made on it — so the company's stored values, and the store a
-	// captured token goes to, are a node that holds data, which nothing in
-	// a seats node's Tier A addresses.
+	// captured token goes to, are reached through a running node that
+	// holds data (see companyResolver for why a seats node is sent to one).
 	apiURL := fs.String("api", "",
-		"the node holding data to read stored values through and store a "+
-			"token or bundle in; default is this node's store, or the "+
-			"running engine holding it")
+		"a running node to read stored values through and store a token or "+
+			"bundle in; default is this node's engine when it runs, and the "+
+			"fleet's store itself when it is stopped")
 	fromHost := fs.Bool("from-host", false,
 		"adopt the login this machine already has (login only)")
 	captureToken := fs.Bool("capture-token", false,
@@ -735,11 +735,10 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		return err
 	}
 	// EVERY NODE, not this one. The store's rows are the company's, on the
-	// coordination KV every node reads: a write through the running node
-	// reaches them at once, and a stopped node's own rows are migrated
-	// there at its next start — which is what `where` says. Each node
-	// restores the bundle at boot into a credentials directory that is
-	// still empty, so one export signs the whole fleet in.
+	// coordination KV every node reads, and a write reaches them there
+	// whichever way it went — which is what `where` says. Each node restores
+	// the bundle at boot into a credentials directory that is still empty,
+	// so one export signs the whole fleet in.
 	fmt.Fprintf(stdout,
 		"Stored the credential bundle as %s in %s.\n"+
 			"Every node restores it at boot when its own credentials directory\n"+
@@ -756,11 +755,11 @@ func authReference(key, field, name string) string {
 }
 
 // storeLLMSecret writes one value into the encrypted secret store, as
-// [secrets.SourceLLMLogin] where the store keeps the word — a stopped node's
-// own table — and as the running node's route records it otherwise. It
-// returns which store took the write, said after every write for the reason
-// [secretTarget.where] gives. An apiURL names the node it goes through, as
-// `crewlet secrets -api` does.
+// [secrets.SourceLLMLogin] where the write keeps the word — made directly,
+// with this node's engine stopped — and as the running node's route records it
+// otherwise. It returns which way it went, said after every write for the
+// reason [secretTarget.where] gives. An apiURL names the node it goes through,
+// as `crewlet secrets -api` does.
 func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, apiURL,
 	name, value string) (string, error) {
 

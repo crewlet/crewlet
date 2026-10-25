@@ -295,7 +295,16 @@ crewlet llm login plan -capture-token   # or mint a headless token into the secr
 ```
 
 An entry on a **key** needs nothing but the key, exported or stored with
-`crewlet secrets set ANTHROPIC_API_KEY`. Either way, `crewlet llm doctor` checks
+`crewlet secrets set ANTHROPIC_API_KEY`. Before the node's first start, or
+with it stopped, a captured token and a stored key both go straight into the
+fleet's [secret store](../concepts/secret-store.md), sealed under the keyring
+[step 3](#3-run-it) exports: the command starts the node's own broker on
+`stream.store_dir`, listening on nothing, writes, and stops it, and the engine
+adopts that store when it starts. While the command holds the store,
+`crewlet run` on the node is refused, naming its pid — two brokers on one
+directory would corrupt it. Once the node runs, the same commands go through
+its API instead, with a Tier A token in `CREWLET_API_TOKEN`. Either way,
+`crewlet llm doctor` checks
 every entry end to end — the binary, its version, how it is signed in, and a
 real tool call — before a seat depends on it. Each seat gets its own isolated
 CLI home, so agents never inherit one another's sessions or memory — that,
@@ -714,8 +723,10 @@ keys edits one the configuration already declares — so one step stays outside
 it. Until it is done the company runs and no agent seat takes a turn; whatever
 is sent to a seat waits on its inbox. The builder's next steps give it: with
 `crewlet run` stopped, write the company to a file with `crewlet config
-export`, add `providers.llm` to it, sign the CLI in with `crewlet llm login`,
-import the file and start the node again
+export`, add `providers.llm` to it, sign the CLI in with `crewlet llm login`
+(a captured token goes into the fleet's secret store through the node's own
+broker, which the command starts while the node is stopped), import the file
+and start the node again
 ([Giving the company a model](../guides/org-builder.md#giving-the-company-a-model)),
 and the work that waited runs.
 

@@ -477,22 +477,26 @@ test("a reference check that failed counts nothing as unread", async () => {
 });
 
 // WHICH PATH WROTE A CREDENTIAL, in words: `source` is provenance, and each
-// word the fleet's listing can carry is said as what it means. No request
-// names its own word any more, so one outside the table is a newer engine's,
-// said as a word this build does not know rather than guessed at — and the
-// words the listing can never carry (`cli` and `llm-login`, which the move
-// onto the fleet replaces, and `rekey`, which no path stamps) have no entry.
+// word the fleet's listing can carry is said as what it means — the words of a
+// `crewlet` command run with its engine stopped (`cli`, `llm-login`) among
+// them, since it writes the store directly. No request names its own word any
+// more, so one outside the table is a newer engine's, said as a word this
+// build does not know rather than guessed at — and the words no path stamps
+// (`migrated`, which the boot move onto the fleet stamped before commands
+// wrote the store themselves, and `rekey`) have no entry.
 test("a credential's provenance is said as the path that wrote it", async () => {
   stubLoaded();
   render(<CredentialPeek name="DATADOG_WEBHOOK_TOKEN" />);
   expect(await screen.findByText("written by an integration's setup")).toBeDefined();
   expect(provenance("api")).toBe("stored through the API: this console, the CLI or another client");
   expect(provenance("provision")).toBe("minted by an integration's provisioning pass");
-  expect(provenance("migrated")).toBe("moved onto the fleet from a node's own table");
-  for (const word of ["api", "setup", "provision", "migrated"]) {
+  expect(provenance("cli")).toBe(
+    "set with crewlet secrets set while its node's engine was stopped",
+  );
+  for (const word of ["api", "setup", "provision", "cli", "llm-login"]) {
     expect(provenance(word)).not.toMatch(/does not know/);
   }
-  for (const word of ["cli", "llm-login", "rekey", "gitlab-provision"]) {
+  for (const word of ["migrated", "rekey", "gitlab-provision"]) {
     expect(provenance(word)).toBe(`a source this build does not know (“${word}”)`);
   }
   // THE SAME PATH IN WORDS, never a pill on every row: the list's Source

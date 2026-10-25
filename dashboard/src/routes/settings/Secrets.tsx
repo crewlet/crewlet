@@ -221,22 +221,23 @@ async function readReferences(
  * row `/secrets` lists is sealed in the fleet's store whatever wrote it. Each
  * path stamps its own word and no request can name one (internal/secrets'
  * `Source`): `PUT /secrets/{name}` stamps `api` whoever calls it — this
- * screen, `crewlet secrets set` against a running node, any client — an
- * integration's setup `setup`, an integration's provisioning pass `provision`,
- * and the move of a stopped node's own rows onto the fleet `migrated`.
+ * screen, a `crewlet` command through a running node, any client — an
+ * integration's setup `setup`, and an integration's provisioning pass
+ * `provision`. A `crewlet` command run while its node's engine is stopped
+ * writes the store directly and keeps its own word: `cli` for
+ * `crewlet secrets set`, `llm-login` for a coding CLI's captured token or
+ * exported login, `provision` for a provisioning run.
  *
- * ONLY THOSE FOUR, because they are all this listing can show: the words a
- * stopped node's own table records (`cli`, `llm-login`) are replaced by
- * `migrated` when its rows reach the fleet, `iam` marks the engine's own keys,
- * which the listing never names, and a rekey keeps the word it found. A word
- * outside the table is a newer engine's, said as one this build does not know
- * rather than guessed at.
+ * `iam` marks the engine's own keys, which the listing never names, and a
+ * rekey keeps the word it found. A word outside the table is a newer engine's,
+ * said as one this build does not know rather than guessed at.
  */
 const PROVENANCE: Record<string, string> = {
   api: "stored through the API: this console, the CLI or another client",
   setup: "written by an integration's setup",
   provision: "minted by an integration's provisioning pass",
-  migrated: "moved onto the fleet from a node's own table",
+  cli: "set with crewlet secrets set while its node's engine was stopped",
+  "llm-login": "a coding CLI's login, stored by crewlet llm while its node's engine was stopped",
 };
 
 /**
@@ -249,7 +250,8 @@ const SOURCE_WORDS: Record<string, string> = {
   api: "API",
   setup: "Integration setup",
   provision: "Provisioning pass",
-  migrated: "Moved from a node",
+  cli: "CLI",
+  "llm-login": "CLI login",
 };
 
 /** A source in words, or the engine's own word for one this build does not know. */
