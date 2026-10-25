@@ -73,6 +73,7 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 				Models:   &phase.Registry{},
 				Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme"}, Role: tc.seat},
 				AgentRun: tc.agentRun,
+				Sessions: testHost(t),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -110,6 +111,7 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 			Models:   &phase.Registry{},
 			Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
 				Role: &org.Role{Name: "Engineer", Sandbox: &org.RoleSandbox{Enabled: true}}},
+			Sessions: testHost(t),
 		})
 		if err != nil {
 			t.Fatal(err)

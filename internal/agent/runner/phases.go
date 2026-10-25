@@ -317,12 +317,21 @@ type Runner struct {
 var _ turn.Phases = (*Runner)(nil)
 
 // New builds a runner.
+//
+// A runner with no session host is refused here rather than at its first
+// phase: every turn runs a phase that offers tools — the reviewer, whatever
+// runtime the executor is on — and a phase reaches its CLI through nothing
+// else, so the turn would fail after its prompts were built and its prefetch
+// spent, naming a toolloop field instead of this one.
 func New(cfg Config) (*Runner, error) {
 	switch {
 	case cfg.Registry == nil:
 		return nil, fmt.Errorf("runner: no tool registry")
 	case cfg.Models == nil:
 		return nil, fmt.Errorf("runner: no provider registry")
+	case cfg.Sessions == nil:
+		return nil, fmt.Errorf("runner: no tool session host (Config.Sessions) — " +
+			"every phase serves its tools to its CLI on this process's one host")
 	}
 	return &Runner{cfg: cfg}, nil
 }
@@ -542,7 +551,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		payload = workPayload{Outcome: string(turn.OutcomeIncomplete)}
 	}
 
-	missing := missingTools(w.surface)
+	missing := missingTools(w.surface, w.res.Result.Messages)
 	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: round, System: w.system, User: w.user,
 		Result: w.res.Result, Exhausted: w.res.Exhausted, Elapsed: w.res.Elapsed,
@@ -1705,7 +1714,7 @@ func describe(s *tools.Surface) turn.Surface {
 	}
 }
 
-// missingTools are names the phase called that the surface did not have.
+// missingTools are names the phase asked for that the surface did not have.
 //
 // Judged against the surface's OWN universe rather than the registry snapshot
 // it was built from: the phase's submission tool and the discovery pair are
@@ -1713,21 +1722,40 @@ func describe(s *tools.Surface) turn.Surface {
 // snapshot, so comparing against one would report the executor's own
 // terminator as a hallucinated tool on every turn.
 //
+// READ OFF WHAT THE MODEL ASKED FOR, not only off what the surface ran. A
+// coding CLI answers a name it was never offered itself — every measured CLI
+// but two refuses an unlisted name without reaching the server — so a guessed
+// MCP tool name never reaches the surface at all, and the one trace of it is
+// the request in the CLI's own record, which the tool loop folds into the
+// conversation as a call nothing ran. The surface's own record still counts,
+// for a CLI that hands the server a name it did not list.
+//
 // Membership is the single source of truth. Matching on the failure TEXT
 // instead would flag a false positive the moment a legitimate tool's own
 // output began with the same words.
-func missingTools(s *tools.Surface) []string {
+func missingTools(s *tools.Surface, conversation []llm.Message) []string {
 	universe := s.Universe()
 	var out []string
 	seen := map[string]bool{}
-	for _, name := range s.CalledNames() {
+	judge := func(name string) {
 		if seen[name] {
-			continue
+			return
 		}
 		seen[name] = true
 		if _, ok := universe.Lookup(name); !ok {
 			out = append(out, name)
 		}
+	}
+	for _, m := range conversation {
+		if m.Role != llm.RoleAssistant {
+			continue
+		}
+		for _, call := range m.ToolCalls {
+			judge(call.Name)
+		}
+	}
+	for _, name := range s.CalledNames() {
+		judge(name)
 	}
 	return out
 }
