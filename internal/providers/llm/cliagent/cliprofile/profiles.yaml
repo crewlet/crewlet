@@ -2483,8 +2483,8 @@ muse-code:
   # request of its own that re-sends the call's prompt — the engine's whole
   # transcript — under instructions of its own, beside the main request.
   # Measured, a 1.4.13 call then makes exactly one model request. They are
-  # billed, and the exec stream reports no counts for this backend to charge
-  # them against. 1.0.x HAS NO SUCH FLAG and refuses it ("unknown option
+  # billed like any request, and each is one the engine never asked for.
+  # 1.0.x HAS NO SUCH FLAG and refuses it ("unknown option
   # --disable-reminders", exit 2, measured), which is why this profile is
   # written for 1.4.x: an operator still on 1.0.x drops it in
   # overrides.complete_args, and that build's observers then run.
@@ -2595,12 +2595,19 @@ muse-code:
   event_type_path: ["payload_type"]
   text_events: ["run.terminal.completed"]
   text_paths: [["payload", "text"]]
-  # NO USAGE PATHS, because the exec stream carries no token counts at all —
-  # not under any key, on any event. The counts are estimated here and
-  # `crewlet llm doctor` says so. They do exist on the session log this
-  # profile deliberately switches off, and on `muse serve`'s MSP protocol,
-  # which is a different transport this backend does not speak.
-  #
+  # THE RUN'S COUNTS ARE ITS `run.usage` EVENT, printed once, before the
+  # terminal one, by every run: per model, `input_tokens` WITH the cached part
+  # in it (`cached_tokens`) and `output_tokens` with the reasoning in it
+  # (`reasoning_tokens`, which is therefore not read as well). Measured on
+  # 1.4.13 against a stand-in reporting 40 cached and 7 reasoning tokens on
+  # each of three requests of 102 to 104 tokens: 309 in, 120 of them cached,
+  # 36 out, 21 of them reasoning; and a text function's own. Summed over every
+  # model the run used.
+  usage:
+    input: [["payload", "models", "*", "input_tokens"]]
+    output: [["payload", "models", "*", "output_tokens"]]
+    cache_read: [["payload", "models", "*", "cached_tokens"]]
+    input_includes_cache: true
   # The `muse` on PATH is the LAUNCHER, and left alone it checks for a new
   # release every hour and forks a background download that outlives the call.
   # Three reasons that is wrong under an engine: it swaps the binary under a
