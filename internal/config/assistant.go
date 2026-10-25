@@ -229,6 +229,19 @@ func (c *Company) assistantChainProblems(path Path) error {
 	return p.err()
 }
 
+// AssistantEntryProblems reports every way the providers.llm entry key could
+// not carry the assistant, judged as a member of `assistant.llm` would be:
+// for `crewlet assistant eval -model`, which measures a candidate before the
+// chain names it, so a model that may never run the assistant is never
+// measured as though it could.
+func (c *Company) AssistantEntryProblems(key string) error {
+	entry, ok := c.Providers.LLM[key]
+	if !ok {
+		return fmt.Errorf("%w: providers.llm has no entry %q", ErrUnknownValue, key)
+	}
+	return assistantMemberProblems(entryPath(key), key, &entry)
+}
+
 // assistantMemberProblems judges one chain member against the assistant's
 // rules, naming the entry's own field each time, since that is what changes.
 func assistantMemberProblems(member Path, key string, entry *LLMProvider) error {
