@@ -102,6 +102,9 @@ import {
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useOpenNewTask } from "~/app/newTask.ts";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { urlAction } from "~/app/assistant/urlAction.ts";
+import { WORK_FILTER_ACTION, lockGate, workFilterKeys } from "./assistantActions.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -128,6 +131,7 @@ import {
   gridRange,
   hiddenLanes,
   hideParam,
+  isShape,
   listParam,
   loadedOf,
   manualOrder,
@@ -638,6 +642,21 @@ export function ItemsView({
     [nav],
   );
 
+  // --- assistant page actions (WP12) ---
+  // THE ASSISTANT WRITES THE SAME KEYS THE CHIPS AND THE ARRANGEMENT DO, and
+  // nothing else ([workFilterKeys]); a host's lock refuses a patch that names
+  // the key the page is ([lockGate]), so `#/me` is never widened.
+  useAssistantContext({
+    resources: project ? [{ kind: "project", id: project }] : [],
+    actions: urlAction(WORK_FILTER_ACTION, {
+      scope: "Work list filters (not saved to a view)",
+      keys: workFilterKeys(labels),
+      nav,
+      blocked: lockGate(host?.lock),
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
+
   /** Writes one filter key by name, which is what a chip and the menu both do. */
   const setFilter = (param: string, value: string) => {
     // THE TRASH'S WIDER SCOPE IS THE SCOPE'S OWN DEFAULT (see `scopeKey`),
@@ -1087,17 +1106,6 @@ export function ItemsView({
         </div>
       </div>
     </>
-  );
-}
-
-/** Whether a `shape=` off the address is one this product draws. */
-function isShape(value: string): value is Shape {
-  return (
-    value === "list" ||
-    value === "board" ||
-    value === "table" ||
-    value === "calendar" ||
-    value === "timeline"
   );
 }
 

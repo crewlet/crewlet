@@ -147,7 +147,7 @@ describe("applying a page action", () => {
 
   test("each way it can go is its own outcome, and only an applied one runs the setters", () => {
     setFramePage(PAGE);
-    registerPage({ actions: { "work.filters.apply": spec as unknown as PageActionSpec<never> } });
+    registerPage({ actions: { "work.filters.apply": spec } });
     expect(applyPageAction({ ...request("blocked"), action: "nope.here" }).outcome).toBe(
       "no_handler",
     );

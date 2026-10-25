@@ -1332,6 +1332,17 @@ export function fieldValueState(field: WorkFieldValue): string {
  */
 export type Shape = WorkViewShape;
 
+/** Whether a `shape=` off the address is one this product draws. */
+export function isShape(value: string): value is Shape {
+  return (
+    value === "list" ||
+    value === "board" ||
+    value === "table" ||
+    value === "calendar" ||
+    value === "timeline"
+  );
+}
+
 /**
  * WHAT A CONTAINER OPENS ON when nothing else decides it.
  *
