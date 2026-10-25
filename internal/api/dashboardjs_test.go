@@ -1075,8 +1075,12 @@ const (
 	// brought the setup layout's and the vertical stepper's rules into the
 	// one sheet by the same rule (0.8 KiB); the setup page itself loads with
 	// the brand's screens: 321.1 KiB. 322 KiB, still under two seconds on
-	// that link.
-	initialBudget = 322 << 10
+	// that link. uilet 0.51 took it to 322.6 KiB with no module newly in the
+	// first paint: the bundler now splits Select (with app/fill.tsx) and Kbd
+	// out of the entry into chunks of their own, each compressed apart (about
+	// 1.1 KiB), beside 0.2 KiB of new kit code and 0.3 KiB of polished kit
+	// rules in the one sheet. 323 KiB, still under two seconds on that link.
+	initialBudget = 323 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
