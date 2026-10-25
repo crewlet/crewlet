@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -191,6 +192,25 @@ func (h *testHost) snapshot() (turns []llm.Turn, calls []hostCall, spent llm.Usa
 		spent = addUsage(spent, u)
 	}
 	return slices.Clone(h.turns), slices.Clone(h.calls), spent, slices.Clone(h.spent)
+}
+
+// awaitRecorded waits, as the tool loop's host does before it runs a call,
+// for the record to show a request asking for a call to name — the call and
+// the record reach the engine by two ways, a socket and the CLI's output, and
+// race — reporting whether it did within the host's two seconds.
+func (h *testHost) awaitRecorded(name string) bool {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		for _, turn := range h.latestTurns() {
+			if slices.ContainsFunc(turn.Calls, func(c llm.TurnCall) bool { return c.Name == name }) {
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // latestTurns is each request the host was told of, as last reported.

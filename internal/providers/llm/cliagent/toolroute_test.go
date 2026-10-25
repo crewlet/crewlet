@@ -135,9 +135,15 @@ func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 // EACH REQUEST IS CHARGED AS IT IS READ, AND THE RUN'S OWN TOTAL SETTLES THE
 // REST. A phase's whole loop is one run now, so a budget charged at its end
 // gates nothing: the input of a request is charged the moment the record shows
-// the request start — before any call it asks for can run — its output when
-// the record closes it, and the CLI's own total for the run settles whatever
-// that missed, never charging anything twice.
+// the request start — so before any call it asks for runs, since the host joins
+// a call to its request first — its output when the record closes it, and the
+// CLI's own total for the run settles whatever that missed, never charging
+// anything twice.
+//
+// THE OUTPUT IS NOT ASKED FOR AT THE CALL: the record closes a request after
+// its calls are listed, and the call reaches the engine over the socket while
+// that line may still be on its way through the CLI's output — a race no host
+// waits out, and one this test lost now and then when it asked.
 //
 // Mutation: charge only at the end (drop the per-request spends), and the
 // first spend comes after every call; charge the result's total on top of
@@ -155,7 +161,9 @@ func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 	}, nil)
 	host := newTestHost(t, "search")
 	var spentBeforeCall llm.Usage
+	recorded := false
 	host.handle("search", func(context.Context, map[string]any) (string, bool) {
+		recorded = host.awaitRecorded("search")
 		_, _, spentBeforeCall, _ = host.snapshot()
 		return "ok", false
 	})
@@ -163,9 +171,10 @@ func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if want := (llm.Usage{Input: 157, Output: 20, CacheRead: 50, CacheWrite: 7}); spentBeforeCall != want {
-		t.Errorf("before the first call ran the host was charged %+v, want the first request's %+v",
-			spentBeforeCall, want)
+	spentBeforeCall.Output = 0
+	if want := (llm.Usage{Input: 157, CacheRead: 50, CacheWrite: 7}); !recorded || spentBeforeCall != want {
+		t.Errorf("before the first call ran (recorded: %v) the host was charged %+v in, want the "+
+			"first request's %+v", recorded, spentBeforeCall, want)
 	}
 	_, _, spent, spends := host.snapshot()
 	if want := (llm.Usage{Input: 357, Output: 63, CacheRead: 50, CacheWrite: 7}); spent != want {
@@ -387,7 +396,10 @@ func TestARunThatNeverReachedItsToolsIsAServerFailure(t *testing.T) {
 // times out inside its tool call.
 func TestTheClockStopsWhileAToolRuns(t *testing.T) {
 	t.Parallel()
-	limit := 700 * time.Millisecond
+	// The first stretch is the CLI's start too — a race-built binary, its
+	// relay and the listing — so the limit leaves that room on a loaded
+	// runner, where 700ms was within reach of a start alone.
+	limit := 1500 * time.Millisecond
 	t.Run("a call longer than the limit", func(t *testing.T) {
 		t.Parallel()
 		p := fakeClaude(t, fakeScript{Responses: []fakeResponse{
