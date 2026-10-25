@@ -127,7 +127,7 @@ func TestTheDispatcherServesTheAPIsOwnHandler(t *testing.T) {
 	if _, err := probe.Do(t.Context(), g, exec.Request{Method: http.MethodGet, Path: "/agents"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(presented, "Bearer "+auth.AssistBearerPrefix) {
+	if !strings.HasPrefix(presented, "Bearer "+iam.AssistBearerPrefix) {
 		t.Fatalf("the dispatched request carried %q", presented)
 	}
 	wire := httptest.NewRequest(http.MethodGet, "/agents", nil)

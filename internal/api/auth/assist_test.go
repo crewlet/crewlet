@@ -326,7 +326,7 @@ func TestAnExecGrantCarriesOnlyItsBoundRequestOnce(t *testing.T) {
 		} {
 			resp := rig.do(g, other)
 			if resp.Status != http.StatusForbidden || rig.seen().ran ||
-				refusal(t, resp)[authz.DetailReason] != "assist_scope" {
+				refusal(t, resp)[authz.DetailReason] != string(authz.ReasonAssistScope) {
 				t.Errorf("%s %s %s answered %d %s, want 403 assist_scope", other.Method,
 					other.Path, other.Body, resp.Status, resp.Body)
 			}
@@ -393,7 +393,7 @@ func TestAnExecGrantCarriesOnlyItsBoundRequestOnce(t *testing.T) {
 			resp := rig.do(g, exec.Request{Method: method, Path: "/operator/act/update_work_item",
 				Body: call.Body})
 			if resp.Status != http.StatusForbidden || rig.seen().ran ||
-				refusal(t, resp)[authz.DetailReason] != "assist_scope" {
+				refusal(t, resp)[authz.DetailReason] != string(authz.ReasonAssistScope) {
 				t.Errorf("a read grant's %s answered %d %s", method, resp.Status, resp.Body)
 			}
 		}
@@ -418,7 +418,7 @@ func TestAnAssistGrantIsRefusedTheGuardedEdges(t *testing.T) {
 	} {
 		resp := rig.do(g, get(path))
 		if resp.Status != http.StatusForbidden || rig.seen().ran ||
-			refusal(t, resp)[authz.DetailReason] != "assist_refused" {
+			refusal(t, resp)[authz.DetailReason] != string(authz.ReasonAssistRefused) {
 			t.Errorf("GET %s through a grant answered %d %s, want 403 assist_refused", path,
 				resp.Status, resp.Body)
 		}
@@ -615,7 +615,7 @@ func TestAnAssistGrantOverTheWireIsRefused(t *testing.T) {
 	g := rig.mustDerive(readRequest())
 	rig.do(g, get("/agents"))
 	bearer := rig.seen().header.Get("Authorization")
-	if !strings.HasPrefix(bearer, "Bearer "+auth.AssistBearerPrefix) {
+	if !strings.HasPrefix(bearer, "Bearer "+iam.AssistBearerPrefix) {
 		t.Fatalf("the dispatched request carried %q", bearer)
 	}
 	for _, path := range []string{"/agents", "/health", "/webhooks/github", "/assistant/conversations"} {
