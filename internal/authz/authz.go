@@ -20,6 +20,10 @@
 // is decided exactly as their own click is, and every row says what an
 // assistant grant may do with its verb (read it, carry the one approved
 // request, or never), which can only take away from what the person holds.
+// The SPLIT with the request guard is deliberate: the guard holds a read
+// grant to reads and an exec grant to the one request it binds, and
+// [Decide] holds every grant to the row's class wherever the verb is asked,
+// a verb asked from inside a tool included, which no route sees.
 //
 // # What it replaces, and what each of those got wrong
 //
@@ -618,6 +622,18 @@ const (
 	// acting on could not ([DecideWithin]). It names no permission, because
 	// none the agent could hold would change it.
 	ReasonCeiling Reason = "ceiling"
+	// ReasonAssistRefused is a refusal a request made through the
+	// Dashboard Assistant gets and the person's own click would not: the
+	// verb is never the assistant's ([AssistNever]), or it needs a person
+	// at the keyboard ([rule.presence]). It names no permission, because
+	// none the person could hold would change it; they take the verb
+	// themselves.
+	ReasonAssistRefused Reason = "assist_refused"
+	// ReasonAssistScope is a refusal an assistant grant gets when its
+	// scope does not reach the verb: a read grant asking a verb the
+	// assistant carries only as an approved request ([AssistApprove]).
+	// The remedy is a proposal the person approves, never a permission.
+	ReasonAssistScope Reason = "assist_scope"
 )
 
 // Reasons are every one, in declaration order.
@@ -627,6 +643,7 @@ var Reasons = []Reason{
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
 	ReasonUnknownAction, ReasonStepUp, ReasonEverybody, ReasonAsked,
 	ReasonSeatOnly, ReasonShared, ReasonNotShared, ReasonRole, ReasonCeiling,
+	ReasonAssistRefused, ReasonAssistScope,
 }
 
 // Valid reports whether a reason is one this build knows.
