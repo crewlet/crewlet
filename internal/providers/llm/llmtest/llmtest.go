@@ -141,6 +141,11 @@ type Script struct {
 	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
 
+	// OnCall, when set, is told what the host tells a backend's
+	// [llm.ServeOptions.OnCall]: when the first call the CLI is waiting on
+	// starts and the last one ends, for the run of index run.
+	OnCall func(run int, busy bool)
+
 	// CallIDMeta is the `_meta` key the script tells the host it sends call
 	// ids under; empty takes [CallIDKey], the key it always sends them
 	// under. A case names another to play a CLI the host must not read.
@@ -259,6 +264,11 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	served, err := host.Serve(ctx, llm.ServeOptions{
 		Relists: !s.NoRelist, ToolTimeout: s.ToolTimeout, ObservesRequests: !s.Unobserved,
 		Concurrency: s.Concurrency, CallIDMeta: s.callIDMeta(),
+		OnCall: func(busy bool) {
+			if s.OnCall != nil {
+				s.OnCall(n, busy)
+			}
+		},
 	})
 	if err != nil {
 		return nil, err

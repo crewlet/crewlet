@@ -181,8 +181,11 @@ type callRec struct {
 	settled bool
 	// refused marks a call answered without running.
 	refused bool
-	// admitted marks a call counted in flight, which its settling uncounts.
+	// admitted marks a call the dispatcher let run.
 	admitted bool
+	// waiting marks an admitted call its CLI run is still waiting on — not
+	// yet settled, and not answered "still running" ([dispatcher.awaitedLocked]).
+	waiting bool
 	// answered marks a call the CLI was answered "still running" while it
 	// goes on: done, as far as its response is concerned.
 	answered bool
@@ -242,6 +245,8 @@ type run struct {
 	released chan struct{}
 	// synthetic is the round an unobserved run's calls are placed on.
 	synthetic int
+	// waiting is how many of the run's calls its CLI is waiting on.
+	waiting int
 	// ctx is the context the run was served under, whose VALUES every call
 	// of the run carries — see [callContext].
 	ctx context.Context
@@ -316,11 +321,9 @@ type dispatcher struct {
 	calls     []*callRec
 	runs      []*run
 	rounds    int // model requests so far, on this invocation's scale
-	inflight  int
 	spent     llm.Usage
 	suspended *callRec
 	payload   map[string]any
-	lastBusy  bool
 
 	// active is a run in progress — between [dispatcher.reopen] and
 	// [dispatcher.finish] — and began when it was started.
@@ -776,10 +779,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 		return refuse(mcp.RefusalInvalid, unparsedArguments(c.name, c.argsErr))
 	}
 	c.admitted = true
-	d.inflight++
-	if d.inflight == 1 {
-		d.busyLocked(true)
-	}
+	d.awaitedLocked(c, true)
 	return c, ""
 }
 
@@ -1199,12 +1199,7 @@ func (d *dispatcher) settleLocked(c *callRec, res ToolResult, refused bool) {
 		return
 	}
 	c.result, c.settled, c.refused = res, true, refused
-	if c.admitted {
-		d.inflight--
-		if d.inflight == 0 {
-			d.busyLocked(false)
-		}
-	}
+	d.awaitedLocked(c, false)
 	d.cond.Broadcast()
 }
 
@@ -1213,6 +1208,7 @@ func (d *dispatcher) settleLocked(c *callRec, res ToolResult, refused bool) {
 func (d *dispatcher) parkLocally(c *callRec) {
 	d.mu.Lock()
 	c.answered = true
+	d.awaitedLocked(c, false)
 	d.decideLocked(stateLocalPark, c.round)
 	d.endIfCompleteLocked()
 	d.cond.Broadcast()
@@ -1222,13 +1218,29 @@ func (d *dispatcher) parkLocally(c *callRec) {
 
 // busyLocked tells the run's backend the engine's tools started or stopped
 // running.
-func (d *dispatcher) busyLocked(busy bool) {
-	if busy == d.lastBusy {
+// awaitedLocked counts an admitted call in or out of what its CLI run is
+// waiting on, and tells the run's backend when the first call starts and the
+// last one ends ([llm.ServeOptions.OnCall]).
+//
+// PER RUN, and only while the CLI waits: a call answered "still running" goes
+// on, but its CLI has its answer and is working — or has been stopped — and a
+// call an earlier run made is no call of this one. Counted for the phase
+// instead, a call parked by one run held the next run's clock stopped and its
+// login unchecked for as long as the call ran, and the next run's first call
+// was never announced.
+func (d *dispatcher) awaitedLocked(c *callRec, waiting bool) {
+	r := c.run
+	if r == nil || !c.admitted || c.waiting == waiting {
 		return
 	}
-	d.lastBusy = busy
-	if r := d.currentRunLocked(); r != nil && r.opts.OnCall != nil {
-		r.opts.OnCall(busy)
+	c.waiting = waiting
+	if waiting {
+		r.waiting++
+	} else {
+		r.waiting--
+	}
+	if r.opts.OnCall != nil && ((waiting && r.waiting == 1) || (!waiting && r.waiting == 0)) {
+		r.opts.OnCall(waiting)
 	}
 }
 

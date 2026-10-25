@@ -764,6 +764,46 @@ func TestACallsIDIsReadOnlyUnderTheKeyItsCLIDeclared(t *testing.T) {
 	}
 }
 
+// THE CLI'S WAIT ENDS WITH ITS ANSWER: a call answered "still running" goes on,
+// but the CLI has its answer and is working — or has been stopped — so the
+// backend is told the run's last call ended then, not when the call returns.
+// Told late, the clock that bounds the CLI's own work stayed stopped, and its
+// login unchecked, for as long as the parked call ran.
+func TestARunStopsWaitingOnACallItWasAnsweredStillRunning(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("delegate")
+	surf.holdTool, surf.hold, surf.entered = "delegate", make(chan struct{}), make(chan struct{})
+	busy := make(chan bool, 8)
+	prov := &llmtest.Script{
+		OnCall: func(_ int, b bool) { busy <- b },
+		Runs: []llmtest.Run{
+			{Responses: []llmtest.Response{{Calls: []llmtest.Call{{Name: "delegate"}}}, {Text: "never"}}},
+			{Responses: []llmtest.Response{{Text: "done"}}},
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"}})
+		done <- err
+	}()
+	<-surf.entered
+	if b := <-busy; !b {
+		t.Fatal("the first call was not announced as started")
+	}
+	select {
+	case b := <-busy:
+		if b {
+			t.Fatal("a second start was announced with no second call")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run was never told its call ended, though the CLI was answered still running")
+	}
+	close(surf.hold)
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
 // A CONCURRENCY NOTHING CAN WAIT ON IS REFUSED, rather than read as one of the
 // three: a profile the backend should have refused reaches no session.
 func TestAnUnknownCallConcurrencyIsRefused(t *testing.T) {
