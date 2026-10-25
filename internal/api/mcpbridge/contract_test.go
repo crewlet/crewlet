@@ -120,13 +120,27 @@ func contractSurface(t *testing.T, spec toolsessiontest.Spec) *tools.Surface {
 	var surf *tools.Surface
 	reg := tools.NewRegistry()
 	for _, tool := range spec.Tools {
-		if err := reg.Register(&suiteTool{tool: tool, surface: func() *tools.Surface { return surf }},
-			tools.OriginBuiltin); err != nil {
+		seat := &suiteTool{tool: tool, surface: func() *tools.Surface { return surf }}
+		var callable tools.Callable = seat
+		if tool.Suspends {
+			callable = suiteLauncher{seat}
+		}
+		if err := reg.Register(callable, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register(%s): %v", tool.Name, err)
 		}
 	}
 	surf = tools.NewSurface("execute", reg.Snapshot(), spec.Offered).ForTurn(turn)
 	return surf
+}
+
+// suiteLauncher is a suite tool whose work outlives its call: its result asks
+// the run to park.
+type suiteLauncher struct{ *suiteTool }
+
+func (s suiteLauncher) CallDetached(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.DetachedResult, error) {
+	res, err := s.CallForTurn(ctx, turn, args)
+	return tools.DetachedResult{Result: res, Suspend: true}, err
 }
 
 // suiteTool is one of the suite's tools as a seat tool.

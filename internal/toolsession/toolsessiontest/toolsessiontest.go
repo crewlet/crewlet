@@ -18,7 +18,8 @@
 // panics; a call that runs under the run's context and not the MCP request's;
 // arguments that did not parse; a call after the run ended; each call's place
 // in the run's call log, fixed when it arrives; an activation answered once the
-// client has re-listed; and the class every refusal carries on the record.
+// client has re-listed; a suspend the run cannot resume, refused; and the class
+// every refusal carries on the record.
 //
 // A gate only one of them has BY DESIGN stays in that package's own tests: the
 // tool loop's round cap, its terminator barrier, its pause for a person's note
@@ -93,6 +94,12 @@ type Tool struct {
 
 	// Run is what the tool does, and its output.
 	Run func(ctx context.Context, call ToolCall) string
+
+	// Suspends marks a tool whose work outlives its call, as run_sandbox's
+	// does: its result asks the run to park with the call unanswered. The
+	// run a factory serves is one that cannot be resumed — a tool loop's
+	// that may not suspend, a box's — so the dispatcher refuses it.
+	Suspends bool
 }
 
 // ToolCall is one call as the tool sees it.
@@ -171,6 +178,7 @@ func Run(t *testing.T, factory Factory) {
 		{"ACallAfterTheRunEndedIsRefused", testACallAfterTheRunEndedIsRefused},
 		{"CallsCountInTheOrderTheyArrived", testCallsCountInTheOrderTheyArrived},
 		{"AnActivationIsAnsweredOnceTheClientHasRelisted", testAnActivationIsAnsweredOnceTheClientHasRelisted},
+		{"ASuspendTheRunCannotResumeIsRefused", testASuspendTheRunCannotResumeIsRefused},
 		{"EveryRefusalCarriesItsClass", testEveryRefusalCarriesItsClass},
 	}
 	for _, c := range cases {

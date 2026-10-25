@@ -286,11 +286,36 @@ func testAnActivationIsAnsweredOnceTheClientHasRelisted(t *testing.T, factory Fa
 	}
 }
 
+// A SUSPEND THE RUN CANNOT RESUME IS REFUSED. A tool whose work outlives its
+// call asks the run to park with the call unanswered, so the conversation can
+// be persisted and re-entered once the work is done. A run that can never be
+// re-entered would strand the CLI waiting on an answer nobody will give, so the
+// call is answered refused — and the run goes on. The tool ran, so it is on the
+// record as a call that ran, failed.
+func testASuspendTheRunCannotResumeIsRefused(t *testing.T, factory Factory) {
+	f := newFixture(t, factory)
+	cs := f.dial(0)
+	if res := f.call(cs, launchTool, nil); !res.IsError {
+		t.Errorf("a suspend the run cannot resume was answered %q, want it refused", text(res))
+	}
+	if r := f.recorded(1)[0]; r.Name != launchTool || !r.Failed {
+		t.Errorf("the refused suspend is recorded %s, want it failed", describe([]Recorded{r}))
+	}
+	if n := f.launches.Load(); n != 1 {
+		t.Errorf("the tool ran %d times, want once", n)
+	}
+	if res := f.call(cs, readTool, nil); res.IsError || text(res) != readAnswer {
+		t.Errorf("the call after a refused suspend was answered %v %q, want the run to go on",
+			res.IsError, text(res))
+	}
+}
+
 // EVERY REFUSAL CARRIES ITS CLASS. A call the dispatcher answers without the
 // tool's own output is on the record with the class a surface that is not a
 // model acts on (mcp.Refusal…): the run is not taking calls, the arguments
-// are wrong, or the engine failed inside the tool. A model reads the sentence;
-// nothing else can read a sentence.
+// are wrong, the engine failed inside the tool, or the tool may not do what it
+// asked from here. A model reads the sentence; nothing else can read a
+// sentence.
 func testEveryRefusalCarriesItsClass(t *testing.T, factory Factory) {
 	for _, tc := range []struct {
 		name string
@@ -327,6 +352,10 @@ func testEveryRefusalCarriesItsClass(t *testing.T, factory Factory) {
 			f.send(cs, readTool, json.RawMessage(`"an object it is not"`))
 			return 1
 		}, crewletmcp.RefusalInvalid},
+		{"a suspend the run cannot resume", func(f *fixture, cs *mcp.ClientSession) int {
+			f.send(cs, launchTool, nil)
+			return 1
+		}, crewletmcp.RefusalForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -336,7 +365,7 @@ func testEveryRefusalCarriesItsClass(t *testing.T, factory Factory) {
 			r := f.recorded(at)[at-1]
 			if !r.Failed || r.Class != tc.want {
 				t.Errorf("the refusal is recorded %s, want it failed with class %q",
-					describe([]Recorded{r}), tc.want)
+					describe([]Recorded{r}), string(tc.want))
 			}
 		})
 	}

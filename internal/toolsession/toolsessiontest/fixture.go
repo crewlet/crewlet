@@ -35,6 +35,10 @@ const (
 	activateTool = "activate"
 	postTool     = "post"
 	postAnswer   = "posted"
+
+	// launchTool's work outlives its call: it asks the run to park.
+	launchTool   = "launch"
+	launchAnswer = "launched"
 )
 
 // answerWait bounds every wait for something a dispatcher owes the case — an
@@ -64,7 +68,7 @@ type fixture struct {
 
 	fence atomic.Pointer[error]
 
-	reads, posts, breaks atomic.Int32
+	reads, posts, breaks, launches atomic.Int32
 
 	// entered says a held write began; release lets every held write
 	// return, once.
@@ -112,8 +116,12 @@ func newFixture(t *testing.T, factory Factory) *fixture {
 				f.posts.Add(1)
 				return postAnswer
 			}},
+			{Name: launchTool, Suspends: true, Run: func(context.Context, ToolCall) string {
+				f.launches.Add(1)
+				return launchAnswer
+			}},
 		},
-		Offered: []string{readTool, writeTool, brokenTool, activateTool},
+		Offered: []string{readTool, writeTool, brokenTool, activateTool, launchTool},
 		Fence: func() error {
 			if err := f.fence.Load(); err != nil {
 				return *err

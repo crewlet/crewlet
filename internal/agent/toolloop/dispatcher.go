@@ -1141,10 +1141,13 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 // honour is a call's result as this phase can take it: a suspend in a phase
 // that never persists a partial conversation cannot be resumed, so it is
 // refused — and the model told so — on the record and the answer alike.
+// FORBIDDEN, the class a surface that is not a model reads: the tool may not
+// park a phase from here, whatever it was asked to do.
 func (d *dispatcher) honour(res ToolResult) ToolResult {
 	if res.Suspend && !d.cfg.AllowSuspend {
 		res.Suspend = false
 		res.Failed = true
+		res.Cause = mcp.RefusalForbidden
 		res.Output = "This tool cannot suspend in this phase. " + res.Output
 	}
 	return res
