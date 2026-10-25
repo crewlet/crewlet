@@ -885,102 +885,48 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
 			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
 	}
-	resumedReply, err := resumeReply(in.Run)
-	if err != nil {
-		return err
-	}
-	tel, err := e.describeResume(ctx, company, in)
+	input, tel, err := e.parkedTurnRunner(ctx, company, in)
 	if err != nil {
 		// A RETRY, like every early return here: nothing ran, and the
 		// coordinator hands its claim back so the next attempt judges the
 		// rebase again against its own clock.
 		return err
 	}
-	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
-	// the run was post-charged a moment ago, and a window it took past its
-	// ceiling refuses every call this segment would make. Before the turn
-	// identity, which carries it to every auxiliary call the segment makes
-	// ([turnTelemetry.budget]).
-	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
-	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
-	// The runtime, and the note box it decides — see [steerBox].
-	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
-	box := steerBox(agentRun)
-	r, err := company.RunnerFor(in.Turn.Handle(),
-		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
-			Task:    resumeTask(in),
-			Compact: e.compactorFor(company),
-			// THE RUNNER NEEDS IT TOO, not just the loop below. This
-			// field reaches runner.Config.Reply, which is what
-			// submit_work's own citation check reads — so a resumed turn
-			// with this unset accepted `no_action` on a turn somebody was
-			// waiting on, and accepted a citation naming any surface at
-			// all, before the loop's later checks ever ran.
-			Reply:     resumedReply,
-			Publisher: e.backends.Queue,
-			Turn:      turnIdentity,
-			Sessions:  e.sessions,
-			// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
-			// the turn's LATER rounds, not for this one: whether the phase
-			// being re-entered was agentic is the state's own answer (see
-			// [execstate.State.AgentRun]), but a turn that loops to another
-			// iteration must run that one the same way it ran the first.
-			AgentRun: agentRun,
-			// A RESUMED SEGMENT IS STEERABLE LIKE ANY OTHER: it is the
-			// same turn running again, and a note sent while it parked
-			// was answered `closed` — the box that segment had is gone.
-			Steer:  box,
-			Budget: tel.budget.budget(),
-			// A resumed Execute loop can exhaust its rounds like any other,
-			// and it is the phase most likely to: it comes back mid-task with
-			// its budget already partly spent.
-			Judge:     e.judgeFor(company, in.Turn.Handle(), tel.aux()),
-			Remaining: e.remainingFor(company, in.Turn.Handle()),
-			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
-			// more than a fresh turn does: this loop was parked across a
-			// coding run that may have taken an hour, and the node that
-			// resumes it is not always the node that suspended it. The
-			// grant it closes on is the one THIS node holds now — which
-			// is the correct anchor, since the resume is what this node is
-			// admitted for.
-			Fence: e.seatFence(in.Turn.Handle()),
-			// The working indicator's phase updates, on the same terms as
-			// the dispatch path: the resumed Execute loop opens a phase
-			// like any other, and a reader watching the thread should see
-			// it move when the box's answer lands.
-			OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
-			// THE SKILL REGISTRY, which this call site omitted. With nil
-			// Skills the runner's guardFor returns nil, so the load-before-use
-			// gate was disarmed for every resumed turn: a seat could call a
-			// tool whose required skill it had never loaded, on the one path
-			// where nobody would notice — and the two RunnerFor sites must
-			// agree or a turn changes shape by being resumed.
-			Skills: e.skills,
-			// NO onboarding on a resume. The pass is a seat's FIRST turn, and
-			// this turn already ran its first phase — running it here would
-			// spend the resumed turn's opening on orientation for a seat that
-			// is mid-task.
-			Resume: &runner.Resume{
-				State: in.State, Answer: in.Answer,
-				// WHICH BOX DID THE WORK. Off the run's own row, because
-				// this process may not be the one that launched it — and
-				// it is the only thing that can say a phase ran in a
-				// sandbox rather than in this process's own tool loop.
-				Run: runner.RunRecord{
-					CodingAgent:   in.Run.CodingAgent,
-					SandboxID:     in.Run.SandboxID,
-					LaunchID:      in.Run.LaunchID,
-					DeliveredRefs: in.DeliveredRefs,
-					RefsElided:    in.RefsElided,
-				},
-				// THE RUN'S OWN TOOL CALLS, off its durable row. A
-				// box-mode executor called them over the bridge, possibly
-				// in another process, so this list is the only record of
-				// what the phase did — its submission included.
-				Bridged: bridgedCalls(in.Run.BridgeCalls),
-			},
-		})
+	resumedReply := input.Reply
+	// The note box the runtime decides — see [steerBox]. A RESUMED SEGMENT
+	// IS STEERABLE LIKE ANY OTHER: it is the same turn running again, and a
+	// note sent while it parked was answered `closed` — the box that segment
+	// had is gone.
+	box := steerBox(input.AgentRun)
+	input.Steer = box
+	// The working indicator's phase updates, on the same terms as the
+	// dispatch path: the resumed Execute loop opens a phase like any other,
+	// and a reader watching the thread should see it move when the box's
+	// answer lands.
+	input.OnPhase = func(ph phase.Phase) { status.Phase(ph.String()) }
+	// NO onboarding on a resume. The pass is a seat's FIRST turn, and this
+	// turn already ran its first phase — running it here would spend the
+	// resumed turn's opening on orientation for a seat that is mid-task.
+	input.Resume = &runner.Resume{
+		State: in.State, Answer: in.Answer,
+		// WHICH BOX DID THE WORK. Off the run's own row, because this
+		// process may not be the one that launched it — and it is the only
+		// thing that can say a phase ran in a sandbox rather than in this
+		// process's own tool loop.
+		Run: runner.RunRecord{
+			CodingAgent:   in.Run.CodingAgent,
+			SandboxID:     in.Run.SandboxID,
+			LaunchID:      in.Run.LaunchID,
+			DeliveredRefs: in.DeliveredRefs,
+			RefsElided:    in.RefsElided,
+		},
+		// THE RUN'S OWN TOOL CALLS, off its durable row. A box-mode
+		// executor called them over the bridge, possibly in another
+		// process, so this list is the only record of what the phase did —
+		// its submission included.
+		Bridged: bridgedCalls(in.Run.BridgeCalls),
+	}
+	r, err := company.RunnerFor(in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
 	}
@@ -1097,6 +1043,77 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	}
 	e.recordResume(ctx, in, res)
 	return nil
+}
+
+// parkedTurnRunner is the runner a parked run's turn is rebuilt with on this
+// node, and the telemetry it was built from: the resume that collects the run
+// ([Engine.resumeTurn]) adds what re-entering the turn takes, and a box-mode
+// run taken over while it works ([Engine.reopenAgentRun]) uses it as it is.
+//
+// ONE CONSTRUCTION for both, because a call a box makes over its bridge after
+// a recovery and a call the resumed turn makes are calls of the same turn, and
+// the two must agree on everything a call reads: the turn's identity and unit
+// of work, the rebase its operation ids are minted under, the counter its
+// spend is held to, the seat's registry, skills and fence, and the reply it
+// owes.
+func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput,
+) (RunnerInput, turnTelemetry, error) {
+	resumedReply, err := resumeReply(in.Run)
+	if err != nil {
+		return RunnerInput{}, turnTelemetry{}, err
+	}
+	tel, err := e.describeResume(ctx, company, in)
+	if err != nil {
+		return RunnerInput{}, turnTelemetry{}, err
+	}
+	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
+	// the run was post-charged a moment ago, and a window it took past its
+	// ceiling refuses every call this segment would make. Before the turn
+	// identity, which carries it to every auxiliary call the segment makes
+	// ([turnTelemetry.budget]).
+	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
+	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
+		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
+	return RunnerInput{
+		Task:    resumeTask(in),
+		Compact: e.compactorFor(company),
+		// THE RUNNER NEEDS IT TOO, not just the loop. This field reaches
+		// runner.Config.Reply, which is what submit_work's own citation
+		// check reads — so a resumed turn with this unset accepted
+		// `no_action` on a turn somebody was waiting on, and accepted a
+		// citation naming any surface at all, before the loop's later
+		// checks ever ran.
+		Reply:     resumedReply,
+		Publisher: e.backends.Queue,
+		Turn:      turnIdentity,
+		Sessions:  e.sessions,
+		// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for the
+		// turn's LATER rounds, not for the one being re-entered: whether
+		// that phase was agentic is the state's own answer (see
+		// [execstate.State.AgentRun]), but a turn that loops to another
+		// iteration must run that one the same way it ran the first.
+		AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
+		Budget:   tel.budget.budget(),
+		// A resumed Execute loop can exhaust its rounds like any other, and
+		// it is the phase most likely to: it comes back mid-task with its
+		// budget already partly spent.
+		Judge:     e.judgeFor(company, in.Turn.Handle(), tel.aux()),
+		Remaining: e.remainingFor(company, in.Turn.Handle()),
+		// THE SAME FENCE THE DISPATCH PATH GETS, and a parked run needs it
+		// more than a fresh turn does: its turn was parked across a coding
+		// run that may have taken an hour, and the node that picks it up is
+		// not always the node that parked it. The grant it closes on is the
+		// one THIS node holds now — which is the correct anchor, since that
+		// is what this node is admitted for.
+		Fence: e.seatFence(in.Turn.Handle()),
+		// THE SKILL REGISTRY, which the resume's call site once omitted.
+		// With nil Skills the runner's guardFor returns nil, so the
+		// load-before-use gate was disarmed for every resumed turn: a seat
+		// could call a tool whose required skill it had never loaded, on the
+		// one path where nobody would notice — and the RunnerFor sites must
+		// agree or a turn changes shape by being resumed.
+		Skills: e.skills,
+	}, tel, nil
 }
 
 // recordResume files a finished resumed turn against the conversation it was
@@ -1856,6 +1873,10 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
+		// AND IS SERVED AGAIN wherever the run is taken over while its box
+		// works: this node after a restart, or the seat's next holder —
+		// see [sandbox.CoordinatorOptions.Recovered].
+		Recovered: e.reopenAgentRun,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,

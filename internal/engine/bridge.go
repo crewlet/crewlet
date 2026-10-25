@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -183,6 +184,18 @@ func (l *bridgeLedger) spent() sandbox.EngineSpend {
 func engineSpendOf(b runner.Bridged) sandbox.EngineSpend {
 	return sandbox.EngineSpend{Aux: auxTokensOf(b.Aux), Workers: b.Workers,
 		WorkerInput: b.WorkerInput, WorkerOutput: b.WorkerOutput}
+}
+
+// bridgedOf is [engineSpendOf] read back: the total a run's row holds, as the
+// meter of a run taken over while it works starts from it
+// ([runner.NewBridgedSpendFrom]). The row keeps no count of auxiliary calls,
+// only their tokens, and nothing reads the count off a bridged meter.
+func bridgedOf(s sandbox.EngineSpend) runner.Bridged {
+	return runner.Bridged{
+		Aux: auxspend.Spent{Input: s.Aux.Input, Output: s.Aux.Output,
+			CacheRead: s.Aux.CacheRead, CacheWrite: s.Aux.CacheWrite},
+		Workers: s.Workers, WorkerInput: s.WorkerInput, WorkerOutput: s.WorkerOutput,
+	}
 }
 
 // encodeArgs renders a call's arguments as the JSON text the row holds.
