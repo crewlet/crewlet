@@ -1776,7 +1776,7 @@ and none of those flags, which an override cannot quietly undo:
 | `claude-code` | `--tools ""` (an empty allow list) in the denied argv, `--strict-mcp-config` with no server | eligible, measured on 2.1.310 |
 | `pi` | `--no-tools` sends no tool, `--no-extensions` loads none | eligible, measured on 0.85.1 |
 | `codex` | none: its shell is switched off, but `apply_patch` has no switch, and its patch check answers whether a file outside the call holds given lines | refused |
-| `opencode` | none measured: the deny-all policy refuses a call when made rather than removing the tool | refused until measured |
+| `opencode` | none measured: the seats' policy offers only the web tools (measured on 2.0.32 and 2.1.4), but the denial's deny-all has not been measured to offer nothing | refused until measured |
 
 **`pi` is the one profile that denies every tool outright** (`--no-tools`),
 and it is honest there for a reason no other vendor gives it: measured off

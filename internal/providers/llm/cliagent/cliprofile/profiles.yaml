@@ -1092,12 +1092,12 @@ opencode:
   # `snapshots: false` stops it keeping a git snapshot of a working
   # directory that is empty by construction.
   #
-  # NO tools_off, so the Dashboard Assistant refuses this CLI. A deny-all
-  # policy refuses a call when it is made; it does not take the tool off the
-  # model's list, so a rule the policy format reads differently in a release
-  # (as v1's did under 2.0) runs the tool. Leaving the model with no tool by
-  # construction has not been measured: the 2.1.4 binary could not run on the
-  # host where this was last checked.
+  # NO tools_off, so the Dashboard Assistant refuses this CLI. The seats'
+  # policy was measured to decide what a call is offered (the web tools and
+  # nothing else, above), but the denial's deny-all has not been measured to
+  # leave a call offered nothing, and the construction lives in a seeded file
+  # rather than on the argv tools_off is checked against, so a release that
+  # read the policy format differently (as 2.0 read v1's) would go unseen.
   local_tools: denied
   work_config_env:
     OPENCODE_CONFIG_DIR: .crewlet-config
