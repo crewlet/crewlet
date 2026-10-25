@@ -1947,6 +1947,82 @@ copilot:
     output: [["providerModelMetrics", "0", "metrics", "usage", "outputTokens"]]
     cache_read: [["providerModelMetrics", "0", "metrics", "usage", "cacheReadTokens"]]
     input_includes_cache: true
+  # NO SERVER OF THE HOME'S OWN: the CLI starts every server its home's
+  # mcp-config.json names on every run, beside any --additional-mcp-config —
+  # measured on 1.0.103, a server planted there started — and nothing in its
+  # help or settings keeps that file out, so the profile writes it, empty,
+  # every generation.
+  seed_files:
+    - path: .copilot/mcp-config.json
+      content: '{"mcpServers":{}}'
+  # THE SEAT'S TOOLS: one stdio server in a configuration file in the call's
+  # own directory, added with --additional-mcp-config, made available beside
+  # the web tools (--available-tools) and allowed (--allow-tool) by the
+  # server's name, which covers every tool it lists — one activated mid-run
+  # included. Measured on 1.0.103 through the engine's own code path on a
+  # custom provider against a local stand-in, the state directory inside a
+  # checkout holding an .mcp.json, .github/mcp.json, .vscode/mcp.json,
+  # .copilot/mcp-config.json and every other CLI's MCP configuration at each
+  # level above the call, and a server in the home's mcp-config.json: the
+  # model was offered the seat's tools, and no other server started. (Offline,
+  # as the stand-in needs, the CLI offers no web tool and starts no built-in
+  # GitHub server; signed in to GitHub it starts that server, whose tools the
+  # available-tools list holds to web_search.)
+  #
+  # The server's `timeout` is the CLI's per-call timeout, in milliseconds
+  # (4,000 gave a slow call up at 4.0s). The CLI re-reads the server's list
+  # when told it changed — a tool activated mid-run was offered from the
+  # request after the one the activation's result went back in — and makes
+  # one response's calls at once. A failed run says why on stderr.
+  mcp:
+    seed:
+      - path: crewlet-mcp.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"type":"local","command":{relay_command_json},"args":{relay_args_json},"tools":["*"],"timeout":{tool_timeout_ms}}}}'
+    args: ["--additional-mcp-config", "@{work}/crewlet-mcp.json", "--available-tools", "crewlet"]
+    allow_args: ["--allow-tool", "crewlet"]
+    tool_timeout_seconds: 600
+    relists: true
+    concurrency: at_once
+  # EACH REQUEST, FROM THE SESSION'S EVENTS FILE the CLI writes as it goes —
+  # stdout here is the answer alone (-s). A request is a turn: turn_start
+  # opens it, a usage_record carries its counts (the input count holding the
+  # cached tokens, as the usage report's does), and assistant.message its
+  # prose and the calls it asked for, each written before the calls run. The
+  # CLI sends no id of its own with a call; a call is joined to its request by
+  # name and arguments, the server's tools spelled `crewlet-<name>`.
+  #
+  # The session's directory is named by an id the CLI mints — --session-id
+  # takes a UUID only, which the engine's session id is not — so the file is
+  # told by its first line, whose session.start names the call's working
+  # directory (owner).
+  #
+  # Measured on 1.0.103: each request's counts in the file before its calls
+  # had returned, their sum equal to the usage report's.
+  requests:
+    source: file
+    in: home
+    file: ".copilot/session-state/*/events.jsonl"
+    owner: {path: ["data", "context", "cwd"], equals: "{work}"}
+    host_prefix: "crewlet-"
+    events:
+      - match: [{path: ["type"], equals: "assistant.turn_start"}]
+        id: ["data", "turnId"]
+      - match: [{path: ["type"], equals: "session.usage_record"}]
+        model: ["data", "usage", "model"]
+        usage:
+          input: [["data", "usage", "inputTokens"]]
+          output: [["data", "usage", "outputTokens"]]
+          cache_read: [["data", "usage", "cacheReadTokens"]]
+          input_includes_cache: true
+      - match: [{path: ["type"], equals: "assistant.message"}]
+        id: ["data", "turnId"]
+        model: ["data", "model"]
+        text: ["data", "content"]
+        blocks:
+          path: ["data", "toolRequests"]
+          each:
+            - call: {id: ["toolCallId"], name: ["name"], args: ["arguments"]}
   env:
     # Auto-update is on by default for a standalone install, and it would
     # download a newer CLI into each seat's own cache and run that instead
