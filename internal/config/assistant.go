@@ -95,7 +95,7 @@ type Assistant struct {
 // the default without a pointer, and a stored value out of range is clamped
 // by its accessor.
 type AssistantDeepWork struct {
-	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an agent-mode entry driving claude-code or opencode. Required."`
+	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an agent-mode entry driving claude-code. Required."`
 	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one deep-work run may take, 60..1200 seconds. Absent: 1200."`
 	MaxSteps       int    `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=400" desc:"Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150."`
 	MaxTokens      int    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" js:"min=0;max=20000000" desc:"Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply."`
@@ -248,8 +248,8 @@ func (c *Company) AssistantDeepWork() (string, LLMProvider, error) {
 }
 
 // deepWorkProblems reports every way `assistant.deep_work` cannot run: no
-// entry, an unknown one, one not in agent mode, a CLI no sandbox runner
-// drives, or a run_in this company configures no backend for.
+// entry, an unknown one, one not in agent mode, a CLI other than Claude
+// Code, or a run_in this company configures no backend for.
 func (c *Company) deepWorkProblems(path Path) error {
 	var p problems
 	d := c.Assistant.DeepWork
@@ -284,9 +284,14 @@ func (c *Company) deepWorkProblems(path Path) error {
 			"no tool of its own and deep work would be quick mode again: set %s: agent",
 			d.LLM, entryField("mode"))
 	}
-	if !slices.Contains(CodingAgents, CodingAgent(entry.AgentName())) {
-		p.add(llmPath, ErrConflict, "providers.llm.%s drives %s, which no sandbox runner "+
-			"drives: deep work runs %s", d.LLM, entry.AgentName(), names(CodingAgents))
+	// CLAUDE CODE ALONE: a run parked on a proposal is continued, after
+	// the approval, in its CLI's own session (`--resume`), and that is the
+	// one runner here that continues one.
+	if CodingAgent(entry.AgentName()) != CodingAgentClaudeCode {
+		p.add(llmPath, ErrConflict, "providers.llm.%s drives %s, and deep work runs on %s "+
+			"alone: a run parked on a proposal continues in its CLI's own session after "+
+			"the approval, which only that runner can do. Set %s: %s",
+			d.LLM, entry.AgentName(), CodingAgentClaudeCode, entryField("agent"), CodingAgentClaudeCode)
 	}
 	if entry.RunIn != "" && entry.RunIn != PlacementDirect && !c.Providers.Sandbox.Configured(entry.RunIn) {
 		p.add(entryField("run_in"), ErrConflict, "deep work on providers.llm.%s runs in %s, "+

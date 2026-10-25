@@ -16,7 +16,7 @@ func deepCompany(entries, block string) string {
 	return assistantCompany(assistantEntry+entries, "  enabled: true\n  llm: [assistant]\n  deep_work:\n"+block)
 }
 
-// DEEP WORK RUNS ONLY ON AN AGENT-MODE ENTRY A SANDBOX RUNNER DRIVES, and is
+// DEEP WORK RUNS ONLY ON AN AGENT-MODE CLAUDE CODE ENTRY, and is
 // handed out from one place, which refuses what admission refuses.
 func TestDeepWorkIsHandedOutOnlyForAnAgentModeEntry(t *testing.T) {
 	t.Parallel()
@@ -36,6 +36,8 @@ func TestDeepWorkIsHandedOutOnlyForAnAgentModeEntry(t *testing.T) {
 		"text mode": {"    deep:\n      agent: claude-code\n      model: sonnet\n",
 			"    llm: deep\n", "assistant.deep_work.llm"},
 		"no runner": {"    deep:\n      agent: codex\n      model: gpt-5\n      mode: agent\n",
+			"    llm: deep\n", "assistant.deep_work.llm"},
+		"no session to continue": {"    deep:\n      agent: opencode\n      model: x/y\n      mode: agent\n",
 			"    llm: deep\n", "assistant.deep_work.llm"},
 		"unconfigured e2b": {"    deep:\n      agent: claude-code\n      mode: agent\n      run_in: e2b\n",
 			"    llm: deep\n", "providers.llm.deep.run_in"},

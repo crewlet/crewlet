@@ -90,7 +90,7 @@
       "additionalProperties": false,
       "properties": {
         "llm": {
-          "description": "providers.llm key deep work runs on: an agent-mode entry driving claude-code or opencode. Required.",
+          "description": "providers.llm key deep work runs on: an agent-mode entry driving claude-code. Required.",
           "type": [
             "string",
             "number",
