@@ -243,6 +243,13 @@ const RUNTIME_ROW: Record<
     path: ["settings", "backups"],
     noSubject: "No directory recorded",
   }),
+  // A COMPLIANCE READ NAMES THE CONVERSATION IT OPENED: the reader is the
+  // row's actor and the reason is its summary, and what was read stays sealed.
+  assistant_conversation_read: (row) => ({
+    kind: "conversation read",
+    subject: row.tags?.conversation_id ?? "",
+    noSubject: "No conversation recorded",
+  }),
 };
 
 function isRuntimeType(type: string): type is RuntimeType {
