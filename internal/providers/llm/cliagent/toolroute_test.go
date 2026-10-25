@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // fakeClaude is a claude-code entry whose CLI is this test binary playing
@@ -174,6 +177,103 @@ func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 	turns := host.latestTurns()
 	if len(turns) != 2 || turns[0].Usage == nil || *turns[0].Usage != (llm.Usage{Input: 157, Output: 20, CacheRead: 50, CacheWrite: 7}) {
 		t.Errorf("the first request's record carries %+v, want its own counts", turns)
+	}
+}
+
+// A CLI WHOSE RECORD SHOWS NO REQUESTS IS NOT REFUSED. Per-request structure
+// is optional per profile: the host is told the run observes none — so it
+// counts the whole run as one round — is told of no request, and is charged
+// the run's own total once it ends.
+//
+// Mutation: tell the host requests are observed when the profile reads none,
+// and it waits on a record that never comes; skip the settle, and the run is
+// charged nothing.
+func TestARunWithNoRequestRecordIsOneRoundChargedAtTheEnd(t *testing.T) {
+	t.Parallel()
+	p := fakeClaude(t, fakeScript{Responses: []fakeResponse{
+		{Text: "a", Calls: []fakeCall{{Name: "search"}}, Usage: fakeUsage{Input: 100, Output: 20}},
+		{Text: "the answer", Usage: fakeUsage{Input: 130, Output: 10}},
+	}}, func(c *Config) { c.Overrides["requests"] = nil })
+	host := newTestHost(t, "search")
+	comp, err := p.Complete(t.Context(), phase(host))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	turns, calls, spent, spends := host.snapshot()
+	host.mu.Lock()
+	observes := host.opts[0].ObservesRequests
+	host.mu.Unlock()
+	if observes || len(turns) != 0 {
+		t.Errorf("the host was told the run observes requests (%v) and %d of them", observes, len(turns))
+	}
+	if len(calls) != 1 {
+		t.Errorf("calls = %+v, want the one search", calls)
+	}
+	if len(spends) != 1 || spent != (llm.Usage{Input: 230, Output: 30}) {
+		t.Errorf("charged %+v, want the run's own total once", spends)
+	}
+	if comp.Content != "the answer" {
+		t.Errorf("Content = %q, want the answer path's", comp.Content)
+	}
+}
+
+// A RECORD THAT SHOWS REQUESTS BUT NOT THEIR COUNTS IS CHARGED AN ESTIMATE AS
+// EACH ONE STARTS — the prompt the engine sent and what the requests before it
+// wrote — so the budget gate sees a run's spend while it goes, and the CLI's
+// own total settles the difference at the end, never refunding below what was
+// charged.
+//
+// Mutation: estimate only at the end, and nothing is charged before the call
+// runs.
+func TestARecordWithoutCountsIsChargedAnEstimateAsItGoes(t *testing.T) {
+	t.Parallel()
+	noUsage := func(events []any) []any {
+		out := make([]any, 0, len(events))
+		for _, e := range events {
+			rule := map[string]any{}
+			for k, v := range e.(map[string]any) {
+				if k != "usage" {
+					rule[k] = v
+				}
+			}
+			out = append(out, rule)
+		}
+		return out
+	}
+	builtin, _ := cliprofile.Builtin("claude-code")
+	raw, err := yaml.Marshal(builtin.Requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests map[string]any
+	if err := yaml.Unmarshal(raw, &requests); err != nil {
+		t.Fatal(err)
+	}
+	events := requests["events"].([]any)
+	p := fakeClaude(t, fakeScript{Responses: []fakeResponse{
+		{Text: "a", Calls: []fakeCall{{Name: "search"}}, Usage: fakeUsage{Input: 100, Output: 20}},
+		{Text: "done", Usage: fakeUsage{Input: 130, Output: 10}},
+	}, ResultUsage: &fakeUsage{Input: 50_000, Output: 900}}, func(c *Config) {
+		c.Overrides["requests"] = map[string]any{"events": noUsage(events)}
+	})
+	host := newTestHost(t, "search")
+	var before llm.Usage
+	var estimated bool
+	host.handle("search", func(context.Context, map[string]any) (string, bool) {
+		_, _, before, _ = host.snapshot()
+		_, _, _, spends := host.snapshot()
+		estimated = len(spends) > 0 && spends[0].Estimated
+		return "ok", false
+	})
+	if _, err := p.Complete(t.Context(), phase(host)); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if before.Input == 0 || !estimated {
+		t.Errorf("before the call ran the host was charged %+v (estimated %v), want an estimate "+
+			"of the first request's input", before, estimated)
+	}
+	if _, _, spent, _ := host.snapshot(); spent.Input != 50_000 || spent.Output != 900 {
+		t.Errorf("the run was charged %+v in all, want the CLI's own total", spent)
 	}
 }
 
