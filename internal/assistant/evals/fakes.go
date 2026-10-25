@@ -114,6 +114,13 @@ func (r *Revoker) RevokeTurn(turn uuid.UUID) {
 	r.turns = append(r.turns, turn)
 }
 
+// RevokedTurn reports whether every grant of a turn was ended.
+func (r *Revoker) RevokedTurn(turn uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Contains(r.turns, turn)
+}
+
 // Revoked reports whether a grant was revoked.
 func (r *Revoker) Revoked(id uuid.UUID) bool {
 	r.mu.Lock()
