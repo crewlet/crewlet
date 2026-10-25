@@ -288,7 +288,8 @@ func TestTheCollectorNeverStartsOnceStopped(t *testing.T) {
 	e.Stop(context.Background())
 
 	refs, err := collect.Sources(references.All, refusedEstate{name: worklet.ObjectEstate{}.Name()},
-		refusedEstate{name: artifactsdomain.ObjectEstate{}.Name()})
+		refusedEstate{name: artifactsdomain.ObjectEstate{}.Name()},
+		refusedEstate{name: assistantdomain.ObjectEstate{}.Name()})
 	if err != nil {
 		t.Fatalf("the references: %v", err)
 	}
