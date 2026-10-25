@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -19,7 +20,8 @@ import (
 // longest the write could be admitted for anyway. The settlement and the
 // turn's resumption are written on the same detached context, because a write
 // that landed and was never recorded is exactly the proposal that reads as
-// unknown.
+// unknown, and bounded by [SettleTimeout], so a store that hangs releases the
+// approving request rather than pinning it for ever.
 func (a *Approver) execute(ctx context.Context, d decider, p assistantdomain.Proposal,
 	from wire.ProposalState, read exec.Grant) (wire.ProposalAnswer, error) {
 
@@ -49,8 +51,17 @@ func (a *Approver) execute(ctx context.Context, d decider, p assistantdomain.Pro
 		a.d.Grants.Revoke(grant.ID())
 		out = outcomeOf(resp, sendErr)
 	}
-	return a.settle(ctx, d, p, out, read)
+	settleCtx, cancel := context.WithTimeout(ctx, SettleTimeout)
+	defer cancel()
+	return a.settle(settleCtx, d, p, out, read)
 }
+
+// SettleTimeout bounds a sent write's settlement and the turn's resumption
+// together: three of the state log's ten-second resolve budgets, for the
+// settle record, the resume record and the card the resumed turn shows. Past
+// it the approval answers what it could record, and a settlement that did not
+// land reads as unknown, which offers the same write again under its own key.
+const SettleTimeout = 30 * time.Second
 
 // CodeNotAvailable is the refusal a write meets when the person's session can
 // no longer derive the grant it would be sent under: the API's

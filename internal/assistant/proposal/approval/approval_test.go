@@ -573,3 +573,32 @@ func TestARepeatedDecisionTheStoreCannotAnswerIsUnconfirmed(t *testing.T) {
 		})
 	}
 }
+
+// A SETTLEMENT HAS A DEADLINE OF ITS OWN: the settle record and the
+// resumption run detached from the approving request, which has none, and
+// within SettleTimeout, so a store that hangs never pins the approval for
+// ever. Mutation: settle on the bare detached context and both deadlines read
+// zero.
+func TestASettlementIsBounded(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	ctx := approvaltest.As(context.Background(), ada)
+	before := time.Now()
+	if _, err := f.Node(t).Approve(ctx, approvaltest.Approve(p)); err != nil {
+		t.Fatal(err)
+	}
+	limit := time.Now().Add(approval.SettleTimeout)
+	moves, resumes := f.Store.MoveDeadlines(), f.Turns.ResumeDeadlines()
+	if len(moves) == 0 || len(resumes) != 1 {
+		t.Fatalf("recorded %d moves and %d resumptions", len(moves), len(resumes))
+	}
+	for name, bound := range map[string]time.Time{"the settle record": moves[len(moves)-1],
+		"the resumption": resumes[0]} {
+		if bound.IsZero() || bound.Before(before) || bound.After(limit) {
+			t.Errorf("%s ran with deadline %v, want one within %v of the approval",
+				name, bound, approval.SettleTimeout)
+		}
+	}
+}

@@ -43,6 +43,7 @@ type Store struct {
 	proposals map[uuid.UUID]assistantdomain.Proposal
 	ops       map[string]bool
 	moves     []assistantdomain.ProposalMove
+	bounds    []time.Time
 	unknown   bool
 	fail      error
 	now       func() time.Time
@@ -77,7 +78,7 @@ func (s *Store) TurnProposals(_ context.Context, owner, conversation,
 }
 
 // Move records one move, arbitrated.
-func (s *Store) Move(_ context.Context, c assistantdomain.Call, id uuid.UUID,
+func (s *Store) Move(ctx context.Context, c assistantdomain.Call, id uuid.UUID,
 	m assistantdomain.ProposalMove) (approval.Written, error) {
 
 	s.mu.Lock()
@@ -107,6 +108,8 @@ func (s *Store) Move(_ context.Context, c assistantdomain.Call, id uuid.UUID,
 	p.RefusalCode = m.RefusalCode
 	s.proposals[id] = p
 	s.moves = append(s.moves, m)
+	bound, _ := ctx.Deadline()
+	s.bounds = append(s.bounds, bound)
 	return approval.Written{Outcome: "applied"}, nil
 }
 
@@ -129,6 +132,14 @@ func (s *Store) Recorded() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.moves)
+}
+
+// MoveDeadlines are the deadlines each recorded move was handed, in order, the
+// zero time for one handed none.
+func (s *Store) MoveDeadlines() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.bounds)
 }
 
 // FailMoves makes every later move fail with err, as a store nobody can reach
@@ -307,6 +318,8 @@ type Turns struct {
 	resumed []approval.Resumption
 	emitted []approval.Emission
 	lapsed  []uuid.UUID
+	// bounds are the deadlines each resumption was handed, zero for none.
+	bounds []time.Time
 }
 
 var _ approval.Turns = (*Turns)(nil)
@@ -315,10 +328,12 @@ var _ approval.Turns = (*Turns)(nil)
 const StreamURL = "/assistant/conversations/c/stream"
 
 // Resume records a resumption.
-func (t *Turns) Resume(_ context.Context, r approval.Resumption) (wire.TurnAccepted, error) {
+func (t *Turns) Resume(ctx context.Context, r approval.Resumption) (wire.TurnAccepted, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.resumed = append(t.resumed, r)
+	bound, _ := ctx.Deadline()
+	t.bounds = append(t.bounds, bound)
 	return wire.TurnAccepted{TurnID: r.Turn, StreamURL: StreamURL, AfterSeq: 7}, nil
 }
 
@@ -350,6 +365,14 @@ func (t *Turns) Resumed() []approval.Resumption {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return slices.Clone(t.resumed)
+}
+
+// ResumeDeadlines are the deadlines each resumption was handed, in order, the
+// zero time for one handed none.
+func (t *Turns) ResumeDeadlines() []time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.bounds)
 }
 
 // Emitted are the emissions, in order.
