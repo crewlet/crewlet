@@ -1048,7 +1048,6 @@ function BuilderScreen({
         apply: (change) => {
           for (const intent of change.intents) dispatch({ type: "record", intent });
         },
-        confirm: "approve",
       } satisfies PageActionSpec<OrgDraftChange>,
     },
   });

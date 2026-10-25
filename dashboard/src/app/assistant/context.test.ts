@@ -25,6 +25,7 @@ import {
   registerPage,
   resetPageContextForTest,
   setFramePage,
+  type AssistantPageRegistration,
   type FramePage,
   type PageActionSpec,
 } from "./context.ts";
@@ -65,17 +66,20 @@ describe("the context a turn sends", () => {
           { kind: "task", id: "x".repeat(201) },
           { kind: "task", id: "ENG-2" },
         ],
+        // ONLY THE CONTRACT'S IDS are offered: the engine's reserved one, an
+        // id nobody declared and one that is no id at all are each left out.
         actions: {
-          "work.filters.apply": {} as PageActionSpec<never>,
+          "work.filter.apply": {} as PageActionSpec<never>,
           "context.invalidate": {} as PageActionSpec<never>,
+          "made.up": {} as PageActionSpec<never>,
           notdotted: {} as PageActionSpec<never>,
-        },
+        } as AssistantPageRegistration["actions"],
       },
     );
     expect(context.screen).toBe("unknown");
     expect(context.query).toEqual({ fine: "1" });
     expect(context.resources).toEqual([{ kind: "task", id: "ENG-2" }]);
-    expect(context.accepts).toEqual(["work.filters.apply"]);
+    expect(context.accepts).toEqual(["work.filter.apply"]);
   });
 
   test("is held to the counts and the byte budget, shedding the query first", () => {
@@ -179,7 +183,7 @@ describe("applying a page action", () => {
   function request(payload: unknown, revision = pageSnapshot()!.context.source_revision) {
     return {
       correlation_id: "c",
-      action: "work.filters.apply",
+      action: "work.filter.apply",
       payload,
       source_revision: revision,
     };
@@ -187,7 +191,7 @@ describe("applying a page action", () => {
 
   test("each way it can go is its own outcome, and only an applied one runs the setters", () => {
     setFramePage(PAGE);
-    registerPage({ actions: { "work.filters.apply": spec } });
+    registerPage({ actions: { "work.filter.apply": spec } });
     expect(applyPageAction({ ...request("blocked"), action: "nope.here" }).outcome).toBe(
       "no_handler",
     );

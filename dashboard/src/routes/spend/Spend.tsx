@@ -84,13 +84,11 @@ export function Spend() {
         scope: "Spend window (view only)",
         keys: spendRangeKeys(range.offer, () => now),
         nav,
-        confirm: "none",
       }),
       ...urlAction("spend.group.set", {
         scope: "Spend chart split (view only)",
         keys: spendGroupKeys(),
         nav,
-        confirm: "none",
       }),
     },
   });

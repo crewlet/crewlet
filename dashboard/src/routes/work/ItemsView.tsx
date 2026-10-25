@@ -656,7 +656,6 @@ export function ItemsView({
         keys: workKeys("chip", labels),
         nav,
         blocked: gate,
-        confirm: "none",
       }),
       ...urlAction("work.filters.clear", {
         scope: "Work list filters (not saved to a view)",
@@ -664,13 +663,11 @@ export function ItemsView({
         preset: () => withoutLocked(clearFiltersPatch(Object.keys(fields)), host?.lock),
         nav,
         blocked: gate,
-        confirm: "none",
       }),
       ...urlAction("work.arrange.set", {
         scope: "How the work list is drawn (not saved to a view)",
         keys: workKeys("arrangement", labels),
         nav,
-        confirm: "none",
       }),
     },
   });

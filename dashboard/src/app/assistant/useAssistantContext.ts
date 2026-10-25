@@ -15,7 +15,13 @@
  */
 
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { registerPage, type AssistantPageRegistration, type PageActionSpec } from "./context.ts";
+import {
+  isPageActionId,
+  registerPage,
+  type AssistantPageRegistration,
+  type PageActionId,
+  type PageActionSpec,
+} from "./context.ts";
 
 export function useAssistantContext(registration: AssistantPageRegistration): void {
   const latest = useRef(registration);
@@ -29,15 +35,14 @@ export function useAssistantContext(registration: AssistantPageRegistration): vo
     Object.keys(registration.actions ?? {}).sort(),
   ]);
   useEffect(() => {
-    const actions: Record<string, PageActionSpec<unknown>> = {};
-    for (const id of Object.keys(latest.current.actions ?? {})) {
+    const actions: Partial<Record<PageActionId, PageActionSpec<unknown>>> = {};
+    for (const id of Object.keys(latest.current.actions ?? {}).filter(isPageActionId)) {
       // EVERY HALF THROUGH THE LATEST RENDER, so a setter that closes over
       // newer state is the one that applies.
       const at = () => latest.current.actions?.[id];
       const first = at()!;
       actions[id] = {
         scope: first.scope,
-        ...(first.confirm === undefined ? {} : { confirm: first.confirm }),
         parse: (raw) => at()?.parse(raw) ?? { ok: false, reason: "The page no longer takes it." },
         preview: (value) => at()?.preview(value) ?? [],
         blocked: (value) => (at() ? at()!.blocked(value) : "The page no longer takes it."),

@@ -27,7 +27,7 @@
 
 import { parseHash, type Navigator } from "../router.tsx";
 import { parseWindow, windowLabel, windowParam, type Offer } from "~/lib/range.ts";
-import type { PageActionParse, PageActionSpec } from "./context.ts";
+import type { PageActionId, PageActionParse, PageActionSpec } from "./context.ts";
 
 /** How a screen writes a key: a filter replaces the history entry, a section pushes one. */
 export type UrlKeyHistory = "filter" | "section";
@@ -66,8 +66,6 @@ export interface UrlActionOptions {
   nav: Pick<Navigator, "filter" | "to">;
   /** The screen's own gate beyond the keys: a sentence, or null where it may. */
   blocked?: (patch: UrlPatch) => string | null;
-  /** Whether the person approves it first; only a pure view change may say `none` (D11). */
-  confirm?: "approve" | "none";
   /**
    * For an action that takes NO arguments (Clear): the patch the screen
    * writes, computed from the address at the moment it is asked. Only the
@@ -177,9 +175,9 @@ function parsePreset(raw: unknown, preset: () => UrlPatch): PageActionParse<UrlP
  * screen's `useAssistantContext` actions.
  */
 export function urlAction(
-  id: string,
+  id: PageActionId,
   options: UrlActionOptions,
-): Record<string, PageActionSpec<UrlPatch>> {
+): Partial<Record<PageActionId, PageActionSpec<UrlPatch>>> {
   const { keys, nav } = options;
   const words = (name: string, value: string | null) => {
     const key = keyOf(keys, name);
@@ -217,7 +215,6 @@ export function urlAction(
         return true;
       };
     },
-    ...(options.confirm === undefined ? {} : { confirm: options.confirm }),
   };
   return { [id]: spec };
 }

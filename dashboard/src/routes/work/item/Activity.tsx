@@ -179,7 +179,6 @@ export function Activity({
       scope: "Which of this task's history is shown",
       keys: { [param]: tabKey("Activity", ACTIVITY_TABS, TAB_LABEL, "filter", "all") },
       nav,
-      confirm: "none",
     }),
   });
   // --- end assistant page actions (WP12) ---

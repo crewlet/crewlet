@@ -298,7 +298,6 @@ export function Turns() {
         sort: choiceKey("Order", TURN_ORDERS, "filter", "-started"),
       },
       nav,
-      confirm: "none",
     }),
   });
   // --- end assistant page actions (WP12) ---

@@ -118,7 +118,6 @@ export function PageEditor({
               ? "The page is being saved."
               : null,
         apply: ({ body }) => setDraft(body),
-        confirm: "approve",
       } satisfies PageActionSpec<PageDraft>,
     },
   });

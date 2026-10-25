@@ -339,7 +339,6 @@ export function Budgets() {
           nonce.current += 1;
           setPrefill({ scope: p.scope, period: p.period, text: p.text, nonce: nonce.current });
         },
-        confirm: "approve",
       } satisfies PageActionSpec<CeilingProposal>,
     },
   });

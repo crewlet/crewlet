@@ -275,7 +275,6 @@ export function useCharterEditing(org: OrgProjection): {
         blocked: () =>
           !mayEdit ? "Writing the principles takes Admin." : access.can ? null : access.reason,
         apply: ({ part, value }) => change(part, value),
-        confirm: "approve",
       } satisfies PageActionSpec<CharterDraft>,
     },
   });
