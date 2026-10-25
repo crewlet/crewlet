@@ -29,16 +29,16 @@
  * links takes no focus of its own. Several screens carry two or three grids at
  * once (and a page's grid sits under another in the peek rail), so the
  * reader's LAST POINTER GESTURE says which grid they are in; with none yet the
- * first drivable grid mounted drives. A grid showing its empty state
- * registers nothing. Module state rather than a context: the grids that must
- * agree are often in different subtrees, and a provider around both would be
- * the shell, which knows nothing about grids.
+ * first drivable grid mounted drives. That decision is the kit's
+ * (`useDataGridDriving`); the keys stay this keymap's rows, gated on it, so
+ * they are checked against every other key the dashboard binds.
  */
 
-import { useCallback, useEffect, useId, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useRef, type ReactNode } from "react";
 import {
   DataGrid as KitDataGrid,
-  type DataGridBand,
+  countDataGridRows,
+  useDataGridDriving,
   type DataGridHandle,
   type DataGridProps,
 } from "@crewlethq/ui";
@@ -47,50 +47,6 @@ import { useParam } from "../router.tsx";
 import { peekHref, usePeek } from "./peekAddress.ts";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { useKeymap } from "../keymap.ts";
-
-const drivable: string[] = [];
-let touched: string | null = null;
-let revision = 0;
-const watchers = new Set<() => void>();
-
-/** Wake every grid: whose keystroke this is has changed. */
-function announce(): void {
-  revision += 1;
-  for (const watcher of watchers) watcher();
-}
-
-function watchDriving(watcher: () => void): () => void {
-  watchers.add(watcher);
-  return () => {
-    watchers.delete(watcher);
-  };
-}
-
-function drivingRevision(): number {
-  return revision;
-}
-
-/**
- * Whether ANY grid on screen holds `j` and `k`: for a screen that binds the
- * same two keys to something of its own (a task page stepping through the list
- * it was opened from) and must stand aside while a grid takes them.
- */
-export function useAnyGridDriving(): boolean {
-  useSyncExternalStore(watchDriving, drivingRevision);
-  return drivable.length > 0;
-}
-
-function isDriving(gridId: string): boolean {
-  if (touched !== null) return touched === gridId;
-  return drivable[0] === gridId;
-}
-
-/** How many rows a grid draws, its bands' rows included. */
-function rowCount<T>(rows: T[] | undefined, bands: DataGridBand<T>[] | undefined): number {
-  const inBand = (band: DataGridBand<T>): number =>
-    band.bands ? band.bands.reduce((n, sub) => n + inBand(sub), 0) : band.rows.length;
-  return bands ? bands.reduce((n, band) => n + inBand(band), 0) : (rows?.length ?? 0);
-}
 
 export interface GridProps<T> extends Omit<
   DataGridProps<T>,
@@ -122,7 +78,6 @@ export function DataGrid<T>({
   const columnSet = colsName ?? name;
   const [cols, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
   const handle = useRef<DataGridHandle>(null);
-  const gridId = useId();
 
   const peek = usePeek();
   const peeked = peek ? peekHref(peek) : "";
@@ -131,28 +86,10 @@ export function DataGrid<T>({
     [isSelected, peeked, rowHref],
   );
 
-  // A pointer gesture that changes nothing on screen still has to re-render
-  // every grid for them to agree about whose keystroke the next one is.
-  useSyncExternalStore(watchDriving, drivingRevision);
-  const canDrive = rowCount(rows, bands) > 0;
-  useEffect(() => {
-    if (!canDrive) return;
-    drivable.push(gridId);
-    announce();
-    return () => {
-      const at = drivable.indexOf(gridId);
-      if (at >= 0) drivable.splice(at, 1);
-      // A grid the reader touched and then left takes nothing with it.
-      if (touched === gridId) touched = null;
-      announce();
-    };
-  }, [gridId, canDrive]);
-  const driving = isDriving(gridId);
-  const claimKeyboard = useCallback(() => {
-    if (touched === gridId) return;
-    touched = gridId;
-    announce();
-  }, [gridId]);
+  // WHICH GRID THE KEYS DRIVE is the kit's decision: the one the reader last
+  // pointed at, else the first mounted with rows. A grid showing its empty
+  // state takes part in nothing.
+  const { driving, claim } = useDataGridDriving(countDataGridRows(rows, bands) > 0);
 
   useKeymap({
     "list.next": { run: () => handle.current?.step(1), when: driving },
@@ -178,7 +115,7 @@ export function DataGrid<T>({
       cols={cols}
       onColsChange={setCols}
       handleRef={handle}
-      onPointerDown={claimKeyboard}
+      onPointerDown={claim}
       empty={
         empty && {
           title: empty.title,
