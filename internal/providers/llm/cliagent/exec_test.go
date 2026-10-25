@@ -108,6 +108,26 @@ func runFakeCLI() {
 		// A CLI that ends cleanly when it is asked to stop — see
 		// exec_unix_test.go.
 		fakeExitZeroOnTerm()
+	case os.Getenv("FAKE_KEY_SESSION") != "":
+		// A CLI that keeps what a key signs it in to in its login's own
+		// file, as Cursor Agent does: it answers with what that file held
+		// when it started, and then, handed a key, writes it down there.
+		path := filepath.Join(os.Getenv("HOME"), os.Getenv("FAKE_KEY_SESSION"))
+		held, err := os.ReadFile(path) //nolint:gosec // the fake's own home
+		if err != nil {
+			held = []byte("nothing")
+		}
+		if key := os.Getenv("FAKE_VENDOR_API_KEY"); key != "" {
+			written := os.MkdirAll(filepath.Dir(path), 0o700)
+			if written == nil {
+				written = os.WriteFile(path, []byte("a session for "+key), 0o600)
+			}
+			if written != nil {
+				fmt.Fprint(os.Stderr, "UNWRITABLE: ", written)
+				os.Exit(3)
+			}
+		}
+		fmt.Print(string(held))
 	case os.Getenv("FAKE_DUMP_CWD") == "1":
 		// THE CHILD'S OWN ANSWER, because nothing else can give one, and it
 		// reports what it FINDS rather than only where it is.

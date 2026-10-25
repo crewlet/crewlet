@@ -47,7 +47,9 @@ type signInSource struct {
 // CLI, and a real checkout would claim a seat for a question about none.
 func (p *Provider) signIn() signIn {
 	var s signIn
-	if p.ws.HasLogin() {
+	// Not for a call that signs in with a key, which runs where no login is
+	// seeded ([Workspace.AcquireForKey]).
+	if !p.signsInWithKey() && p.ws.HasLogin() {
 		s.sources = append(s.sources, signInSource{
 			state: "credentials",
 			line:  "credential files in " + p.ws.CredentialsDir(),
@@ -93,6 +95,24 @@ func (p *Provider) signIn() signIn {
 		s.sources = append(s.sources, signInSource{state: "environment", line: "env sets " + name})
 	}
 	return s
+}
+
+// signsInWithKey reports whether this entry's calls hand the CLI a key: every
+// call under api-key, which never signs in with a login, and a call under
+// inherit-env whose engine environment holds the key variable. Such a call runs
+// in the seat's key home ([Workspace.AcquireForKey]).
+//
+// Read off [childEnv], as [Provider.signIn] is, so the home a call runs in and
+// the doctor's account of its sign-in are one reading of one environment.
+func (p *Provider) signsInWithKey() bool {
+	if p.auth.Mode == AuthAPIKey {
+		return true
+	}
+	if p.auth.Mode != AuthInheritEnv || p.profile.APIKeyEnv == "" {
+		return false
+	}
+	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
+	return strings.TrimSpace(env[p.profile.APIKeyEnv]) != ""
 }
 
 // ModeSignIn is the credential an entry's auth mode hands its CLI from the

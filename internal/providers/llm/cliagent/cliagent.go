@@ -343,7 +343,12 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		return nil, sitting
 	}
 
-	checkout, err := p.ws.Acquire(ctx, seat, callID, p)
+	var checkout *Checkout
+	if p.signsInWithKey() {
+		checkout, err = p.ws.AcquireForKey(ctx, seat, callID)
+	} else {
+		checkout, err = p.ws.Acquire(ctx, seat, callID, p)
+	}
 	if err != nil {
 		// CLASSIFIED, not fatal outright: a seat's generation runs the CLI
 		// itself now, so what failed may be a slow host or an unusable

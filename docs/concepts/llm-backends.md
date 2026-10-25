@@ -336,8 +336,8 @@ flat-rate plan. The three modes:
 | `auth.mode` | What reaches the CLI |
 |---|---|
 | `subscription` (default) | its login — credential files in the entry's directory, or a database export — and a headless token in its `token_env` where `auth.token` or that variable resolves. Its `api_key_env` is removed. |
-| `api-key` | one key in its `api_key_env`: `auth.api_key`, or that variable itself looked up through the secret store and then the environment. Its `token_env` is removed. |
-| `inherit-env` | whichever of the two variables the **engine's own** environment holds — the deliberate escape hatch for an unusual CLI, and the only mode in which a host credential reaches the child. |
+| `api-key` | one key in its `api_key_env`: `auth.api_key`, or that variable itself looked up through the secret store and then the environment (never for a [shared](#profile-fields) variable). Its `token_env` is removed, and no login is seeded: the call runs in the seat's [key home](#isolation-the-part-that-actually-matters). |
+| `inherit-env` | whichever of the two variables the **engine's own** environment holds — the deliberate escape hatch for an unusual CLI, and the only mode in which a host credential reaches the child. Where that is the key, the call runs in the key home, as under `api-key`; otherwise beside the login, as under `subscription`. |
 
 **One key, never a list.** A CLI holds one sign-in and rotates nothing, so an
 entry has at most one token or one key; a second key is a second entry, placed
@@ -695,13 +695,16 @@ its own place to run:
 <state_dir>/
 └── <agent>/                          # one per CLI: claude-code/, codex/, …
     ├── credentials/                  # the login — ONE per state_dir and CLI
-    └── seats/
-        ├── sarah-chen/
-        │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
-        │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
-        │   └── work/<call-id>/       # cwd for one call, then deleted
-        └── marcus-rivera/
-            └── …
+    ├── seats/                        # where a call signed in with the login runs
+    │   ├── sarah-chen/
+    │   │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
+    │   │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
+    │   │   └── work/<call-id>/       # cwd for one call, then deleted
+    │   └── marcus-rivera/
+    │       └── …
+    └── key-seats/                    # where a call signed in with a key runs
+        └── sarah-chen/
+            └── …                     # the same layout, never holding the login
 ```
 
 **Between seats.** Every seat gets its own `home`. `HOME`,
@@ -716,6 +719,19 @@ layout is reachable across that boundary, and nothing configured may move
 it: a profile's `env` or `passthrough_env`, or an entry's `env`, naming
 one of those variables is refused, because each is layered over the
 isolation and would replace it without a word.
+
+**Between a login and a key.** A call that hands its CLI a key — every call
+under `auth.mode: api-key`, and one under `inherit-env` whose engine
+environment holds the profile's `api_key_env` — runs in the seat's
+`key-seats/` home, which is never seeded with the login and from which nothing
+is carried back to `credentials/`. A CLI may keep what a key signed it in to in
+the very file its login lives in: `cursor-agent` writes the session
+`CURSOR_API_KEY` bought, and the key itself, into its `auth.json`, and prefers
+that file to the variable on its next start. In a login's home that file would
+be carried back as the login of record and sign every subscription seat on the
+directory in with the key; so a key home's credential files are removed as
+each of its generations opens and closes, and the key stays no longer than the
+calls it was handed to.
 
 **Between turns.** Each profile declares its `volatile_paths` —
 sessions, transcripts, history, todo state. They are deleted before and
@@ -2583,7 +2599,7 @@ one `crewlet llm login` names when it refuses a token the mode never reads:
 |---|---|
 | `subscription` | a login: adopt this machine's with `-from-host` where it has one — or, preferred where the CLI mints one, a headless token with `-capture-token` — else the CLI's own `crewlet llm login <key>`, or, for a CLI with no login command (`gemini-cli`, `qwen-code`, `grok`), a login made with the CLI by hand and adopted |
 | `api-key` | the key alone: `auth.api_key`, else the CLI's key variable, stored with `crewlet secrets set` or exported in the engine's environment. Never a login, which would sit in every seat's home beside the key and leave which of the two the CLI bills to the vendor's precedence, and never a token, which the mode removes |
-| `inherit-env` | the variables it forwards, exported in the engine's own environment — never the secret store, which it does not read — and a login, as under `subscription` but without `-capture-token`, whose token lands in the secret store |
+| `inherit-env` | the variables it forwards, exported in the engine's own environment — never the secret store, which it does not read — and, where the engine's environment holds no key, a login, as under `subscription` but without `-capture-token`, whose token lands in the secret store |
 
 One case is not a fault: a CLI pointed at an
 endpoint that takes no key (an `opencode` entry declaring a local server, or a

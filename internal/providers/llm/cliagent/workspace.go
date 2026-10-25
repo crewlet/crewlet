@@ -51,7 +51,9 @@ type Workspace struct {
 	agent    string
 	profile  cliprofile.Profile
 
-	mu    sync.Mutex
+	mu sync.Mutex
+	// seats is each home's share, by its seat directory: a seat's login home
+	// and its key home ([Workspace.AcquireForKey]) are two.
 	seats map[string]*seatState
 	// retries is when the next sweep may try a seat whose open generation
 	// it could not carry out, by seat slug ([Workspace.sweep]). Guarded by mu.
@@ -169,9 +171,17 @@ func (w *Workspace) Root() string { return w.root }
 // CredentialsDir is where the shared login lives — ONE per workspace.
 func (w *Workspace) CredentialsDir() string { return filepath.Join(w.root, "credentials") }
 
-// SeatDir is one seat's share of the workspace.
+// SeatDir is one seat's share of the workspace: its login home, and that
+// home's cache, lock and open generation.
 func (w *Workspace) SeatDir(seat string) string {
 	return filepath.Join(w.root, "seats", seatSlug(seat))
+}
+
+// KeySeatDir is one seat's KEY HOME — where its calls that sign in with a key
+// run ([Workspace.AcquireForKey]) — beside the login homes rather than among
+// them, so a sweep for a login to carry out never lists one.
+func (w *Workspace) KeySeatDir(seat string) string {
+	return filepath.Join(w.root, "key-seats", seatSlug(seat))
 }
 
 // loginHome is the home every `crewlet llm` auth command runs the CLI in,
@@ -303,6 +313,9 @@ type Checkout struct {
 
 	ws   *Workspace
 	seat *seatState
+	// keyed is a key home's checkout ([Workspace.AcquireForKey]), which
+	// carries nothing out.
+	keyed bool
 	// record is where the seat's open generation is kept on disk.
 	record string
 	// store is the generation's way back out for a login held in the CLI's
@@ -343,14 +356,57 @@ type Checkout struct {
 // sweep, for the other seats' homes, which is sound because a workspace drives
 // ONE CLI ([Shared]) and an export reads that CLI's database whichever entry
 // runs it.
-func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (_ *Checkout, err error) {
-	slug := seatSlug(seat)
-	state := w.seatState(seat)
+func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (*Checkout, error) {
 	dir := w.SeatDir(seat)
+	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
+		return w.openGeneration(ctx, seatSlug(seat), dir, state, store)
+	})
+	if err != nil {
+		return nil, err
+	}
+	checkout.record = filepath.Join(dir, generationFile)
+	checkout.store = store
+	return checkout, nil
+}
+
+// AcquireForKey prepares a place for one call whose CLI signs in with a KEY —
+// an entry under auth.mode api-key, or inherit-env handing it the engine's own
+// key — in the seat's key home ([Workspace.KeySeatDir]).
+//
+// A HOME APART FROM THE LOGIN'S, because a CLI may keep what a key signs it in
+// to in the very file its login lives in. Cursor Agent exchanges
+// CURSOR_API_KEY for a session and writes the session, and the key itself, to
+// the auth.json a login is kept in; on its next start it prefers the key that
+// file holds to the variable (read from the 2026.10.22 bundle). In the login
+// home that file was carried back over the login of record, and every
+// subscription seat on the workspace then signed in with the key — or, left
+// in the home, it outlived a switch to subscription and went on signing that
+// seat in with it.
+//
+// So a key home is never seeded with the login, and nothing in it is carried
+// out: each generation opens and closes it with no credential file in it
+// ([Workspace.dropCopies]), so a key the CLI wrote down stays no longer than
+// the calls it was handed to.
+func (w *Workspace) AcquireForKey(ctx context.Context, seat, callID string) (*Checkout, error) {
+	dir := w.KeySeatDir(seat)
+	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
+		return w.openKeyGeneration(ctx, dir, state)
+	})
+	if err != nil {
+		return nil, err
+	}
+	checkout.keyed = true
+	return checkout, nil
+}
+
+// checkOut is the part of a checkout the two kinds of home share: the call's
+// own working directory, prepared, and the seat's generation opened by open
+// when the call is its first.
+func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_ *Checkout, err error) {
+	state := w.seatState(dir)
 	home := filepath.Join(dir, "home")
 	cache := filepath.Join(dir, "cache")
 	work := filepath.Join(dir, "work", seatSlug(callID))
-	record := filepath.Join(dir, generationFile)
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -398,15 +454,31 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 		return nil, err
 	}
 	if state.inflight == 0 {
-		if err = w.openGeneration(ctx, slug, dir, state, store); err != nil {
+		if err = open(state); err != nil {
 			return nil, err
 		}
 	}
 	state.inflight++
-	return &Checkout{
-		Home: home, Cache: cache, Work: work,
-		ws: w, seat: state, record: record, store: store,
-	}, nil
+	return &Checkout{Home: home, Cache: cache, Work: work, ws: w, seat: state}, nil
+}
+
+// openKeyGeneration is the first call into a key home taking its generation
+// lock and emptying the home of every credential file and volatile path —
+// whatever an earlier generation's CLI wrote down, a process that ended
+// mid-call included — before the home's own settings are seeded. On success
+// the lock is the seat's to hold until its last call is out.
+func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *seatState) error {
+	release, err := w.lockSeat(ctx, dir)
+	if err != nil {
+		return err
+	}
+	home := filepath.Join(dir, "home")
+	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome)); err != nil {
+		release()
+		return err
+	}
+	state.held = release
+	return nil
 }
 
 // openGeneration is the first call into a seat taking its generation lock,
@@ -507,6 +579,11 @@ func (c *Checkout) Release(ctx context.Context) error {
 			c.seat.held = nil
 		}
 	}()
+	if c.keyed {
+		// Nothing to carry: what a key signed the CLI in to goes with
+		// the generation ([Workspace.AcquireForKey]).
+		return errors.Join(workErr, c.ws.dropCopies(c.Home), c.ws.prune(c.Home))
+	}
 	if _, err := c.ws.syncCredentialsOut(ctx, c.Home, c.Cache, c.store, c.seat.gen); err != nil {
 		return errors.Join(workErr, fmt.Errorf("cli-agent: the login in %q could not be "+
 			"carried back to the shared directory, so the home was kept as it is for the "+
@@ -516,14 +593,15 @@ func (c *Checkout) Release(ctx context.Context) error {
 	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
 }
 
-// seatState returns a seat's share, creating it once.
-func (w *Workspace) seatState(seat string) *seatState {
+// seatState returns the share of the home in a seat directory, creating it
+// once.
+func (w *Workspace) seatState(dir string) *seatState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	state, ok := w.seats[seatSlug(seat)]
+	state, ok := w.seats[dir]
 	if !ok {
 		state = &seatState{}
-		w.seats[seatSlug(seat)] = state
+		w.seats[dir] = state
 	}
 	return state
 }
