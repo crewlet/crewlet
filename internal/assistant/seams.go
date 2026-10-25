@@ -77,6 +77,8 @@ type Records interface {
 	CreateConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
 	TitleConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
 	ClearConversation(ctx context.Context, w Write, id uuid.UUID) (Written, error)
+	// OpenTurn answers [assistantdomain.ErrTurnOpen] for a turn already
+	// open (a retry the ledger collapsed, or one finding its turn open).
 	OpenTurn(ctx context.Context, w Write, t assistantdomain.NewTurn) (int, error)
 	RecordMessage(ctx context.Context, w Write, turn uuid.UUID, m assistantdomain.NewMessage) error
 	RecordStep(ctx context.Context, w Write, turn uuid.UUID, s wire.StepEvent) error

@@ -298,6 +298,11 @@ func (a assistantRecords) OpenTurn(ctx context.Context, w assistant.Write,
 		return 0, err
 	}
 	seq, res, err := a.w.OpenTurn(ctx, c, t)
+	if err == nil && res.Collapsed {
+		// A RETRY THE LEDGER ANSWERED: the first opening's runner has
+		// the turn, wherever it runs.
+		return seq, fmt.Errorf("%w: turn %s", assistantdomain.ErrTurnOpen, t.Turn)
+	}
 	return seq, settled(res, err)
 }
 

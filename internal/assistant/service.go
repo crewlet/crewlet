@@ -97,6 +97,8 @@ type Service struct {
 
 	mu       sync.Mutex
 	decliner Decliner
+	// attempts are the turn starts in flight here ([Service.Start]).
+	attempts map[uuid.UUID]*attempt
 	turns    map[uuid.UUID]*turn
 	running  map[uuid.UUID]int
 	streams  int
@@ -159,7 +161,7 @@ func New(d Deps) (*Service, error) {
 		}, now),
 		base: base, cancel: cancel,
 		turns: map[uuid.UUID]*turn{}, running: map[uuid.UUID]int{},
-		streaming: map[uuid.UUID]int{},
+		streaming: map[uuid.UUID]int{}, attempts: map[uuid.UUID]*attempt{},
 	}
 	s.reaperWG.Add(1)
 	go s.reapLoop()
@@ -234,7 +236,47 @@ func StreamPath(conversation, turn uuid.UUID) string {
 // nothing is recorded until the person may use the assistant, their load
 // allows another turn, the company's windows have room and a model chain
 // resolves.
+//
+// ONE ATTEMPT AT A TIME PER TURN: a start under a key whose first attempt is
+// still in flight on this node (a client retrying on its own timeout) waits
+// for that attempt and answers what it answered, rather than running a second
+// loop for one turn. Its own read grant is ended unused.
 func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, error) {
+	id := TurnID(ts.Key)
+	s.mu.Lock()
+	if first, ok := s.attempts[id]; ok {
+		s.mu.Unlock()
+		if ts.Read != nil {
+			s.revoker.Revoke(ts.Read.ID())
+		}
+		select {
+		case <-first.done:
+			return first.accepted, first.err
+		case <-ctx.Done():
+			return wire.TurnAccepted{}, &Unavailable{RetryAfter: time.Second, Cause: ctx.Err()}
+		}
+	}
+	a := &attempt{done: make(chan struct{})}
+	s.attempts[id] = a
+	s.mu.Unlock()
+	a.accepted, a.err = s.start(ctx, ts)
+	s.mu.Lock()
+	delete(s.attempts, id)
+	s.mu.Unlock()
+	close(a.done)
+	return a.accepted, a.err
+}
+
+// attempt is one start of a turn in flight on this node, and what it
+// answered once done is closed.
+type attempt struct {
+	done     chan struct{}
+	accepted wire.TurnAccepted
+	err      error
+}
+
+// start is one attempt at [Service.Start].
+func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, error) {
 	// A GRANT NO RUNNER TAKES IS ENDED HERE: every return below that starts
 	// nothing (a retry answered with the turn it already started, a refusal,
 	// a failure) leaves the grant derived for this request revoked rather
@@ -341,7 +383,12 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if _, err := s.records.OpenTurn(ctx, t.write().Step("open"), assistantdomain.NewTurn{
 		Conversation: ts.Conversation, Turn: id, Node: s.node, PromptVersion: PromptVersion,
 		Model: provider.Model(), ProviderKey: key, TraceID: traceOf(ctx), Page: chip,
-	}); err != nil {
+	}); errors.Is(err, assistantdomain.ErrTurnOpen) {
+		// THE SAME KEY IS THE SAME TURN, decided by the record: an attempt
+		// that raced its first one (on another node) starts nothing.
+		t.cancel(nil)
+		return accepted, nil
+	} else if err != nil {
 		t.cancel(nil)
 		return wire.TurnAccepted{}, s.writeFailure(err)
 	}

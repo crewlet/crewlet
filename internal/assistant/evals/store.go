@@ -274,7 +274,7 @@ func (s *Store) OpenTurn(_ context.Context, w assistant.Write, t assistantdomain
 	}
 	switch c.OpenTurn {
 	case t.Turn:
-		return c.Turns, nil
+		return c.Turns, fmt.Errorf("%w: turn %s", assistantdomain.ErrTurnOpen, t.Turn)
 	case uuid.Nil:
 	default:
 		return 0, fmt.Errorf("%w: turn %s", assistantdomain.ErrTurnRunning, c.OpenTurn)

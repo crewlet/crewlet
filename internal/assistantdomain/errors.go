@@ -29,6 +29,12 @@ var (
 	ErrTurnRunning = errors.New("assistantdomain: the conversation has a turn " +
 		"running or waiting on an approval")
 
+	// ErrTurnOpen reports a turn opened that is already open: a retry of
+	// its opening, which landed before, on this node or another. Nothing
+	// was written; the caller starts nothing, since the first opening's
+	// runner has the turn.
+	ErrTurnOpen = errors.New("assistantdomain: the turn is already open")
+
 	// ErrTurnMoved reports a turn move from a state the turn is no longer in:
 	// a park of a turn that is not running, a resume of one that is not
 	// parked, a second close.

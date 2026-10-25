@@ -145,6 +145,12 @@ func TestASecondTurnIsRefusedWhileOneIsOpen(t *testing.T) {
 	}); !errors.Is(err, assistantdomain.ErrTurnRunning) {
 		t.Fatalf("a second turn opened beside a parked one answers %v", err)
 	}
+	if _, _, err := n.writer.OpenTurn(t.Context(), fresh(c), assistantdomain.NewTurn{
+		Conversation: conversation, Turn: first,
+	}); !errors.Is(err, assistantdomain.ErrTurnOpen) {
+		t.Fatalf("opening the open turn again answers %v, want ErrTurnOpen: a retry "+
+			"never starts a second runner", err)
+	}
 	parked, err := n.reader.Parked(t.Context(), c.Owner, first)
 	if err != nil || string(parked) != `[{"role":"user"}]` {
 		t.Fatalf("the parked loop reads %q, %v", parked, err)

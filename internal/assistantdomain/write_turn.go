@@ -97,7 +97,11 @@ func (w *Writer) sealPage(page *wire.PageChip, aad string) (title, screen string
 // OpenTurn opens a turn in one of the owner's conversations, answering the
 // turn's number in it. ONE AT A TIME: the record is arbitrated on the
 // conversation's subject, so a second opening while a turn is running or
-// parked, on this node or any other, is refused [ErrTurnRunning].
+// parked, on this node or any other, is refused [ErrTurnRunning], and an
+// opening of the turn already open (a retry whose first attempt landed) is
+// refused [ErrTurnOpen], so it never starts a second runner. A retry the
+// ledger collapses reports [statelog.Result.Collapsed], which the caller
+// reads the same way.
 func (w *Writer) OpenTurn(ctx context.Context, c Call, t NewTurn) (int, statelog.Result, error) {
 	if err := c.validate(true); err != nil {
 		return 0, statelog.Result{}, err
@@ -134,7 +138,7 @@ func (w *Writer) OpenTurn(ctx context.Context, c Call, t NewTurn) (int, statelog
 				// THIS TURN IS ALREADY OPEN: a retry whose first attempt
 				// landed publishes nothing and answers the number it took.
 				seq = row.turns
-				return statelog.Decision{}, nil
+				return statelog.Decision{}, fmt.Errorf("%w: turn %s", ErrTurnOpen, t.Turn)
 			case "":
 			default:
 				return statelog.Decision{}, fmt.Errorf("%w: turn %s", ErrTurnRunning, row.openTurn)
