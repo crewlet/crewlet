@@ -9,9 +9,9 @@
  * for each mode are keyed on these unions so a mode the engine adds is a
  * typecheck failure rather than a row drawn with nothing said.
  *
- * HELD AGAINST `config.CLIAgentAuthModes`, `config.CLIAgentModes` and an unset
- * `config.LLMProvider`'s `AgentName`, `AgentMode`, `ResolvedAuthMode`,
- * `Timeout` and `Concurrency` by
+ * HELD AGAINST `config.CLIAgentAuthModes`, `config.CLIModes` and an unset
+ * `config.LLMProvider`'s `AgentName`, `Box`, `ResolvedAuthMode`, `Timeout` and
+ * `Concurrency` by
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`: a default
  * that drifted would name a CLI, a sign-in or a cap the engine does not apply
  * to the entry on screen.
@@ -27,17 +27,19 @@
 export type CLIAuthMode = "subscription" | "api-key" | "inherit-env";
 
 /**
- * How the engine uses the CLI. `text`: a model behind the engine's own tool
- * loop. `agent`: the CLI runs the seat's executor itself, its tools bridged in
- * over MCP, in the sandbox cell `run_in` names.
+ * WHERE the engine runs an entry's CLI — in either mode the CLI drives its own
+ * loop, calling the seat's tools over MCP. `host`: on this engine's host, turn
+ * by turn, a subprocess of the turn. `box`: the seat's executor runs detached
+ * in a box of `providers.sandbox` — the cell `run_in` names — with the seat's
+ * tools bridged in.
  */
-export type CLIMode = "text" | "agent";
+export type CLIMode = "host" | "box";
 
 /** The CLI an entry that names no `agent` drives. */
 export const DEFAULT_CLI_AGENT = "claude-code";
 
 /** An entry's `mode` when it names none. */
-export const DEFAULT_CLI_MODE: CLIMode = "text";
+export const DEFAULT_CLI_MODE: CLIMode = "host";
 
 /** An entry's `auth.mode` when it names none. */
 export const DEFAULT_CLI_AUTH_MODE: CLIAuthMode = "subscription";
