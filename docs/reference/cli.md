@@ -108,9 +108,10 @@ file naming this node's store and keyring, and `-api URL`, a node to read
 through instead — the same two [`crewlet secrets`](#crewlet-secrets) takes.
 
 There is one store, the fleet's, and a run decides **once** which way it
-reaches it; everything it does with the company's values goes that one way: the values it reads, what a `-secret-store`
-sink records and the seat tokens it reads back, and what `crewlet llm login`
-and `crewlet llm export -secret-store` store. Its first line says which it is.
+reaches it; everything it does with the company's values goes that one way: the
+values it reads, what a `-secret-store` sink records and the seat tokens it
+reads back, and what `crewlet llm login` and `crewlet llm export -secret-store`
+store. Its first line says which it is.
 
 | Where the run is | What it reads |
 |---|---|
@@ -139,21 +140,20 @@ in.** Through a node it lists the node's names first (`GET /secrets`, which
 reveals nothing), then asks `POST /secrets/reveal` for the variables the
 command reads that the node lists, at most 64 to a request — so a run is one
 reveal or a few, never one per name, and a name the node does not hold costs no
-request. A listed name gone by the
-time it is asked falls to the environment as an unheld one does, and that is
-**this shell's** environment, not the engine's. A name no store can hold — an
-`overrides.token_env` outside the reference grammar — is never sent. The node
-logs every name asked against the caller, and the run's first line names the
-node and how many values it revealed there in how many requests: `resolving
-${VAR} through the running node at <url>: N of the M stored values this command
-reads revealed there in K requests, each logged by name`. With the engine
-stopped the run takes the fleet's listing the same way, then reads the names it
-lists in one read of the store, which opens no row it was not asked for, and
-its first line names the broker: `resolving ${VAR} from the fleet's store,
-reached through this node's broker on <stream.store_dir> — this node's engine
-is stopped: N of the stored values this command reads held there` (`the
-external broker at <host:port>` on `stream.type: nats`). What each command
-reads:
+request. A listed name gone by the time it is asked falls to the environment as
+an unheld one does, and that is **this shell's** environment, not the engine's.
+A name no store can hold — an `overrides.token_env` outside the reference
+grammar — is never sent. The node logs every name asked against the caller, and
+the run's first line names the node and how many values it revealed there in
+how many requests: `resolving ${VAR} through the running node at <url>: N of
+the M stored values this command reads revealed there in K requests, each
+logged by name`. With the engine stopped the run takes the fleet's listing the
+same way, then reads the names it lists in one read of the store, which opens
+no row it was not asked for, and its first line names the broker: `resolving
+${VAR} from the fleet's store, reached through this node's broker on
+<stream.store_dir> — this node's engine is stopped: N of the stored values this
+command reads held there` (`the external broker at <host:port>` on
+`stream.type: nats`). What each command reads:
 
 - **`crewlet llm`** the entries it works on: `login`, `status`, `logout`,
   `export`, `import` and `doctor KEY` the one named — and only it, whatever the
