@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -85,7 +86,7 @@ func (s *surface) Phase() string { return "assistant" }
 func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
 	tool, offered := s.byName[call.Name]
 	if !offered {
-		return failed(fmt.Sprintf("There is no tool named %q here. Use only the tools "+
+		return failed(mcp.RefusalNotFound, fmt.Sprintf("There is no tool named %q here. Use only the tools "+
 			"you are offered.", call.Name)), nil
 	}
 	switch tool.Kind {
@@ -96,7 +97,7 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	case catalog.KindNavigate:
 		return s.navigate(ctx, tool, call.Arguments)
 	}
-	return failed("This tool cannot be used here."), nil
+	return failed(mcp.RefusalInternalError, "This tool cannot be used here."), nil
 }
 
 // refuseBefore records a call refused before anything was sent, and answers
@@ -108,7 +109,7 @@ func (s *surface) refuseBefore(ctx context.Context, tool catalog.Tool, args map[
 	step := s.t.stepStart(tool, args, nil)
 	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: codeInvalidInput,
 		Message: message}, 0, 0)
-	return failed("Refused before anything was sent: " + message)
+	return failed(mcp.Classify(mcp.RefusalInvalid, err), "Refused before anything was sent: "+message)
 }
 
 // read sends one read tool's request and shapes its answer.
@@ -133,7 +134,8 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be read", nil, resp.Status, len(resp.Body))
 		s.t.svc.log.ErrorContext(ctx, "assistant_step_unreadable", "turn", s.t.id,
 			"tool", tool.Name, "route", route, "error", redact.Secrets(err.Error()))
-		return failed("The answer could not be read. Tell the person it failed."), nil
+		return failed(mcp.Classify(mcp.RefusalInternalError, err),
+			"The answer could not be read. Tell the person it failed."), nil
 	}
 	if shaped.Refusal != nil {
 		state := wire.StepRefused
@@ -151,7 +153,10 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 	for _, card := range shaped.Cards {
 		s.t.emitCard(ctx, card, appNames(tool.Apps))
 	}
-	return toolloop.ToolResult{Output: shaped.Model, Failed: shaped.Failed()}, nil
+	if shaped.Refusal != nil {
+		return failed(routeClass(resp.Status, shaped.Refusal.Code), shaped.Model), nil
+	}
+	return toolloop.ToolResult{Output: shaped.Model}, nil
 }
 
 // unsent ends a step whose request could not be sent at all: the turn's own
@@ -166,8 +171,8 @@ func (s *surface) unsent(ctx context.Context, step stepClock, tool catalog.Tool,
 	s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be sent", nil, 0, 0)
 	s.t.svc.log.ErrorContext(ctx, "assistant_step_not_sent", "turn", s.t.id,
 		"tool", tool.Name, "route", route, "error", redact.Secrets(err.Error()))
-	return failed("The request could not be sent. Tell the person it failed; do not " +
-		"retry it."), nil
+	return failed(mcp.Classify(mcp.RefusalInternalError, err), "The request could not be "+
+		"sent. Tell the person it failed; do not retry it."), nil
 }
 
 // propose turns a write or a page action into a proposal the person approves,
@@ -222,12 +227,14 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		message := redact.Secrets(err.Error())
 		s.t.stepEnd(ctx, step, wire.StepRefused, "Not proposed", &wire.Refusal{
 			Code: codeInvalidInput, Message: message}, 0, 0)
-		return failed("The change could not be prepared: " + message), nil
+		return failed(mcp.Classify(mcp.RefusalInvalid, err),
+			"The change could not be prepared: "+message), nil
 	}
 	s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be prepared", nil, 0, 0)
 	s.t.svc.log.ErrorContext(ctx, "assistant_proposal_failed", "turn", s.t.id,
 		"tool", tool.Name, "error", redact.Secrets(err.Error()))
-	return failed("The change could not be prepared. Tell the person it failed."), nil
+	return failed(mcp.Classify(mcp.RefusalInternalError, err),
+		"The change could not be prepared. Tell the person it failed."), nil
 }
 
 // applyAtOnce hands a `confirm: none` page action (a pure view change, D11)
@@ -245,8 +252,8 @@ func (s *surface) applyAtOnce(ctx context.Context, step stepClock,
 		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be applied", nil, 0, 0)
 		s.t.svc.log.ErrorContext(ctx, "assistant_page_action_unapproved", "turn", s.t.id,
 			"proposal", drafted.Proposal, "error", redact.Secrets(err.Error()))
-		return failed("The change to the screen could not be applied. Tell the person it " +
-			"failed."), nil
+		return failed(mcp.Classify(mcp.RefusalInternalError, err), "The change to the "+
+			"screen could not be applied. Tell the person it failed."), nil
 	}
 	action := proposal.PageAction(drafted.Proposal, drafted.Path, drafted.SourceRevision,
 		drafted.Body, wire.ConfirmNone)
@@ -323,9 +330,37 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 	return toolloop.ToolResult{Output: "A link to " + link.Label + " is shown to the person."}, nil
 }
 
-// failed is a call that failed, as the model reads it.
-func failed(output string) toolloop.ToolResult {
-	return toolloop.ToolResult{Output: output, Failed: true}
+// failed is a call that failed, as the model reads it, carrying its class in
+// cause (an [mcp.Refusal], or one beneath the error that decided it through
+// [mcp.Classify]). The model reads only the sentence; the class is for a
+// caller that dispatches through this surface with no model behind it, the
+// same contract every first-party tool keeps ([toolloop.ToolResult.Cause]).
+func failed(cause error, output string) toolloop.ToolResult {
+	return toolloop.ToolResult{Output: output, Failed: true, Cause: cause}
+}
+
+// routeClass is a route's refusal as a refusal class: the route's own code
+// where the API spells it as a class (the operator surface answers each class
+// with the code of the same name), else the class its status means. A status
+// that is no refusal (a read whose body was not the envelope) is the node's
+// own failure.
+func routeClass(status int, code string) mcp.Refusal {
+	if class := mcp.Refusal(code); class.Valid() {
+		return class
+	}
+	switch {
+	case status == http.StatusNotFound:
+		return mcp.RefusalNotFound
+	case status == http.StatusForbidden:
+		return mcp.RefusalForbidden
+	case status == http.StatusConflict:
+		return mcp.RefusalConflict
+	case status == http.StatusServiceUnavailable:
+		return mcp.RefusalUnavailable
+	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
+		return mcp.RefusalInvalid
+	}
+	return mcp.RefusalInternalError
 }
 
 // appNames is a tool's apps as a card is recorded with them.
