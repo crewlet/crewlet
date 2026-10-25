@@ -576,6 +576,10 @@ function givingWay(
     // "In progr…". A company's status words are short by nature, and what
     // gives way when they do not fit is the columns above, not the word.
     if (c.key === "status") return { ...c, width: "max-content" };
+    // THE KEY IS DRAWN WHOLE TOO. It is the row's address, a few characters
+    // by its own grammar (`PROJ-<n>`), and a shrinking column capped it at a
+    // fifth of a list narrowed by the assistant beside it, which read "FA…".
+    if (c.key === "key") return { ...c, width: "max-content" };
     return order[c.key] !== undefined ? { ...c, drop: order[c.key] } : c;
   });
 }
