@@ -110,6 +110,39 @@ type Mux interface {
 	Handle(pattern string, h http.Handler)
 }
 
+// PolicyMux is a [Mux] that is also told the policy each route is mounted
+// with, once the route is registered on it.
+//
+// FOR A TABLE THAT KEEPS EVERY PATTERN. internal/api's route table lists every
+// route it is handed, and a walk over the guarded routes (the Dashboard
+// Assistant's catalogue walk, which must classify each one by its verb) needs
+// the verb beside the pattern, which only the router held. Reporting it to
+// the mux keeps one table of both rather than a second list of verbs.
+type PolicyMux interface {
+	Mux
+	MountedWith(pattern string, p Policy)
+}
+
+// Within is a mux that mounts every route on inner and reports each policy to
+// outer: for a surface that serves its routes behind a sub-mux of its own (one
+// wrapper round all of them) while the table it is mounted on keeps their
+// verbs. Where outer keeps no policies it is inner itself.
+func Within(inner, outer Mux) Mux {
+	keeper, ok := outer.(PolicyMux)
+	if !ok {
+		return inner
+	}
+	return within{Mux: inner, outer: keeper}
+}
+
+// within is [Within]'s mux.
+type within struct {
+	Mux
+	outer PolicyMux
+}
+
+func (w within) MountedWith(pattern string, p Policy) { w.outer.MountedWith(pattern, p) }
+
 // Router mounts guarded routes and remembers every pattern it mounted.
 //
 // THE MOUNT IS THE ONLY READER OF r.Pattern, which is what makes the gate and
@@ -232,6 +265,9 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 	}
 	t.policies[pattern] = p
 	t.mux.Handle(pattern, t.wrap(p, h))
+	if keeper, ok := t.mux.(PolicyMux); ok {
+		keeper.MountedWith(pattern, p)
+	}
 	return nil
 }
 

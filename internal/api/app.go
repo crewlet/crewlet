@@ -116,6 +116,8 @@ type App struct {
 
 	// routes is every pattern mounted, in mount order. See [routeTable].
 	routes []string
+	// policies are the guarded routes' policies. See [routeTable].
+	policies map[string]authz.Policy
 }
 
 // routeTable is the one mux every surface mounts on, keeping the pattern of
@@ -134,6 +136,18 @@ type App struct {
 type routeTable struct {
 	mux      *http.ServeMux
 	patterns []string
+	// policies are the guarded routes' verbs, each reported by the
+	// [authz.Router] that mounted it ([authz.PolicyMux]), so a walk can
+	// classify a guarded route by the verb it is decided by.
+	policies map[string]authz.Policy
+}
+
+// MountedWith keeps the policy a guarded route was mounted with.
+func (t *routeTable) MountedWith(pattern string, p authz.Policy) {
+	if t.policies == nil {
+		t.policies = map[string]authz.Policy{}
+	}
+	t.policies[pattern] = p
 }
 
 func (t *routeTable) Handle(pattern string, handler http.Handler) {
@@ -972,6 +986,7 @@ func New(opts Options) (*App, error) {
 	// drained exactly once, and which socket answers it is decided by one
 	// predicate rather than by which of two muxes somebody registered it on.
 	a.routes = mux.patterns
+	a.policies = mux.policies
 	chain := a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
 		a.drainGate(httpjson.Mux(mux.mux)))))
 	// EACH SOCKET SAYS WHETHER IT IS HTTPS BY ITS OWN ADDRESS
