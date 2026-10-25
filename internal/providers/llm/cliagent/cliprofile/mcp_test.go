@@ -163,6 +163,11 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 		"an owner of a stdout record": {map[string]any{"requests": map[string]any{
 			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}"},
 		}}, `requests.owner is set but requests.source is "stdout"`},
+		"an owner line with nothing to compare": {map[string]any{"requests": map[string]any{
+			"source": "file", "file": ".cli/*.jsonl", "in": "home",
+			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}",
+				"match": []any{map[string]any{"path": []any{"type"}}}},
+		}}, "requests.owner.match[0].equals"},
 		"an owner the run cannot know": {map[string]any{"requests": map[string]any{
 			"source": "file", "file": ".cli/*.jsonl", "in": "home",
 			"owner": map[string]any{"path": []any{"thread"}, "equals": "{thread}"},

@@ -25,24 +25,24 @@ const recordPoll = 100 * time.Millisecond
 // The file does not exist when the run starts — the CLI creates it — so it is
 // looked for by its glob until it appears, and a file the glob already matched
 // before the run is never taken for this run's. Where the glob cannot name the
-// run's own file, owns says which is: it is handed a new file's first line,
-// and a file whose first line it refuses is another run's, passed over for
-// good ([cliprofile.RecordOwner]).
+// run's own file, owns says which is: it is handed a new file's lines from its
+// first until one decides, and a file it refuses is another run's, passed over
+// for good ([cliprofile.RecordOwner]).
 type recordTail struct {
 	pattern string
 	before  []string
-	owns    func(first string) bool
+	owns    func(line string) (decided, owned bool)
 	foreign []string
 	tee     *lineTee
 	done    chan struct{}
 }
 
 // tailRecord starts following the first file pattern matches that did not
-// exist when it was called — and whose first line owns accepts, where owns is
-// not nil — handing each complete line to line, until stop is closed, and then
-// reads the file to its end, its last line included whether or not it ended in
-// a newline. wait returns when that is done.
-func tailRecord(pattern string, owns func(string) bool, line func(string), stop <-chan struct{}) (wait func()) {
+// exist when it was called — and which owns accepts, where owns is not nil —
+// handing each complete line to line, until stop is closed, and then reads the
+// file to its end, its last line included whether or not it ended in a newline.
+// wait returns when that is done.
+func tailRecord(pattern string, owns func(string) (bool, bool), line func(string), stop <-chan struct{}) (wait func()) {
 	before, _ := filepath.Glob(pattern)
 	t := &recordTail{
 		pattern: pattern, before: before, owns: owns, done: make(chan struct{}),
@@ -118,12 +118,12 @@ func (t *recordTail) open() *os.File {
 		if t.owns == nil {
 			return f
 		}
-		switch first, whole := headLine(f); {
-		case !whole:
-			// Its first line is still being written: asked again at the
-			// next poll.
+		switch decided, owned := headOwned(f, t.owns); {
+		case !decided:
+			// The line that names its run is still to be written: asked
+			// again at the next poll.
 			_ = f.Close()
-		case t.owns(first):
+		case owned:
 			if _, err := f.Seek(0, io.SeekStart); err != nil {
 				_ = f.Close()
 				return nil
@@ -137,25 +137,37 @@ func (t *recordTail) open() *os.File {
 	return nil
 }
 
-// maxFirstLine bounds what is read of a file to find its first line: a record's
-// first event is its header, a few hundred bytes to a few kilobytes (Codex's
-// session_meta carries its base instructions). A file whose first line runs
-// past it is read as not having one yet, and so is never taken.
-const maxFirstLine = 1 << 20
+// maxOwnerHead bounds what is read of a file to find the line that names its
+// run: a record's header, a few hundred bytes to a few kilobytes (Codex's
+// session_meta carries its base instructions), or the few events before the
+// one that names it (Kimi Code's wire log lists the tools the run was offered,
+// schemas and all, before its profile.bind). A file whose head runs past it
+// without deciding is read as undecided, and so is never taken.
+const maxOwnerHead = 4 << 20
 
-// headLine is f's first line and whether it is whole — ended by a newline.
-func headLine(f *os.File) (string, bool) {
+// headOwned hands f's complete lines to owns, from the first, until one
+// decides, and reports what it decided — undecided where the lines written so
+// far, or the bound, run out first.
+func headOwned(f *os.File, owns func(string) (bool, bool)) (decided, owned bool) {
 	buf := make([]byte, 0, 64<<10)
 	chunk := make([]byte, 64<<10)
-	for len(buf) < maxFirstLine {
+	start := 0
+	for len(buf) < maxOwnerHead {
 		n, err := f.Read(chunk)
 		buf = append(buf, chunk[:n]...)
-		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
-			return string(buf[:i]), true
+		for {
+			i := bytes.IndexByte(buf[start:], '\n')
+			if i < 0 {
+				break
+			}
+			if decided, owned := owns(string(buf[start : start+i])); decided {
+				return true, owned
+			}
+			start += i + 1
 		}
 		if err != nil || n == 0 {
-			return "", false
+			return false, false
 		}
 	}
-	return "", false
+	return false, false
 }

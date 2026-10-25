@@ -859,8 +859,9 @@ type Requests struct {
 }
 
 // RecordOwner is how a file record says whose it is: the value at Path in the
-// file's FIRST line. A file the glob finds whose first line holds anything else
-// there is another run's, and is passed over.
+// file's FIRST line — or, where Match is set, in the first line that matches
+// it. A file the glob finds whose line holds anything else there is another
+// run's, and is passed over.
 //
 // For a CLI that keeps every run's record side by side in the seat's home —
 // which every concurrent call of the seat shares — under a name the engine does
@@ -868,7 +869,13 @@ type Requests struct {
 // Gemini CLI names its chat after the first eight characters of the session
 // id, which no glob can spell.
 type RecordOwner struct {
-	// Path is the value's place in the first line.
+	// Match picks the line the value is read from: the first line of the
+	// file that matches every condition — for a CLI whose record names its
+	// run only in a later event (Kimi Code's wire log opens with its
+	// protocol version and names the call's working directory in the
+	// profile.bind event after it). Empty: the file's first line.
+	Match []Match `yaml:"match,omitempty"`
+	// Path is the value's place in that line.
 	Path Path `yaml:"path,omitempty"`
 	// Equals is what it holds in this run's file: {session}, the id
 	// session_args handed the run, or {work}, the call's working directory.
@@ -939,7 +946,7 @@ func (r *Requests) clone() *Requests {
 	out := *r
 	out.Stops = cloneMap(r.Stops)
 	if r.Owner != nil {
-		owner := RecordOwner{Path: slices.Clone(r.Owner.Path), Equals: r.Owner.Equals}
+		owner := RecordOwner{Match: cloneMatches(r.Owner.Match), Path: slices.Clone(r.Owner.Path), Equals: r.Owner.Equals}
 		out.Owner = &owner
 	}
 	if r.Events != nil {
@@ -1142,6 +1149,9 @@ func (p *Profile) validateOwner(add func(string, ...any)) {
 	if p.Requests.Source != SourceFile {
 		add("requests.owner is set but requests.source is %q — it says which file is the "+
 			"run's, and a stdout record is the run's own", p.Requests.Source)
+	}
+	if len(o.Match) > 0 {
+		validateMatches(add, "requests.owner.match", o.Match)
 	}
 	validatePath(add, "requests.owner.path", o.Path)
 	switch o.Equals {

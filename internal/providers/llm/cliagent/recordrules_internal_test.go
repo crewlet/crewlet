@@ -268,6 +268,61 @@ func TestAFileRecordIsTakenByAFirstLineNamingTheRun(t *testing.T) {
 	}
 }
 
+// A FILE RECORD THAT NAMES ITS RUN ONLY IN A LATER EVENT IS TAKEN BY THAT EVENT.
+// Kimi Code's wire log opens with its protocol version, which every run's has,
+// and names the call's working directory in the profile.bind event a few lines
+// on: the owner's match picks that line, a file whose line names another run is
+// passed over, and one that has not written it yet is looked at again rather
+// than judged on its header.
+//
+// Mutation: judge a file by its first line whatever the owner's match, and no
+// file is ever this run's.
+func TestAFileRecordIsTakenByTheEventThatNamesTheRun(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	owner := recordOwner(&cliprofile.RecordOwner{
+		Match: []cliprofile.Match{{Path: cliprofile.Path{"type"}, Equals: "profile.bind"}},
+		Path:  cliprofile.Path{"environmentDisclosure", "cwd"}, Equals: "{work}",
+	}, "", work)
+	var mu sync.Mutex
+	var lines []string
+	stop := make(chan struct{})
+	wait := tailRecord(filepath.Join(dir, "*.jsonl"), owner, func(l string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, l)
+	}, stop)
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const header = `{"type":"metadata","protocol_version":"1.5"}` + "\n" + `{"type":"runtime.set_binding"}` + "\n"
+	bind := func(cwd string) string {
+		return `{"type":"profile.bind","environmentDisclosure":{"cwd":` + jsonString(cwd) + `}}` + "\n"
+	}
+	write("a-other.jsonl", header+bind("/elsewhere")+`{"line":"OTHER"}`+"\n")
+	write("b-ours.jsonl", header)
+	time.Sleep(3 * recordPoll)
+	write("b-ours.jsonl", header+bind(work)+`{"line":"OURS"}`+"\n")
+	time.Sleep(3 * recordPoll)
+	close(stop)
+	wait()
+	mu.Lock()
+	defer mu.Unlock()
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "OTHER") || !strings.Contains(got, "OURS") {
+		t.Errorf("the tail read %q, want our record and none of the other's", got)
+	}
+	if !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "protocol_version") }) {
+		t.Errorf("the tail did not read our record from its first line: %q", got)
+	}
+}
+
 func jsonString(s string) string {
 	raw, _ := json.Marshal(s)
 	return string(raw)
