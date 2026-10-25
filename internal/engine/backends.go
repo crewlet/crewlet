@@ -832,7 +832,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // the subsystem that reads it already uses, named at its own package.
 func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered bool) (coord.Fleet, error) {
 	return kv.OpenFleet(ctx, js, kv.FleetConfig{
-		RateWindow:       coord.RateWindow,
+		MaxRateWindow:    coord.MaxRateWindow,
 		MaxClaimTTL:      coord.MaxClaimTTL,
 		LedgerRetention:  coord.LedgerRetention,
 		FireRetention:    coord.FireRetention,

@@ -103,6 +103,16 @@ const (
 	// — and narrower would trip on an ordinary burst from one push.
 	RateWindow = time.Second
 
+	// MaxRateWindow is the longest window any caller counts a [Counter]
+	// over, and so how long the fleet keeps a window (a few multiples of
+	// it, so a window that just closed is still readable while a straggler
+	// finishes writing to it). One minute: the Dashboard Assistant's turn
+	// rate is a person's questions per MINUTE (internal/assistant), counted
+	// across the fleet, the widest window any caller asks for. A backend
+	// refuses a wider one rather than reap it mid-window, which would
+	// restart its count and pass far more than the caller asked for.
+	MaxRateWindow = time.Minute
+
 	// ClaimTTL is how long an inbound delivery stays claimed.
 	//
 	// Sized to cover queue redelivery and an operator's replay, NOT a
@@ -330,6 +340,10 @@ const (
 type Counter interface {
 	// Allow increments the bucket's count for the window containing now
 	// and reports whether it stayed within limit.
+	//
+	// A window wider than [MaxRateWindow] is an ERROR, never counted: the
+	// fleet does not keep a window that long, so its count would restart
+	// before the window closed.
 	//
 	// THREE ANSWERS: within the limit, over it, and — as an error — the
 	// store could not say, whatever the bool beside it. CONTENTION IS

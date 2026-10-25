@@ -235,6 +235,25 @@ var valveCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE WIDEST WINDOW IS COUNTED, and one past it is an error: a backend
+	// that kept a window shorter than its caller counts over would restart
+	// the count mid-window (the Dashboard Assistant's turn rate is per
+	// minute), and one that took a wider window and reaped it would pass
+	// far more than the caller asked for.
+	name: "the widest window is counted and one past it is refused",
+	fn: func(h *fleetHarness) {
+		at := h.now().Truncate(coord.MaxRateWindow)
+		if !h.allow("assistant.turn:p", 1, coord.MaxRateWindow, at) {
+			h.t.Fatal("the first call in the widest window was refused")
+		}
+		if h.allow("assistant.turn:p", 1, coord.MaxRateWindow, at.Add(coord.MaxRateWindow-time.Second)) {
+			h.t.Fatal("a later instant in the widest window got its own count")
+		}
+		if ok, err := h.f.Allow(h.ctx, "assistant.turn:q", 1, coord.MaxRateWindow+time.Second, at); err == nil {
+			h.t.Fatalf("a window past coord.MaxRateWindow was counted (ok %v) rather than refused", ok)
+		}
+	},
+}, {
 	name: "buckets do not share a count",
 	fn: func(h *fleetHarness) {
 		at := h.now()

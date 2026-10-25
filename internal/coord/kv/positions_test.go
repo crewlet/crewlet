@@ -125,7 +125,7 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 	t.Helper()
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 		BucketPrefix:     fmt.Sprintf("p%d", bucketSeq.Add(1)),
-		RateWindow:       ttl,
+		MaxRateWindow:    ttl,
 		MaxClaimTTL:      ttl,
 		LedgerRetention:  ttl,
 		FireRetention:    ttl,
