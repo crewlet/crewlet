@@ -377,6 +377,35 @@ func TestTheLastRoundsParallelCallsAllRunAndTheRunEnds(t *testing.T) {
 	}
 }
 
+// THE LAST ROUND'S OWN TOOLS END THE RUN TOO. A last round whose calls are all
+// the CLI's own — its web search — has nothing for the host to answer, and the
+// CLI runs them and asks its model again: the run is ended as soon as the round
+// is read, not after a request the budget did not allow.
+func TestALastRoundOfTheCLIsOwnToolsEndsTheRun(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("post")
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{{Name: "web_search", Native: true}}},
+		calling("", "post"),
+	))
+	prov.Before = func(name string) {
+		if name == "web_search" {
+			// The CLI's own search takes its time, as a real one does.
+			time.Sleep(3 * llmtest.KillLatency)
+		}
+	}
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 1})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := surf.calls(); len(got) != 0 {
+		t.Errorf("the surface ran %v past the budget", got)
+	}
+	if res.RoundsUsed != 1 || !res.ExhaustedRounds {
+		t.Errorf("rounds %d exhausted %v, want the one round, exhausted", res.RoundsUsed, res.ExhaustedRounds)
+	}
+}
+
 // A CALL STILL RUNNING NEAR THE CLI'S OWN TOOL TIMEOUT ENDS THE RUN, and the
 // next run is handed its real result: a CLI that gave up on a call the engine is
 // still running would send its model to do it again.
@@ -650,5 +679,38 @@ func TestASubmissionThatOutlivesItsRunStillFinishesThePhase(t *testing.T) {
 	}
 	if res.ExhaustedRounds || res.Withheld != "" {
 		t.Errorf("result %+v, want a finished phase", res)
+	}
+}
+
+// A NOTE WAITING AS THE CLI RUNS ITS OWN TOOLS ENDS THE RUN. A response whose
+// calls are all the CLI's own has nothing for the host to answer, so no call's
+// end can pause the run: the note is seen as the response is read, and the next
+// run reads it before the model asks anything more.
+func TestANoteWaitingAsTheCLIRunsItsOwnToolsEndsTheRun(t *testing.T) {
+	t.Parallel()
+	box := &stepBox{log: &stepLog{}}
+	prov := script(
+		runOf(
+			llmtest.Response{Writing: func() { box.offer("n-1", "the note") },
+				Calls: []llmtest.Call{{Name: "web_search", Native: true}}},
+			says("never reached in this run"),
+		),
+		runOf(says("done")),
+	)
+	prov.Before = func(name string) {
+		if name == "web_search" {
+			time.Sleep(3 * llmtest.KillLatency)
+		}
+	}
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface("post"), Steer: box})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	seen := prov.Seen()
+	if len(seen) != 2 || indexOf(seen[1].Messages, "the note") == -1 {
+		t.Fatalf("%d runs, want the one the note ended and the one that read it", len(seen))
+	}
+	if strings.Contains(res.Text, "never reached in this run") {
+		t.Errorf("the first run went on past the note: %q", res.Text)
 	}
 }

@@ -396,6 +396,7 @@ func (d *dispatcher) Observe(t llm.Turn) {
 			d.endLocked()
 		}
 	}
+	d.reviewLocked(turn)
 	d.endIfCompleteLocked()
 	d.cond.Broadcast()
 	d.mu.Unlock()
@@ -408,6 +409,27 @@ func (d *dispatcher) expectLocked(t *observedTurn) {
 	t.expect = make([]bool, len(t.calls))
 	for i, c := range t.calls {
 		t.expect[i] = c.Host && d.offeredLocked(c.Name)
+	}
+}
+
+// reviewLocked decides what a response read means for the run: the budget's
+// last round, or a note waiting while it asks for calls.
+func (d *dispatcher) reviewLocked(t *observedTurn) {
+	switch {
+	case t.round > d.cfg.MaxRounds:
+		// A REQUEST THE BUDGET DID NOT ALLOW: nothing of it runs.
+		d.exhaustLocked()
+		return
+	case t.round == d.cfg.MaxRounds && len(t.calls) > 0:
+		// THE LAST ROUND THE BUDGET ALLOWS asked for tools: once its calls
+		// have all come, the run ends before the CLI can make another
+		// request — at once, where none of them is the host's.
+		d.decideLocked(stateExhausted, t.round)
+	}
+	if len(t.calls) > 0 && d.cfg.Steer != nil && d.cfg.Steer.Waiting() {
+		// A NOTE WAITING while the model asks for more: the response's
+		// calls run, and the next run reads the note before anything else.
+		d.decideLocked(statePausing, t.round)
 	}
 }
 
@@ -971,14 +993,8 @@ func (d *dispatcher) withheld(r *run, answer toolsession.Result) toolsession.Res
 }
 
 // afterCallLocked decides what an ordinary call's completion means for the
-// run: the budget's last round, a note waiting, an activation the CLI will
-// not see.
+// run: a note waiting, an activation the CLI will not see.
 func (d *dispatcher) afterCallLocked(c *callRec, before uint64) {
-	if c.round == d.cfg.MaxRounds {
-		// THE LAST ROUND THE BUDGET ALLOWS: once its calls have all come,
-		// the run ends before the CLI can make another request.
-		d.decideLocked(stateExhausted, c.round)
-	}
 	if d.cfg.Steer != nil && d.cfg.Steer.Waiting() {
 		d.decideLocked(statePausing, c.round)
 	}
