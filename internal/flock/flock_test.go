@@ -154,3 +154,27 @@ func TestAStampReplacesTheLastHoldersLine(t *testing.T) {
 		t.Errorf("the stamp is %q, want it to name this process (%q…)", raw, want)
 	}
 }
+
+// THE STAMP SAYS WHICH PROGRAM HOLDS THE LOCK, and never what it was given: a
+// refused taker has to tell an engine (`crewlet run`) from a command that lets
+// go when it finishes, and a value can follow on a command line.
+//
+// Mutation: stamp the whole command line and the value case fails; stamp none
+// of it and every case does.
+func TestTheStampNamesTheProgramAndNotItsArguments(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"/usr/local/bin/crewlet", "run", "-config", "crewlet.yaml"}, "crewlet run"},
+		{[]string{"crewlet", "secrets", "set", "GL_TOKEN", "-value", "glpat-x"}, "crewlet secrets set"},
+		{[]string{"crewlet", "llm", "login", "default", "-capture-token"}, "crewlet llm login"},
+		{[]string{"crewlet"}, "crewlet"},
+		{nil, "unknown"},
+	} {
+		if got := command(c.args); got != c.want {
+			t.Errorf("command(%q) = %q, want %q", c.args, got, c.want)
+		}
+	}
+}

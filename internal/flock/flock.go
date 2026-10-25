@@ -62,7 +62,7 @@ var ErrHeld = errors.New("flock: held by another holder")
 type HeldError struct {
 	// Path is the lock file.
 	Path string
-	// Holder is the holder's stamp, "pid N on HOST since T", or
+	// Holder is the holder's stamp, "pid N (PROGRAM) on HOST since T", or
 	// [UnknownHolder] when there is none to read.
 	Holder string
 }
@@ -150,8 +150,30 @@ func stamp(file *os.File) {
 		return
 	}
 	host, _ := os.Hostname()
-	_, _ = file.WriteAt([]byte(fmt.Sprintf("pid %d on %s since %s\n",
-		os.Getpid(), host, time.Now().UTC().Format(time.RFC3339))), 0)
+	_, _ = file.WriteAt([]byte(fmt.Sprintf("pid %d (%s) on %s since %s\n",
+		os.Getpid(), command(os.Args), host, time.Now().UTC().Format(time.RFC3339))), 0)
+}
+
+// command names the holder's program for its stamp: the binary and the
+// subcommands after it — `crewlet run`, `crewlet secrets set` — because a pid
+// alone does not say whether the holder is the engine or a command that lets
+// go when it finishes, which is what a refused taker most needs to know.
+//
+// AT MOST TWO WORDS AFTER THE BINARY, AND NONE FROM THE FIRST FLAG ON: a value
+// can follow on a command line (`-value`, a name after the subcommand), and a
+// stamp is a file, so it carries the command's verbs and never its arguments.
+func command(args []string) string {
+	if len(args) == 0 {
+		return "unknown"
+	}
+	words := []string{filepath.Base(args[0])}
+	for _, arg := range args[1:] {
+		if len(words) == 3 || arg == "" || strings.HasPrefix(arg, "-") {
+			break
+		}
+		words = append(words, arg)
+	}
+	return strings.Join(words, " ")
 }
 
 // maxHolderStamp bounds the read of a holder's stamp.
