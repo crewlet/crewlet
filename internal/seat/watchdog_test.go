@@ -430,6 +430,66 @@ func TestAWedgedHeartbeatPassIsWhatTheWatchdogSees(t *testing.T) {
 	}
 }
 
+// unansweredRenew is a store that answers no renew: each waits out its read's
+// whole bound — on the fake clock — and comes back unknown, as every renew does
+// on a node whose link to the broker is down, and has the case judge the
+// watchdog as it returns.
+type unansweredRenew struct {
+	coord.Backend
+	bound time.Duration
+	clock *fakeClock
+	judge func()
+}
+
+func (b unansweredRenew) Renew(context.Context, string, string, int64, time.Duration) (bool, error) {
+	b.clock.Advance(b.bound)
+	b.judge()
+	return false, errors.Join(coord.ErrUnavailable, errors.New("the store did not answer the renew"))
+}
+
+// A PASS OF RENEWS NOBODY ANSWERS IS STILL TURNING, and the watchdog sees it
+// so.
+//
+// A renew the store leaves unanswered is held to its read's whole bound — five
+// seconds where nothing set a deadline — so a heartbeat pass over a node's
+// seats while its link to the broker is down spends a bound per seat, keeping
+// each seat until its own lease's TTL and then dropping it, which is what an
+// unreachable store asks of it. The beat was stamped only once the whole pass
+// had answered, so twelve seats' bounds read as a wedge forty-five seconds in
+// and the watchdog ended a process that was doing its job. Stamped as each
+// renew is asked, the beat is never older than one renew's bound.
+func TestAPassOfUnansweredRenewsIsStillTurning(t *testing.T) {
+	t.Parallel()
+	const ttl, bound = 45 * time.Second, 5 * time.Second
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{Seats: numberedSeats(12), ClaimLimit: 12, TTL: ttl,
+		HeartbeatInterval: 15 * time.Second})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	if held := len(h.Held()); held != 12 {
+		t.Fatalf("the host claimed %d seats, want all 12", held)
+	}
+	fired, onStall := caught()
+	w := newWatchdog(ttl, f.clock.Now, onStall)
+	w.Watch("seat-heartbeat", h)
+	// A STARTED HOST'S PULSE, which is live and has beaten: the loops Start
+	// spins would race the pass this case drives itself.
+	h.mu.Lock()
+	h.running = true
+	h.mu.Unlock()
+	h.stampBeat()
+
+	h.backend = unansweredRenew{Backend: f.store, bound: bound, clock: f.clock,
+		judge: func() { w.check() }}
+	h.Heartbeat(f.ctx)
+	select {
+	case stall := <-fired:
+		t.Fatalf("the watchdog fired (%+v) on a pass whose every renew returned "+
+			"inside its %v bound", stall, bound)
+	default:
+	}
+}
+
 // A HEALTHY DUTY IS NOT BEHIND, and its lag is not reported.
 //
 // The time since a turning duty's last beat is never zero, only shorter than

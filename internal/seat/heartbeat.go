@@ -135,6 +135,18 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 	var lost []string
 
 	for _, t := range targets {
+		// THE BEAT AS EACH RENEW IS ASKED, not only once the whole pass
+		// has answered, because the pass is turning for as long as its
+		// renews return. A renew the store leaves unanswered is held to its
+		// read's whole bound — five seconds, where nothing set a deadline —
+		// so a pass over many seats on a node that cannot reach its store
+		// spends a bound per seat, doing exactly what an unreachable store
+		// asks of it: keeping each seat until its own lease's TTL, then
+		// dropping it. Stamped only at the pass's end, that read as a wedge
+		// once the bounds summed past the TTL — ten seats at the default —
+		// and the watchdog ended the process. A renew that hangs still
+		// freezes the beat, which is the wedge the watchdog is for.
+		h.stampBeat()
 		// Read the clock PER SEAT, not once before the loop. A single
 		// pre-loop timestamp is assigned to every seat's last-renew stamp,
 		// so with many seats and a slow store the later ones record a renew
