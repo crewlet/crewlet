@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -172,14 +173,103 @@ func TestARerunSkipsAnUnchangedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Kept) != 1 {
-		t.Fatalf("a re-run reported %+v rather than keeping the app", res)
+	if len(res.Created) != 0 || len(res.Updated) != 0 {
+		t.Fatalf("a re-run reported %+v rather than leaving the app's manifest alone", res)
 	}
 	if ws.called("apps.manifest.update") != before {
 		t.Error("an unchanged manifest was pushed anyway")
 	}
 	if ws.called("apps.manifest.create") != 1 {
 		t.Error("a re-run created a second app for the same seat")
+	}
+}
+
+// A SEAT IS KEPT ONLY WHEN THE RUN LEFT BOTH ITS APP AND ITS TOKEN.
+//
+// Kept is what the report says was left alone, with a credential that still
+// works and that minting afresh would revoke. A seat whose manifest Slack
+// already held but whose app this run installed — a -reinstall re-run, or the
+// run after a -no-install one — or left waiting for its click was reported
+// kept as well, so a -reinstall run said it had left alone the token it had
+// just minted. It is reported Installed or Pending alone.
+func TestASeatIsKeptOnlyWhenTheRunLeftItsAppAndItsToken(t *testing.T) {
+	t.Parallel()
+	install := func(context.Context, string, string) (string, error) {
+		return "the-temporary-code", nil
+	}
+	cases := []struct {
+		name string
+		// first is the run before the one under test, which is then.
+		first, then func(*slack.Options)
+
+		kept, installed, pending bool
+	}{
+		{
+			name:  "a plain re-run of an installed app",
+			first: func(o *slack.Options) { o.Install = install },
+			then:  func(o *slack.Options) { o.Install = install },
+			kept:  true,
+		},
+		{
+			name:      "a -reinstall re-run of an installed app",
+			first:     func(o *slack.Options) { o.Install = install },
+			then:      func(o *slack.Options) { o.Install, o.Reinstall = install, true },
+			installed: true,
+		},
+		{
+			name:      "the install run after a -no-install run",
+			first:     func(o *slack.Options) { o.Install = nil },
+			then:      func(o *slack.Options) { o.Install = install },
+			installed: true,
+		},
+		{
+			name:    "a -no-install re-run of an app nobody installed",
+			first:   func(o *slack.Options) { o.Install = nil },
+			then:    func(o *slack.Options) { o.Install = nil },
+			pending: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			ws := newWorkspace(t)
+			withCreate(ws)
+			ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+				"bot_user_id":"U0BOTSWE","app_id":"A0SWE","team":{"id":"T0ACME"}}`
+			recorder := newSink()
+
+			_, ledger, path, err := run(t, ws, func(o *slack.Options) {
+				o.Sink = recorder
+				c.first(o)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := slack.Options{
+				Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
+				Ledger: ledger, LedgerPath: path, Sink: recorder,
+				BaseURL: "https://engine.example.com",
+			}
+			c.then(&opts)
+			res, err := slack.Reconcile(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Created) != 0 || len(res.Updated) != 0 {
+				t.Fatalf("the run under test changed the app's manifest (%+v), "+
+					"so this case proves nothing", res)
+			}
+			if got := slices.Contains(res.Kept, "swe"); got != c.kept {
+				t.Errorf("kept = %v, want %v (kept %v, installed %v)",
+					got, c.kept, res.Kept, res.Installed)
+			}
+			if got := slices.Contains(res.Installed, "swe"); got != c.installed {
+				t.Errorf("installed = %v, want %v", got, c.installed)
+			}
+			if _, got := res.Pending["swe"]; got != c.pending {
+				t.Errorf("pending = %v, want %v", got, c.pending)
+			}
+		})
 	}
 }
 
