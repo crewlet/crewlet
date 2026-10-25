@@ -162,6 +162,10 @@ func (p Profile) Clone() Profile {
 			ImportArgs: append([]string(nil), p.CredentialStore.ImportArgs...),
 		}
 	}
+	out.MCP = p.MCP.clone()
+	out.Requests = p.Requests.clone()
+	out.Cap = p.Cap.clone()
+	out.FailureMarkers = append([]string(nil), p.FailureMarkers...)
 	return out
 }
 

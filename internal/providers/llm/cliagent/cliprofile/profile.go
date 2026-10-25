@@ -29,8 +29,8 @@ const (
 	// the same two reasons: argv is bounded by ARG_MAX, and
 	// /proc/<pid>/cmdline makes it readable by every account on the
 	// machine. A rendered prompt is the whole flattened transcript — the
-	// seat's identity, the tool catalogue, the conversation and its tool
-	// results — so it is the LARGEST and the most sensitive thing this
+	// seat's identity, the conversation and its tool results — so it is
+	// the LARGEST and the most sensitive thing this
 	// backend hands a CLI. Prefer this over argv wherever a vendor offers
 	// a prompt-file flag; `muse exec --prompt-file` is the first that does.
 	PromptFile PromptMode = "file"
@@ -355,9 +355,10 @@ func (s MarkerScope) Valid() bool {
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
-// In text mode the engine uses none of them: Crewlet's tools ride the prompt
-// envelope, and a CLI editing files in its own sandbox is invisible to the
-// tool registry, the permission model, redaction and the event stream. The
+// On this host the engine uses none of them: a seat's tools reach the CLI as
+// the engine's own MCP server ([MCP]), and a CLI editing files in its own
+// sandbox is invisible to the tool registry, the permission model and the
+// event stream. The
 // shell is the one that matters: hostbox isolates a seat's HOME and
 // environment, not the filesystem, so a CLI with a shell on the engine host
 // reads whatever the engine user can read. A profile therefore DENIES local
@@ -1130,6 +1131,29 @@ type Profile struct {
 	// — the vendors that take their tool policy from a file rather than a
 	// flag. See [SeedFile].
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
+
+	// MCP is how the CLI is handed a phase's tools as an MCP server — see
+	// [MCP]. Nil: the CLI cannot be handed any, and a seat's phase on it is
+	// refused.
+	MCP *MCP `yaml:"mcp,omitempty"`
+
+	// Requests is how the CLI's own record shows each model request of a run
+	// with tools — see [Requests]. Nil: the record shows none, and the whole
+	// run counts as one round.
+	Requests *Requests `yaml:"requests,omitempty"`
+
+	// Cap is how a run the CLI's own turn cap ended is told from a failure —
+	// see [Cap]. Nil: the CLI has no cap, or the profile cannot tell one.
+	Cap *Cap `yaml:"cap,omitempty"`
+
+	// FailureMarkers are sentinels the CLI writes on stderr when its own
+	// confinement failed to load — a policy file it could not read — after
+	// which it runs on its vendor's defaults. Matched as each stderr line
+	// arrives, on every call, and the run is stopped at once and fails: a CLI
+	// running with its tool policy unloaded must not be left to use the tools
+	// that policy denies (Gemini CLI reports "Policy file error" and carries
+	// on, measured on 0.58.0).
+	FailureMarkers []string `yaml:"failure_markers,omitempty"`
 }
 
 // credentialWords are the name components that mark a variable as carrying a
@@ -1666,6 +1690,10 @@ func (p *Profile) problems() []string {
 				"configures nothing", i)
 		}
 	}
+	p.validateMCP(add)
+	p.validateRequests(add)
+	p.validateCap(add)
+	p.validateFailureMarkers(add)
 	p.validateCollisions(add)
 	return bad
 }
@@ -1759,6 +1787,12 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 				file(ch.field+".file.name", name)
 			}
 		}
+	}
+	if scope == SeedWork {
+		// Written on a run with tools alone, after the seeds above, so one at
+		// a path a seed or the system prompt file also names replaces it on
+		// exactly those runs.
+		out = append(out, p.mcpClaims()...)
 	}
 	field, relocations := "config_env", p.ConfigEnv
 	if scope == SeedWork {
@@ -2348,6 +2382,17 @@ func (p *Profile) ValidateCredentials(name string) error {
 			add("subscription_env names %q, which is a credential variable — it selects "+
 				"the login a subscription call signs in with and carries no secret; give "+
 				"a credential through the entry's auth", env)
+		}
+	}
+	if p.MCP != nil {
+		for _, env := range slices.Sorted(maps.Keys(p.MCP.Env)) {
+			// Set on every run with tools whatever auth.mode says, and
+			// stored unredacted like the rest of overrides.
+			if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+				add("mcp.env names %q, which is a credential variable — the tool route's "+
+					"environment is set whatever auth.mode says and is stored unredacted; give "+
+					"the credential through the entry's auth or its own env", env)
+			}
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
