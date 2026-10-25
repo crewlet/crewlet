@@ -2618,6 +2618,79 @@ muse-code:
   # operator's, on their schedule.
   env:
     MUSE_NO_AUTO_UPDATE: "1"
+  # THE SEAT'S TOOLS: one stdio server, declared for the one run by `-c`, the
+  # CLI's per-run setting, which takes a JSON value — the only per-run channel
+  # this CLI has for a server. Its settings file names servers too, but it is
+  # the seat's, which every call shares; its project files are read only from
+  # a trusted workspace, and nothing here trusts one (measured outside the
+  # engine, which a run from inside a checkout cannot be — the CLI refuses a
+  # TMPDIR inside the repository: --trust-workspace started a checkout's
+  # .mcp.json server, and without it none); and a plugin's server
+  # needs an approval in that same settings file. Measured on 1.4.13 through the
+  # engine's own code path against a local stand-in, with servers planted in
+  # the home's settings file, in ~/.claude.json and ~/.codex/config.toml, and
+  # in an .mcp.json and a .muse/settings.json at every level of a checkout
+  # above the call: the model was offered the seat's tools and the two web
+  # tools, and no other server started. The seed_files settings file is what
+  # keeps the home's out — without it the planted server started on every
+  # call, text functions included — and, naming no approval, what keeps an
+  # installed plugin's server from starting (measured outside the engine: an
+  # installed, approved plugin's server started on a text function, and with
+  # the seeded file in place of the settings it did not); plugins live under
+  # the volatile .local/share/muse besides.
+  #
+  # run.toolset, set for the run, adds `mcp__crewlet__*` to the two web
+  # tools; the model sees the tools as `mcp__crewlet__<name>`.
+  #
+  # NO TIMEOUT KNOB FOR A SERVER DECLARED THIS WAY: `-c` refuses any key past
+  # transport, command and args (`tool_timeout_sec` among them: "unknown key"),
+  # and the settings file that takes one is the seat's. The CLI's own is 300 s
+  # — a 700 s call ended at 300 s as "tool timed out" — and the engine answers
+  # a call still running near it itself. The CLI makes a response's calls one
+  # after another ("tool action serialized"), whatever --parallel-tool-calls
+  # or a read-only hint says; does not re-read the list when told it changed;
+  # refuses a name without the server's prefix itself; and on arguments that
+  # are not JSON asks its model again, with a growing pause, rather than
+  # calling — eight times in 55 s in the measurement, each a request of its
+  # own. It has no turn cap of
+  # its own: a run's rounds are bounded by the phase's (a stand-in that
+  # always called a tool drew 1,128 requests in 90 s).
+  #
+  # A failed run's cause is its run.terminal.failed event's reason; stderr
+  # says only "run ended with Failed".
+  mcp:
+    args:
+      - "-c"
+      - 'mcpServers.crewlet={"transport":"stdio","command":{relay_command_json},"args":{relay_args_json}}'
+      - "-c"
+      - 'run.toolset=["web_search","web_fetch","mcp__crewlet__*"]'
+    tool_timeout_seconds: 300
+    relists: false
+    concurrency: in_turn
+    failure_events:
+      - match: [{path: ["payload_type"], equals: "run.terminal.failed"}]
+        fields: [["payload", "reason"]]
+  # EACH REQUEST, FROM THE STREAM: a model request is a task the CLI proposes
+  # with the kind model.meta.response, its prose the run.output.delta
+  # fragments after it — which no event repeats whole per request, so they
+  # are its prose run together — and each call a tool task's side effect,
+  # filed under the operation `tool:<name>` with the key `tool:<the model's
+  # call id>`. The CLI sends that key with the call, in `_meta`
+  # (`idempotencyKey`, beside `callId`, the bare id), so a call is joined by
+  # it; the record names no arguments. It carries no counts per request: the
+  # run's are its run.usage event (see usage).
+  requests:
+    source: stdout
+    call_id_meta: idempotencyKey
+    host_prefix: "tool:mcp__crewlet__"
+    events:
+      - match: [{path: ["payload_type"], equals: "task.lifecycle.proposed"}, {path: ["payload", "event", "task_kind"], equals: "model.meta.response"}]
+        opens: true
+        id: ["payload", "task_id"]
+      - match: [{path: ["payload_type"], equals: "run.output.delta"}]
+        delta: ["payload", "text"]
+      - match: [{path: ["payload_type"], equals: "task.lifecycle.side_effect_intent"}, {path: ["payload", "event", "operation"], prefix: "tool:"}]
+        call: {id: ["payload", "event", "idempotency_key"], name: ["payload", "event", "operation"]}
   # No config_env: this CLI is XDG-native and has no relocation variable of
   # its own. buildEnv already points XDG_CONFIG_HOME and XDG_DATA_HOME inside
   # the seat's home, and the binary honours both. (MUSE_AUTH_PATH looks like
