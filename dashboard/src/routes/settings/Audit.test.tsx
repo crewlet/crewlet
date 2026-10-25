@@ -912,6 +912,20 @@ test("a source refused on authority names its grant, and the other sources stand
   expect(screen.queryByText(/You may not read this/)).toBeNull();
 });
 
+// TWO SOURCES REFUSED IN THE SAME WORDS ARE ONE SENTENCE: a refusal naming no
+// grant says "Sign in to see this." whichever source it refused, and the notice
+// said it once a source, keyed by the sentence.
+test("two sources refused in the same words are said once", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    config_audit: new QueryError("unauthorized"),
+    artifact_trail: new QueryError("unauthorized"),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  expect(screen.getAllByText("Sign in to see this.")).toHaveLength(1);
+});
+
 // AND A REFUSAL REPLACES WHAT IT REFUSED: rows read before a grant was taken
 // away are not drawn under the sentence saying they are withheld.
 test("a source refused after it answered takes its rows off the grid", async () => {

@@ -1021,15 +1021,27 @@ export function Audit() {
 
   // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on
   // authority, with the grants its refusal named, and the two REST reads.
+  //
+  // EACH SENTENCE ONCE. A refusal naming no grant says "Sign in to see this."
+  // whichever source it refused, so a signed-out reader refused every source
+  // was told the same sentence five times — and the notice keys its lines by
+  // the sentence, so React drew five lines under one key.
   const withheld = [
-    ...reads
-      .filter(({ read }) => read.error === "unauthorized")
-      .map(({ read, gesture }) =>
-        needsWords(gesture, read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : []),
-      ),
-    secrets.withheld,
-    identity.withheld,
-  ].filter((sentence) => sentence !== "");
+    ...new Set(
+      [
+        ...reads
+          .filter(({ read }) => read.error === "unauthorized")
+          .map(({ read, gesture }) =>
+            needsWords(
+              gesture,
+              read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : [],
+            ),
+          ),
+        secrets.withheld,
+        identity.withheld,
+      ].filter((sentence) => sentence !== ""),
+    ),
+  ];
 
   const loading =
     work.loading || knowledge.loading || config.loading || runtime.loading || artifacts.loading;
