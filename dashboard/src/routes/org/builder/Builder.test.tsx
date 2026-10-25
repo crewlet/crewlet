@@ -27,6 +27,12 @@ import {
   refusal,
 } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 
 /** Nobody signed in, as the `viewer` question answers it. */
 const NOBODY = { login: "", owner: "", grants: [] };
@@ -75,6 +81,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   localStorage.clear();
   sessionStorage.clear();
@@ -1067,4 +1074,44 @@ test("a project link to a node that owns one leaves its project as it is", async
   expect(
     (within(editor).getByRole("combobox", { name: /Tracker project/ }) as HTMLInputElement).value,
   ).toBe("CORE");
+});
+
+describe("the draft, for the assistant", () => {
+  test("names the revision it was opened on, what it holds and each change, read only", async () => {
+    setFramePage({
+      screen: "company-org-edit",
+      title: "Org chart › Edit org",
+      path: ["company", "org", "edit"],
+      params: {},
+      query: { view: "visualization" },
+    });
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    expect(await screen.findByText("CEO")).toBeDefined();
+    const open = () => pageSnapshot()!.context;
+    const field = (path: string) => open().draft?.fields.find((f) => f.path === path);
+    await waitFor(() =>
+      expect(open().draft).toMatchObject({
+        kind: "client",
+        id: "company",
+        revision: "r1",
+        step: "visualization",
+      }),
+    );
+    expect(field("scope")?.value).toBe("The whole company");
+    expect(field("changes")).toMatchObject({ value: "", kind: "list" });
+    expect(Number(field("seats")?.value)).toBeGreaterThan(0);
+    // STRUCTURE IS CHANGED THROUGH THE BUILDER'S OWN DOOR, never draft.set.
+    expect(open().draft!.fields.some((f) => f.editable)).toBe(false);
+    expect(open().accepts).toContain("org.draft.apply_ops");
+    act(() => {
+      applyPageAction({
+        correlation_id: "c1",
+        action: "org.draft.apply_ops",
+        payload: { ops: [{ op: "rename", seat: "designer", name: "Product designer" }] },
+        source_revision: open().source_revision,
+      });
+    });
+    await waitFor(() => expect(field("changes")?.value).toMatch(/Product designer/));
+  });
 });

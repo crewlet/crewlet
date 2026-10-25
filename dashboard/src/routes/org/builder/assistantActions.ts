@@ -23,9 +23,18 @@
 
 import type { ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import type { PageActionParse } from "~/app/assistant/context.ts";
-import { locate, seatWithHandle, unitWithKey, type Draft, type Placement } from "./model/draft.ts";
+import type { AssistantDraftSpec } from "~/app/assistant/draft.ts";
+import {
+  allSeats,
+  allUnits,
+  locate,
+  seatWithHandle,
+  unitWithKey,
+  type Draft,
+  type Placement,
+} from "./model/draft.ts";
 import { COMPANY_KEY, mintKey, type KeySource, type NodeKey } from "./model/keys.ts";
-import { describeOperation, type Intent } from "./model/operations.ts";
+import { apply as applyOperation, describeOperation, type Intent } from "./model/operations.ts";
 import { builderReducer, recordIntent, type BuilderState } from "./model/reducer.ts";
 
 /** The most changes one proposal makes: a team's worth, read on one card. */
@@ -255,4 +264,63 @@ export function parseOrgOps(
     at = builderReducer(at, { type: "record", intent });
   }
   return { ok: true, value: { intents, words } };
+}
+
+/** What the assistant is told about the builder, beside its draft's fields. */
+const ORG_HELP =
+  "The person is editing the org chart as a draft. Change it with org.draft.apply_ops, " +
+  "naming seats by handle and units by key; read the configuration for a node's full " +
+  "values. Nothing is saved until the person reviews and saves the draft.";
+
+/** Each operation of the draft's log, in the builder's own words, each against the draft before it. */
+export function draftChanges(state: BuilderState): string[] {
+  let before = state.baseDraft;
+  return state.log.ops.map((op) => {
+    const words = describeOperation(op, before);
+    before = applyOperation(before, op).draft;
+    return words;
+  });
+}
+
+/**
+ * The builder's draft as the page declares it (`useAssistantDraft`): what is
+ * being edited, read only. A change to the org is a structural one, which
+ * `org.draft.apply_ops` makes through the builder's one door, so no field
+ * here is set by `draft.set`.
+ */
+export function orgDraftSpec(args: {
+  state: BuilderState;
+  /** The open view (`visualization`, `table`). */
+  view: string;
+  /** The selected node's name, or null. */
+  selected: string | null;
+}): AssistantDraftSpec<BuilderState> {
+  const { state, view, selected } = args;
+  const count = <T>(items: Iterable<T>) => String([...items].length);
+  return {
+    kind: "client",
+    id: state.base.revision === null ? null : "company",
+    revision: state.base.revision,
+    step: view,
+    scope: "This org chart draft (not saved)",
+    help: ORG_HELP,
+    value: state,
+    fields: [
+      {
+        path: "scope",
+        label: "Editing",
+        read: (s) => (s.scope === null ? "The whole company" : `The unit ${s.scope}`),
+      },
+      {
+        path: "changes",
+        label: "Changes not saved",
+        read: draftChanges,
+      },
+      { path: "units", label: "Units", read: (s) => count(allUnits(s.draft)) },
+      { path: "seats", label: "Seats", read: (s) => count(allSeats(s.draft)) },
+      { path: "selected", label: "Selected", read: () => selected ?? "Nothing" },
+    ],
+    // NOTHING HERE IS SET (see above), so nothing is ever applied.
+    apply: () => {},
+  };
 }

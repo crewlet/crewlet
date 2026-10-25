@@ -27,7 +27,12 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
-import { applyPageAction, resetPageContextForTest } from "~/app/assistant/context.ts";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -44,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -455,4 +461,42 @@ test("a ceiling the assistant prepared opens its editor filled in, and saves not
   expect(field.value).toBe("2M");
   expect(calls).toEqual([]);
   resetPageContextForTest();
+});
+
+test("a ceiling open in its editor is the assistant's to read and fill in, and saves nothing", async () => {
+  const calls = stubConfig(() => valid());
+  setFramePage({
+    screen: "spend-budgets",
+    title: "Spend › Budgets",
+    path: ["spend", "budgets"],
+    params: {},
+    query: {},
+  });
+  mount(answer());
+  await settle();
+  expect(pageSnapshot()!.context.draft).toBeUndefined();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Change PM's daily token ceiling/ }));
+  });
+  await settle();
+  const open = () => pageSnapshot()!.context;
+  expect(open().draft).toMatchObject({ kind: "client", id: "pm", step: "day" });
+  expect(open().draft!.fields[0]).toMatchObject({ path: "ceiling", editable: true });
+  const set = (ceiling: string) =>
+    applyPageAction({
+      correlation_id: ceiling,
+      action: "draft.set",
+      payload: { values: { ceiling } },
+      source_revision: open().source_revision,
+    });
+  // A VALUE THE FIELD REFUSES is refused in its own words.
+  expect(set("lots")).toMatchObject({
+    outcome: "invalid",
+    reason: expect.stringMatching(/^Give a whole number of tokens/),
+  });
+  await act(async () => {
+    expect(set("3M").outcome).toBe("applied");
+  });
+  expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("3M");
+  expect(calls).toEqual([]);
 });

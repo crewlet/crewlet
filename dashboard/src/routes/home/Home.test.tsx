@@ -14,6 +14,12 @@ import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import type { ReactNode } from "react";
 import { Home } from "./Home.tsx";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 import { greeting } from "~/lib/format.ts";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { NOBODY_SENTENCE } from "./Decisions.tsx";
@@ -174,6 +180,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   localStorage.clear();
   reloadForTest();
@@ -965,5 +972,32 @@ describe("the head", () => {
     expect(figure?.closest("p")?.textContent).toBe(
       "Nimbus is running on 3 nodes. 1 decision is waiting on you, and no agents are working right now.",
     );
+  });
+});
+
+describe("the board being arranged, for the assistant", () => {
+  test("is declared while Edit Home is open, read only, and gone when it closes", async () => {
+    setFramePage({ screen: "home", title: "Home", path: ["home"], params: {}, query: {} });
+    mount();
+    await settle();
+    expect(pageSnapshot()!.context.draft).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Home" }));
+    await settle();
+    const draft = pageSnapshot()!.context.draft!;
+    expect(draft).toMatchObject({ kind: "client", step: "arrange" });
+    expect(draft.help).toMatch(/done on the board itself/);
+    const widgets = draft.fields.find((f) => f.path === "widgets")!;
+    expect(widgets).toMatchObject({ kind: "list" });
+    expect(widgets.value.split("\n").length).toBeGreaterThan(1);
+    // NOTHING ON THE BOARD IS THE ASSISTANT'S TO SET.
+    expect(draft.fields.some((f) => f.editable)).toBe(false);
+    expect(
+      applyPageAction({
+        correlation_id: "c1",
+        action: "draft.set",
+        payload: { values: { widgets: ["Note"] } },
+        source_revision: pageSnapshot()!.context.source_revision,
+      }),
+    ).toMatchObject({ outcome: "invalid" });
   });
 });

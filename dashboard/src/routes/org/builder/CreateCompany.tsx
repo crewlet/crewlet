@@ -37,6 +37,13 @@ import { useState } from "react";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 import { href } from "~/app/router.tsx";
 import { ConfigField } from "~/components/ConfigField.tsx";
+import {
+  DraftRefusal,
+  refuse,
+  useAssistantDraft,
+  type AssistantDraftSpec,
+  type DraftValue,
+} from "~/app/assistant/draft.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { managerOf } from "~/protocol/configAnswer.ts";
 import type { HumanContactKey } from "~/protocol/index.ts";
@@ -75,6 +82,144 @@ const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
   },
 ];
 
+/** What the create form holds. */
+export interface CreateForm {
+  readonly name: string;
+  readonly template: TemplateId;
+  readonly leads: LeadsAre;
+  readonly ownSeat: boolean;
+  readonly seatName: string;
+  readonly identity: HumanContactKey;
+  readonly value: string;
+}
+
+/** What the assistant is told about the create form, beside its fields. */
+const CREATE_HELP =
+  "The company does not exist yet. You can propose its name, the shape it starts from, " +
+  "whether unit leads are people or agents, and the person's own seat; the person " +
+  "presses Create, and units and seats are then edited in the builder.";
+
+const textOf = (value: DraftValue) => (typeof value === "string" ? value.trim() : null);
+
+/** The create form as the page declares it (`useAssistantDraft`), each value refused in the form's own words. */
+export function createCompanyDraft(
+  form: CreateForm,
+  apply: (next: CreateForm) => void,
+): AssistantDraftSpec<CreateForm> {
+  const one = <T extends string>(
+    choices: readonly { value: T; label: string }[],
+    what: string,
+  ) => ({
+    hint: `One of ${choices.map((c) => `${c.value} (${c.label})`).join(", ")}`,
+    pick: (value: DraftValue): T | DraftRefusal =>
+      choices.find((c) => c.value === textOf(value))?.value ??
+      refuse(`Choose ${what}: ${choices.map((c) => c.value).join(", ")}.`),
+  });
+  const template = one(
+    TEMPLATES.map((t) => ({ value: t.id, label: t.label })),
+    "the shape to start from",
+  );
+  const leads = one<LeadsAre>(
+    [
+      { value: "agents", label: "Leads are agents" },
+      { value: "people", label: "Leads are people" },
+    ],
+    "whether the unit leads are people or agents",
+  );
+  const own = one(
+    [
+      { value: "yes", label: "Add a seat for yourself" },
+      { value: "no", label: "No seat of your own" },
+    ],
+    "whether to add a seat for yourself",
+  );
+  const reach = one(
+    CONTACT_IDENTITIES.map((c) => ({ value: c.key, label: c.label })),
+    "how agents reach you",
+  );
+  return {
+    kind: "client",
+    step: "create",
+    scope: "The company you are creating (not created)",
+    help: CREATE_HELP,
+    value: form,
+    fields: [
+      {
+        path: "name",
+        label: "Company name",
+        read: (f) => f.name,
+        write: (f, v) => {
+          const name = textOf(v);
+          return name ? { ...f, name } : refuse("Enter the company name.");
+        },
+      },
+      {
+        path: "template",
+        label: "Start from",
+        hint: template.hint,
+        read: (f) => f.template,
+        write: (f, v) => {
+          const picked = template.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, template: picked };
+        },
+      },
+      {
+        path: "leads",
+        label: "Unit leads",
+        hint: `${leads.hint}; for an established company`,
+        read: (f) => f.leads,
+        write: (f, v) => {
+          const picked = leads.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, leads: picked };
+        },
+      },
+      {
+        path: "own_seat",
+        label: "Add a seat for yourself",
+        hint: own.hint,
+        read: (f) => (f.ownSeat ? "yes" : "no"),
+        write: (f, v) => {
+          const picked = own.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, ownSeat: picked === "yes" };
+        },
+      },
+      {
+        path: "seat.name",
+        label: "Your seat's name",
+        hint: "Name the role, not the person",
+        read: (f) => f.seatName,
+        write: (f, v) => {
+          const seatName = textOf(v);
+          return seatName
+            ? { ...f, seatName }
+            : refuse("Enter a name for your seat, or leave your seat out.");
+        },
+      },
+      {
+        path: "seat.reach",
+        label: "How agents reach you",
+        hint: reach.hint,
+        read: (f) => f.identity,
+        write: (f, v) => {
+          const picked = reach.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, identity: picked };
+        },
+      },
+      {
+        path: "seat.contact",
+        label: "Your contact identity",
+        hint: "Empty if you will work only through the dashboard",
+        read: (f) => f.value,
+        write: (f, v) => {
+          const value = textOf(v);
+          return value === null ? refuse("A contact identity is one value.") : { ...f, value };
+        },
+      },
+    ],
+    apply,
+  };
+}
+
 export function CreateCompany({
   keys,
   onApply,
@@ -96,6 +241,20 @@ export function CreateCompany({
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const chosen = TEMPLATES.find((t) => t.id === template)!;
+
+  // WHAT IS OPEN, for the assistant: the form as filled in so far, each
+  // value set through the form's own setters; Create stays the person's.
+  useAssistantDraft(
+    createCompanyDraft({ name, template, leads, ownSeat, seatName, identity, value }, (next) => {
+      setName(next.name);
+      setTemplate(next.template);
+      setLeads(next.leads);
+      setOwnSeat(next.ownSeat);
+      setSeatName(next.seatName);
+      setIdentity(next.identity);
+      setValue(next.value);
+    }),
+  );
 
   const start = () => {
     const built = templateIntent(

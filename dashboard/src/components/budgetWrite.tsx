@@ -56,6 +56,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+import { refuse, useAssistantDraft } from "~/app/assistant/draft.ts";
 
 /**
  * A ceiling the assistant prepared, for the editor of its scope and window to
@@ -269,6 +270,43 @@ export function CeilingEditor({
 
   const shown = saved && expected !== undefined ? expected : (limit ?? null);
   const who = scope.kind === "company" ? "The company" : scope.name;
+
+  // WHAT IS OPEN, for the assistant, while the field is: the ceiling as
+  // typed, set as typing sets it and refused in the field's own words; the
+  // save, its warning and its step-up stay the person's.
+  useAssistantDraft<string>(
+    editing
+      ? {
+          kind: "client",
+          id: scopeId,
+          step: period,
+          scope: `${who}, ${adjective} token ceiling (not saved)`,
+          help:
+            "One window's token ceiling is open for editing. You can propose a value; " +
+            "saving it is the person's, and the engine may ask them to confirm it.",
+          value: text,
+          fields: [
+            {
+              path: "ceiling",
+              label: `${who} · ${periodTitle(period)} token ceiling`,
+              hint: CEILING_TYPING,
+              read: (t) => t,
+              write: (_, next) => {
+                if (typeof next !== "string") return refuse("A ceiling is one value.");
+                const read = readCeiling(period, next);
+                return read.ok ? next : refuse(read.error);
+              },
+            },
+          ],
+          apply: (next) => {
+            setText(next);
+            setError(undefined);
+            if (write.state.kind !== "idle" && !write.busy) write.reset();
+          },
+          blocked: () => (write.busy ? "The ceiling is being saved." : null),
+        }
+      : null,
+  );
   const fieldId = `${id}-ceiling`;
   return (
     <span className="ceiling">
