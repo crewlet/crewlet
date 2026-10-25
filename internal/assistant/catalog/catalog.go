@@ -136,9 +136,11 @@ type Tool struct {
 	Parameters map[string]any
 	Kind       Kind
 	Tier       Tier
-	// Route is the guarded route the call is sent to, "METHOD /pattern";
-	// a write's is `POST /operator/act/{tool}` with Act as the tool.
-	Route string
+	// Routes are every guarded route the call may be sent to, each
+	// "METHOD /pattern" as the API mounts it; Build picks one by the
+	// call's arguments and sends nothing else. A write's is only
+	// `POST /operator/act/{tool}`, with Act as the tool.
+	Routes []string
 	// Act is the operator catalogue tool a write executes as.
 	Act string
 	// Apps are the apps a card built from this tool's answer needs, so a
@@ -149,6 +151,7 @@ type Tool struct {
 	Fence bool
 	// Label renders the step's sentence from the call's safe arguments.
 	Label func(args map[string]any) string
-	// Build turns the call's arguments into the request it sends.
+	// Build turns the call's arguments into the one request it sends, on
+	// one of Routes.
 	Build func(args map[string]any) (exec.Request, error)
 }
