@@ -1702,14 +1702,14 @@ type Stream struct {
 	// log, where every person's conversations, turns and proposals are
 	// recorded before they are applied.
 	//
-	// UNSET TAKES A FIXED GIBIBYTE ([DefaultAssistantLogMaxBytes]), sized by
-	// how many people ask the assistant rather than by the disk: about four
+	// UNSET TAKES A FIXED 512 MiB ([DefaultAssistantLogMaxBytes]), sized by
+	// how many people ask the assistant rather than by the disk: about two
 	// weeks of a completely blocked trim at the reference company's rate. It
 	// shares the state logs' one budget, and crossing it refuses the append
 	// (the assistant cannot record the turn) rather than shedding history. A
 	// conversation's own retention is set in the company document and does
 	// not depend on this.
-	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the Dashboard Assistant's log; unset takes a flat 1 GiB, 64 MiB..64 GiB."`
+	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the Dashboard Assistant's log; unset takes a flat 512 MiB, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it

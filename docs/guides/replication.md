@@ -914,8 +914,8 @@ counting what the broker's streams already hold there.
 stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
 into what the state logs that already exist leave of their share of the
 broker, and it goes no lower than 1073741824 bytes. Give the broker more room;
-a fresh node of this configuration reserves at least 10737418239 bytes of the
-broker: 8053063680 for the state logs at their floors and 2684354559 for the
+a fresh node of this configuration reserves at least 10021590357 bytes of the
+broker: 7516192768 for the state logs at their floors and 2505397589 for the
 nats object bucket, a quarter of the broker's limit unless
 store.objects.nats_max_bytes sets it; the state logs that already exist keep
 the ceilings they were created with, and no Tier A setting changes them: …
