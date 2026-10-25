@@ -200,7 +200,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// an error path, not a refusal, and not the 404 or 405 this mux answers
 	// for a path or a method it does not serve.
 	routes := http.NewServeMux()
-	router := authz.NewRouter(routes, authz.ContextGuard(authz.NoChart{}))
+	// Within, so the table this surface is mounted on keeps each route's
+	// verb although it holds only the two prefixes below.
+	router := authz.NewRouter(authz.Within(routes, mux), authz.ContextGuard(authz.NoChart{}))
 	var failures []error
 	mount := func(pattern string, a authz.Action, h http.HandlerFunc) {
 		if err := router.Handle(pattern, authz.Policy{Action: a}, h); err != nil {
