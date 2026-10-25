@@ -96,16 +96,26 @@ underneath — rather than hanging with nothing to read. See
 
 **Credentials go through a node that is running.** The
 [secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on
-the KV like everything else the fleet shares, so `crewlet secrets set` against
-a live node reaches all of them — but it gets there through that node's
-authenticated API, because the coordination broker is inside the engine's own
-process and listens on no socket. Against a **stopped** node the same command
-writes that node's own table instead, which is the bootstrap path: the value
-is on one node until it starts and migrates the row. Fine for a first
-provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
-provisioner follows the same rule, and both take `-api URL` to name the node
-to write through. The process environment remains the fallback every node
-resolves from, so a platform secret projected as env still works unchanged.
+the KV like everything else the fleet shares, and nowhere else, so `crewlet
+secrets set` against a live node reaches all of them — but it gets there
+through that node's authenticated API, because the coordination broker is
+inside the engine's own process, with no address a command is given, and a
+second broker on its store directory is refused. With this node's engine
+**stopped**, the command reaches the same store itself where the node can: a
+lone member — one whose other nodes are its leaves — starts its own broker on
+`stream.store_dir`, with no listener, not even the leaf one, and stops it
+again, and a node on an external broker dials it. A **cluster member** cannot
+— started alone it never reaches the quorum the store needs, and beside
+running peers it would rejoin the cluster as this node for the length of one
+command — so it is refused and told to name a running member with
+`-api URL`, or to start its engine and re-run. Even where the direct way is
+open, a rotation on a live fleet belongs on a running node: that write is
+stamped with the credential that authenticated it and logged on the node that
+took it, where a direct one records only the shell's user and no node logs it.
+`-secret-store` on a provisioner follows the same rule, and both take
+`-api URL` to name the node to write through. The process environment remains
+the fallback every node resolves from, so a platform secret projected as env
+still works unchanged.
 
 **Every `seats` node runs its seats' models, so every one needs their CLIs.**
 A [`providers.llm` entry](../concepts/llm-backends.md) is a coding CLI that the
@@ -118,10 +128,11 @@ travel through the secret store: a headless token (`crewlet llm login <key>
 set as `auth.credential_bundle` or `CREWLET_LLM_CLI_<KEY>_CREDENTIALS`), which
 each node restores into an empty credential directory when it builds the
 company. A plain `crewlet llm login` signs in the host it ran on and no other.
-A `seats` node holds no data, so `crewlet llm` run on it names a node that
-does with `-api URL` — the company's stored values are read through that
-node, and a captured token is stored there — with one of Tier A's tokens in
-`CREWLET_API_TOKEN`.
+A `seats` node holds no data, and a cluster member whose engine is stopped
+cannot reach the store alone, so `crewlet llm` run on either names a running
+node that holds data with `-api URL` — the company's stored values are read
+through that node, and a captured token is stored there — with one of Tier
+A's tokens in `CREWLET_API_TOKEN`.
 See [LLM Backends § Authentication](../concepts/llm-backends.md#authentication).
 
 **One keyring and one `api.external_url` on every node that serves the API.**

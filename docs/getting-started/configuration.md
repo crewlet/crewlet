@@ -662,7 +662,17 @@ stream:
                                     #   the fleet's streams for every node
                                     #   that reaches it. A leaf (a node
                                     #   without `data`) is refused one: it
-                                    #   keeps no stream of its own
+                                    #   keeps no stream of its own. ONE
+                                    #   broker per directory: a member holds
+                                    #   `crewlet-broker.lock` inside it while
+                                    #   its broker runs, and a second — an
+                                    #   engine, or a `crewlet` command
+                                    #   reaching the fleet's store with the
+                                    #   engine stopped — is refused, naming
+                                    #   the holder's pid, host and start.
+                                    #   NATS itself takes no lock and would
+                                    #   accept it, and two writers corrupt
+                                    #   the store
   # store_max_bytes: 68719476736    # how much of that directory's volume the
                                     #   EMBEDDED broker may hold — the ONE number
                                     #   every stream ceiling on it is compared
@@ -1037,7 +1047,12 @@ stream:
 
 store:
   path: "./crewlet-data/company.db"   # the NODE estate — the audit log, memory,
-                                    #   config revisions, the secret bootstrap.
+                                    #   config revisions. Never a secret: the
+                                    #   company's live in the fleet's store,
+                                    #   and a `crewlet` command run with the
+                                    #   engine stopped writes them there,
+                                    #   holding this file's lock without
+                                    #   opening it.
                                     #   Owned exclusively by this process. Not a
                                     #   shared database, and no DSN: two engines
                                     #   on one file corrupt it
@@ -1075,10 +1090,16 @@ store:
                                     #   Explicit rather than derived from the
                                     #   roles because it is the one setting here
                                     #   that deletes something. The offline
-                                    #   `migrate`, `config`, `secrets` and
-                                    #   `search eval` commands refuse a scratch
-                                    #   store: what they wrote would be gone at
-                                    #   the next boot
+                                    #   `migrate`, `config` and `search eval`
+                                    #   commands refuse a scratch store: what
+                                    #   they wrote would be gone at the next
+                                    #   boot. `secrets`, `llm`, the
+                                    #   provisioners and every other command
+                                    #   resolving the company's ${VAR}s refuse
+                                    #   it unless -api names a running node
+                                    #   that holds data: the company's secrets
+                                    #   are the fleet's, and a node that holds
+                                    #   none has no store of them to reach
   # max_open_conns: 0               #   the ORDINARY READERS of this node's
                                     #   own database and of the replicated
                                     #   estate's (that one never fewer than
