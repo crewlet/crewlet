@@ -333,6 +333,13 @@ type Invocation struct {
 	// Outcome is how the run ended — see [InvocationOutcome].
 	Outcome InvocationOutcome
 
+	// FirstRound and LastRound are the rounds the run made, both inclusive,
+	// on [Round.Round]'s scale; both zero for a run that made no request.
+	// Named rather than left to a reader to place by time, because an
+	// unobserved run's round has no instant of its own — and a phase's runs
+	// are sequential, so a run's rounds are one contiguous stretch.
+	FirstRound, LastRound int
+
 	// RequestsObserved says the CLI's record showed the run's model
 	// requests, each a [Round]. False: the whole run is recorded as one.
 	RequestsObserved bool

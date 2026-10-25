@@ -277,6 +277,7 @@ func (d *dispatcher) reopen() {
 	}
 	d.parked = nil
 	d.invCalls = len(d.calls)
+	d.invRounds = d.rounds
 }
 
 // running is the calls in flight, for a live frame.
@@ -351,6 +352,11 @@ func (d *dispatcher) invocation(began time.Time, took time.Duration, comp *llm.C
 		if c.admitted {
 			inv.Calls++
 		}
+	}
+	// The run's rounds, the synthetic one of an unobserved run included:
+	// [dispatcher.fold] has numbered it by the time a run is recorded.
+	if d.rounds > d.invRounds {
+		inv.FirstRound, inv.LastRound = d.invRounds+1, d.rounds
 	}
 	if comp != nil {
 		inv.ProviderKey, inv.Model = comp.ProviderKey, comp.Model

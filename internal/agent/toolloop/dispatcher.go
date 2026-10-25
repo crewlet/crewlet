@@ -195,6 +195,8 @@ type dispatcher struct {
 	lastBusy  bool
 	// invCalls is where the current CLI run's calls start in calls.
 	invCalls int
+	// invRounds is the last round before the current CLI run's first.
+	invRounds int
 
 	// folded is how much of turns and calls the loop has already turned
 	// into conversation, so [dispatcher.Pending] and the next fold start
@@ -213,6 +215,7 @@ func newDispatcher(ctx context.Context, cfg Config, firstRound int) *dispatcher 
 		parkLocal:   make(map[string]struct{}, len(cfg.ParkLocally)),
 		done:        make(chan struct{}),
 		rounds:      firstRound,
+		invRounds:   firstRound,
 	}
 	d.cond = sync.NewCond(&d.mu)
 	for _, name := range cfg.TerminateAfter {
