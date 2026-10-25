@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Role names a message's author.
@@ -248,6 +249,34 @@ type Delta struct {
 	// Model names the backend that is answering now. Set on a Restart, so a
 	// consumer can say which model gave up and which took over.
 	Model string
+
+	// Retract says the text THIS attempt streamed so far is not its answer:
+	// discard it, and what follows replaces it.
+	//
+	// Not a Restart, because nothing failed and nothing is tried again. A
+	// backend that streams a VIEW of its output rather than the output
+	// itself (the cli-agent backend streams the prose inside the envelope
+	// it asked the model for) learns only once the call is over whether
+	// that view and the authoritative reading agree, and when they do not,
+	// keeping the shown text as an abandoned attempt would tell a reader a
+	// model had given up when it had answered. The text that follows a
+	// Retract is the completion's content from the start.
+	Retract bool
+}
+
+// Reconcile is what takes a reader who was shown `shown` to `want`: the tail
+// to append when shown is a prefix of want, or want whole with restart set
+// when it is not, so the reader discards what it drew and starts again.
+//
+// The one rule every streaming hop applies at the end of what it streamed, so
+// "what was shown" and "what is true" can never quietly differ: a backend
+// settling its stream against its [Completion], and a consumer settling its
+// frames against a round's committed text.
+func Reconcile(shown, want string) (tail string, restart bool) {
+	if strings.HasPrefix(want, shown) {
+		return want[len(shown):], false
+	}
+	return want, true
 }
 
 // Send delivers one fragment, and is a no-op when nothing asked to stream or
@@ -260,7 +289,7 @@ func (r Request) Send(d Delta) {
 	if r.OnDelta == nil {
 		return
 	}
-	if !d.Restart && d.Content == "" {
+	if !d.Restart && !d.Retract && d.Content == "" {
 		return
 	}
 	r.OnDelta(d)
