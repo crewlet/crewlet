@@ -153,6 +153,29 @@ func TestARetractedViewIsErasedRatherThanKeptAsAnAbandonedAttempt(t *testing.T) 
 	}
 }
 
+// THE TOKEN STREAM IS ASKED FOR ONLY BY A LOOP THAT SAYS SO, and only while
+// something watches. A seat's loop streams its partials and keeps the argv it
+// always ran; the Dashboard Assistant's asks for the token stream as well.
+func TestTheTokenStreamIsAskedForOnlyWhenTheLoopSaysSo(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		partials, tokens, want bool
+	}{{true, false, false}, {true, true, true}, {false, true, false}} {
+		p := &streamingProvider{final: llm.Completion{Content: "hi"}}
+		if _, err := toolloop.Run(t.Context(), toolloop.Config{
+			Provider: p, Surface: &fakeSurface{}, MaxRounds: 2,
+			StreamPartials: c.partials, StreamTokens: c.tokens,
+			OnProgress: func(toolloop.Result) {},
+		}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if p.askedForTokens != c.want {
+			t.Errorf("partials %v, tokens %v: token stream asked = %v, want %v",
+				c.partials, c.tokens, p.askedForTokens, c.want)
+		}
+	}
+}
+
 // Streaming is opt-in per call. Twelve of the thirteen call sites in this
 // engine want an answer, not a running commentary, and must keep taking the
 // unary path untouched.
@@ -171,15 +194,17 @@ func TestAProviderIsNotAskedToStreamUnlessSomethingIsWatching(t *testing.T) {
 
 // streamingProvider replays fragments, then answers.
 type streamingProvider struct {
-	fragments     []llm.Delta
-	final         llm.Completion
-	askedToStream bool
+	fragments      []llm.Delta
+	final          llm.Completion
+	askedToStream  bool
+	askedForTokens bool
 }
 
 func (p *streamingProvider) Model() string { return "streamer" }
 
 func (p *streamingProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
 	p.askedToStream = req.Streaming()
+	p.askedForTokens = req.StreamTokens
 	for _, d := range p.fragments {
 		req.Send(d)
 	}

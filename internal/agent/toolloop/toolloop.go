@@ -903,6 +903,11 @@ type Config struct {
 	// authoritative narration still comes from the completed round.
 	StreamPartials bool
 
+	// StreamTokens also asks the provider to switch to its token stream
+	// where it streams only by running the call differently
+	// ([llm.Request.StreamTokens]). Read only with StreamPartials.
+	StreamTokens bool
+
 	// OnProgress receives the live view twice per round and once per call:
 	// once the model has spoken, immediately before each tool call with
 	// that call as [Result.Running], and again once its tools have
@@ -1251,6 +1256,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// its turn or a worker it delegated to — and nothing else is.
 			Agent:   true,
 			OnDelta: onDelta,
+			// Only where something is watching: a token stream nobody
+			// reads is a larger output for nothing.
+			StreamTokens: onDelta != nil && cfg.StreamTokens,
 		})
 		took := time.Since(began)
 		if err != nil {
