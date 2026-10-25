@@ -297,6 +297,75 @@ func TestAnActivationIsAdvertisedOnTheSameConnection(t *testing.T) {
 	}
 }
 
+// AN ACTIVATION'S ANSWER WAITS FOR THE CLIENT'S RE-LIST, where the client
+// re-lists: answered at once, a CLI asked its model again before its re-list
+// landed, and the activated tool reached the model one request late. A client
+// that never re-lists is answered anyway, once the wait is over.
+func TestAnActivationsAnswerWaitsForTheClientsRelist(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		relists bool
+	}{{"a client that re-lists", true}, {"a client that never does", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := host(t)
+			d := &fakeDispatcher{
+				offered:   []toolsession.Tool{tool("activate_tool")},
+				activates: "activate_tool", adds: tool("post_message"),
+			}
+			s, err := h.Open(t.Context(), "crewlet", "", d)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer s.Retire()
+			s.Server().HoldAnswersForRelist()
+			const relistDelay = 300 * time.Millisecond
+			var cs *mcp.ClientSession
+			opts := &mcp.ClientOptions{}
+			if tc.relists {
+				opts.ToolListChangedHandler = func(ctx context.Context, _ *mcp.ToolListChangedRequest) {
+					// A CLI that re-reads its list a moment after the notice.
+					time.Sleep(relistDelay)
+					_, _ = cs.ListTools(ctx, nil)
+				}
+			}
+			conn, err := net.Dial("unix", s.Path())
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			c := mcp.NewClient(&mcp.Implementation{Name: "fake-cli", Version: "1"}, opts)
+			cs, err = c.Connect(t.Context(), &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			t.Cleanup(func() { _ = cs.Close() })
+			_ = names(t, cs)
+			began := time.Now()
+			if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{
+				Name: "activate_tool", Arguments: map[string]any{},
+			}); err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			answered := time.Now()
+			if !tc.relists {
+				if took := answered.Sub(began); took < time.Second {
+					t.Errorf("answered after %s: the hold let the answer go with no re-list", took)
+				}
+				return
+			}
+			// The client re-lists no sooner than relistDelay after the
+			// notice, so an answer that waited for it took at least that —
+			// and was let go once it came, well before the hold's own bound.
+			if took := answered.Sub(began); took < relistDelay {
+				t.Errorf("answered after %s, before the client could have re-listed", took)
+			} else if took > 1500*time.Millisecond {
+				t.Errorf("answered after %s: the hold outlasted the client's re-list", took)
+			}
+		})
+	}
+}
+
 // THE HINTS TRAVEL WITH THE TOOL, because a CLI decides from them whether a
 // call may run beside another and whether to ask first.
 func TestAToolsHintsAreAdvertised(t *testing.T) {

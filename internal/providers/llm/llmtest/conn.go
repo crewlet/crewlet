@@ -120,7 +120,13 @@ func Connect(ctx context.Context, req llm.Request, opts ConnOptions) (*Conn, err
 		return nil, fmt.Errorf("llmtest: reach the session: %w", err)
 	}
 	c.sock = sock
-	client := mcp.NewClient(&mcp.Implementation{Name: "llmtest", Version: "1"}, nil)
+	var copts *mcp.ClientOptions
+	if !opts.NoRelist {
+		copts = &mcp.ClientOptions{ToolListChangedHandler: func(ctx context.Context, req *mcp.ToolListChangedRequest) {
+			_ = c.listOn(ctx, req.Session)
+		}}
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "llmtest", Version: "1"}, copts)
 	cs, err := client.Connect(ctx, &mcp.IOTransport{Reader: sock, Writer: sock}, nil)
 	if err != nil {
 		c.Close()
@@ -164,7 +170,14 @@ func (c *Conn) releaseRun() {
 
 // list reads the tool list, as the CLI offers it to its model.
 func (c *Conn) list(ctx context.Context) error {
-	res, err := c.cs.ListTools(ctx, nil)
+	return c.listOn(ctx, c.cs)
+}
+
+// listOn reads the tool list over cs — the connection's own session, handed
+// to a list-changed notice by the SDK, so the notice reads no field the
+// connection is still being built into.
+func (c *Conn) listOn(ctx context.Context, cs *mcp.ClientSession) error {
+	res, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("llmtest: list the tools: %w", err)
 	}

@@ -1264,7 +1264,7 @@
           ]
         },
         "timeout_seconds": {
-          "description": "Wall-clock cap on one CLI invocation (default 600).",
+          "description": "Wall-clock cap on one stretch of the CLI's own work with no tool call in flight (default 600).",
           "minimum": 0,
           "type": [
             "number",

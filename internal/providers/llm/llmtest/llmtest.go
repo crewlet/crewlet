@@ -101,6 +101,13 @@ type Run struct {
 	Stop llm.StopReason
 }
 
+// relist re-reads the tool list when the server says it changed, as a CLI that
+// re-lists does — and as the host waits for before it answers the call that
+// changed it.
+func relist(ctx context.Context, req *mcp.ToolListChangedRequest) {
+	_, _ = req.Session.ListTools(ctx, nil)
+}
+
 // CallIDKey is the `_meta` key the script sends a call's id under, as Codex
 // does.
 const CallIDKey = "callId"
@@ -151,6 +158,11 @@ type Script struct {
 	// to one of the CLI's own tools included, which then takes as long as
 	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
+
+	// LateRecord makes the CLI one whose record shows a response — its prose,
+	// its calls, its cost — only once the response's calls have run, as
+	// Gemini CLI's and OpenCode's do, and says so to the host.
+	LateRecord bool
 
 	// NumberedRequests makes the CLI one whose requests are numbered from one
 	// in every run — as a backend numbers the requests of a CLI whose record
@@ -279,7 +291,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	host := req.Tools
 	served, err := host.Serve(ctx, llm.ServeOptions{
 		Relists: !s.NoRelist, ToolTimeout: s.ToolTimeout, ObservesRequests: !s.Unobserved,
-		Concurrency: s.Concurrency, CallIDMeta: s.callIDMeta(),
+		Concurrency: s.Concurrency, CallIDMeta: s.callIDMeta(), RecordsCallsLate: s.LateRecord,
 		OnCall: func(busy bool) {
 			if s.OnCall != nil {
 				s.OnCall(n, busy)
@@ -324,7 +336,11 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	if err != nil {
 		return nil, fmt.Errorf("llmtest: reach the session: %w", err)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "llmtest", Version: "1"}, nil)
+	var copts *mcp.ClientOptions
+	if !s.NoRelist {
+		copts = &mcp.ClientOptions{ToolListChangedHandler: relist}
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "llmtest", Version: "1"}, copts)
 	cs, err := client.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("llmtest: connect: %w", err)
@@ -375,7 +391,10 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		if s.NumberedRequests {
 			id = fmt.Sprintf("request-%d", i+1)
 		}
-		if !s.Unobserved {
+		observe := func() {
+			if s.Unobserved {
+				return
+			}
 			uu := u
 			host.Observe(llm.Turn{
 				ID: id, Text: r.Text, Calls: calls,
@@ -383,13 +402,21 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 			})
 			host.Spent(u)
 		}
+		late := s.LateRecord && len(r.Calls) > 0
+		if !late {
+			observe()
+		}
 		if r.Trailing != "" {
 			req.Send(llm.Delta{Content: r.Trailing, Request: id})
 		}
 		if len(r.Calls) == 0 {
 			break
 		}
-		if exited := s.call(ctx, cs, conn, r); exited != nil {
+		exited := s.call(ctx, cs, conn, r)
+		if late {
+			observe()
+		}
+		if exited != nil {
 			if s.Unobserved {
 				host.Spent(total)
 			}

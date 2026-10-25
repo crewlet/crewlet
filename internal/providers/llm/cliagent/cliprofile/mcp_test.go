@@ -130,7 +130,7 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 			"source": "file", "file": "{session}.jsonl", "in": "work",
 		}}, "session_args does not give the run one"},
 		"calls with no host prefix": {map[string]any{"requests": map[string]any{"host_prefix": ""}},
-			"requests.host_prefix is empty"},
+			"neither requests.host_prefix nor requests.host_namespace"},
 		"a stop reason the engine has no word for": {map[string]any{"requests": map[string]any{
 			"stops": map[string]any{"max_tokens": "cap"},
 		}}, "requests.stops.max_tokens"},
@@ -143,7 +143,37 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 		}}, "requests.events[0].match[0].equals"},
 		"rules that never begin a request": {map[string]any{"requests": map[string]any{
 			"events": []any{map[string]any{"text": []any{"t"}, "match": []any{map[string]any{"path": []any{"type"}, "equals": "x"}}}},
-		}}, "neither opens a request nor names one by id"},
+		}}, "neither opens a request, names one by id, nor closes one"},
+		"a whole event naming no request": {map[string]any{"requests": map[string]any{
+			"events": []any{map[string]any{"opens": true, "whole": true, "text": []any{"t"},
+				"match": []any{map[string]any{"path": []any{"type"}, "equals": "x"}}}},
+		}}, "requests.events[0] is whole but names no id"},
+		"a namespace nothing says is the host's": {map[string]any{"requests": map[string]any{
+			"events": []any{map[string]any{"opens": true, "match": []any{map[string]any{"path": []any{"type"}, "equals": "x"}},
+				"call": map[string]any{"name": []any{"name"}, "namespace": []any{"ns"}}}},
+		}}, "reads a call's namespace but requests.host_namespace is empty"},
+		"a host namespace no call is read in": {map[string]any{"requests": map[string]any{
+			"host_namespace": "mcp__crewlet",
+		}}, "requests.host_namespace is set but no call rule reads a namespace"},
+		"an owner of a stdout record": {map[string]any{"requests": map[string]any{
+			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}"},
+		}}, `requests.owner is set but requests.source is "stdout"`},
+		"an owner the run cannot know": {map[string]any{"requests": map[string]any{
+			"source": "file", "file": ".cli/*.jsonl", "in": "home",
+			"owner": map[string]any{"path": []any{"thread"}, "equals": "{thread}"},
+		}}, `requests.owner.equals is "{thread}"`},
+		"an owner naming a session nothing gives the run": {map[string]any{"requests": map[string]any{
+			"source": "file", "file": ".cli/*.jsonl", "in": "home",
+			"owner": map[string]any{"path": []any{"session"}, "equals": "{session}"},
+		}}, "requests.owner.equals is {session} but session_args does not give the run one"},
+		"a block rule shadowing the rules after it": {map[string]any{"requests": map[string]any{
+			"events": []any{map[string]any{"opens": true, "match": []any{map[string]any{"path": []any{"type"}, "equals": "x"}},
+				"blocks": map[string]any{"path": []any{"content"}, "each": []any{
+					map[string]any{"text": []any{"text"}},
+					map[string]any{"match": []any{map[string]any{"path": []any{"type"}, "equals": "call"}},
+						"call": map[string]any{"name": []any{"name"}}},
+				}}}},
+		}}, "requests.events[0].blocks.each[0] matches every block"},
 		"a cap that says nothing": {map[string]any{"cap": map[string]any{"match": []any{}, "exit_code": nil}},
 			"cap names neither exit_code nor match"},
 		"a record with no route": {map[string]any{"mcp": nil}, "requests is set but mcp is not"},
@@ -157,6 +187,32 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 				t.Errorf("err = %v, want a refusal naming %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A RECORD THE GLOB CANNOT NAME IS STILL A RECORD: one under the seat's home
+// whose first line says whose it is loads without {session} in its glob, and
+// rules that only end requests begin them too — the shapes Codex's rollout and
+// Qwen Code's stream need, which no rule of theirs opens a request in.
+//
+// Mutation: refuse a home glob without {session} whatever the owner, or a
+// record with no rule that opens one, and these are refused.
+func TestARecordNamedByItsFirstLineOrEndedByItsRulesLoads(t *testing.T) {
+	t.Parallel()
+	is := func(kind string) []any { return []any{map[string]any{"path": []any{"type"}, "equals": kind}} }
+	p, err := load(map[string]any{"requests": map[string]any{
+		"source": "file", "file": ".cli/sessions/*/rollout-*.jsonl", "in": "home",
+		"owner": map[string]any{"path": []any{"payload", "cwd"}, "equals": "{work}"},
+		"events": []any{
+			map[string]any{"match": is("message"), "text": []any{"text"}},
+			map[string]any{"match": is("usage"), "closes": true, "usage": map[string]any{"input": []any{[]any{"in"}}}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if o := p.Requests.Owner; o == nil || o.Equals != "{work}" || !p.Requests.Events[1].Closes {
+		t.Errorf("loaded %+v", p.Requests)
 	}
 }
 

@@ -333,7 +333,7 @@ export function EditModelDialog({
                 placeholder={String(DEFAULT_CLI_TIMEOUT_SECONDS)}
                 disabled={busy}
                 error={errorOf("timeout")}
-                help={`Seconds one CLI call may take. Empty is ${fmtSetting(DEFAULT_CLI_TIMEOUT_SECONDS)}.`}
+                help={`Seconds the CLI may work without calling a tool. Empty is ${fmtSetting(DEFAULT_CLI_TIMEOUT_SECONDS)}.`}
               />
               <ConfigField
                 label="At once"

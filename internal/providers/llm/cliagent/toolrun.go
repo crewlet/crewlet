@@ -92,6 +92,7 @@ func (p *Provider) serveTools(
 		OnCall:           t.onCall,
 		Concurrency:      callConcurrency(m.Concurrency),
 		CallIDMeta:       callIDMeta(p.profile.Requests),
+		RecordsCallsLate: p.profile.Requests != nil && p.profile.Requests.LateCalls,
 	})
 	if err != nil {
 		t.carry.stop()
@@ -154,9 +155,45 @@ func (p *Provider) serveTools(
 		}
 		pattern := filepath.Join(root, strings.ReplaceAll(r.File, "{session}", session))
 		t.stopTail = make(chan struct{})
-		t.waitTail = tailRecord(pattern, t.reader.fileLine, t.stopTail)
+		t.waitTail = tailRecord(pattern, recordOwner(r.Owner, session, checkout.Work), t.reader.fileLine, t.stopTail)
 	}
 	return t, nil
+}
+
+// recordOwner is the test a file record's first line must pass to be this
+// run's ([cliprofile.RecordOwner]), or nil where the glob alone names it.
+//
+// The working directory is compared as the CLI reports it, which is the path
+// the kernel resolved — so the call's directory is accepted as written and with
+// its links resolved, as a state_dir under a symlinked /tmp reads either way.
+func recordOwner(o *cliprofile.RecordOwner, session, work string) func(string) bool {
+	if o == nil {
+		return nil
+	}
+	var want []string
+	switch o.Equals {
+	case "{session}":
+		want = []string{session}
+	case "{work}":
+		want = []string{filepath.Clean(work)}
+		if real, err := filepath.EvalSymlinks(work); err == nil && real != want[0] {
+			want = append(want, real)
+		}
+	}
+	return func(first string) bool {
+		doc, ok := decodeRecordLine(first)
+		if !ok {
+			return false
+		}
+		got, ok := stringAt(doc, o.Path)
+		if !ok || got == "" {
+			return false
+		}
+		if o.Equals == "{work}" {
+			got = filepath.Clean(got)
+		}
+		return slices.Contains(want, got)
+	}
 }
 
 // callConcurrency is the profile's word for which of one response's calls the

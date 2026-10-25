@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -23,22 +24,28 @@ const recordPoll = 100 * time.Millisecond
 //
 // The file does not exist when the run starts — the CLI creates it — so it is
 // looked for by its glob until it appears, and a file the glob already matched
-// before the run is never taken for this run's.
+// before the run is never taken for this run's. Where the glob cannot name the
+// run's own file, owns says which is: it is handed a new file's first line,
+// and a file whose first line it refuses is another run's, passed over for
+// good ([cliprofile.RecordOwner]).
 type recordTail struct {
 	pattern string
 	before  []string
+	owns    func(first string) bool
+	foreign []string
 	tee     *lineTee
 	done    chan struct{}
 }
 
 // tailRecord starts following the first file pattern matches that did not
-// exist when it was called, handing each complete line to line, until stop is
-// closed — and then reads the file to its end, its last line included whether
-// or not it ended in a newline. wait returns when that is done.
-func tailRecord(pattern string, line func(string), stop <-chan struct{}) (wait func()) {
+// exist when it was called — and whose first line owns accepts, where owns is
+// not nil — handing each complete line to line, until stop is closed, and then
+// reads the file to its end, its last line included whether or not it ended in
+// a newline. wait returns when that is done.
+func tailRecord(pattern string, owns func(string) bool, line func(string), stop <-chan struct{}) (wait func()) {
 	before, _ := filepath.Glob(pattern)
 	t := &recordTail{
-		pattern: pattern, before: before, done: make(chan struct{}),
+		pattern: pattern, before: before, owns: owns, done: make(chan struct{}),
 		// The same bound a stdout record's lines have: one line past the
 		// cap is skipped rather than held.
 		tee: &lineTee{sink: io.Discard, on: line, limit: maxOutput, every: true},
@@ -98,7 +105,7 @@ func (t *recordTail) open() *os.File {
 	}
 	slices.Sort(matches)
 	for _, m := range matches {
-		if slices.Contains(t.before, m) {
+		if slices.Contains(t.before, m) || slices.Contains(t.foreign, m) {
 			continue
 		}
 		f, err := os.Open(m) //nolint:gosec // a profile glob rooted in the call's own home or work dir
@@ -108,7 +115,47 @@ func (t *recordTail) open() *os.File {
 			}
 			return nil
 		}
-		return f
+		if t.owns == nil {
+			return f
+		}
+		switch first, whole := headLine(f); {
+		case !whole:
+			// Its first line is still being written: asked again at the
+			// next poll.
+			_ = f.Close()
+		case t.owns(first):
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				_ = f.Close()
+				return nil
+			}
+			return f
+		default:
+			_ = f.Close()
+			t.foreign = append(t.foreign, m)
+		}
 	}
 	return nil
+}
+
+// maxFirstLine bounds what is read of a file to find its first line: a record's
+// first event is its header, a few hundred bytes to a few kilobytes (Codex's
+// session_meta carries its base instructions). A file whose first line runs
+// past it is read as not having one yet, and so is never taken.
+const maxFirstLine = 1 << 20
+
+// headLine is f's first line and whether it is whole — ended by a newline.
+func headLine(f *os.File) (string, bool) {
+	buf := make([]byte, 0, 64<<10)
+	chunk := make([]byte, 64<<10)
+	for len(buf) < maxFirstLine {
+		n, err := f.Read(chunk)
+		buf = append(buf, chunk[:n]...)
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+			return string(buf[:i]), true
+		}
+		if err != nil || n == 0 {
+			return "", false
+		}
+	}
+	return "", false
 }

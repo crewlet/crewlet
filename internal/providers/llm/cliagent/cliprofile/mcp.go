@@ -746,13 +746,33 @@ func (s RequestSource) Valid() bool { return s == SourceStdout || s == SourceFil
 //   - opens begins a new request; an event with an id belongs to the request
 //     of that id, opened by it if none is; any other event belongs to the
 //     request open now;
+//   - closes ends the request open now, once the rest of the rule is applied.
+//     A record whose rules close requests marks where each one ENDS rather
+//     than where it begins — Codex's rollout ends a response with its usage,
+//     Qwen Code's stream ends one with the results of its calls — so in such a
+//     record an event that reads into the request open now, while none is,
+//     begins the next one;
 //   - id, model, stop and usage set the request's (a usage figure takes the
 //     LAST value read for that request, so a stream's running count works);
 //   - text appends to the request's prose and delta streams text as it is
 //     written; call reads one call; blocks reads an array of content blocks,
 //     each by the first of its rules that matches;
+//   - whole says the event carries its request WHOLE, as it stands now, so
+//     what it reads replaces the prose and calls earlier events of the request
+//     read rather than adding to them — for a CLI that writes a response's
+//     entry again as it grows (Gemini CLI, which adds a response's calls to its
+//     entry once they have run);
 //   - tools is the list of tools the CLI offers its model, which the doctor
 //     reports.
+//
+// # When a request is told to the host
+//
+// As soon as the record shows it saying something — its prose or a call — so
+// the host has it before the calls it asked for arrive, and places each call
+// on the request that asked for it. A record that shows a request's calls only
+// once they have RUN (LateCalls) is told one request at a time once the record
+// has moved past it instead: told as read, the host would hold a call it is
+// about to run for a request it has already been told asked for none.
 type Requests struct {
 	// Source is stdout or file.
 	Source RequestSource `yaml:"source,omitempty"`
@@ -787,12 +807,52 @@ type Requests struct {
 	// the host's, reported by its own name; any other is one of the CLI's own
 	// tools (its web search, its fetch).
 	HostPrefix string `yaml:"host_prefix,omitempty"`
+
+	// HostNamespace is the namespace the CLI files the server's tools under,
+	// for a CLI whose record keeps a call's namespace apart from its name
+	// ([CallPaths.Namespace]) — Codex's rollout records `mcp__crewlet` beside
+	// `search`. A call in it is the host's, reported by its name; any other
+	// is one of the CLI's own.
+	HostNamespace string `yaml:"host_namespace,omitempty"`
+
+	// Owner says which file is this run's record, for a file record under
+	// the seat's home whose name the engine does not choose — see
+	// [RecordOwner]. A glob there that names the run's own file through
+	// {session} needs none.
+	Owner *RecordOwner `yaml:"owner,omitempty"`
+
+	// LateCalls declares that the record shows a request's calls only once
+	// they have run — OpenCode prints a call as it completes, Gemini CLI
+	// writes a response's calls into its entry after running them — so each
+	// request is told to the host once the record has moved past it (a rule
+	// closed it, another request began, or the run ended) rather than as it
+	// is read. Its usage is still charged as it is read.
+	LateCalls bool `yaml:"late_calls,omitempty"`
+}
+
+// RecordOwner is how a file record says whose it is: the value at Path in the
+// file's FIRST line. A file the glob finds whose first line holds anything else
+// there is another run's, and is passed over.
+//
+// For a CLI that keeps every run's record side by side in the seat's home —
+// which every concurrent call of the seat shares — under a name the engine does
+// not choose: Codex names its rollout after a thread id it mints itself, and
+// Gemini CLI names its chat after the first eight characters of the session
+// id, which no glob can spell.
+type RecordOwner struct {
+	// Path is the value's place in the first line.
+	Path Path `yaml:"path,omitempty"`
+	// Equals is what it holds in this run's file: {session}, the id
+	// session_args handed the run, or {work}, the call's working directory.
+	Equals string `yaml:"equals,omitempty"`
 }
 
 // RequestEvent is one rule a line of the record is read by — see [Requests].
 type RequestEvent struct {
 	Match  []Match    `yaml:"match,omitempty"`
 	Opens  bool       `yaml:"opens,omitempty"`
+	Closes bool       `yaml:"closes,omitempty"`
+	Whole  bool       `yaml:"whole,omitempty"`
 	ID     Path       `yaml:"id,omitempty"`
 	Model  Path       `yaml:"model,omitempty"`
 	Text   Path       `yaml:"text,omitempty"`
@@ -804,12 +864,23 @@ type RequestEvent struct {
 	Tools  Path       `yaml:"tools,omitempty"`
 }
 
-// CallPaths locate one call: the CLI's id for it, the tool's name and its
-// arguments, an object.
+// ReadsRequest reports whether the rule reads anything INTO a request — as
+// against only the tools on offer, or only where one ends — which is what
+// begins the next request in a record whose rules close them.
+func (e RequestEvent) ReadsRequest() bool {
+	return len(e.Model) > 0 || len(e.Text) > 0 || len(e.Delta) > 0 || e.Call != nil ||
+		e.Blocks != nil || len(e.Stop) > 0 || e.Usage.any()
+}
+
+// CallPaths locate one call: the CLI's id for it, the tool's name, its
+// arguments — an object, or one encoded as a JSON string — and, for a CLI
+// that keeps it apart from the name, the namespace the tool is filed under
+// ([Requests.HostNamespace]).
 type CallPaths struct {
-	ID   Path `yaml:"id,omitempty"`
-	Name Path `yaml:"name,omitempty"`
-	Args Path `yaml:"args,omitempty"`
+	ID        Path `yaml:"id,omitempty"`
+	Name      Path `yaml:"name,omitempty"`
+	Args      Path `yaml:"args,omitempty"`
+	Namespace Path `yaml:"namespace,omitempty"`
 }
 
 // Blocks is an array of content blocks in an event, and the rules each block is
@@ -819,7 +890,9 @@ type Blocks struct {
 	Each []BlockRule `yaml:"each,omitempty"`
 }
 
-// BlockRule reads one kind of content block: prose, or a call.
+// BlockRule reads one kind of content block: prose, or a call. An empty Match
+// holds of every block — for an array that holds one kind alone, such as the
+// list of calls Gemini CLI and Copilot record beside a response's prose.
 type BlockRule struct {
 	Match []Match    `yaml:"match,omitempty"`
 	Text  Path       `yaml:"text,omitempty"`
@@ -837,6 +910,10 @@ func (r *Requests) clone() *Requests {
 	}
 	out := *r
 	out.Stops = cloneMap(r.Stops)
+	if r.Owner != nil {
+		owner := RecordOwner{Path: slices.Clone(r.Owner.Path), Equals: r.Owner.Equals}
+		out.Owner = &owner
+	}
 	if r.Events != nil {
 		out.Events = make([]RequestEvent, len(r.Events))
 		for i, e := range r.Events {
@@ -848,7 +925,7 @@ func (r *Requests) clone() *Requests {
 
 func (e RequestEvent) clone() RequestEvent {
 	out := RequestEvent{
-		Match: cloneMatches(e.Match), Opens: e.Opens,
+		Match: cloneMatches(e.Match), Opens: e.Opens, Closes: e.Closes, Whole: e.Whole,
 		ID: slices.Clone(e.ID), Model: slices.Clone(e.Model), Text: slices.Clone(e.Text),
 		Delta: slices.Clone(e.Delta), Stop: slices.Clone(e.Stop), Tools: slices.Clone(e.Tools),
 		Usage: e.Usage.clone(), Call: e.Call.clone(),
@@ -871,7 +948,8 @@ func (c *CallPaths) clone() *CallPaths {
 	if c == nil {
 		return nil
 	}
-	return &CallPaths{ID: slices.Clone(c.ID), Name: slices.Clone(c.Name), Args: slices.Clone(c.Args)}
+	return &CallPaths{ID: slices.Clone(c.ID), Name: slices.Clone(c.Name), Args: slices.Clone(c.Args),
+		Namespace: slices.Clone(c.Namespace)}
 }
 
 func (u UsagePaths) clone() UsagePaths {
@@ -926,29 +1004,39 @@ func (p *Profile) validateRequests(add func(string, ...any)) {
 		switch {
 		case !r.In.Valid():
 			add("requests.in %q (want home or work)", r.In)
-		case r.In == SeedHome && !strings.Contains(r.File, "{session}"):
+		case r.In == SeedHome && !strings.Contains(r.File, "{session}") && r.Owner == nil:
 			add("requests.file %q is under the seat's home and does not name the run's own "+
 				"file through {session} — the home is shared by every call of the seat at once, "+
-				"so the glob could find another run's record", r.File)
+				"so the glob could find another run's record; name it, or say how the file "+
+				"names its run (requests.owner)", r.File)
 		}
 		if strings.Contains(r.File, "{session}") && !hasPlaceholder(p.SessionArgs, "{session}") {
 			add("requests.file names {session} but session_args does not give the run one — " +
 				"declare session_args with {session}")
 		}
 	}
+	p.validateOwner(add)
 	if len(r.Events) == 0 {
 		add("requests.events is empty — give the rules a line of the record is read by")
 	}
-	opens, calls := false, false
+	opens, closes, calls, namespaced := false, false, false, false
 	for i, e := range r.Events {
 		label := fmt.Sprintf("requests.events[%d]", i)
 		validateMatches(add, label+".match", e.Match)
-		if !e.Opens && len(e.ID) == 0 && len(e.Model) == 0 && len(e.Text) == 0 && len(e.Delta) == 0 &&
-			e.Call == nil && e.Blocks == nil && len(e.Stop) == 0 && !e.Usage.any() && len(e.Tools) == 0 {
-			add("%s reads nothing — give it opens, id, model, text, delta, call, blocks, stop, "+
-				"usage or tools", label)
+		if !e.Opens && !e.Closes && len(e.ID) == 0 && len(e.Tools) == 0 && !e.ReadsRequest() {
+			add("%s reads nothing — give it opens, closes, id, model, text, delta, call, blocks, "+
+				"stop, usage or tools", label)
+		}
+		if e.Whole && len(e.ID) == 0 {
+			// What a whole event replaces is its OWN request's, which only an
+			// id names: read into the request open now, it would wipe whichever
+			// request that happened to be.
+			add("%s is whole but names no id — a whole event replaces what its own request "+
+				"read, and only an id says which request that is", label)
 		}
 		opens = opens || e.Opens || len(e.ID) > 0
+		closes = closes || e.Closes
+		namespaced = namespaced || e.Call.namespaced() || e.Blocks.namespaced()
 		for _, f := range []struct {
 			name string
 			path Path
@@ -968,7 +1056,16 @@ func (p *Profile) validateRequests(add func(string, ...any)) {
 			}
 			for j, rule := range b.Each {
 				rl := fmt.Sprintf("%s.blocks.each[%d]", label, j)
-				validateMatches(add, rl+".match", rule.Match)
+				switch {
+				case len(rule.Match) > 0:
+					validateMatches(add, rl+".match", rule.Match)
+				case j < len(b.Each)-1:
+					// Every block is read by the first rule that holds, so
+					// one that holds of every block leaves the rules after
+					// it nothing to read.
+					add("%s matches every block, so the rules after it never read one — give "+
+						"it a match, or put it last", rl)
+				}
 				switch {
 				case len(rule.Text) > 0 && rule.Call != nil:
 					add("%s reads both text and a call — a block is one or the other", rl)
@@ -983,19 +1080,52 @@ func (p *Profile) validateRequests(add func(string, ...any)) {
 			}
 		}
 	}
-	if !opens {
-		add("requests.events neither opens a request nor names one by id — no line of the " +
-			"record would ever begin a request")
+	if !opens && !closes {
+		add("requests.events neither opens a request, names one by id, nor closes one — no " +
+			"line of the record would ever begin a request")
 	}
-	if calls && strings.TrimSpace(r.HostPrefix) == "" {
-		add("requests reads calls but requests.host_prefix is empty — say how the CLI spells " +
-			"one of the server's tools to its model, e.g. mcp__crewlet__, so a call to it is " +
-			"told from one to the CLI's own tools")
+	switch {
+	case calls && strings.TrimSpace(r.HostPrefix) == "" && strings.TrimSpace(r.HostNamespace) == "":
+		add("requests reads calls but neither requests.host_prefix nor requests.host_namespace " +
+			"is set — say how the CLI spells one of the server's tools to its model, e.g. " +
+			"mcp__crewlet__, so a call to it is told from one to the CLI's own tools")
+	case namespaced && strings.TrimSpace(r.HostNamespace) == "":
+		add("requests reads a call's namespace but requests.host_namespace is empty — say " +
+			"which namespace the CLI files the server's tools under, e.g. mcp__crewlet")
+	case !namespaced && strings.TrimSpace(r.HostNamespace) != "":
+		add("requests.host_namespace is set but no call rule reads a namespace — give the " +
+			"call its namespace path, or drop host_namespace")
 	}
 	for _, from := range slices.Sorted(maps.Keys(r.Stops)) {
 		if !slices.Contains(StopValues, r.Stops[from]) {
 			add("requests.stops.%s is %q (want one of %s)", from, r.Stops[from], strings.Join(StopValues, ", "))
 		}
+	}
+}
+
+// validateOwner holds a file record's owner to a value the run knows before
+// the file exists: its session, where session_args hands it one, or its
+// working directory.
+func (p *Profile) validateOwner(add func(string, ...any)) {
+	o := p.Requests.Owner
+	if o == nil {
+		return
+	}
+	if p.Requests.Source != SourceFile {
+		add("requests.owner is set but requests.source is %q — it says which file is the "+
+			"run's, and a stdout record is the run's own", p.Requests.Source)
+	}
+	validatePath(add, "requests.owner.path", o.Path)
+	switch o.Equals {
+	case "{work}":
+	case "{session}":
+		if !hasPlaceholder(p.SessionArgs, "{session}") {
+			add("requests.owner.equals is {session} but session_args does not give the run " +
+				"one — declare session_args with {session}")
+		}
+	default:
+		add("requests.owner.equals is %q (want {session}, the id session_args hands the run, "+
+			"or {work}, the call's working directory)", o.Equals)
 	}
 }
 
@@ -1011,6 +1141,20 @@ func (c *CallPaths) validate(add func(string, ...any), label string) {
 	if len(c.Args) > 0 {
 		validatePath(add, label+".args", c.Args)
 	}
+	if len(c.Namespace) > 0 {
+		validatePath(add, label+".namespace", c.Namespace)
+	}
+}
+
+// namespaced reports whether the call rule reads a namespace.
+func (c *CallPaths) namespaced() bool { return c != nil && len(c.Namespace) > 0 }
+
+// namespaced reports whether any of the block rules reads a call's namespace.
+func (b *Blocks) namespaced() bool {
+	if b == nil {
+		return false
+	}
+	return slices.ContainsFunc(b.Each, func(rule BlockRule) bool { return rule.Call.namespaced() })
 }
 
 // validateFailureMarkers holds each failure marker to the shape of a vendor's

@@ -837,6 +837,37 @@ func TestARequestOfOneRunIsNeverReadAsAnotherRunsRequest(t *testing.T) {
 	}
 }
 
+// A CLI WHOSE RECORD SHOWS CALLS ONLY AFTER THEY RAN IS NEVER WAITED FOR, and
+// its calls still land on the request that asked for them. Gemini CLI and
+// OpenCode write a response down once its calls are answered, so holding a
+// call for its response's record held every call for the whole join wait.
+func TestACLIThatRecordsCallsLateIsNotWaitedFor(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("search", "post")
+	prov := &llmtest.Script{LateRecord: true, Runs: []llmtest.Run{{Responses: []llmtest.Response{
+		{Text: "looking", Calls: []llmtest.Call{{Name: "search"}}},
+		{Text: "posting", Calls: []llmtest.Call{{Name: "post"}}},
+		{Text: "done"},
+	}}}}
+	began := time.Now()
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if took := time.Since(began); took >= toolloop.JoinWait {
+		t.Errorf("the run took %s: its calls waited for records that come only after them", took)
+	}
+	if res.RoundsUsed != 3 || len(res.Rounds) != 3 {
+		t.Fatalf("rounds used %d, rounds %+v; want the three requests", res.RoundsUsed, res.Rounds)
+	}
+	want := map[string]int{"search": 1, "post": 2}
+	for _, ex := range res.Executions {
+		if ex.Round != want[ex.Name] {
+			t.Errorf("%s is on round %d, want %d — the request that asked for it", ex.Name, ex.Round, want[ex.Name])
+		}
+	}
+}
+
 // A CONCURRENCY NOTHING CAN WAIT ON IS REFUSED, rather than read as one of the
 // three: a profile the backend should have refused reaches no session.
 func TestAnUnknownCallConcurrencyIsRefused(t *testing.T) {

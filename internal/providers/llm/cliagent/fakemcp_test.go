@@ -74,6 +74,15 @@ type fakeScript struct {
 
 	// Serve is the serve lifecycle's fake server: see [runFakeServer].
 	Serve fakeServe `json:"serve,omitzero"`
+
+	// CLI plays another CLI than Claude Code, by its profile's name — see
+	// [fakeCLIs].
+	CLI string `json:"cli,omitempty"`
+
+	// ForeignRecord writes, before the run's own, a record of ANOTHER run
+	// where this CLI keeps its records — the seat's home, which every
+	// concurrent call of the seat shares — its one response saying FOREIGN.
+	ForeignRecord bool `json:"foreign_record,omitempty"`
 }
 
 // fakeServe is how the fake plays a CLI whose loop runs in a server of its own,
@@ -153,6 +162,9 @@ func runFakeMCPCLI() {
 	if err := json.Unmarshal([]byte(os.Getenv(fakeMCPEnv)), &script); err != nil {
 		fmt.Fprintln(os.Stderr, "fake: bad script:", err)
 		os.Exit(70)
+	}
+	if script.CLI != "" {
+		runFakeOtherCLI(script)
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {

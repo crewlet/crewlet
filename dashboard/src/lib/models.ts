@@ -71,7 +71,7 @@ export interface ModelEntry {
   mode: string;
   /** The sandbox cell a box-mode run happens in; "" takes `providers.sandbox`'s default. */
   runIn: string;
-  /** The wall-clock cap on one CLI invocation, in seconds, the default applied. */
+  /** The wall-clock cap on one stretch of the CLI's own work with no tool call in flight, in seconds, the default applied. */
   timeoutSeconds: number;
   /** Whether the entry names its own `timeout_seconds`. */
   timeoutSet: boolean;
