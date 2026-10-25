@@ -77,8 +77,10 @@ func (p *Provider) serveTools(
 ) (*toolRun, error) {
 	m := p.profile.MCP
 	t := &toolRun{
-		host:   req.Tools,
-		reader: newRecordReader(p.profile, req, sent),
+		host: req.Tools,
+		// AS A RUN WITH TOOLS PRINTS: its output may be the route's own
+		// ([cliprofile.MCP.Output]).
+		reader: newRecordReader(p.profile.Routed(), req, sent),
 		clock:  newStretch(p.timeout),
 		carry:  startCarrier(ctx, p, checkout),
 	}

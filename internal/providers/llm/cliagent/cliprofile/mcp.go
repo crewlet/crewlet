@@ -119,6 +119,15 @@ type MCP struct {
 	// environment, mcp.env included.
 	UsageArgs []string `yaml:"usage_args,omitempty"`
 
+	// Output, where set, is what a run with tools prints in place of the
+	// profile's output — for a CLI whose text function is read best as the
+	// plain answer it prints, while the record of a run with tools is the
+	// JSON stream another flag of its prints instead (Grok's
+	// --output-format streaming-json, Pi's --mode json), which mcp.args or
+	// mcp.complete_args then pass. A run with tools reads its answer from
+	// that record ([Requests]), never from the profile's text_paths.
+	Output OutputMode `yaml:"output,omitempty"`
+
 	// Lifecycle is how a run with tools is shaped: run, the default — the
 	// CLI is one process that starts the crewlet server itself — or serve.
 	Lifecycle Lifecycle `yaml:"lifecycle,omitempty"`
@@ -153,6 +162,22 @@ func (c Concurrency) Valid() bool { return slices.Contains(ConcurrencyValues, c)
 // Serves reports whether a run with tools on this route runs against a server
 // of the CLI's own ([LifecycleServe]).
 func (m *MCP) Serves() bool { return m != nil && m.Lifecycle == LifecycleServe }
+
+// RouteOutput is what a run with tools prints: the route's [MCP.Output]
+// where it sets one, the profile's own output otherwise.
+func (p *Profile) RouteOutput() OutputMode {
+	if p.MCP != nil && p.MCP.Output != "" {
+		return p.MCP.Output
+	}
+	return p.EffectiveOutput()
+}
+
+// Routed is the profile as a run with tools reads what its CLI printed: its
+// output the route's ([Profile.RouteOutput]).
+func (p Profile) Routed() Profile {
+	p.Output = p.RouteOutput()
+	return p
+}
 
 // Lifecycle is how a run with tools is shaped.
 type Lifecycle string
@@ -510,9 +535,12 @@ func (p *Profile) validateMCP(add func(string, ...any)) {
 			validatePath(add, fmt.Sprintf("%s.fields[%d]", label, j), f)
 		}
 	}
-	if len(m.FailureEvents) > 0 && p.EffectiveOutput() != OutputJSONL {
-		add("mcp.failure_events is set but output is %q — a failure event exists only in a "+
-			"jsonl stream", p.EffectiveOutput())
+	if m.Output != "" && !m.Output.Valid() {
+		add("mcp.output %q (want json, jsonl or text)", m.Output)
+	}
+	if len(m.FailureEvents) > 0 && p.RouteOutput() != OutputJSONL {
+		add("mcp.failure_events is set but a run with tools prints %q — a failure event exists "+
+			"only in a jsonl stream (mcp.output, or output)", p.RouteOutput())
 	}
 }
 
@@ -706,9 +734,9 @@ func (p *Profile) validateCap(add func(string, ...any)) {
 	}
 	if len(c.Match) > 0 {
 		validateMatches(add, "cap.match", c.Match)
-		if p.EffectiveOutput() == OutputText {
-			add("cap.match is set but output is text — there is no document to match; use " +
-				"cap.exit_code")
+		if p.RouteOutput() == OutputText {
+			add("cap.match is set but a run with tools prints text — there is no document to " +
+				"match; use cap.exit_code")
 		}
 	}
 }
@@ -989,9 +1017,9 @@ func (p *Profile) validateRequests(add func(string, ...any)) {
 			add("requests.file or requests.in is set but requests.source is stdout — they say " +
 				"where a file source is found")
 		}
-		if p.EffectiveOutput() != OutputJSONL {
-			add("requests.source is stdout but output is %q — a record of requests is a jsonl "+
-				"stream", p.EffectiveOutput())
+		if p.RouteOutput() != OutputJSONL {
+			add("requests.source is stdout but a run with tools prints %q — a record of requests "+
+				"is a jsonl stream (mcp.output, or output)", p.RouteOutput())
 		}
 	case r.Source == SourceFile:
 		switch {

@@ -33,7 +33,7 @@ func (p *Provider) toolCompletion(
 ) (*llm.Completion, error) {
 	out, read := t.reader.stdoutResult()
 	if !read {
-		out = extract(p.profile, res.stdout)
+		out = extract(p.profile.Routed(), res.stdout)
 	}
 	failed := res.exitCode != 0 || out.failed
 	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
@@ -173,7 +173,7 @@ func (p *Provider) capped(res *rawResult, reader *recordReader) bool {
 	if len(c.Match) == 0 {
 		return true
 	}
-	if p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
+	if p.profile.RouteOutput() == cliprofile.OutputJSONL {
 		return reader.hitCap()
 	}
 	doc, ok := decodeObject(strings.TrimSpace(res.stdout))
