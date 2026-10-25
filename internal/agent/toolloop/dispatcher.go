@@ -369,8 +369,14 @@ func (d *dispatcher) Spent(u llm.Usage) {
 	}
 }
 
-// Done is closed when the run must end.
-func (d *dispatcher) Done() <-chan struct{} { return d.done }
+// Done is closed when the run must end. Read under the lock because the loop
+// replaces it between runs ([dispatcher.reopen]), while a backend may still be
+// reading it.
+func (d *dispatcher) Done() <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.done
+}
 
 // Halted reports a run no other member of a chain may continue: any state but
 // open is one the loop answers itself — the phase ended, or the run was ended
@@ -692,7 +698,11 @@ func (d *dispatcher) stillOpenLocked() string {
 // execute runs one admitted call under the PHASE's context, never the MCP
 // request's, and turns a panic into the phase's end.
 func (d *dispatcher) execute(c *callRec) (res ToolResult) {
+	// The call's clock is read by a live frame another call's goroutine
+	// publishes, so it is written under the lock that frame reads it under.
+	d.mu.Lock()
 	c.started = time.Now()
+	d.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			perr := turn.Recovered(r)
@@ -701,7 +711,9 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 			d.cut(perr)
 			res = ToolResult{Output: endedNote, Failed: true}
 		}
+		d.mu.Lock()
 		c.took = time.Since(c.started)
+		d.mu.Unlock()
 	}()
 	d.frame()
 	out, err := d.cfg.Surface.Execute(withCallRound(d.ctx, c.round), llm.ToolCall{
