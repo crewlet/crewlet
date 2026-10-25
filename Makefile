@@ -230,7 +230,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -687,6 +687,17 @@ derived: ## regenerate internal/config/testdata/derived/*.derived.json from the 
 gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate routes' renderer
 	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheGateAnswerMatchesItsGoldenFile
+
+# The Dashboard Assistant's golden streams and answers (every testdata file
+# under internal/assistant and internal/api/assistantapi) are written by the
+# engine's own encoder through internal/assistant/assistanttest.Golden and
+# never hand-edited; the dashboard's suites replay the SAME files through
+# their own decoder, so a change on either side fails until the other follows
+# it. Every test that compares one has "Fixture" in its name, which is what
+# this target runs. Read the diff before committing it.
+assistant-fixtures: ## regenerate the Dashboard Assistant's golden streams from the engine's encoder
+	CREWLET_REGENERATE_ASSISTANT_FIXTURES=1 $(GO) test ./internal/assistant/... \
+	  ./internal/api/assistantapi/... -count=1 -run Fixture
 
 # internal/api/testdata/objects_answer.json is the object store's rendering —
 # the `objects` block GET /fleet answers (the collector's last collection and
