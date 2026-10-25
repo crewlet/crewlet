@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -70,32 +71,41 @@ func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 // holds until the calls in flight are answered.
 type boxLine struct {
 	base *http.Transport
-	gone context.Context
-	cut  context.CancelFunc
+	gone chan struct{}
+	once sync.Once
 }
 
 func newBoxLine(t *testing.T) *boxLine {
 	t.Helper()
-	gone, cut := context.WithCancel(context.Background())
-	l := &boxLine{base: &http.Transport{}, gone: gone, cut: cut}
+	l := &boxLine{base: &http.Transport{}, gone: make(chan struct{})}
 	t.Cleanup(l.base.CloseIdleConnections)
-	t.Cleanup(cut)
+	t.Cleanup(l.cut)
 	return l
 }
 
+// cut aborts every request in flight, and refuses every one after.
+func (l *boxLine) cut() { l.once.Do(func() { close(l.gone) }) }
+
 func (l *boxLine) RoundTrip(r *http.Request) (*http.Response, error) {
-	if l.gone.Err() != nil {
+	select {
+	case <-l.gone:
 		return nil, errors.New("the box is gone")
+	default:
 	}
 	ctx, abort := context.WithCancel(r.Context())
-	stop := context.AfterFunc(l.gone, abort)
+	go func() {
+		select {
+		case <-l.gone:
+			abort()
+		case <-ctx.Done():
+		}
+	}()
 	resp, err := l.base.RoundTrip(r.WithContext(ctx))
 	if err != nil {
-		stop()
 		abort()
 		return nil, err
 	}
-	resp.Body = &abortOnClose{ReadCloser: resp.Body, done: func() { stop(); abort() }}
+	resp.Body = &abortOnClose{ReadCloser: resp.Body, done: abort}
 	return resp, nil
 }
 

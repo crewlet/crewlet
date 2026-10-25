@@ -93,7 +93,7 @@ type gated struct {
 	url      string
 }
 
-func newGated(t *testing.T, ctx context.Context, extra ...tools.Callable) *gated {
+func newGated(t *testing.T, extra ...tools.Callable) *gated {
 	t.Helper()
 	f := newFixture(t)
 	reg := tools.NewRegistry()
@@ -127,7 +127,7 @@ func newGated(t *testing.T, ctx context.Context, extra ...tools.Callable) *gated
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
 	f.server.Config.Handler = mux
-	g.url = f.bridge.Open(ctx, f.session)
+	g.url = f.bridge.Open(t.Context(), f.session)
 	if g.url == "" {
 		t.Fatal("no endpoint was minted")
 	}
@@ -190,7 +190,7 @@ func TestABoxIsAnsweredAtOnceWhenItsRunsToolsClose(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			held := newHeldTool("write")
-			g := newGated(t, t.Context(), held, &panicky{})
+			g := newGated(t, held, &panicky{})
 			sess := dial(t, g.url)
 			t.Cleanup(held.free)
 
@@ -217,7 +217,7 @@ func TestABoxIsAnsweredAtOnceWhenItsRunsToolsClose(t *testing.T) {
 func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
 	t.Parallel()
 	launch := &launcher{}
-	g := newGated(t, t.Context(), launch)
+	g := newGated(t, launch)
 	sess := dial(t, g.url)
 	res := callTool(t, sess, "launch", map[string]any{})
 	if !res.IsError || !strings.Contains(text(res), "cannot be used from a coding run") {
@@ -244,7 +244,7 @@ func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
 // call whose arguments did not parse is recorded unrun, untimed and failed.
 func TestARecordedCallCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	t.Parallel()
-	g := newGated(t, t.Context())
+	g := newGated(t)
 	before := time.Now()
 	callTool(t, dial(t, g.url), "read_page", map[string]any{"text": "one"})
 	opened := mcpbridge.Dispatcher(g.session)
