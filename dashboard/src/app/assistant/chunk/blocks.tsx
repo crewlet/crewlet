@@ -555,18 +555,22 @@ export function CardBlock({
       return <Proposal proposal={card.proposal} local={local} on={on} />;
     case "entity": {
       const entity = card.entity;
-      if (entity.items && entity.items.length > 0) {
-        return (
-          <EntityList
-            title={entity.title}
-            items={entity.items.map((item) => ({
+      const facts = (entity.facts ?? []).filter((fact) => !fact.detail);
+      const items =
+        entity.items && entity.items.length > 0
+          ? entity.items.map((item) => ({
               id: `${item.kind}:${item.id}`,
               name: item.label,
               ...(item.fact === undefined ? {} : { fact: item.fact }),
               ...(item.open ? { action: <EngineLink link={item.open} on={on} /> } : {}),
-            }))}
-          />
-        );
+            }))
+          : null;
+      // A LIST AND NOTHING ELSE (a task's comments) is the list card. A RECORD
+      // WITH A LIST UNDER IT (a page and its comments, the company's mission and
+      // vision over its policies, a company over its units) keeps both: drawn
+      // as the list alone, the record's facts, text and link were dropped.
+      if (items && facts.length === 0 && !entity.subtitle && !entity.text && !entity.open) {
+        return <EntityList title={entity.title} items={items} />;
       }
       return (
         <StatusCard
@@ -575,21 +579,20 @@ export function CardBlock({
           actions={entity.open ? <EngineLink link={entity.open} on={on} /> : undefined}
           actionsAlign="start"
         >
-          {entity.facts && entity.facts.length > 0 ? (
+          {facts.length > 0 ? (
             <PropertyList
               groups={[
                 {
-                  items: entity.facts
-                    .filter((fact) => !fact.detail)
-                    .map((fact) => ({
-                      label: fact.label,
-                      value: fact.mono ? <code>{factText(fact)}</code> : factText(fact),
-                    })),
+                  items: facts.map((fact) => ({
+                    label: fact.label,
+                    value: fact.mono ? <code>{factText(fact)}</code> : factText(fact),
+                  })),
                 },
               ]}
             />
           ) : null}
           {entity.text ? <ReplyProse text={entity.text} /> : null}
+          {items ? <EntityList label={entity.title} items={items} /> : null}
         </StatusCard>
       );
     }

@@ -85,6 +85,42 @@ test("a fact is worded by its type, and one kept for the model is not drawn", ()
   expect(screen.queryByText("Version")).toBeNull();
 });
 
+test("a record with a list under it keeps its facts: the principles over their policies", () => {
+  draw({
+    type: "entity",
+    entity: {
+      kind: "unit",
+      id: "",
+      title: "Company principles",
+      facts: [
+        { label: "Mission", value: "Help friends share costs fairly." },
+        { label: "Vision", value: "Settling up takes seconds." },
+      ],
+      items: [
+        { kind: "unit", id: "1", label: "Money is an integer number of cents." },
+        { kind: "unit", id: "2", label: "Miles is the final authority." },
+      ],
+    },
+  });
+  expect(screen.getByText("Help friends share costs fairly.")).toBeTruthy();
+  expect(screen.getByText("Settling up takes seconds.")).toBeTruthy();
+  expect(screen.getByText("Money is an integer number of cents.")).toBeTruthy();
+});
+
+test("a list with no record beside it is the list card alone", () => {
+  draw({
+    type: "entity",
+    entity: {
+      kind: "task",
+      id: "FAIR-1",
+      title: "Settle up",
+      items: [{ kind: "task", id: "c1", label: "Looks right to me.", fact: "ada" }],
+    },
+  });
+  expect(screen.getByText("Looks right to me.")).toBeTruthy();
+  expect(screen.getByText("Settle up")).toBeTruthy();
+});
+
 const proposal = {
   proposal_id: "p",
   scope: "server",
