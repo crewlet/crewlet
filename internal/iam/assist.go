@@ -10,7 +10,7 @@ import (
 // AssistPrefix is the class the Dashboard Assistant's grant carries where the
 // audit trail records which credential a request was made through:
 // `assist:<grant>` in the operator column, beside the person as the author
-// (ADR-0046).
+// (ADR-0049).
 //
 // A THIRD CREDENTIAL CLASS beside [MachineTokenPrefix] and [SessionPrefix],
 // because a request the assistant makes is the person's own, decided by their
@@ -43,7 +43,7 @@ func AssistName(grant uuid.UUID) string { return AssistPrefix + grant.String() }
 func ValidAssistName(s string) bool { return validCredential(s, AssistPrefix) }
 
 // AssistScope is how far an assistant grant reaches, narrowing what the
-// person's own grants admit and never widening it (ADR-0046, ADR-0048).
+// person's own grants admit and never widening it (ADR-0049, ADR-0051).
 //
 // TWO VALUES AND NO ZERO MEANING. A grant that reads a turn's answers is not a
 // grant that may write anything, and the one that writes is bound to exactly

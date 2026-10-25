@@ -432,7 +432,7 @@ var ErrRefused = errors.New("not allowed")
 //
 // A request the assistant makes is its person's own, composed from their rows,
 // so an administrator's assistant carries admin. The authority table refuses
-// it every directory verb (internal/authz's assist column, ADR-0048); this
+// it every directory verb (internal/authz's assist column, ADR-0051); this
 // refuses the RECORD for the token's reason, so no surface the table does not
 // guard can be the way a model enrols, promotes or removes somebody. Checked
 // first beside the token, on the class as well.

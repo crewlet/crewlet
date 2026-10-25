@@ -2,7 +2,7 @@
 // question, answered by a model through the engine's own tool loop, with every
 // read made as that person and every change prepared for them to approve.
 //
-// # It acts as the person and is nobody of its own (ADR-0046)
+// # It acts as the person and is nobody of its own (ADR-0049)
 //
 // The assistant has no identity in product data. It is not a seat: it holds
 // no lease, has no roster entry, writes no diary and is charged to no work
@@ -36,5 +36,5 @@
 // rendered from a server-side preview and bound to its digest and the object's
 // revision (internal/assistant/proposal), the loop suspends with the call
 // unanswered, and only the person's approval, made from their own browser,
-// sends it, once (ADR-0047).
+// sends it, once (ADR-0050).
 package assistant

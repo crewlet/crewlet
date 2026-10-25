@@ -4,7 +4,7 @@
 // page change through, every one guarded, mounted on the authority table and
 // refusing in the engine's envelope.
 //
-// # An approval is the person's, from their own browser (ADR-0047)
+// # An approval is the person's, from their own browser (ADR-0050)
 //
 // A proposal executes only from its owner's approval of the server-rendered
 // preview its card showed: a request carrying the person's session cookie and

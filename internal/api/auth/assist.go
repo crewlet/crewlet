@@ -28,7 +28,7 @@ import (
 )
 
 // THE ASSISTANT GRANT: how the Dashboard Assistant acts as the person who
-// asked it, and nothing else (ADR-0046).
+// asked it, and nothing else (ADR-0049).
 //
 // # A sibling of the view ticket, not a credential of its own
 //
@@ -56,7 +56,7 @@ import (
 //   - SCOPE. A read grant takes GET and HEAD only; an exec grant takes the ONE
 //     request its approval bound, by the request's digest
 //     ([opkey.RequestDigestOf]), once. The authority table's assistant column
-//     (ADR-0048) is decided inside [authz.Decide] beside these, so a nested verb
+//     (ADR-0051) is decided inside [authz.Decide] beside these, so a nested verb
 //     a tool asks is held to it too.
 //   - LIFETIME. A read grant lives [AssistReadLifetime], an exec grant
 //     [AssistExecLifetime], and neither outlives the session's absolute or idle

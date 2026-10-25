@@ -1,7 +1,7 @@
 -- The Dashboard Assistant's conversations land: the state log's eighth domain,
 -- a person's conversations with the assistant, their turns, the messages,
 -- steps and cards the person saw, and the proposals they decided.
--- internal/assistantdomain is the domain (ADR-0049).
+-- internal/assistantdomain is the domain (ADR-0052).
 --
 -- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
 -- CREWLET_ASSISTANT_LOG stream by one deterministic applier. A person opens the

@@ -99,7 +99,7 @@ type EntityItem struct {
 }
 
 // ProposalCard is a change waiting on the person, rendered from the server's
-// own preview (ADR-0047).
+// own preview (ADR-0050).
 type ProposalCard struct {
 	ProposalID uuid.UUID     `json:"proposal_id"`
 	Scope      ProposalScope `json:"scope"`

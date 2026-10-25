@@ -1,4 +1,4 @@
-# ADR-0046: The assistant acts only through a grant derived from the person's session
+# ADR-0049: The assistant acts only through a grant derived from the person's session
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
@@ -29,9 +29,9 @@ a click in the dashboard), carrying an **assistant grant**:
   and it is never fresher than the request that derived it (its step-up instant is
   clamped to the deriving request's).
 - **Narrowing, never widening.** A read grant reaches only reads, and an exec
-  grant only the one approved request its proposal binds (ADR-0047). The
+  grant only the one approved request its proposal binds (ADR-0050). The
   person's own authority decision is still the whole decision; the grant's
-  scope and the authority table's assistant column (ADR-0048) only subtract.
+  scope and the authority table's assistant column (ADR-0051) only subtract.
 
 The orchestrator holds a grant as a handle it can name and time but never
 present (`internal/assistant/exec`'s `Grant`), and no package under
@@ -60,7 +60,7 @@ failure `internal/api/operator`'s package doc exists to prevent.
 
 ## What this does not decide
 
-How a write waits for the person (ADR-0047), how each verb says what the
-assistant may do with it (ADR-0048) and where conversations live (ADR-0049).
+How a write waits for the person (ADR-0050), how each verb says what the
+assistant may do with it (ADR-0051) and where conversations live (ADR-0052).
 The grant's token format, lifetimes and revocation registry are
 `internal/api/auth`'s own doc.

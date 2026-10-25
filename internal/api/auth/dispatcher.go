@@ -15,7 +15,7 @@ import (
 )
 
 // HOW AN ASSISTANT TOOL CALL IS SENT: in process, through the very handler the
-// API port serves (ADR-0046).
+// API port serves (ADR-0049).
 //
 // # In process, and why not a loopback call
 //

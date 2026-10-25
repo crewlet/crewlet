@@ -1,4 +1,4 @@
-# ADR-0048: Every authority row says what the assistant may do with it
+# ADR-0051: Every authority row says what the assistant may do with it
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
@@ -10,7 +10,7 @@
 **Every row of the authority table states what the Dashboard Assistant may do
 with its verb**, in a field of its own beside `humanOnly`, `presence` and
 `recency`: `AssistRead` (an assistant read grant may take it), `AssistApprove`
-(only the one approved request an exec grant carries, ADR-0047) or
+(only the one approved request an exec grant carries, ADR-0050) or
 `AssistNever`. The zero is invalid, and the table's completeness walk fails the
 build on a row that does not decide, exactly as it does for a row with no
 recency.
@@ -57,5 +57,5 @@ every tool already asks.
 ## What this does not decide
 
 Which tools the model is offered (`internal/assistant/catalog`), how a grant is
-scoped and bound (ADR-0046, ADR-0047), and the class each verb is decided by,
+scoped and bound (ADR-0049, ADR-0050), and the class each verb is decided by,
 which is the table's own doc.

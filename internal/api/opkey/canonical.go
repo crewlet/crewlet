@@ -20,7 +20,7 @@ import (
 // Two things bind themselves to a request. [Digest] steps an operation key by
 // it, so a key sent with another request is another operation; and the
 // Dashboard Assistant binds an approval to the exact request its preview
-// showed (ADR-0047), so a request that moved after the person approved it is
+// showed (ADR-0050), so a request that moved after the person approved it is
 // refused rather than executed. Encoded twice, the two would agree only until
 // one of them was edited, and the second is a security property. asks is the
 // decoded body, nil for a route that takes none; an error is a body that

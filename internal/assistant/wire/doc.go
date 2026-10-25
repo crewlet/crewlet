@@ -54,5 +54,5 @@
 // request headers. A step carries a label the engine renders from the call's
 // safe fields and the route it asked, a card is built by the engine from the
 // tool's own answer, and a proposal card is rendered from a server-side
-// preview, never from model prose (ADR-0047).
+// preview, never from model prose (ADR-0050).
 package wire

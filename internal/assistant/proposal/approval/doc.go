@@ -1,6 +1,6 @@
 // Package approval carries a person's decision on a Dashboard Assistant
 // proposal out: an approval, a decline, a Stop on the turn it parked, and a
-// page's claim on and report of a page action (ADR-0047).
+// page's claim on and report of a page action (ADR-0050).
 //
 // # An approval is the person's, made once, and sends exactly what they saw
 //

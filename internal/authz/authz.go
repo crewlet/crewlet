@@ -15,7 +15,7 @@
 // an agent owner's artifacts, and a caller with no relation is answered as if
 // the artifact did not exist.
 //
-// THE DASHBOARD ASSISTANT IS DECIDED HERE TOO: ADR-0048, whose authority this
+// THE DASHBOARD ASSISTANT IS DECIDED HERE TOO: ADR-0051, whose authority this
 // package is. A request the assistant makes is its person's own, so the person
 // is decided exactly as their own click is, and every row says what an
 // assistant grant may do with its verb (read it, carry the one approved

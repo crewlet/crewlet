@@ -281,7 +281,7 @@ export async function recentConversations(limit = 4) {
 /**
  * The operation each approval is sent under, by proposal: minted at the first
  * press and sent again on a retry, so a retry after an answer nobody heard is
- * the same write to the engine, which it collapses (ADR-0047).
+ * the same write to the engine, which it collapses (ADR-0050).
  */
 const approvals = new Map<string, string>();
 
