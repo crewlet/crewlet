@@ -38,18 +38,25 @@ refused, and the dashboard shows them the reason.
 
 ## Turning it on
 
-1. **Add a dedicated `providers.llm` entry** for the assistant, in text mode,
-   on a profile that denies the CLI's own shell, with
-   `overrides: { web_tools: denied }`. A dedicated entry keeps its own
-   `max_concurrent` slots, so a busy company's seats never queue people's
-   questions and the reverse. The CLIs that can deny the web are `claude-code`,
-   `codex`, `opencode` and `pi`; any other is refused.
-2. **Prove the entry** with `crewlet llm doctor assistant` (the entry's key).
-   On a denied entry the doctor asks the CLI to fetch a page and reports a
-   fetch that succeeded as a problem.
+1. **Add a dedicated `providers.llm` entry** for the assistant that meets the
+   assistant's rules: text mode, a CLI run with no tool of its own, and
+   `overrides: { web_tools: denied }`. Which CLIs qualify, and why the others
+   are refused, is stated once in the
+   [Configuration Reference](../getting-started/configuration.md#the-dashboard-assistant)
+   and in [Tool calls in text mode](../concepts/llm-backends.md#tool-calls-in-text-mode).
+   A dedicated entry keeps its own `max_concurrent` slots, so a busy company's
+   seats never queue people's questions and the reverse.
+2. **Prove the entry** with `crewlet llm doctor assistant` (the entry's key),
+   which runs the exact argv the assistant runs and reports a shell or a fetch
+   that succeeded as a problem. It is the operator's proof before turning the
+   assistant on.
 3. **Set the `assistant:` block**: `enabled: true` and `llm:` naming the entry
    (a fallback chain, first key first). The defaults for steps, turn timeout,
-   proposal lifetime and retention suit most companies.
+   proposal lifetime and retention suit most companies. Every key, its range
+   and its default are in the generated
+   [company schema](https://github.com/crewlet/crewlet/blob/main/schema/company.schema.json)
+   (`crewlet schema company`) and described in the configuration reference;
+   this page does not repeat them.
 4. **Apply the revision** (`crewlet config import`, or the dashboard's
    configuration editor). The next page load lights **Ask** for every person.
 
@@ -147,10 +154,13 @@ model chain or a route failing.
 `crewlet assistant eval -suite <dir>` runs a directory of evaluation cases
 through the assistant's real orchestrator and catalogue in process, against a
 company each case describes, and reports each case's pass rate. With no
-`-model` it plays each case's own scripted rounds, which is deterministic and
-is how the engine's own tests run the shipped suite; with `-model <key>` it
-asks the candidate model, so the same cases measure a model before you switch
-to it. The flags and the suite format are in the
+`-model` it plays each case's own scripted rounds, which is deterministic,
+calls no model, and is how the engine's own tests run the shipped suite. With
+`-model <key> -paid` it asks the candidate model, so the same cases measure a
+model before you switch to it; that calls a paid model once per round of every
+trial, which is why it needs the explicit `-paid`. The shipped
+`injected-instruction` case is the measurement the engine's tests cannot make:
+whether this model, given an instruction hidden in a task, declines it. The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 
