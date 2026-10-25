@@ -754,12 +754,15 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   6 GiB..64 TiB — the 4.5 GiB the five
-                                    #   state logs reserve at their smallest,
-                                    #   and about 1.5 GiB for every stream
-                                    #   that reserves nothing — and it must not
-                                    #   be smaller than the ceilings declared
-                                    #   inside it.
+                                    #   6 GiB..64 TiB, and it must not be
+                                    #   smaller than the ceilings declared
+                                    #   inside it. The eight state logs
+                                    #   reserve 7.5 GiB at their smallest, so
+                                    #   a value the bounds admit can be short
+                                    #   of what a node boots in: `crewlet
+                                    #   validate` warns below the least a
+                                    #   fresh node of the configuration
+                                    #   reserves (see the deployment guide).
                                     #   REFUSED for `type: nats` — an external
                                     #   cluster's account limits are its own
                                     #   operator's, and this node reads them back
@@ -1045,6 +1048,20 @@ stream:
                                     #   refuses the append, and the top of it
                                     #   is kept for gate records as on the
                                     #   tracker's log
+  # assistant_log_max_bytes: 1073741824
+                                    #   the Dashboard Assistant's log, where
+                                    #   every person's conversations, turns
+                                    #   and proposals are recorded (64 MiB..
+                                    #   64 GiB). UNSET TAKES a flat 1 GiB,
+                                    #   sized by how many people ask the
+                                    #   assistant rather than by the disk:
+                                    #   about four weeks of a completely
+                                    #   blocked trim at the reference
+                                    #   company's rate. Crossing it refuses
+                                    #   the append, and the top of it is kept
+                                    #   for gate records. How long a
+                                    #   conversation is kept is the company
+                                    #   document's `assistant.retention_days`
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
