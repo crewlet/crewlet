@@ -10,7 +10,7 @@
  * own about who is reading it.
  */
 
-import { Button, Text } from "@crewlethq/ui";
+import { Button } from "@crewlethq/ui";
 import { PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import type { PrincipleCardEdit } from "../PrincipleCard.tsx";
 import {
@@ -48,11 +48,11 @@ export function partEdit(editing: Editing, part: CharterPart): PrincipleCardEdit
 
   return {
     shown,
-    note: applying ? (
-      <Text as="p" variant="caption" className="charter-edit__note">
-        Saved. This page shows it as soon as this node applies the new revision.
-      </Text>
-    ) : null,
+    // THE WORDS ALONE: the card draws its note as the caption under its body
+    // (`PrincipleCard`), so a paragraph here would be one inside another.
+    note: applying
+      ? "Saved. This page shows it as soon as this node applies the new revision."
+      : null,
     actions:
       editing.mayEdit && !open && !empty ? (
         <Button

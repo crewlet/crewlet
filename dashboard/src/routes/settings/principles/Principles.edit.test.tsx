@@ -137,6 +137,26 @@ test("a policy moved with its button is saved in its new place", async () => {
   ]);
 });
 
+// THE NOTE IS THE CARD'S CAPTION, ONE PARAGRAPH: the card draws the caption
+// under its body, so a note that brought a paragraph of its own was a <p>
+// inside the card's <p>, which HTML does not allow (a browser parsing it
+// closes the outer one first) and React warns of. Mutation: hand the card the
+// note as `<Text as="p">` and the sentence's paragraph sits inside another.
+test("a save this node has not applied yet is noted under the card in one paragraph", async () => {
+  mount();
+  await open("standing policies");
+  fireEvent.click(
+    within(card("Standing policies")).getByRole("button", { name: "Move policy 3 of 3 up" }),
+  );
+  saveKey(policyBox(1, 3));
+  await screen.findByText("Standing policies saved");
+  const note = within(card("Standing policies")).getByText(
+    "Saved. This page shows it as soon as this node applies the new revision.",
+  );
+  expect(note.tagName).toBe("P");
+  expect(note.parentElement?.closest("p")).toBeNull();
+});
+
 // A REMOVED RULE IS NOT READ BY ANYBODY FROM THE NEXT TURN, and the company's
 // history says one went. Mutation: keep removed rows in the draft and the PUT
 // still carries three.
