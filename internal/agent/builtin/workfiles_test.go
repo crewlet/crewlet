@@ -117,7 +117,17 @@ type fakeObjects struct {
 
 	// corrupt makes every read answer the store's corruption sentinel.
 	corrupt bool
+
+	// full makes every put read its content and be refused as a store with
+	// no room refuses one ([objstore.Full]), through the store's own
+	// wrapping, naming [caseRemedy].
+	full bool
 }
+
+// caseRemedy is the room a full [fakeObjects] names: a case's own, so a
+// sentence naming it spliced the store's remedy rather than a spelling of the
+// tool's own.
+const caseRemedy = "an operator makes room in this case's own bucket"
 
 func newFakeObjects() *fakeObjects { return &fakeObjects{objects: map[objstore.Key][]byte{}} }
 
@@ -134,6 +144,11 @@ func (o *fakeObjects) Put(_ context.Context, r io.Reader, limit int64,
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	k := objstore.KeyAt(time.Now())
+	if o.full {
+		return objstore.Object{}, fmt.Errorf("objstore: store the object: %w", &objstore.Full{
+			Remedy: caseRemedy, Err: fmt.Errorf("natsobj: put %s: OBJ_crewlet_files holds as many "+
+				"bytes as it reserves", k.Name())})
+	}
 	o.objects[k] = data
 	return objstore.Object{Key: k, Hash: objstore.HashOf(data), Size: int64(len(data))}, nil
 }
@@ -408,6 +423,44 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 	}
 	if objects.count() != 3 || files.puts != 3 {
 		t.Fatalf("three different writes stored %d objects and %d rows", objects.count(), files.puts)
+	}
+}
+
+// A FILE THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store
+// refuses the same content the same way until an operator makes room, so the
+// seat is told that, with the room the store names — never "try again
+// shortly", which had it upload the same bytes into the same full bucket —
+// under the class a person's surface answers 507 rather than a 503 asking it
+// back. Nothing is recorded, and the store's own words, naming its bucket,
+// stay in the node's log.
+//
+// Mutation: answer the full store through the catch-all (`unavailable`, "Try
+// again shortly") and this fails on the class and on the sentence; splice a
+// room of the tool's own and it fails on the room.
+func TestAFileTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	objects.full = true
+	reg := workRegistry(t, fileDeps(files, objects))
+	got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+		"path": "report.md", "content": "no room",
+	})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalStoreFull || !errors.Is(got.Cause, objstore.ErrFull) {
+		t.Fatalf("a write the store had no room for answered %s (refusal %q, cause %v), want store_full "+
+			"over ErrFull", got.Output, tools.RefusalOf(got), got.Cause)
+	}
+	switch out := strings.ToLower(got.Output); {
+	case !strings.Contains(got.Output, caseRemedy):
+		t.Errorf("a write the store had no room for answered %s, which does not name the store's room %q",
+			got.Output, caseRemedy)
+	case strings.Contains(out, "try again shortly") || strings.Contains(out, "make the same call again"):
+		t.Errorf("a write the store had no room for answered %s, which invites the retry the full "+
+			"store refuses the same", got.Output)
+	case strings.Contains(got.Output, "OBJ_crewlet_files"):
+		t.Errorf("the object store's own words reached the sentence: %s", got.Output)
+	}
+	if files.puts != 0 {
+		t.Errorf("a write the store had no room for recorded %d rows", files.puts)
 	}
 }
 

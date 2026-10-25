@@ -5684,6 +5684,7 @@ And the tool's own refusal, carrying the tool's sentence as `detail`:
 | `not_found` | `404` |
 | `forbidden` | `403` |
 | `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
+| `store_full` | `507` — the object store has no room for what the tool would store: nothing was stored or recorded, and **no** `Retry-After`, since the same call is refused the same until an operator makes room |
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |
 
@@ -5824,6 +5825,7 @@ mean the same thing on every write surface:
 | `422` | `invalid` | The domain refused the write on its own rules — a purge whose `?confirm=` names another item among them | `detail`: the domain's own sentence |
 | `500` | `internal_error` | The engine failed at something of its own | nothing a retry changes; the detail is in the node's log |
 | `503` | `unavailable`, `no_active_revision`, `identity_unavailable` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — `"outcome": "unknown"` and the `op_id` to retry with, on every route, a tool-backed one included. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
+| `507` | `store_full` | The object store has no room for the content the write would store — the fleet's NATS bucket holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation) — so nothing was stored or recorded | `detail`: what was not written; **no** `Retry-After`, since the same request is refused the same until an operator makes room |
 
 The `403` wording is the point of the `unauthorized` row: the three surfaces that serve
 these verbs refuse in ONE sentence, formed by one function, so a person told one

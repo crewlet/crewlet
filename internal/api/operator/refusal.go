@@ -67,7 +67,8 @@ func About(tool string, args map[string]any) httpjson.Detail {
 // classAnswer is how one refusal class is answered.
 type classAnswer struct {
 	// status is the 4xx a refusal of the class is answered with — or the
-	// 500 of a FAULT, which no request can change and no wait clears — and
+	// 507 of a full object store, which only an operator's room clears, or
+	// the 500 of a FAULT, which no request can change and no wait clears — and
 	// ZERO for a class waiting can clear, which is answered `503` through
 	// [httpjson.UnavailableWith] — the one writer that sets the
 	// Retry-After beside the envelope, so no row here could state a 503
@@ -83,11 +84,15 @@ type classAnswer struct {
 // gesture the domain forbids this caller, 409 for a state the request collided
 // with — re-read it, or (for a spent budget, a full inbox, a run that stopped)
 // change it — 503 for a node that could not serve it, the one class a retry of
-// the same request can fix, and 500 for a node that FAILED at something of its
-// own ([crewletmcp.RefusalInternalError]): nothing the caller does next helps,
-// and a 503 there told a client to come back in two seconds, for ever. A test
-// answers every class this build knows through [Fail] and holds each to
-// exactly one status.
+// the same request can fix, 507 for content the object store had no room for
+// ([crewletmcp.RefusalStoreFull]), which neither the request nor a wait
+// changes and an operator's room does — HTTP's own status for a server that
+// cannot store what the request needs, and never a 503, whose Retry-After sent
+// the same bytes back into the same full bucket — and 500 for a node that
+// FAILED at something of its own ([crewletmcp.RefusalInternalError]): nothing
+// the caller does next helps, and a 503 there told a client to come back in
+// two seconds, for ever. A test answers every class this build knows through
+// [Fail] and holds each to exactly one status.
 var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalInvalid:            {http.StatusUnprocessableEntity, httpjson.CodeInvalid},
 	crewletmcp.RefusalNotFound:           {http.StatusNotFound, httpjson.CodeNotFound},
@@ -101,6 +106,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalNotRunning:         {http.StatusConflict, httpjson.CodeNotRunning},
 	crewletmcp.RefusalSteerUnsupported:   {http.StatusConflict, httpjson.CodeSteerUnsupported},
 	crewletmcp.RefusalBudgetExhausted:    {http.StatusConflict, httpjson.CodeBudgetExhausted},
+	crewletmcp.RefusalStoreFull:          {http.StatusInsufficientStorage, httpjson.CodeStoreFull},
 	crewletmcp.RefusalUnavailable:        {0, httpjson.CodeUnavailable},
 	crewletmcp.RefusalInternalError:      {http.StatusInternalServerError, httpjson.CodeInternalError},
 }

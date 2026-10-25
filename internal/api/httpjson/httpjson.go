@@ -612,6 +612,11 @@ const (
 	// CodeBudgetExhausted is a call that would spend tokens refused because
 	// a window of the company's budget has no room left; nothing was spent.
 	CodeBudgetExhausted Code = "budget_exhausted"
+	// CodeStoreFull is content the object store had no room for: nothing
+	// was stored, and an operator has to make room before the same request
+	// can land. 507, never a 503: waiting alone does not clear it, so it
+	// carries no Retry-After.
+	CodeStoreFull Code = "store_full"
 
 	// THE ACT ROUTE'S OWN — `POST /operator/act/{tool}`, the dashboard's
 	// write transport — about the request rather than the tool.
@@ -1140,6 +1145,9 @@ var codes = map[Code]string{
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +
 		"nothing was spent on this. Raise it, or wait for the window to turn " +
 		"over.",
+	CodeStoreFull: "The company's file store has no room left, so nothing was " +
+		"stored. An operator has to make room for it; sending it again changes " +
+		"nothing until then.",
 	CodeUnknownTool: "This engine does not support that change. It may be " +
 		"running a different version. Reload the page.",
 	CodeReadOnlyTool: "That is a read, and this route only makes changes. Ask " +

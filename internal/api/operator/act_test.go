@@ -621,8 +621,9 @@ func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 // knowing which half of the vocabulary a code came from. Asked of [operator.Fail]
 // itself, the one writer every transport answers a refusal through, so what is
 // held is what goes out: a class waiting can clear is a 503 carrying a
-// Retry-After, every other a 4xx, and a class this build does not know is an
-// opaque 500 rather than a status nobody chose.
+// Retry-After, a full object store a 507 and a fault a 500, neither carrying
+// one, every other a 4xx, and a class this build does not know is an opaque
+// 500 rather than a status nobody chose.
 func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	t.Parallel()
 	answer := func(class crewletmcp.Refusal) (*httptest.ResponseRecorder, map[string]any) {
@@ -641,11 +642,18 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 		// A FAULT IS THE ONE CLASS ANSWERED 500, and the only 500 a class
 		// may answer: every other one is a refusal the caller acts on.
 		fault := class == crewletmcp.RefusalInternalError
+		// A FULL STORE IS THE ONE 507: no request it could change, and no
+		// wait that clears it, so neither a 4xx nor a 503's Retry-After.
+		full := class == crewletmcp.RefusalStoreFull
 		switch {
 		case rec.Code < 400 || rec.Code > 599:
 			t.Errorf("the refusal class %q answers %d, which is no refusal", class, rec.Code)
 		case fault != (rec.Code == http.StatusInternalServerError):
 			t.Errorf("the refusal class %q answers %d; only a fault is a 500", class, rec.Code)
+		case full != (rec.Code == http.StatusInsufficientStorage):
+			t.Errorf("the refusal class %q answers %d; only a full object store is a 507", class, rec.Code)
+		case rec.Code >= 500 && !fault && !full && rec.Code != http.StatusServiceUnavailable:
+			t.Errorf("the refusal class %q answers %d, a server error no class is given", class, rec.Code)
 		case code != string(class):
 			t.Errorf("the refusal class %q is answered as %q — a client reads one "+
 				"vocabulary whichever transport refused it", class, code)
@@ -660,8 +668,9 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 			rec.Header().Get("Retry-After") == "" {
 			t.Errorf("the refusal class %q answers 503 with no Retry-After", class)
 		}
-		if after := rec.Header().Get("Retry-After"); fault && after != "" {
-			t.Errorf("a fault told its caller to come back in %s seconds", after)
+		if after := rec.Header().Get("Retry-After"); rec.Code != http.StatusServiceUnavailable && after != "" {
+			t.Errorf("the refusal class %q (%d) told its caller to come back in %s seconds, which "+
+				"no wait clears", class, rec.Code, after)
 		}
 	}
 	if rec, _ := answer("teapot"); rec.Code != http.StatusInternalServerError {

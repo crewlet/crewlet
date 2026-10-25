@@ -52,6 +52,7 @@ const (
 	RefusalNotRunning         = mcp.RefusalNotRunning
 	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
+	RefusalStoreFull          = mcp.RefusalStoreFull
 	RefusalUnavailable        = mcp.RefusalUnavailable
 	RefusalInternalError      = mcp.RefusalInternalError
 )

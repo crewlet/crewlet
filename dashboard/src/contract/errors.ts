@@ -96,6 +96,8 @@ export const ACT_ERRORS = {
   steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
   budget_exhausted:
     "The token budget for this window is spent. Raise it, or wait for the window to reset.",
+  store_full:
+    "The company’s file store is full, so nothing was saved. Ask an operator to make room; trying again won’t help until then.",
   unavailable: "This node could not make the change just now. Try again in a moment.",
   internal_error:
     "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose.",

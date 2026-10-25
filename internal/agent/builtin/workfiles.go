@@ -44,13 +44,17 @@ import (
 // words with its error in the node's log ([objectFailure]), because an object
 // store's error names its endpoint, its bucket and its keys, and the sentence
 // reaches a model's prompt, an operator's assistant and a person's screen —
-// none of whom can act on them. Two of its answers are told apart from the
+// none of whom can act on them. Three of its answers are told apart from the
 // rest: content that IS there but is not what the file records
 // ([objstore.ErrCorrupt]), and a file row naming no content at all, are
-// damage no retry reads past, so they are [tools.RefusalInternalError]; any
-// other failure to reach the content is the store not answering, which is
-// [tools.RefusalUnavailable] — the class the HTTP file routes answer the same
-// failure with — and invites the retry that reaches it.
+// damage no retry reads past, so they are [tools.RefusalInternalError]; and a
+// write the store refused because it has no room for it ([objstore.Full]) is
+// [tools.RefusalStoreFull], naming the room an operator makes, in the store's
+// own words for it ([objstore.Full.Remedy]), because the same content is
+// refused the same way until then — "try again shortly" uploaded it again into
+// the same full bucket. Any other failure to reach the content is the store not
+// answering, which is [tools.RefusalUnavailable] — the class the HTTP file
+// routes answer the same failure with — and invites the retry that reaches it.
 
 // FileReader is the tracker's read side for files.
 type FileReader interface {
@@ -500,11 +504,19 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE BYTES FIRST — see the file's head.
 	object, err := t.deps.Objects.Put(ctx, bytes.NewReader(content), tracker.MaxFileBytes,
 		objstore.PutMeta{ContentType: contentType})
+	var full *objstore.Full
 	switch {
 	case errors.Is(err, objstore.ErrTooLarge):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %s was not "+
 			"written: its content is over the %d bytes a project's file may hold",
 			t.Name(), filePath, int64(tracker.MaxFileBytes))), nil
+	case errors.As(err, &full):
+		// NO ROOM, WHICH NO RETRY MAKES — see the file's head.
+		return objectFailure(ctx, t.Name(), tools.RefusalStoreFull, err,
+			fmt.Sprintf("%s: %s was not written, and nothing was recorded: the "+
+				"object store has no room left for its content. Making the call "+
+				"again is refused the same until %s — say so, and say the file "+
+				"was not written.", t.Name(), filePath, full.Remedy)), nil
 	case err != nil:
 		return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
 			fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+

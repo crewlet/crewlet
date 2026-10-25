@@ -111,6 +111,18 @@ const (
 	// sentence names the window and when it resets.
 	RefusalBudgetExhausted Refusal = "budget_exhausted"
 
+	// RefusalStoreFull — the object store has no room for content the call
+	// would store, so it was not stored, and nothing was recorded. Nothing
+	// about the call was wrong and nothing in the node failed, which tells
+	// it from [RefusalInvalid] and [RefusalInternalError]; and, which tells
+	// it from [RefusalUnavailable], waiting alone does not clear it: the
+	// same call is refused the same way until an operator makes room, so
+	// its sentence names that room, as the store names it
+	// (objstore.Full.Remedy), and never invites the retry. Read as
+	// unavailable, a seat was told to try again shortly and uploaded the
+	// same bytes into the same full bucket.
+	RefusalStoreFull Refusal = "store_full"
+
 	// RefusalUnavailable — this node cannot serve the call right now, or
 	// this company does not run what it needs: the node is behind its log,
 	// the log refused the read or the append, the coordination store did
@@ -150,7 +162,7 @@ var Refusals = []Refusal{
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
 	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
-	RefusalUnavailable, RefusalInternalError,
+	RefusalStoreFull, RefusalUnavailable, RefusalInternalError,
 }
 
 // Valid reports whether a class off the wire is one this build knows. The
