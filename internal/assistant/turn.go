@@ -198,7 +198,16 @@ func (t *turn) emitCard(ctx context.Context, card wire.Card, apps []string) {
 	message := t.answer
 	t.anchored = true
 	t.mu.Unlock()
-	ev := wire.CardEvent{CardID: assistantdomain.CardID(t.id, n), MessageID: message, Card: card}
+	id := assistantdomain.CardID(t.id, n)
+	if card.Type == wire.CardTable && card.Table != nil {
+		// EVERY TABLE IS DOWNLOADABLE, from here alone: the card's id is
+		// minted here, and the export routes read this stored card again as
+		// its owner, with every column the drawer leaves out.
+		table := *card.Table
+		table.Exports = wire.ExportsOf(id)
+		card.Table = &table
+	}
+	ev := wire.CardEvent{CardID: id, MessageID: message, Card: card}
 	t.emit(wire.Frame{Kind: wire.EventCard, Card: &ev})
 	t.record(ctx, "card", func(ctx context.Context, w Write) error {
 		return t.svc.records.RecordCard(ctx, w.Step("card", strconv.Itoa(n)), t.id, ev, apps)

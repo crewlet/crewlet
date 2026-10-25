@@ -61,6 +61,13 @@ type Exports struct {
 	XLSX string `json:"xlsx"`
 }
 
+// ExportsOf are the download paths of the table card with this id: the
+// export routes, which read the stored card again as its owner.
+func ExportsOf(card uuid.UUID) *Exports {
+	base := "/assistant/cards/" + card.String() + "/export"
+	return &Exports{CSV: base + ".csv", XLSX: base + ".xlsx"}
+}
+
 // Link is a dashboard address the engine built from its own route table:
 // Href is the path the dashboard's router resolves, never a URL a model
 // wrote.
