@@ -77,11 +77,12 @@ var previewArgs = map[string]map[string]any{
 //
 // Each proposing tool's preview reads what it changes through the turn's
 // grant, answers a card the proposal package accepts (a title, an approve
-// label, at least one change, an audience where visibility moves), binds the
+// label, at least one change, an audience exactly where the tool declares
+// ChangesVisibility), binds the
 // revision it read, and carries the request byte for byte. A share to the whole
 // company asks a step-up (D09). Mutation: build the preview's request from
 // other arguments than the tool's, or drop the share's audience, and this
-// fails.
+// fails, and so does unsetting share_artifact's ChangesVisibility.
 func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 	t.Parallel()
 	read := reader(world())
@@ -99,9 +100,15 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 			t.Errorf("%s: %v", tool.Name, err)
 			continue
 		}
-		visibility := tool.Name == "share_artifact" || tool.Name == "unshare_artifact"
-		if err := p.Check(visibility); err != nil {
+		if err := p.Check(tool.ChangesVisibility); err != nil {
 			t.Errorf("%s's preview: %v", tool.Name, err)
+		}
+		// A PREVIEW NAMING AN AUDIENCE IS A WRITE THAT DECLARES IT CHANGES
+		// VISIBILITY, and the other way round, so the proposal is told to
+		// hold the audience exactly where one is shown.
+		if (len(p.Audience) > 0) != tool.ChangesVisibility {
+			t.Errorf("%s previews the audience %v and declares ChangesVisibility %v",
+				tool.Name, p.Audience, tool.ChangesVisibility)
 		}
 		want, err := tool.Request(args)
 		if err != nil {

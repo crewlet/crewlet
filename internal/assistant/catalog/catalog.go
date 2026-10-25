@@ -213,6 +213,11 @@ type Tool struct {
 	// builtins; the catalogue walk holds it to the hint, and it is one of
 	// the three inputs a write's tier is derived from.
 	Destructive bool
+	// ChangesVisibility marks a write that changes who can see something (a
+	// share, an unshare): its preview must name the audience (D09), which
+	// proposal.Preview.Check holds when told so.
+	ChangesVisibility bool
+
 	// Preview is a write's or a page action's preview: what the call would
 	// change, read from the object as it is now, and the exact request
 	// the approval sends (internal/assistant/proposal).
