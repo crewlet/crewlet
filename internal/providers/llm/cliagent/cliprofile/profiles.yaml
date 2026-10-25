@@ -2218,6 +2218,167 @@ grok:
   # One side request remains and no documented switch removes it on 1.0.70:
   # a session-title request to the session-summary model (grok-4.6 on the
   # Responses API) carrying the prompt, before the answer.
+  # THE HOME'S OWN MCP SERVERS, AND EVERY OTHER VENDOR'S, NEVER START. 1.0.70
+  # starts the servers ~/.grok/config.toml names, ~/.claude.json's and
+  # ~/.cursor/mcp.json's beside them (its "compatibility" sources), and a
+  # project's .grok/config.toml, .cursor/mcp.json and .mcp.json from the
+  # working directory to the repository root. Measured through the engine,
+  # with each of those planted in the seat's home and at every level of a
+  # checkout above the call: with the two files below, none started, a run
+  # with tools listed the seat's server alone and a text function none;
+  # without them, the three in the home started on every call (the project
+  # ones never did — the engine's `.git` file ends the walk at the call's
+  # directory, and the CLI loads no project configuration it has not been
+  # told to trust).
+  #
+  #   config.toml        the home's settings, rewritten every generation, so
+  #                      no server written there survives into a call, and
+  #                      the Claude and Cursor sources (servers and hooks)
+  #                      are not scanned at all.
+  #   requirements.toml  the CLI's own MCP allowlist ("allowed_mcp_servers"),
+  #                      which binds EVERY source — the home, a project, the
+  #                      compatibility files, a plugin: one naming any other
+  #                      server is dropped from the session. It only ever
+  #                      tightens, unsigned too (measured: it alone kept all
+  #                      three planted servers out). A deployment that syncs
+  #                      a signed one replaces it with the organisation's.
+  seed_files:
+    - path: .grok/config.toml
+      content: |
+        # Written by Crewlet every generation: no MCP server of the home's own,
+        # and no other vendor's servers or hooks.
+        [compat.claude]
+        mcps = false
+        hooks = false
+
+        [compat.cursor]
+        mcps = false
+        hooks = false
+    - path: .grok/requirements.toml
+      content: |
+        # Written by Crewlet: the seat's own server is the one MCP server a call may start.
+        [[allowed_mcp_servers]]
+        server_name = "crewlet"
+  # THE SEAT'S TOOLS: one stdio server, declared by an AGENT FILE in the call's
+  # own directory (--agent), whose `mcpServers` the CLI starts beside its
+  # default agent's prompt and tools — an agent file with no body adds nothing
+  # to the system prompt, and --rules still lands the seat's text at its end.
+  # Measured on 1.0.70 through the engine's own code path against a local
+  # stand-in for the API.
+  #
+  # THE MODEL REACHES THEM THROUGH TWO META-TOOLS, never by name: the request
+  # offers search_tool (find a tool, get its schema) and use_tool (call it by
+  # its qualified name, `crewlet__<name>`), and tells the model only that the
+  # crewlet server is connected with so many tools. So the route's own
+  # complete_args drop both from the deny list a text function keeps.
+  #
+  #   --deny Read(**)       use_tool also takes its arguments, or the whole
+  #                         call, from a FILE the model names — any path on
+  #                         the host, read before the call is checked
+  #                         (tool_input_file, file). Denied by a Read rule on
+  #                         every path: an absolute one, ~/…, ../…, and one
+  #                         in the call's directory were each refused ("MCP
+  #                         source Read denied"), inline calls went through.
+  #                         A bare `--deny Read` denies search_tool too — it
+  #                         is a read — and leaves the model no tool names.
+  #   --allow MCPTool(*)    the server's tools run unasked. Every MCP tool
+  #                         rather than `crewlet__*`, because a call the model
+  #                         names without the server's prefix (`echo`) is
+  #                         asked about BEFORE it is resolved, and a headless
+  #                         run that asks is cancelled whole (exit 0, nothing
+  #                         on stdout); allowed, it is refused for not being
+  #                         qualified and the model told so, and the run goes
+  #                         on (measured, for a listed and an unlisted name).
+  #                         The allowlist above leaves the crewlet server the
+  #                         only one whose tools it can match.
+  #   --output-format streaming-json  the record (requests, below); a text
+  #                         function keeps the plain answer (mcp.output).
+  #
+  # THE CLI'S OWN TIMEOUT, 6000 seconds, has no knob for a server an agent
+  # file declares: tool_timeout_sec, toolTimeoutMs and tool_timeout_ms in the
+  # frontmatter, and a `[mcp_servers.crewlet]` timeout in the home's
+  # config.toml, all left it at 6000 (its event log names the timeout each
+  # call runs under; a 10 s call ran out with a 4 s setting). The server's
+  # list is read once: a tool activated mid-run was "not found" for the rest
+  # of the run. One response's calls run at once (two 1.5 s calls
+  # overlapped).
+  mcp:
+    output: jsonl
+    complete_args:
+      - "--tools"
+      - "web_search,web_fetch"
+      - "--disallowed-tools"
+      - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+      - "--allow"
+      - "WebFetch"
+    seed:
+      - path: crewlet-agent.md
+        in: work
+        content: |
+          ---
+          name: crewlet-seat
+          description: The Crewlet seat this run serves.
+          mcpServers:
+            - crewlet:
+                command: {relay_command_json}
+                args: {relay_args_json}
+          ---
+    args: ["--agent", "{work}/crewlet-agent.md", "--output-format", "streaming-json", "--deny", "Read(**)"]
+    allow_args: ["--allow", "MCPTool(*)"]
+    tool_timeout_seconds: 6000
+    concurrency: at_once
+  # EACH REQUEST, FROM THE STREAM. A response is its prose (`text`), then its
+  # counts (`usage`), then a `tool_call` per call; the results of its calls
+  # (`tool_call_update` with a final status) end it, and the next prose or
+  # counts begin the next — every call of a response is printed before any of
+  # them is answered. The CLI hands the server no id of its own, so a call is
+  # joined by name and arguments: the record's name is the one the model gave
+  # use_tool, `crewlet__<name>`, and a name without the prefix is one the CLI
+  # refused. The counts are the request's own: `input_tokens` WITHOUT the cached
+  # part, and `output_tokens` with the reasoning in it (measured with a stand-in
+  # reporting 40 cached and 7 reasoning tokens: 65 + 40 of a 105-token prompt,
+  # 12 out). The run's `end` event repeats their sum, and is not read. The
+  # session-title request the CLI makes first is in neither, and is not
+  # charged.
+  requests:
+    source: stdout
+    host_prefix: "crewlet__"
+    events:
+      - match: [{path: ["type"], equals: "available_commands"}]
+        tools: ["tools"]
+      - match: [{path: ["type"], equals: "text"}]
+        text: ["data"]
+      - match: [{path: ["type"], equals: "usage"}]
+        usage:
+          input: [["usage", "input_tokens"]]
+          output: [["usage", "output_tokens"]]
+          cache_read: [["usage", "cache_read_input_tokens"]]
+          cache_write: [["usage", "cache_creation_input_tokens"]]
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "use_tool"}]
+        call: {id: ["toolCallId"], name: ["rawInput", "tool_name"], args: ["rawInput", "tool_input"]}
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "search_tool"}]
+        call: {id: ["toolCallId"], name: ["toolName"], args: ["rawInput"]}
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "web_fetch"}]
+        call: {id: ["toolCallId"], name: ["toolName"], args: ["rawInput"]}
+      - match: [{path: ["type"], equals: "tool_call"}, {path: ["kind"], equals: "web_search"}]
+        call: {id: ["toolCallId"], name: ["toolName"], args: ["rawInput"]}
+      - match: [{path: ["type"], equals: "tool_call_update"}, {path: ["status"], equals: "completed"}]
+        closes: true
+      - match: [{path: ["type"], equals: "tool_call_update"}, {path: ["status"], equals: "failed"}]
+        closes: true
+  # --max-turns, where an operator adds it: a `max_turns_reached` event, then
+  # exit 1 with "Error: max turns reached" on stderr (measured).
+  cap:
+    exit_code: 1
+    match: [{path: ["type"], equals: "max_turns_reached"}]
+  # A RUN THAT WOULD ASK IS CANCELLED WHOLE: 1.0.70 cannot ask for an approval
+  # headless, so it gives up the run — exit 0, an `end` of stopReason
+  # cancelled, and nothing of the answer — and says so on stderr. Every tool
+  # either kind of call is offered is allowed or refused by the flags above,
+  # so a run that asks is one those flags no longer cover: it is stopped at
+  # that line and fails, rather than passing off what it had written as an
+  # answer.
+  failure_markers: ["a headless run cannot ask for approval"]
   credential_paths: [".grok/auth.json"]
   # What a call leaves in the seat's home, measured on 1.0.70: a session
   # directory per working directory holding the conversation, the rendered
