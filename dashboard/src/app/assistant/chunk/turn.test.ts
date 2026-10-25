@@ -345,6 +345,7 @@ describe("one row per move of the state machine", () => {
       ["interrupted", "interrupted"],
       ["expired", "expired"],
       ["budget_exhausted", "budget_exhausted"],
+      ["superseded", "completed"],
       ["waiting_for_approval", "awaiting_approval"],
     ] as const) {
       const view = after(...SENT, frame("done", 1, { state, duration_ms: 5000, steps: 2 }));

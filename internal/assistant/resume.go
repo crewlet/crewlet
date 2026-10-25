@@ -86,6 +86,9 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if err != nil {
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
+	if row.Conversation == r.Conversation && row.State == wire.TurnSuperseded {
+		return s.settledPast(ctx, person, row, r)
+	}
 	if row.State != wire.TurnWaitingForApproval || row.Conversation != r.Conversation {
 		return wire.TurnAccepted{}, ErrTurnRunning
 	}
@@ -151,9 +154,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		}
 	}
 	if r.Invalidate != nil {
-		t.emit(wire.Frame{Kind: wire.EventAction, Action: &wire.ActionEvent{
-			ActionID: uuid.NewSHA1(r.Proposal, []byte(wire.ActionContextInvalidate)),
-			Name:     wire.ActionContextInvalidate, Invalidate: r.Invalidate}})
+		t.emit(invalidation(r.Proposal, r.Invalidate))
 	}
 	c, _ := s.company()
 	assistantCfg := config.Assistant{}
@@ -210,18 +211,20 @@ func resultOf(r approval.Resumption, b provenance.Boundary) string {
 	return out.String()
 }
 
-// Emit appends frames to a turn that stays parked: the proposal card at its
-// state now and, for an approved page action, the action the page applies;
-// then the segment ends again, waiting for approval, so the client's stream
-// closes cleanly. It answers where the client reads them.
-func (s *Service) Emit(ctx context.Context, owner, conversation, turn uuid.UUID,
+// Emit appends frames to a turn that stays parked, or that the person asked
+// past (superseded): the proposal card at its state now and, for an approved
+// page action, the action the page applies; then the segment ends again in
+// the turn's state, so the client's stream closes cleanly. It answers where
+// the client reads them.
+func (s *Service) Emit(ctx context.Context, owner, conversation, turnID uuid.UUID,
 	e approval.Emission) (wire.TurnAccepted, error) {
 
-	row, err := s.transcripts.Turn(ctx, owner, turn)
+	row, err := s.transcripts.Turn(ctx, owner, turnID)
 	if err != nil {
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
-	if row.Conversation != conversation || row.State != wire.TurnWaitingForApproval {
+	if row.Conversation != conversation || (row.State != wire.TurnWaitingForApproval &&
+		row.State != wire.TurnSuperseded) {
 		return wire.TurnAccepted{}, ErrTurnRunning
 	}
 	person, how := iam.From(ctx)
@@ -229,32 +232,85 @@ func (s *Service) Emit(ctx context.Context, owner, conversation, turn uuid.UUID,
 		return wire.TurnAccepted{}, fmt.Errorf("%w: frames are emitted on the owner's own "+
 			"decision", ErrNotFound)
 	}
-	keep, err := s.parkedLoop(ctx, owner, turn)
-	if err != nil {
-		return wire.TurnAccepted{}, err
+	var parkedSeq uint64
+	if row.State == wire.TurnWaitingForApproval {
+		keep, err := s.parkedLoop(ctx, owner, turnID)
+		if err != nil {
+			return wire.TurnAccepted{}, err
+		}
+		parkedSeq = keep.Seq
 	}
-	floor := s.continuing(ctx, owner, turn, keep.Seq)
-	t := s.newTurn(person, conversation, turn, "", nil, nil, nil)
+	return s.tell(ctx, person, row, s.continuing(ctx, owner, turnID, parkedSeq),
+		func(t *turn) error {
+			if e.Card != nil {
+				if err := s.showProposal(ctx, t, uuid.Nil, *e.Card); err != nil {
+					return err
+				}
+			}
+			if e.Action != nil {
+				action := *e.Action
+				t.emit(wire.Frame{Kind: wire.EventAction, Action: &action})
+			}
+			return nil
+		})
+}
+
+// tell appends frames to a turn no runner holds (one parked, or ended): a
+// segment of its stream numbered after floor, what frames writes, then how
+// the turn stands (the waiting status for a parked turn) and the done frame
+// in its state. It answers where the client reads them.
+func (s *Service) tell(ctx context.Context, person iam.Principal, row assistantdomain.Turn,
+	floor uint64, frames func(t *turn) error) (wire.TurnAccepted, error) {
+
+	t := s.newTurn(person, row.Conversation, row.ID, "", nil, nil, nil)
 	defer t.cancel(nil)
-	t.log = s.hub.Open(owner, conversation, turn, floor)
+	t.log = s.hub.Open(person.ID, row.Conversation, row.ID, floor)
+	defer t.log.End()
 	after := t.log.Last()
-	if e.Card != nil {
-		if err := s.showProposal(ctx, t, uuid.Nil, *e.Card); err != nil {
-			t.log.End()
+	if frames != nil {
+		if err := frames(t); err != nil {
 			return wire.TurnAccepted{}, err
 		}
 	}
-	if e.Action != nil {
-		action := *e.Action
-		t.emit(wire.Frame{Kind: wire.EventAction, Action: &action})
+	if row.State == wire.TurnWaitingForApproval {
+		t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
+			State: wire.StatusWaitingForApproval, StepsDone: row.Steps}})
 	}
-	t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
-		State: wire.StatusWaitingForApproval, StepsDone: row.Steps}})
-	t.emit(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{
-		State: wire.TurnWaitingForApproval, Steps: row.Steps}})
-	t.log.End()
-	return wire.TurnAccepted{TurnID: turn, StreamURL: StreamPath(conversation, turn),
+	t.emit(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{State: row.State,
+		Steps: row.Steps}})
+	return wire.TurnAccepted{TurnID: row.ID, StreamURL: StreamPath(row.Conversation, row.ID),
 		AfterSeq: after}, nil
+}
+
+// settledPast shows what became of a proposal of a turn the person asked past
+// (superseded): its card at its state now, with the receipt, and where a
+// write landed the `context.invalidate` the open screens refresh by. The loop
+// is NOT resumed: the person moved on to another question, and a model woken
+// in a conversation that has since gone elsewhere would answer into the
+// middle of it. The decision's read grant ends unused ([Service.Resume]
+// revokes a grant no runner takes).
+func (s *Service) settledPast(ctx context.Context, person iam.Principal,
+	row assistantdomain.Turn, r approval.Resumption) (wire.TurnAccepted, error) {
+
+	return s.tell(ctx, person, row, s.continuing(ctx, r.Owner, r.Turn, 0), func(t *turn) error {
+		if r.Card.Type != "" {
+			if err := s.showProposal(ctx, t, r.Proposal, r.Card); err != nil {
+				return err
+			}
+		}
+		if r.Invalidate != nil {
+			t.emit(invalidation(r.Proposal, r.Invalidate))
+		}
+		return nil
+	})
+}
+
+// invalidation is the `context.invalidate` action for a write proposal
+// landed at, under an id derived from the proposal, so a repeat is one action.
+func invalidation(proposal uuid.UUID, at *wire.Invalidate) wire.Frame {
+	return wire.Frame{Kind: wire.EventAction, Action: &wire.ActionEvent{
+		ActionID: uuid.NewSHA1(proposal, []byte(wire.ActionContextInvalidate)),
+		Name:     wire.ActionContextInvalidate, Invalidate: at}}
 }
 
 // showProposal streams a proposal card at its state now under the id the
