@@ -1,7 +1,5 @@
 package assistantdomain
 
-import "time"
-
 // THE BOUNDS ON WHAT IS STORED. They are this package's because the writer is
 // where a value is refused before it is sealed and published, and the
 // orchestrator (internal/assistant) reads them from here rather than stating
@@ -44,16 +42,4 @@ const (
 	// DefaultListLimit what a listing that names none takes.
 	MaxListLimit     = 50
 	DefaultListLimit = 20
-)
-
-// The retention a conversation is kept for after it was last used (ADR-0049).
-const (
-	// DefaultRetention is what `assistant.retention_days` takes unset: the
-	// turn detail's and the trash's thirty days.
-	DefaultRetention = 30 * 24 * time.Hour
-
-	// MinRetention and MaxRetention bound the setting: a day, the trash
-	// reaper's own floor, and a year.
-	MinRetention = 24 * time.Hour
-	MaxRetention = 365 * 24 * time.Hour
 )
