@@ -245,6 +245,10 @@ operator_acted             # an operator tool call that is not a proven read,
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`
+assistant_conversation_read # an administrator's compliance read of a
+                           # person's Dashboard Assistant conversation (D06):
+                           # the reader, conversation_id, owner_id and the
+                           # reason they gave; the conversation stays sealed
 seat_paused                # a person paused a seat (paused_by,
                            # paused_by_kind and operator_id from
                            # iam.ActorFor, reason, stop_running, paused_at).

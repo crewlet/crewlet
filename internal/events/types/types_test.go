@@ -76,6 +76,8 @@ func catalogue() []events.Payload {
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
 		OperatorActed{}, BackupRequested{},
+		// assistant_read.go
+		AssistantConversationRead{},
 		// seat.go
 		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
 	}
@@ -99,6 +101,7 @@ var wireTypes = []string{
 	"agent_turn_started",
 	"agent_turn_steered",
 	"agent_turn_stopped",
+	"assistant_conversation_read",
 	"auxiliary_spend",
 	"backup_requested",
 	"budget_exhausted",
@@ -337,6 +340,7 @@ var wireTags = map[string][]string{
 	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
 	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
 	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
+	"assistant_conversation_read":     {"actor", "actor_kind", "conversation_id", "operator_id", "owner_id", "reason"},
 	"auxiliary_spend":                 {"actor_role", "actor_seat", "agent_handle", "agent_id", "cache_read_tokens", "cache_write_tokens", "calls", "day", "duration_ms", "ended_at", "failed_calls", "input_tokens", "model", "output_tokens", "provider_key", "purpose", "role", "stage", "started_at", "total_tokens", "turn_id", "work_key"},
 	"custody_batch":                   {"events"},
 	"reflection_due":                  {"turn"},
