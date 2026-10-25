@@ -2648,6 +2648,39 @@ confirm.
 And **no tool** asks for a proof — a seat has no keyboard, and the operator's
 assistant's surface is not a step-up surface — which the build checks too.
 
+### Every row says what the Dashboard Assistant may do with it
+
+The Dashboard Assistant acts as the person using it: a request it makes is
+decided exactly as that person's own click is, and the credential it came
+through is recorded beside them as `assist:<grant>`. So the table can only
+take away from what the person holds, never add to it, and every row states
+how far it lets the assistant reach (ADR-0048):
+
+- **read**: a read grant takes the verb, so a turn reads what the person may
+  read with nothing for them to approve;
+- **approve**: the verb runs only as the one request the person approved,
+  carried by a grant bound to that request;
+- **never**: no grant takes it, whoever approved what.
+
+A row that does not decide fails the build. **Never** covers what a model must
+never be one step from: every secret, setup and fleet control, the company
+document, every identity directory verb but the org chart's seat read, every
+credential and session control, every purge, transfer, forced publish and
+export, a question answered by a model at the company's expense, the agents'
+own verbs, and the assistant's own verbs. A verb no assistant tool reaches is
+**never** too, even where reading it would be harmless, and moves only with the
+tool that exposes it. And a row that needs a person present is refused to the
+assistant whatever it says, because the assistant is not a person at a
+keyboard.
+
+A refusal through the assistant is `403 unauthorized` with `reason:
+assist_refused` (the person takes the gesture themselves) or `reason:
+assist_scope` (a write asked through a read grant: the remedy is a proposal
+the person approves), naming no permission, since none would change either.
+The identity domain refuses the record as well: an administrative identity
+record or a token mint whose request came through the assistant is refused
+`assist_refused`, as one through a machine token is.
+
 ### Route policy travels with the route
 
 An HTTP route declares its verb where it is **mounted**, not in a middleware

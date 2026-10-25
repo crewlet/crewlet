@@ -644,7 +644,11 @@ table made the refusal — every question, the policy every `/config/*` and
 `seat_only` (a person or a token asking for a verb only an agent seat takes),
 `token_refused` (a [machine token](#post-iamcredentials-mints-a-machine-token)
 on a gesture that needs a person present, answered under the code
-`token_refused` rather than `unauthorized`), `unnamed`, and `step_up` on the one
+`token_refused` rather than `unauthorized`), `assist_refused` and
+`assist_scope` (a request the Dashboard Assistant made on a verb its row keeps
+from it, or a write through a read grant: see
+[Every row says what the Dashboard Assistant may do with it](../concepts/identity-and-access.md#every-row-says-what-the-dashboard-assistant-may-do-with-it)),
+`unnamed`, and `step_up` on the one
 refusal the caller clears themselves
 ([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants`
 are the **least** that would have admitted this caller for this object: any
