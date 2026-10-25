@@ -128,11 +128,9 @@ type Deps struct {
 	StepUp func(act string) bool
 
 	// StepOp derives one step's operation id from a request's operation
-	// (internal/statelog.StepOpID); NewOp mints a fresh one
-	// (internal/statelog.NewOpID). Injected because nothing under
+	// (internal/statelog.StepOpID). Injected because nothing under
 	// internal/assistant imports the state log.
 	StepOp func(opID string, steps ...string) string
-	NewOp  func() string
 
 	// Now is the clock; nil is the wall clock in UTC.
 	Now func() time.Time
@@ -159,8 +157,8 @@ func New(d Deps) (*Approver, error) {
 			"proposal is never executed")
 	case d.StepUp == nil:
 		return nil, errors.New("approval: the step-up rule is required")
-	case d.StepOp == nil || d.NewOp == nil:
-		return nil, errors.New("approval: the operation ids are required")
+	case d.StepOp == nil:
+		return nil, errors.New("approval: the step operation id derivation is required")
 	}
 	if d.Now == nil {
 		d.Now = func() time.Time { return time.Now().UTC() }

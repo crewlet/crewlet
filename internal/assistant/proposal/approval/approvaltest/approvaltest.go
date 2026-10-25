@@ -390,8 +390,7 @@ func (f *Fleet) Node(t testing.TB) *approval.Approver {
 			}
 			return op
 		},
-		NewOp: uuid.NewString,
-		Now:   f.Now,
+		Now: f.Now,
 	})
 	if err != nil {
 		t.Fatalf("approval.New: %v", err)

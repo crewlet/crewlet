@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
@@ -77,7 +76,6 @@ func mountAssistant(boot *config.Bootstrap, e *engine.Engine, opts *api.Options)
 			return ok && recency == iam.RecencyStepUp
 		},
 		StepOp: statelog.StepOpID,
-		NewOp:  func() string { return statelog.NewOpID(time.Now().UTC(), "approval") },
 	})
 	if err != nil {
 		return nil, err
