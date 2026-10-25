@@ -493,7 +493,8 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 //
 // A REMOTE SERVER NEVER STARTS OAUTH (`oauth: false`): 2.0 tries it by default
 // on a remote server that refuses a request, and a headless run has nobody to
-// complete it — the bridge authenticates with the run's token, in its headers.
+// complete it — the bridge authenticates with the run's token, which is a
+// segment of the endpoint's URL path rather than a header.
 func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 	out := make(map[string]any, len(servers))
 	for name, s := range servers {

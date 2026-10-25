@@ -582,10 +582,11 @@ func buildSystem(req LaunchRequest) string {
 // no flag removes it. A seat prompt that only implies who it is loses to that,
 // so this says outright which of the two prompts is the role. The host-mode
 // backend opens its calls with the same note
-// (internal/providers/llm/cliagent harnessNote), less the sentence about
-// Crewlet's JSON envelope: here the run's tools are its own and the seat's,
-// called the way its CLI calls any tool. Constant, so it stays part of the
-// prefix a vendor caches.
+// (internal/providers/llm/cliagent harnessNote), less the sentence it adds on
+// a call that offers tools — act through the `crewlet` server's tools, never
+// the CLI's own: here the run's shell and editor are what the box is for, and
+// the seat's tools are called the way its CLI calls any tool. Constant, so it
+// stays part of the prefix a vendor caches.
 const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +
 	"Crewlet company, and Crewlet — not a person at a terminal — reads what you " +
 	"report. The tool's own instructions describe the program you run in, not your " +
