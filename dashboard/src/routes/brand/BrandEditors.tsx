@@ -525,7 +525,7 @@ export function VoiceEditor({ edit, onEdit }: BrandEditorProps) {
           onChange={(next) => setVoice({ ...voice, write_like: next })}
           maxItems={BRAND_VOICE_MAX_EXAMPLES}
           error={wrong.like}
-          helper={`Up to ${BRAND_VOICE_MAX_EXAMPLES} short lines.`}
+          helper="Short lines, one idea each."
         />
         <ListInput
           label="Avoid"
@@ -535,7 +535,7 @@ export function VoiceEditor({ edit, onEdit }: BrandEditorProps) {
           onChange={(next) => setVoice({ ...voice, avoid: next })}
           maxItems={BRAND_VOICE_MAX_EXAMPLES}
           error={wrong.avoid}
-          helper={`Up to ${BRAND_VOICE_MAX_EXAMPLES} short lines.`}
+          helper="Short lines, one idea each."
         />
       </div>
     </div>
