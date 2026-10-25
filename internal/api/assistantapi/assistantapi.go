@@ -177,13 +177,6 @@ func (s *Surface) Viewer(ctx context.Context, p iam.Principal) wire.ViewerAssist
 // 16 KiB) beside a page context (8 KiB), with room for the JSON around them.
 const maxBody = 64 << 10
 
-// principal is the person the guard resolved; the authority table admitted
-// nobody else to these routes.
-func principal(r *http.Request) iam.Principal {
-	p, _ := iam.From(r.Context())
-	return p
-}
-
 // decode reads a body into v within [maxBody] and refuses a protocol version
 // this node does not speak.
 func decode(w http.ResponseWriter, r *http.Request, v any, version func() int) bool {
