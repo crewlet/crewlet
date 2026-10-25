@@ -17,7 +17,6 @@ import {
   Button,
   Card,
   ColorSwatch,
-  ContrastBadge,
   List,
   ListItem,
   LogoSlot,
@@ -38,12 +37,11 @@ import {
   BRAND_COLOR_ROLES,
   BRAND_FACE_ROLES,
   BRAND_LOGO_SLOTS,
-  brandContrast,
   faceDrawing,
   isBrandColor,
-  type BrandContrast,
 } from "~/lib/brand/brand.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
+import { ContrastPanel } from "./ContrastPanel.tsx";
 
 /** The cards, in the order the page draws them. */
 export type BrandCardKey = "logos" | "colours" | "type" | "voice";
@@ -181,25 +179,11 @@ export function LogosBody({ document, assets }: { document: BrandDocument; asset
   );
 }
 
-/** A row of the pairs an adoption measures, each a badge with its ratio and level. */
-export function ContrastRow({ results }: { results: readonly BrandContrast[] }) {
-  return (
-    <ul className="brand-contrast" aria-label="Contrast">
-      {results.map((r) => (
-        <li key={`${r.foreground}/${r.ground}`}>
-          <ContrastBadge
-            foreground={r.foregroundColor}
-            background={r.groundColor}
-            label={r.label}
-            scale={r.scale}
-          />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** The Colours card's body: each role the brand sets, with its value to copy, and how its pairs read. */
+/**
+ * The Colours card's body: each role the brand sets, with its value to copy,
+ * and how its pairs read, the pair that blocks an adoption told apart from the
+ * ones that only advise (the setup's own panel, without its suggestions).
+ */
 export function ColoursBody({ colors }: { colors: BrandDocument["colors"] }) {
   const set = BRAND_COLOR_ROLES.filter((spec) => isBrandColor(colors[spec.role]));
   return (
@@ -214,7 +198,7 @@ export function ColoursBody({ colors }: { colors: BrandDocument["colors"] }) {
           />
         ))}
       </div>
-      <ContrastRow results={brandContrast(colors)} />
+      <ContrastPanel colors={colors} />
     </div>
   );
 }

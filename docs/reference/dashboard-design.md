@@ -1166,6 +1166,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
 | `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
+| `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Adopt as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unadopted draft ("Continue setting up") and the Brand page's **Run setup again** | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
@@ -7495,8 +7496,15 @@ for a recent sign-in when the proof is stale. Text on the light ground below
 version somebody else published is offered under the header ("Version 9 by
 @brand-agent is newer than the adopted version 7", with **Review and adopt**
 for an administrator). With no brand adopted, an administrator is offered
-**Set up your brand** (the name, the primary logo and the primary colour,
-adopted in one gesture) and everyone else reads "No brand yet". The bar holds
+**Set up your brand**, which opens the setup on a page of its own
+(`#/company/brand/setup`, six steps, each Continue saving a draft), and
+everyone else reads "No brand yet". A draft nobody adopted yet (one a setup
+left, or a version an agent or an editor published) is offered under the
+header with **Continue setting up**, and a draft that lacks a primary logo or
+colour says so ("Draft, not ready to adopt: add a primary logo and colour")
+and is never offered for adoption; the engine publishes such a draft and
+refuses only to adopt it. **Run setup again** in the bar walks every part
+again, prefilled from the kit where it stands. The bar holds
 the kit's **History** and **Stop using this brand**. The brand meets people
 where they make things: the Make row's `BrandChip` (or **Set up your brand**
 for an administrator), the company's theme first and chosen in a new deck's

@@ -74,6 +74,9 @@ import { useSetupTarget, type SetupTarget } from "./useSetupTarget.ts";
 
 const TITLE = "Set up your brand";
 
+/** A step's place in the setup. */
+const indexOf = (id: SetupStepId) => SETUP_STEPS.findIndex((s) => s.id === id);
+
 export function BrandSetup() {
   const read = useSetupTarget();
   if (read.state === "loading") {
@@ -139,7 +142,14 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     [target.document],
   );
   const [edit, setEdit] = useState<BrandEdit>(initial);
-  const [step, setStep] = useState<SetupStepId>(() => resumeStep(initial));
+  const [step, setStepNow] = useState<SetupStepId>(() => resumeStep(initial));
+  // THE FURTHEST STEP VISITED, so walking back to Logos keeps every step up
+  // to it a button in the rail.
+  const [reached, setReached] = useState<SetupStepId>(step);
+  const setStep = (to: SetupStepId) => {
+    setStepNow(to);
+    setReached((was) => (indexOf(to) > indexOf(was) ? to : was));
+  };
   const [saved, setSaved] = useState<Saved>(() => ({
     kit: target.kit,
     version: target.version,
@@ -204,7 +214,8 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
       });
       return true;
     }
-    if (answer.kind === "refused") setRefused(refusedLogos(answer.error?.body.findings, edit.document));
+    if (answer.kind === "refused")
+      setRefused(refusedLogos(answer.error?.body.findings, edit.document));
     setSaid(answer.text);
     announce(answer.text);
     return false;
@@ -223,7 +234,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   const go = async (to: SetupStepId) => {
     const part = stepSpec(step).part;
     const problem = part ? partProblem(part, edit) : undefined;
-    const forward = SETUP_STEPS.findIndex((s) => s.id === to) > SETUP_STEPS.findIndex((s) => s.id === step);
+    const forward = indexOf(to) > indexOf(step);
     if (forward && problem) return hold(problem);
     if (!problem && !(await save())) return;
     setSaid(null);
@@ -330,36 +341,39 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     <>
       <SetupWizard
         title={TITLE}
-        headingLevel={2}
         status={
           <EditingStatus
             dirty={dirty}
             saving={draftSave.busy}
             {...(saved.at ? { savedAt: saved.at } : {})}
-            labels={{ editing: "Draft", saved: "Draft saved" }}
+            labels={{ editing: "Draft" }}
           />
         }
-        exit={
-          <Button variant="ghost" onClick={() => nav.to(BRAND_PAGE)}>
+        actions={
+          <Button size="small" variant="ghost" onClick={() => nav.to(BRAND_PAGE)}>
             Exit
           </Button>
         }
         steps={steps}
         current={step}
-        onSelectStep={(id: string) => void go(id as SetupStepId)}
-        stepsLabel="Brand setup"
-        aside={
-          step === "review" ? undefined : (
-            <BrandPreview
-              document={edit.document}
-              assets={assets}
-              draft
-              title="Preview of your draft"
-            />
-          )
-        }
-        asideLabel="Preview of your draft"
-        asideToggleLabel="Preview"
+        reached={reached}
+        onSelect={(id: string) => void go(id as SetupStepId)}
+        stepsLabel="Brand setup steps"
+        heading={spec.label}
+        lead={spec.lead}
+        {...(step === "review"
+          ? {}
+          : {
+              aside: (
+                <BrandPreview
+                  document={edit.document}
+                  assets={assets}
+                  draft
+                  title="Preview of your draft"
+                />
+              ),
+              asideLabel: "Preview of your draft",
+            })}
         footer={footer}
       >
         <div ref={body} onKeyDown={onKeyDown}>
@@ -368,7 +382,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
           ) : step === "logos" ? (
             <LogosStep {...editorProps} refused={refused} />
           ) : step === "colours" ? (
-            <ColoursStep edit={edit} onEdit={setEdit} />
+            <ColoursStep {...editorProps} />
           ) : step === "type" ? (
             <TypographyStep {...editorProps} />
           ) : step === "voice" ? (

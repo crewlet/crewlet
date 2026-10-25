@@ -4,7 +4,8 @@
  * colour that would be refused holds Save with the engine's reason, and a
  * newer version is offered for review; with no brand adopted, an
  * administrator is offered the setup and everyone else is told what that
- * means.
+ * means; a draft nobody adopted is offered to continue, and one that lacks a
+ * primary logo or colour says so and is never offered for adoption.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -14,7 +15,13 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { LiveSocket, Store, type BrandAnswer } from "~/protocol/index.ts";
+import {
+  LiveSocket,
+  Store,
+  type ArtifactListItem,
+  type BrandAnswer,
+  type BrandDocument,
+} from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -71,8 +78,59 @@ const ADOPTED: NonNullable<BrandAnswer["brand"]> = {
   adopted_at: "2026-10-24T09:00:00Z",
 };
 
-/** Mount the page for a reader holding `grants`, over the company's `brand` answer. */
-function mount(grants: string[], brand: BrandAnswer["brand"]) {
+/** A brand kit in the reader's listing: the draft a setup left. */
+function kitRow(over: Partial<ArtifactListItem> = {}): ArtifactListItem {
+  return {
+    id: "01DRAFT",
+    kind: "brand",
+    title: "FairSplit brand",
+    owner: "ana",
+    owner_kind: "human",
+    head_number: 2,
+    role: "owner",
+    status: "live",
+    capabilities: [],
+    share_count: 1,
+    created_by: { name: "ana", kind: "human" },
+    updated_by: { name: "ana", kind: "human" },
+    created_at: "2026-10-24T09:00:00Z",
+    updated_at: "2026-10-24T09:00:00Z",
+    trashed_at: "0001-01-01T00:00:00Z",
+    opened_at: "0001-01-01T00:00:00Z",
+    ...over,
+  } as ArtifactListItem;
+}
+
+/** A draft with nothing chosen but its name: what the first Continue publishes. */
+const PARTIAL: BrandDocument = {
+  v: 1,
+  name: "FairSplit",
+  logos: {},
+  colors: {},
+  type: { heading: { kit: "geist" }, body: { kit: "geist" } },
+  voice: {},
+};
+
+/** Serve each kit version's `brand.json` from `versions` (`kit:n`), and 404 for anything else. */
+function serveVersions(versions: Record<string, BrandDocument>) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const m = /\/artifacts\/([^/]+)\/versions\/(\d+)\/files\/brand\.json/.exec(url);
+      const doc = m ? versions[`${decodeURIComponent(m[1]!)}:${m[2]}`] : undefined;
+      return doc
+        ? new Response(JSON.stringify(doc), { status: 200 })
+        : new Response("{}", { status: 404 });
+    }),
+  );
+}
+
+/**
+ * Mount the page for a reader holding `grants`, over the company's `brand`
+ * answer and the brand kits the reader may see (`kits`).
+ */
+function mount(grants: string[], brand: BrandAnswer["brand"], kits: ArtifactListItem[] = []) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(withDerived({ name: "FairSplit", roles: [] }));
@@ -89,7 +147,11 @@ function mount(grants: string[], brand: BrandAnswer["brand"]) {
         })
       : what === "brand"
         ? Promise.resolve({ brand })
-        : new Promise(() => {});
+        : what === "artifacts"
+          ? Promise.resolve({ contents: kits, common_prefixes: [], is_truncated: false })
+          : what === "artifact_version"
+            ? Promise.resolve({ manifest: { files: [] } })
+            : new Promise(() => {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
@@ -125,17 +187,58 @@ test("a reader reads the adopted brand card by card and is handed no control", a
 test("a reader with no brand adopted is told what that means, and offered nothing", async () => {
   mount([], null);
   expect(await screen.findByText("No brand yet")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Set up your brand" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Set up your brand" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Continue setting up" })).toBeNull();
 });
 
-test("an administrator with no brand adopted is offered the setup, held until a logo and a colour are chosen", async () => {
+test("an administrator with no brand adopted is offered the setup, on a page of its own", async () => {
   mount(["admin"], null);
-  fireEvent.click(await screen.findByRole("button", { name: "Set up your brand" }));
-  const dialog = await screen.findByRole("dialog");
-  const adopt = within(dialog).getByRole("button", { name: "Adopt as the company brand" });
-  expect(adopt.getAttribute("aria-disabled") ?? adopt.getAttribute("disabled")).not.toBeNull();
-  expect(within(dialog).getByDisplayValue("FairSplit")).toBeTruthy();
-  expect(within(dialog).getByText(/visible to everyone in the company/)).toBeTruthy();
+  const setUp = await screen.findByRole("link", { name: "Set up your brand" });
+  expect(setUp.getAttribute("href")).toBe("#/company/brand/setup");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("a draft a setup left is offered to continue, and says what it lacks before it can be adopted", async () => {
+  serveVersions({ "01DRAFT:2": PARTIAL });
+  mount(["admin"], null, [kitRow()]);
+  const notice = await screen.findByText(
+    /Draft, not ready to adopt: add a primary logo and colour\./,
+  );
+  expect(notice.textContent).toMatch(/A draft of the FairSplit brand is in progress\./);
+  const go = screen.getByRole("link", { name: "Continue setting up" });
+  expect(go.getAttribute("href")).toBe("#/company/brand/setup");
+  // NEVER OFFERED FOR ADOPTION, and the empty state offers no second way in.
+  expect(screen.queryByRole("button", { name: "Review and adopt" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Set up your brand" })).toBeNull();
+});
+
+test("a complete draft is offered to an administrator for review, and an editor continues their own", async () => {
+  const ready = {
+    ...PARTIAL,
+    logos: { primary: "logos/primary.svg" },
+    colors: { primary: "#0f7b5f" },
+  };
+  serveVersions({ "01DRAFT:2": ready });
+  mount(["admin"], null, [kitRow()]);
+  expect(await screen.findByRole("button", { name: "Review and adopt" })).toBeTruthy();
+  expect(screen.queryByText(/not ready to adopt/)).toBeNull();
+  cleanup();
+  // AN EDITOR OF THE KIT, who may not adopt: theirs to continue, an
+  // administrator's to adopt.
+  mount([], null, [kitRow({ role: "editor" })]);
+  expect(await screen.findByRole("link", { name: "Continue setting up" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Review and adopt" })).toBeNull();
+  cleanup();
+  // A VIEWER OF IT is not handed the draft at all.
+  mount([], null, [kitRow({ role: "viewer" })]);
+  expect(await screen.findByText("No brand yet")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Continue setting up" })).toBeNull();
+});
+
+test("an administrator runs the setup again from the bar", async () => {
+  mount(["admin"], ADOPTED);
+  fireEvent.click(await screen.findByRole("button", { name: /More brand actions/ }));
+  expect(await screen.findByRole("menuitem", { name: "Run setup again" })).toBeTruthy();
 });
 
 // ON A PHONE THE BAR KEEPS ONE "MORE": the brand's own menu is marked to fold
@@ -170,8 +273,10 @@ test("a newer version is offered to an administrator for review, and named to a 
     await screen.findByText(/Version 9 by brand-agent is newer than the adopted version 7\./),
   ).toBeTruthy();
   expect(screen.getByRole("button", { name: "Review and adopt" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Continue setting up" })).toBeTruthy();
   cleanup();
   mount([], newer);
   expect(await screen.findByText(/An administrator can review and adopt it\./)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Review and adopt" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Continue setting up" })).toBeNull();
 });

@@ -14,7 +14,12 @@
 import { Button, ContrastBadge, Tag, Text } from "@crewlethq/ui";
 import { CircleAlertGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
-import { brandContrast, type BrandColorRole, type BrandContrast } from "~/lib/brand/brand.ts";
+import {
+  brandContrast,
+  refusalWords,
+  type BrandColorRole,
+  type BrandContrast,
+} from "~/lib/brand/brand.ts";
 import { contrastSuggestions, pairReason } from "~/lib/brand/suggest.ts";
 
 /** Whether a pair falls short of its minimum, measured. */
@@ -58,7 +63,18 @@ export function ContrastPanel({
                 )
               ) : null}
             </span>
-            {low ? (
+            {low && pair.refuses ? (
+              // THE ENGINE'S OWN REASON for the pair that refuses, said the
+              // moment it falls short while the colours are being chosen.
+              <Text
+                as="p"
+                variant="body"
+                className="brand-refusal"
+                {...(onApply ? { role: "alert" } : {})}
+              >
+                {refusalWords(pair)}
+              </Text>
+            ) : low ? (
               <Text as="p" variant="caption" tone="secondary" className="brand-contrast-reason">
                 {pairReason(pair)}
               </Text>

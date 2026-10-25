@@ -1,8 +1,7 @@
 /**
  * The brand setup's steps, each the editor of one part of the brand: the same
  * fields the Brand page's cards edit, so a value is chosen and refused the
- * same way in both places, under a lead sentence saying why the part matters
- * to agents and what they make.
+ * same way in both places.
  */
 
 import type { ReactNode } from "react";
@@ -17,24 +16,21 @@ import {
   faceDrawing,
   warningPairs,
   warningWords,
-  type BrandColorRole,
   type BrandContrast,
   type BrandLogoSlot,
 } from "~/lib/brand/brand.ts";
 import { pairReason } from "~/lib/brand/suggest.ts";
 import { stepSpec, type SetupStepId } from "~/lib/brand/setup.ts";
-import { withDocument } from "~/lib/brand/validate.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
 import type { BrandEdit } from "~/lib/brand/draft.ts";
 import {
-  ColourFields,
+  ColoursEditor,
   IdentityFields,
   LogoFields,
   TypographyEditor,
   VoiceEditor,
   type BrandEditorProps,
 } from "../BrandEditors.tsx";
-import { ContrastPanel } from "../ContrastPanel.tsx";
 import { BrandPreview } from "../BrandPreview.tsx";
 import { PUBLIC_FACE } from "../AdoptDialog.tsx";
 
@@ -42,21 +38,18 @@ import { PUBLIC_FACE } from "../AdoptDialog.tsx";
 export const VOICE_NOTE =
   "Agents read this when they write an artifact. To shape every message they write, add a standing policy in Principles.";
 
-/** One step's body: its lead sentence over its fields. */
-function StepBody({ step, children }: { step: SetupStepId; children: ReactNode }) {
-  return (
-    <div className="brand-setup-step">
-      <Text as="p" variant="body" tone="secondary" className="brand-setup-lead">
-        {stepSpec(step).lead}
-      </Text>
-      {children}
-    </div>
-  );
+/**
+ * One step's fields, stacked. The step's heading and lead sentence are the
+ * wizard's (`SetupWizard heading` and `lead`), which focuses the heading when
+ * the step changes.
+ */
+function StepBody({ children }: { children: ReactNode }) {
+  return <div className="brand-setup-step">{children}</div>;
 }
 
 export function IdentityStep({ edit, onEdit }: Omit<BrandEditorProps, "assets">) {
   return (
-    <StepBody step="identity">
+    <StepBody>
       <IdentityFields edit={edit} onEdit={onEdit} />
     </StepBody>
   );
@@ -69,26 +62,23 @@ export function LogosStep({
   refused,
 }: BrandEditorProps & { refused: Partial<Record<BrandLogoSlot, string>> }) {
   return (
-    <StepBody step="logos">
+    <StepBody>
       <LogoFields edit={edit} onEdit={onEdit} assets={assets} purposes refused={refused} />
     </StepBody>
   );
 }
 
-export function ColoursStep({ edit, onEdit }: Omit<BrandEditorProps, "assets">) {
-  const apply = (set: Partial<Record<BrandColorRole, string>>) =>
-    onEdit(withDocument(edit, (d) => ({ ...d, colors: { ...d.colors, ...set } })));
+export function ColoursStep(props: BrandEditorProps) {
   return (
-    <StepBody step="colours">
-      <ColourFields edit={edit} onEdit={onEdit} />
-      <ContrastPanel colors={edit.document.colors} onApply={apply} />
+    <StepBody>
+      <ColoursEditor {...props} />
     </StepBody>
   );
 }
 
 export function TypographyStep(props: BrandEditorProps) {
   return (
-    <StepBody step="type">
+    <StepBody>
       <TypographyEditor {...props} />
     </StepBody>
   );
@@ -96,7 +86,7 @@ export function TypographyStep(props: BrandEditorProps) {
 
 export function VoiceStep(props: BrandEditorProps) {
   return (
-    <StepBody step="voice">
+    <StepBody>
       <Text as="p" variant="body" className="brand-setup-note">
         {VOICE_NOTE}
       </Text>
@@ -176,7 +166,7 @@ export function ReviewStep({
   const cards = summaries(doc);
   const warnings = setupWarnings(doc);
   return (
-    <StepBody step="review">
+    <StepBody>
       <div className="brand-setup-summaries">
         {(Object.keys(cards) as (keyof typeof cards)[]).map((step) => (
           <Card as="section" key={step} aria-label={stepSpec(step).label}>

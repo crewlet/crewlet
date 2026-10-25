@@ -11,6 +11,7 @@ import { BRAND_COLOR_FALLBACKS, BRAND_CONTRAST_PAIRS } from "~/contract/brand.ts
 import type { BrandDocument } from "~/protocol/index.ts";
 import {
   BRAND_COLOR_ROLES,
+  DEFAULT_FACE,
   brandChanges,
   brandContrast,
   effectiveColors,
@@ -134,8 +135,22 @@ describe("a version read back", () => {
   test("refuses what no published version holds", () => {
     expect(parseBrandDocument("not json")).toBeNull();
     expect(parseBrandDocument(JSON.stringify({ v: 2, name: "x" }))).toBeNull();
-    expect(parseBrandDocument(JSON.stringify({ ...doc(), colors: { primary: "red" } }))).toBeNull();
-    expect(parseBrandDocument(JSON.stringify({ ...doc(), logos: {} }))).toBeNull();
+    expect(
+      // A licence with no family to hold it: the engine refuses that face.
+      parseBrandDocument(JSON.stringify({ ...doc(), type: { heading: { licensed: true } } })),
+    ).toBeNull();
+  });
+
+  // A DRAFT NEEDS ONLY ITS NAME: the engine publishes one without a logo or
+  // a colour, and refuses only to adopt it.
+  test("reads a partial draft, keeping what it sets and dropping what it cannot", () => {
+    const draft = parseBrandDocument(
+      JSON.stringify({ v: 1, name: "FairSplit", logos: {}, colors: { primary: "red" } }),
+    );
+    expect(draft).not.toBeNull();
+    expect(draft!.logos).toEqual({});
+    expect(draft!.colors).toEqual({});
+    expect(draft!.type).toEqual({ heading: DEFAULT_FACE, body: DEFAULT_FACE });
   });
 
   test("keeps nothing the format does not name, and never a colour that is not #rrggbb", () => {

@@ -33,7 +33,7 @@
 .brand-voice,
 .brand-editor,
 .brand-adopt,
-.brand-setup {
+.brand-setup-step {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
@@ -63,7 +63,6 @@
     gap: var(--spacing-3);
   }
 }
-.brand-contrast,
 .brand-warnings {
   display: flex;
   flex-wrap: wrap;
@@ -71,6 +70,34 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* The contrast pairs: one a line, the badge and its verdict, then why a low
+   pair matters and the one-click changes that fix it. */
+.brand-contrast-pairs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.brand-contrast-pair {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.brand-contrast-pair-head,
+.brand-contrast-offers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.brand-contrast-reason {
+  margin: 0;
+}
+.brand-contrast-offers {
+  margin-top: var(--spacing-1);
 }
 .brand-faces {
   display: grid;
@@ -157,6 +184,45 @@
 }
 .brand-diff-was {
   color: var(--color-text-tertiary);
+}
+/* The brand setup (`#/company/brand/setup`): each step's fields, and on
+   Review a summary card a step, two a row where they fit. */
+.brand-setup-note,
+.brand-setup-hold {
+  margin: 0;
+}
+.brand-setup-hold {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.brand-setup-summaries {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+.brand-setup-summary {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: 0;
+}
+.brand-setup-summary-row {
+  display: contents;
+}
+.brand-setup-summary-row dt {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.brand-setup-summary-row dd {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-compact);
+  overflow-wrap: anywhere;
+}
+.brand-setup-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }
 /* A brand kit's gallery cover: the sample doc on its own ground, filling the card. */
 .artifacts-preview-brand {

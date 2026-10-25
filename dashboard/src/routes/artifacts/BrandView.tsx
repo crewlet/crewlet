@@ -6,10 +6,13 @@
  * WHETHER IT IS THE COMPANY'S BRAND is said over the cards: this version is
  * the adopted one, or it is not, and an administrator may review and adopt it
  * here. The kit itself is changed on Company › Brand, or by an agent or an
- * editor publishing a version; this view draws and never writes.
+ * editor publishing a version; this view draws and never writes. A draft that
+ * lacks a primary logo or colour is drawn as far as it goes (the preview
+ * falls back to Crewlet's defaults), says what it lacks, and is never offered
+ * for adoption.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   AsideLayout,
   Button,
@@ -21,12 +24,10 @@ import {
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { useViewer } from "~/lib/viewer.ts";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useRest } from "~/lib/useRest.ts";
-import { versionText } from "~/lib/artifacts/api.ts";
-import { BRAND_ENTRY } from "~/lib/brand/api.ts";
-import { mayAdoptBrand, parseBrandDocument } from "~/lib/brand/brand.ts";
-import { useBrand, useBrandAssets, versionSource } from "~/lib/brand/useBrand.ts";
+import { mayAdoptBrand } from "~/lib/brand/brand.ts";
+import { useBrand, useBrandAssets } from "~/lib/brand/useBrand.ts";
+import { useBrandVersion } from "~/lib/brand/useBrandVersion.ts";
+import { draftReadiness } from "~/lib/brand/validate.ts";
 import {
   BrandCard,
   ColoursBody,
@@ -42,25 +43,11 @@ export function BrandView({ detail, version }: { detail: ArtifactDetail; version
   const viewer = useViewer();
   const brand = useBrand();
   const [reviewing, setReviewing] = useState(false);
-  const read = useRest(version > 0 ? `brand-kit:${detail.id}:${version}` : null, async (signal) =>
-    parseBrandDocument(await versionText(detail.id, version, BRAND_ENTRY, signal)),
-  );
-  const manifest = useQuery(
-    "artifact_version",
-    { id: detail.id, n: version },
-    { enabled: version > 0 },
-  );
-  const doc = read.data;
-  const source = useMemo(() => {
-    if (!doc) return null;
-    const digests = new Map(
-      (manifest.data?.manifest.files ?? []).map((f) => [f.path, f.object.hash] as const),
-    );
-    return versionSource(detail.id, version, doc, digests);
-  }, [doc, manifest.data, detail.id, version]);
-  const assets = useBrandAssets(source);
+  const read = useBrandVersion(detail.id, version);
+  const doc = read.document;
+  const assets = useBrandAssets(read.source);
 
-  if (read.error || (read.data === null && !read.loading)) {
+  if (read.error || (doc === null && !read.loading)) {
     return (
       <Callout variant="warning" title="This version cannot be drawn">
         Its brand file is not one this page can read. Open its files from History.
@@ -72,6 +59,7 @@ export function BrandView({ detail, version }: { detail: ArtifactDetail; version
   const adoption = brand.adoption;
   const adopted = adoption?.kit === detail.id && adoption.kit_version === version;
   const canAdopt = mayAdoptBrand(viewer);
+  const readiness = draftReadiness(doc);
   return (
     <div className="brand-view">
       {adopted ? (
@@ -85,6 +73,8 @@ export function BrandView({ detail, version }: { detail: ArtifactDetail; version
         >
           This version is the company's brand.
         </Callout>
+      ) : readiness ? (
+        <Callout variant="warning">{readiness}</Callout>
       ) : canAdopt ? (
         <Callout
           variant="info"
