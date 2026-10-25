@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -550,7 +552,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 
 	for vendor, commands := range vendorCommands {
 		var out bytes.Buffer
-		if err := runIntegration(noEnviron, vendor, nil, io.Discard, &out); !errors.Is(err, flag.ErrHelp) {
+		if err := runIntegration(invocation{environ: noEnviron}, vendor, nil, io.Discard, &out); !errors.Is(err, flag.ErrHelp) {
 			t.Fatalf("%s: bare invocation returned %v, want the help sentinel", vendor, err)
 		}
 		usage := out.String()
@@ -568,7 +570,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 			// AND IT REACHES THAT RUNNER. `-h` makes every subcommand
 			// print its flags and stop, which is the cheapest proof that
 			// the dispatch found it rather than falling through.
-			if err := runIntegration(noEnviron, vendor, []string{command.sub, "-h"},
+			if err := runIntegration(invocation{environ: noEnviron}, vendor, []string{command.sub, "-h"},
 				io.Discard, io.Discard); errors.Is(err, errUnknownSub) {
 				t.Errorf("%s: usage names %q but dispatch does not reach it",
 					vendor, command.sub)
@@ -576,7 +578,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 		}
 		// AN UNKNOWN SUBCOMMAND IS AN ERROR, not a usage dump: a typo
 		// answered with help reads as though the command was accepted.
-		if err := runIntegration(noEnviron, vendor, []string{"nonesuch"},
+		if err := runIntegration(invocation{environ: noEnviron}, vendor, []string{"nonesuch"},
 			io.Discard, io.Discard); !errors.Is(err, errUnknownSub) {
 			t.Errorf("%s: an unknown subcommand returned %v, want an unknown-command error",
 				vendor, err)
@@ -721,5 +723,345 @@ func TestTheServiceAccountModeComesFromTheDocumentUnlessTheFlagSaysOtherwise(t *
 	}
 	if got := accountMode(nil, false, ""); got != gitlab.ModeGroup {
 		t.Errorf("no gitlab block at all chose %q, want the group route", got)
+	}
+}
+
+// outrankRoute is a store a provisioning run reads through that holds held:
+// the args that send the run there and the environment it runs in, and the
+// node, where the route is one.
+type outrankRoute struct {
+	name string
+	open func(t *testing.T, held map[string]string) (args []string, node *revealNode)
+	// says is what a refusal names the store by.
+	says func(args []string, node *revealNode) string
+}
+
+var outrankRoutes = []outrankRoute{
+	{
+		name: "through a running node",
+		open: func(t *testing.T, held map[string]string) ([]string, *revealNode) {
+			node := newRevealNode(t, held)
+			return []string{"-api", node.server.URL,
+				"-config", filepath.Join(t.TempDir(), "absent.yaml")}, node
+		},
+		says: func(_ []string, node *revealNode) string {
+			return "read through the running node at " + node.server.URL
+		},
+	},
+	{
+		name: "on rows that are the whole store",
+		open: func(t *testing.T, held map[string]string) ([]string, *revealNode) {
+			cfg := bootstrapWithKeyring(t, "k1")
+			for name, value := range held {
+				if _, errs, err := secretsCmd(t, cfg, "set", name, "-value", value); err != nil {
+					t.Fatalf("seed %s: %v (%s)", name, err, errs)
+				}
+			}
+			return []string{"-config", cfg}, nil
+		},
+		says: func(args []string, _ *revealNode) string {
+			boot, err := loadBootstrapForStore(args[len(args)-1])
+			if err != nil {
+				return err.Error()
+			}
+			return "this node's own rows at " + absolute(boot.Store.Path)
+		},
+	},
+}
+
+// A SINK THE COMPANY'S STORE OUTRANKS IS REFUSED BEFORE THE VENDOR, where the
+// store holds a name the run can mint into.
+//
+// The engine resolves every ${VAR} from the store before its environment, so a
+// value an -env-file or -print run mints for a name the store holds is never
+// read: the vendor holds the new value and the engine goes on with the stored
+// one — a seat's earlier token retired under it, a hook re-keyed with a key
+// the engine does not hold. So each provisioner, through a running node and on
+// rows that are the whole store alike, refuses such a run naming the store,
+// the names, the sink and -secret-store, and:
+//
+//   - no vendor is reached — every vendor address here fails the case on any
+//     request, and Slack's run, whose vendor is no address this case can
+//     name, writes no ledger, which its first step at Slack would;
+//   - nothing is printed but the run's route line: not its plan;
+//   - no env file is written, and nothing is written through the node.
+//
+// Mutation: let refuseOutranked through, and every row goes red; leave the
+// seats' tokens out of what GitLab, Mattermost or Slack can mint into, or the
+// flag for a fresh value out of a webhook secret's, and that row does; count
+// Slack's signing secret only where an install runs, and the -no-install row
+// does.
+func TestASinkTheStoreOutranksIsRefusedBeforeTheVendor(t *testing.T) {
+	t.Parallel()
+	const public = "-public-url=https://crewlet.example.com"
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		held   map[string]string
+		vendor string
+	}{
+		{"gitlab provision, a seat's token",
+			[]string{"gitlab", "provision", "-admin-token=glpat-admin", public},
+			map[string]string{"GITLAB_TOKEN_CEO": "glpat-ceo"}, "GitLab"},
+		{"gitlab provision -rotate, the signing secret",
+			[]string{"gitlab", "provision", "-admin-token=glpat-admin", public, "-rotate"},
+			map[string]string{"GITLAB_SIGNING_SECRET": storedSigningSecret}, "GitLab"},
+		{"mattermost provision, a bot's token",
+			[]string{"mattermost", "provision", "-admin-token=mm-admin"},
+			map[string]string{"MM_TOKEN_CEO": "mm-ceo"}, "Mattermost"},
+		{"github provision -recreate-webhooks",
+			[]string{"github", "provision", public, "-recreate-webhooks"},
+			map[string]string{"GITHUB_WEBHOOK_SECRET": "a-stored-secret"}, "GitHub"},
+		{"jira provision -recreate-webhook",
+			[]string{"jira", "provision", public, "-recreate-webhook"},
+			map[string]string{"JIRA_WEBHOOK_SECRET": "a-stored-secret"}, "Jira"},
+		{"confluence provision -recreate-webhooks",
+			[]string{"confluence", "provision", public, "-recreate-webhooks"},
+			map[string]string{"CONFLUENCE_WEBHOOK_SECRET": "a-stored-secret"}, "Confluence"},
+		{"slack provision, a bot's token",
+			[]string{"slack", "provision", public},
+			map[string]string{"SLACK_BOT_TOKEN_CEO": "xoxb-ceo"}, "Slack"},
+		{"slack provision, a signing secret",
+			[]string{"slack", "provision", public},
+			map[string]string{"SLACK_SIGNING_SECRET_CEO": "a-stored-secret"}, "Slack"},
+		{"slack provision -no-install, a signing secret",
+			[]string{"slack", "provision", public, "-no-install"},
+			map[string]string{"SLACK_SIGNING_SECRET_CEO": "a-stored-secret"}, "Slack"},
+	} {
+		for _, route := range outrankRoutes {
+			for _, sinkName := range []string{"-print", "-env-file"} {
+				t.Run(tc.name+", "+route.name+", "+sinkName, func(t *testing.T) {
+					t.Parallel()
+					dir := t.TempDir()
+					envFile := filepath.Join(dir, "minted.env")
+					ledger := filepath.Join(dir, "slack-apps.json")
+					sink, says := []string{"-print"}, "this run's output (-print)"
+					if sinkName == "-env-file" {
+						sink, says = []string{"-env-file", envFile}, "the env file "+envFile
+					}
+					storeArgs, node := route.open(t, maps.Clone(tc.held))
+					args := append(slices.Clone(tc.args[:2]),
+						companyAt(t, readerCompanyDoc, untouchedVendor(t)))
+					args = append(append(args, tc.args[2:]...), sink...)
+					args = append(append(args, "-ledger", ledger), storeArgs...)
+					if tc.args[0] != "slack" {
+						args = slices.DeleteFunc(args, func(arg string) bool {
+							return arg == "-ledger" || arg == ledger
+						})
+					}
+
+					out, errs, err := cli(t, args...)
+					if !errors.Is(err, errOutrankedSink) {
+						t.Fatalf("err = %v, want the outranked-sink refusal\n%s%s", err, out, errs)
+					}
+					want := []string{"crewlet " + tc.args[0] + " provision", says,
+						route.says(storeArgs, node), "-secret-store",
+						"Nothing was sent to " + tc.vendor + "."}
+					for name := range tc.held {
+						want = append(want, "${"+name+"}")
+					}
+					for _, w := range want {
+						if !strings.Contains(err.Error(), w) {
+							t.Errorf("the refusal omits %q: %v", w, err)
+						}
+					}
+					if lines := strings.Split(strings.TrimSpace(out), "\n"); len(lines) != 1 ||
+						!strings.Contains(lines[0], "secret store") &&
+							!strings.Contains(lines[0], "running node") || errs != "" {
+						t.Errorf("a refused run printed more than its route line:\n%s%s", out, errs)
+					}
+					for _, path := range []string{envFile, ledger} {
+						if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+							t.Errorf("a refused run wrote %s: %v", path, statErr)
+						}
+					}
+					if node != nil {
+						node.mu.Lock()
+						stored := len(node.stored)
+						node.mu.Unlock()
+						if stored != 0 {
+							t.Errorf("a refused run wrote %d value(s) through the node", stored)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+// reachedVendor is a vendor that refuses every request with a 401, and how
+// many it has had: a run that reached it was not refused before it.
+func reachedVendor(t *testing.T) (string, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"message":"401 Unauthorized"}`)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return requests
+	}
+}
+
+// A RUN THE STORE DOES NOT OUTRANK GOES ON TO THE VENDOR: one whose store holds
+// nothing it can mint into — a webhook secret that resolves, registered as it
+// is; a secret it would mint with no hook to register, for want of an address
+// or, on GitHub, of a provisioning block naming where; a Slack run under
+// -no-install, which installs nothing and so records no bot token; a run whose
+// store holds none of its names — one whose sink is the store itself, which
+// reads each value back and records over it, and one with no store at all,
+// which nothing outranks. No case's run reaches Slack ([unreachableSlack]), so
+// a Slack run is seen going on to the step after the store: the deployment
+// address it was not given.
+//
+// Mutation: count a webhook secret as one the run mints whatever its flag,
+// or wherever it registers no hook — no address, or no GitHub provisioning
+// block — and that GitHub row is refused; count a bot token under -no-install,
+// and Slack's is; ask a -secret-store run, and its row is; refuse on a name the
+// store does not hold, and the empty store's row is.
+func TestARunTheStoreDoesNotOutrankGoesOnToTheVendor(t *testing.T) {
+	t.Parallel()
+	const public = "-public-url=https://crewlet.example.com"
+	signing := map[string]string{"GITLAB_SIGNING_SECRET": storedSigningSecret}
+	const githubProvisioning = "    provisioning:\n      org: nimbus\n"
+	unprovisioned := strings.Replace(readerCompanyDoc,
+		"\"${GITHUB_WEBHOOK_SECRET}\"\n"+githubProvisioning, "\"${GITHUB_WEBHOOK_SECRET}\"\n", 1)
+	if unprovisioned == readerCompanyDoc {
+		t.Fatal("readerCompanyDoc's github block has no provisioning block to leave out")
+	}
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		held  map[string]string
+		route bool
+		// doc is the company the run reads, where it is not readerCompanyDoc.
+		doc string
+		// stop is what a Slack run stops at past the store: no case's run
+		// reaches Slack ([unreachableSlack]), so this is how one is seen to
+		// have gone on.
+		stop string
+	}{
+		{name: "github provision, a stored webhook secret it registers as it is",
+			args: []string{"github", "provision", "-print", public},
+			held: map[string]string{"GITHUB_WEBHOOK_SECRET": "a-stored-secret"}, route: true},
+		{name: "github provision -recreate-webhooks with no address to register a hook at",
+			args: []string{"github", "provision", "-print", "-recreate-webhooks"},
+			held: map[string]string{"GITHUB_WEBHOOK_SECRET": "a-stored-secret"}, route: true},
+		{name: "github provision -recreate-webhooks with no provisioning block to register a hook on",
+			args: []string{"github", "provision", "-print", public, "-recreate-webhooks"},
+			held: map[string]string{"GITHUB_WEBHOOK_SECRET": "a-stored-secret"}, route: true,
+			doc: unprovisioned},
+		{name: "slack provision -no-install, a bot's token held",
+			args: []string{"slack", "provision", "-print", "-no-install"},
+			held: map[string]string{"SLACK_BOT_TOKEN_CEO": "xoxb-ceo"}, route: true,
+			stop: "no address for this deployment"},
+		{name: "gitlab provision, a stored signing secret it reuses",
+			args: []string{"gitlab", "provision", "-print", "-admin-token=glpat-admin", public},
+			held: signing, route: true},
+		{name: "gitlab provision, a store holding none of its names",
+			args: []string{"gitlab", "provision", "-env-file", "ENVFILE", "-admin-token=glpat-admin",
+				public}, held: map[string]string{"UNRELATED": "x"}, route: true},
+		{name: "gitlab provision -secret-store, its seat's token held",
+			args: []string{"gitlab", "provision", "-secret-store", "-admin-token=glpat-admin", public},
+			held: map[string]string{"GITLAB_TOKEN_CEO": "glpat-ceo"}, route: true},
+		{name: "gitlab provision with no store",
+			args: []string{"gitlab", "provision", "-print", "-admin-token=glpat-admin", public}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vendor, reached := reachedVendor(t)
+			doc := tc.doc
+			if doc == "" {
+				doc = readerCompanyDoc
+			}
+			args := append(slices.Clone(tc.args[:2]), companyAt(t, doc, vendor))
+			for _, arg := range tc.args[2:] {
+				if arg == "ENVFILE" {
+					arg = filepath.Join(t.TempDir(), "minted.env")
+				}
+				args = append(args, arg)
+			}
+			if tc.route {
+				storeArgs, _ := outrankRoutes[0].open(t, maps.Clone(tc.held))
+				args = append(args, storeArgs...)
+			} else {
+				args = append(args, "-config", filepath.Join(t.TempDir(), "absent.yaml"))
+			}
+			out, errs, err := cli(t, args...)
+			if errors.Is(err, errOutrankedSink) {
+				t.Fatalf("a run the store does not outrank was refused: %v\n%s%s", err, out, errs)
+			}
+			if tc.stop != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.stop) {
+					t.Errorf("err = %v, want the run to go on to %q\n%s%s", err, tc.stop, out, errs)
+				}
+				return
+			}
+			if reached() == 0 {
+				t.Errorf("the run never reached the vendor: %v\n%s%s", err, out, errs)
+			}
+		})
+	}
+}
+
+// A SLACK RUN WHOSE SINK IS NO STORE ONLY LISTS THE STORE: what it needs of it
+// is which names it holds, so through a running node it takes the listing and
+// reveals nothing, says so on its first line, and goes on where the store holds
+// none of its names. With no token for the node it is told of the token a
+// listing takes, which a machine token can be; a listing the node refuses is
+// shown the node's refusal. Neither is told anything of the Tier A token a
+// reveal takes.
+//
+// Mutation: route it as a run that reveals, and the no-token refusal names a
+// reveal; hand a refused listing the reveal's remedy, and that refusal does;
+// read its names' values, and the node is asked for them.
+func TestASlackRunWhoseSinkIsNoStoreOnlyListsTheStore(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"UNRELATED": "x"})
+	company := companyAt(t, readerCompanyDoc, untouchedVendor(t))
+	args := []string{"slack", "provision", company, "-print",
+		"-public-url", "https://crewlet.example.com", "-api", node.server.URL,
+		"-config", filepath.Join(t.TempDir(), "absent.yaml"),
+		"-ledger", filepath.Join(t.TempDir(), "slack-apps.json")}
+
+	out, errs, err := cliIn(t, tokenEnviron("a-machine-token"), args...)
+	if errors.Is(err, errOutrankedSink) || errors.Is(err, errStoppedNode) {
+		t.Fatalf("a run the store holds none of the names of was refused: %v\n%s%s", err, out, errs)
+	}
+	first, _, _ := strings.Cut(out, "\n")
+	if want := "checking which names the running node at " + node.server.URL +
+		" holds: this command reads no stored value, so none was revealed."; first != want {
+		t.Errorf("the first line is %q, want %q", first, want)
+	}
+	if asked, gets := node.batches(); len(asked) != 0 || len(gets) != 0 || node.listed() != 1 {
+		t.Errorf("listed %d time(s), and asked %v and %v: want the one listing and no reveal",
+			node.listed(), asked, gets)
+	}
+
+	requests := node.requests()
+	_, _, err = cliIn(t, noEnviron, args...)
+	if err == nil || !strings.Contains(err.Error(), "an API token or an access token") ||
+		strings.Contains(err.Error(), "reveal") {
+		t.Errorf("with no token the run was told %v, want the token a listing takes", err)
+	}
+	if node.requests() != requests {
+		t.Error("a run with no token reached the node")
+	}
+
+	refusing := newRevealNode(t, nil)
+	refusing.refuseListing = http.StatusForbidden
+	args[slices.Index(args, "-api")+1] = refusing.server.URL
+	_, _, err = cliIn(t, tokenEnviron("a-machine-token"), args...)
+	if err == nil || !strings.Contains(err.Error(), "403") ||
+		strings.Contains(err.Error(), "reveal") {
+		t.Errorf("a refused listing was told %v, want the node's refusal and no reveal", err)
 	}
 }

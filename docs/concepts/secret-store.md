@@ -473,10 +473,12 @@ The **environment stays the bootstrap path**, and it is a perfectly good place t
 > the credential reaches the fleet at that start. Anywhere else — a node that
 > has run, a cluster member, an external broker's client — a provisioner that
 > reads the company's values is refused before it mints, whatever its sink
-> (`slack provision` reads them only with `-secret-store`), because what it
-> would read there is one node's rows and not the company's values: run it
-> beside the running engine, or name one with `-api`. `-env-file PATH` and
-> `-print` remain for feeding a secret manager instead.
+> (`slack provision` included: with `-env-file` or `-print` it still asks the
+> store which of its names it holds), because what it would read there is one
+> node's rows and not the company's values: run it beside the running engine,
+> or name one with `-api`. `-env-file PATH` and `-print` remain for feeding a
+> secret manager instead — for names the store does not hold, since the store
+> outranks them (below).
 
 ---
 
@@ -509,6 +511,16 @@ before the engine starts; the engine itself reads `${VAR}` from this store and
 then from the process environment, and from nowhere else. `-secret-store` is
 the one that needs no file and no restart — see [`crewlet config
 activate`](../reference/cli.md#crewlet-config-activate).
+
+**And the store outranks the other two.** A value an `-env-file` or `-print`
+run mints for a name this store already holds is never read: the third-party
+app holds the new value, the engine goes on with the stored one, and a seat's
+earlier token or a hook's earlier key is retired under it. So such a run is
+refused before it reaches the third-party app wherever its store — the running
+node, or a single node's own rows before its first start — holds a name it can
+mint into, naming them: record with `-secret-store`, or remove the stored value
+first ([a sink the store
+outranks](../reference/cli.md#a-sink-the-store-outranks)).
 
 ---
 

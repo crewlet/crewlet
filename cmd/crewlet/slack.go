@@ -27,7 +27,7 @@ import (
 // takes the code back — and when there is no operator to ask (-dry-run, or a
 // pipe), it prints the URLs and stops rather than pretending.
 
-func runSlackProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runSlackProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("slack provision", flag.ContinueOnError)
@@ -80,8 +80,9 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 	// address is Tier A's now ([webhookBase]), resolved before the file is
 	// decoded, so resolving the company's values here would open the store,
 	// or reveal credentials through the running node, for nothing read.
-	// Loading it opens nothing: only -secret-store reaches the store.
-	companySecrets, err := openCompanyStore(environ, sinks.store,
+	// Loading it opens nothing: only a real run with seats to provision
+	// reaches the store, below, for what its sink needs of it.
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
 		"crewlet slack provision", readsTheCompany)
 	if err != nil {
 		return err
@@ -113,7 +114,7 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 
 	refresh := strings.TrimSpace(*refreshToken)
 	if refresh == "" {
-		refresh = operatorCredential("SLACK_CONFIG_REFRESH_TOKEN")
+		refresh = operatorCredential(inv.environ, "SLACK_CONFIG_REFRESH_TOKEN")
 	}
 
 	if *dryRun || !provisions {
@@ -126,7 +127,7 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		// manifest from the create costs a minute per seat and leaves
 		// the seats before the bad one already created.
 		res, checked := slack.Validate(context.Background(), slack.Options{
-			Admin: slack.NewAdmin(nil), Seats: plans,
+			Admin: slack.NewAdmin(inv.slack), Seats: plans,
 			Ledger: ledger, LedgerPath: *ledgerPath,
 			BaseURL: base, ConfigRefreshToken: refresh,
 			Only: splitHandles(*only),
@@ -144,21 +145,33 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		}
 		return nil
 	}
+	// A REAL RUN DECIDES ITS ROUTE BEFORE IT PRINTS ANYTHING, as every reader
+	// of the company does, whatever its sink — and the sink is chosen first,
+	// for the reason GitLab's command gives.
+	if err = sinks.check(); err != nil {
+		return err
+	}
 	ctx := context.Background()
 	if sinks.recordsInStore() {
 		// A RUN THAT RECORDS INTO THE STORE READS IT BACK — each seat's
-		// token, to leave an installed app alone — so it decides its route
-		// before it prints anything, as every reader of the company does,
-		// and reads those tokens in one batch up front. -reinstall reads
-		// none of them back. -print and -env-file read no store at all.
-		if err = sinks.check(); err != nil {
-			return err
-		}
+		// token, to leave an installed app alone — and reads those tokens
+		// in one batch up front. -reinstall reads none of them back.
 		var readBack []string
 		if !*reinstall {
 			readBack = slackTokenVars(plans, splitHandles(*only))
 		}
 		if _, err = companySecrets.stored(ctx, readBack, stdout); err != nil {
+			return err
+		}
+	} else {
+		// AND ONE THAT RECORDS ANYWHERE ELSE ASKS THE STORE WHAT IT HOLDS,
+		// and nothing more: an install mints each seat's token and the run
+		// records each app's signing secret, and where the store holds
+		// either name, the engine reads the store's over anything recorded
+		// here.
+		companySecrets.onlyLists()
+		if err = sinks.refuseOutranked(ctx, companySecrets, "Slack",
+			slackMintsInto(plans, splitHandles(*only), !*noInstall), stdout); err != nil {
 			return err
 		}
 	}
@@ -179,7 +192,7 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 	}
 
 	opts := slack.Options{
-		Admin: slack.NewAdmin(nil), Seats: plans,
+		Admin: slack.NewAdmin(inv.slack), Seats: plans,
 		Ledger: ledger, LedgerPath: *ledgerPath, Sink: sink,
 		BaseURL: base, ConfigRefreshToken: refresh, Reinstall: *reinstall,
 		Only: splitHandles(*only),
@@ -210,6 +223,30 @@ func slackTokenVars(plans []slack.SeatPlan, only []string) []string {
 	for _, plan := range plans {
 		if slackProvisions(plan, only) {
 			names = append(names, plan.TokenVar)
+		}
+	}
+	return unionReads(names)
+}
+
+// slackMintsInto is every variable a run can record a seat's credentials
+// into, for each seat it provisions ([slackProvisions]): its signing secret,
+// which the run records from the app it creates or the ledger holds, and,
+// where install is set (the run has no -no-install), its bot token, which an
+// install mints. Whether an app is created or an install run is settled
+// against the ledger and Slack part way through the run, so every such seat
+// counts.
+//
+// -no-install RECORDS NO BOT TOKEN: with nobody to ask for a code, each seat's
+// authorize URL is printed and nothing is installed, so counting the token
+// there would refuse a run over a name it never writes.
+func slackMintsInto(plans []slack.SeatPlan, only []string, install bool) []string {
+	var names []string
+	for _, plan := range plans {
+		if slackProvisions(plan, only) {
+			names = append(names, plan.SigningVar)
+			if install {
+				names = append(names, plan.TokenVar)
+			}
 		}
 	}
 	return unionReads(names)

@@ -40,7 +40,7 @@ func jiraProvisionReads(cfg *config.Jira, o *org.Organization) []string {
 		jira.SeatCredentialReads(o))
 }
 
-func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("jira provision", flag.ContinueOnError)
@@ -94,7 +94,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		}
 	}
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, sinks.store,
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
 		"crewlet jira provision", readsTheCompany)
 	if err != nil {
 		return err
@@ -105,6 +105,13 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		return err
 	}
 	boot := companySecrets.boot
+	hookBase := webhookBase(*publicURL, boot)
+	if !*dryRun {
+		if err = sinks.refuseOutranked(ctx, companySecrets, "Jira",
+			webhookMintsInto(cfg.WebhookSecret, *recreate, env.Value, hookBase), stdout); err != nil {
+			return err
+		}
+	}
 
 	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
@@ -139,7 +146,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, boot)
+		opts.WebhookBase = hookBase
 		opts.WebhookBaseKey = webhookBaseKey(boot)
 		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {

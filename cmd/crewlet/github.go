@@ -38,7 +38,7 @@ func githubProvisionReads(cfg *config.GitHub, o *org.Organization) []string {
 	return unionReads(fieldReads(cfg.URL, cfg.Token, cfg.WebhookSecret), github.CredentialReads(o))
 }
 
-func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("github provision", flag.ContinueOnError)
@@ -92,7 +92,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		}
 	}
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, sinks.store,
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
 		"crewlet github provision", readsTheCompany)
 	if err != nil {
 		return err
@@ -103,6 +103,23 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		return err
 	}
 	boot := companySecrets.boot
+	base := webhookBase(*publicURL, boot)
+	if !*dryRun {
+		// A HOOK IS REGISTERED ONLY ON WHAT integrations.github.provisioning
+		// NAMES, and with no such block the run reaches no webhook secret at
+		// all — it registers nothing, an address or not — so it mints into
+		// nothing either. Counting the secret there would refuse a run that
+		// records nothing, and send its operator to unset the key the hooks
+		// they registered by hand verify with.
+		hookAt := base
+		if cfg.Provisioning == nil {
+			hookAt = ""
+		}
+		if err = sinks.refuseOutranked(ctx, companySecrets, "GitHub",
+			webhookMintsInto(cfg.WebhookSecret, *recreate, env.Value, hookAt), stdout); err != nil {
+			return err
+		}
+	}
 
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
@@ -140,7 +157,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		fmt.Fprintln(stdout,
 			"-dry-run: reading GitHub; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, boot)
+		opts.WebhookBase = base
 		opts.WebhookBaseKey = webhookBaseKey(boot)
 		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {

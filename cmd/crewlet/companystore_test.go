@@ -223,7 +223,9 @@ func companyAt(t *testing.T, doc, vendor string) string {
 
 // readerCompanyDoc is a company every reader of the company has work in: a
 // GitLab seat, a Mattermost bot, a Slack app, a GitHub, Jira and Confluence
-// block, each signing secret a whole ${VAR}, every vendor at VENDOR.
+// block, each signing secret a whole ${VAR}, every vendor at VENDOR — GitHub's
+// with an organization to register its hook on, without which a run registers
+// none.
 const readerCompanyDoc = `
 name: Nimbus
 providers:
@@ -242,6 +244,8 @@ integrations:
     url: VENDOR
     token: ghp-an-org-token
     webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
+    provisioning:
+      org: nimbus
   jira:
     url: VENDOR
     email: ops@example.com
@@ -345,8 +349,10 @@ type readerRun struct {
 
 // readersOfTheCompany is every command that reads the company's stored values:
 // each vendor command that resolves the company, its -dry-run where that dry
-// run resolves values, the command's flag for a fresh value, `slack provision
-// -secret-store`, and the four llm reports.
+// run resolves values, the command's flag for a fresh value, a real `slack
+// provision` whatever its sink — `-secret-store` reads the seats' tokens back,
+// and `-print` asks which of its names the store holds, which it outranks —
+// and the four llm reports.
 func readersOfTheCompany() []readerRun {
 	vendorRun := func(name string, extra ...string) readerRun {
 		fields := strings.Fields(name)
@@ -378,6 +384,7 @@ func readersOfTheCompany() []readerRun {
 			}}
 	}
 	const sink, public = "-print", "-public-url=https://crewlet.example.com"
+	const slackConfigToken = "-config-token=xoxe-1-a-fixture-refresh-token"
 	return []readerRun{
 		vendorRun("gitlab provision", sink, public, "-admin-token=glpat-admin"),
 		vendorRun("gitlab provision", "-dry-run", public),
@@ -396,9 +403,13 @@ func readersOfTheCompany() []readerRun {
 		vendorRun("mattermost provision", sink, "-admin-token=mm-admin"),
 		vendorRun("mattermost provision", sink, "-admin-token=mm-admin", "-rotate"),
 		vendorRun("mattermost doctor", "-admin-token=mm-admin"),
-		vendorRun("slack provision", "-secret-store", public, "-config-token=xoxe-refresh"),
-		vendorRun("slack provision", "-secret-store", public, "-config-token=xoxe-refresh",
-			"-reinstall"),
+		// WITH AN APP-CONFIGURATION TOKEN, so a run the refusal let through
+		// goes on to Slack, which no case's run reaches: its first request
+		// fails the case ([unreachableSlack]).
+		vendorRun("slack provision", "-secret-store", public, slackConfigToken),
+		vendorRun("slack provision", "-secret-store", public, slackConfigToken, "-reinstall"),
+		vendorRun("slack provision", sink, public, slackConfigToken),
+		vendorRun("slack provision", sink, public, slackConfigToken, "-reinstall"),
 		llmRun("list"),
 		llmRun("status"),
 		llmRun("export"),
@@ -504,9 +515,9 @@ func TestAStoppedNodeThatHasRunRefusesEveryReaderOfTheCompany(t *testing.T) {
 }
 
 // A RUN THAT READS NO STORED VALUE DECIDES NO ROUTE, and so runs on a stopped
-// node that has run: a dry run that resolves nothing, a plan with nothing in it,
-// a Slack run whose sink is no store. Refusing them would refuse a question
-// the store has no part in.
+// node that has run: a dry run that resolves nothing, a plan with nothing in it
+// — a Slack run with no seat to provision among them, whatever its sink.
+// Refusing them would refuse a question the store has no part in.
 //
 // A Slack seat whose credentials are literals is no seat to provision: the run
 // leaves it to the operator who wrote them, and records or reads back nothing
@@ -1221,12 +1232,11 @@ func TestARunReadingTheCompanysValuesIsToldItsOwnWayPast(t *testing.T) {
 
 // COMMANDS ON A RUNNING NODE DO NOT DIE ON ITS LOCK.
 //
-// `slack provision` without -secret-store builds URLs and manifests from Tier
-// A's address and reads none of the company's values, so against a running
-// node it neither meets the lock nor needs a credential for the node. `llm
-// list` reads the company's values and so reads them through the node, as
-// every provisioning command does — the entry's conventional bundle among
-// them, in one batch.
+// `slack provision` with no seat to provision reads none of the company's
+// values and asks the store nothing, so against a running node it neither
+// meets the lock nor needs a credential for the node. `llm list` reads the
+// company's values and so reads them through the node, as every provisioning
+// command does — the entry's conventional bundle among them, in one batch.
 func TestCommandsOnARunningNodeDoNotDieOnItsLock(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"CREWLET_LLM_CLI_SUB_CREDENTIALS": aBundle(t)})
@@ -1393,15 +1403,11 @@ func TestASecretStoreSinkReadsBackThroughTheRunsRoute(t *testing.T) {
 // does anything — and with its flag for a fresh value, which reads none back,
 // it asks for none. Each run here stops after the reads, before it reaches the
 // vendor: GitLab and Mattermost at the administrator token they were not
-// given, Slack at the deployment address no Tier A and no -public-url gives
-// it.
-//
-// Not parallel: it clears the operator's variables in the process
-// environment, which these commands read their administrator token from.
+// given — the invocation's environment holds none, whatever the process
+// exports ([operatorCredential]) — Slack at the deployment address no Tier A
+// and no -public-url gives it.
 func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
-	t.Setenv("GITLAB_ADMIN_TOKEN", "")
-	t.Setenv("MATTERMOST_ADMIN_TOKEN", "")
-	t.Setenv("SLACK_CONFIG_REFRESH_TOKEN", "")
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		args  func(vendor string) []string

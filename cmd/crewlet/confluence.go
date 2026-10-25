@@ -27,7 +27,7 @@ func confluenceReads(cfg *config.Confluence) []string {
 	return fieldReads(cfg.URL, cfg.CloudID, cfg.SiteURL, cfg.Email, cfg.Token)
 }
 
-func runConfluenceImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runConfluenceImport(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 	directory, args := splitSubject(args)
 
@@ -79,7 +79,7 @@ func runConfluenceImport(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, storeAt,
+	companySecrets, err := openCompanyStore(inv.environ, storeAt,
 		"crewlet confluence import", readsTheCompany)
 	if err != nil {
 		return err
@@ -170,7 +170,7 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 // SKILLS-ONLY, and that is not an omission: knowledge docs are searched live
 // at query time and never loaded into a registry, so for them there is
 // nothing to resync.
-func runConfluenceResync(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runConfluenceResync(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("confluence resync", flag.ContinueOnError)
@@ -201,7 +201,7 @@ func runConfluenceResync(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, storeAt,
+	companySecrets, err := openCompanyStore(inv.environ, storeAt,
 		"crewlet confluence resync", readsTheCompany)
 	if err != nil {
 		return err
@@ -269,7 +269,7 @@ func confluenceProvisionReads(cfg *config.Confluence) []string {
 	return unionReads(confluenceReads(cfg), fieldReads(cfg.WebhookSecret, cfg.WebhookToken))
 }
 
-func runConfluenceProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runConfluenceProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("confluence provision", flag.ContinueOnError)
@@ -316,7 +316,7 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 		}
 	}
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, sinks.store,
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
 		"crewlet confluence provision", readsTheCompany)
 	if err != nil {
 		return err
@@ -327,6 +327,18 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 		return err
 	}
 	boot := companySecrets.boot
+	// BOTH OF THE HOOKS' VALUES: which one the instance's hooks use — the
+	// token on Cloud, the secret on Data Center — is the instance's answer,
+	// which the run has not asked for yet.
+	hookBase := webhookBase(*publicURL, boot)
+	if !*dryRun {
+		if err = sinks.refuseOutranked(ctx, companySecrets, "Confluence", unionReads(
+			webhookMintsInto(cfg.WebhookSecret, *recreate, env.Value, hookBase),
+			webhookMintsInto(cfg.WebhookToken, *recreate, env.Value, hookBase)),
+			stdout); err != nil {
+			return err
+		}
+	}
 
 	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
@@ -357,7 +369,7 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no hook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, boot)
+		opts.WebhookBase = hookBase
 		opts.WebhookBaseKey = webhookBaseKey(boot)
 		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {

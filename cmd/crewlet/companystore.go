@@ -101,6 +101,17 @@ import (
 // A run that reads no stored value decides no route at all and runs
 // anywhere: a dry run that resolves nothing, a plan with nothing in it.
 //
+// # A run that only asks which names the store holds
+//
+// A provisioning run whose sink is an env file or its own output asks its
+// store which of the names the run can mint into it holds, since the store
+// outranks that sink ([sinkFlags.refuseOutranked]). That is a read of the
+// company's store like any other — a stopped node that has run cannot answer
+// it, so the run is refused there — but where it is all the run reads (a
+// Slack run whose sink is no store), the listing is the whole of it, and the
+// route takes the token a listing takes rather than a reveal's
+// ([companyStore.onlyLists]).
+//
 // # No Tier A, and no -api
 //
 // With no Tier A file at `-config` and no `-api`, there is no store to read:
@@ -156,6 +167,10 @@ type companyStore struct {
 	closeTarget func()
 	routeErr    error
 
+	// listsOnly is whether the run reveals nothing through its route and
+	// only asks it which names it holds ([companyStore.onlyLists]).
+	listsOnly bool
+
 	// values is what the run has read through its route, nil until it has
 	// read; saidEnvOnly is whether the environment-only line was printed.
 	values      *storedValues
@@ -208,10 +223,12 @@ func (s *companyStore) route(ctx context.Context) (*secretTarget, error) {
 	if s.boot == nil && s.apiURL == "" {
 		return nil, nil
 	}
-	// EVERY RUN HERE REVEALS: the values a command resolves, and a seat
-	// credential its sink reads back, are the node's break-glass read.
+	// A RUN HERE REVEALS — the values a command resolves, and a seat
+	// credential its sink reads back, are the node's break-glass read —
+	// unless all it asks is which names the store holds.
 	target, closeTarget, err := routeSecretStore(ctx, s.environ, s.boot,
-		s.bootstrapPath, s.apiURL, storeRun{command: s.command, use: s.use, reveals: true})
+		s.bootstrapPath, s.apiURL,
+		storeRun{command: s.command, use: s.use, reveals: !s.listsOnly})
 	if err != nil {
 		s.routeErr = err
 		return nil, err
@@ -219,6 +236,16 @@ func (s *companyStore) route(ctx context.Context) (*secretTarget, error) {
 	s.target, s.closeTarget = target, closeTarget
 	return target, nil
 }
+
+// onlyLists makes the run one that reveals nothing through its route: all it
+// asks of the store is which names it holds ([companyStore.holding]). Through
+// a node that is the listing, `secrets.list`, which takes admin and no person
+// present — so a machine token serves it, and the route asks for no Tier A
+// token and a refused listing names none ([storeRun.reveals]).
+//
+// CALLED BEFORE ANYTHING DECIDES THE ROUTE, which is decided once: the token a
+// run presents is chosen with it.
+func (s *companyStore) onlyLists() { s.listsOnly = true }
 
 // Close releases whatever the route opened.
 func (s *companyStore) Close() {
@@ -299,6 +326,12 @@ func (s *companyStore) where(target *secretTarget) string {
 // readFailure is a read of the run's store that failed, in the terms of the
 // route it took.
 func (s *companyStore) readFailure(target *secretTarget, err error) error {
+	remedy := revealRemedy(err)
+	if s.listsOnly {
+		// A LISTING IS NO REVEAL, so the token a reveal takes is no remedy
+		// for a refused one.
+		remedy = ""
+	}
 	switch {
 	case target.locked != nil:
 		// BOTH FACTS, as a write's refusal gives them: the lock alone reads
@@ -307,19 +340,24 @@ func (s *companyStore) readFailure(target *secretTarget, err error) error {
 		// the engine runs, so stopping the engine is not offered.
 		return fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
 			"database, so the company's stored values are read through its API — "+
-			"and they cannot be: %w%s", target.locked, s.bootstrapPath, err, revealRemedy(err))
+			"and they cannot be: %w%s", target.locked, s.bootstrapPath, err, remedy)
 	case target.fleet:
 		return fmt.Errorf("read the company's stored values through %s: %w%s",
-			target.node, err, revealRemedy(err))
+			target.node, err, remedy)
 	}
 	return fmt.Errorf("read %s: %w", s.boot.Store.Path, err)
 }
 
 // sayRoute is the run's first line on a store it read: which one, and through
-// a node how much it revealed there. A run that acts on its own on rows that
-// are not the whole store says nothing of them ([actsOnItsOwn]).
+// a node how much it revealed there — or, for a run that only asks which names
+// the store holds, that it reads none of the values. A run that acts on its
+// own on rows that are not the whole store says nothing of them
+// ([actsOnItsOwn]).
 func (s *companyStore) sayRoute(notes io.Writer, target *secretTarget, values *storedValues, asked int) {
 	switch {
+	case target.fleet && s.listsOnly:
+		fmt.Fprintf(notes, "checking which names the running node at %s holds: this "+
+			"command reads no stored value, so none was revealed.\n", target.node)
 	case target.fleet && asked == 0:
 		fmt.Fprintf(notes, "resolving ${VAR} through the running node at %s: it holds "+
 			"none of the values this command reads, so none was revealed.\n", target.node)
@@ -337,9 +375,12 @@ func (s *companyStore) sayRoute(notes io.Writer, target *secretTarget, values *s
 		if !values.fileExists {
 			absent = ", which do not exist yet"
 		}
-		fmt.Fprintf(notes, "resolving ${VAR} from this node's own rows (%s%s) and the "+
-			"environment: its broker has never started (%s holds no state) and %s "+
-			"names no fleet, so these rows are the company's whole secret store.\n",
+		reads := "resolving ${VAR} from this node's own rows (%s%s) and the environment"
+		if s.listsOnly {
+			reads = "checking which names this node's own rows (%s%s) hold"
+		}
+		fmt.Fprintf(notes, reads+": its broker has never started (%s holds no state) "+
+			"and %s names no fleet, so these rows are the company's whole secret store.\n",
 			store, absent, storeDir, s.bootstrapPath)
 	}
 }
@@ -381,6 +422,32 @@ func (s *companyStore) recordInto(ctx context.Context) (sinkStore, error) {
 		return sinkStore{}, err
 	}
 	return sinkStore{target: target, values: values}, nil
+}
+
+// holding is which of names the run's store holds, by its listing alone — no
+// value is read — each once and sorted, and that store as a refusal names it;
+// nil where the run has no store (no Tier A file and no -api: the
+// environment-only run), which then holds nothing. On a stopped node whose own
+// rows are not the company's whole store the route's refusal is the answer
+// ([stoppedNodeError]): a miss in those rows says nothing of the fleet's.
+func (s *companyStore) holding(ctx context.Context, names []string, notes io.Writer) (
+	held []string, store string, err error) {
+
+	target, err := s.route(ctx)
+	if err != nil || target == nil {
+		return nil, "", err
+	}
+	values, err := s.stored(ctx, nil, notes)
+	if err != nil {
+		return nil, "", err
+	}
+	if target.fleet {
+		store = "the fleet's, read through the running node at " + target.node
+	} else {
+		store = "this node's own rows at " + absolute(s.boot.Store.Path) +
+			", which are the whole of it until the node's broker first starts"
+	}
+	return values.holding(names), store, nil
 }
 
 // storedValues is the stored values one run reads, through the store its route
@@ -519,6 +586,21 @@ func (v *storedValues) readLocked(names []string) (int, error) {
 		}
 	}
 	return len(ask), nil
+}
+
+// holding is which of names the store holds — listed, or recorded by the
+// run's sink since — each once, sorted.
+func (v *storedValues) holding(names []string) []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var held []string
+	for _, name := range names {
+		if v.held[name] {
+			held = append(held, name)
+		}
+	}
+	slices.Sort(held)
+	return slices.Compact(held)
 }
 
 // revealed is how many values the run has read.

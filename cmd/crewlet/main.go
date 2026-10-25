@@ -88,28 +88,50 @@ func main() {
 // run is main's testable body: it takes its arguments and streams rather
 // than reaching for globals, so the CLI surface can be exercised in tests —
 // and it runs the invocation against THIS PROCESS'S environment, which is
-// where an operator's credential comes from ([runIn]).
+// where an operator's credential comes from, and Slack's own Web API
+// ([runIn]).
 func run(args []string, stdout, stderr io.Writer) error {
-	return runIn(config.EnvSource{}, args, stdout, stderr)
+	return runIn(invocation{environ: config.EnvSource{}}, args, stdout, stderr)
 }
 
-// runIn is [run] against an environment it is HANDED: where every command
-// that talks to a running node reads its credential ([nodeTokenOrEmpty]).
+// invocation is what one run of a command is HANDED rather than reads from
+// the process it runs in ([runIn]).
+type invocation struct {
+	// environ is where a command that talks to a running node reads its
+	// credential ([nodeTokenOrEmpty]), and where a provisioning command
+	// reads the operator's own ([operatorCredential]).
+	environ config.Source
+
+	// slack is the client `crewlet slack provision` reaches Slack's Web API
+	// through, nil for the default one. Slack is the one vendor no document
+	// addresses — every other vendor command reaches the instance its
+	// company file names — so this is the only way a run reaches anything
+	// but slack.com.
+	slack *http.Client
+}
+
+// runIn is [run] against an invocation it is HANDED: the environment every
+// command that talks to a running node reads its credential from
+// ([nodeTokenOrEmpty]), and a provisioning command the operator's own, and the
+// client Slack's Web API is reached through.
 //
-// The process's own for every run of the binary, so the rule the credential
-// follows — `CREWLET_API_TOKEN` and nothing else — is unchanged. It is a
-// parameter because the process's environment is shared by everything running
-// in it: a suite running its commands side by side could only hand each one a
-// credential by setting the process's variable, which Go refuses to a parallel
-// test, and which would hand every concurrent command whichever case set it
-// last. The engine is handed its environment for the same reason
-// ([engine.Options.Environment]).
+// The process's own environment and the default client for every run of the
+// binary, so the rule the credential follows — `CREWLET_API_TOKEN` and
+// nothing else — is unchanged. They are parameters because the process is
+// shared by everything running in it: a suite running its commands side by
+// side could only hand each one a credential by setting the process's
+// variable, which Go refuses to a parallel test and which would hand every
+// concurrent command whichever case set it last; and a case that read the
+// process's would read whatever the machine running the suite exports — an
+// operator's own Slack refresh token among them, which a run that reached
+// slack.com would spend. The engine is handed its environment for the same
+// reason ([engine.Options.Environment]).
 //
-// THE CREDENTIAL, AND NOT THE LOGGING KNOBS: `CREWLET_LOG_LEVEL`,
+// THE CREDENTIALS, AND NOT THE LOGGING KNOBS: `CREWLET_LOG_LEVEL`,
 // `CREWLET_LOG_FORMAT` and `CREWLET_LOG_FILE` configure the process's one
 // logger, which is the process's state rather than the invocation's, so they
 // are read from the process.
-func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err error) {
+func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) {
 	// A READ OF THE RUN'S STORE THAT FAILED PART WAY THROUGH A COMMAND — a
 	// reveal through a node, or this node's own rows — stops it with a
 	// panic, because the lookup that made it has no error to return
@@ -131,6 +153,7 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 	}
 
 	cmd, rest := args[0], args[1:]
+	environ := inv.environ
 
 	// THE OPERATOR COMMANDS ARE QUIET BY DEFAULT. They open a store, which
 	// logs a migration line per schema file and an open line per call —
@@ -230,7 +253,7 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 	case "search":
 		return runSearch(rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
-		return runIntegration(environ, cmd, rest, stdout, stderr)
+		return runIntegration(inv, cmd, rest, stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", cmd)

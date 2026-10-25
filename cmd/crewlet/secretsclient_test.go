@@ -516,7 +516,7 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	var out, errs bytes.Buffer
-	err := runIn(tokenEnviron("ops-token"), []string{"secrets", "set", "GL_TOKEN", "-value", "glpat-x",
+	err := runIn(invocation{environ: tokenEnviron("ops-token")}, []string{"secrets", "set", "GL_TOKEN", "-value", "glpat-x",
 		"-config", cfg, "-api", node.server.URL}, &out, &errs)
 	if err != nil {
 		t.Fatalf("set: %v\n%s", err, errs.String())
@@ -572,7 +572,7 @@ func TestTheSecretsCommandReachesANamedNodeWithNoTierAHere(t *testing.T) {
 		node.body = answer
 		var out, errs bytes.Buffer
 		full := append(append([]string{"secrets"}, args...), "-config", missing)
-		err := runIn(tokenEnviron("ops-token"), full, &out, &errs)
+		err := runIn(invocation{environ: tokenEnviron("ops-token")}, full, &out, &errs)
 		return out.String(), err
 	}
 

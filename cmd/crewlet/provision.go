@@ -29,6 +29,33 @@ import (
 // because every one has to be found and revoked by hand. So there is no
 // default: the operator says where, up front, and a run with no answer is
 // refused before it touches anything.
+//
+// # A sink the company's store outranks
+//
+// `-env-file` and `-print` hand what a run mints to the operator, for the
+// engine to read from its environment — and the engine resolves every `${VAR}`
+// from the company's secret store FIRST. So where the store holds a name the
+// run mints into, what the run records is never read: the vendor holds the new
+// value and the engine goes on with the stored one. For a seat's token that is
+// the outage the re-run rule exists to prevent — GitLab retires a seat's
+// earlier tokens once a new one is recorded, so a seat the engine runs on the
+// stored token is locked out — and for a webhook secret it is a hook re-keyed
+// with a key the engine does not hold, every delivery refused. A `gitlab
+// provision -rotate -env-file`, the remedy for a leaked key, would re-key the
+// hook while the engine went on verifying with the leaked one.
+//
+// So a run with one of those sinks that has a store to ask — a running node,
+// or rows that are the company's whole store — is refused before it reaches
+// the vendor where the store holds any name it can mint into
+// ([sinkFlags.refuseOutranked]): every planned seat's token, since whether a
+// seat is kept or re-minted is settled against the vendor, part way through
+// the run; and a webhook secret the run would mint, under its flag for a fresh
+// one or where the reference resolves to nothing. Asking the sink instead
+// would not do: an env file's value for a name the store also holds is not the
+// one the engine runs on, so a seat kept because that value still
+// authenticates is reported healthy on a token the engine does not use.
+// `-secret-store` is the one sink the store does not outrank: it reads each
+// stored value back, and records over it.
 
 // sinkFlags is the shared --secret-store / --env-file / --print choice, and the
 // store a run reads the company's values from and records into.
@@ -111,6 +138,107 @@ func (s sinkFlags) check() error {
 	return nil
 }
 
+// describe names the sink a run with no `-secret-store` chose, as a refusal
+// names it.
+func (s sinkFlags) describe() string {
+	if *s.print {
+		return "this run's output (-print)"
+	}
+	return "the env file " + *s.envFile
+}
+
+// refuseOutranked refuses a run whose sink the company's store outranks — an
+// env file, or the run's own output — where that store holds any of mintsInto,
+// the variables the run can mint a value into; the vendor is named for what
+// the refusal says it would hold. See the package doc's "A sink the company's
+// store outranks" for why.
+//
+// It asks the store by its listing alone, through the run's route: a
+// provisioner that has read the company has decided that route already, and
+// one that reads nothing else — Slack with no `-secret-store` — decides it
+// here, before it prints anything. A run with no store (no Tier A file and no
+// -api) has nothing to be outranked by, and a run that mints into nothing has
+// nothing to ask.
+func (s sinkFlags) refuseOutranked(ctx context.Context, companySecrets *companyStore,
+	vendor string, mintsInto []string, notes io.Writer) error {
+
+	if *s.secretStore || len(mintsInto) == 0 {
+		return nil
+	}
+	held, store, err := companySecrets.holding(ctx, mintsInto, notes)
+	if err != nil || len(held) == 0 {
+		return err
+	}
+	return &outrankedSinkError{command: companySecrets.command, vendor: vendor,
+		store: store, sink: s.describe(), names: held}
+}
+
+// errOutrankedSink is the refusal of a provisioning run whose sink the
+// company's secret store outranks, where the store holds a name the run can
+// mint into ([sinkFlags.refuseOutranked]).
+var errOutrankedSink = errors.New("the company's secret store outranks this run's sink")
+
+// outrankedSinkError is that refusal: the store and the names it holds, the
+// sink the run chose, and the two ways forward.
+type outrankedSinkError struct {
+	command, vendor string
+	// store is where the run read the store's names, as said.
+	store string
+	// sink is the sink the run chose, as said.
+	sink string
+	// names is every variable the run can mint into that the store holds.
+	names []string
+}
+
+// Is makes the refusal [errOutrankedSink].
+func (e *outrankedSinkError) Is(target error) bool { return target == errOutrankedSink }
+
+func (e *outrankedSinkError) Error() string {
+	refs := make([]string, len(e.names))
+	for i, name := range e.names {
+		refs[i] = "${" + name + "}"
+	}
+	held := refs[0]
+	if n := len(refs); n > 1 {
+		held = strings.Join(refs[:n-1], ", ") + " and " + refs[n-1]
+	}
+	return fmt.Sprintf("%s: the company's secret store (%s) holds %s, which this run "+
+		"can mint into, and the only place it would record a new value is %s. The "+
+		"engine resolves every ${VAR} from that store before its environment, so what "+
+		"the run minted would never be read: %s would hold it, and the engine would go "+
+		"on with the stored value. Record with -secret-store instead, which reads the "+
+		"stored value back and writes into that store, or remove the value from the "+
+		"store first (crewlet secrets unset NAME). Nothing was sent to %s.",
+		e.command, e.store, held, e.sink, e.vendor, e.vendor)
+}
+
+// webhookMintsInto is the variable a run can mint a webhook secret into: the
+// whole `${VAR}` ref names, where the run registers a hook at all, and either
+// asked for a fresh secret or ref resolves to nothing — a secret that resolves
+// is registered as it is. base is the address the run registers its hooks at,
+// and empty where it registers none: no webhook address, or nothing to
+// register one on (GitHub with no `integrations.github.provisioning`), which
+// its caller knows and this does not.
+func webhookMintsInto(ref string, fresh bool, value func(string) string, base string) []string {
+	name := soleVarOf(ref)
+	if name == "" || base == "" || !fresh && strings.TrimSpace(value(ref)) != "" {
+		return nil
+	}
+	return []string{name}
+}
+
+// gitlabMintsInto is every variable a `crewlet gitlab provision` run can mint
+// into: each planned seat's token — a seat is kept or re-minted on what the
+// vendor says of the token the sink holds, which the run learns only part way
+// through — and the signing secret where its plan mints or rotates one.
+func gitlabMintsInto(plan *provision.Plan, signing gitlab.SigningPlan) []string {
+	names := seatTokenVars(plan, nil)
+	if signing.Action == gitlab.SigningMint || signing.Action == gitlab.SigningRotate {
+		names = append(names, signing.Var)
+	}
+	return unionReads(names)
+}
+
 // sinkStore is the run's store as a provisioning sink's: writes go to its
 // route, and a read back is answered from the values the run read up front
 // ([storedValues.get]), with a one-name read for a held name nothing read
@@ -179,7 +307,8 @@ func unionReads(lists ...[]string) []string {
 }
 
 // operatorCredential reads the human operator's own credential, from the
-// ENVIRONMENT ALONE.
+// invocation's ENVIRONMENT ALONE ([runIn]): the process's, for every run of
+// the binary.
 //
 // Deliberately NOT through [companyStore.resolver], which every company value
 // goes through. This is the operator's credential rather than the company's, and
@@ -189,8 +318,13 @@ func unionReads(lists ...[]string) []string {
 // from the store would imply it may be kept there — which is how the most
 // powerful credential in the deployment ends up in the shared table beside
 // the seat tokens it exists to mint.
-func operatorCredential(name string) string {
-	return strings.TrimSpace(config.EnvOnly().Lookup(name))
+//
+// THE INVOCATION'S, NOT THE PROCESS'S, as the node credential is: a case that
+// reads the process's runs on whatever the machine running the suite exports,
+// and a Slack refresh token is spent by the rotation a run makes with it.
+func operatorCredential(environ config.Source, name string) string {
+	value, _ := environ.Lookup(name)
+	return strings.TrimSpace(value)
 }
 
 // gitlabProvisionReads is every variable `crewlet gitlab provision` reads of
@@ -204,7 +338,7 @@ func gitlabProvisionReads(cfg *config.GitLab) []string {
 }
 
 // runGitLabProvision is `crewlet gitlab provision`.
-func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("gitlab provision", flag.ContinueOnError)
@@ -303,7 +437,7 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	// be silent about the one outcome an operator most needs warning of —
 	// and is refused like a real run where the store cannot be read.
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, sinks.store,
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
 		"crewlet gitlab provision", readsTheCompany)
 	if err != nil {
 		return err
@@ -335,6 +469,15 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	signing := gitlab.PlanSigningSecret(
 		env.Value(cfg.SigningSecret), signingVar, *rotate, base != "", baseKey)
 
+	// A REAL RUN THE STORE OUTRANKS IS REFUSED BEFORE ITS PLAN PRINTS: the
+	// plan says what it would mint, and none of it happens.
+	if !*dryRun && !plan.Empty() {
+		if err = sinks.refuseOutranked(ctx, companySecrets, "GitLab",
+			gitlabMintsInto(plan, signing), stdout); err != nil {
+			return err
+		}
+	}
+
 	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run
 	// uses. A --dry-run that re-derived it separately would be a second
 	// implementation that can disagree with the real one about what it
@@ -356,7 +499,7 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("GITLAB_ADMIN_TOKEN")
+		token = operatorCredential(inv.environ, "GITLAB_ADMIN_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
@@ -488,10 +631,13 @@ func printNotes(w io.Writer, notes []string) {
 type vendorCommand struct {
 	sub  string
 	args string // the operand spelling shown in usage, without the vendor
-	// run takes the invocation's environment ([runIn]) first, because a
-	// command that stores what it mints may reach the running node's
-	// /secrets with the credential read from it.
-	run func(environ config.Source, args []string, stdout, stderr io.Writer) error
+	// run takes the invocation ([runIn]) first, because a command that
+	// stores what it mints may reach the running node's /secrets with the
+	// credential read from its environment, a command that takes an
+	// operator credential (GitLab's, Mattermost's, Slack's) reads it from
+	// there ([operatorCredential]), and Slack's reaches its Web API through
+	// the invocation's client.
+	run func(inv invocation, args []string, stdout, stderr io.Writer) error
 }
 
 // vendorCommands is the whole vendor CLI surface, and it is the ONLY list.
@@ -538,7 +684,7 @@ var vendorCommands = map[string][]vendorCommand{
 var errUnknownSub = errors.New("unknown command")
 
 // runIntegration dispatches `crewlet <vendor> <command>`.
-func runIntegration(environ config.Source, vendor string, args []string, stdout, stderr io.Writer) error {
+func runIntegration(inv invocation, vendor string, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	commands := vendorCommands[vendor]
 	if len(commands) == 0 {
@@ -549,7 +695,7 @@ func runIntegration(environ config.Source, vendor string, args []string, stdout,
 	}
 	for _, command := range commands {
 		if command.sub == sub {
-			return command.run(environ, rest, stdout, stderr)
+			return command.run(inv, rest, stdout, stderr)
 		}
 	}
 	if sub != "" && sub != "help" {
@@ -591,7 +737,7 @@ func mattermostProvisionReads(cfg *config.Mattermost) []string {
 }
 
 // runMattermostProvision is `crewlet mattermost provision`.
-func runMattermostProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runMattermostProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("mattermost provision", flag.ContinueOnError)
@@ -650,7 +796,7 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 		return err
 	}
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, sinks.store,
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
 		"crewlet mattermost provision", readsTheCompany)
 	if err != nil {
 		return err
@@ -666,6 +812,12 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 	if err != nil {
 		return err
 	}
+	// EVERY PLANNED BOT'S TOKEN is a name the run can mint into: a bot is
+	// kept or re-minted on what the server says of the token its sink holds.
+	if err = sinks.refuseOutranked(ctx, companySecrets, "Mattermost",
+		seatTokenVars(plan, splitHandles(*only)), stdout); err != nil {
+		return err
+	}
 	printPlan(stdout, plan, what)
 	sink, err := sinks.open(ctx, companySecrets, stdout)
 	if err != nil {
@@ -674,7 +826,7 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("MATTERMOST_ADMIN_TOKEN")
+		token = operatorCredential(inv.environ, "MATTERMOST_ADMIN_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
@@ -744,7 +896,7 @@ func mattermostDoctorReads(cfg *config.Mattermost, o *org.Organization) []string
 }
 
 // runMattermostDoctor is `crewlet mattermost doctor`.
-func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runMattermostDoctor(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("mattermost doctor", flag.ContinueOnError)
@@ -783,7 +935,7 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	companySecrets, err := openCompanyStore(environ, storeAt,
+	companySecrets, err := openCompanyStore(inv.environ, storeAt,
 		"crewlet mattermost doctor", readsTheCompany)
 	if err != nil {
 		return err
@@ -796,7 +948,7 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("MATTERMOST_ADMIN_TOKEN")
+		token = operatorCredential(inv.environ, "MATTERMOST_ADMIN_TOKEN")
 	}
 	// AN EMPTY TOKEN IS FINE. The checks that need one borrow a seat's,
 	// because those are the credentials the engine authenticates with —

@@ -109,24 +109,37 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 }
 
 // THE OPERATOR'S OWN CREDENTIAL IS NOT THE COMPANY'S, and does not come
-// from the store.
+// from the store — nor from the process's environment, but from the one the
+// invocation is handed ([runIn]), which for the binary is the process's.
 //
 // A GitLab admin PAT carries `api` scope over the whole group, and the store
 // is replicated to every node holding the keyring. Crewlet never persists
 // one; reading one back would imply it may be kept there — which is how the
 // most powerful credential in the deployment ends up in the shared table
-// beside the seat tokens it exists to mint.
+// beside the seat tokens it exists to mint. And a case that read the process's
+// environment would run on whatever the machine running the suite exports.
+//
+// Not parallel: it exports the credential on the process, to show a run
+// handed an environment without it does not read it there.
+//
+// Mutation: read the store, or the process's environment, and the run finds an
+// administrator token.
 func TestAnOperatorCredentialIsNotReadFromTheStore(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_ADMIN_TOKEN",
 		"-value", "stored-admin-pat"); err != nil {
 		t.Fatalf("seed the store: %v (%s)", err, errs)
 	}
-	if got := operatorCredential("GITLAB_ADMIN_TOKEN"); got != "" {
-		t.Fatalf("an operator credential was read out of the secret store: %q", got)
+	t.Setenv("GITLAB_ADMIN_TOKEN", "process-admin-pat")
+	company := companyAt(t, readerCompanyDoc, untouchedVendor(t))
+	_, _, err := cliIn(t, noEnviron, "gitlab", "provision", company, "-print",
+		"-config", cfg, "-public-url", "https://crewlet.example.com")
+	if err == nil || !strings.Contains(err.Error(), "no administrator token") {
+		t.Fatalf("err = %v, want the run to find no administrator token: one was read "+
+			"out of the secret store or the process's environment", err)
 	}
-	t.Setenv("GITLAB_ADMIN_TOKEN", "  exported-admin-pat  ")
-	if got := operatorCredential("GITLAB_ADMIN_TOKEN"); got != "exported-admin-pat" {
+	exported := config.MapSource{"GITLAB_ADMIN_TOKEN": "  exported-admin-pat  "}
+	if got := operatorCredential(exported, "GITLAB_ADMIN_TOKEN"); got != "exported-admin-pat" {
 		t.Errorf("the exported credential did not reach the run: %q", got)
 	}
 }
@@ -228,6 +241,9 @@ type revealNode struct {
 	// its body the engine's own refusal of a machine token.
 	refuse int
 
+	// refuseListing, when set, is the status the listing is answered with.
+	refuseListing int
+
 	// gone is the names the listing still names and a reveal no longer
 	// finds: removed between the two.
 	gone map[string]bool
@@ -274,6 +290,12 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 		if r.URL.Path == "/secrets" {
 			n.mu.Lock()
 			n.listings++
+			if n.refuseListing != 0 {
+				n.mu.Unlock()
+				w.WriteHeader(n.refuseListing)
+				_, _ = fmt.Fprint(w, `{"error":"forbidden","detail":"this token may not list secrets"}`)
+				return
+			}
 			var rows []map[string]string
 			for name := range n.held {
 				rows = append(rows, map[string]string{"name": name, "key_id": "k1"})
@@ -839,7 +861,7 @@ func TestAGitLabProvisionThroughANodeRevealsOnlyItsOwnFields(t *testing.T) {
 				"    enabled: true\n", "    enabled: true\n    token: \"${GITLAB_READ_TOKEN}\"\n",
 			).Replace(gitlabCompanyDoc))
 			var out, errs bytes.Buffer
-			err := runGitLabProvision(tokenEnviron("ops-token"), []string{company, "-dry-run",
+			err := runGitLabProvision(invocation{environ: tokenEnviron("ops-token")}, []string{company, "-dry-run",
 				"-config", config, "-api", node.server.URL,
 				"-public-url", "https://crewlet.example.com"}, &out, &errs)
 			if err != nil {
@@ -917,12 +939,16 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	}
 }
 
-// SLACK WITHOUT -secret-store RESOLVES NOTHING, so it opens no store for it.
-// What it reads of the deployment is Tier A's address alone, and resolving the
-// company's values there — opening the store, or beside a running engine
-// revealing them through it — would be a credential read for a run that uses
-// none.
-func TestSlackProvisionReadsTierAAndNoStore(t *testing.T) {
+// A SLACK RUN WITH NO SEAT TO PROVISION OPENS NO STORE. What it reads of the
+// deployment is Tier A's address alone, and it mints into no name a store
+// could hold, so opening the store — or beside a running engine, asking it —
+// would be a read for a run that uses none. A route it decided says so on the
+// run's first line, whichever store it reached, so no such line is printed;
+// and the file a never-started node's open would create is not there.
+//
+// Mutation: decide the route, or ask the store which names it holds, before
+// the empty plan's return, and the route line is printed.
+func TestASlackRunWithNoSeatToProvisionOpensNoStore(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	storePath := storePathOf(t, cfg)
@@ -931,11 +957,15 @@ func TestSlackProvisionReadsTierAAndNoStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out, errs bytes.Buffer
-	err := run([]string{"slack", "provision", companyPath, "-print", "-config", cfg,
-		"-ledger", filepath.Join(t.TempDir(), "ledger.json")}, &out, &errs)
+	out, errs, err := cliIn(t, noEnviron, "slack", "provision", companyPath, "-print",
+		"-config", cfg, "-ledger", filepath.Join(t.TempDir(), "ledger.json"))
 	if err != nil {
-		t.Fatalf("slack provision of a company with no Slack seat: %v (%s)", err, errs.String())
+		t.Fatalf("slack provision of a company with no Slack seat: %v (%s)", err, errs)
+	}
+	for _, line := range []string{"checking which names", "resolving ${VAR}"} {
+		if strings.Contains(out, line) {
+			t.Errorf("slack provision decided a route, though it reads nothing:\n%s", out)
+		}
 	}
 	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("slack provision opened the store at %s, though it resolves nothing: %v",
