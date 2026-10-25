@@ -102,7 +102,11 @@ func startServer(
 		up: make(chan struct{}), marker: make(chan struct{}), exited: make(chan struct{}),
 	}
 	s.stderr.buf.limit = maxOutput
-	cmd := exec.Command(binary, args...) //nolint:gosec // binary and args come from a validated profile
+	// NOT UNDER A CONTEXT: the server lives for the run it serves and is ended
+	// by [cliServer.stop] — its whole group signalled, a grace, then killed —
+	// which the run's end calls. A context's cancel would kill the leader
+	// alone, leaving what it started (the relay among it) running.
+	cmd := exec.Command(binary, args...) //nolint:gosec,noctx // a validated profile's binary and args; ended by stop
 	cmd.Dir, cmd.Env = dir, env
 	cmd.Stdout = &lineTee{sink: io.Discard, on: s.line, limit: maxOutput, every: true}
 	cmd.Stderr = &s.stderr
@@ -253,7 +257,7 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 	select {
 	case <-srv.up:
 	case <-waitCtx.Done():
-		return t.notUp(ctx, p, waitCtx, "")
+		return t.notUp(ctx, waitCtx, p, "")
 	}
 	t.values.Ready = srv.values()
 	readyEnv := make([]string, 0, len(t.readyEnv))
@@ -286,7 +290,7 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 			case <-time.After(servePollInterval):
 				continue
 			case <-waitCtx.Done():
-				return t.notUp(ctx, p, waitCtx, last)
+				return t.notUp(ctx, waitCtx, p, last)
 			}
 		}
 	}
@@ -327,7 +331,7 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 // its failure by its cause, or not started and no failure for a start the host
 // ended.
 func (t *toolRun) notUp(
-	ctx context.Context, p *Provider, waitCtx context.Context, last string,
+	ctx, waitCtx context.Context, p *Provider, last string,
 ) (context.Context, bool, error) {
 	t.server.stop()
 	cause := context.Cause(waitCtx)

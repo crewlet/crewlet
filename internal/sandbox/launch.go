@@ -314,10 +314,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// below reads: the job's own runner and the standing instructions that
 	// list the servers a box has.
 	if req.Opened != nil {
-		named, err := req.Opened(opened.LaunchID)
-		if err != nil {
+		named, openErr := req.Opened(opened.LaunchID)
+		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
-			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", err)
+			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
 		}
 		if len(named) > 0 {
 			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named))

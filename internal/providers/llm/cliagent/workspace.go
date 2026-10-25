@@ -1291,16 +1291,16 @@ func (w *Workspace) carryChanged(
 	var changed []held
 	shared := w.CredentialsDir()
 	for _, rel := range w.profile.CredentialPaths {
-		src, err := cliprofile.UnderRoot(home, rel)
-		if err != nil {
-			return false, nil, err
+		src, rootErr := cliprofile.UnderRoot(home, rel)
+		if rootErr != nil {
+			return false, nil, rootErr
 		}
-		content, err := os.ReadFile(src) //nolint:gosec // path is rooted by cliprofile.UnderRoot
-		if os.IsNotExist(err) {
+		content, readErr := os.ReadFile(src) //nolint:gosec // path is rooted by cliprofile.UnderRoot
+		if os.IsNotExist(readErr) {
 			continue
 		}
-		if err != nil {
-			return false, nil, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
+		if readErr != nil {
+			return false, nil, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, readErr)
 		}
 		name := filepath.Base(rel)
 		// A settings file the CLI also keeps its login in is carried with
@@ -1319,9 +1319,9 @@ func (w *Workspace) carryChanged(
 			return false, nil, fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
 				"home was released with no way to export it", w.agent)
 		}
-		document, err := store.exportLogin(ctx, home, cache)
-		if err != nil {
-			return false, nil, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
+		document, exportErr := store.exportLogin(ctx, home, cache)
+		if exportErr != nil {
+			return false, nil, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, exportErr)
 		}
 		if holdsLogin(document) {
 			holds = true

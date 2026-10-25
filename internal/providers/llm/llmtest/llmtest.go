@@ -338,7 +338,8 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		return nil, fmt.Errorf("llmtest: the host served %s %v, want the relay and a socket",
 			served.Command, served.Args)
 	}
-	conn, err := net.Dial("unix", served.Args[len(served.Args)-1])
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", served.Args[len(served.Args)-1])
 	if err != nil {
 		return nil, fmt.Errorf("llmtest: reach the session: %w", err)
 	}
@@ -351,7 +352,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	if err != nil {
 		return nil, fmt.Errorf("llmtest: connect: %w", err)
 	}
-	defer cs.Close()
+	defer func() { _ = cs.Close() }()
 	if _, err := cs.ListTools(ctx, nil); err != nil {
 		return nil, fmt.Errorf("llmtest: list the tools: %w", err)
 	}

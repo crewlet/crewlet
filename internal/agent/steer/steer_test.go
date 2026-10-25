@@ -123,8 +123,10 @@ func TestWaitingLeavesTheNoteForTheNextRun(t *testing.T) {
 		t.Fatal("an empty box reported a note waiting")
 	}
 	b.Offer(note("n"))
-	if !b.Waiting() || !b.Waiting() {
-		t.Fatal("a box holding a note did not report it waiting, twice")
+	for range 2 {
+		if !b.Waiting() {
+			t.Fatal("a box holding a note did not report it waiting, twice")
+		}
 	}
 	if got := b.Drain(); len(got) != 1 {
 		t.Fatalf("drain after a look took %+v, want the one note", got)

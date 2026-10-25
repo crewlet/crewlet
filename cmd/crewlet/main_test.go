@@ -2297,7 +2297,7 @@ func TestTheRelayIsDispatchedUnderItsOwnName(t *testing.T) {
 			mcprelay.Command)
 	}
 
-	dir, err := os.MkdirTemp("", "relay")
+	dir, err := os.MkdirTemp("", "relay") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
 	if err != nil {
 		t.Fatal(err)
 	}

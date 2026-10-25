@@ -656,7 +656,7 @@ func (r *recordReader) flushLocked(touched map[*request]bool, final bool) ([]llm
 			// asked for none.
 			continue
 		}
-		if !req.dirty && !(final && !req.observed) {
+		if !req.dirty && (!final || req.observed) {
 			continue
 		}
 		if !final && len(req.text) == 0 && len(req.calls) == 0 {

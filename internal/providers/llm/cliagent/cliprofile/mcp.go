@@ -142,14 +142,14 @@ type MCP struct {
 type Concurrency string
 
 const (
-	// ConcurrencyAtOnce: any call beside any other (Gemini CLI, OpenCode,
+	// ConcurrencyAtOnce is any call beside any other (Gemini CLI, OpenCode,
 	// Copilot, Grok, Pi).
 	ConcurrencyAtOnce Concurrency = "at_once"
-	// ConcurrencyReadOnly: only calls to tools annotated read-only beside
-	// each other; any other call alone (Claude Code, Qwen Code).
+	// ConcurrencyReadOnly is only calls to tools annotated read-only beside
+	// each other, and any other call alone (Claude Code, Qwen Code).
 	ConcurrencyReadOnly Concurrency = "read_only"
-	// ConcurrencyInTurn: one call at a time, each once the last is answered
-	// (Muse, Kimi, Hermes).
+	// ConcurrencyInTurn is one call at a time, each once the last is
+	// answered (Muse, Kimi, Hermes).
 	ConcurrencyInTurn Concurrency = "in_turn"
 )
 

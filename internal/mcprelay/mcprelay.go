@@ -78,7 +78,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			Command, args[0], err)
 		return fmt.Errorf("mcp-relay: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	go func() {
 		// The CLI finished: half-close, so the engine still answers what it

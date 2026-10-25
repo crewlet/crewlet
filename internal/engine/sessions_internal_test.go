@@ -76,7 +76,7 @@ func TestABootThatFailsEarlyRemovesItsSessionDirectory(t *testing.T) {
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	// A SHORT temp root of its own: one under t.TempDir() carries the test's
 	// name and is itself past the bound a socket's path has.
-	tmp, err := os.MkdirTemp("", "crewlet-boot-")
+	tmp, err := os.MkdirTemp("", "crewlet-boot-") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
 	if err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

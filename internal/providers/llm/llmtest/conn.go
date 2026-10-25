@@ -114,7 +114,8 @@ func Connect(ctx context.Context, req llm.Request, opts ConnOptions) (*Conn, err
 		return nil, fmt.Errorf("llmtest: the host served %s %v, want the relay and a socket",
 			served.Command, served.Args)
 	}
-	sock, err := net.Dial("unix", served.Args[len(served.Args)-1])
+	var dialer net.Dialer
+	sock, err := dialer.DialContext(ctx, "unix", served.Args[len(served.Args)-1])
 	if err != nil {
 		c.Close()
 		return nil, fmt.Errorf("llmtest: reach the session: %w", err)

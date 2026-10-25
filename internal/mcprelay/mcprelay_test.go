@@ -18,7 +18,7 @@ import (
 // socket path.
 func socket(t *testing.T) (string, *net.UnixListener) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "relay")
+	dir, err := os.MkdirTemp("", "relay") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
 	if err != nil {
 		t.Fatal(err)
 	}

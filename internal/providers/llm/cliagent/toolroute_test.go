@@ -471,7 +471,8 @@ func TestAModelCallInsideAToolCallRunsOnTheRunsSlot(t *testing.T) {
 		// and gives up at its own short deadline.
 		outside, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
-		_, unrelated = p.Complete(outside, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
+		_, unrelated = p.Complete(outside, //nolint:contextcheck // another seat's call carries none of this call's values
+			llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
 
 		nested, cancel2 := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel2()
