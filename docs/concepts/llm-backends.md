@@ -1828,12 +1828,15 @@ non-empty string wins, and an empty one falls through to the next.
 **A call that asks to be watched streams.** A caller watching an answer being
 written (the dashboard's live view of a round, a Dashboard Assistant answer)
 gets the text as it arrives from a CLI that prints JSON lines: Codex, OpenCode,
-Qwen Code, Kimi Code and Muse Code always do, and Claude Code does for exactly those calls,
-through its profile's `stream` variant (`--output-format stream-json --verbose
---include-partial-messages` appended to the call's argv, measured against
-2.1.310). A call nobody watches runs the profile as written. A `json` or `text`
-profile with no variant is read from the whole of what the CLI printed, so its
-answer arrives at the end in one piece.
+Qwen Code, Kimi Code and Muse Code always do. Claude Code does for a call that also asks
+for its **token stream**, through its profile's `stream` variant
+(`--output-format stream-json --verbose --include-partial-messages` appended to
+the call's argv, measured against 2.1.310). Today only the Dashboard Assistant
+asks: a seat's round is watched for its live view but runs the profile as
+written, and its answer arrives at the end in one piece, until a live streamed
+round has been proven on the installed CLI by `crewlet llm doctor`'s
+`stream smoke` line. A `json` or `text` profile with no variant is always read
+from the whole of what the CLI printed.
 
 **What streams is the prose, never the envelope.** A call that offers tools asks
 the model for an envelope (see the response contract above), so its raw tokens
@@ -2888,7 +2891,7 @@ it runs on.
 | `web_tools` | The entry's stance on the CLI's own web tools: `allowed` (the default, and every seat's) or `denied`. `denied` runs the CLI through `web_denial`, and is refused on a profile that has none. |
 | `web_tools_note` | How the profile's web denial was measured, or why it has none. |
 | `web_denial` | `{complete_args, seed_files}`: what the run uses instead when `web_tools` is `denied`. Each field set replaces the profile field of that name whole; a field left unset keeps it. Overriding `complete_args` (or `seed_files`) beside `web_tools: denied` is refused where the denial replaces it: override `web_denial.complete_args` instead. |
-| `stream` | `{args, event_type_path, text_events, delta_paths, delta_events}`: how a `json` profile streams a call that asks to be streamed. `args` is appended to the argv the call already runs (after `web_denial`, so every isolation and denial flag stays in place), output becomes `jsonl`, and the other four fields replace the profile's for that call. Chosen per call, never per entry; refused on a profile whose output is already `jsonl`, and the profile it makes is validated like any other. |
+| `stream` | `{args, event_type_path, text_events, delta_paths, delta_events}`: how a `json` profile streams a call that is watched and asks for the token stream (the Dashboard Assistant's). `args` is appended to the argv the call already runs (after `web_denial`, so every isolation and denial flag stays in place), output becomes `jsonl`, and the other four fields replace the profile's for that call. Chosen per call, never per entry, and only on that explicit ask; refused on a profile whose output is already `jsonl`, and the profile it makes is validated like any other. |
 | `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
 
 ---
@@ -2936,10 +2939,20 @@ token usage   : reported by CLI
 system prompt : seats: added to the CLI's own (append_system_prompt)
               : side passes: replaces the CLI's own (system_prompt)
 smoke test    : ok — 812 in / 34 out
+stream smoke  : ok — 812 in / 34 out
 local tools   : denied by profile — probe: refused
 web           : allowed; ok — fetched https://www.cloudflare.com/cdn-cgi/trace
 problems      : none
 ```
+
+`stream smoke` is the same smoke test through the profile's `stream` variant,
+the run a Dashboard Assistant answer makes, and is printed only for a profile
+that has one (Claude Code). It is a separate line because the variant is another
+argv and another output shape: a variant that stopped matching the installed
+CLI fails here while the seats' smoke test, on the profile as written, still
+passes. The shell and web probes run the variant too, since the assistant is the
+caller whose admission rests on them and the variant only adds to the profile's
+own arguments.
 
 The `web` line leads with the entry's stance. On an entry with
 `overrides: {web_tools: denied}` (the one an assistant runs on) the probe's

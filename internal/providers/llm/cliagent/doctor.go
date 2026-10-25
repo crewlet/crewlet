@@ -113,6 +113,10 @@ type Diagnosis struct {
 	SystemPrompt []string
 	// Smoke is the result of a real completion with a real tool.
 	Smoke string
+	// StreamSmoke is the same completion through the profile's streamed
+	// variant ([cliprofile.Stream]), the run a Dashboard Assistant answer
+	// makes; empty where the profile has no variant.
+	StreamSmoke string
 	// LocalTools is the profile's stance on the CLI's own shell and file
 	// tools, beside what the shell probe measured.
 	LocalTools string
@@ -245,9 +249,22 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.LocalTools = stance + " — probe skipped, no binary to run"
 		d.Web = web + "; probe skipped, no binary to run"
 	default:
-		d.Smoke, answered = p.smokeTest(ctx)
+		d.Smoke, answered = p.smokeTest(ctx, smokeRequest())
 		if strings.HasPrefix(d.Smoke, "failed") {
 			d.Problems = append(d.Problems, d.Smoke)
+		}
+		// THE STREAMED VARIANT, measured as a round of its own where the
+		// profile has one: it is another argv and another output shape,
+		// and the run that proves it reads back is what any caller beyond
+		// the Dashboard Assistant waits on before it asks for the token
+		// stream.
+		if p.profile.CanStream() {
+			var streamed bool
+			d.StreamSmoke, streamed = p.smokeTest(ctx, tokenStreamed(smokeRequest()))
+			answered = answered || streamed
+			if strings.HasPrefix(d.StreamSmoke, "failed") {
+				d.Problems = append(d.Problems, "streamed: "+d.StreamSmoke)
+			}
 		}
 		verdict, problem := p.shellProbe(ctx)
 		d.LocalTools = stance + " — " + verdict
@@ -464,7 +481,7 @@ func (p *Provider) localToolsStance() string {
 // refused is good news worth printing. The second return is the problem line,
 // empty when there is none.
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
-	comp, err := p.Complete(ctx, watched(probeRequest(shellProbePrompt)))
+	comp, err := p.Complete(ctx, tokenStreamed(probeRequest(shellProbePrompt)))
 	if err != nil {
 		return "probe failed — " + err.Error(), ""
 	}
@@ -511,7 +528,7 @@ func (p *Provider) webStance() string {
 // says it cannot.
 func (p *Provider) webProbe(ctx context.Context) (verdict, problem string) {
 	denied := p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied
-	comp, err := p.Complete(ctx, watched(probeRequest(webProbePrompt)))
+	comp, err := p.Complete(ctx, tokenStreamed(probeRequest(webProbePrompt)))
 	if err != nil {
 		return "probe failed: " + err.Error(), "the web probe failed: " + err.Error()
 	}
@@ -631,8 +648,8 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 // answered reports whether the model replied at all, however badly: a reply
 // is proof the CLI reached its model signed in, which the doctor needs apart
 // from whether the reply was usable.
-func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
-	comp, err := p.Complete(ctx, smokeRequest())
+func (p *Provider) smokeTest(ctx context.Context, req llm.Request) (verdict string, answered bool) {
+	comp, err := p.Complete(ctx, req)
 	if err != nil {
 		return "failed — " + err.Error(), false
 	}
@@ -714,16 +731,23 @@ func smokeRequest() llm.Request {
 	return watched(req)
 }
 
-// watched is a probe's request as every production call that matters sends
-// it: STREAMED, as a seat's round on the live view and a Dashboard Assistant
-// answer are. A streamed call runs the profile's streamed variant where it has
-// one ([Provider.profileFor]), so a probe that asked for none would prove the
-// web denied, the shell refused and the envelope readable on an argv and a
-// stream reading no such call uses. Nothing watches the fragments; the probe
-// reads the completion, which a streamed call returns exactly as an unwatched
-// one does.
+// watched is a request as a seat's round sends it: streamed for the live
+// view, on the profile as written.
 func watched(req llm.Request) llm.Request {
 	req.OnDelta = func(llm.Delta) {}
+	return req
+}
+
+// tokenStreamed is a request as a Dashboard Assistant answer sends it: watched
+// and asking for the token stream, so it runs the profile's streamed variant
+// where it has one ([Provider.profileFor]). The isolation probes send this,
+// because the assistant is the caller whose admission rests on the web being
+// denied, and the variant's argv only adds to the profile's own; a probe on
+// the profile as written would prove the denial on an argv no assistant call
+// runs.
+func tokenStreamed(req llm.Request) llm.Request {
+	req = watched(req)
+	req.StreamTokens = true
 	return req
 }
 
@@ -760,6 +784,9 @@ func (d Diagnosis) Render(w io.Writer) {
 		line(label, entry)
 	}
 	line("smoke test", d.Smoke)
+	if d.StreamSmoke != "" {
+		line("stream smoke", d.StreamSmoke)
+	}
 	line("local tools", d.LocalTools)
 	line("web", d.Web)
 	for i, entry := range d.AgentRuntime {

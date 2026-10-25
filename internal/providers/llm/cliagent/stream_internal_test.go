@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,12 +62,14 @@ func readFixture(t *testing.T) string {
 	return string(raw)
 }
 
-// toolRequest is a round that offers a tool, so the reply is an envelope.
+// toolRequest is a round that offers a tool, so the reply is an envelope,
+// sent as a Dashboard Assistant answer is: watched and asking for the token
+// stream.
 func toolRequest(onDelta func(llm.Delta)) llm.Request {
 	return llm.Request{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "Why is the sea salty?"}},
 		Tools:    []llm.ToolDef{{Name: "search_knowledge", Description: "Search the knowledge base."}},
-		OnDelta:  onDelta,
+		OnDelta:  onDelta, StreamTokens: true,
 	}
 }
 
@@ -200,7 +203,7 @@ func TestAPlainStreamedCallIsShownAsItsAnswerIsTrimmed(t *testing.T) {
 	t.Parallel()
 	p := claudeStreamProvider(t, claudeStream(t, "\n  The sea\n stays salty. \n\n", 4), "")
 	var rec recorder
-	comp, err := ask(t, p, llm.Request{OnDelta: rec.on})
+	comp, err := ask(t, p, llm.Request{OnDelta: rec.on, StreamTokens: true})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -287,5 +290,61 @@ func TestTheWebProbeRunsTheStreamedArgv(t *testing.T) {
 	verdict, problem := p.webProbe(t.Context())
 	if !strings.Contains(verdict, "FETCHED") || problem == "" {
 		t.Errorf("verdict %q, problem %q: the probe did not run the streamed argv", verdict, problem)
+	}
+}
+
+// A SEAT'S ROUND RUNS THE ARGV IT ALWAYS RAN. A seat watches its round for the
+// live view but does not ask for the token stream, so on Claude Code it runs
+// the profile as written, reads the one json document back, and is sent no
+// fragment: exactly what it did before the streamed variant existed.
+func TestASeatsWatchedRoundRunsTheProfileAsWritten(t *testing.T) {
+	t.Parallel()
+	p := claudeStreamProvider(t, readFixture(t),
+		`{"result":"{\"message\": \"as written\", \"tool_calls\": []}","is_error":false}`)
+	var rec recorder
+	req := toolRequest(rec.on)
+	req.StreamTokens = false
+	comp, err := ask(t, p, req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if comp.Content != "as written" {
+		t.Errorf("content = %q: a seat's round ran the streamed argv", comp.Content)
+	}
+	if len(rec.deltas) != 0 {
+		t.Errorf("a json round sent %+v; it has no faithful view to stream", rec.deltas)
+	}
+	if got := p.argv(p.profileFor(req)); !slices.Equal(got, p.argv(&p.profile)) {
+		t.Errorf("a seat's argv %q, want the profile's own %q", got, p.argv(&p.profile))
+	}
+}
+
+// THE DOCTOR PROVES THE STREAMED VARIANT APART FROM THE SEATS' ARGV. Its smoke
+// test runs a seat's round and, on a profile with a variant, the same round
+// through it, so a variant that stopped reading back fails the doctor before
+// any caller asks for the token stream.
+func TestTheDoctorSmokesTheStreamedVariantApart(t *testing.T) {
+	t.Parallel()
+	envelope := `{"message": "", "tool_calls": [{"name": "crewlet_smoke", "arguments": {"ok": true}}]}`
+	unary, err := jsonLine(map[string]any{"result": envelope, "is_error": false,
+		"usage": map[string]any{"input_tokens": 9, "output_tokens": 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := claudeStreamProvider(t, claudeStream(t, envelope, 3), unary)
+	if verdict, _ := good.smokeTest(t.Context(), smokeRequest()); !strings.HasPrefix(verdict, "ok") {
+		t.Errorf("the seats' smoke = %q", verdict)
+	}
+	if verdict, _ := good.smokeTest(t.Context(), tokenStreamed(smokeRequest())); !strings.HasPrefix(verdict, "ok") {
+		t.Errorf("the streamed smoke = %q", verdict)
+	}
+	// A stream with no result event is a variant that no longer matches
+	// its CLI: the seats' smoke still passes, and only the streamed one fails.
+	broken := claudeStreamProvider(t, `{"type":"system","subtype":"init"}`+"\n", unary)
+	if verdict, _ := broken.smokeTest(t.Context(), smokeRequest()); !strings.HasPrefix(verdict, "ok") {
+		t.Errorf("the seats' smoke = %q on a profile whose variant drifted", verdict)
+	}
+	if verdict, _ := broken.smokeTest(t.Context(), tokenStreamed(smokeRequest())); !strings.HasPrefix(verdict, "failed") {
+		t.Errorf("the streamed smoke = %q, want the drifted variant to fail", verdict)
 	}
 }
