@@ -24,6 +24,9 @@ type Result struct {
 	Model string
 	// Refusal is the route's refusal, when the answer was one.
 	Refusal *wire.Refusal
+	// Trust is the label the model's text was fenced under: the tool's,
+	// or what its TrustOf made of this answer. A refusal carries none.
+	Trust provenance.Trust
 }
 
 // Failed reports a read the route refused or could not answer.
@@ -70,11 +73,19 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if err != nil {
 		return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
 	}
-	model, err := fitModel(t, built.Card, b)
+	trust := t.Trust
+	if t.TrustOf != nil {
+		answer, err := cards.Decode(body)
+		if err != nil {
+			return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, err)
+		}
+		trust = t.TrustOf(answer)
+	}
+	model, err := fitModel(t, trust, built.Card, b)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Cards: built.Cards(), Model: model}, nil
+	return Result{Cards: built.Cards(), Model: model, Trust: trust}, nil
 }
 
 // modelText is a summary as the model reads it: fenced whole, with the
@@ -89,13 +100,13 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 //
 // THE MODEL CUT INCLUDES THE FENCE: the summary is built to [cards.ModelBytes]
 // less [fenceBytes], so what the model is handed never passes the bound.
-func modelText(t Tool, b provenance.Boundary, summary []byte) (string, error) {
+func modelText(t Tool, trust provenance.Trust, b provenance.Boundary, summary []byte) (string, error) {
 	if !t.Fence {
 		return provenance.Neutralise(b, string(summary)), nil
 	}
 	out, err := json.Marshal(map[string]any{
-		"provenance": provenance.NewEnvelope(t.Trust, nil),
-		"answer":     provenance.Fence(b, t.Source, t.Trust, nil, string(summary)),
+		"provenance": provenance.NewEnvelope(trust, nil),
+		"answer":     provenance.Fence(b, t.Source, trust, nil, string(summary)),
 	})
 	if err != nil {
 		return "", fmt.Errorf("catalog: encode a fenced result: %w", err)
@@ -121,14 +132,14 @@ const fenceBytes = 2 << 10
 // [cards.ModelBytes] with the fence included: the summary is built to the
 // bound less the fence's guess, and built again smaller by what the result
 // went past it, whole rows still, until it fits.
-func fitModel(t Tool, card wire.Card, b provenance.Boundary) (string, error) {
+func fitModel(t Tool, trust provenance.Trust, card wire.Card, b provenance.Boundary) (string, error) {
 	budget := cards.ModelBytes - fenceBytes
 	for budget > 0 {
 		summary, err := cards.Summary(card, budget)
 		if err != nil {
 			return "", fmt.Errorf("catalog: summarise %s's answer: %w", t.Name, err)
 		}
-		model, err := modelText(t, b, summary)
+		model, err := modelText(t, trust, b, summary)
 		if err != nil {
 			return "", err
 		}

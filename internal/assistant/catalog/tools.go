@@ -14,11 +14,14 @@ import (
 var all = sync.OnceValues(func() ([]Tool, error) {
 	var out []Tool
 	for _, t := range readTools() {
-		// EVERY READ IS A ROUTE'S OWN ANSWER about the company's records,
-		// so every one carries the same label: the answer names no writer
-		// per field, and colleague is the least every writer earns.
+		// EVERY READ IS A ROUTE'S OWN ANSWER, labelled as one, and
+		// colleague unless the tool says its text comes from outside the
+		// company (Trust or TrustOf).
 		t.Kind, t.Tier = KindRead, TierRead
-		t.Source, t.Trust = provenance.SourceAPIAnswer, provenance.TrustColleague
+		t.Source = provenance.SourceAPIAnswer
+		if t.Trust == "" {
+			t.Trust = provenance.TrustColleague
+		}
 		out = append(out, t)
 	}
 	out = append(out, writeTools()...)

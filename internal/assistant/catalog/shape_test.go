@@ -195,7 +195,12 @@ func TestEveryAssistantToolResultIsFenced(t *testing.T) {
 					t.Errorf("%s: the fenced result is not its envelope: %v", name, err)
 					continue
 				}
-				head := opener + " source=" + string(tool.Source) + " trust=" + string(tool.Trust)
+				// THE TRUST THIS ANSWER EARNED: the tool's, or what its
+				// TrustOf made of the rows (TestAnAnswerIsFencedAtTheTrustItsTextEarns).
+				if !res.Trust.Valid() {
+					t.Errorf("%s: the result names no trust", name)
+				}
+				head := opener + " source=" + string(tool.Source) + " trust=" + string(res.Trust)
 				if !strings.HasPrefix(fenced.Answer, head) ||
 					!strings.HasSuffix(fenced.Answer, closer) ||
 					strings.Count(fenced.Answer, closer) != 1 ||
@@ -203,7 +208,7 @@ func TestEveryAssistantToolResultIsFenced(t *testing.T) {
 					t.Errorf("%s: the answer is not inside exactly one fence:\n%.300s", name,
 						fenced.Answer)
 				}
-				if fenced.Provenance.Trust != tool.Trust {
+				if fenced.Provenance.Trust != res.Trust {
 					t.Errorf("%s: the envelope labels %q", name, fenced.Provenance.Trust)
 				}
 			}
@@ -241,5 +246,45 @@ func TestARefusalAndATruncatedAnswerAreNeverCardedAsData(t *testing.T) {
 	if res.Failed() || len(res.Cards) != 1 || res.Cards[0].Type != wire.CardNotice ||
 		res.Cards[0].Notice.Text != cards.TooLargeText {
 		t.Errorf("a truncated answer shaped as %+v", res)
+	}
+}
+
+// AN ANSWER IS FENCED AT THE TRUST ITS TEXT EARNS: a coding run's question
+// (a third-party coding CLI's, from a brief that may come from outside the
+// company) and a connected knowledge base's pages are external, and the same
+// tools answering only the company's own text are colleague. Mutation: label
+// every read colleague again, or ignore TrustOf, and the external rows fail.
+func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
+	t.Parallel()
+	b := provenance.Boundary("K7Q2M4XWB3ZP6TNA")
+	for _, tc := range []struct {
+		tool, body string
+		want       provenance.Trust
+	}{
+		{"list_coding_runs", `{"runs":[{"agent_handle":"dev","status":"waiting","question":"Which branch?"}]}`,
+			provenance.TrustExternal},
+		{"list_coding_runs", `{"runs":[{"agent_handle":"dev","status":"running"}]}`,
+			provenance.TrustColleague},
+		{"list_decisions", `{"items":[{"kind":"run","run":{"agent_handle":"dev","question":"Merge it?"}}]}`,
+			provenance.TrustExternal},
+		{"list_decisions", `{"items":[{"kind":"ask","ask":{"key":"ENG-1","title":"Ship it","body":"Which day?"}}]}`,
+			provenance.TrustColleague},
+		{"search_knowledge", `{"backend":"confluence","hits":[{"title":"Runbook","snippet":"Step one"}]}`,
+			provenance.TrustExternal},
+		{"search_knowledge", `{"backend":"native","hits":[{"title":"Runbook","snippet":"Step one"}]}`,
+			provenance.TrustColleague},
+		{"get_task", `{"task":{"key":"ENG-1","title":"Ship it","body":"Details."}}`,
+			provenance.TrustColleague},
+	} {
+		tool := mustTool(t, tc.tool)
+		args := assistanttest.ExampleArgs(t, tool.Parameters)
+		res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(tc.body)},
+			b, evals.Epoch)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.tool, err)
+		}
+		if res.Trust != tc.want || !strings.Contains(res.Model, "trust="+string(tc.want)) {
+			t.Errorf("%s answering %s is fenced at %q, want %q", tc.tool, tc.body, res.Trust, tc.want)
+		}
 	}
 }

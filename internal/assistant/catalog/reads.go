@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
@@ -9,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The read tools: each one request, to one named read route the dashboard
@@ -318,6 +320,9 @@ func readTools() []Tool {
 				"coding runs parked on a question for them.",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /work/decisions"}, Fence: true,
+			// An ask is a colleague's; a coding run's question is not (see
+			// list_coding_runs), so an answer holding one is external.
+			TrustOf: outsideWhere("items", "run.question"),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /work/decisions", nil, nil)
 			},
@@ -458,6 +463,10 @@ func readTools() []Tool {
 			Description: "Coding runs in flight and recent, including any parked on a question.",
 			schema:      object(nil, map[string]*schema{}),
 			Routes:      []string{"GET /sandbox-runs"}, Fence: true,
+			// A RUN'S QUESTION IS THE CODING CLI'S, a third party's model
+			// working from a brief that may be an outside chat message or a
+			// webhook's payload: outside the company, whoever runs it.
+			TrustOf: outsideWhere("runs", "question"),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /sandbox-runs", nil, nil)
 			},
@@ -571,7 +580,10 @@ func readTools() []Tool {
 			// OFFERED AS THE KNOWLEDGE QUESTION ANSWERS: to a reader who
 			// sees pages or tasks (it searches both), not on one app.
 			Routes: []string{"GET /query/{what}"}, Fence: true,
-			Shows: []authz.ObjectKind{authz.KindPage, authz.KindTask},
+			// THE NATIVE KNOWLEDGE BASE IS WRITTEN BY THE COMPANY; a connected
+			// one (Confluence) by whoever its own users are.
+			TrustOf: knowledgeTrust,
+			Shows:   []authz.ObjectKind{authz.KindPage, authz.KindTask},
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get("GET /query/{what}", map[string]string{"what": "knowledge"},
 					query(a).str("q", "q").values())
@@ -779,4 +791,30 @@ func artifactKinds() []string {
 		out = append(out, string(k))
 	}
 	return out
+}
+
+// outsideWhere is the trust of an answer whose rows (at rows) may carry text
+// from outside the company at field: external where any row carries some,
+// colleague where none does.
+func outsideWhere(rows, field string) func(answer any) provenance.Trust {
+	return func(answer any) provenance.Trust {
+		list, _ := cards.Lookup(answer, rows).([]any)
+		for _, row := range list {
+			if strings.TrimSpace(cards.Text(cards.Lookup(row, field))) != "" {
+				return provenance.TrustExternal
+			}
+		}
+		return provenance.TrustColleague
+	}
+}
+
+// knowledgeTrust is a knowledge search's trust: colleague from the native
+// knowledge base, external from a connected one, whose pages people outside
+// the company may write.
+func knowledgeTrust(answer any) provenance.Trust {
+	switch cards.Text(cards.Lookup(answer, "backend")) {
+	case "", "native":
+		return provenance.TrustColleague
+	}
+	return provenance.TrustExternal
 }

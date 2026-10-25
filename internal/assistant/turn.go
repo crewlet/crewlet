@@ -112,9 +112,10 @@ func (t *turn) firstOutput() {
 	}
 }
 
-// tainted notes a read whose answer somebody outside the company wrote.
-func (t *turn) tainted(tool catalog.Tool) {
-	if !tool.Fence || !outsideTrusts[tool.Trust] {
+// tainted notes a read whose answer, at the trust it was fenced under,
+// somebody outside the company wrote.
+func (t *turn) tainted(tool catalog.Tool, trust provenance.Trust) {
+	if !tool.Fence || !outsideTrusts[trust] {
 		return
 	}
 	t.mu.Lock()

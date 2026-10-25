@@ -204,9 +204,15 @@ type Tool struct {
 	// provenance.SourceAPIAnswer for every route's answer.
 	Source provenance.Source
 	// Trust is how far the model may rely on a read's answer: the least
-	// its writers earn (a route's answer names no writer per field, so
-	// colleague for the company's own records).
+	// its writers earn. Colleague where every text the card carries was
+	// written by the company's own principals (agents and people alike,
+	// as provenance.TrustFor counts them); external where it originates
+	// outside the company.
 	Trust provenance.Trust
+	// TrustOf, for a read whose answer may or may not carry text from
+	// outside the company, decides the answer's trust from what it holds
+	// (a row's origin, the backend that answered) in place of Trust.
+	TrustOf func(answer any) provenance.Trust
 	// Label renders the step's sentence from the call's safe arguments.
 	Label func(args map[string]any) string
 	// Build turns the call's arguments into the one request it sends, on
