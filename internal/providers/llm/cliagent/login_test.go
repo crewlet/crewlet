@@ -240,6 +240,11 @@ func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
 			want := map[string]string{}
 			for _, file := range profileLoginNames(source.profile) {
 				want[file] = fmt.Sprintf(`{"cli":%q,"file":%q}`, from, file)
+				if key, ok := source.profile.LoginKeys[file]; ok {
+					// A file the CLI keeps settings in too is a login
+					// only holding its key.
+					want[file] = fmt.Sprintf(`{"cli":%q,"file":%q,%q:"placeholder"}`, from, file, key)
+				}
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
 			blob, err := source.ExportBundle()

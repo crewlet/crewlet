@@ -1249,6 +1249,11 @@ cursor-agent:
   # never where a seat's CLI looked, and the one it did use was never carried
   # back. cli-config.json follows CURSOR_CONFIG_DIR on both.
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
+  # cli-config.json is the CLI's settings file too, written on every run
+  # signed in or not (measured); a login adds the account it is for under
+  # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
+  login_keys:
+    cli-config.json: "authInfo"
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
   # directory, and per call-directory a projects entry holding the trust
   # marker, the call's transcript and a worker log — one more entry for every
@@ -1408,7 +1413,22 @@ copilot:
     # of the one installed. Read from `copilot help environment` on 1.0.103;
     # no measured call attempted an update.
     COPILOT_AUTO_UPDATE: "false"
-  credential_paths: [".copilot/hosts.json"]
+  # THE LOGIN IS THE SYSTEM KEYCHAIN'S, or this file's. `copilot login` keeps
+  # its token in the keychain — the Secret Service on Linux — and where none
+  # answers, as on a headless engine host, asks "Store token in plaintext
+  # config file? (y/N)" and, told yes, writes it under `copilotTokens` in
+  # .copilot/config.json (read from the 1.0.103 bundle and its runtime
+  # addon; `.copilot/hosts.json`, which this list named before, appears in
+  # neither). A login kept in a keychain is out of a seat's reach: sign the
+  # entry in with `crewlet llm login`, answering yes, or give it a token
+  # (api_key_env below).
+  #
+  # The same file is the CLI's own record of itself — it writes
+  # `firstLaunchAt` there on its first start, signed in or not (measured) —
+  # so it is a login only while it holds copilotTokens.
+  credential_paths: [".copilot/config.json"]
+  login_keys:
+    config.json: "copilotTokens"
   # What a call leaves in the seat's home, measured on 1.0.103: a session
   # directory holding the call's events, and the session database every
   # session is indexed in (which the CLI's own session_store_sql tool
@@ -1431,7 +1451,7 @@ copilot:
   # handing every seat gh's own token, with gh's scopes, is not this
   # profile's decision — GITHUB_TOKEN below is the way to give a seat a
   # GitHub token.
-  host_credential_paths: [".copilot/hosts.json"]
+  host_credential_paths: [".copilot/config.json"]
   # Copilot authenticates with a GitHub token, so this is its key variable —
   # reached deliberately through auth.mode api-key or inherit-env, never
   # forwarded silently.

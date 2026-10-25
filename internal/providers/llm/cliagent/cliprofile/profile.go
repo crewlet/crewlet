@@ -1,6 +1,7 @@
 package cliprofile
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -1049,6 +1050,18 @@ type Profile struct {
 	// refresh; anything else in the home is conversation state.
 	CredentialPaths []string `yaml:"credential_paths,omitempty"`
 
+	// LoginKeys names, by a credential file's NAME, the top-level key that
+	// file holds only once the CLI has signed in — for a file the CLI also
+	// keeps state of its own in. Copilot CLI writes `firstLaunchAt` into the
+	// config.json its plaintext login lives in on its first start, and Cursor
+	// Agent its settings into cli-config.json on every run, signed in or
+	// not; carried out of a seat's home, either was a "login" that had the
+	// doctor report a sign-in nobody made and kept a configured bundle from
+	// being restored. Without its key such a file is not a login
+	// ([Profile.HoldsLogin]). A credential file not named here is a login
+	// whenever it exists.
+	LoginKeys map[string]string `yaml:"login_keys,omitempty"`
+
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call. A
 	// second invisible memory inside the CLI would make turns
@@ -1872,11 +1885,22 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 		}
 		byName[name] = rel
 	}
+	for _, name := range slices.Sorted(maps.Keys(p.LoginKeys)) {
+		switch {
+		case byName[name] == "":
+			add("login_keys names %q, which is the file name of no credential_paths entry — "+
+				"a login key says which of the credential files holds a login only once it "+
+				"carries that key", name)
+		case strings.TrimSpace(p.LoginKeys[name]) == "":
+			add("login_keys.%s is empty — name the top-level key the file holds once the "+
+				"CLI has signed in", name)
+		}
+	}
 	// A HOST FILE IS ADOPTED UNDER ITS FILE NAME, and a seat is seeded only
 	// with the names credential_paths gives — so a host path whose file name
 	// none of them has is adopted, reported as the login found, and read by
 	// no seat: copilot listed gh's `.config/gh/hosts.yml`, adopted as
-	// `hosts.yml` beside the `hosts.json` its credential_paths name.
+	// `hosts.yml` beside the `hosts.json` its credential_paths then named.
 	for i, rel := range p.HostCredentialPaths {
 		if name := filepath.Base(rel); staysInside(rel) && namesAFile(rel) && byName[name] == "" {
 			add("host_credential_paths[%d] %q has a file name (%s) no credential_paths "+
@@ -2350,6 +2374,48 @@ func (p *Profile) ValidateCredentials(name string) error {
 		return nil
 	}
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// HoldsLogin reports whether the credential file named name, holding content,
+// is a login: one [Profile.LoginKeys] does not name, or one whose top-level
+// key it names is set to something other than null or an empty string, object
+// or array.
+//
+// Read as JSON once every line opening with `//` is set aside, because the
+// file Copilot CLI keeps its plaintext login in opens with two such lines. A
+// file that does not read that way IS taken for a login: guessing harder would
+// mean parsing a vendor's format here, and a wrong guess in the other
+// direction is a login the engine would not carry, export or keep.
+func (p *Profile) HoldsLogin(name string, content []byte) bool {
+	key, named := p.LoginKeys[name]
+	if !named {
+		return true
+	}
+	var lines []string
+	for line := range strings.Lines(string(content)) {
+		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+			lines = append(lines, line)
+		}
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(strings.Join(lines, "")), &doc); err != nil {
+		return true
+	}
+	var value any
+	if err := json.Unmarshal(doc[key], &value); err != nil {
+		return false
+	}
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	}
+	return true
 }
 
 // EffectivePromptMode is the prompt mode with its default applied.

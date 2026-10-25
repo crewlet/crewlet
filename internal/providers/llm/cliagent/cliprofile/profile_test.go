@@ -639,3 +639,45 @@ func TestAPlatformSectionIsResolvedBeforeOverrides(t *testing.T) {
 		}
 	}
 }
+
+// A LOGIN KEY DECIDES WHETHER A FILE HOLDS A LOGIN, AND NOTHING ELSE DOES. Only
+// a file login_keys names is read, its `//` header lines set aside as Copilot
+// CLI writes them; an empty value is no login; and a file the rule cannot read
+// is taken for one, the direction that never drops somebody's login. A key may
+// only name a credential file, and must say which key.
+func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
+	t.Parallel()
+	p, err := Load("copilot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const header = "// User settings belong in settings.json.\n// This file is managed automatically.\n"
+	for name, tc := range map[string]struct {
+		file, content string
+		want          bool
+	}{
+		"first launch only":      {"config.json", header + `{"firstLaunchAt": "2026-10-24T21:08:22.632Z"}`, false},
+		"a token":                {"config.json", header + `{"copilotTokens": {"https://github.com:someone": "placeholder"}}`, true},
+		"an emptied token table": {"config.json", header + `{"copilotTokens": {}}`, false},
+		"a null token table":     {"config.json", `{"copilotTokens": null}`, false},
+		"unreadable":             {"config.json", "not json at all", true},
+		"a file no key names":    {"other.json", `{}`, true},
+	} {
+		if got := p.HoldsLogin(tc.file, []byte(tc.content)); got != tc.want {
+			t.Errorf("%s: HoldsLogin = %v, want %v", name, got, tc.want)
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		keys map[string]any
+		says string
+	}{
+		"a file no credential path has": {map[string]any{"hosts.json": "token"}, `login_keys names "hosts.json"`},
+		"no key":                        {map[string]any{"config.json": ""}, "login_keys.config.json is empty"},
+	} {
+		if _, err := Load("copilot", map[string]any{"login_keys": tc.keys}); err == nil ||
+			!strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
+		}
+	}
+}

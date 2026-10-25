@@ -1628,15 +1628,15 @@ func holdsLogin(document []byte) bool {
 	return true
 }
 
-// HasLogin reports whether the shared directory holds any credential file.
+// HasLogin reports whether the shared directory holds a login.
 func (w *Workspace) HasLogin() bool {
 	return len(w.LoginFiles()) > 0
 }
 
-// LoginFiles lists the credential files present in the shared directory,
-// as absolute paths, sorted — a [cliprofile.CredentialStore]'s document among
-// them, which travels in a bundle and is removed by a logout exactly as a
-// credential file is.
+// LoginFiles lists the credential files in the shared directory that hold a
+// login ([Workspace.holdsLogin]), as absolute paths, sorted — a
+// [cliprofile.CredentialStore]'s document among them, which travels in a bundle
+// and is removed by a logout exactly as a credential file is.
 func (w *Workspace) LoginFiles() []string {
 	shared := w.CredentialsDir()
 	var candidates []string
@@ -1648,10 +1648,26 @@ func (w *Workspace) LoginFiles() []string {
 	}
 	var out []string
 	for _, path := range candidates {
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && w.holdsLogin(path) {
 			out = append(out, path)
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// holdsLogin reports whether a shared credential file is a login, by its
+// profile's [cliprofile.Profile.HoldsLogin]. A file that cannot be read counts
+// as one, as a file the rule cannot parse does: the direction that never drops
+// a login.
+func (w *Workspace) holdsLogin(path string) bool {
+	name := filepath.Base(path)
+	if _, named := w.profile.LoginKeys[name]; !named {
+		return true
+	}
+	content, err := os.ReadFile(path) //nolint:gosec // path is inside the state dir
+	if err != nil {
+		return true
+	}
+	return w.profile.HoldsLogin(name, content)
 }
