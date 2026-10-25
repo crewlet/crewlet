@@ -248,7 +248,7 @@ function AuditReads({ reads }: { reads: ConversationView["auditReads"] }) {
     >
       <Stack gap={1}>
         {reads.map((read) => (
-          <span key={`${read.reader}@${read.at}`}>
+          <span key={`${read.at}/${read.reader}`}>
             {`${read.reader}, ${fmtDateTime(read.at)}: “${read.reason}”`}
           </span>
         ))}
