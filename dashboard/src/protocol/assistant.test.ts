@@ -210,6 +210,32 @@ describe("a turn's stream", () => {
     expect(held.get(outer)).toBe(0);
   });
 
+  // A BUSY ENGINE IS WAITED OUT, NOT A FAULT: a `429 assistant_busy` on the
+  // stream is dialled again after the Retry-After it names, not after the
+  // backoff, and the stream is not stopped. Mutation: dial on the backoff
+  // and the second dial comes milliseconds after the first.
+  test("a busy stream is dialled again after the wait the engine named", async () => {
+    const at: number[] = [];
+    serve(
+      () => {
+        at.push(Date.now());
+        return new Response(JSON.stringify({ error: "assistant_busy" }), {
+          status: 429,
+          headers: { "Content-Type": "application/json", "Retry-After": "1" },
+        });
+      },
+      () => {
+        at.push(Date.now());
+        return sse(body(FIRST));
+      },
+    );
+    const w = watch(URL_);
+    await w.ended;
+    expect(w.stops).toEqual([]);
+    expect(w.frames).toHaveLength(FIRST.length);
+    expect(at[1]! - at[0]!).toBeGreaterThanOrEqual(950);
+  });
+
   test("a refusal stops it with the engine's own answer; a 5xx is dialled again", async () => {
     const refused = serve(
       () =>

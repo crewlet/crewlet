@@ -189,6 +189,9 @@ export function openTurnStream(
   let stopped = false;
   let outageSince: number | null = null;
   let wait = backoffMs;
+  // THE WAIT THE ENGINE NAMED for the next dial (a `429 assistant_busy`'s or
+  // a `503`'s Retry-After), in ms; 0 where it named none.
+  let told = 0;
 
   const setState = (state: StreamState) => {
     if (outer.signal.aborted && state !== "closed") return;
@@ -273,6 +276,12 @@ export function openTurnStream(
       } else if (!(err instanceof RestError) && !isAbort(err)) {
         throw err;
       }
+      // A BUSY ENGINE SAYS WHEN TO COME BACK: the next dial waits for its
+      // Retry-After rather than for the backoff, which would ask again
+      // into the same refusal.
+      if (err instanceof RestError && err.retryAfterSeconds !== null) {
+        told = err.retryAfterSeconds * 1000;
+      }
       return false;
     } finally {
       // EVERY WAY OUT ENDS THE CONNECTION: after a fault or a refusal the
@@ -297,7 +306,8 @@ export function openTurnStream(
       if (done || outer.signal.aborted || stopped) break;
       outageSince ??= now();
       setState("reconnecting");
-      await sleep(wait);
+      await sleep(Math.max(wait, told));
+      told = 0;
       wait = Math.min(maxBackoffMs, wait * 2);
       if (outer.signal.aborted) break;
     }
