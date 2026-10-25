@@ -326,6 +326,38 @@ const (
 	// the service objective: everybody's, because it carries no artifact
 	// content and a reader of any artifact sends it.
 	ActionArtifactReady Action = "artifacts.ready"
+
+	// --- artifact folders and the company's brand -------------------- //
+	//
+	// A FOLDER GRANTS NOTHING (ADR-0047). Its own visibility is decided as
+	// a relation on its top-level folder ([KindArtifactFolder], read by
+	// [ActionArtifactRead]'s row, since the ladder is the artifact's), and
+	// filing an artifact asks TWO decisions: the artifact's
+	// ([ActionArtifactMove]) and the destination folder's
+	// ([ActionArtifactFolderFile]), each through the requester ceiling.
+	//
+	// CREATING A FOLDER is the app (an agent creates subfolders only, a rule
+	// the artifacts writer holds) beside contributor on the parent.
+	ActionArtifactFolderCreate Action = "create_artifact_folder"
+	// FILING ONE ARTIFACT is an edit of where it lives: editor on it.
+	ActionArtifactMove Action = "move_artifact"
+	// FILING INTO A FOLDER, or creating a folder inside one: contributor on
+	// the destination, asked beside the move or the create.
+	ActionArtifactFolderFile Action = "artifacts.folder.file"
+	// MANAGING A FOLDER is its owner's, the owner's lead's or admin's, and
+	// a person's: a rename, a move under another parent, a removal (which
+	// moves what it holds up a level) and taking an artifact out of it.
+	ActionArtifactFolderRename Action = "artifacts.folder.rename"
+	ActionArtifactFolderMove   Action = "artifacts.folder.move"
+	ActionArtifactFolderRemove Action = "artifacts.folder.remove"
+	ActionArtifactFolderUnfile Action = "artifacts.folder.unfile"
+
+	// THE ADOPTED BRAND IS THE COMPANY'S PUBLIC FACE (ADR-0048): everybody
+	// reads it, every agent under every ceiling included, and only an
+	// administrator, a person at a recent proof, changes it.
+	ActionBrandRead  Action = "get_company_brand"
+	ActionBrandAdopt Action = "artifacts.brand.adopt"
+	ActionBrandClear Action = "artifacts.brand.clear"
 )
 
 // Presence is which arms of a verb need a PERSON present: refused to a request
@@ -877,6 +909,39 @@ var rules = map[Action]rule{
 		recency: iam.RecencyAny},
 	ActionArtifactUsage: {class: ClassAdmin, recency: iam.RecencyAny},
 	ActionArtifactReady: {class: ClassEverybody, recency: iam.RecencyAny},
+
+	// --- artifact folders and the company's brand -------------------- //
+	//
+	// A FOLDER IS DECIDED AS AN ARTIFACT IS, on [KindArtifactFolder]: its
+	// owner and its top-level folder's shares. Creating one is the app;
+	// the parent's contributor role is asked beside it
+	// ([ActionArtifactFolderFile]).
+	ActionArtifactFolderCreate: {class: ClassApp, app: iam.GrantArtifacts,
+		recency: iam.RecencyAny, steerable: true},
+	ActionArtifactMove: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+	ActionArtifactFolderFile: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleContributor, recency: iam.RecencyAny, steerable: true},
+	// MANAGING A FOLDER is the owner's and a person's: a seat that renamed,
+	// moved or removed a folder a team files into would reorganise work it
+	// does not own, and a model persuaded by a row it read must not be able
+	// to.
+	ActionArtifactFolderRename: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+	ActionArtifactFolderMove: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+	ActionArtifactFolderRemove: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+	ActionArtifactFolderUnfile: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+	// THE BRAND IS EVERYBODY'S TO READ, and an administrator's, a person's
+	// and a recent proof's to change: an adoption restyles every page the
+	// company publishes, as far-reaching as a purge is irreversible.
+	ActionBrandRead: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionBrandAdopt: {class: ClassAdmin, humanOnly: true,
+		presence: PresenceRequired, recency: iam.RecencyStepUp},
+	ActionBrandClear: {class: ClassAdmin, humanOnly: true,
+		presence: PresenceRequired, recency: iam.RecencyStepUp},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table

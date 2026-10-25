@@ -181,7 +181,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 // auth.credential_bundle — not by its CLI, so an entry moved to another CLI
 // still restores the bundle it was configured with. Judged by its files' names
 // alone, that bundle was refused only where the two CLIs keep different names:
-// six keep an `auth.json` and two an `oauth_creds.json`, so codex's bundle was
+// six keep an `auth.json`, so codex's bundle was
 // written into pi's empty login, where it is a credential pi cannot read and,
 // as a login already present, turned every later restore away — the right
 // bundle included.
@@ -193,7 +193,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 // with nothing beside its login files.
 //
 // Mutation: skip the manifest's check in restoreBundle, and every pair that
-// shares a file name restores (codex into pi, qwen-code into gemini-cli), and
+// shares a file name restores (codex into pi, among others), and
 // every other pair is refused as a file it does not keep rather than as
 // another CLI's bundle.
 func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
@@ -240,6 +240,11 @@ func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
 			want := map[string]string{}
 			for _, file := range profileLoginNames(source.profile) {
 				want[file] = fmt.Sprintf(`{"cli":%q,"file":%q}`, from, file)
+				if key, ok := source.profile.LoginKeys[file]; ok {
+					// A file the CLI keeps settings in too is a login
+					// only holding its key.
+					want[file] = fmt.Sprintf(`{"cli":%q,"file":%q,%q:"placeholder"}`, from, file, key)
+				}
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
 			blob, err := source.ExportBundle(t.Context())
@@ -656,7 +661,7 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 		{
 			name: "codex under api-key", agent: "codex", mode: AuthAPIKey,
 			want: []string{"auth.mode is api-key",
-				"providers.llm.sub.auth.api_key, else OPENAI_API_KEY", "`crewlet secrets set`"},
+				"providers.llm.sub.auth.api_key, else CODEX_API_KEY", "`crewlet secrets set`"},
 			notWant: []string{"crewlet llm login sub", "stdin_login"},
 		},
 		{
@@ -671,7 +676,7 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 		{
 			name: "codex under inherit-env", agent: "codex", mode: AuthInheritEnv,
 			want: []string{"run `crewlet llm login sub`", "auth.mode is inherit-env",
-				"OPENAI_API_KEY from the engine's own process environment",
+				"CODEX_API_KEY from the engine's own process environment",
 				"export it in the engine's environment"},
 			notWant: []string{"capture-token"},
 		},
@@ -719,6 +724,26 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A CLI THAT KEEPS NO LOGIN IS SENT TO ITS KEY, not to a login on the host:
+// Qwen Code keeps none — both measured builds refuse the OAuth login it once
+// kept — so `-from-host` would find nothing to adopt.
+func TestBrokeringALoginForACLIThatKeepsNoneNamesItsKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	p, err := New(Config{Key: "qwen", Agent: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = p.BrokerLogin(t.Context(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, ErrNoLoginCommand) {
+		t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+	}
+	if !strings.Contains(err.Error(), "auth.mode: api-key") || strings.Contains(err.Error(), "-from-host") {
+		t.Errorf("the refusal does not send the operator to the key alone: %v", err)
 	}
 }
 
@@ -1013,9 +1038,7 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 // boot or apply — put back the very login the operator had just removed, a
 // compromised one typically, and the logout lasted until the next command.
 // Now the restore declines, and says why in words an operator can act on —
-// among them how to retire the bundle for good, `crewlet secrets unset`, which
-// a stopped node refuses once it has run and wherever it is not the fleet's
-// only member, so the decline says it takes the running engine or -api there.
+// among them how to retire the bundle for good, `crewlet secrets unset`.
 //
 // Mutation: drop the record from Logout, or the check from restoreBundle, and
 // the login comes back here.
@@ -1047,9 +1070,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	}
 	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
-		"fresh volume", "crewlet secrets unset " + cliprofile.BundleVarName("sub"),
-		"-api naming a running node, once the node has run or wherever it is not the " +
-			"fleet's only member"} {
+		"fresh volume", "crewlet secrets unset " + cliprofile.BundleVarName("sub")} {
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("the decline does not name %q: %v", want, err)
 		}

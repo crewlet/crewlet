@@ -381,7 +381,8 @@ func TestARekeyDryRunReportsWithoutWriting(t *testing.T) {
 // PROVENANCE IS RECORDED, so "where did this credential come from" has an
 // answer months later — and it is the command's own, never a word its caller
 // picked. `-source` once stamped whatever it was given, so a row could claim
-// any path; the flag is gone, and a stopped node's table records `cli`.
+// any path; the flag is gone, and a write made directly, with the engine
+// stopped, records `cli`.
 // Mutation: stamp another word in setSecret and the row's source fails.
 func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -430,13 +431,13 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 		"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
 
 	target, err := throughTheRunningNode(operator, boot, "crewlet.yaml",
-		storeRun{command: "crewlet secrets set", use: actsOnItsOwn, offline: true}, locked)
+		storeRun{command: "crewlet secrets set", offline: true}, locked)
 	if err != nil {
 		t.Fatalf("a locked store was refused instead of routed: %v", err)
 	}
-	if !target.fleet {
-		t.Fatal("the target is not marked fleet-wide, so `secrets set` would " +
-			"tell an operator their rotation reached one node")
+	if !target.throughNode {
+		t.Fatal("the target is not marked as a running node's, so `secrets set` " +
+			"would tell an operator their rotation waits for this engine's start")
 	}
 	if !strings.Contains(target.where, "127.0.0.1:8000") {
 		t.Errorf("where = %q, want the node it writes through", target.where)
@@ -450,20 +451,23 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 // way past it is the run's own.
 //
 // The lock alone reads as "you are blocked, with no way forward"; the API's
-// own complaint alone reads as though the local store were never an option.
-// An operator needs to know that the engine is holding the file AND why the
+// own complaint alone reads as though nothing were holding the store. An
+// operator needs to know that the engine is holding the file AND why the
 // route around it did not work. What to do next differs by what the run does
-// with the store: stopping the engine is a way to SET a value, whose row the
-// next start moves onto the fleet, and no way at all to read the fleet's or to
-// change it otherwise — a stopped node that has run refuses those. And none of
-// them is told the environment will stand in: the store outranks it in the
-// engine's resolver, so an exported value never replaces one the store holds,
-// and a routed read never falls back to it. Every one is sent to a node whose
-// api.auth.admin is serve, whether it reveals, lists or writes: each /secrets
-// route is admin's, and a node that refuses admin serves it to no token.
+// with the store: a `crewlet secrets` command, whose whole subject is the
+// store, is offered stopping the engine — with it stopped the command reaches
+// the fleet's store itself — and a run that reads the company to act on a
+// vendor or a login is not, since a node taken down to read a value is an
+// outage to save a token. And none of them is told the environment will stand
+// in: the store outranks it in the engine's resolver, so an exported value
+// never replaces one the store holds, and a routed read never falls back to
+// it. Every one is sent to a node whose api.auth.admin is serve, whether it
+// reveals, lists or writes: each /secrets route is admin's, and a node that
+// refuses admin serves it to no token.
 //
 // Mutation: name the admin posture only for a run that reveals, and the write,
-// the listing and the unset go red.
+// the listing and the unset go red; offer stopping the engine to every run,
+// and the provisioners' and the login's do.
 func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 	t.Parallel()
 	// api.port 0 is a node that serves no HTTP at all, which is the one
@@ -476,15 +480,13 @@ func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 		wantStop bool
 		alsoWant []string
 	}{
-		{run: storeRun{command: "crewlet secrets set", use: actsOnItsOwn, offline: true},
-			wantStop: true, alsoWant: []string{"crewlet run"}},
-		{run: storeRun{command: "crewlet secrets unset"},
-			alsoWant: []string{"Stopping `crewlet run` here is no way around it"}},
-		{run: storeRun{command: "crewlet gitlab provision", reveals: true},
-			alsoWant: []string{"Stopping `crewlet run` here is no way around it"}},
-		{run: storeRun{command: "crewlet slack provision"},
-			alsoWant: []string{"Stopping `crewlet run` here is no way around it"}},
-		{run: storeRun{command: "crewlet llm login", use: actsOnItsOwn, reveals: true}},
+		{run: storeRun{command: "crewlet secrets set", offline: true},
+			wantStop: true, alsoWant: []string{"reaches the fleet's store itself",
+				"member of a cluster"}},
+		{run: storeRun{command: "crewlet secrets unset", offline: true}, wantStop: true},
+		{run: storeRun{command: "crewlet gitlab provision", reveals: true}},
+		{run: storeRun{command: "crewlet slack provision"}},
+		{run: storeRun{command: "crewlet llm login", reveals: true}},
 	} {
 		t.Run(tc.run.command, func(t *testing.T) {
 			t.Parallel()
@@ -549,7 +551,7 @@ func TestARunThatRevealsAsksForATierAToken(t *testing.T) {
 	}
 
 	_, err = throughTheRunningNode(noEnviron, boot, "crewlet.yaml",
-		storeRun{command: "crewlet secrets set", use: actsOnItsOwn, offline: true}, locked)
+		storeRun{command: "crewlet secrets set", offline: true}, locked)
 	if err == nil || !strings.Contains(err.Error(), "access token") {
 		t.Errorf("a write was not offered the machine token it may use: %v", err)
 	}
@@ -669,10 +671,11 @@ func TestOnlyALockedStoreGetsARemediation(t *testing.T) {
 // Derived from the source in BOTH directions, because a hand-kept list of the
 // openers names functions, not opens: it named the function each command
 // opened its store in, so an open that moved — as the secret store's moved
-// into routeSecretStore and this node's own table — left it asserting about a
-// function that opens nothing, and a new opener appeared in no list at all.
-// So every function in this package that calls one of the store's openers —
-// every exported function of internal/store taking a database path — must be
+// into routeSecretStore, and then onto the fleet's own store — left it
+// asserting about a function that opens nothing, and a new opener appeared in
+// no list at all. So every function in this package that calls one of the
+// store's openers — every exported function of internal/store taking a
+// database path, the lock's own probe among them — must be
 // declared below, with the functions that answer its lock, and each of those
 // must route it (throughTheRunningNode) or explain it (engineHoldsTheStore).
 // A new opener fails here until somebody decides what a running engine means
@@ -680,17 +683,13 @@ func TestOnlyALockedStoreGetsARemediation(t *testing.T) {
 func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 	t.Parallel()
 	answeredBy := map[string][]string{
-		// The node's own secret table: a run ROUTES a locked one through
-		// the node, and a write that finds it locked after the run was
-		// routed to it explains.
-		"(*localSecrets).open": {"routeSecretStore", "(*localSecrets).write"},
-		// A reader a stopped node refuses asks the lock alone, never
-		// opening the file, and a held one is ROUTED through the node as
-		// an open's would be.
-		"routeSecretStore": {"routeSecretStore"},
-		"openConfigStore":  {"openConfigStore"},
-		"runMigrate":       {"runMigrate"},
-		"runSearchEval":    {"runSearchEval"},
+		// The fleet's store, reached with the engine stopped, asks the node
+		// database's lock first and hands a held one back as it came: the
+		// one route every secret-store run takes ROUTES it through the node.
+		"openFleetStore":  {"routeSecretStore"},
+		"openConfigStore": {"openConfigStore"},
+		"runMigrate":      {"runMigrate"},
+		"runSearchEval":   {"runSearchEval"},
 	}
 	handlers := []string{"throughTheRunningNode", "engineHoldsTheStore"}
 
@@ -769,7 +768,8 @@ func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 }
 
 // storeOpeners is every exported function of internal/store that takes a
-// database path — the functions that take the file's lock.
+// database path — the functions that take the file's lock, or ask it
+// ([store.Probe], whose path is its dbPath).
 func storeOpeners(t *testing.T) map[string]bool {
 	t.Helper()
 	dir := filepath.Join(sourcetree.Root(t), "internal", "store")
@@ -798,7 +798,7 @@ func storeOpeners(t *testing.T) map[string]bool {
 					continue
 				}
 				for _, param := range field.Names {
-					if param.Name == "path" {
+					if param.Name == "path" || param.Name == "dbPath" {
 						out[fn.Name.Name] = true
 					}
 				}
@@ -854,29 +854,28 @@ func calls(fn *ast.FuncDecl, name string) bool {
 	return found
 }
 
-// AN OFFLINE WRITE PAST THE SIZE EVERY STORE KEEPS IS REFUSED, AND OPENS
-// NOTHING.
+// A WRITE WITH THE ENGINE STOPPED PAST THE SIZE EVERY STORE KEEPS IS REFUSED,
+// and the fleet's store holds nothing under its name.
 //
-// A stopped node's table took a value of any size, and the next start moved it
-// onto the fleet, where a value past the limit can be longer, in the
-// characters JSON escapes longest, than any answer a reader through the node
-// takes: a credential stored and possibly unreadable through the node. The
-// refusal comes before the file is opened, so a node that has never started
-// is left with no database, as a read leaves it.
-func TestAnOfflineWritePastTheSizeEveryStoreKeepsIsRefused(t *testing.T) {
+// The direct write has no node's route in front of it, and so none of the
+// route's bound on a body: the fleet's store would take a value of any size,
+// where a value past the limit can be longer, in the characters JSON escapes
+// longest, than any answer a reader through a node takes — a credential stored
+// and possibly unreadable through the node. So the store holds every write to
+// the limit itself ([secrets.CheckValue]).
+//
+// Mutation: drop the store's own check, and the value is stored.
+func TestAWriteWithTheEngineStoppedPastTheSizeEveryStoreKeepsIsRefused(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	_, _, err := secretsCmd(t, cfg, "set", "BIG", "-value",
 		strings.Repeat("&", secrets.MaxValueBytes+1))
 	if !errors.Is(err, secrets.ErrValueTooLarge) {
-		t.Fatalf("an offline set a byte past the limit answered %v, want ErrValueTooLarge", err)
+		t.Fatalf("a set a byte past the limit with the engine stopped answered %v, "+
+			"want ErrValueTooLarge", err)
 	}
-	boot, err := loadBootstrapForStore(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(boot.Store.Path); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the refused write left a database at %s (%v)", boot.Store.Path, err)
+	if _, held := fleetRowsOf(t, cfg)["BIG"]; held {
+		t.Error("the refused value was stored on the fleet's store")
 	}
 }
 

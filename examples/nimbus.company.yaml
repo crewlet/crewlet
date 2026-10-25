@@ -91,7 +91,7 @@ providers:
     #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
     # (and set providers.sandbox.default_coding_agent: claude-code below,
     # since a seat's code work runs on its entry's own CLI).  OpenAI's?
-    # `agent: codex`, `model: gpt-5`, the same `auth`, reading OPENAI_API_KEY.
+    # `agent: codex`, `model: gpt-5`, the same `auth`, reading CODEX_API_KEY.
     #
     # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
     # package) on the machine running `crewlet run`.  Check the whole entry
@@ -100,11 +100,10 @@ providers:
     # doctor loads that file):
     #   crewlet llm doctor default -company examples/nimbus.company.yaml \
     #                              -config  examples/nimbus.config.yaml
-    # Before the node's first start its own rows are the company's whole
-    # secret store, and the doctor reads them.  Once the engine has run, run
-    # it beside the running engine with CREWLET_API_TOKEN set to
-    # $CREWLET_API_TOKEN_FOUNDER: the company's values are then on a store
-    # only a running engine serves, and a stopped node refuses the doctor.
+    # With the engine stopped the doctor reaches the fleet's secret store
+    # itself, through this node's own broker.  Once the engine runs, it
+    # reads the store through it: run the doctor with CREWLET_API_TOKEN set
+    # to $CREWLET_API_TOKEN_FOUNDER.
     # See docs/concepts/llm-backends.md.
     default:
       agent: opencode
@@ -477,11 +476,10 @@ integrations:
   #       -env-file .env -config examples/nimbus.config.yaml
   #
   # The provision loads examples/nimbus.config.yaml, so export the keyring
-  # and the founder token its header names first.  Before the node's first
-  # start its own rows are the company's whole secret store, and the
-  # provision reads them; once the engine has run, run it beside the
-  # running engine with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER,
-  # or it is refused.
+  # and the founder token its header names first.  With the engine stopped
+  # the provision reaches the fleet's secret store itself, through this
+  # node's own broker; once the engine runs, it reads the store through it,
+  # with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER.
   #
   # See docs/integrations/mattermost.md.
   #

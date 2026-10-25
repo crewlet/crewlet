@@ -183,8 +183,9 @@ live-editable, so the first version does not need to be the last.
      `auth: {mode: api-key}`, which reads `ANTHROPIC_API_KEY` from the secret
      store or the environment. Name another variable with
      `auth.api_key: "${VAR}"` only if theirs is called something else.
-   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth` for an
-     `OPENAI_API_KEY`; leave `auth` out for a ChatGPT login.
+   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth`, which
+     reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
+     with; leave `auth` out for a ChatGPT login.
    - **Open models** (OpenRouter, a hosted provider, a local server) —
      `agent: opencode`, `model: <provider>/<model>` (a bare id is refused), and
      the provider's key in `env` under that provider's own variable, e.g.
@@ -192,13 +193,13 @@ live-editable, so the first version does not need to be the last.
 
    Whichever it is, the CLI must be installed on the machine running
    `crewlet run`, and `crewlet llm doctor` is what proves the entry works —
-   tell the founder to run it, and where: before a single node's first start
-   it reads that node's own secret rows, which are then the company's whole
-   store; once the engine has run, it reads the company's values through the
-   running engine, so it is run beside it with `CREWLET_API_TOKEN` set to one
-   of the node's Tier A tokens (or with `-api URL` naming a running node). A
-   stopped node that has run refuses it rather than read its own leftover
-   rows, and so does a stopped member of a cluster. If they want a plan with
+   tell the founder to run it, and where: with the engine stopped it reaches
+   the fleet's secret store itself, through the node's own broker; while the
+   engine runs it reads the company's values through it, so it is run beside
+   it with `CREWLET_API_TOKEN` set to one of the node's Tier A tokens (or with
+   `-api URL` naming a running node). A member of a cluster whose engine is
+   stopped cannot reach the store alone, and refuses it, naming `-api`. If
+   they want a plan with
    a key behind it, that is two entries on the same CLI and a list:
    `llm: [plan, key]`. A cheap, fast entry for `llm_auxiliary` is worth
    suggesting once the company grows: every auxiliary call pays a CLI launch

@@ -1178,25 +1178,6 @@ func (b *Bootstrap) BrokerKind() placement.BrokerKind {
 	}
 }
 
-// SoleMember reports whether this node's broker is the fleet's ONLY member: an
-// embedded member that names no cluster. Such a broker holds every stream the
-// fleet has and the coordination KV beside them, and that stays true when it
-// serves leaves, because a leaf runs no JetStream and holds no copy of
-// anything.
-//
-// ASKED OF THE CLUSTER'S NAME, which is the rule the embedded server itself is
-// built by: its cluster block is installed on the name alone — a port or a
-// peer list without one configures nothing, and Tier A refuses that shape — so
-// the name is sufficient. Not of the peer list, which a named member whose
-// peers dial it may leave empty, and not of the replica count, which reports a
-// single-replica member of a cluster as solo.
-//
-// Read off [Bootstrap.BrokerKind], so a node this calls the sole member is one
-// that starts a member's broker.
-func (b *Bootstrap) SoleMember() bool {
-	return b.BrokerKind() == placement.BrokerMember && b.Stream.Cluster.Name == ""
-}
-
 // ResolveNodeID answers what this process calls itself.
 //
 // Precedence: node.id in the file, then CREWLET_NODE_ID, then

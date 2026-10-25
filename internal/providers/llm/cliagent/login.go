@@ -66,6 +66,13 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 		// never creates a login (see [Workspace.syncCredentialsOut]), and a
 		// headless call has nobody to complete a sign-in for it anyway — so
 		// the advice to make a call and then look was advice to watch it fail.
+		//
+		// And not "adopt it from the host" for a CLI that keeps no login at
+		// all: there is nothing on the host to adopt.
+		if !p.profile.KeepsLogin() {
+			return fmt.Errorf("%w: the %q CLI keeps no login for Crewlet to hold — %s",
+				ErrNoLoginCommand, p.agent, p.keyRemedy())
+		}
 		return fmt.Errorf("%w: the %q CLI declares no login subcommand — sign in with "+
 			"the CLI itself and adopt that login with `crewlet llm login %s -from-host`, "+
 			"or give the entry a key",
@@ -93,7 +100,7 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 // exports), so a login that left none there is one no seat would ever have
 // been signed in by.
 func (p *Provider) loginLeftNothing() error {
-	if len(p.profile.CredentialPaths) == 0 && p.profile.CredentialStore == nil {
+	if !p.profile.KeepsLogin() {
 		return fmt.Errorf("cliagent: the %q profile names no place a login is kept — no "+
 			"credential_paths and no credential_store — so nothing its login command stores "+
 			"can reach a seat; declare where it keeps one under "+
@@ -340,16 +347,27 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	// THEN THE EPOCH, before the removal it counts ([Workspace.bumpLoginEpoch])
 	// and on the same terms: one that cannot be moved still removes the login.
 	//
-	// The removal is ONE WRITE of the empty login ([Workspace.writeLoginLocked]),
-	// so a logout killed part way never leaves one file of the login it was
-	// removing — and it REPLACES a write that stopped part way rather than
-	// finishing it, so a login that was never put in place is discarded
-	// without being written to disk first.
+	// The removal is ONE WRITE of the login less every file of it that is a
+	// login ([Workspace.writeLoginLocked]), so a logout killed part way never
+	// leaves one file of the login it was removing. What it keeps is what is
+	// not a login ([Workspace.loginIn]): a settings file the CLI also keeps
+	// its login in, holding none, is the CLI's record of itself rather than
+	// anybody's sign-in. A write that stopped part way is the login of record,
+	// so it is finished by the read and removed with the rest; one that cannot
+	// be finished cannot be told apart file by file, and the logout REPLACES
+	// it whole — it removes the login an operator asked removed either way.
 	removeErr := p.ws.markLoggedOut()
 	if err := p.ws.bumpLoginEpoch(); err != nil {
 		removeErr = errors.Join(removeErr, err)
 	}
-	if err := p.ws.writeLoginLocked(ctx, p.key, nil); err != nil {
+	var kept map[string][]byte
+	if current, err := p.ws.readLoginLocked(); err == nil {
+		kept = maps.Clone(current)
+		maps.DeleteFunc(kept, func(name string, content []byte) bool {
+			return p.profile.HoldsLogin(name, content)
+		})
+	}
+	if err := p.ws.writeLoginLocked(ctx, p.key, kept); err != nil {
 		removeErr = errors.Join(removeErr, err)
 	}
 	if removeErr != nil {
@@ -594,21 +612,24 @@ func (p *Provider) hostStoreName(home string) string {
 //
 // The files are read as ONE login ([Workspace.Login]), so a bundle never packs
 // a write that stopped part way — which every fresh volume restoring it would
-// then hold.
+// then hold. And only the files of it that are a login travel
+// ([Workspace.loginIn]): a settings file the CLI also keeps its login in,
+// holding none, is the CLI's record of itself on this host.
 func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
-	login, err := p.ws.Login(ctx)
+	files, err := p.ws.Login(ctx)
 	if err != nil {
 		return "", err
 	}
+	login := p.ws.loginIn(files)
 	if len(login) == 0 {
 		return "", fmt.Errorf("cliagent: %q has no login to export — "+
 			"run `crewlet llm login %s` first", p.agent, p.key)
 	}
-	files := make([]bundleFile, 0, len(login))
+	packed := make([]bundleFile, 0, len(login))
 	for _, name := range slices.Sorted(maps.Keys(login)) {
-		files = append(files, bundleFile{name: name, data: login[name]})
+		packed = append(packed, bundleFile{name: name, data: login[name]})
 	}
-	return packBundle(p.agent, files)
+	return packBundle(p.agent, packed)
 }
 
 // bundleManifest is what a bundle's [cliprofile.BundleManifest] entry holds.
@@ -871,15 +892,9 @@ func (p *Provider) retireBundle() string {
 		return fmt.Sprintf("remove providers.llm.%s.auth.credential_bundle from the company "+
 			"document, or the secret it references", p.key)
 	}
-	// THROUGH A RUNNING ENGINE once the node has run, and on any node that
-	// is not the fleet's only member: a stopped node's own rows are not the
-	// fleet's there, and `crewlet secrets unset` refuses rather than remove
-	// a row the fleet never held.
 	name := cliprofile.BundleVarName(p.key)
-	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`, with "+
-		"this node's engine running or -api naming a running node, once the node has "+
-		"run or wherever it is not the fleet's only member) and from the engine's "+
-		"environment", name, name)
+	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
+		"the engine's environment", name, name)
 }
 
 // ImportBundle is [Provider.RestoreBundle] for an operator who asked for it,
@@ -933,7 +948,7 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 	if err != nil {
 		return err
 	}
-	if len(current) > 0 {
+	if len(p.ws.loginIn(current)) > 0 {
 		return ErrLoginPresent
 	}
 	if err = p.declineAfterLogout(operator); err != nil {
@@ -947,7 +962,13 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 			return err
 		}
 	}
-	if err = p.ws.writeLoginLocked(ctx, p.key, staged); err != nil {
+	// A FILE THE BUNDLE DOES NOT CARRY STAYS: whatever the shared login holds
+	// here is no login (the check above) — a settings file the CLI also keeps
+	// its login in, holding none — and a bundle carries only the files that
+	// are one ([Provider.ExportBundle]), so the restore is not in its way.
+	next := maps.Clone(current)
+	maps.Copy(next, staged)
+	if err = p.ws.writeLoginLocked(ctx, p.key, next); err != nil {
 		return err
 	}
 	if operator {
@@ -963,7 +984,7 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 // VALIDATED WHOLE, THEN WRITTEN WHOLE. Every entry is checked and held before
 // anything reaches the disk, because the checks reject a bundle mid-archive:
 // writing as the loop went left the rejected bundle's earlier files behind,
-// and HasLogin reads a directory with any credential in it as a login — so a
+// and HasLogin reads a directory with any file of a login in it as one — so a
 // refused restore could leave a half-populated home that the next boot
 // declines to repair. The write itself is ONE STEP for the same reason
 // ([Workspace.writeLoginLocked]): written a file at a time, a restore killed or
@@ -1167,10 +1188,11 @@ func (p *Provider) runInCredentialHome(
 	home := p.ws.loginHome()
 	cache := p.ws.loginCache()
 	record := filepath.Join(p.ws.Root(), loginGenerationFile)
-	for _, dir := range []string{home, cache, p.ws.CredentialsDir()} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return false, fmt.Errorf("cliagent: preparing %q: %w", dir, err)
-		}
+	if err := prepareHome(home, cache); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(p.ws.CredentialsDir(), 0o700); err != nil {
+		return false, fmt.Errorf("cliagent: preparing %q: %w", p.ws.CredentialsDir(), err)
 	}
 	unlock, lockErr := p.ws.lockLoginHome(ctx)
 	if lockErr != nil {

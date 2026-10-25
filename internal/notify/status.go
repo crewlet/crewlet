@@ -168,16 +168,40 @@ func ConversationOf(metadata map[string]string, backend string) (Conversation, b
 // channels as direct messages, and raise an indicator on every seat for
 // traffic nobody addressed to any of them.
 func Addressed(metadata map[string]string, dmPrefix string) bool {
-	if slices.Contains(DirectChannelTypes, metadata["channel_type"]) {
-		return true
+	return addressOf(metadata, dmPrefix) != addressNone
+}
+
+// address is WHY a chat message is addressed to a seat, or that it is not.
+//
+// [Addressed] is this with the reason dropped, and the chat prompt states the
+// reason in place of its triage guidance ([ChatPrompt.Build]). ONE FUNCTION
+// ANSWERS BOTH, because the delivery check holds an addressed turn to an
+// answer: a prompt that judged "addressed" by a rule of its own could tell a
+// seat to stay silent on a message the engine then refuses to let it ignore.
+type address int
+
+const (
+	addressNone address = iota
+	// addressDirect: a direct conversation, where nobody else is there.
+	addressDirect
+	// addressMention: the seat was named personally ([FollowMention]).
+	addressMention
+	// addressThread: a reply in a thread the seat follows.
+	addressThread
+)
+
+// addressOf decides [address], strongest reason first.
+func addressOf(metadata map[string]string, dmPrefix string) address {
+	switch {
+	case slices.Contains(DirectChannelTypes, metadata["channel_type"]),
+		dmPrefix != "" && strings.HasPrefix(metadata["channel"], dmPrefix):
+		return addressDirect
+	case metadata["thread_follow_reason"] == string(FollowMention):
+		return addressMention
+	case metadata["thread_following"] != "":
+		return addressThread
 	}
-	if dmPrefix != "" && strings.HasPrefix(metadata["channel"], dmPrefix) {
-		return true
-	}
-	if metadata["thread_follow_reason"] == string(FollowMention) {
-		return true
-	}
-	return metadata["thread_following"] != ""
+	return addressNone
 }
 
 // StatusPoster is the backend call this driver drives, plus what it can

@@ -21,7 +21,7 @@ import (
 func TestASourceIsAWritePathsWordAndNothingElse(t *testing.T) {
 	t.Parallel()
 	for _, s := range []Source{SourceAPI, SourceSetup, SourceProvision,
-		SourceMigrated, SourceCLI, SourceLLMLogin, SourceIAM} {
+		SourceCLI, SourceLLMLogin, SourceIAM} {
 		if !s.Valid() {
 			t.Errorf("%q is a write path's word and is not Valid", s)
 		}
@@ -29,7 +29,7 @@ func TestASourceIsAWritePathsWordAndNothingElse(t *testing.T) {
 			t.Errorf("CheckSource(%q) = %v, want it admitted", s, err)
 		}
 	}
-	for _, s := range []Source{"", "gitlab-provision", "operator", "API", "rekey"} {
+	for _, s := range []Source{"", "gitlab-provision", "operator", "API", "rekey", "migrated"} {
 		if s.Valid() {
 			t.Errorf("%q is no write path's word and is Valid", s)
 		}
@@ -98,9 +98,9 @@ func TestEverySourceConstantIsListed(t *testing.T) {
 // Every store asks this one function at the write, because every reader of a
 // revealed value through a node is sized from the same number: a store that
 // took more could hold a credential a reveal cannot give back, which is what
-// an offline `crewlet secrets set` past the API's limit could leave on the
-// fleet. A value exactly at the limit is a value, or the guard is an outage at
-// its own boundary.
+// a `crewlet secrets set` run with the engine stopped, writing the fleet's
+// store directly, could leave there past the API's limit. A value exactly at
+// the limit is a value, or the guard is an outage at its own boundary.
 func TestAValueIsHeldToTheSizeEveryReaderIsSizedFor(t *testing.T) {
 	t.Parallel()
 	if err := CheckValue(strings.Repeat("Q", MaxValueBytes)); err != nil {

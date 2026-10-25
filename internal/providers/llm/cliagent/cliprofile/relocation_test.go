@@ -152,10 +152,15 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 	t.Parallel()
 	const agent = "---\ndescription: d\n---\n{system}\n"
 	opencodePrompt := func(dir string) map[string]any {
-		return map[string]any{"name": dir + "/agents/crewlet-seat.md", "discovered": true, "template": agent}
+		return map[string]any{"file": map[string]any{
+			"name": dir + "/agents/crewlet-seat.md", "discovered": "selected", "template": agent,
+		}}
 	}
 	opencodeSeed := func(dir string) []any {
 		return []any{map[string]any{"path": dir + "/opencode.json", "in": "work", "content": "{}"}}
+	}
+	opencodeAppend := func(dir string) map[string]any {
+		return map[string]any{"file": map[string]any{"name": dir + "/AGENTS.md", "discovered": "always"}}
 	}
 	for name, tc := range map[string]struct {
 		agent     string
@@ -168,24 +173,38 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 			left: []string{
 				`work_config_env moves OPENCODE_CONFIG_DIR from .crewlet-config to .elsewhere`,
 				`seed_files[0].path ".crewlet-config/opencode.json"`,
-				`system_prompt_file.name ".crewlet-config/agents/crewlet-seat.md"`,
+				`system_prompt.file.name ".crewlet-config/agents/crewlet-seat.md"`,
+				`append_system_prompt.file.name ".crewlet-config/AGENTS.md"`,
 				"re-root them from .crewlet-config to .elsewhere",
 			},
 		},
 		"opencode's directory moved with its agent file but not its policy": {
 			agent: "opencode",
 			overrides: map[string]any{
-				"work_config_env":    map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
-				"system_prompt_file": opencodePrompt(".elsewhere"),
+				"work_config_env": map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
+				"system_prompt":   opencodePrompt(".elsewhere"),
+			},
+			left: []string{
+				`seed_files[0].path ".crewlet-config/opencode.json"`,
+				`append_system_prompt.file.name ".crewlet-config/AGENTS.md"`,
+			},
+		},
+		"opencode's directory moved with both prompt files but not its policy": {
+			agent: "opencode",
+			overrides: map[string]any{
+				"work_config_env":      map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
+				"system_prompt":        opencodePrompt(".elsewhere"),
+				"append_system_prompt": opencodeAppend(".elsewhere"),
 			},
 			left: []string{`seed_files[0].path ".crewlet-config/opencode.json"`},
 		},
 		"opencode's directory moved with everything under it": {
 			agent: "opencode",
 			overrides: map[string]any{
-				"work_config_env":    map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
-				"system_prompt_file": opencodePrompt(".elsewhere"),
-				"seed_files":         opencodeSeed(".elsewhere"),
+				"work_config_env":      map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
+				"system_prompt":        opencodePrompt(".elsewhere"),
+				"append_system_prompt": opencodeAppend(".elsewhere"),
+				"seed_files":           opencodeSeed(".elsewhere"),
 			},
 		},
 		"codex's home moved alone": {
@@ -195,7 +214,6 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 				`config_env moves CODEX_HOME from .codex to .codex-elsewhere`,
 				`credential_paths[0] ".codex/auth.json"`,
 				`volatile_paths[0] ".codex/sessions"`,
-				`volatile_paths[2] ".codex/log"`,
 			},
 		},
 		"codex's home moved with its login but not its sessions": {
@@ -204,7 +222,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 				"config_env":       map[string]any{"CODEX_HOME": ".codex-elsewhere"},
 				"credential_paths": []any{".codex-elsewhere/auth.json"},
 			},
-			left: []string{`volatile_paths[1] ".codex/history.jsonl"`},
+			left: []string{`volatile_paths[0] ".codex/sessions"`},
 		},
 		"codex's home moved with everything under it": {
 			agent: "codex",
@@ -239,7 +257,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 			overrides: map[string]any{
 				"config_env":       map[string]any{"CODEX_HOME": "."},
 				"credential_paths": []any{"auth.json"},
-				"volatile_paths":   []any{"sessions", "history.jsonl", "log"},
+				"volatile_paths":   []any{"sessions"},
 			},
 		},
 		"codex's home moved inside its old directory, with its paths": {
@@ -247,7 +265,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 			overrides: map[string]any{
 				"config_env":       map[string]any{"CODEX_HOME": ".codex/inner"},
 				"credential_paths": []any{".codex/inner/auth.json"},
-				"volatile_paths":   []any{".codex/inner/sessions", ".codex/inner/history.jsonl", ".codex/inner/log"},
+				"volatile_paths":   []any{".codex/inner/sessions"},
 			},
 		},
 		// The parent of pi's .pi/agent holds every path pi kept there, and pi
@@ -309,7 +327,7 @@ func TestKeptUnderNamesTheFieldsThatMoveWithADirectory(t *testing.T) {
 		want            []string
 	}{
 		{"codex", "CODEX_HOME", []string{"credential_paths", "volatile_paths"}},
-		{"opencode", "OPENCODE_CONFIG_DIR", []string{"seed_files", "system_prompt_file.name"}},
+		{"opencode", "OPENCODE_CONFIG_DIR", []string{"seed_files", "system_prompt.file.name", "append_system_prompt.file.name"}},
 		{"opencode", "OPENCODE_CONFIG_PROJECT_DISABLE", nil},
 		{"codex", "HOME", nil},
 	} {
@@ -426,7 +444,7 @@ func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
 // `.crewlet-config/` writes a regular file where OpenCode's configuration
 // directory has to be, so the seat's agent file under it is ENOTDIR — on every
 // call, with a profile that loaded and an entry every write path accepted.
-// Judged on the path AS WRITTEN, as system_prompt_file.name is, because
+// Judged on the path AS WRITTEN, as system_prompt.file.name is, because
 // cleaning is what hides a trailing separator.
 func TestASeedPathMustNameAFile(t *testing.T) {
 	t.Parallel()
@@ -478,15 +496,15 @@ func TestAFileTheProfileWritesIsNoPathAnotherFieldNeeds(t *testing.T) {
 		"the directory opencode's agent file goes in": {
 			agent: "opencode", overrides: seed("work", ".crewlet-config/agents"),
 			want: []string{`seed_files[0].path ".crewlet-config/agents" is a FILE where ` +
-				`system_prompt_file.name needs a directory`},
+				`system_prompt.file.name needs a directory`},
 		},
 		"opencode's agent file": {
 			agent: "opencode", overrides: seed("work", ".crewlet-config/agents/crewlet-seat.md"),
-			want: []string{"system_prompt_file.name", `is the file seed_files[0].path names too`},
+			want: []string{"system_prompt.file.name", `is the file seed_files[0].path names too`},
 		},
 		"a file handed to the CLI by its path": {
 			agent: "kimi-code", overrides: seed("work", "crewlet-seat.md"),
-			want: []string{"system_prompt_file.name", `is the file seed_files[0].path names too`},
+			want: []string{"system_prompt.file.name", `is the file seed_files[0].path names too`},
 		},
 		"codex's home": {
 			agent: "codex", overrides: seed("home", ".codex"),
@@ -594,9 +612,9 @@ func TestTheOpenCodeProfileWritesWhatItReadsIntoTheCallsOwnConfigDir(t *testing.
 			"OpenCode reads is the directory OPENCODE_CONFIG_DIR names",
 			policy.Scope(), policy.Path, filepath.Join(dir, "opencode.json"))
 	}
-	if spf := p.SystemPromptFile; spf == nil || !spf.Discovered ||
+	if spf := p.SystemPrompt.File; !spf.Found() ||
 		!under(spf.Name) || filepath.Dir(filepath.Clean(spf.Name)) != filepath.Join(dir, "agents") {
-		t.Errorf("system_prompt_file = %+v, want a discovered file in %s/agents/", spf, dir)
+		t.Errorf("system_prompt.file = %+v, want a discovered file in %s/agents/", spf, dir)
 	}
 }
 

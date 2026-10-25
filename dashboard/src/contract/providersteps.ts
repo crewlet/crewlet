@@ -13,35 +13,23 @@
  * redacted, and `crewlet llm` refuses a company file still carrying a mask
  * (`config.LoadCompanyToRun` with no revision to restore one from, since the
  * command writes none) — the import would restore it, but the sign-in comes
- * first — while the export is the stored document as it stands. The node is
- * stopped first because the export reads the node's store, which one process
- * holds at a time, and the import then takes the offline route, and the node
- * publishes the revision when it starts again.
+ * first — while the export is the stored document as it stands. The node is stopped
+ * first because the export reads the node's store, which one process holds at
+ * a time — `crewlet llm` itself runs beside a running node, reading the stored
+ * values through it — and the import then takes the offline route, and the
+ * node publishes the revision when it starts again.
  *
- * THE SIGN-IN RUNS ON THE STOPPED NODE AND THE CHECK ON THE RUNNING ONE. The
- * builder's node has run, so its own secret rows are not the company's whole
- * store: the fleet's is the broker's, which only a running engine serves. A
- * login is let through there because what it writes is new — `-capture-token`
- * stores a headless token in this node's own rows under the CLI's own token
- * variable, which an entry naming no `auth.token` reads, so the entry needs
- * nothing but its model, and the node carries the row onto the fleet's store
- * as it starts. `crewlet llm doctor` reads the company's stored values, and
- * every command that does is refused on a stopped node that has run, where
- * its rows would answer for a store they are not. So the check is the last
- * step, beside the running node, reading the values through it — the token
- * the login stored among them — which is what the engine runs on. Every value
- * it reads that way is a reveal, which takes admin and a person present, so
- * `CREWLET_API_TOKEN` holds one of `crewlet.yaml`'s `api.auth.tokens`, one
- * that carries `admin`: a machine token is refused one.
+ * `-capture-token` stores a headless token in the secret store under the CLI's
+ * own token variable, which an entry naming no `auth.token` reads, so the
+ * entry needs nothing but its model. With the node stopped it reaches the
+ * fleet's store through the node's own broker — except on a member of a
+ * cluster, which cannot reach it alone and names a running member instead.
  *
  * HELD by `cmd/crewlet.TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds`,
  * which walks these lines in order from the state a create leaves — the store
- * holding the company, no company file beside `crewlet.yaml`, a node that has
- * run — running every `crewlet config` command, loading what every `crewlet
- * llm` command loads through the store its run reaches, and standing a node
- * up at `crewlet run` that holds what the stopped node's rows held. A step
- * that reads a file no earlier step wrote, or that the stopped node refuses,
- * fails it.
+ * holding the company, no company file beside `crewlet.yaml` — running every
+ * `crewlet config` command and loading what every `crewlet llm` command loads.
+ * A step that reads a file no earlier step wrote fails it.
  */
 export const PROVIDER_STEPS = `# Stop crewlet run first (Ctrl+C), and run these beside its
 # crewlet.yaml: the export reads the company out of the store,
@@ -56,14 +44,13 @@ providers:
     default:
       model: sonnet
 
-# 3. Sign its CLI in to your subscription
+# 3. Sign its CLI in to your subscription, and check it end to end
+#    (on a member of a cluster, add -api with a running member's URL
+#    and a Tier A token in CREWLET_API_TOKEN: a member alone cannot
+#    reach the fleet's store)
 crewlet llm login default -capture-token
+crewlet llm doctor default
 
 # 4. Import the file, and start the node again
 crewlet config import company.yaml
-crewlet run
-
-# 5. In a second terminal, with CREWLET_API_TOKEN set to one of
-# crewlet.yaml's api.auth tokens, check it end to end through
-# the running node
-crewlet llm doctor default`;
+crewlet run`;

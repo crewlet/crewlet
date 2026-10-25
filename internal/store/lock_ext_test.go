@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -117,83 +116,6 @@ func TestTwoHandlesInOneProcessShareTheLock(t *testing.T) {
 	}
 }
 
-// A PROBE ANSWERS ANOTHER PROCESS'S HOLD, AND ONLY ANOTHER'S: a probe from a
-// second process while this one holds the file is told so, naming the file
-// and the holder, as an open there would be; a probe here, beside this
-// process's own claim, is not, since an open here would share the claim; and
-// once the holder has closed it, the second process's probe finds it free.
-func TestAProbeAnswersAnotherProcesssHoldOnly(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "index.db")
-	db, err := store.OpenNode(t.Context(), path, store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	out, err := runHelper(t, path, probeMode)
-	if err == nil || !strings.Contains(out, lockedMarker) {
-		t.Fatalf("a probe from another process missed the hold: %v: %s", err, out)
-	}
-	for _, want := range []string{path, "pid"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the probe's answer omits %q: %s", want, out)
-		}
-	}
-	if err := store.ProbeLock(path); err != nil {
-		t.Errorf("a probe beside this process's own claim answered %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := runHelper(t, path, probeMode); err != nil || !strings.Contains(out, probeFree) {
-		t.Errorf("a probe of a closed database answered %v: %s", err, out)
-	}
-}
-
-// A PROBE CHANGES NOTHING, which is what it is for: a caller that may decline
-// to open a file learns whether another process holds it without the open,
-// which would apply the file's pending schema. So a probe of a path with no
-// database creates neither the database nor its sidecar; a probe of one that
-// exists leaves the database's bytes and the holder's stamp as they were; and
-// the lock it took for the asking is free again once it has answered, so
-// another process opens the file.
-func TestAProbeChangesNothingAndHoldsNothing(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	absent := filepath.Join(dir, "absent.db")
-	if err := store.ProbeLock(absent); err != nil {
-		t.Fatalf("a probe of a path with no database answered %v", err)
-	}
-	for _, created := range []string{absent, absent + ".lock"} {
-		if _, err := os.Stat(created); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a probe created %s: %v", created, err)
-		}
-	}
-
-	path := filepath.Join(dir, "index.db")
-	if out, err := runHelper(t, path, ""); err != nil {
-		t.Fatalf("create the database in another process: %v: %s", err, out)
-	}
-	before := map[string][]byte{}
-	for _, file := range []string{path, path + ".lock"} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before[file] = raw
-	}
-	if err := store.ProbeLock(path); err != nil {
-		t.Fatalf("a probe of a database nobody holds answered %v", err)
-	}
-	for file, raw := range before {
-		if after, err := os.ReadFile(file); err != nil || !bytes.Equal(after, raw) {
-			t.Errorf("a probe changed %s (%v)", file, err)
-		}
-	}
-	if out, err := runHelper(t, path, ""); err != nil {
-		t.Errorf("another process could not open the file after a probe here: %v: %s", err, out)
-	}
-}
-
 // --- the subprocess harness ------------------------------------------- //
 //
 // Re-execing the test binary is the only way to get a second OS process, and
@@ -203,13 +125,6 @@ func TestAProbeChangesNothingAndHoldsNothing(t *testing.T) {
 // rather than matching ErrLocked's text, so the case fails when the two stop
 // agreeing instead of quietly passing on a substring.
 const lockedMarker = "REFUSED-BY-LOCK"
-
-// probeMode has the helper probe the lock ([store.ProbeLock]) rather than open
-// the database, printing lockedMarker on ErrLocked and probeFree on nil.
-const (
-	probeMode = "probe"
-	probeFree = "PROBE-FOUND-IT-FREE"
-)
 
 // helperEnv names the database the helper should open, and helperModeEnv what
 // it should do with it.
@@ -243,18 +158,6 @@ func runHelper(t *testing.T, path, mode string) (string, error) {
 // runLockHelper opens the database and reports what happened. Called from
 // TestMain in store_test.go, which is this binary's single entry point.
 func runLockHelper(path, mode string) int {
-	if mode == probeMode {
-		switch err := store.ProbeLock(path); {
-		case errors.Is(err, store.ErrLocked):
-			fmt.Printf("%s %v\n", lockedMarker, err)
-			return 3
-		case err != nil:
-			fmt.Printf("probe failed: %v\n", err)
-			return 4
-		}
-		fmt.Println(probeFree)
-		return 0
-	}
 	db, err := store.OpenNode(context.Background(), path, store.Options{Scratch: mode == "scratch"})
 	if err != nil {
 		if errors.Is(err, store.ErrLocked) {

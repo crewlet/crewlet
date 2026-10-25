@@ -95,7 +95,7 @@ func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) e
 	}
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
-		"crewlet jira provision", readsTheCompany)
+		"crewlet jira provision")
 	if err != nil {
 		return err
 	}

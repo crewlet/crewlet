@@ -83,18 +83,18 @@ const UnsearchedKnowledgeHint = "(the knowledge base could not be searched at " 
 	"with a focused query once you know what the task needs)"
 
 // knowledgeQuerySystemPrompt turns a task into a search query.
+//
+// [Fetcher.knowledgeQuery] tolerates surrounding quotes and anything after
+// the first line, so the prompt does not spell out what a query is not
+// (prose, quotes, JSON) and spends its words on what it should CONTAIN. What
+// it cannot tolerate is a line in FRONT of the query — "Here is the query:"
+// would be searched — which is what "and nothing else" is there for.
 const knowledgeQuerySystemPrompt = `You turn an AI agent's current task into a search query for its team's knowledge base.
 
-Output format (strict):
-- A single line of 2-8 search keywords or key phrases.
-- No prose, no explanation, no quotes, no JSON — just the query text.
-- Preserve exact identifiers verbatim: error codes, ticket keys, API, function and service names.
-- Focus on the procedural or reference material the agent would look up — runbook topics, conventions, domain terms, methodologies.
-- Drop conversational filler, and drop people's names unless a person is themselves the subject of the lookup.
-
-Examples:
-- Task: "investigate the latency spike on checkout after the Tuesday deploy" -> latency spike checkout deployment rollback incident response
-- Task: "review the change adding the rate limiter" -> code review checklist rate limiting conventions`
+Answer with one line of 2-8 search keywords or key phrases, and nothing else.
+- Keep exact identifiers verbatim: error codes, ticket keys, API, function and service names.
+- Aim at the procedural or reference material the agent would look up: runbook topics, conventions, domain terms, methodologies.
+- Drop conversational filler, and people's names unless a person is themselves the subject of the lookup.`
 
 // knowledgeBlock is the rendered block, and the read it came from.
 type knowledgeBlock struct {
@@ -204,10 +204,12 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 // knowledgeQuery asks the auxiliary model for a search query.
 //
 // WRITTEN FROM WHAT THE TURN WAS ASKED ([Request.Ask]), not from the brief the
-// executor is handed: the brief wraps a chat message in triage guidance with
-// worked examples of its own (a new hire welcomed, a ticket opened for an
-// engineer), and a query writer handed the brief is handed those as candidate
-// search terms beside the one sentence the turn is about.
+// executor is handed: the brief wraps a chat message in scaffolding that is
+// the same on every turn of that surface — the seat's handle, the collectives,
+// a role group in the triage — and a query writer handed the brief is handed
+// those as candidate search terms beside the one sentence the turn is about,
+// as it was handed the worked examples the triage carried then (a new hire
+// welcomed, a ticket opened for an engineer).
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
 		"Task the agent is about to work on:\n\""+r.Ask+
@@ -215,10 +217,11 @@ func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	if !ok {
 		return ""
 	}
-	// THE FIRST REAL LINE, unquoted. A chatty model prefixes an
-	// explanation or wraps the query in quotes, and both would be searched
-	// verbatim — a quoted query matches nothing, and a query with a
-	// sentence in front of it matches the sentence.
+	// THE FIRST REAL LINE, unquoted. A chatty model explains its query on
+	// the lines under it or wraps it in quotes, and both would be searched
+	// verbatim — a quoted query matches nothing, and a query with its
+	// explanation attached matches the explanation. A lead-in line ABOVE
+	// it is the prompt's to prevent: no line rule tells one from a query.
 	for line := range strings.SplitSeq(answer, "\n") {
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
 			return strings.Trim(trimmed, `"'`)

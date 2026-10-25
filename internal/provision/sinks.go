@@ -21,12 +21,12 @@ import (
 
 // SecretStore is the encrypted store a minted credential is recorded in.
 //
-// AN INTERFACE, because there are two: the fleet's, on the coordination KV,
-// which every node reads; and this node's own table, which a provisioning run
-// reaches while the engine is stopped on a single node that has never started,
-// where those rows are the company's whole store. Naming either concretely
-// here would have made a provisioner that works on a stopped node and a
-// provisioner that works on a running fleet two different sinks.
+// AN INTERFACE, because there is one store and two ways to it: through a
+// running node's `/secrets` route, and directly — the fleet's store on the
+// coordination KV, as the engine's own pass and a `crewlet` command run with
+// the node's engine stopped reach it. Naming either concretely here would have
+// made a provisioner that works on a stopped node and a provisioner that works
+// on a running fleet two different sinks.
 type SecretStore interface {
 	Set(ctx context.Context, name, value string, by secrets.Author,
 		source secrets.Source, now time.Time) error
@@ -56,9 +56,9 @@ func NewSecretStoreSink(values SecretStore, by secrets.Author) *SecretStoreSink 
 
 // Record implements [TokenSink], write-through, as [secrets.SourceProvision].
 //
-// The word is the store's to keep where the store is the writer: the engine's
-// own pass and a stopped node's table record it, while a `crewlet <vendor>
-// provision` run through a running node reaches that node's `/secrets` route,
+// The word is kept wherever the write is made directly — the engine's own
+// pass, and a `crewlet <vendor> provision` run with the node's engine stopped —
+// while a run through a running node reaches that node's `/secrets` route,
 // which stamps its own word whoever calls it.
 func (s *SecretStoreSink) Record(ctx context.Context, name, value string) error {
 	if err := s.values.Set(ctx, name, value, s.by, secrets.SourceProvision,

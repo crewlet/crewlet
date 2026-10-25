@@ -89,7 +89,7 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 			if _, got := universe.Lookup(RunSandboxTool); got != tc.want {
 				t.Errorf("run_sandbox reachable by activation = %v, want %v", got, tc.want)
 			}
-			if got := strings.Contains(universe.Catalogue(), RunSandboxTool); got != tc.want {
+			if got := strings.Contains(universe.Discoverable(nil), RunSandboxTool); got != tc.want {
 				t.Errorf("run_sandbox in the catalogue = %v, want %v", got, tc.want)
 			}
 		})
@@ -123,7 +123,7 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 		if _, held := universe.Lookup(MarkOnboardedTool); held {
 			t.Errorf("agent run %v: mark_onboarded is in the executor's snapshot, one activation away", agentRun)
 		}
-		if strings.Contains(universe.Catalogue(), MarkOnboardedTool) {
+		if strings.Contains(universe.Discoverable(nil), MarkOnboardedTool) {
 			t.Errorf("agent run %v: the executor's catalogue lists mark_onboarded", agentRun)
 		}
 	}

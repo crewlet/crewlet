@@ -16,8 +16,6 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // fleetUnderTest is coord.Fleet under a name of its own, because the interface
@@ -52,15 +50,13 @@ func (f *silentFleet) timesAsked() int {
 	return f.asked
 }
 
-// nodeBeforeItsSnapshot is a node holding both secret stores, its fleet's
+// nodeBeforeItsSnapshot is a node holding the fleet's secret store, its
 // listing silent fails times, whose environment holds the stale value of
 // ACME_TOKEN and of ACME_MODEL, and whose fleet holds the current ones —
 // sealed under seal, which is the node's own keyring unless a test says
 // otherwise.
 func nodeBeforeItsSnapshot(t *testing.T, fails int, seal secrets.Cipher) (*Engine, *silentFleet) {
 	t.Helper()
-	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
-	t.Cleanup(func() { _ = db.Close() })
 	_, cipher := testKeyring(t)
 	if seal == nil {
 		seal = cipher
@@ -74,7 +70,7 @@ func nodeBeforeItsSnapshot(t *testing.T, fails int, seal secrets.Cipher) (*Engin
 	}
 	fleet := &silentFleet{fleetUnderTest: inner, fails: fails}
 	return &Engine{
-		backends: &Backends{Store: db, Fleet: fleet},
+		backends: &Backends{Fleet: fleet},
 		cipher:   cipher,
 		environ: config.MapSource{
 			"ACME_TOKEN": "stale-from-the-environment",
@@ -197,21 +193,18 @@ roles:
 	}
 }
 
-// THE COMPANY'S HALF OF THE BOOT IS BELOW THE BOUNDARY, and this node's own
-// secret rows are moved above it.
+// THE COMPANY'S HALF OF THE BOOT IS BELOW THE BOUNDARY.
 //
 // A startup probe is sized for the store a node holds (Options.Recovered), so
 // nothing whose time grows with what the company configures may run before
 // the boundary: the secret snapshot grows with the company's secrets, and a
-// bundle restore waits on the shared login's lock. The migration of the
-// node's own rows is the node's, and must precede the snapshot so the first
-// epoch resolves from the fleet's copy of them. And the bundles are restored
-// last, after every step that can still fail the boot, on Apply's rule.
+// bundle restore waits on the shared login's lock. And the bundles are
+// restored last, after every step that can still fail the boot, on Apply's
+// rule.
 //
 // Read out of the source, because none of the order is visible from outside
-// a running node. Mutation: move any of the five calls back above
-// opts.Recovered(), the migration below it, or the restore above equip, and
-// this is red.
+// a running node. Mutation: move any of the four calls back above
+// opts.Recovered(), or the restore above equip, and this is red.
 func TestTheCompanysHalfOfTheBootIsBelowTheBoundary(t *testing.T) {
 	t.Parallel()
 	fn := engineFunction(t, "New")
@@ -219,11 +212,6 @@ func TestTheCompanysHalfOfTheBootIsBelowTheBoundary(t *testing.T) {
 	if boundary == token.NoPos {
 		t.Fatal("New no longer calls opts.Recovered(), so this guard asserts nothing — " +
 			"point it at whatever replaced the boundary")
-	}
-	if migrate := firstCall(fn, "migrateSecrets"); migrate == token.NoPos || migrate > boundary {
-		t.Errorf("New moves this node's own secret rows at %v, want it done above the boundary "+
-			"at %v: the rows are what the node holds, and the snapshot below must find them on the fleet",
-			migrate, boundary)
 	}
 	for _, name := range []string{"bootSecrets", "NewCompanyWith", "stampActivation", "restoreBundles"} {
 		if at := firstCall(fn, name); at == token.NoPos || at < boundary {

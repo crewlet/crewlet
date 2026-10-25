@@ -326,14 +326,14 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "codex")
-	env := map[string]string{"OPENAI_API_KEY": "sk-not-a-real-key"}
+	env := map[string]string{"CODEX_API_KEY": "sk-not-a-real-key"}
 	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, env); err != nil {
 		t.Fatalf("a seat carrying its own key was refused: %v", err)
 	}
 	// Blank is not a value: an unresolved ${VAR} lands here as empty, and
 	// reading that as "authenticated" is the whole failure again.
 	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, map[string]string{
-		"OPENAI_API_KEY": "  ",
+		"CODEX_API_KEY": "  ",
 	}); err == nil {
 		t.Error("an empty credential variable was read as authentication")
 	}

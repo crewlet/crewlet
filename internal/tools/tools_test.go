@@ -296,7 +296,7 @@ func TestTheCatalogueNamesServersRatherThanExpandingThem(t *testing.T) {
 		mustRegister(t, r, tool(n), tools.Origin("github"))
 	}
 
-	got := r.Snapshot().Catalogue()
+	got := r.Snapshot().Discoverable(nil)
 	if !strings.Contains(got, "- reflect: Record a lesson.") {
 		t.Errorf("the builtin is missing its one-line description:\n%s", got)
 	}
@@ -322,12 +322,47 @@ func TestTheCatalogueNamesServersRatherThanExpandingThem(t *testing.T) {
 	}
 }
 
-func TestAnEmptyCatalogueSaysSo(t *testing.T) {
+// AN ACTIVE TOOL IS NOT LISTED AGAIN. Its whole definition already reaches the
+// model with every request, so a prompt that also listed it paid for its
+// description twice — on the executor, which holds every first-party tool from
+// its first round, that copy was most of the system prompt.
+//
+// A server stays listed while ANY of its tools is still to be discovered,
+// because the line is how the model learns the rest exist; and nothing to
+// discover is the empty string, which a prompt builder reads as no section —
+// "(no tools available)" over a phase holding a full surface would be false.
+func TestOnlyWhatIsNotActiveIsDiscoverable(t *testing.T) {
 	t.Parallel()
-	// An empty string in a prompt reads as a section the engine forgot to
-	// fill in.
-	if got := tools.NewRegistry().Snapshot().Catalogue(); got != "(no tools available)" {
-		t.Errorf("catalogue = %q", got)
+	r := tools.NewRegistry()
+	for _, n := range []string{"lookup", "search"} {
+		mustRegister(t, r, tool(n), tools.OriginBuiltin)
+	}
+	for _, n := range []string{"gh_a", "gh_b"} {
+		mustRegister(t, r, tool(n), tools.Origin("github"))
+	}
+	mustRegister(t, r, tool("jira_get"), tools.Origin("jira"))
+	snap := r.Snapshot()
+
+	got := snap.Discoverable([]string{"lookup", "gh_a", "jira_get"})
+	lines := strings.Split(got, "\n")
+	if slices.Contains(lines, "- lookup") {
+		t.Errorf("an active tool is listed again:\n%s", got)
+	}
+	if !slices.Contains(lines, "- search") {
+		t.Errorf("an inactive first-party tool is missing:\n%s", got)
+	}
+	if !strings.Contains(got, "`github`") {
+		t.Errorf("a server with a tool still to discover is not named:\n%s", got)
+	}
+	if strings.Contains(got, "jira") {
+		t.Errorf("a server whose every tool is active is still named:\n%s", got)
+	}
+
+	if got := snap.Discoverable(snap.Names()); got != "" {
+		t.Errorf("a surface holding everything has %q to discover, want nothing", got)
+	}
+	if got := tools.NewRegistry().Snapshot().Discoverable(nil); got != "" {
+		t.Errorf("an empty snapshot renders %q, want nothing", got)
 	}
 }
 
@@ -344,7 +379,7 @@ func TestASnapshotWithoutAToolNeitherListsNorActivatesIt(t *testing.T) {
 	full := r.Snapshot()
 	narrowed := full.Without("drop", "never-registered")
 
-	if got := narrowed.Catalogue(); strings.Contains(got, "drop") || !strings.Contains(got, "keep") {
+	if got := narrowed.Discoverable(nil); strings.Contains(got, "drop") || !strings.Contains(got, "keep") {
 		t.Errorf("catalogue = %q, want the kept tool and not the dropped one", got)
 	}
 	if !slices.Equal(narrowed.Names(), []string{"keep"}) {
@@ -357,7 +392,7 @@ func TestASnapshotWithoutAToolNeitherListsNorActivatesIt(t *testing.T) {
 		t.Error("a dropped tool can still be activated by name")
 	}
 	// A COPY: the snapshot it was made from is unchanged.
-	if _, held := full.Lookup("drop"); !held || !strings.Contains(full.Catalogue(), "drop") {
+	if _, held := full.Lookup("drop"); !held || !strings.Contains(full.Discoverable(nil), "drop") {
 		t.Error("narrowing a snapshot changed the one it was made from")
 	}
 }

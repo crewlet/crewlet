@@ -302,11 +302,13 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"memory_overview": "decided_by:" + string(authz.ActionSeatTrailRead),
 		"conversations":   "decided_by:" + string(authz.ActionSeatTrailRead),
 
-		// THE ARTIFACTS: the listing is everybody's and filtered row by row;
+		// THE ARTIFACTS: the listing and the folder tree are everybody's and
+		// filtered row by row and folder by folder;
 		// every other question is decided per artifact by the artifacts' one
 		// admission, the usage against the plan is the deployment's, and the
 		// company trail of every artifact is the company-wide trail's.
 		"artifacts":             "everybody",
+		"artifact_folders":      "everybody",
 		"artifact":              "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_versions":     "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_version":      "decided_by:" + string(authz.ActionArtifactRead),
@@ -316,6 +318,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_access":       "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":        "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":        "decided_by:" + string(authz.ActionAuditRead),
+		"brand":                 "decided_by:" + string(authz.ActionBrandRead),
 		"artifact_data":         "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_doc":     "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_query":   "decided_by:" + string(authz.ActionArtifactDataQuery),

@@ -80,7 +80,7 @@ func runConfluenceImport(inv invocation, args []string, stdout, stderr io.Writer
 
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, storeAt,
-		"crewlet confluence import", readsTheCompany)
+		"crewlet confluence import")
 	if err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func runConfluenceResync(inv invocation, args []string, stdout, stderr io.Writer
 
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, storeAt,
-		"crewlet confluence resync", readsTheCompany)
+		"crewlet confluence resync")
 	if err != nil {
 		return err
 	}
@@ -317,7 +317,7 @@ func runConfluenceProvision(inv invocation, args []string, stdout, stderr io.Wri
 	}
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
-		"crewlet confluence provision", readsTheCompany)
+		"crewlet confluence provision")
 	if err != nil {
 		return err
 	}

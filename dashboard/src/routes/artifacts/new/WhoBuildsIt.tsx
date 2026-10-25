@@ -31,7 +31,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { projectOptions, startingProject } from "~/lib/startingProject.ts";
 import { artifactBuilders, type Builder } from "~/lib/artifacts/builders.ts";
-import type { ArtifactKind, WorkProjectRow } from "~/protocol/index.ts";
+import type { WorkProjectRow } from "~/protocol/index.ts";
+import type { MakeKind } from "~/lib/artifacts/words.ts";
 import { useWorkItem } from "./create.ts";
 
 /** Up to this many agents are drawn as a list; more are a searchable field. */
@@ -56,7 +57,7 @@ export interface WhoBuildsItState {
  * suggested agent (`suggested` names one, else the best match), and the
  * project that follows the agent until the reader picks one.
  */
-export function useWhoBuildsIt(kind: ArtifactKind, suggested?: string): WhoBuildsItState {
+export function useWhoBuildsIt(kind: MakeKind, suggested?: string): WhoBuildsItState {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const viewer = useViewer();

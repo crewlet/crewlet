@@ -772,6 +772,11 @@ type Engine struct {
 	// shared by every registry it builds ([builtin.DataTurns]).
 	dataTurns *builtin.DataTurns
 
+	// folderTurns is this node's tally of the folder records each agent
+	// turn segment writes, shared by every registry it builds
+	// ([builtin.FolderTurns]).
+	folderTurns *builtin.FolderTurns
+
 	// onArtifactsServing is told whenever this node's artifact copies leave
 	// or return to service, and stopArtifactWatchFn ends the watcher that
 	// tells it. See presence.go.
@@ -861,14 +866,13 @@ type Options struct {
 	//
 	// WHAT COMES BEFORE IT IS THE NODE'S OWN: its store and its migrations,
 	// the broker (the embedded one's file-store recovery, a leaf's link, a
-	// member's cluster), the streams and buckets it provisions, the secret
-	// rows its own store holds moved onto the fleet ([Engine.migrateSecrets]),
-	// the custody batches its own event log left unsettled, the replicated
-	// estate, the state logs it provisions and a join's snapshot. All of it
-	// takes as long as what the node holds is large, so the DEPLOYMENT bounds
-	// it — a startup probe sized for the store it gave the node — and nothing
-	// in this process does: a recovery cannot be cut short without losing
-	// what it recovers. APPLYING those logs is not part of it: their appliers
+	// member's cluster), the streams and buckets it provisions, the custody
+	// batches its own event log left unsettled, the replicated estate, the
+	// state logs it provisions and a join's snapshot. All of it takes as
+	// long as what the node holds is large, so the DEPLOYMENT bounds it — a
+	// startup probe sized for the store it gave the node — and nothing in
+	// this process does: a recovery cannot be cut short without losing what
+	// it recovers. APPLYING those logs is not part of it: their appliers
 	// catch up in the background from here on, and what waits for them is a
 	// seat's acquisition ([Engine.StateLogHydrated]), never this call.
 	//
@@ -1198,6 +1202,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		steers:              steers,
 		presenceWire:        presenceWire,
 		dataTurns:           builtin.NewDataTurns(nil),
+		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
@@ -1396,16 +1401,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return nil, err
 	}
 	e.acknowledge(ctx, maintenanceStreams())
-
-	// THIS NODE'S OWN SECRET ROWS ONTO THE FLEET, here among what it
-	// recovers: they are rows its own store holds, written by `crewlet
-	// secrets set` while the engine was stopped, and moving them is the
-	// node's work rather than its company's. It also has to come before the
-	// snapshot the company's half takes below the boundary, so a value set
-	// on this node while the engine was stopped is on the fleet before
-	// anything resolves it — and, once it is, so are this node's peers. See
-	// [Engine.migrateSecrets].
-	e.migrateSecrets(ctx)
 
 	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a
 	// maintenance mode still answers reads, and its writers are what

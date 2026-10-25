@@ -56,11 +56,10 @@
 # Re-runnable: every step is idempotent. Its COMPANY= provision reads the
 # company's stored values through ./crewlet.yaml when one is present, and
 # from the environment alone when none is. With that node's engine stopped it
-# runs only before a single node's first start, when the node's own rows are
-# the company's whole secret store; once the node has run, or on a member of
-# a cluster, run it with the engine up and CREWLET_API_TOKEN set to one of
-# crewlet.yaml's api.auth tokens whose grants include admin, or the provision
-# is refused.
+# reaches the fleet's secret store itself, through the node's own broker; with
+# the engine up it goes through it, so set CREWLET_API_TOKEN to one of
+# crewlet.yaml's api.auth tokens whose grants include admin. On a member of a
+# cluster whose engine is stopped the provision is refused, naming -api.
 set -euo pipefail
 
 PORT="${MATTERMOST_LISTEN_PORT:-8065}"
@@ -698,12 +697,12 @@ Next:
 
      It reads the company's stored values through ./crewlet.yaml when one
      is here, and from this shell alone when none is. With that node's
-     engine stopped it runs only before the node's first start. Once the
-     node has run, a provisioner needs its running engine — run this step
-     and the next with the engine up and CREWLET_API_TOKEN set to one of
-     crewlet.yaml's api.auth tokens whose grants include admin, or pass
-     -api URL naming a running node — and with the engine stopped it is
-     refused before it changes anything.
+     engine stopped it reaches the fleet's store itself, through the node's
+     own broker; with the engine up, run this step and the next with
+     CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens whose
+     grants include admin, or pass -api URL naming a running node. On a
+     member of a cluster whose engine is stopped it is refused before it
+     changes anything, naming -api.
 
   3. Check the whole path before you boot or restart:
 

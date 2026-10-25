@@ -1442,7 +1442,7 @@ describe("a screen found by what it holds", () => {
 describe("artifacts", () => {
   const listing = (params: Record<string, unknown>) =>
     Promise.resolve({
-      items:
+      contents:
         params["q"] === "Q4 launch"
           ? [{ id: "a-1", kind: "sheet", title: "Q4 launch review", owner: "jane-founder" }]
           : [],

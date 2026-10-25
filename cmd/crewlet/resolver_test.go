@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,10 +16,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // resolveWith is the resolver a `crewlet gitlab provision` run builds over
@@ -32,7 +35,7 @@ func resolveWith(t *testing.T, environ config.Source, bootstrapPath, apiURL stri
 	t.Helper()
 	companySecrets, err := openCompanyStore(environ,
 		storeFlags{bootstrap: &bootstrapPath, api: &apiURL},
-		"crewlet gitlab provision", readsTheCompany)
+		"crewlet gitlab provision")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -48,8 +51,8 @@ func resolveWith(t *testing.T, environ config.Source, bootstrapPath, apiURL stri
 // signing secret that is not merely a missing value. Empty is the signal to
 // MINT, so the run replaced a working webhook secret at the third-party app
 // with a fresh one and broke every delivery in flight until the config
-// caught up. On a node whose broker has never started, the node's own rows are
-// that store, and the run says so — naming both directories, from the root.
+// caught up. With the engine stopped the run reaches the fleet's store itself,
+// and says so.
 func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -59,7 +62,7 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, companySecrets, err := resolveWith(t, noEnviron, cfg, "",
+	env, _, err := resolveWith(t, noEnviron, cfg, "",
 		[]string{"GITLAB_SIGNING_SECRET"}, &notes)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -69,18 +72,13 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	if got != "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ==" {
 		t.Fatalf("the stored secret did not reach the run: %q", got)
 	}
-	storeDir := companySecrets.boot.Stream.StoreDir
-	for _, want := range []string{
-		"from this node's own rows (" + companySecrets.boot.Store.Path + ")",
-		"its broker has never started (" + storeDir + " holds no state)",
-		"so these rows are the company's whole secret store",
-	} {
+	// AND IT SAYS WHICH CHAIN RAN, as every other chain does: the store,
+	// reached with the engine stopped, and how many of the values the
+	// command reads it held.
+	for _, want := range []string{"the fleet's store", "engine is stopped", "1 of the stored values"} {
 		if !strings.Contains(notes.String(), want) {
-			t.Errorf("the run's first line does not say %q: %q", want, notes.String())
+			t.Errorf("the note omits %q: %q", want, notes.String())
 		}
-	}
-	if !filepath.IsAbs(storeDir) {
-		t.Fatalf("the premise: the fixture's store_dir %q is absolute", storeDir)
 	}
 }
 
@@ -381,17 +379,6 @@ func (n *revealNode) revealMany(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"values": values, "missing": missing})
 }
 
-// hold makes the node hold rows beside what it already holds, as a node's
-// start carries its own table's rows onto the fleet's store.
-func (n *revealNode) hold(rows map[string]string) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.held == nil {
-		n.held = map[string]string{}
-	}
-	maps.Copy(n.held, rows)
-}
-
 // listed is how many times the node has been asked for its listing.
 func (n *revealNode) listed() int {
 	n.mu.Lock()
@@ -443,7 +430,7 @@ func storedThroughNode(t *testing.T, node *revealNode, environ config.Source,
 	missing := filepath.Join(t.TempDir(), "crewlet.yaml")
 	api := node.server.URL
 	companySecrets, err := openCompanyStore(environ, storeFlags{bootstrap: &missing, api: &api},
-		"crewlet gitlab provision", readsTheCompany)
+		"crewlet gitlab provision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -777,6 +764,12 @@ func TestAReadBeyondTheScopeIsStillTheFleetsValue(t *testing.T) {
 		!strings.Contains(notes.String(), "as it was read") {
 		t.Errorf("the reveal beyond the scope was not said: %q", notes.String())
 	}
+	// AS A REVEAL, logged where it was made: the same words the command's
+	// first line used for its way in.
+	if !strings.Contains(notes.String(), "revealed ${GITLAB_READ_TOKEN}") ||
+		!strings.Contains(notes.String(), "logged there by name") {
+		t.Errorf("a reveal through the node was said as a direct read: %q", notes.String())
+	}
 	resolver.Value("${GITLAB_READ_TOKEN}")
 	resolver.Value("${NOT_HELD_BY_THE_FLEET}")
 	asked, gets := node.batches()
@@ -914,16 +907,122 @@ func TestANamedNodeIsReadWithNoTierAHere(t *testing.T) {
 	}
 }
 
-// A NAMED NODE IS WHERE THE VALUES ARE READ, and the local path is never
-// opened: a vendor command's -api names the node its credentials are written
-// through, possibly from a machine that is not one, where opening the Tier A
-// store path would create an empty database and resolve every stored value as
+// A STOPPED NODE READS WHAT THE FLEET HOLDS — the resolver and the sink alike.
+//
+// The bug this whole route exists for: with the engine stopped, a command read
+// the node's own table, which never held what was stored through a running
+// node, so a provisioning run read a working signing key as unset and MINTED
+// over it, and a -secret-store sink read a seat's working token as absent and
+// replaced it. The value here is put on the fleet's store the way a running
+// node puts it there, and both halves of one provisioning run must see it —
+// at once, as a run holds them: the resolver it plans from and the sink it
+// asks before minting, over the run's one route.
+//
+// Mutation: answer a stopped node from anywhere but the fleet's store, and
+// both resolve unset.
+func TestAStoppedNodeReadsWhatTheFleetHolds(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatalf("load Tier A: %v", err)
+	}
+	const key = "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ=="
+	onTheFleet, err := engine.OpenFleetStore(t.Context(), boot)
+	if err != nil {
+		t.Fatalf("open the fleet's store as a node does: %v", err)
+	}
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleetsecrets.New(onTheFleet.Fleet, cipher).Set(t.Context(),
+		"GITLAB_SIGNING_SECRET", key, secrets.Author{Name: "token:ops", Kind: "operator"},
+		secrets.SourceAPI, time.Now()); err != nil {
+		t.Fatalf("store the key on the fleet: %v", err)
+	}
+	onTheFleet.Close()
+
+	flags := flag.NewFlagSet("provision", flag.ContinueOnError)
+	sinks := addSinkFlags(flags)
+	if err := flags.Parse([]string{"-secret-store", "-config", cfg}); err != nil {
+		t.Fatal(err)
+	}
+	companySecrets, err := openCompanyStore(noEnviron, sinks.store, "crewlet gitlab provision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(t.Context(), []string{"GITLAB_SIGNING_SECRET"},
+		&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("resolve on a stopped node: %v", err)
+	}
+	if got := env.Value("${GITLAB_SIGNING_SECRET}"); got != key {
+		t.Errorf("the resolver read the fleet's signing key as %q", got)
+	}
+
+	sink, err := sinks.open(t.Context(), companySecrets, io.Discard)
+	if err != nil {
+		t.Fatalf("open the -secret-store sink beside the resolver: %v", err)
+	}
+	held, ok, err := sink.Value(t.Context(), "GITLAB_SIGNING_SECRET")
+	if err != nil || !ok || held != key {
+		t.Errorf("the sink read the fleet's key as %q (held %v, err %v): a "+
+			"provisioner asking it would mint over a working one", held, ok, err)
+	}
+}
+
+// ONLY A LOCKED DATABASE IS READ THROUGH THE NODE. Any other failure to reach
+// the store with the engine stopped is a broken node, and answering it through
+// the node's API would replace its message with a connection refused — or
+// with an answer from a node the run was never meant to ask.
+//
+// Mutation: route every failure of the stopped-engine way in through the
+// node, and the node is asked.
+func TestOnlyALockedStoreIsReadThroughTheNode(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
+	cfg := bootstrapForURL(t, node.server.URL)
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A STORE DIRECTORY THAT IS A FILE: no broker starts on it, and nothing
+	// holds the node's database.
+	if err := os.WriteFile(boot.Stream.StoreDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = resolveWith(t, tokenEnviron(cliFixtureToken), cfg, "",
+		llmEntryReads(readingCompany(t), []string{"default"}), &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("a store no broker could start on resolved anyway")
+	}
+	if errors.Is(err, store.ErrLocked) {
+		t.Fatalf("an unrelated failure was read as a running engine: %v", err)
+	}
+	if n := node.requests(); n != 0 {
+		t.Errorf("an unrelated failure was answered with %d requests to the node", n)
+	}
+}
+
+// A NAMED NODE IS WHERE THE VALUES ARE READ, and nothing of this node's is
+// touched: a vendor command's -api names the node its credentials are written
+// through, possibly from a machine that is not one, where reaching the store
+// the Tier A file describes would start a broker on a directory nobody meant —
+// creating a fleet store there — and read every value the named node holds as
 // unset.
 func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
 	cfg := bootstrapWithKeyring(t, "k1")
-	storePath := storePathOf(t, cfg)
+	// WHAT THE STOPPED-ENGINE ROUTE WOULD LEAVE: the database lock it asks,
+	// and the broker's store directory.
+	touched := []string{
+		filepath.Join(filepath.Dir(cfg), "index.db.lock"),
+		filepath.Join(filepath.Dir(cfg), "stream"),
+	}
 
 	env, _, err := resolveWith(t, tokenEnviron("ops-token"), cfg, node.server.URL,
 		llmEntryReads(readingCompany(t), []string{"default"}), &bytes.Buffer{})
@@ -933,9 +1032,10 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	if got := env.Value("${PROXY_URL}"); got != "http://proxy.example.com:3128" {
 		t.Errorf("${PROXY_URL} = %q, not the named node's value", got)
 	}
-	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the local store at %s was opened for a run that named a node: %v",
-			storePath, err)
+	for _, path := range touched {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was touched by a run that named a node: %v", path, err)
+		}
 	}
 }
 
@@ -944,14 +1044,18 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 // could hold, so opening the store — or beside a running engine, asking it —
 // would be a read for a run that uses none. A route it decided says so on the
 // run's first line, whichever store it reached, so no such line is printed;
-// and the file a never-started node's open would create is not there.
+// and what a route with the engine stopped leaves — the database lock it asks,
+// and the broker's store directory — is not there.
 //
 // Mutation: decide the route, or ask the store which names it holds, before
 // the empty plan's return, and the route line is printed.
 func TestASlackRunWithNoSeatToProvisionOpensNoStore(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
-	storePath := storePathOf(t, cfg)
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	companyPath := filepath.Join(t.TempDir(), "company.yaml")
 	if err := os.WriteFile(companyPath, []byte(builderCompany), 0o600); err != nil {
 		t.Fatal(err)
@@ -967,9 +1071,11 @@ func TestASlackRunWithNoSeatToProvisionOpensNoStore(t *testing.T) {
 			t.Errorf("slack provision decided a route, though it reads nothing:\n%s", out)
 		}
 	}
-	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("slack provision opened the store at %s, though it resolves nothing: %v",
-			storePath, err)
+	for _, path := range []string{boot.Store.Path + ".lock", boot.Stream.StoreDir} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("slack provision reached the store (%s), though it resolves "+
+				"nothing: %v", path, err)
+		}
 	}
 }
 
@@ -1055,10 +1161,10 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 }
 
 // EVERY COMMAND THAT READS THE COMPANY TAKES -api. Each one's values are read
-// through a node when its own has no store of the company's — a seats node, a
-// machine that is not a node, or a stopped node that has run — and both the
-// scratch refusal and the stopped-node refusal name -api as the way there, so
-// a command without the flag was told to use one it would refuse.
+// through a node when its own cannot reach the company's store — a seats node,
+// a machine that is not a node, or a cluster member whose engine is stopped —
+// and both the scratch refusal and the cluster member's name -api as the way
+// there, so a command without the flag was told to use one it would refuse.
 func TestEveryCommandThatReadsTheCompanyTakesAPI(t *testing.T) {
 	t.Parallel()
 	for _, command := range [][]string{

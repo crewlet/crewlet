@@ -778,6 +778,45 @@ func TestTheSpacePromptTellsTheLeadSilenceIsOrdinary(t *testing.T) {
 	}
 }
 
+// A SUBSCRIBER IS NOT TOLD IT LEADS THE SPACE.
+//
+// The lead's prompt says it was reached because nobody had worked on the page,
+// and that mentioning a teammate sends the next change to them instead. A
+// subscriber worked on the page — that is why it is subscribed — and a mention
+// subscribes the teammate without unsubscribing anybody, so a subscriber's
+// copy that rendered the lead's prompt was three false sentences. Both still
+// hear that silence is the ordinary outcome: neither was asked anything.
+func TestASubscriberIsNotGivenTheLeadsPrompt(t *testing.T) {
+	t.Parallel()
+	got := route(t, parser(t, withWatchers(newWatchList("swe"))),
+		pageEvent("page_updated", "ENG", "<p>Words.</p>", acctWriter))
+	if len(got) != 1 || got[0].Metadata[confluence.RoutedViaField] != confluence.ViaWatcher {
+		t.Fatalf("want one subscriber copy, got %v", viaOf(got))
+	}
+	subscriber := (confluence.Prompt{}).Build(got[0].Inbound, nil)
+	lead := route(t, parser(t, nil), pageEvent("page_updated", "ENG", "<p>Words.</p>", acctWriter))
+	if len(lead) != 1 || lead[0].Metadata[confluence.RoutedViaField] != confluence.ViaSpaceLead {
+		t.Fatalf("want one space-lead copy, got %v", viaOf(lead))
+	}
+	leadText := (confluence.Prompt{}).Build(lead[0].Inbound, nil)
+	for _, leadOnly := range []string{"lead of the team that owns the space", "@mention them"} {
+		if strings.Contains(subscriber, leadOnly) {
+			t.Errorf("the subscriber was told %q:\n%s", leadOnly, subscriber)
+		}
+		if !strings.Contains(leadText, leadOnly) {
+			t.Errorf("the lead was not told %q:\n%s", leadOnly, leadText)
+		}
+	}
+	const ordinary = "Staying silent is the ordinary outcome"
+	if !strings.Contains(subscriber, ordinary) || !strings.Contains(leadText, ordinary) {
+		t.Errorf("one of the two was not told %q:\nsubscriber:\n%s\nlead:\n%s",
+			ordinary, subscriber, leadText)
+	}
+	if !strings.Contains(subscriber, "page you follow") {
+		t.Errorf("the subscriber is not told why it is reading this:\n%s", subscriber)
+	}
+}
+
 // THE PAGE IS THE CONVERSATION, so a burst of edits coalesces into one
 // trigger rather than one turn each.
 func TestThePageIsTheConversation(t *testing.T) {

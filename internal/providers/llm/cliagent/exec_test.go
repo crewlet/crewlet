@@ -1,8 +1,10 @@
 package cliagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -71,6 +73,14 @@ func runFakeCLI() {
 		delay, _ := strconv.Atoi(ms)
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
+	if dir := os.Getenv("FAKE_RECORD_ARGV"); dir != "" {
+		// Not a mode: a record of what this invocation was handed, kept
+		// before whichever mode answers, for a case that asks what SEVERAL
+		// calls carried — the doctor's three probes — or what one call's
+		// argv held beside a reply of its own. A file per invocation,
+		// because the calls of one case may overlap.
+		fakeRecordArgv(dir)
+	}
 	switch {
 	case os.Getenv("FAKE_STORE") == "1":
 		// A CLI that keeps its login, its sessions and their usage in a
@@ -103,6 +113,26 @@ func runFakeCLI() {
 		// A CLI that ends cleanly when it is asked to stop — see
 		// exec_unix_test.go.
 		fakeExitZeroOnTerm()
+	case os.Getenv("FAKE_KEY_SESSION") != "":
+		// A CLI that keeps what a key signs it in to in its login's own
+		// file, as Cursor Agent does: it answers with what that file held
+		// when it started, and then, handed a key, writes it down there.
+		path := filepath.Join(os.Getenv("HOME"), os.Getenv("FAKE_KEY_SESSION"))
+		held, err := os.ReadFile(path) //nolint:gosec // the fake's own home
+		if err != nil {
+			held = []byte("nothing")
+		}
+		if key := os.Getenv("FAKE_VENDOR_API_KEY"); key != "" {
+			written := os.MkdirAll(filepath.Dir(path), 0o700)
+			if written == nil {
+				written = os.WriteFile(path, []byte("a session for "+key), 0o600)
+			}
+			if written != nil {
+				fmt.Fprint(os.Stderr, "UNWRITABLE: ", written)
+				os.Exit(3)
+			}
+		}
+		fmt.Print(string(held))
 	case os.Getenv("FAKE_DUMP_CWD") == "1":
 		// THE CHILD'S OWN ANSWER, because nothing else can give one, and it
 		// reports what it FINDS rather than only where it is.
@@ -196,6 +226,13 @@ func runFakeCLI() {
 		name := os.Getenv("FAKE_REPORT_ENV")
 		_, present := os.LookupEnv(name)
 		fmt.Printf("%s present=%v", name, present)
+	case os.Getenv("FAKE_REPORT_TMPDIR") == "1":
+		// Reports whether the TMPDIR the child was handed is a directory,
+		// FROM INSIDE it and before it writes anything: a program finds its
+		// temporary directory rather than making it, so this is what
+		// mktemp, or a CLI's own sandbox helper, would find.
+		info, err := os.Stat(os.Getenv("TMPDIR"))
+		fmt.Printf("TMPDIR dir=%v", err == nil && info.IsDir())
 	case os.Getenv("FAKE_PROMPT_FILE") != "":
 		// Answers the whole prompt-file question FROM INSIDE THE CHILD,
 		// which is the only place it can be answered honestly: the
@@ -272,6 +309,48 @@ func runFakeCLI() {
 	}
 	code, _ := strconv.Atoi(os.Getenv("FAKE_EXIT"))
 	os.Exit(code)
+}
+
+// fakeRecordArgv writes this invocation's argv, after the binary, as a JSON
+// array into a new file in dir. A record that cannot be written ends the run
+// non-zero, so the case reads a failed call rather than a missing record.
+func fakeRecordArgv(dir string) {
+	f, err := os.CreateTemp(dir, "argv-*.json")
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+	err = json.NewEncoder(f).Encode(os.Args[1:])
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+}
+
+// recordedArgv reads back every argv [fakeRecordArgv] wrote into dir, in no
+// particular order.
+func recordedArgv(t *testing.T, dir string) [][]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make([][]string, 0, len(entries))
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var argv []string
+		if err := json.Unmarshal(raw, &argv); err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		out = append(out, argv)
+	}
+	return out
 }
 
 // fakeProvider builds a provider whose CLI is this test binary.
@@ -699,8 +778,44 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 	}
 }
 
-// Each call runs in an EMPTY per-call directory, so a CLI that reads
-// AGENTS.md or CLAUDE.md from cwd finds nothing from anyone else.
+// THE TEMPORARY DIRECTORY A COMMAND IS HANDED EXISTS WHEN IT STARTS, for every
+// kind of command this package runs in a home of its own: a call in a seat's
+// home, a login command in the login home, the version probe in the probe home.
+//
+// A program finds its TMPDIR rather than making it — mktemp fails on one that
+// names nothing — and a TMPDIR named and never made failed every codex call
+// from 0.164 on, whose sandbox helper resolves it before reading the call's
+// AGENTS.md. Asked of the child, before it writes anything.
+func TestEveryCommandFindsTheTemporaryDirectoryItIsHanded(t *testing.T) {
+	t.Parallel()
+	fake := []any{"-test.run=TestCLIAgentFakeCLI"}
+	p := fakeProvider(t, map[string]string{"FAKE_REPORT_TMPDIR": "1"},
+		map[string]any{"status_args": fake, "version_args": fake})
+	const want = "TMPDIR dir=true"
+
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if comp.Content != want {
+		t.Errorf("a call's child reported %q, want %q", comp.Content, want)
+	}
+	var out bytes.Buffer
+	if err := p.Status(t.Context(), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != want {
+		t.Errorf("a login command's child reported %q, want %q", got, want)
+	}
+	if got := p.probeVersion(t.Context()); got != want {
+		t.Errorf("the version probe's child reported %q, want %q", got, want)
+	}
+}
+
+// Each call runs in a per-call directory holding nothing but the engine's own
+// project-root marker, so a CLI that reads AGENTS.md or CLAUDE.md from cwd
+// finds nothing from anyone else — and, stopped at that marker, nothing from
+// the directories above it either.
 //
 // IT ASKS THE CHILD, and that is the whole repair. It read PWD out of the
 // dumped environment and skipped when it was absent, with a comment blaming
@@ -709,7 +824,7 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 // platform including the one CI runs, and this assertion had never once been
 // made. os.Getwd() in the child is the only honest source, and it cannot be
 // unavailable.
-func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
+func TestTheWorkingDirectoryHoldsOnlyTheProjectRootMarker(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_DUMP_CWD": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{})
@@ -725,10 +840,10 @@ func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
 	}
 	// The child listed its own directory, because the parent cannot: the
 	// per-call directory is removed when the call releases.
-	if entries := envValue(comp.Content, "CWD_ENTRIES"); entries != "" {
-		t.Errorf("the call's working directory %q was not empty: %s — a CLI "+
+	if entries := envValue(comp.Content, "CWD_ENTRIES"); entries != cliprofile.ProjectRootMarker {
+		t.Errorf("the call's working directory %q holds %q, want only %s — a CLI "+
 			"reading AGENTS.md or CLAUDE.md from cwd would find somebody "+
-			"else's", dir, entries)
+			"else's", dir, entries, cliprofile.ProjectRootMarker)
 	}
 }
 

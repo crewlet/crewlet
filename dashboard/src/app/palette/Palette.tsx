@@ -316,7 +316,7 @@ export function CommandPalette({
     served && !picking && scope === "artifacts" && term.length >= SEARCH_MIN && tooLong === null;
   const artifacts = useQuery(
     "artifacts",
-    { scope: "all", q: term, sort: "updated", limit: ARTIFACT_HITS },
+    { scope: "all", q: term, sort: "updated", "max-keys": ARTIFACT_HITS },
     { enabled: wantsArtifacts },
   );
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
@@ -1025,7 +1025,7 @@ export function CommandPalette({
     const drawn = new Set((pageAnswer.data?.hits ?? []).map((p) => `page:${p.id}`));
     push("sources", "Sources of the answer", sourceRows(drawn));
   } else if (scope === "artifacts") {
-    push("artifacts", "Artifacts", asItems(artifactHits(artifactAnswer.data?.items ?? [], nav)));
+    push("artifacts", "Artifacts", asItems(artifactHits(artifactAnswer.data?.contents ?? [], nav)));
   } else if (scope === "agents") {
     for (const g of agentGroups(Infinity, true)) push(g.id, g.label, g.items);
   } else {

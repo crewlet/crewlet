@@ -23,10 +23,10 @@
 #     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \
 #                                           -config  examples/nimbus-claude-cli.config.yaml
 #
-# Before the node's first start its own rows are the company's whole
-# secret store, so the doctor reads them; once it has run, run the doctor
-# beside the running engine with CREWLET_API_TOKEN set to
-# $CREWLET_API_TOKEN_FOUNDER, or it is refused.  Then run the pair, with
+# With the engine stopped both reach the fleet's secret store themselves,
+# through this node's own broker; once the engine runs, they go through
+# it, with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER.  Then run
+# the pair, with
 # the tool bridge the engineers' agent-mode runs dial back on and the .env
 # the bootstrap wrote:
 #
@@ -153,11 +153,10 @@ providers:
     #   crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml \
     #                              -config  examples/nimbus-claude-cli.config.yaml
     #
-    # Before the node's first start its own rows are the company's whole
-    # secret store, and the doctor reads them.  Once the engine has run, the
-    # company's values are on a store only a running engine serves: run the
-    # doctor beside it with CREWLET_API_TOKEN set to one of its Tier A
-    # tokens, or it is refused rather than read the node's leftover rows.
+    # With the engine stopped the doctor reaches the fleet's secret store
+    # itself, through this node's own broker.  Once the engine runs, it
+    # reads the store through it: run the doctor with CREWLET_API_TOKEN set
+    # to one of its Tier A tokens.
     #
     # `doctor` is the command that matters here.  An entry can be
     # configured perfectly and still not work — a missing binary, a
@@ -642,11 +641,10 @@ scheduling:
 #       -config examples/nimbus-claude-cli.config.yaml
 #
 # Both load examples/nimbus-claude-cli.config.yaml, so export the keyring
-# and the founder token this file's header names first.  Before the
-# node's first start its own rows are the company's whole secret store,
-# and both read them; once it has run, run them beside the running engine
-# with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER, or they are
-# refused.
+# and the founder token this file's header names first.  With the engine
+# stopped both reach the fleet's secret store themselves, through this
+# node's own broker; once the engine runs, they go through it, with
+# CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER.
 #
 # See docs/integrations/mattermost.md.
 #

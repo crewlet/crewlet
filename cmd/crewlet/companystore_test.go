@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,13 +13,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
-
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -43,15 +40,6 @@ func TestTheStoredSigningSecretIsAWellFormedKey(t *testing.T) {
 	}
 }
 
-// seedTheStore creates the database the Tier A at cfg names, as a node's first
-// start does, holding one value.
-func seedTheStore(t *testing.T, cfg string) {
-	t.Helper()
-	if _, errs, err := secretsCmd(t, cfg, "set", "SEEDED", "-value", "x"); err != nil {
-		t.Fatalf("seed the store: %v (%s)", err, errs)
-	}
-}
-
 // storePathOf is the database the Tier A at cfg names.
 func storePathOf(t *testing.T, cfg string) string {
 	t.Helper()
@@ -62,145 +50,31 @@ func storePathOf(t *testing.T, cfg string) string {
 	return boot.Store.Path
 }
 
-// markBrokerRun leaves in the store directory the Tier A at cfg names what a
-// member's first start leaves there: the broker's own state directory.
-func markBrokerRun(t *testing.T, cfg string) {
+// fleetRowsOf is every value the fleet's store holds, read straight off it the
+// way a command reaches it on the node the Tier A at cfg describes with its
+// engine stopped ([openFleetStore]) — and through this process's session, so a
+// case that still holds a route there reads beside it rather than being
+// refused a second broker on the store directory.
+func fleetRowsOf(t *testing.T, cfg string) map[string]string {
 	t.Helper()
 	boot, err := loadBootstrapForStore(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(boot.Stream.StoreDir, server.JetStreamStoreDir), 0o700); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// rowsOf is every value this node's own table at cfg holds, read straight off
-// the file, as no command reads it on a node that has run.
-func rowsOf(t *testing.T, cfg string) map[string]string {
-	t.Helper()
-	boot, err := loadBootstrapForStore(cfg)
+	fs, closeFleet, err := openFleetStore(t.Context(), boot, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cipher, err := boot.Secrets.Cipher()
+	defer closeFleet()
+	values, err := fleetSecrets(fs, boot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := store.OpenNode(t.Context(), boot.Store.Path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-	rows, err := db.SecretValues(cipher).All(t.Context())
+	rows, err := values.All(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return rows
-}
-
-// filesBeside is every file in the directory holding db — the database and
-// its sidecars among them — each as its size, modification time and bytes, so
-// two readings differ wherever anything opened, wrote or created one.
-func filesBeside(t *testing.T, db string) map[string]string {
-	t.Helper()
-	entries, err := os.ReadDir(filepath.Dir(db))
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := map[string]string{}
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !info.Mode().IsRegular() {
-			out[entry.Name()] = info.Mode().String()
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(filepath.Dir(db), entry.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		out[entry.Name()] = fmt.Sprintf("%d bytes, %s, %x", info.Size(),
-			info.ModTime().Format(time.RFC3339Nano), sha256.Sum256(raw))
-	}
-	return out
-}
-
-// servingAPI is the api block of a node that serves one: a port, the address
-// browsers use, and a Tier A token that clears the floor.
-func servingAPI(port int) string {
-	return fmt.Sprintf("api:\n  host: 127.0.0.1\n  port: %d\n"+
-		"  external_url: \"http://127.0.0.1:%d\"\n  auth:\n    admin: serve\n"+
-		"    tokens:\n      - id: ops\n        token: %s\n        grants: [admin]\n",
-		port, port, cliFixtureToken)
-}
-
-// tierAWith writes a Tier A naming a store in its own directory, the fixture
-// keyring, and blocks — the stream's, the API's, the node's — and returns its
-// path, refusing a document Tier A itself refuses.
-func tierAWith(t *testing.T, blocks func(dir string) string) string {
-	t.Helper()
-	dir := t.TempDir()
-	body := fmt.Sprintf("store:\n  path: %s\n", filepath.Join(dir, "index.db")) +
-		blocks(dir) + fixtureKeyring
-	path := filepath.Join(dir, "crewlet.yaml")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadBootstrapForStore(path); err != nil {
-		t.Fatalf("the fixture's Tier A is refused: %v\n%s", err, body)
-	}
-	return path
-}
-
-// stoppedShape is a stopped node whose own rows are not the company's whole
-// secret store, for the reason its name gives.
-type stoppedShape struct {
-	name string
-	// tierA writes the node's Tier A, serving an API.
-	tierA func(t *testing.T) string
-	// says is what the refusal says of the node.
-	says string
-}
-
-var stoppedShapes = []stoppedShape{
-	{
-		name: "a sole member whose broker has run",
-		tierA: func(t *testing.T) string {
-			cfg := tierAWith(t, func(dir string) string {
-				return "node:\n  id: cli-test\n" + fixtureStream(dir) + servingAPI(1)
-			})
-			markBrokerRun(t, cfg)
-			return cfg
-		},
-		says: "has run before",
-	},
-	{
-		name: "a member of a cluster that never started",
-		tierA: func(t *testing.T) string {
-			return tierAWith(t, func(dir string) string {
-				return "node:\n  id: node-a\ncoordination:\n  type: embedded-kv\n" +
-					"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n  replicas: 3\n" +
-					"  cluster:\n    name: crewlet\n    port: 6222\n" +
-					"    peers: [\"nats://node-b.example.com:6222\", \"nats://node-c.example.com:6222\"]\n" +
-					servingAPI(1)
-			})
-		},
-		says: "member of a fleet (stream.cluster)",
-	},
-	{
-		name: "a client of an external broker",
-		tierA: func(t *testing.T) string {
-			return tierAWith(t, func(string) string {
-				return "node:\n  id: cli-test\ncoordination:\n  type: embedded-kv\n" +
-					"stream:\n  type: nats\n  url: nats://nats.example.com:4222\n" +
-					servingAPI(1)
-			})
-		},
-		says: "external broker (stream.type: nats)",
-	},
 }
 
 // untouchedVendor is every vendor these cases name, answering nothing: a run
@@ -376,7 +250,7 @@ func readersOfTheCompany() []readerRun {
 			}}
 	}
 	llmRun := func(sub string, extra ...string) readerRun {
-		return readerRun{name: "llm " + sub,
+		return readerRun{name: strings.Join(append([]string{"llm", sub}, extra...), " "),
 			args: func(t *testing.T, cfg, _ string) ([]string, *cliagent.Provider) {
 				company, entry := cliAgentCompanyFile(t)
 				return append([]string{"llm", sub, "sub", "-company", company, "-config", cfg},
@@ -418,106 +292,65 @@ func readersOfTheCompany() []readerRun {
 	}
 }
 
-// A STOPPED NODE WHOSE OWN ROWS ARE NOT THE WHOLE STORE REFUSES EVERY READER
-// OF THE COMPANY, before it reads, plans or changes anything.
+// A CLUSTER MEMBER WITH ITS ENGINE STOPPED REFUSES EVERY READER OF THE COMPANY,
+// before it reads, plans or changes anything.
 //
-// The company's values are on a store only a running engine serves — the
-// broker on this node has run, or the node is one member of a cluster, or a
-// client of one somebody else runs — so a miss in this node's rows says
-// nothing about them. A run that read it as unset minted over the fleet's
-// value, and the engine's next start took the run's write over the fleet's;
-// a report restored a configured bundle from these rows into an empty
-// credentials directory, which the engine then refused to overwrite. So each
-// such run is refused with what the node is and the two ways to the fleet's
-// values, whatever flag for a fresh value it was given, and:
+// Started alone, a member cannot reach the quorum the fleet's store needs, and
+// beside running peers it would rejoin the cluster for the sake of one value,
+// so its command is sent to a running member ([engine.ErrNoFleetStoreHere]).
+// A run that went on without the store would read every value the fleet holds
+// as unset — and unset is the signal a provisioner mints on, or a report
+// restores the configured bundle on. So each such run is refused, naming
+// `-api` and this node's Tier A, whatever flag for a fresh value it was given,
+// and:
 //
 //   - nothing is printed but the error, on either stream: not a plan, nor a
 //     route line;
 //   - no vendor is reached;
-//   - no database is created where there was none, and one that exists is
-//     never opened — an open applies pending schema — so its file and its
-//     lock's stamp are as they were, byte for byte and to the nanosecond;
-//   - an llm entry's configured bundle — here in this node's rows — is not
-//     restored into its credentials directory.
+//   - no broker is started on the member's store directory;
+//   - an llm entry's credentials directory is left as it was.
 //
-// Mutation: drop the StoreHasRun stat, and the sole member's rows go red; drop
-// SoleMember from stoppedNode, and the cluster member's rows do; let a reader
-// through a target with stopped set, or open the file before deciding, and
-// every row does.
-func TestAStoppedNodeThatHasRunRefusesEveryReaderOfTheCompany(t *testing.T) {
+// Mutation: let a reader on, past a store it could not reach, and every row
+// goes red.
+func TestAClusterMemberWithItsEngineStoppedRefusesEveryReaderOfTheCompany(t *testing.T) {
 	t.Parallel()
-	bundle := aBundle(t)
-	for _, shape := range stoppedShapes {
-		for _, seeded := range []bool{false, true} {
-			name := shape.name + ", no database"
-			if seeded {
-				name = shape.name + ", rows held"
+	cfg := clusterMemberConfig(t)
+	for _, reader := range readersOfTheCompany() {
+		t.Run(reader.name, func(t *testing.T) {
+			t.Parallel()
+			vendor := untouchedVendor(t)
+			args, entry := reader.args(t, cfg, vendor)
+			out, errs, err := cli(t, args...)
+			if !errors.Is(err, engine.ErrNoFleetStoreHere) {
+				t.Fatalf("err = %v, want the cluster member's refusal\n%s%s", err, out, errs)
 			}
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-				cfg := shape.tierA(t)
-				db := storePathOf(t, cfg)
-				var before map[string]string
-				if seeded {
-					// `secrets set` is the one write a stopped node that
-					// has run still takes, so this seeds it as an operator
-					// would.
-					if _, errs, err := secretsCmd(t, cfg, "set",
-						"CREWLET_LLM_CLI_SUB_CREDENTIALS", "-value", bundle); err != nil {
-						t.Fatalf("seed: %v (%s)", err, errs)
-					}
-					seedTheStore(t, cfg)
-					before = rowsOf(t, cfg)
+			for _, want := range []string{"-api", cfg} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal omits %q: %v", want, err)
 				}
-				files := filesBeside(t, db)
-				for _, reader := range readersOfTheCompany() {
-					t.Run(reader.name, func(t *testing.T) {
-						vendor := untouchedVendor(t)
-						args, entry := reader.args(t, cfg, vendor)
-						out, errs, err := cli(t, args...)
-						if !errors.Is(err, errStoppedNode) {
-							t.Fatalf("err = %v, want the stopped-node refusal\n%s%s", err, out, errs)
-						}
-						for _, want := range []string{"crewlet " + strings.Join(args[:2], " "),
-							shape.says, "-api", "Nothing was read or changed."} {
-							if !strings.Contains(err.Error(), want) {
-								t.Errorf("the refusal omits %q: %v", want, err)
-							}
-						}
-						if out != "" || errs != "" {
-							t.Errorf("a refused run printed:\n%s%s", out, errs)
-						}
-						if entry != nil {
-							if has, _ := entry.Workspace().HasLogin(t.Context()); has {
-								t.Error("a refused report restored a bundle into the entry's " +
-									"credentials directory")
-							}
-						}
-					})
+			}
+			if out != "" || errs != "" {
+				t.Errorf("a refused run printed:\n%s%s", out, errs)
+			}
+			if entry != nil {
+				if has, _ := entry.Workspace().HasLogin(t.Context()); has {
+					t.Error("a refused report wrote a login into the entry's " +
+						"credentials directory")
 				}
-				if after := filesBeside(t, db); !maps.Equal(files, after) {
-					t.Errorf("refused runs changed the files beside %s: %v, then %v", db, files, after)
-				}
-				if seeded {
-					if after := rowsOf(t, cfg); !maps.Equal(before, after) {
-						t.Errorf("the rows changed under refused runs: %v, then %v", before, after)
-					}
-					return
-				}
-				for _, path := range []string{db, db + ".lock"} {
-					if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-						t.Errorf("a refused run created %s: %v", path, err)
-					}
-				}
-			})
-		}
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(cfg), "stream")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a broker was started on the member's store directory: %v", err)
 	}
 }
 
-// A RUN THAT READS NO STORED VALUE DECIDES NO ROUTE, and so runs on a stopped
-// node that has run: a dry run that resolves nothing, a plan with nothing in it
-// — a Slack run with no seat to provision among them, whatever its sink.
-// Refusing them would refuse a question the store has no part in.
+// A RUN THAT READS NO STORED VALUE DECIDES NO ROUTE, and so runs where every
+// route is refused — a cluster member with its engine stopped: a dry run that
+// resolves nothing, a plan with nothing in it — a Slack run with no seat to
+// provision among them, whatever its sink. Refusing them would refuse a
+// question the store has no part in, and routing them on a solo node would
+// start its broker for a store nothing reads.
 //
 // A Slack seat whose credentials are literals is no seat to provision: the run
 // leaves it to the operator who wrote them, and records or reads back nothing
@@ -526,9 +359,9 @@ func TestAStoppedNodeThatHasRunRefusesEveryReaderOfTheCompany(t *testing.T) {
 // Mutation: route before the empty-plan or dry-run return, or decide a Slack
 // run's plan is empty by its seats rather than by those it can provision, and
 // these go red.
-func TestARunThatReadsNoStoredValueRunsOnAStoppedNodeThatHasRun(t *testing.T) {
+func TestARunThatReadsNoStoredValueDecidesNoRoute(t *testing.T) {
 	t.Parallel()
-	cfg := stoppedShapes[0].tierA(t)
+	cfg := clusterMemberConfig(t)
 	vendor := untouchedVendor(t)
 	company := companyAt(t, readerCompanyDoc, vendor)
 	empty := companyAt(t, "name: Nimbus\nintegrations:\n  mattermost:\n    enabled: true\n"+
@@ -560,148 +393,20 @@ func TestARunThatReadsNoStoredValueRunsOnAStoppedNodeThatHasRun(t *testing.T) {
 	}
 }
 
-// A STOPPED NODE SERVING NO API IS TOLD ONLY OF -api: Tier A gives it no
-// API, so starting it as configured gives no way to read the values through,
-// and offering that would send an operator to a step that ends at the same
-// refusal. What was read is said as read — `crewlet run -api-port` and
-// `-roles` override both, and this command cannot know whether the engine was
-// started with one — so the refusal claims no more of the node than its Tier
-// A says.
-func TestAStoppedNodeServingNoAPIIsToldOnlyOfAPI(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		blocks func(dir string) string
-		says   string
-	}{
-		"api.port 0": {
-			blocks: func(dir string) string { return "node:\n  id: cli-test\n" + fixtureStream(dir) },
-			says:   "api.port is 0 (a `crewlet run -api-port` override is not known here)",
-		},
-		"no ingress role": {
-			blocks: func(dir string) string {
-				return "node:\n  id: cli-test\n  roles: [data, seats, workers]\n" +
-					fixtureStream(dir) + servingAPI(1)
-			},
-			says: "leave out ingress (a `crewlet run -roles` override is not known here)",
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			cfg := tierAWith(t, tc.blocks)
-			markBrokerRun(t, cfg)
-			_, _, err := cli(t, "gitlab", "provision", gitlabCompanyFile(t), "-dry-run",
-				"-config", cfg)
-			if !errors.Is(err, errStoppedNode) {
-				t.Fatalf("err = %v, want the stopped-node refusal", err)
-			}
-			for _, want := range []string{"Tier A gives this node no API", tc.says, "-api URL"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("the refusal omits %q: %v", want, err)
-				}
-			}
-			if strings.Contains(err.Error(), "crewlet run -config") {
-				t.Errorf("a node serving no API was told to start its engine and re-run: %v", err)
-			}
-		})
-	}
-}
-
-// THE ROUTE LINE AND THE REFUSAL NAME EVERY PATH FROM THE ROOT. Each path in
-// Tier A is relative to the working directory, which is the one thing a run
-// from the wrong place gets wrong — so the line naming this node's rows as the
-// whole store, and the refusal naming its broker's state, say each path from
-// the root however Tier A spells it, and a run that found nothing because it
-// looked in the wrong place says where it looked.
+// A STOPPED NODE READS AND RECORDS THE FLEET'S STORE ITSELF.
 //
-// The paths here are spelled relative to this test's own working directory,
-// so nothing has to change it.
+// With the engine stopped there is no node to go through, and the store is
+// still the fleet's: the command reaches it through this node's own broker
+// ([openFleetStore]). A provisioning run reads what the store holds — a value
+// set while the engine was stopped, as here, or through a running node — and
+// says on its first line which store it reached, and how; its -secret-store
+// sink records into that store, where the engine reads it at its next start.
 //
-// Mutation: print a path as Tier A spells it, and its relative spelling shows.
-func TestTheRouteAndTheRefusalNameEveryPathFromTheRoot(t *testing.T) {
+// Mutation: answer a stopped node from anywhere but the fleet's store, and the
+// plan mints over the stored key and the record lands nowhere the engine reads.
+func TestAStoppedNodeReadsAndRecordsTheFleetsStoreItself(t *testing.T) {
 	t.Parallel()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relative := func(t *testing.T, path string) string {
-		t.Helper()
-		rel, err := filepath.Rel(wd, path)
-		if err != nil || filepath.IsAbs(rel) {
-			t.Fatalf("no relative spelling of %s from %s: %q, %v", path, wd, rel, err)
-		}
-		return rel
-	}
-	for _, ran := range []bool{false, true} {
-		t.Run(fmt.Sprintf("broker has run %v", ran), func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			db, streamDir := filepath.Join(dir, "index.db"), filepath.Join(dir, "stream")
-			cfg := writeFile(t, dir, "crewlet.yaml", fmt.Sprintf(
-				"store:\n  path: %s\nnode:\n  id: cli-test\nstream:\n  store_dir: %s\n",
-				relative(t, db), relative(t, streamDir))+servingAPI(1)+fixtureKeyring)
-			want := []string{streamDir}
-			if ran {
-				markBrokerRun(t, cfg)
-			} else {
-				want = append(want, db)
-			}
-			out, errs, err := cli(t, "gitlab", "provision", gitlabCompanyFile(t), "-dry-run",
-				"-config", cfg, "-public-url", "https://crewlet.example.com")
-			said := out + errs
-			if ran {
-				if !errors.Is(err, errStoppedNode) {
-					t.Fatalf("err = %v, want the stopped-node refusal", err)
-				}
-				said = err.Error()
-			} else if err != nil || !strings.Contains(said, "company's whole secret store") {
-				t.Fatalf("err = %v, want a run on the whole store:\n%s", err, said)
-			}
-			for _, path := range want {
-				if !strings.Contains(said, path) {
-					t.Errorf("%s is not named from the root:\n%s", path, said)
-				}
-				if rel := relative(t, path); strings.Contains(said, rel) {
-					t.Errorf("%s is named as Tier A spells it:\n%s", rel, said)
-				}
-			}
-		})
-	}
-}
-
-// WHERE WHETHER THE BROKER HAS RUN CANNOT BE TOLD, THE RUN IS REFUSED, never
-// read as a node that has not: a store directory that is a file — a stat
-// failure no privilege bypasses — names the failure in the refusal.
-//
-// Mutation: read a stat error as "never ran", and the run resolves.
-func TestAnUnreadableBrokerStateIsRefusedRatherThanReadAsNew(t *testing.T) {
-	t.Parallel()
-	cfg := tierAWith(t, func(dir string) string {
-		file := filepath.Join(dir, "stream")
-		if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return "node:\n  id: cli-test\n" + fixtureStream(dir) + servingAPI(1)
-	})
-	out, _, err := cli(t, "gitlab", "provision", gitlabCompanyFile(t), "-dry-run", "-config", cfg)
-	if !errors.Is(err, errStoppedNode) {
-		t.Fatalf("err = %v, want the stopped-node refusal\n%s", err, out)
-	}
-	if !errors.Is(err, syscall.ENOTDIR) || !strings.Contains(err.Error(), "cannot be told") {
-		t.Errorf("the refusal does not name what could not be read: %v", err)
-	}
-}
-
-// A NODE WHOSE BROKER HAS NEVER RUN READS ITS OWN ROWS AS THE WHOLE STORE.
-//
-// The fleet's store is that member's own JetStream, which does not exist until
-// its broker first starts, so its rows are the company's whole store: a row is
-// held, and none is definitively not held. A provisioning run there before the
-// first start is how a company is set up, and it reads and records there, says
-// so on its first line naming both directories from the root, and creates no
-// database for a read — only a write does.
-func TestANodeWhoseBrokerHasNeverRunReadsItsRowsAsTheWholeStore(t *testing.T) {
-	t.Parallel()
-	t.Run("the rows answer, and the run says whose", func(t *testing.T) {
+	t.Run("the store answers, and the run says how it got there", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapWithKeyring(t, "k1")
 		if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_SIGNING_SECRET",
@@ -711,12 +416,11 @@ func TestANodeWhoseBrokerHasNeverRunReadsItsRowsAsTheWholeStore(t *testing.T) {
 		out, errs, err := provisionCmd(t, gitlabCompanyFile(t), "-dry-run", "-config", cfg,
 			"-public-url", "https://crewlet.example.com")
 		if err != nil {
-			t.Fatalf("a dry run before the first start: %v\n%s", err, errs)
+			t.Fatalf("a dry run with the engine stopped: %v\n%s", err, errs)
 		}
 		first, _, _ := strings.Cut(out, "\n")
-		boot, _ := loadBootstrapForStore(cfg)
-		for _, want := range []string{boot.Store.Path, boot.Stream.StoreDir,
-			"these rows are the company's whole secret store"} {
+		for _, want := range []string{"the fleet's store", "engine is stopped",
+			"1 of the stored values"} {
 			if !strings.Contains(first, want) {
 				t.Errorf("the first line does not say %q: %q", want, first)
 			}
@@ -725,32 +429,16 @@ func TestANodeWhoseBrokerHasNeverRunReadsItsRowsAsTheWholeStore(t *testing.T) {
 			t.Errorf("the stored signing key did not reach the plan:\n%s", out)
 		}
 	})
-	t.Run("a read creates no database, and the first write does", func(t *testing.T) {
+	t.Run("a -secret-store record lands on the fleet's store", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapWithKeyring(t, "k1")
-		db := storePathOf(t, cfg)
-		out, errs, err := provisionCmd(t, gitlabCompanyFile(t), "-dry-run", "-config", cfg,
-			"-public-url", "https://crewlet.example.com")
-		if err != nil {
-			t.Fatalf("dry run: %v\n%s", err, errs)
-		}
-		if !strings.Contains(out, "which do not exist yet") ||
-			!strings.Contains(out, "WILL BE MINTED into GITLAB_SIGNING_SECRET") {
-			t.Errorf("a node with no rows yet was not planned as one:\n%s", out)
-		}
-		for _, path := range []string{db, db + ".lock"} {
-			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("a read created %s: %v", path, err)
-			}
-		}
-
 		sink := secretStoreSink(t, noEnviron, "-config", cfg)
 		if err := sink.Record(t.Context(), "GITLAB_TOKEN_SWE", "glpat-minted"); err != nil {
-			t.Fatalf("record into the rows: %v", err)
+			t.Fatalf("record into the fleet's store: %v", err)
 		}
-		if got := rowsOf(t, cfg)["GITLAB_TOKEN_SWE"]; got != "glpat-minted" {
-			t.Errorf("a -secret-store write before the first start did not land in the "+
-				"rows: %q", got)
+		if got := fleetRowsOf(t, cfg)["GITLAB_TOKEN_SWE"]; got != "glpat-minted" {
+			t.Errorf("a -secret-store write with the engine stopped did not land on the "+
+				"fleet's store: %q", got)
 		}
 	})
 }
@@ -769,7 +457,7 @@ func secretStoreSink(t *testing.T, environ config.Source, flags ...string) provi
 		*sinks.store.bootstrap = filepath.Join(t.TempDir(), "absent.yaml")
 	}
 	companySecrets, err := openCompanyStore(environ, sinks.store,
-		"crewlet gitlab provision", readsTheCompany)
+		"crewlet gitlab provision")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,82 +469,50 @@ func secretStoreSink(t *testing.T, environ config.Source, flags ...string) provi
 	return sink
 }
 
-// A RUN THAT ACTS ON ITS OWN RUNS ON A STOPPED NODE WHEREVER IT HAS RUN.
+// A LOGIN WITH THE ENGINE STOPPED STORES ITS TOKEN ON THE FLEET'S STORE, and
+// says who reads it when: this node's engine at its start, and a node already
+// running on the same store at its next apply ([secretsStoppedNote]).
 //
-// `crewlet llm login` writes a new token, which the next start carries onto
-// the fleet later-wins, and `logout` and `import` remove or restore a login on
-// this host and write no row: none of them is right or wrong by what the
-// fleet holds. So they run on a stopped node that has run, the token landing
-// in its rows with the note that says when it reaches the fleet, and nothing
-// said about the rows they read the entry from — no route line, no refusal.
-//
-// Mutation: hold them to the rule, and every case is refused.
-func TestAWriterLandsInAStoppedNodesRowsWhereverItHasRun(t *testing.T) {
+// Mutation: write it anywhere but the store the run read the company from, and
+// the fleet's store does not hold it.
+func TestALoginWithTheEngineStoppedStoresOnTheFleetsStore(t *testing.T) {
 	t.Parallel()
-	cfg := stoppedShapes[0].tierA(t)
-
-	t.Run("login -token-stdin", func(t *testing.T) {
-		store := llmStoreAt(t, noEnviron, "login", "-config", cfg)
-		company := writeFile(t, t.TempDir(), "company.yaml",
-			"name: Acme\nproviders:\n  llm:\n"+healthyDoctorEntry(t, "claude", "m")+
-				"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
-		var notes bytes.Buffer
-		doc, keys, resolver, err := loadLLMConfig(t.Context(), company, store, "login", "claude", &notes)
-		if err != nil {
-			t.Fatalf("a login on a stopped node that has run was refused: %v", err)
-		}
-		providers, err := cliAgents(doc, keys, resolver)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out bytes.Buffer
-		if err := loginLLM(t.Context(), loginRequest{providers: providers, key: "claude",
-			tokenStdin: true, companySecrets: store, stdin: strings.NewReader("fake-pasted\n")},
-			&out, &notes); err != nil {
-			t.Fatalf("login -token-stdin: %v", err)
-		}
-		if notes.Len() > 0 {
-			t.Errorf("a login on rows that are not the whole store said of them: %q", notes.String())
-		}
-		if !strings.Contains(out.String(), secretsLocalNote) {
-			t.Errorf("the write does not say when the fleet reads it:\n%s", out.String())
-		}
-		if got := rowsOf(t, cfg)["FAKE_CLI_TOKEN"]; got != "fake-pasted" {
-			t.Errorf("the token did not land in this node's rows: %q", got)
-		}
-	})
-	t.Run("logout and import", func(t *testing.T) {
-		company, entry := cliAgentCompanyFile(t)
-		for _, sub := range []string{"logout", "import"} {
-			out, errs, err := cli(t, "llm", sub, "sub", "-company", company, "-config", cfg)
-			if errors.Is(err, errStoppedNode) {
-				t.Errorf("llm %s on a stopped node that has run was refused: %v", sub, err)
-			}
-			if strings.Contains(out+errs, "resolving ${VAR}") {
-				t.Errorf("llm %s said of rows that are not the whole store:\n%s%s", sub, out, errs)
-			}
-		}
-		if has, _ := entry.Workspace().HasLogin(t.Context()); has {
-			t.Error("the premise: an import of an empty stdin restored a login")
-		}
-	})
+	cfg := bootstrapWithKeyring(t, "k1")
+	store := llmStoreAt(t, noEnviron, "login", "-config", cfg)
+	company := writeFile(t, t.TempDir(), "company.yaml",
+		"name: Acme\nproviders:\n  llm:\n"+healthyDoctorEntry(t, "claude", "m")+
+			"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
+	var notes bytes.Buffer
+	doc, keys, resolver, err := loadLLMConfig(t.Context(), company, store, "login", "claude", &notes)
+	if err != nil {
+		t.Fatalf("a login with the engine stopped was refused: %v", err)
+	}
+	providers, err := cliAgents(doc, keys, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := loginLLM(t.Context(), loginRequest{providers: providers, key: "claude",
+		tokenStdin: true, companySecrets: store, stdin: strings.NewReader("fake-pasted\n")},
+		&out, &notes); err != nil {
+		t.Fatalf("login -token-stdin: %v", err)
+	}
+	if !strings.Contains(out.String(), secretsStoppedNote) {
+		t.Errorf("the write does not say who reads it when:\n%s", out.String())
+	}
+	if got := fleetRowsOf(t, cfg)["FAKE_CLI_TOKEN"]; got != "fake-pasted" {
+		t.Errorf("the token did not land on the fleet's store: %q", got)
+	}
 }
 
 // A BROKER LOGIN OR AN IMPORT NAMES THE DOCTOR AS IT CAN BE RUN FROM WHERE IT
 // RAN, with the -company, -config and -api the run was given: the doctor reads
 // the company document and the store the run did, and a bare one after a run
-// through -api reads this machine's Tier A instead, which may be a stopped node
-// that refuses it. Both run on a stopped node whose own rows are not the
-// company's whole secret store, and the doctor that checks what they wrote is
-// refused there, since it reads the company's stored values: so there each ends
-// on the running engine and the token its reveal takes, or -api — only -api
-// where Tier A gives the node no API — and anywhere else on the doctor as it
-// stands.
+// through -api reads this machine's Tier A instead, which may be another
+// node's, or another store altogether.
 //
-// Mutation: end on the bare doctor whatever the route, and the stopped nodes'
-// rows go red; condition it everywhere, and the others do; leave out a flag the
-// run was given, and every row does, the -api one beside a Tier A that is a
-// stopped node that has run among them.
+// Mutation: leave out a flag the run was given, and every row does, the -api
+// one beside a Tier A among them.
 func TestALoginNamesTheDoctorAsItCanBeRun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -864,20 +520,11 @@ func TestALoginNamesTheDoctorAsItCanBeRun(t *testing.T) {
 		cfg  func(t *testing.T) string
 		// api is whether the run names a node with -api.
 		api bool
-		// says is what the line names beyond the doctor, none where it is
-		// the doctor as it stands.
-		says []string
 	}{
-		{name: "a stopped node that has run", cfg: stoppedShapes[0].tierA,
-			says: []string{"once this node's engine is running (crewlet run -config ",
-				apiTokenEnv + " holds one of ", "or with -api URL naming a running node"}},
-		{name: "a stopped node that has run, serving no API", cfg: func(t *testing.T) string {
-			cfg := tierAWith(t, func(dir string) string { return "node:\n  id: cli-test\n" + fixtureStream(dir) })
-			markBrokerRun(t, cfg)
-			return cfg
-		}, says: []string{"and -api URL naming a running node", "api.port is 0"}},
-		{name: "-api beside a stopped node that has run", cfg: stoppedShapes[0].tierA, api: true},
-		{name: "a single node before its first start", cfg: func(t *testing.T) string {
+		{name: "-api beside a Tier A", cfg: func(t *testing.T) string {
+			return bootstrapWithKeyring(t, "k1")
+		}, api: true},
+		{name: "a node whose engine is stopped", cfg: func(t *testing.T) string {
 			return bootstrapWithKeyring(t, "k1")
 		}},
 		{name: "no Tier A", cfg: func(t *testing.T) string {
@@ -897,23 +544,9 @@ func TestALoginNamesTheDoctorAsItCanBeRun(t *testing.T) {
 				doctor := strings.Join(append([]string{"crewlet llm doctor sub -company", company},
 					flags...), " ")
 				lines := strings.Split(strings.TrimSpace(out), "\n")
-				last := lines[len(lines)-1]
-				if !strings.HasPrefix(last, "Verify it with `"+doctor+"`") {
+				if last := lines[len(lines)-1]; last != "Verify it with `"+doctor+"`." {
 					t.Fatalf("the run does not end on the doctor with its own flags, `%s`:\n%s",
 						doctor, out)
-				}
-				if tc.says == nil && last != "Verify it with `"+doctor+"`." {
-					t.Errorf("a run whose doctor runs as it stands conditioned it: %q", last)
-				}
-				for _, want := range tc.says {
-					if !strings.Contains(last, want) {
-						t.Errorf("the line omits %q, so it sends the operator to a doctor "+
-							"refused here: %q", want, last)
-					}
-				}
-				if tc.says != nil && strings.Contains(tc.name, "no API") &&
-					strings.Contains(last, apiTokenEnv) {
-					t.Errorf("a node serving no API was told to start its engine: %q", last)
 				}
 			}
 			t.Run("import", func(t *testing.T) {
@@ -968,62 +601,18 @@ roles:
 	}
 }
 
-// ON A STOPPED NODE THAT HAS RUN, `crewlet secrets` ONLY SETS.
-//
-// Before a sole member's first start its own table is the company's whole
-// store and every subcommand works on it. After one the company's rows are
-// the fleet's, and this node's are what was written since it stopped: `list`
-// and `get` would answer for those, an `unset` of a name the fleet holds
-// removes nothing (the migration copies rows and carries no removal), and a
-// `rekey` re-seals rows that are not the ones a rotation is about. So those
-// are refused, naming the running engine and -api, and `set` — whose value
-// the next start carries onto the fleet later-wins — writes the rows.
-//
-// Mutation: let a reader through a stopped target, and get, list, unset and
-// rekey answer from the rows; hold `set` to the rule, and the write is refused.
-func TestOnAStoppedNodeThatHasRunTheSecretsCommandOnlySets(t *testing.T) {
-	t.Parallel()
-	cfg := stoppedShapes[0].tierA(t)
-	out, errs, err := secretsCmd(t, cfg, "set", "ROTATED", "-value", "v2")
-	if err != nil {
-		t.Fatalf("secrets set on a stopped node that has run: %v (%s)", err, errs)
-	}
-	if !strings.Contains(out, secretsLocalNote) {
-		t.Errorf("the write does not say when the fleet reads it:\n%s", out)
-	}
-	if got := rowsOf(t, cfg)["ROTATED"]; got != "v2" {
-		t.Fatalf("the value did not land in the rows: %q", got)
-	}
-	for _, args := range [][]string{
-		{"get", "ROTATED", "-reveal"}, {"list"}, {"unset", "ROTATED"},
-		{"rekey"}, {"rekey", "-dry-run"},
-	} {
-		out, _, err := secretsCmd(t, cfg, args...)
-		if !errors.Is(err, errStoppedNode) {
-			t.Errorf("secrets %s = %v, want the stopped-node refusal\n%s", args[0], err, out)
-			continue
-		}
-		if !strings.Contains(err.Error(), "crewlet secrets "+args[0]) || out != "" {
-			t.Errorf("secrets %s: the refusal names no command, or printed %q: %v",
-				args[0], out, err)
-		}
-	}
-	if got := rowsOf(t, cfg)["ROTATED"]; got != "v2" {
-		t.Errorf("a refused unset changed the rows: %q", got)
-	}
-}
-
 // A MISTAKE IN THE COMMAND LINE IS ANSWERED AS ONE, before any route is
-// decided: on a stopped node that has run, where every subcommand but set is
+// decided: on a cluster member whose engine is stopped, where every route is
 // refused, a mistyped subcommand, a missing name or a `get` without -reveal is
-// told what is wrong with it — not to start the engine, which would not fix
-// it.
+// told what is wrong with it — not to name a running member or start the
+// engine, which would not fix it. (On a solo node, a route would start its
+// broker for a command line that was never going to run.)
 //
 // Mutation: check the command line after the store is routed, and each of
-// these gets the stopped-node refusal instead.
+// these gets the cluster member's refusal instead.
 func TestASecretsUsageErrorIsAnsweredBeforeAnyRoute(t *testing.T) {
 	t.Parallel()
-	cfg := stoppedShapes[0].tierA(t)
+	cfg := clusterMemberConfig(t)
 	for _, tc := range []struct {
 		args []string
 		says string
@@ -1037,7 +626,8 @@ func TestASecretsUsageErrorIsAnsweredBeforeAnyRoute(t *testing.T) {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			t.Parallel()
 			_, _, err := secretsCmd(t, cfg, tc.args...)
-			if err == nil || errors.Is(err, errStoppedNode) || !strings.Contains(err.Error(), tc.says) {
+			if err == nil || errors.Is(err, engine.ErrNoFleetStoreHere) ||
+				!strings.Contains(err.Error(), tc.says) {
 				t.Errorf("err = %v, want %q", err, tc.says)
 			}
 		})
@@ -1045,17 +635,17 @@ func TestASecretsUsageErrorIsAnsweredBeforeAnyRoute(t *testing.T) {
 }
 
 // A PROVISIONING RUN'S CHOICE OF SINK IS ANSWERED AS A MISTAKE IN ITS COMMAND
-// LINE, before any route is decided: on a stopped node that has run, where
-// every real provisioning run is refused, a run naming no sink, or two, is
-// told to name exactly one — not to start the engine, which would not fix it —
-// and reaches no vendor.
+// LINE, before any route is decided: on a cluster member whose engine is
+// stopped, where every real provisioning run is refused, a run naming no sink,
+// or two, is told to name exactly one — not to name a running member, which
+// would not fix it — and reaches no vendor.
 //
 // Mutation: check the sink only where it is opened, after the route, and the
-// GitLab, GitHub, Jira and Confluence rows get the stopped-node refusal
+// GitLab, GitHub, Jira and Confluence rows get the cluster member's refusal
 // instead.
 func TestAProvisioningRunsChoiceOfSinkIsAnsweredBeforeAnyRoute(t *testing.T) {
 	t.Parallel()
-	cfg := stoppedShapes[0].tierA(t)
+	cfg := clusterMemberConfig(t)
 	const public = "-public-url=https://crewlet.example.com"
 	for _, command := range [][]string{
 		{"gitlab", "provision", public, "-admin-token=glpat-admin"},
@@ -1080,7 +670,8 @@ func TestAProvisioningRunsChoiceOfSinkIsAnsweredBeforeAnyRoute(t *testing.T) {
 				args := append(slices.Clone(command[:2]), company)
 				args = append(append(args, command[2:]...), tc.sinks...)
 				out, errs, err := cli(t, append(args, "-config", cfg)...)
-				if err == nil || errors.Is(err, errStoppedNode) || !strings.Contains(err.Error(), tc.says) {
+				if err == nil || errors.Is(err, engine.ErrNoFleetStoreHere) ||
+					!strings.Contains(err.Error(), tc.says) {
 					t.Errorf("err = %v, want %q\n%s%s", err, tc.says, out, errs)
 				}
 				if tc.sinks == nil && !errors.Is(err, provision.ErrNoSink) {
@@ -1093,50 +684,39 @@ func TestAProvisioningRunsChoiceOfSinkIsAnsweredBeforeAnyRoute(t *testing.T) {
 
 // A RUN ON A NODE WHOSE ENGINE IS UP READS THE FLEET THROUGH IT.
 //
-// The engine holds its store for as long as it runs, so the lock routes the
-// whole run through the node's API — a dry run included — and the values come
-// from the fleet's store: the listing, then one batch of exactly the names the
-// command reads that the node lists, under the operator's own token. Whether
-// the node's broker has run or not: a running engine's broker has, so that is
-// the node an operator meets, and there the lock is asked of alone, before the
-// file is opened; where the broker has not, the open meets it.
+// The engine holds this node's database for as long as it runs, so the lock
+// routes the whole run through the node's API — a dry run included — and the
+// values come from the fleet's store: the listing, then one batch of exactly
+// the names the command reads that the node lists, under the operator's own
+// token.
 //
-// Mutation: refuse a reader on a node that has run whatever its lock says, and
-// the run on a running node that has run is refused as though it were
-// stopped.
+// Mutation: reach the store directly whatever the lock says, and the run is
+// refused a broker on the directory the engine holds — or, here, reads no
+// value the node holds.
 func TestARunOnARunningNodeReadsTheFleetThroughIt(t *testing.T) {
 	t.Parallel()
-	for _, ran := range []bool{false, true} {
-		t.Run(fmt.Sprintf("broker has run %v", ran), func(t *testing.T) {
-			t.Parallel()
-			node := newRevealNode(t, map[string]string{"GITLAB_SIGNING_SECRET": storedSigningSecret,
-				"UNREAD": "x"})
-			cfg := bootstrapForURL(t, node.server.URL)
-			seedTheStore(t, cfg)
-			if ran {
-				markBrokerRun(t, cfg)
-			}
-			holdTheStore(t, storePathOf(t, cfg), store.EstateNode)
+	node := newRevealNode(t, map[string]string{"GITLAB_SIGNING_SECRET": storedSigningSecret,
+		"UNREAD": "x"})
+	cfg := bootstrapForURL(t, node.server.URL)
+	holdTheStore(t, storePathOf(t, cfg), store.EstateNode)
 
-			out, errs, err := cli(t, "gitlab", "provision", gitlabCompanyFile(t), "-dry-run",
-				"-config", cfg, "-public-url", "https://crewlet.example.com")
-			if err != nil {
-				t.Fatalf("a dry run on a running node failed: %v\n%s", err, errs)
-			}
-			if !strings.Contains(out, "reused — the configured one already resolves") {
-				t.Errorf("the plan did not reuse the fleet's signing secret:\n%s", out)
-			}
-			asked, gets := node.batches()
-			if want := []string{"GITLAB_SIGNING_SECRET"}; len(asked) != 1 ||
-				!slices.Equal(asked[0], want) || len(gets) != 0 {
-				t.Errorf("asked %v and %v, want one batch of %v", asked, gets, want)
-			}
-			for _, token := range node.tokens {
-				if token != "Bearer "+cliFixtureToken {
-					t.Errorf("a request carried %q, not the operator's own token", token)
-				}
-			}
-		})
+	out, errs, err := cli(t, "gitlab", "provision", gitlabCompanyFile(t), "-dry-run",
+		"-config", cfg, "-public-url", "https://crewlet.example.com")
+	if err != nil {
+		t.Fatalf("a dry run on a running node failed: %v\n%s", err, errs)
+	}
+	if !strings.Contains(out, "reused — the configured one already resolves") {
+		t.Errorf("the plan did not reuse the fleet's signing secret:\n%s", out)
+	}
+	asked, gets := node.batches()
+	if want := []string{"GITLAB_SIGNING_SECRET"}; len(asked) != 1 ||
+		!slices.Equal(asked[0], want) || len(gets) != 0 {
+		t.Errorf("asked %v and %v, want one batch of %v", asked, gets, want)
+	}
+	for _, token := range node.tokens {
+		if token != "Bearer "+cliFixtureToken {
+			t.Errorf("a request carried %q, not the operator's own token", token)
+		}
 	}
 }
 
@@ -1145,15 +725,14 @@ func TestARunOnARunningNodeReadsTheFleetThroughIt(t *testing.T) {
 // A machine token is refused every reveal, whatever it carries, and the
 // command has no other way to the values while the engine runs. So the lock
 // and the refusal are both in the error, with the token a reveal takes — and
-// stopping the engine is NOT offered: once the node has run, its own table is
-// not where the fleet's values are. Nothing is printed: the plan the refused
-// values would have decided is not.
+// stopping the engine is NOT offered: it would let the command reach the store
+// itself, but a node taken down to read a value is an outage to save a token.
+// Nothing is printed: the plan the refused values would have decided is not.
 func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"GITLAB_SIGNING_SECRET": storedSigningSecret})
 	node.refuse = http.StatusForbidden
 	cfg := bootstrapForURL(t, node.server.URL)
-	seedTheStore(t, cfg)
 	holdTheStore(t, storePathOf(t, cfg), store.EstateNode)
 
 	out, _, err := cliIn(t, tokenEnviron("pat-of-a-person"), "gitlab", "provision",
@@ -1181,15 +760,15 @@ func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
 // A RUN THAT CANNOT GET THROUGH A RUNNING NODE IS TOLD ITS OWN WAY PAST.
 //
 // The refusal used to be the one written for `crewlet secrets set`: stop the
-// engine, use "an access token" (which the reveal every one of these runs
-// makes refuses), or let the environment stand in (which a routed read never
-// does). Through the lock and through -api alike, it now names the bearer the
-// reveal takes and the node to take it to instead, and asks the node nothing.
+// engine (an outage to read a value), use "an access token" (which the reveal
+// every one of these runs makes refuses), or let the environment stand in
+// (which a routed read never does, and the store outranks). Through the lock
+// and through -api alike, it now names the bearer the reveal takes and the
+// node to take it to instead, and asks the node nothing.
 func TestARunReadingTheCompanysValuesIsToldItsOwnWayPast(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, nil)
 	cfg := bootstrapForURL(t, node.server.URL)
-	seedTheStore(t, cfg)
 	holdTheStore(t, storePathOf(t, cfg), store.EstateNode)
 	company := gitlabCompanyFile(t)
 
@@ -1241,7 +820,6 @@ func TestCommandsOnARunningNodeDoNotDieOnItsLock(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"CREWLET_LLM_CLI_SUB_CREDENTIALS": aBundle(t)})
 	cfg := bootstrapForURL(t, node.server.URL)
-	seedTheStore(t, cfg)
 	holdTheStore(t, storePathOf(t, cfg), store.EstateNode)
 
 	// WITH NO CREDENTIAL FOR THE NODE AT ALL: a run that routed its store
@@ -1271,9 +849,10 @@ func TestCommandsOnARunningNodeDoNotDieOnItsLock(t *testing.T) {
 
 // A SCRATCH NODE IS REFUSED BY THE COMMAND THAT WAS RUN.
 //
-// A node without `data` keeps no rows to read or write offline, and the
-// refusal used to name `crewlet secrets` whatever the operator ran — sending
-// somebody running a provisioner off to a command they had not typed.
+// A node without `data` has no store of the company's to reach — the fleet's
+// is its members' — and the refusal used to name `crewlet secrets` whatever
+// the operator ran, sending somebody running a provisioner off to a command
+// they had not typed.
 func TestAScratchStoreIsRefusedByTheCommandThatWasRun(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1308,8 +887,9 @@ func TestAScratchStoreIsRefusedByTheCommandThatWasRun(t *testing.T) {
 //
 // What a provisioning sink reads back — whether a seat holds a token — is
 // answered from the store the run's reads went through, wherever that is:
-// this node's rows before its first start, a node named with -api from a
-// machine with or without a Tier A. Held means held and a miss means not held.
+// the fleet's store reached directly with this node's engine stopped, a node
+// named with -api from a machine with or without a Tier A. Held means held and
+// a miss means not held.
 // Through a node the names the run read up front are answered from that batch
 // with no request of their own, a held name it did not read is one name in one
 // more batch, and an unheld one costs nothing — never a GET reveal per seat.
@@ -1326,7 +906,7 @@ func TestASecretStoreSinkReadsBackThroughTheRunsRoute(t *testing.T) {
 			t.Errorf("a token nothing holds read back as %q, %v, %v", value, ok, err)
 		}
 	}
-	t.Run("this node's rows before its first start", func(t *testing.T) {
+	t.Run("the fleet's store, reached directly", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapWithKeyring(t, "k1")
 		for name, value := range held {
@@ -1356,7 +936,7 @@ func TestASecretStoreSinkReadsBackThroughTheRunsRoute(t *testing.T) {
 				*sinks.store.bootstrap = filepath.Join(t.TempDir(), "absent.yaml")
 			}
 			companySecrets, err := openCompanyStore(tokenEnviron(cliFixtureToken), sinks.store,
-				"crewlet gitlab provision", readsTheCompany)
+				"crewlet gitlab provision")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1466,8 +1046,8 @@ func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
 
 // AN ENVIRONMENT-ONLY RUN DECIDES NO ROUTE. `crewlet llm list` with no Tier A
 // at -config and no -api — a machine that is not a node, every reference
-// exported — resolves from the environment alone, says so, and is never held
-// to the stopped-node rule: there is no node here to be stopped.
+// exported — resolves from the environment alone, says so, and reaches no
+// store: there is no node here, and no broker to start.
 //
 // Mutation: route a run with no Tier A and no -api, and it is refused.
 func TestAnEnvironmentOnlyRunDecidesNoRoute(t *testing.T) {

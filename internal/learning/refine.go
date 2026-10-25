@@ -353,7 +353,7 @@ func parseRefinement(completion *llm.Completion) (refinementChoice, bool) {
 const RefinementSystemPrompt = `You decide whether a completed agent turn taught
 one of that agent's own skills something worth writing down.
 
-Answer with a JSON object and nothing else:
+Answer with one JSON object and nothing else:
 {"skill_name":"the exact name of ONE listed skill","bullet":"one sentence"}
 
 Answer exactly {} — which is the RIGHT answer most of the time — when the turn
@@ -362,8 +362,7 @@ when what you would write is already in the skill.
 
 Write a bullet ONLY for something the skill does not say and its next reader
 would want to know: a case where following it goes wrong, a precondition it
-omits, a step that turned out to matter. One sentence, general — no ticket
-numbers, no names, no dates, nothing about this instance.`
+omits, a step that turned out to matter. ` + skillGenerality
 
 // buildRefinementPrompt renders the turn and the skills it was working from.
 func buildRefinementPrompt(t Turn, candidates []Skill) string {

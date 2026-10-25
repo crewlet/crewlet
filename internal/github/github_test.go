@@ -645,16 +645,66 @@ func TestTheDirectedPromptsSayDifferentThings(t *testing.T) {
 		}
 	}
 
-	// A CHANGES-REQUESTED REVIEW SENDS THE READER TO THE LINE COMMENTS.
-	// The summary says what is wrong; the lines say where, and a change
-	// answering only the summary comes back for a second round.
-	if got := build(github.PRChangesRequested, "Needs a test"); !strings.Contains(got, "line comment") {
-		t.Errorf("the change request never mentions the line comments:\n%s", got)
+	// A CHANGES-REQUESTED REVIEW WITH NO SUMMARY STILL SAYS WHERE IT IS.
+	// The whole review can live in the line comments, and an empty summary
+	// rendered as nothing reads as a review that asked for nothing.
+	if got := build(github.PRChangesRequested, ""); !strings.Contains(got, "line comments") {
+		t.Errorf("an empty change request does not point at the line comments:\n%s", got)
 	}
-	// AND AN APPROVAL SAYS TO MERGE IT. An approved pull request nobody
-	// merges is work that never shipped.
+	// AN APPROVAL SAYS TO MERGE IT. An approved pull request nobody merges
+	// is work that never shipped.
 	if got := build(github.PRApproved, ""); !strings.Contains(got, "Merge it") {
 		t.Errorf("the approval does not say to merge:\n%s", got)
+	}
+	// A MERGE SAYS WHO IS OWED THE NEWS: it is the moment the requester's
+	// question is answered, and nothing else tells them.
+	if got := build(github.PRMerged, ""); !strings.Contains(got, "Tell whoever asked for it") {
+		t.Errorf("the merge does not send the news to the requester:\n%s", got)
+	}
+	// A REVIEW REQUEST IS DECLINED BY MOVING IT, which only the code host
+	// knows; that a direct ask may not end in silence is the executor's
+	// contract and is not restated.
+	got := build(github.PRReviewRequested, "")
+	if !strings.Contains(got, "request review from whoever is") {
+		t.Errorf("the review request does not say how to decline it:\n%s", got)
+	}
+	if strings.Contains(got, "go quiet") {
+		t.Errorf("the review request restates the engine's own delivery rule:\n%s", got)
+	}
+}
+
+// A MENTION IS ADDRESSED, SO IT IS NOT ASKED WHETHER IT WAS ASKED.
+//
+// The delivery check holds a mention to an answer. The evaluation block tells
+// an unaddressed seat that silence is right when nothing was asked of it, so
+// rendering it on a mention bought a corrective round and nothing else — while
+// on thread activity the seat merely follows it is the whole instruction.
+func TestOnlyUnaddressedActivityIsToldToEvaluate(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{
+		github.CommentMention, github.IssueMention, github.PRMention, github.CommentAdded,
+	} {
+		n := notify.Inbound{
+			Source: github.Backend, Subject: "Add the thing", Body: "@ana thoughts?",
+			Sender: "reviewer",
+			Metadata: map[string]string{
+				"event_type": reason, "repo": "acme/api", "pr_number": "7",
+			},
+		}
+		got := (github.Prompt{}).Build(n, nil)
+		if evaluated := strings.Contains(got, "Evaluate Before Acting"); evaluated == (github.Prompt{}).Addressed(n) {
+			t.Errorf("%s: evaluation block = %v on a wake addressed = %v:\n%s",
+				reason, evaluated, !evaluated, got)
+		}
+	}
+	// AND THE OPENER READS AS ENGLISH on every surface it names.
+	got := (github.Prompt{}).Build(notify.Inbound{
+		Source: github.Backend, Metadata: map[string]string{
+			"event_type": github.IssueMention, "repo": "acme/api", "issue_number": "3",
+		},
+	}, nil)
+	if !strings.Contains(got, "mentioned in an issue or pull-request description") {
+		t.Errorf("the description mention misreads:\n%s", got)
 	}
 }
 

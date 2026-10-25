@@ -44,8 +44,9 @@ import (
 // provision -rotate -env-file`, the remedy for a leaked key, would re-key the
 // hook while the engine went on verifying with the leaked one.
 //
-// So a run with one of those sinks that has a store to ask — a running node,
-// or rows that are the company's whole store — is refused before it reaches
+// So a run with one of those sinks that has a store to ask — the running node
+// or the one -api names, or the fleet's store reached directly with this
+// node's engine stopped — is refused before it reaches
 // the vendor where the store holds any name it can mint into
 // ([sinkFlags.refuseOutranked]): every planned seat's token, since whether a
 // seat is kept or re-minted is settled against the vendor, part way through
@@ -455,8 +456,8 @@ func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	}
 	// THE SINK IS CHOSEN BEFORE THE ROUTE IS DECIDED, wherever the run will
 	// open one: a run naming none, or two, is a mistake in its command line,
-	// and it is told so — not, on a stopped node, to start the engine, which
-	// would not fix it.
+	// and it is told so — not to start the engine or name a node, which
+	// would not fix it, nor after a broker has started to read the store.
 	if !*dryRun && !plan.Empty() {
 		if err = sinks.check(); err != nil {
 			return err
@@ -465,13 +466,17 @@ func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer)
 
 	// RESOLVED BEFORE THE PLAN IS PRINTED, because the plan's most
 	// consequential line depends on it: whether this run will replace the
-	// key a working hook signs with. Reading the store is not a mutation,
-	// so a -dry-run does it too — a dry run that could not say this would
-	// be silent about the one outcome an operator most needs warning of —
-	// and is refused like a real run where the store cannot be read.
+	// key a working hook signs with. Reading the store is not a mutation of
+	// it, so a -dry-run does it too — a dry run that could not say this
+	// would be silent about the one outcome an operator most needs warning
+	// of — and is refused like a real run where the store cannot be read.
+	// With the engine stopped that read starts this node's broker, which
+	// on a node that has never booted creates the fleet's buckets as the
+	// engine's first boot would (engine.OpenFleetStore): the store is made,
+	// not changed.
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
-		"crewlet gitlab provision", readsTheCompany)
+		"crewlet gitlab provision")
 	if err != nil {
 		return err
 	}
@@ -840,7 +845,7 @@ func runMattermostProvision(inv invocation, args []string, stdout, stderr io.Wri
 	}
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
-		"crewlet mattermost provision", readsTheCompany)
+		"crewlet mattermost provision")
 	if err != nil {
 		return err
 	}
@@ -985,7 +990,7 @@ func runMattermostDoctor(inv invocation, args []string, stdout, stderr io.Writer
 
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, storeAt,
-		"crewlet mattermost doctor", readsTheCompany)
+		"crewlet mattermost doctor")
 	if err != nil {
 		return err
 	}

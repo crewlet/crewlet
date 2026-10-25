@@ -71,6 +71,58 @@ func TestInputTokensCarryTheWholePromptIncludingCache(t *testing.T) {
 	}
 }
 
+// AN INPUT COUNT THAT ALREADY HOLDS THE CACHE IS CHARGED ONCE. Anthropic's
+// input_tokens leaves the cached tokens out and OpenAI's counts them in, and
+// the two name their fields alike: read the second way round, every cached
+// token was charged twice. The profile says which arithmetic its vendor uses,
+// and the default is the first.
+func TestAnInputCountThatHoldsTheCacheIsChargedOnce(t *testing.T) {
+	t.Parallel()
+	const answer = `{"result":"ok","usage":{"input":1000,"cached":600,"written":40,"output":50}}`
+	for _, tc := range []struct {
+		includes bool
+		want     int
+	}{
+		{includes: false, want: 1000 + 600 + 40},
+		{includes: true, want: 1000},
+	} {
+		p := cliprofile.Profile{
+			Output: cliprofile.OutputJSON, TextPaths: []cliprofile.Path{{"result"}},
+			Usage: cliprofile.UsagePaths{
+				Input:              []cliprofile.Path{{"usage", "input"}},
+				Output:             []cliprofile.Path{{"usage", "output"}},
+				CacheRead:          []cliprofile.Path{{"usage", "cached"}},
+				CacheWrite:         []cliprofile.Path{{"usage", "written"}},
+				InputIncludesCache: tc.includes,
+			},
+		}
+		prov := &Provider{profile: p, model: "m", now: time.Now}
+		comp, err := prov.completion(t.Context(), "prompt", false, &rawResult{stdout: answer}, "")
+		if err != nil {
+			t.Fatalf("completion: %v", err)
+		}
+		if comp.InputTokens != tc.want || comp.TotalTokens() != tc.want+50 {
+			t.Errorf("input_includes_cache %v: InputTokens = %d, total %d, want %d and %d",
+				tc.includes, comp.InputTokens, comp.TotalTokens(), tc.want, tc.want+50)
+		}
+		// The breakdown is the vendor's either way: what the cache served and
+		// wrote is reported as it said.
+		if comp.CacheRead != 600 || comp.CacheWrite != 40 {
+			t.Errorf("input_includes_cache %v: cache read %d write %d, want 600 and 40",
+				tc.includes, comp.CacheRead, comp.CacheWrite)
+		}
+	}
+	// An operator declares it in overrides like any usage field, and the
+	// paths it sits beside stay as the profile had them.
+	p, err := cliprofile.Load("claude-code", map[string]any{"usage": map[string]any{"input_includes_cache": true}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !p.Usage.InputIncludesCache || len(p.Usage.Input) == 0 || len(p.Usage.CacheRead) == 0 {
+		t.Errorf("usage after the override = %+v, want the declaration beside the built-in paths", p.Usage)
+	}
+}
+
 // A JSONL stream spells one answer across several events, and reports a
 // RUNNING total: text concatenates, usage takes the last value.
 func TestAStreamConcatenatesTextAndTakesTheFinalUsage(t *testing.T) {
@@ -180,6 +232,83 @@ func TestPathsIndexIntoArrays(t *testing.T) {
 	got := extract(p, `{"content":[{"text":"block one"},{"text":"block two"}]}`)
 	if got.text != "block one" {
 		t.Errorf("text = %q", got.text)
+	}
+}
+
+// A COUNT UNDER EVERY MEMBER IS THEIR SUM, for a CLI that keys its counts by
+// something no profile can name in advance — the model that served each
+// request. A member without the count adds nothing, an array's elements are
+// members too, and a path no member resolves is unread usage, estimated,
+// rather than a zero.
+func TestAUsageCountUnderEveryMemberIsTheirSum(t *testing.T) {
+	t.Parallel()
+	p := cliprofile.Profile{
+		Output:    cliprofile.OutputJSON,
+		TextPaths: []cliprofile.Path{{"response"}},
+		Usage: cliprofile.UsagePaths{
+			Input:     []cliprofile.Path{{"models", cliprofile.PathEvery, "tokens", "input"}},
+			Output:    []cliprofile.Path{{"models", cliprofile.PathEvery, "tokens", "output"}},
+			CacheRead: []cliprofile.Path{{"steps", cliprofile.PathEvery, "cached"}},
+		},
+	}
+	got := extract(p, `{"response":"hi","models":{
+		"big":{"tokens":{"input":100,"output":7}},
+		"small":{"tokens":{"input":20,"output":"3"}},
+		"idle":{"tokens":{}}},
+		"steps":[{"cached":5},{"other":1},{"cached":6}]}`)
+	if !got.reported {
+		t.Fatal("usage under every member went unread")
+	}
+	if got.input != 120 || got.output != 10 || got.cacheRead != 11 {
+		t.Errorf("usage = in %d out %d cached %d, want 120 10 11", got.input, got.output, got.cacheRead)
+	}
+
+	none := extract(p, `{"response":"hi","models":{"big":{"api":{}}}}`)
+	if none.reported {
+		t.Errorf("no member carried a count, and usage was reported as in %d out %d",
+			none.input, none.output)
+	}
+}
+
+// A MODEL-SIDE TOOL'S PROMPT IS CHARGED AS INPUT. Gemini reports the pages a
+// web fetch put in front of the model apart from the prompt count, and bills
+// them as input: a fetching call charged only its question would be charged a
+// fraction of what it read.
+func TestAToolsPromptIsChargedAsInput(t *testing.T) {
+	t.Parallel()
+	p := cliprofile.Profile{
+		Output:    cliprofile.OutputJSON,
+		TextPaths: []cliprofile.Path{{"response"}},
+		Usage: cliprofile.UsagePaths{
+			Input:      []cliprofile.Path{{"usage", "input"}},
+			Output:     []cliprofile.Path{{"usage", "output"}},
+			CacheRead:  []cliprofile.Path{{"usage", "cached"}},
+			ToolPrompt: []cliprofile.Path{{"usage", "tool"}},
+		},
+	}
+	stdout := `{"response":"hi","usage":{"input":40,"output":2,"cached":100,"tool":5000}}`
+	prov := &Provider{profile: p, model: "m", now: time.Now}
+	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: stdout}, "")
+	if err != nil {
+		t.Fatalf("completion: %v", err)
+	}
+	if comp.InputTokens != 5140 || comp.CacheRead != 100 || comp.OutputTokens != 2 {
+		t.Errorf("completion = in %d cached %d out %d, want 5140 100 2",
+			comp.InputTokens, comp.CacheRead, comp.OutputTokens)
+	}
+
+	// Read wherever usage is: the last event of a stream, and a usage
+	// report the CLI is asked for after the call.
+	stream := p
+	stream.Output = cliprofile.OutputJSONL
+	if got := extract(stream, `{"usage":{"tool":1}}`+"\n"+stdout); got.toolPrompt != 5000 {
+		t.Errorf("a stream's tool prompt = %d, want the last event's 5000", got.toolPrompt)
+	}
+	report := p
+	report.UsageArgs = []string{"usage"}
+	var fromReport extracted
+	if outcome := fromReport.applyUsageReport(report, stdout); outcome != usageApplied || fromReport.toolPrompt != 5000 {
+		t.Errorf("a usage report's tool prompt = %d (%v), want 5000", fromReport.toolPrompt, outcome)
 	}
 }
 

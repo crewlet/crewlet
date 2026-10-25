@@ -403,10 +403,10 @@ reads what it needs of the company's values — the instance's `url`, and with
 `-secret-store` (no `-rotate`) each planned bot's token, which decides whether
 that bot keeps it — through the engine, as `CREWLET_API_TOKEN`: one of its
 Tier A tokens carrying `admin`, since that read is the node's break-glass
-reveal and refuses a machine token. With the engine stopped, the run reads this
-node's own rows only before a single node's first start, when they are the
-company's whole secret store; once the node has run it is refused before it
-changes anything, naming the running engine and `-api URL`. See
+reveal and refuses a machine token. With the engine stopped, the run reads the
+fleet's store itself, through this node's own broker or the external one; on a
+member of a cluster whose engine is stopped it is refused before it changes
+anything, naming `-api URL`. See
 [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
 A running engine reads the tokens at its next apply and not before, so a run
 that minted one says what is left on its `Next:` line: for `-secret-store`,
@@ -564,7 +564,7 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
 | `-decommission` | Revoke the tokens of, and then disable, managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. The token goes because the account does not: a departed colleague whose credential outlived them starts working again the moment the bot is re-enabled. |
 | `-dry-run` | Print the plan; create and modify nothing. It reads no stored value, so it runs on any node, a stopped one included — and so does a run with nothing to provision. |
-| `-config PATH` / `-api URL` | Where a real run reads the company's values (the instance URL, and with `-secret-store` each bot's token it reads back) and where `-secret-store` records: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; on a single node before its first start, from that node's own rows; with neither a file nor `-api`, from the environment alone. On any other stopped node a real run is refused before it touches the server, `-rotate` included — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values). |
+| `-config PATH` / `-api URL` | Where a real run reads the company's values (the instance URL, and with `-secret-store` each bot's token it reads back) and where `-secret-store` records: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; with this node's engine stopped, from the fleet's store itself; with neither a file nor `-api`, from the environment alone. On a member of a cluster whose engine is stopped a real run is refused before it touches the server, `-rotate` included — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values). |
 
 Afterwards, do what the run's `Next:` line says. With `-secret-store` that is
 `POST /config/reload` to a node that is up — or the `crewlet config import`
@@ -1207,15 +1207,15 @@ first — the engine reads no `.env` file itself, only its own environment
 ([Environment variables](../reference/environment-variables.md)). Every step
 is idempotent, so re-run any of them freely.
 
-Step 4 runs before step 5's first boot, when the node's own rows under
-`nimbus-data/` are the company's whole secret store, so `-config` reads them —
-the first time through, that is: both Nimbus examples keep their broker under
-`nimbus-data/stream`, and once either has started there it holds broker state.
-From then on, run `crewlet llm doctor` beside the running engine with
-`CREWLET_API_TOKEN` set to `$CREWLET_API_TOKEN_FOUNDER`: the store is the
-running engine's then, and with that engine stopped again the doctor is
-refused, as every command that reads the company is ([where a command reads
-the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
+Step 4 runs before step 5's first boot, so `-config` reaches the fleet's
+store itself: the doctor starts the node's own broker under
+`nimbus-data/stream`, creates the store there as the engine's first boot
+would, reads it and stops the broker again. Once step 5 has started the
+engine, run `crewlet llm doctor` beside it with `CREWLET_API_TOKEN` set to
+`$CREWLET_API_TOKEN_FOUNDER`, since the store is read through the running
+engine then; with that engine stopped again, the doctor reaches the store
+itself as it did the first time ([where a command reads the company's
+values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 
 Step 4 is the one a company's first model always needs, and
 `crewlet llm doctor` is the half that matters: a `providers.llm` entry can be

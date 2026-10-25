@@ -1359,35 +1359,25 @@ func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, err
 // computed from the members' own outcomes, so asking for a number that is then
 // discarded spends tokens to invite a claim contradicting the row it appears
 // on.
-const CompactorSystemPrompt = `You are an agent-learning episode compactor.
+//
+// "(heterogeneous)" is no sentinel the code reads: [ParseSummary] stores it
+// like any pattern. It is the words the seat later reads on the row — a fold
+// whose turns shared nothing says so, rather than naming a pattern none of
+// them had.
+const CompactorSystemPrompt = `You are an agent-learning episode compactor. You receive N similar turns of
+one agent and fold them into ONE summary, which replaces them in the agent's
+episode store.
 
-You receive N similar agent turns (each a brief turn summary) and must
-emit ONE JSON object summarising the recurring pattern.  The output
-becomes a single compacted episode row that replaces the N originals
-in the agent's episode store.
-
-Output format (strict, JSON only -- no prose before or after):
+Answer with one JSON object and nothing else:
 
 {
-  "common_task_pattern": "<one sentence describing the recurring task>",
+  "common_task_pattern": "<one short declarative sentence: the recurring task, which the agent reads as 'you have done this kind of work N times'>",
   "common_outcome": "done" | "failed",
-  "subjects_involved": ["<distinct counterparties / subjects>"],
-  "notable_patterns": "<one to three sentences naming variations / edge cases>"
+  "subjects_involved": ["<the distinct named counterparties that recur: chat users, ticket reporters; empty if none>"],
+  "notable_patterns": "<one to three sentences on how the turns varied: edge cases, hand-offs>"
 }
 
-Rules:
-- ` + "``common_task_pattern``" + ` is declarative and short; the agent reads
-  it as "you've done this kind of work N times".
-- ` + "``subjects_involved``" + ` lists distinct named counterparties (chat
-  user labels, ticket reporter handles).  Empty if none consistent.
-- ` + "``notable_patterns``" + ` captures variation across the cluster
-  (e.g. "most replied within the thread; 2 handed off to manager
-  when message contained 'urgent'").  Keep it useful, not exhaustive.
-- Never invent facts not present in the turns.
-- If the turns don't actually share a coherent pattern, emit
-  ` + "``{\"common_task_pattern\": \"(heterogeneous)\"}``" + `; the rest of the
-  fields can be empty -- the compactor will still write the row but
-  the agent will see it as low-signal.
+If the turns share no coherent pattern, answer {"common_task_pattern": "(heterogeneous)"}.
 `
 
 // perTurnDetail is the budget one turn's task or plan has in the prompt, past

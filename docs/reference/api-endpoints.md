@@ -204,7 +204,7 @@ refused `400 non_canonical_path` as always.
 
 | `phase` | `/health` | What the node is doing |
 |---|---|---|
-| `recovering` | `503` | Opening and recovering what it holds itself: its own store and that release's schema migrations, the embedded broker's file store and listeners, JetStream catching up with its peers — or, on a node without `data`, its leaf link to a member — the streams and buckets it provisions, the secret rows an offline `crewlet secrets set` left in its own store (moved onto the fleet), the batches of a stateless node's events its own event log left unsettled, the replicated estate and its state logs, and a joining node's snapshot. It takes as long as the store is large — and, on a data node of a fleet whose rows the logs can no longer bring level, as long as fetching a peer's snapshot of the whole replicated estate takes, which `stream.tracker_retention.rejoin_window` budgets and `crewlet retention status` projects; a lone data node never fetches one. The deployment bounds it with a startup probe: see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe). A join logs `statelog_join_progress` every ten seconds while it transfers. It ends with `engine_recovered` in the log. Applying the state logs is not part of it: that catches up in the background from then on, and what waits for it is the node's first seat, never `/health`. |
+| `recovering` | `503` | Opening and recovering what it holds itself: its own store and that release's schema migrations, the embedded broker's file store and listeners, JetStream catching up with its peers — or, on a node without `data`, its leaf link to a member — the streams and buckets it provisions, the batches of a stateless node's events its own event log left unsettled, the replicated estate and its state logs, and a joining node's snapshot. It takes as long as the store is large — and, on a data node of a fleet whose rows the logs can no longer bring level, as long as fetching a peer's snapshot of the whole replicated estate takes, which `stream.tracker_retention.rejoin_window` budgets and `crewlet retention status` projects; a lone data node never fetches one. The deployment bounds it with a startup probe: see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe). A join logs `statelog_join_progress` every ten seconds while it transfers. It ends with `engine_recovered` in the log. Applying the state logs is not part of it: that catches up in the background from then on, and what waits for it is the node's first seat, never `/health`. |
 | `preparing` | `200` | Bringing up what its company configures: the snapshot of the company's secrets its `${VAR}` references resolve from, the company built from its document, its shared MCP servers, its sandboxes, its native tracker and knowledge base, its coding CLIs' credential bundles, the first apply of its active revision, and the dashboard's projection. None of it holds a probe. A part that waits on something else is bounded by its own setting — a tool server by its `startup_timeout_seconds` — but the first apply has no deadline beyond its parts', so a part that never returns leaves the node here, with `/ready` naming `starting`, and nothing restarts it: watch for a node that stays unready (see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe)). So does a secret store that does not answer: the node builds no company from the environment alone, and asks again, logging `secret_store_unreadable`, until the store answers. A value its keyring cannot open ends the boot instead, naming the secret, since no wait changes that answer. |
 
 Every field of that body is a field of [the health envelope](#the-health-envelope)
@@ -1626,7 +1626,8 @@ lists every variable the document reads **without naming it**: a
 conventional variable instead — its CLI's token variable under
 `subscription` (`CLAUDE_CODE_OAUTH_TOKEN`, which `crewlet llm login
 -capture-token` stores), its key variable under `api-key`
-(`ANTHROPIC_API_KEY`), and `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` for the bundle
+(`ANTHROPIC_API_KEY`; never a variable other vendors' keys share, such as Qwen
+Code's `OPENAI_API_KEY`, which such an entry names in `auth.api_key`), and `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` for the bundle
 `crewlet llm export -secret-store` stores — and `providers.embeddings` with no
 `api_key` reads `OPENAI_API_KEY`. Each is reported at the empty field
 (`providers.llm.default.auth.token`), which is where a reference would be
@@ -2098,11 +2099,11 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api`, `setup`, `provision` or `migrated` — see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values` — the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped — `crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle — where a provisioner's `-secret-store` run made that way records `provision`; see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values` — the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
 | `POST` | `/secrets/reveal` | **Break-glass, for several names at once.** The body is `{"names": ["GITLAB_TOKEN_SWE", …]}` — at most 64 names, each an environment-variable name — and the answer is `{"values": {"<name>": "<value>"}, "missing": ["<name>"]}`: every name asked that is held, with its decrypted value (an empty one included), and every name nothing holds. Nothing beside the names asked is opened. `Cache-Control: no-store`, logged by every name asked against the authenticated operator, and decided on the reveal's own row before the body is read. It is what a [CLI run resolving a company document through a running node](cli.md#where-a-command-reads-the-companys-values) reads: having listed the names with `GET /secrets`, it asks for the variables its command reads that the node lists — and, with a `-secret-store` sink, the planned seats' tokens it reads back — in requests of at most 64, never one reveal per name. `400 invalid_body` for no names, more than 64, a field it does not read or a body that is not JSON; `400 invalid_name` for a name no `${VAR}` reference can hold; `400 invalid_query` for any query parameter; `403 reserved_name` for the engine's own key. The longest answer is about 24 MiB — 64 values of the largest size a write admits, each in the characters JSON spells longest — which is what a client reading it must be prepared to take |
-| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB — the size every store holds a value to, a stopped node's own table included, which is what every reveal is sized from — and it is the only thing the request supplies; a longer body is `413 body_too_large`. The author is the caller the guard resolved and the `source` is this route's own, `api`, whoever calls it — never anything the request names; the answer carries `updated_by`, `updated_by_kind`, `operator_id` and `source` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name; `400 invalid_query` when the request carries any query parameter (`?source=` included), with a `detail` naming each and a `hint` saying where the provenance comes from instead — checked after the name and before the body is read |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB — the size every store holds a value to, a direct write with the engine stopped included, which is what every reveal is sized from — and it is the only thing the request supplies; a longer body is `413 body_too_large`. The author is the caller the guard resolved and the `source` is this route's own, `api`, whoever calls it — never anything the request names; the answer carries `updated_by`, `updated_by_kind`, `operator_id` and `source` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name; `400 invalid_query` when the request carries any query parameter (`?source=` included), with a `detail` naming each and a `hint` saying where the provenance comes from instead — checked after the name and before the body is read |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — and every person's sealed values in the identity estate, one record per person, answering the names of yours it moved, `engine_keys_moved`, a count of the engine's, and `identity` — `{"people": n, "values": n}`, or `null` on a node that runs no identity estate. An outstanding invitation's address is not moved (only a re-issue could carry it again) and is counted by the listing instead. A person whose record nobody could confirm, or whose value would not open, is `500 rekey_incomplete` carrying what did move — run it again, which moves only what is still under an old key. `?key_id=` is refused with `409` when it names a different key |
 
@@ -2157,9 +2158,14 @@ or a field it does not read), `not_found`, and on a rekey
 `key_id_mismatch` (with `key_id` and `your_key_id`) and `rekey_incomplete`
 (with the `moved` names and the `engine_keys_moved` count).
 
-`crewlet secrets` is the client for all of this — see
+`crewlet secrets` is the client for all of this while its node's engine runs,
+or with `-api` naming a node that does — see
 [the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for
-why the CLI goes through a running node rather than writing the KV itself.
+why the CLI goes through a running node rather than reaching the KV beside it.
+With that node's engine stopped it reaches the fleet's store itself, through no
+route here: no node logs a `secret_revealed` line for what it reads, and a
+write records the shell's user as its author, with no credential, under the
+command's own `source`.
 
 ### Concurrent writes
 
@@ -4197,7 +4203,7 @@ Server → client kinds:
 | `error`    | Reply to a client `query` that could not be answered, a `watch` that was not installed, or an `artifact_join` refused or an artifact's room withdrawn (`what: "artifact_join"`, naming the `artifact`; see `artifact_join` below). | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `admin` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault), or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-fourteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
 | `pong`     | Reply to a client `ping`. | `null` |
 | `inbox_changed` | A committed tracker batch wrote the watched seat one or more notices. Every node serving the API holds the estate — `ingress` requires `data` — and applies every tracker record, so each node pushes to its OWN sockets from its own applier after the batch commits. While a node's own copy is out of service it stays in rotation and pushes a sound data node's movements instead, relayed over the broker, and withholds its own applier's; every switch of source sends each watched seat one frame with `unread_delta: 0` and an empty `subject` and `reason`, because what moved during the switch is not replayed — read the inbox again, as on any frame. One frame per seat per batch. | `{ handle, unread_delta, subject, reason }`, and the frame itself carries `seat`. **Identifiers and a count, never content**: `subject` is the id of the object the newest of those notices was written on — the task for a task commit, and the PERSON for a `prioritised` notice, whose task `work_inbox` names as `task` — and `reason` the reason it was routed under, and what the notices say is read through `work_inbox`, the question that decides who may read them. `unread_delta` is a **hint** — the notices the batch wrote, which a redelivery the engine has already collapsed may count twice — so a client re-asks rather than adding it to a badge. **Routed by seat**: it reaches only the clients whose `watch` for that seat was allowed, never every tab. It needs `tracker`, the permission `work_inbox` takes. |
-| `artifact_changed` | A committed artifacts batch moved an artifact whose room this socket is in: a version published, its title, description, icon or a label, its shares, its assets, the trash, a restore, a transfer or a purge. Each node pushes from its own applier. | `{ artifact, what, head, position }`, where `what` is `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset` (this node cannot say which artifacts moved, so re-read). **A hint, never content**: re-read through the questions that decide what you may see. |
+| `artifact_changed` | A committed artifacts batch moved an artifact whose room this socket is in: a version published, its title, description, icon or a label, its shares, its assets, the trash, a restore, a transfer, a purge or the folder it is filed in. Each node pushes from its own applier. | `{ artifact, what, head, position }`, where `what` is `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer`, `folder` (it was filed in another folder; a folder's removal, which re-files what it held, is not pushed per artifact) or `reset` (this node cannot say which artifacts moved, so re-read). **A hint, never content**: re-read through the questions that decide what you may see. |
 | `artifact_data` | A committed datastore batch changed documents of an artifact whose room this socket is in. Each node pushes from its own applier, after the commit. | `{ artifact, deltas?, keys?, reread?, schema?, resync?, gone?, through }`. **Shaped per reader**: a document in an `own_rows`, `editors` or `private` collection is pushed only to the members its rule admits, by the role each member's join decided, and a batch a member may see none of is not pushed to them at all. The changed documents travel inline (`deltas`: `collection`, `doc`, `version`, `deleted`, `body`, `read`, `created_by`, `updated_by`, `updated_at`) while the frame stays within 64 KiB, and as `keys` with `reread: true` past it. `schema` says the collections changed; `resync` says this node's pushes may have gaps (read whole); `gone` says the datastore was purged. `through` is the store's version after the batch, the `since` of the next catch-up. |
 | `artifact_presence` | Who is in an artifact's room changed: somebody joined, left, or moved what they are doing or looking at, on this node or another. Coalesced to at most ten a second per room, each carrying at most ten new or changed members (the one waiting longest first, the rest in the frames that follow). | `{ artifact, upsert, leave, counts?, truncated }`: the members now presented that are new or changed (`session`, `seat`, `kind`, `activity`, `focus`, `at`, and for an agent `turn`, the run of the turn whose tool call put it there), and the sessions no longer presented. Past 50 members a room presents the 50 most recently active with `truncated: true` and `counts: { human, agent }` of the rest, and returns to everybody below 40. **Told, never stored**: see [Presence](#presence-in-an-artifacts-room). |
 
@@ -4914,9 +4920,10 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
 `search_knowledge`, and, wherever the node takes artifact uploads,
-`list_artifacts`, `get_artifact`, `create_artifact`, `publish_artifact`,
-`update_artifact`, `share_artifact`, `unshare_artifact`,
-`upload_artifact_asset`, `read_artifact_data`, `query_artifact_data`,
+`list_artifacts`, `get_artifact`, `get_company_brand`, `create_artifact`,
+`publish_artifact`, `update_artifact`, `share_artifact`, `unshare_artifact`,
+`upload_artifact_asset`, `create_artifact_folder`, `move_artifact`,
+`read_artifact_data`, `query_artifact_data`,
 `write_artifact_data` and `set_artifact_schema` (see
 [Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact write answers
 its `op_id` here as the tracker's do. A schema, a default, a trimmed field and the wording of a
@@ -6428,7 +6435,7 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/uploads` | `create_artifact` | An upload intent for a new artifact |
 | `POST /artifacts/{id}/uploads` | `publish_artifact`, or `upload_artifact_asset` with `asset: true` | An upload intent for the next version, or into the asset store |
 | `PUT /artifacts/uploads/{upload}/files/{path}` | the intent's own verb, decided again | One file's bytes, streamed through the engine |
-| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline, naming no upload, files or entry; a kind with no starter is `422 invalid`. A `slides` starter takes an optional `"deck": {"theme": "<id>", "slides": [{"layout": "<id>", "title": "..."}]}`, the theme it is drawn in and the slides it opens with (at most 60, each title at most 200 bytes); absent, it opens with a cover, an agenda, two columns and a closing slide in the `ink` theme. A plan naming a theme or layout there is not is `422 invalid`. A doc's starter may carry the text its writer already wrote, `"doc": {"body": "<markdown>"}`: the engine writes the title as the tab's heading and the body under it, held to the doc format, at most 1 MiB in all. A design's starter is the `layout` sent with it: its `boards` (each a `title`, `x`, `y`, `w`, `h` and an optional `brief`, the first the cover) and `notes` (as `canvas.json` holds them), published as `canvas.json` and one placeholder page per board under `boards/`, every typed word escaped as text; a design starter with no layout, and a layout outside the canvas format's bounds, are `422 invalid`, each problem named at its place in the layout (`boards[2].w`). `deck`, `doc` or `layout` without `starter`, or on any kind but its own, is `422 invalid` |
+| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline, naming no upload, files or entry; a kind with no starter is `422 invalid`. A `slides` starter takes an optional `"deck": {"theme": "<id>", "slides": [{"layout": "<id>", "title": "..."}]}`, the theme it is drawn in and the slides it opens with (at most 60, each title at most 200 bytes); absent, it opens with a cover, an agenda, two columns and a closing slide in the `ink` theme. A plan naming a theme or layout there is not is `422 invalid`. A doc's starter may carry the text its writer already wrote, `"doc": {"body": "<markdown>"}`: the engine writes the title as the tab's heading and the body under it, held to the doc format, at most 1 MiB in all. A design's starter is the `layout` sent with it: its `boards` (each a `title`, `x`, `y`, `w`, `h` and an optional `brief`, the first the cover) and `notes` (as `canvas.json` holds them), published as `canvas.json` and one placeholder page per board under `boards/`, every typed word escaped as text; a design starter with no layout, and a layout outside the canvas format's bounds, are `422 invalid`, each problem named at its place in the layout (`boards[2].w`). `deck`, `doc` or `layout` without `starter`, or on any kind but its own, is `422 invalid`. `"folder": "<id>"` creates it in that folder, which asks `artifacts.folder.file` on it beside the create: a folder the caller cannot see, or one removed, is `404 folder_not_found` |
 | `POST /artifacts/checks` | `create_artifact` | A page's text files judged as a publish of its kind would judge them, writing nothing: `{"kind": "html", "entry": "index.html", "files": [{"path": "index.html", "text": "..."}]}`, answered `200` with every `refusals` and `warnings` finding (path, line, code, message). Framed kinds only, 1 to 64 text files and at most 2 MiB of text. An allowlisted CDN file is named where its copy would be served and never fetched, so a CDN that refuses the file is found only at publish. Held to a budget per node (two checks a second for one person, a burst of ten): `429 check_budget` with a `Retry-After` |
 | `POST /artifacts/{id}/versions` | `publish_artifact`; `artifacts.publish.force` beside it when forced | The next version, based on `If-Match: "<n>"` |
 | `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
@@ -6436,6 +6443,17 @@ for. The domain's applier decides from the record alone.
 | `PATCH /artifacts/{id}/versions/{n}` | `update_artifact` | Version `n`'s label (`{"label": ""}` clears it); a labelled version is kept past the hundred unlabelled ones |
 | `PUT /artifacts/{id}/shares` | `share_artifact` | `{"audience": {"kind": "seat", "id": "bob"}, "role": "editor"}`; never above the sharer's own role, and never the company from an agent. A NEW audience is held to the grant rule: a seat audience is a seat handle, never a login (`token:maya` or `jane.doe` is refused 422, `invalid`), and a seat or a unit the company's roster does not hold is refused the same way, with the sentence that says which; a create's `shares` are held to the same rule. An audience the artifact already shares with may change its role whatever it names |
 | `DELETE /artifacts/{id}/shares/{audience}` | `unshare_artifact` | The audience as `seat:<handle>`, `unit:<key>` or `company`. Any audience a share can be stored under is withdrawn, never held to the grant rule or the roster: a share to a login written before the rule, and a share to a seat the chart has since removed, are the ones an owner most needs to remove |
+
+| `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
+| `POST /artifacts/{id}/work-items` | `get_artifact` on the artifact and `update_work_item` on the item | `{"work_item": "ENG-12", "after"?: "CREWLET_TRACKER_LOG@1:9"}`: links the artifact to a work item the tracker holds, so the item's Artifacts panel lists it. `after` is the `position` the item's create answered with, and the item is read from no earlier than it. See [Linking to a work item](#linking-to-a-work-item) |
+| `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
+| `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
+| `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, in three steps: the artifact is committed to its purge (into the trash, never restored again), its datastore goes, then its own rows |
+| `POST /artifacts/{id}/assets` | `upload_artifact_asset` | `{"upload": "<upload>", "name": "<name>"}`: finalize an asset |
+| `DELETE /artifacts/{id}/assets/{asset}` | `upload_artifact_asset` | Remove one |
+| `PUT`, `DELETE /artifacts/{id}/pin` | `artifacts.pin` | The caller's own pin |
+| `PUT /artifacts/{id}/folder` | `move_artifact` on the artifact and `artifacts.folder.file` on the folder | `{"folder": "<id>"}` files it in a folder, `{"folder": ""}` at the top level. See [Folders](#folders) |
+| `POST /artifacts/folder-moves` | as `PUT /artifacts/{id}/folder`, for each item alone | `{"items": [{"artifact", "folder"}]}`, at most 25, answered `200` with `{"results": [{"artifact", "outcome", "message"?}]}`. See [Folders](#folders) |
 
 **A share that reaches nobody is surfaced, not dropped.** A build before the
 grant rule could store a share to a login named as a seat (`seat:token:maya`),
@@ -6447,14 +6465,6 @@ marks it `invalid: true`, the share dialog lists it with why ("token:maya is a
 sign-in, not a seat. Remove it and share with their seat.") and offers Remove as
 its one action, and the listing never counts it toward the login's Shared
 section, where every read of it would be withheld.
-| `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
-| `POST /artifacts/{id}/work-items` | `get_artifact` on the artifact and `update_work_item` on the item | `{"work_item": "ENG-12", "after"?: "CREWLET_TRACKER_LOG@1:9"}`: links the artifact to a work item the tracker holds, so the item's Artifacts panel lists it. `after` is the `position` the item's create answered with, and the item is read from no earlier than it. See [Linking to a work item](#linking-to-a-work-item) |
-| `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
-| `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
-| `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, in three steps: the artifact is committed to its purge (into the trash, never restored again), its datastore goes, then its own rows |
-| `POST /artifacts/{id}/assets` | `upload_artifact_asset` | `{"upload": "<upload>", "name": "<name>"}`: finalize an asset |
-| `DELETE /artifacts/{id}/assets/{asset}` | `upload_artifact_asset` | Remove one |
-| `PUT`, `DELETE /artifacts/{id}/pin` | `artifacts.pin` | The caller's own pin |
 
 Every write but the transfer carries an `Idempotency-Key`, from which every
 record id is derived, so a retry under the same key is the same operation
@@ -6570,7 +6580,8 @@ a person present, and the version is marked forced.
 
 | Path | Question | Answers |
 |---|---|---|
-| `GET /artifacts` | `artifacts` | One page of what the caller can see: `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind`, `q`, `status` (`live`, `trashed`), `pinned`, `work_item`, `sort` (`updated`, `created`, `title`, `opened`), `cursor`, `limit`. Filtered for the caller's relations and decided row by row, never refused |
+| `GET /artifacts` | `artifacts` | One page of what the caller can see, in S3 `ListObjectsV2` terms: `prefix` (a folder path, `Marketing/Q4/`, empty for the top level) or `folder` (the folder's id in place of the path), `delimiter=/` (one level, its child folders answered as `common_prefixes`; absent, everything beneath), `max-keys` (50 by default, at most 200) and `continuation-token`; beside them `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind`, `q`, `status` (`live`, `trashed`), `pinned`, `work_item`, `sort` (`updated`, `created`, `title`, `opened`). Answers `{prefix, delimiter?, contents, common_prefixes?, key_count, is_truncated, next_continuation_token?, total, read_level, position, complete}`. Filtered for the caller's relations and decided row by row, never refused. See [Folders](#folders) |
+| `GET /artifact-folders` | `artifact_folders` | The folder tree the caller sees: every folder, parents before children and siblings A to Z, each with its `role` for the caller and the artifacts and folders directly in it they can see, and `top_level`, the artifacts they can see filed in no folder they see. See [Folders](#folders) |
 | `GET /artifacts/{id}` | `artifact` | The head, the caller's `role`, whether they may publish (`writer`), and the shares to the owner and editors (`share_count` below) |
 | `GET /artifacts/{id}/versions` | `artifact_versions` | The retained versions, newest first |
 | `GET /artifacts/{id}/versions/{n}` | `artifact_version` | One version and its manifest |
@@ -6589,6 +6600,61 @@ no page runtime (a Markdown document, a sheet).
 The same questions are asked over the socket by name. Every question about one
 artifact is decided by `get_artifact` and records the admin path's override
 as every read route does.
+
+### Folders
+
+An artifact is filed in at most one folder, and **a folder grants nothing**:
+who may open an artifact is still its owner and its own shares, so filing it,
+moving it and removing its folder never widen or narrow its access
+([ADR-0047](../../adr/0047-an-artifact-lives-in-one-folder-and-a-folder-grants-nothing.md)).
+A folder's own visibility is its **top-level folder's**: that folder's owner
+and its shares, a preset chosen when it is made (`company`, everyone in the
+company as `contributor`, or `private`, its owner alone). So a tree is seen
+whole or not at all, a breadcrumb never names a folder its reader cannot see,
+and a folder the caller cannot see is answered exactly as one that does not
+exist.
+
+| Method and path | Verb | What it does |
+|---|---|---|
+| `POST /artifact-folders` | `create_artifact_folder`, and `artifacts.folder.file` on the parent | `{"name", "parent"?, "visibility"?}`, or `{"path": "Q3/Week 1", "parents": true, "parent"?, "visibility"?}` to create a path with its missing parents in one record (`mkdir -p`). A top-level folder states `visibility` (`company` or `private`) and is a person's to make; an agent creates folders only inside one. Answers `201` with `{folders, created, op_id, outcome, position}`, the chain parents first, and `200` with `created: 0` when every name was already there |
+| `PATCH /artifact-folders/{id}` | `artifacts.folder.rename`, `artifacts.folder.move`, and `artifacts.folder.file` on a new parent | `{"name"?, "parent"?, "confirm_widen"?}`: a rename or a move (`"parent": ""` to the top level), one a request, since they are two records and a move refused after a rename would leave the rename behind; a body naming both is `422 invalid`. A move into a tree whose audience reaches somebody the folder's present one does not (a private folder moved under a company one) is `409 folder_widens` until `confirm_widen` is sent. Answers `{folder, op_id, outcome, position}` |
+| `DELETE /artifact-folders/{id}` | `artifacts.folder.remove` | Removes the folder: its child folders and every artifact in it, live and trashed, move up to its parent in one record. Nothing is trashed and nobody loses access. A child whose name its new place already holds is `409 folder_name_taken`; the answer carries no counts, which would include artifacts the caller cannot see |
+| `PUT /artifacts/{id}/folder` | `move_artifact` (editor) on the artifact and `artifacts.folder.file` (contributor) on the folder | Files one artifact; to the top level from a folder it is `move_artifact`, or the folder's manager's `artifacts.folder.unfile` for an artifact they can read. A move is not an edit: the artifact's `updated_at` stays, and its history row names the folders by id only |
+| `POST /artifacts/folder-moves` | as above, per item | Up to 25 artifacts, each decided and written alone: one item's refusal is named in its result (`outcome` is `moved` or the refusal's code, with a `message`) and stops nothing else |
+
+**Who manages a folder.** Seeing a folder and filing into it are decided on its
+top-level folder; renaming, moving and removing it and taking an artifact out
+of it are decided on the folder's **own owner**, and are a person's: its owner,
+the owner's lead where the owner is an agent, or an administrator, recorded as
+the admin path. The tree answers each folder's `role` for the caller (`owner`,
+`contributor` or `viewer`) from those decisions, and a folder's `shares` only
+to its managers. An administrator is never shown a private folder: the admin
+path lists no folder, as it lists no artifact.
+
+**Names.** A name is 1 to 80 bytes, trimmed and NFC, with no `/`, no control,
+bidi or zero-width character, and not `.` or `..`. Siblings are unique
+without regard to case. At the top level the company's folders are unique
+among themselves and each owner's own among their own, so a name is never
+refused because of a folder its creator cannot see; a path naming both a
+private and a company folder is `409 folder_ambiguous` on a write (`candidates`
+lists each by id) and `400 bad_params` on the listing: list it by `folder` id.
+Folders nest at most four deep; a company holds at most 2000 live folders and
+one folder at most 1000 children.
+
+**Listing by folder.** The listing places every row in the tree as its reader
+sees it: an artifact filed in a folder the reader cannot see is at their top
+level, never hidden by it, and its `folder` and `folder_path` are answered only
+where they see that folder. One artifact's head and its history's moves
+(`from_folder`, `to_folder`) name a folder on the same rule, so a folder's id
+reaches nobody it is not shown to. A `prefix` or `folder` that names nothing the caller sees is
+`404 not_found`, never an empty page. The continuation token carries the
+folder's id rather than its path, so a rename between two pages does not move
+the next one, a token is held to the delimiter it was minted under, and a
+query naming another folder beside a token (by `folder`, or by a `prefix` that
+names a folder now) is refused rather than answered as the token's folder. Each
+common prefix is `{prefix, folder, name, visibility, items, folders}`, counting
+only what the reader may open, by the same filter the page and its `total`
+are counted by.
 
 ### Viewing a version
 
@@ -6653,7 +6719,13 @@ The API origin **never renders an artifact**:
   `sample` (a deck of every layout once, drawn in that theme, as the same
   canonical tree a version's deck is answered as), `layouts`, each its `id`,
   `name`, `description` and `heading` (the title a slide of it opens with), and
-  `default`, the plan a starter opens with when it names none. The create page
+  `default`, the plan a starter opens with when it names none. Whenever the
+  company has adopted a brand, its theme (`brand`, named for the brand, its
+  colours and typefaces resolved from the adoption) comes first, its sample's
+  cover drawing the logo a deck begun in it shows, at the path the starter
+  copies it to, with `logo` (`{path, slot}`) naming that path and the adopted
+  brand's file slot it is drawn from, since a sample holds no bytes; the answer is
+  composed per request, so an adoption or a clear shows at once. The create page
   draws its theme picker and preview from it, and the deck editor adds a slide
   from the sample of the theme its deck's index names (see
   [Slide Format](slide-format.md#the-index)).
@@ -6676,8 +6748,10 @@ The API origin **never renders an artifact**:
   which is each viewer's); for a design (`design`), its title, board count,
   cover board, the `bounds` every board and note fits in, each board's `path`,
   `title`, `x`, `y`, `w` and `h` in the canvas's order and the number of
-  `notes`, read from `canvas.json` alone. The gallery draws each as the card's
-  cover (a design's as a schematic). Any other kind answers its kind alone. A
+  `notes`, read from `canvas.json` alone; for a brand kit (`brand`), its whole
+  `brand.json` as `brand.document`, read under the brand format again. The
+  gallery draws each as the card's cover (a design's as a schematic). Any other
+  kind answers its kind alone. A
   cover is not an open, so none is recorded. A node keeps the decks, docs and
   canvases it has read by version (16 MiB of their files at most for each),
   and the boards (64 MiB of their spec and file datasets), since a version
@@ -6749,6 +6823,34 @@ The API origin **never renders an artifact**:
   (`429 throttled`, with `Retry-After`). A deployment with no
   `api.artifacts.external_url` is `409 artifact_origin_unset`.
 
+### The company's brand
+
+A brand kit is an artifact of kind `brand` (its `brand.json` and the logos and
+faces it names, held to the
+[brand format](../concepts/artifacts.md#the-company-brand) at publish; a draft
+needs only its `name`). The
+company's brand is the one version of one kit an administrator **adopted**:
+the adoption snapshots that version's index, the stylesheet generated from it
+and a copy of every file it serves, so publishing to the kit, trashing it or
+purging it changes nothing until somebody adopts again. What is adopted is the
+company's public face: everybody reads it.
+
+| Method and path | Verb | What it does |
+|---|---|---|
+| `GET /brand` | `get_company_brand` (everybody's) | The adopted brand, or `{"brand": null}`: the `kit` and its `kit_version`, the `document` (the adopted `brand.json`), the generated stylesheet's `css_sha`, every served file in `files` (`slot`, `content_type` and `object` as `{hash, size}`, the stylesheet first), `adopted_by` and `adopted_at`. `newer_version` and `newer_by` name the kit's newest version and its publisher where it is newer than the adopted one, answered only to a reader who may open the kit (by a share, or as an administrator, which reads no content and leaves no elevated-read record). Also the `brand` question on the socket |
+| `GET /brand/files/{hash}` | `get_company_brand` | One file an adoption serves, by its SHA-256: an **attachment**, an SVG as `text/plain`, under the API's own policy, as every artifact file is. A hash no current or retained adoption serves is `404` |
+| `POST /brand/adoptions` | `artifacts.brand.adopt` (an administrator, a person present, a recent proof) | `{"kit": "<id>", "version": <n>}`: adopt that version. Reading the kit is decided as any content read, so an administrator with no share on it is admitted on the admin path and the read recorded. The kit is read back and held to the brand format (`422 policy_refused` with its `findings`, code `brand_format`). A brand that leaves out `logos.primary` or `colors.primary` is `422 policy_refused` with one `brand_format` finding per missing field (its message `field: <name>: is required to adopt the brand: ...`) and `missing`, the bare field names in that order; only a brand that holds both is measured for contrast: its text colour on its light ground must reach 4.5:1 (`422 brand_contrast`, with `contrast`: the pair, its two colours, the unrounded `ratio` and the `min`), and a version the kit no longer keeps is `404 not_found`. The adoption also labels the version `Adopted <date>` where that label is free. Carries an `Idempotency-Key` |
+| `DELETE /brand/adoptions/current` | `artifacts.brand.clear` (an administrator, a person present, a recent proof) | Withdraw the adopted brand. A framed page pinned to its stylesheet keeps it while its version is retained. Clearing when nothing is adopted answers success and writes nothing. Carries an `Idempotency-Key` |
+
+A framed version (`html`, `design`) **pins** the stylesheet adopted when it is
+published: its `versions` answer carries it as `brand`, and the artifact origin
+places `<link rel="stylesheet" href="/_crewlet/brand/<sha256>.css">` at the top
+of every document of that version it serves, leaving the author's bytes as
+they are. A page whose `<html>` element carries `data-crewlet-brand="off"` is
+served without it, and an `html` version whose entry page says so pins none. A
+deck copies the brand into its own files when it is created, and a doc and a
+dashboard follow the adopted brand live, drawn by the dashboard.
+
 ### Refusals
 
 | Status | `error` | When |
@@ -6765,6 +6867,9 @@ The API origin **never renders an artifact**:
 | `409` | `carried_object_gone` / `upload_missing` | A carried file's bytes are gone, or a declared file has not arrived; `paths` names them |
 | `409` | `upload_consumed` / `upload_expired` | The upload is used, or an uploaded object is too old to name; upload again |
 | `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address |
+| `404` | `folder_not_found` | A folder a body names (a parent, a destination, the folder a create files into) that does not exist, was removed, or that the caller cannot see; one answer for all three |
+| `409` | `folder_name_taken` / `folder_cycle` / `folder_depth` / `folder_limit` | A name its place already holds, a folder moved into itself or beneath itself, a folder deeper than four, or past the company's or one folder's bound |
+| `409` | `folder_widens` / `folder_ambiguous` | A move that would show a folder to more people, unconfirmed; a path naming several folders the caller sees (`candidates`) |
 | `409` | `artifact_not_framed` / `artifact_origin_unset` | See [Viewing a version](#viewing-a-version) |
 | `409` | `conflict` | A frame whose ready time was already reported; see [Viewing a version](#viewing-a-version) |
 | `410` | `upload_expired` | The upload's window closed before it was finished |
@@ -6773,6 +6878,8 @@ The API origin **never renders an artifact**:
 | `415` | `media_type_refused` | A file type an artifact may not publish |
 | `422` | `upload_mismatch` / `content_refused` | Bytes that are not the declared ones, or not what their type promises |
 | `422` | `edit_refused` / `policy_refused` | An edit that matched zero or several times (`index`, `matches`), or a page the publish policy refuses (`findings`) |
+| `422` | `policy_refused` | An adoption of a brand that leaves out a field an adopted brand holds (`findings`, `missing`) |
+| `422` | `brand_contrast` | An adoption whose text colour does not reach 4.5:1 on its light ground; `contrast` names the pair |
 | `422` | `capability_unknown` / `contract_unknown` / `credential_refused` / `invalid` | A capability or runtime this build does not serve, a credential in what an agent published, or a value the domain refuses |
 | `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
 | `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |

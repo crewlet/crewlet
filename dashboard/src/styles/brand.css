@@ -1,0 +1,276 @@
+/* ---- Company › Brand, a brand kit's view, and a kit's gallery cover ------------
+   The brand's own sheet: imported by `routes/brand/BrandPreview.tsx`, which
+   every surface that draws a brand draws (Company › Brand, a kit's view, a
+   kit's cover in the gallery), so it arrives with the brand's screens rather
+   than in the first paint every reader loads. Every rule selects a class of
+   the brand's own.
+
+   THE CARDS IN THE MAIN COLUMN, THE PREVIEW BESIDE THEM. The preview stays in
+   view while a long card is edited, under the bar where one is drawn; where
+   the layout stacks (a narrow page), it follows the cards and scrolls with
+   them. */
+.brand-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.brand-preview {
+  position: sticky;
+  top: calc(var(--sticky-top) + var(--spacing-4));
+}
+.brand-preview-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.brand-preview-note {
+  margin-top: var(--spacing-3);
+}
+/* The Logos card: the name over three slots, the two wide logos side by side
+   and the mark beside them; two a row on a phone. */
+.brand-logos,
+.brand-colours,
+.brand-voice,
+.brand-editor,
+.brand-adopt,
+.brand-setup-body,
+.brand-setup-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.brand-name {
+  margin: 0;
+}
+.brand-logo-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+/* The Colours card: swatches two or three a row, the contrast pairs under them. */
+.brand-swatches,
+.brand-color-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr));
+  gap: var(--spacing-3) var(--spacing-4);
+}
+/* ON A PHONE THE LOGOS AND THE SWATCHES GO TWO A ROW, as the approved page
+   draws them: one a row stood the page about 3400px tall at 390. The
+   editor's colour fields keep their own measure, which an input needs. */
+@container page (width < 640px) {
+  .brand-logo-slots,
+  .brand-swatches {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--spacing-3);
+  }
+}
+.brand-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* The contrast pairs under their heading: one compact row a pair, the badge
+   and what a low pair needs, then one muted line on why it matters and the
+   one-click changes that fix it, each step of the kit's scale. */
+.brand-contrast {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.brand-contrast-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.brand-contrast-pairs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.brand-contrast-pair {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.brand-contrast-pair-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.brand-contrast-reason {
+  margin: 0;
+}
+.brand-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+.brand-voice-lists,
+.brand-editor-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+/* The Voice editor's two lists, one above the other at full width. */
+.brand-voice-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.brand-voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+/* A refusal said under the field it is about, in the danger ink. */
+.brand-refusal {
+  margin: 0;
+  color: var(--color-feedback-danger-ink);
+}
+/* The Typography editor: one fieldset a face, its files a row each. */
+.brand-face-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.brand-face-legend {
+  padding: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.brand-font-files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.brand-font-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.brand-font-file-name {
+  flex: 1 1 10rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.brand-font-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+/* The adopt dialog's changes: what changed, then what it was and is. */
+.brand-diff {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+}
+.brand-diff-row {
+  display: contents;
+}
+.brand-diff-row dt {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.brand-diff-row dd {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-compact);
+  overflow-wrap: anywhere;
+}
+.brand-diff-was {
+  color: var(--color-text-tertiary);
+}
+/* The brand setup (`#/company/brand/setup`): the Voice step's note. */
+.brand-setup-note {
+  margin: 0;
+}
+/* The setup's Review: the summary (`ReviewList`) and, beside it, the column a
+   person decides in, the preview over "Before you adopt", at 22rem: the
+   wizard's 20rem aside wrapped "When you adopt" to ten lines. The decision
+   column ends above the finish action;
+   where the step is narrower than both need, it follows the summary in one
+   column, still ending where the finish is. */
+.brand-review {
+  container: brand-review / inline-size;
+}
+.brand-review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: var(--spacing-5);
+  align-items: start;
+}
+@container brand-review (width < 48rem) {
+  .brand-review-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.brand-review-decide,
+.brand-review-before,
+.brand-review-stack,
+.brand-review-identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+.brand-review-stack {
+  gap: var(--spacing-2);
+}
+.brand-review-identity {
+  gap: var(--spacing-1);
+}
+.brand-review-identity > p,
+.brand-review-stack > p {
+  margin: 0;
+}
+.brand-review-name {
+  font-weight: var(--font-weight-semibold);
+}
+/* The three logos as thumbnails, one row of equal columns at every width. */
+.brand-review-logos {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 9rem));
+  gap: var(--spacing-3);
+  align-items: start;
+}
+.brand-review-swatches,
+.brand-review-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(10rem, 100%), 1fr));
+  gap: var(--spacing-3) var(--spacing-4);
+}
+.brand-review-faces {
+  grid-template-columns: repeat(auto-fill, minmax(min(12rem, 100%), 1fr));
+}
+/* "When you adopt" heads its three items at the small step: it sits under a
+   dialog's title or a card's, which it must never outrank (the register is
+   the container's to set, `Section`). */
+.brand-when-you-adopt {
+  --crewlet-section-title-size: var(--font-size-sm);
+}
+/* A brand kit's gallery cover: the sample doc on its own ground, filling the card. */
+.artifacts-preview-brand {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: var(--spacing-6);
+  background: var(--color-surface-background);
+}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,9 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/clientsource"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sourcetree"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // builderCompany is a company as the dashboard's builder creates one: its
@@ -46,32 +43,21 @@ roles:
 //
 // So the steps are read out of the dashboard (PROVIDER_STEPS) and walked here,
 // in order, from the state a create leaves — crewlet.yaml in the working
-// directory, the store holding the company, no company file beside it, and a
-// node that HAS RUN, since the company was created through its API — stopped,
-// as the steps say to leave it:
+// directory, the store holding the company, no company file beside it — with
+// no node running, as the steps say to leave it:
 //
 //   - a `crewlet config` command RUNS, and a `> FILE` after it is written;
 //   - a `crewlet llm` command loads what it loads before the vendor's CLI
-//     starts — the company file, the entry it names, and the company's stored
-//     values through the store its run reaches — because the sign-in and the
-//     smoke test are the vendor's, and no test calls a vendor. A
-//     `-capture-token` login stores what the command stores once the vendor
-//     has minted, a fixture token in the vendor's place;
-//   - `crewlet run` starts the node on the revision the import marked active,
-//     which the walk reads off the store as it starts, and from then on the
-//     store is held, as the engine holds it, and the node's API serves what
-//     the stopped node's own rows held, as the engine's start carries them
-//     onto the fleet's store ([fleetsecrets.Migrate]);
+//     starts — the company file, and the entry it names — because the sign-in
+//     and the smoke test are the vendor's, and no test calls a vendor;
+//   - `crewlet run` publishes the revision the import marked active, which the
+//     end of the walk reads off the store instead;
 //   - the lines under a step that are neither a command nor a comment are the
 //     YAML it adds, and they go into the file an earlier step wrote.
 //
-// Anything else fails: another command, a block with no file to go in, or a
-// step the binary refuses where the steps run it, is a step nothing here has
-// run. On a stopped node that has run, its own rows are not the company's
-// whole secret store, so every command that reads the company's values is
-// refused there; the check the steps end on is made through the running node,
-// and has to read the token the login stored. And the guide that explains the
-// steps shows them as they are.
+// Anything else fails: another command, or a block with no file to go in, is
+// a step nothing here has run. And the guide that explains the steps shows
+// them as they are.
 //
 // NOT PARALLEL: the steps name their files relative to where they are typed,
 // so the walk moves into that directory, and a working directory is the
@@ -93,21 +79,12 @@ func TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds(t *testing.T) {
 			"in one bash block: give its \"Giving the company a model\" the steps verbatim")
 	}
 
-	// THE NODE THE STEPS START AGAIN: its API, at the address its Tier A
-	// gives, holding nothing until `crewlet run` and then what the stopped
-	// node's own rows held.
-	node := newRevealNode(t, map[string]string{})
 	dir := t.TempDir()
 	tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "node.db")) + fixtureStream(dir) +
-		servingAPI(node.server.Listener.Addr().(*net.TCPAddr).Port) + fixtureKeyring
+		filepath.Join(dir, "node.db")) + fixtureStream(dir) + fixtureKeyring
 	if err := os.WriteFile(filepath.Join(dir, defaultBootstrapPath), []byte(tierA), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// THE BUILDER'S NODE HAS RUN: the company was made through its API, so
-	// its broker has started on its store directory, and the fleet's secret
-	// store is that broker's, which only a running engine serves.
-	markBrokerRun(t, filepath.Join(dir, defaultBootstrapPath))
 	// THE COMPANY GOES IN FROM ELSEWHERE, so the store holds it and the
 	// directory the steps run in holds no company file — what a create
 	// through the API leaves behind.
@@ -125,7 +102,7 @@ func TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds(t *testing.T) {
 			defaultCompanyPath, defaultBootstrapPath, err)
 	}
 
-	w := stepWalk{t: t, node: node, captured: map[string]capturedToken{}}
+	w := stepWalk{t: t}
 	for line := range strings.SplitSeq(steps, "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
@@ -152,10 +129,15 @@ func TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds(t *testing.T) {
 	if len(w.signedIn) == 0 {
 		t.Fatal("no step signs a model in, so the steps add nothing an agent can run on")
 	}
-	if w.started == nil {
-		t.Fatal("no step starts the node again, so nothing runs on the model the steps add")
+	cs, closeStore, err := openConfigStore(t.Context(), defaultBootstrapPath, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	active := w.started
+	defer closeStore()
+	_, active, err := storedCompany(t.Context(), cs, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if active.Name != "Acme" {
 		t.Errorf("the active company is %q, not the one the builder made", active.Name)
 	}
@@ -176,39 +158,17 @@ func TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds(t *testing.T) {
 			t.Errorf("a step signs %q in, and the company the node starts on has no such "+
 				"providers.llm entry: the steps never imported it", key)
 		}
-		// THE CHECK IS OF WHAT THE ENGINE RUNS ON: the entry as the running
-		// node resolves it, the stored sign-in included. A check made
-		// anywhere else, or never, leaves the operator to find a broken
-		// sign-in on the first turn.
-		if !slices.Contains(w.checked, key) {
-			t.Errorf("the steps sign %q in and never check it with `crewlet llm doctor` "+
-				"through the running node", key)
-		}
 	}
 }
 
 // stepWalk is the state of one walk through the steps: the file the last
-// redirected step wrote, the YAML waiting to go into it, every model a step
-// signed in, the token each `-capture-token` stored, every model a step
-// checked through the running node — and the node: whether a step has
-// started it, and the company it started on.
+// redirected step wrote, the YAML waiting to go into it, and every model a
+// step signed in.
 type stepWalk struct {
 	t        *testing.T
 	written  string
 	block    []string
 	signedIn []string
-	captured map[string]capturedToken
-	checked  []string
-
-	node    *revealNode
-	running bool
-	started *config.Company
-}
-
-// capturedToken is the headless token a `-capture-token` login stored for one
-// entry, and the variable it stored it under.
-type capturedToken struct {
-	name, value string
 }
 
 // addBlock adds the YAML lines read since the last step to the file a step
@@ -261,7 +221,8 @@ func (w *stepWalk) command(line string) {
 	case "llm":
 		w.llm(line, args[1:])
 	case "run":
-		w.start(line)
+		// The node starting again publishes what the import marked active,
+		// which the walk reads off the store once every step is done.
 	default:
 		w.t.Fatalf("the steps run `crewlet %s`, which this walk does not model: "+
 			"say here what it reads and writes, or it is a step nothing has run", args[0])
@@ -274,48 +235,16 @@ func (w *stepWalk) command(line string) {
 	}
 }
 
-// start walks `crewlet run`: the node starts on the revision the import marked
-// active, read off the store before the node takes it; holds its store for the
-// rest of the walk, as the engine does while it runs; and carries this node's
-// own secret rows onto the fleet's store, which its API then serves — the
-// engine's start migrates them ([fleetsecrets.Migrate]), and on a node whose
-// fleet holds nothing yet every row it carries is the later write.
-func (w *stepWalk) start(line string) {
-	w.t.Helper()
-	if w.running {
-		w.t.Fatalf("%q starts a node the steps already started", line)
-	}
-	cs, closeStore, err := openConfigStore(w.t.Context(), defaultBootstrapPath, "")
-	if err != nil {
-		w.t.Fatalf("`%s` starts on the store at %s, and it cannot be read: %v",
-			line, defaultBootstrapPath, err)
-	}
-	_, active, err := storedCompany(w.t.Context(), cs, "")
-	closeStore()
-	if err != nil {
-		w.t.Fatalf("`%s` starts on no active company: %v", line, err)
-	}
-	w.started = active
-	rows := rowsOf(w.t, defaultBootstrapPath)
-	holdTheStore(w.t, storePathOf(w.t, defaultBootstrapPath), store.EstateNode)
-	w.node.hold(rows)
-	w.running = true
-}
-
 // llm holds a `crewlet llm SUB KEY ...` step to what the command loads before
 // it starts the vendor's CLI ([runLLM]): the company file it names or
-// defaults to, held to the runnable rules, carrying the entry it names, the
-// company's stored values the entry reads, through the store the run reaches —
-// this node's own rows while the node is stopped, the running node's API once
-// it runs — and that entry built, the one entry the command resolves and
-// builds. Before `crewlet run` the step has no credential for a node, as the
-// stopped node serves none; after it, the operator's Tier A token.
+// defaults to, held to the runnable rules, carrying the entry it names, and
+// that entry built — the one entry the command resolves and builds.
 func (w *stepWalk) llm(line string, args []string) {
 	w.t.Helper()
 	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
 		w.t.Fatalf("%q names no providers.llm entry, and the steps are for one", line)
 	}
-	sub, key := args[0], args[1]
+	key := args[1]
 	companyPath := defaultCompanyPath
 	for i, arg := range args {
 		if value, ok := strings.CutPrefix(arg, "-company="); ok {
@@ -324,87 +253,23 @@ func (w *stepWalk) llm(line string, args []string) {
 			companyPath = args[i+1]
 		}
 	}
-	environ := noEnviron
-	if w.running {
-		environ = tokenEnviron(cliFixtureToken)
-	}
-	listed := w.node.listed()
 	bootstrapPath, apiURL := defaultBootstrapPath, ""
-	use := readsTheCompany
-	if slices.Contains(llmActsOnItsOwn, sub) {
-		use = actsOnItsOwn
-	}
-	companySecrets, err := openCompanyStore(environ,
-		storeFlags{bootstrap: &bootstrapPath, api: &apiURL}, "crewlet llm "+sub, use)
+	companySecrets, err := openCompanyStore(noEnviron,
+		storeFlags{bootstrap: &bootstrapPath, api: &apiURL}, "crewlet llm "+args[0])
 	if err != nil {
 		w.t.Fatalf("`%s` reads Tier A from %s, and cannot: %v", line, bootstrapPath, err)
 	}
 	defer companySecrets.Close()
 	company, keys, resolver, err := loadLLMConfig(w.t.Context(), companyPath, companySecrets,
-		sub, key, io.Discard)
-	switch {
-	case errors.Is(err, errStoppedNode):
-		w.t.Fatalf("`%s` is refused on a stopped node that has run: move it after "+
-			"`crewlet run`, where it reads the company's values through the running "+
-			"node: %v", line, err)
-	case err != nil:
+		args[0], key, io.Discard)
+	if err != nil {
 		w.t.Fatalf("`%s` reads the company from %s, and cannot: %v",
 			line, companyPath, err)
 	}
-	providers, err := cliAgents(company, keys, resolver)
-	if err != nil {
+	if _, err := cliAgents(company, keys, resolver); err != nil {
 		w.t.Fatalf("`%s`: %v", line, err)
 	}
-	switch {
-	case !w.running && w.node.requests() > 0:
-		w.t.Fatalf("`%s` runs while the node is stopped and reached its API, which "+
-			"serves nothing until `crewlet run`", line)
-	case w.running && w.node.listed() == listed:
-		w.t.Fatalf("`%s` runs beside the running node and read nothing through it, "+
-			"so it did not read the store the engine runs on", line)
+	if !slices.Contains(w.signedIn, key) {
+		w.signedIn = append(w.signedIn, key)
 	}
-	switch sub {
-	case "login":
-		if slices.Contains(args, "-capture-token") {
-			w.capture(line, key, providers, companySecrets)
-		}
-		if !slices.Contains(w.signedIn, key) {
-			w.signedIn = append(w.signedIn, key)
-		}
-	case "doctor":
-		if !w.running {
-			break
-		}
-		// THE TOKEN THE LOGIN STORED, AS THE RUNNING NODE SERVES IT: the
-		// stopped node wrote it into its own rows, and the doctor checks
-		// the sign-in the engine runs on only where the node's start has
-		// carried it onto the store the engine reads.
-		if captured, ok := w.captured[key]; ok {
-			if got, _ := resolver.LookupOK(captured.name); got != captured.value {
-				w.t.Fatalf("`%s` reads ${%s} as %q through the running node, not the "+
-					"token the login stored before the node started", line, captured.name, got)
-			}
-		}
-		w.checked = append(w.checked, key)
-	}
-}
-
-// capture stores what `crewlet llm login KEY -capture-token` stores once the
-// vendor's CLI has minted a token ([loginLLM]): after the same refusal of a
-// token nothing would read, a token under the CLI's own token variable,
-// through the run's store — a fixture value in place of the vendor's mint.
-func (w *stepWalk) capture(line, key string, providers []cliAgentProvider, companySecrets *companyStore) {
-	w.t.Helper()
-	p, err := oneProvider(providers, key)
-	if err != nil {
-		w.t.Fatalf("`%s`: %v", line, err)
-	}
-	if err := refuseUnreadToken(p, key, loginRequest{captureToken: true}); err != nil {
-		w.t.Fatalf("`%s` would mint a token nothing reads: %v", line, err)
-	}
-	token := capturedToken{name: p.Profile().TokenEnv, value: "sk-ant-oat01-walked-" + key}
-	if _, err := storeLLMSecret(w.t.Context(), companySecrets, token.name, token.value); err != nil {
-		w.t.Fatalf("`%s` cannot store the token it captures: %v", line, err)
-	}
-	w.captured[key] = token
 }

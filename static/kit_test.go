@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -45,6 +46,10 @@ var shippedKits = []string{
 	"0.43.0",
 	"0.47.0",
 	"0.48.3",
+	"0.49.1",
+	"0.50.0",
+	"0.51.0",
+	"0.54.0",
 }
 
 // TestEveryShippedKitVersionStaysEmbedded: each version in the ledger is still
@@ -77,5 +82,31 @@ func TestEveryShippedKitVersionStaysEmbedded(t *testing.T) {
 			t.Errorf("artifacts/kit/%s is embedded and not in shippedKits; "+
 				"append it to the ledger in static/kit_test.go", entry.Name())
 		}
+	}
+}
+
+// TestTheNewestKitIsTheLedgersLast: the ledger ends on the newest kit this
+// build embeds, ordered as the publish pipeline orders releases. That release
+// is what the engine tells every seat to link (`${crewlet_kit_version}`, the
+// embedded release set's newest) and what get_company_brand answers, so a kit
+// appended anywhere but the end, or embedded without its ledger line, would
+// leave the skill naming a release the record says is not the newest.
+func TestTheNewestKitIsTheLedgersLast(t *testing.T) {
+	t.Parallel()
+	tree, err := fs.Sub(static.FS(), "artifacts/kit")
+	if err != nil {
+		t.Fatalf("the embedded kit tree: %v", err)
+	}
+	kits, err := artifactupload.ReleasesIn(tree)
+	if err != nil {
+		t.Fatalf("reading the embedded kit tree: %v", err)
+	}
+	if got, want := kits.Latest(), shippedKits[len(shippedKits)-1]; got != want {
+		t.Fatalf("the newest embedded kit is %q and the ledger ends on %q: append each "+
+			"new kit at the end of shippedKits, oldest first", got, want)
+	}
+	if got := kits.Versions(); !slices.Equal(got, shippedKits) {
+		t.Fatalf("the embedded kits in release order are %v and the ledger reads %v: "+
+			"keep the ledger in release order", got, shippedKits)
 	}
 }

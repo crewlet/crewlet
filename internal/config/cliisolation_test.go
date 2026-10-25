@@ -115,12 +115,14 @@ func TestACLIEnvIsolationRefusalNamesTheFieldThatTakesIt(t *testing.T) {
 			agent: "opencode", model: "anthropic/claude-sonnet-5", variable: "OPENCODE_CONFIG_DIR",
 			names: []string{
 				"points it at .crewlet-config under the call's working directory with work_config_env",
-				"moving the seed_files and system_prompt_file.name kept under .crewlet-config beneath it",
+				"moving the seed_files, system_prompt.file.name and append_system_prompt.file.name " +
+					"kept under .crewlet-config beneath it",
 				"overrides.work_config_env",
 			},
 			alone: "{work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}}",
 			follow: "{work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}, " +
-				"system_prompt_file: {name: .elsewhere/agents/crewlet-seat.md}, " +
+				"system_prompt: {file: {name: .elsewhere/agents/crewlet-seat.md}}, " +
+				"append_system_prompt: {file: {name: .elsewhere/AGENTS.md}}, " +
 				"seed_files: [{path: .elsewhere/opencode.json, in: work, content: '{}'}]}",
 		},
 		"a custom profile's relocation, with nothing kept under it": {

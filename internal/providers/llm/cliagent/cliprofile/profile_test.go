@@ -1,6 +1,7 @@
 package cliprofile
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -339,6 +340,44 @@ func TestTheTextPathsRuleNamesTheDefaultedOutput(t *testing.T) {
 	}
 }
 
+// ONLY A USAGE PATH MAY STEP INTO EVERY MEMBER: a count under every member adds
+// up, while the answer, a failure flag, an event's kind and its failure class
+// are each one value, and the members of an object have no order — the same
+// stdout would answer differently from one call to the next.
+func TestOnlyAUsagePathMayStepIntoEveryMember(t *testing.T) {
+	t.Parallel()
+	base := map[string]any{"binary": "x", "complete_args": []any{"-p"}, "text_paths": []any{[]any{"answer"}}}
+	with := func(extra map[string]any) map[string]any {
+		out := map[string]any{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+	if _, err := Load("custom", with(map[string]any{
+		"usage": map[string]any{"input": []any{[]any{"stats", "models", PathEvery, "tokens", "input"}}},
+	})); err != nil {
+		t.Errorf("a usage path stepping into every member was refused: %v", err)
+	}
+	for field, extra := range map[string]map[string]any{
+		"text_paths":      {"text_paths": []any{[]any{"candidates", PathEvery, "text"}}},
+		"error_paths":     {"error_paths": []any{[]any{"errors", PathEvery}}},
+		"event_type_path": {"output": "jsonl", "event_type_path": []any{PathEvery, "type"}, "text_events": []any{"x"}},
+		"marker_path": {
+			"output": "jsonl", "event_type_path": []any{"type"}, "text_events": []any{"x"},
+			"marker_scope": "events", "marker_events": []any{"error"}, "marker_path": []any{"error", PathEvery},
+		},
+	} {
+		_, err := Load("custom", with(extra))
+		if err == nil || !strings.Contains(err.Error(), field+" ") || !strings.Contains(err.Error(), "only a usage path may") {
+			t.Errorf("%s stepping into every member: err = %v, want a refusal naming %s", field, err, field)
+		}
+	}
+}
+
 // A typo in overrides is refused with a pointer to the field list in the
 // docs, so the list has to exist and be THE list: every field the decoder
 // accepts, and nothing it refuses. It did not exist when the pointer was
@@ -386,12 +425,12 @@ func TestEachProfileNamesTheVariablesItsCLIReads(t *testing.T) {
 	t.Parallel()
 	want := map[string][2]string{ // agent: {api_key_env, token_env}
 		"claude-code":  {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
-		"codex":        {"OPENAI_API_KEY", ""},
+		"codex":        {"CODEX_API_KEY", ""},
 		"gemini-cli":   {"GEMINI_API_KEY", ""},
-		"qwen-code":    {"DASHSCOPE_API_KEY", ""},
+		"qwen-code":    {"OPENAI_API_KEY", ""},
 		"opencode":     {"", ""},
 		"cursor-agent": {"CURSOR_API_KEY", ""},
-		"copilot":      {"GITHUB_TOKEN", ""},
+		"copilot":      {"COPILOT_GITHUB_TOKEN", ""},
 		"grok":         {"XAI_API_KEY", ""},
 		"muse-code":    {"META_API_KEY", ""},
 		"kimi-code":    {"", ""},
@@ -461,5 +500,184 @@ func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
 	}
 	if p.ModelNamesProvider {
 		t.Error("overrides.model_names_provider did not reach the profile")
+	}
+}
+
+// A SHARED KEY VARIABLE NEEDS A VARIABLE. api_key_env_shared says the CLI's key
+// variable holds other vendors' keys too; on a profile that names none it
+// declares nothing, and an override that dropped the variable and kept the
+// flag is a mistake to say rather than a no-op to ignore.
+func TestASharedKeyVariableNeedsAVariable(t *testing.T) {
+	t.Parallel()
+	_, err := Load("qwen-code", map[string]any{"api_key_env": ""})
+	if err == nil || !strings.Contains(err.Error(), "api_key_env_shared is set but api_key_env is empty") {
+		t.Errorf("a shared key variable with no variable: err = %v", err)
+	}
+	if _, err := Load("qwen-code", nil); err != nil {
+		t.Errorf("the shipped qwen-code profile does not load: %v", err)
+	}
+}
+
+// A SUBSCRIPTION VARIABLE CHOOSES A LOGIN AND NOTHING ELSE. It is set under one
+// mode, over the entry's env, so a value that clashes with what the rest of the
+// child's environment holds — the isolation, a variable env sets under every
+// other mode, a credential — or an empty one that selects nothing is refused
+// where the profile loads, not discovered on a call.
+func TestASubscriptionVariableIsRefusedWhereItWouldClash(t *testing.T) {
+	t.Parallel()
+	if _, err := Load("gemini-cli", nil); err != nil {
+		t.Fatalf("the shipped gemini-cli profile does not load: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		overrides map[string]any
+		says      string
+	}{
+		"an empty value": {map[string]any{"subscription_env": map[string]any{"GOOGLE_GENAI_USE_GCA": ""}},
+			"subscription_env.GOOGLE_GENAI_USE_GCA is empty"},
+		"an isolation variable": {map[string]any{"subscription_env": map[string]any{"HOME": "/elsewhere"}},
+			"subscription_env names HOME, which the engine sets"},
+		"a variable env sets too": {map[string]any{"subscription_env": map[string]any{"NO_BROWSER": "1"}},
+			"subscription_env and env both name NO_BROWSER"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load("gemini-cli", tc.overrides)
+			if err == nil || !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("err = %v, want one saying %q", err, tc.says)
+			}
+		})
+	}
+	for _, variable := range []string{"GEMINI_API_KEY", "VENDOR_SECRET_TOKEN"} {
+		p, ok := Builtin("gemini-cli")
+		if !ok {
+			t.Fatal("no built-in gemini-cli profile")
+		}
+		p.SubscriptionEnv = map[string]string{variable: "x"}
+		if err := p.ValidateCredentials("gemini-cli"); err == nil ||
+			!strings.Contains(err.Error(), "subscription_env names \""+variable+"\", which is a credential variable") {
+			t.Errorf("subscription_env naming %s: err = %v", variable, err)
+		}
+	}
+}
+
+// EVERY SHIPPED PROFILE LOADS ON EVERY PLATFORM A RELEASE RUNS ON, not only on
+// the one the suite happens to run on: a platform section is merged in before
+// the profile is validated, so one that broke a rule would otherwise reach
+// macOS users unvalidated by a Linux CI.
+func TestEveryShippedProfileLoadsOnEveryPlatform(t *testing.T) {
+	t.Parallel()
+	for _, goos := range Platforms {
+		table, err := decodeTable(profilesYAML, goos)
+		if err != nil {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		for _, name := range slices.Sorted(maps.Keys(table)) {
+			if name == "custom" {
+				continue
+			}
+			p := table[name]
+			if err := p.Validate(name); err != nil {
+				t.Errorf("%s on %s: %v", name, goos, err)
+			}
+		}
+	}
+}
+
+// CURSOR'S LOGIN IS WHERE EACH PLATFORM'S BUILD KEEPS IT: ~/.cursor/auth.json
+// on macOS, $XDG_CONFIG_HOME/cursor/auth.json on Linux, which the engine points
+// at the seat home's `.config`. With the macOS path on Linux, an adopted login
+// never reached a seat and a refreshed one was never carried back.
+func TestCursorKeepsItsLoginWhereEachPlatformsBuildDoes(t *testing.T) {
+	t.Parallel()
+	for goos, want := range map[string]string{
+		"darwin": ".cursor/auth.json",
+		"linux":  ".config/cursor/auth.json",
+	} {
+		table, err := decodeTable(profilesYAML, goos)
+		if err != nil {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		p := table["cursor-agent"]
+		for field, paths := range map[string][]string{
+			"credential_paths":      p.CredentialPaths,
+			"host_credential_paths": p.HostCredentialPaths,
+		} {
+			if !slices.Contains(paths, want) || !slices.Contains(paths, ".cursor/cli-config.json") {
+				t.Errorf("%s on %s = %v, want %s beside .cursor/cli-config.json", field, goos, paths, want)
+			}
+		}
+	}
+}
+
+// A PLATFORM SECTION IS THE BUILT-IN'S, AND AN OVERRIDE OUTRANKS IT. The section
+// is resolved before an entry's overrides are merged, so an operator who sets a
+// field a section also sets gets their own value on every platform; and a
+// section naming a platform no release runs on is refused, being a typo for one
+// that does.
+func TestAPlatformSectionIsResolvedBeforeOverrides(t *testing.T) {
+	t.Parallel()
+	override := []string{".cursor/cli-config.json", ".elsewhere/auth.json"}
+	p, err := Load("cursor-agent", map[string]any{"credential_paths": []any{override[0], override[1]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.CredentialPaths, override) {
+		t.Errorf("credential_paths = %v, want the override", p.CredentialPaths)
+	}
+	raw := []byte("demo:\n  binary: demo\n  complete_args: [\"-p\"]\n  platforms:\n    windows:\n      binary: demo.exe\n")
+	if _, err := decodeTable(raw, "linux"); err == nil || !strings.Contains(err.Error(), `platforms names "windows"`) {
+		t.Errorf("a section for a platform no release runs on: err = %v", err)
+	}
+	raw = []byte("demo:\n  binary: demo\n  complete_args: [\"-p\"]\n  platforms:\n    linux:\n      binary: demo-linux\n")
+	for goos, want := range map[string]string{"linux": "demo-linux", "darwin": "demo"} {
+		table, err := decodeTable(raw, goos)
+		if err != nil {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		if got := table["demo"].Binary; got != want {
+			t.Errorf("binary on %s = %q, want %q", goos, got, want)
+		}
+	}
+}
+
+// A LOGIN KEY DECIDES WHETHER A FILE HOLDS A LOGIN, AND NOTHING ELSE DOES. Only
+// a file login_keys names is read, its `//` header lines set aside as Copilot
+// CLI writes them; an empty value is no login; and a file the rule cannot read
+// is taken for one, the direction that never drops somebody's login. A key may
+// only name a credential file, and must say which key.
+func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
+	t.Parallel()
+	p, err := Load("copilot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const header = "// User settings belong in settings.json.\n// This file is managed automatically.\n"
+	for name, tc := range map[string]struct {
+		file, content string
+		want          bool
+	}{
+		"first launch only":      {"config.json", header + `{"firstLaunchAt": "2026-10-24T21:08:22.632Z"}`, false},
+		"a token":                {"config.json", header + `{"copilotTokens": {"https://github.com:someone": "placeholder"}}`, true},
+		"an emptied token table": {"config.json", header + `{"copilotTokens": {}}`, false},
+		"a null token table":     {"config.json", `{"copilotTokens": null}`, false},
+		"unreadable":             {"config.json", "not json at all", true},
+		"a file no key names":    {"other.json", `{}`, true},
+	} {
+		if got := p.HoldsLogin(tc.file, []byte(tc.content)); got != tc.want {
+			t.Errorf("%s: HoldsLogin = %v, want %v", name, got, tc.want)
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		keys map[string]any
+		says string
+	}{
+		"a file no credential path has": {map[string]any{"hosts.json": "token"}, `login_keys names "hosts.json"`},
+		"no key":                        {map[string]any{"config.json": ""}, "login_keys.config.json is empty"},
+	} {
+		if _, err := Load("copilot", map[string]any{"login_keys": tc.keys}); err == nil ||
+			!strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
+		}
 	}
 }

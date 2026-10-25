@@ -3,13 +3,10 @@ package store
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
+
+	"github.com/crewlet/crewlet/internal/flock"
 )
 
 // Enforcing "one file, one process".
@@ -33,25 +30,21 @@ import (
 // collision. That is what the measurement above was originally a comparison
 // against, and it is why the answer is a lock rather than a better error.)
 //
-// That is not a theoretical shape. `crewlet secrets`, `crewlet llm export
-// -secret-store` and every provisioner's secret-store sink all open the
-// database the engine is running on, from a second OS process, as their
-// documented gesture. Before this lock the only defence was a printed
-// warning, which is a defence against an operator who reads it.
+// That is not a theoretical shape. `crewlet config`, `crewlet migrate` and
+// `crewlet search eval` open a node's database from a second OS process as
+// their documented gesture, and every command that reaches the company's
+// secrets asks this lock ([Probe]) whether the engine runs. Before this lock
+// the only defence was a printed warning, which is a defence against an
+// operator who reads it.
 //
-// # Why an OS lock rather than a pid file
+// # An OS lock, on a sidecar
 //
-// A pid file has to answer "is that process still alive?", and the portable
-// answer is worse than the question: os.FindProcess succeeds for any pid on
-// Unix, Signal(0) is unsupported on Windows, and pids are reused. A crashed
-// engine would leave a lock nobody could safely clear.
-//
-// An advisory file lock is released by the KERNEL when the holder exits,
-// however it exits. A crash frees it; a kill -9 frees it; a container OOM
-// frees it. There is no stale state to reap and no liveness check to get
-// wrong. The lock is taken on a SIDECAR file rather than the database itself,
-// because the driver opens and closes the database on its own schedule and a
-// lock on a descriptor it owns is a lock we cannot reason about.
+// The lock itself is [flock.Try]'s — an advisory lock the KERNEL releases when
+// its holder exits, however it exits, so a crashed engine leaves nothing to
+// reap; that package says why that beats a pid file. It is taken on a SIDECAR
+// file rather than the database itself, because the driver opens and closes
+// the database on its own schedule and a lock on a descriptor it owns is a
+// lock we cannot reason about.
 //
 // # Cross-PROCESS, not cross-handle
 //
@@ -60,7 +53,9 @@ import (
 // the driver serialises its own connections, and two pools on one file are
 // the same as one pool with more of them. So the lock is REFCOUNTED per
 // process — a second Open here shares the claim rather than being refused —
-// and only the last Close releases it. Refusing in-process would break the
+// and only the last Close releases it. That sharing is this file's, on top of
+// one [flock.Lock]: the OS lock itself excludes a second taker in this process
+// as firmly as one in another. Refusing in-process would break the
 // legitimate case (a test proving that mutual exclusion lives in a SQL
 // statement rather than in a pool) while catching nothing the real bug does.
 //
@@ -91,7 +86,7 @@ var ErrLocked = errors.New("store: the database is open in another process")
 // the last of them closes — see the refcount note above.
 type fileLock struct {
 	path string
-	file *os.File
+	held *flock.Lock
 
 	// holds is how many live handles share this claim. Guarded by
 	// locksHeld's mutex, never by a field of its own: the count and the
@@ -160,9 +155,8 @@ func lockStore(dbPath string) (*fileLock, error) {
 // holds the path, and any handle asking while it holds the path is refused in
 // turn.
 //
-// The holder's identity is written into the sidecar AFTER the lock is held,
-// so what a refused opener reads is always a live holder's — never a
-// half-written line from a racing one.
+// Who holds it is [flock.Try]'s to stamp into the sidecar, and what a refused
+// opener's error names.
 func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// An in-memory database is per-connection by construction: there
@@ -187,83 +181,46 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	}
 
 	path := dbPath + lockSuffix
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("store: preparing %s: %w", dir, err)
-		}
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("store: opening the lock beside %s: %w", dbPath, err)
-	}
-	held, err := tryLock(file)
+	held, err := flock.Try(path)
+	var other *flock.HeldError
 	switch {
-	case err != nil:
-		_ = file.Close()
-		return nil, fmt.Errorf("store: locking %s: %w", dbPath, err)
-	case !held:
-		holder := readHolder(file)
-		_ = file.Close()
+	case errors.As(err, &other):
 		return nil, fmt.Errorf("%w: %s is held by %s. Stop it before running "+
 			"this — the driver does not support two processes on one file, "+
 			"and does not reliably refuse the second one either",
-			ErrLocked, dbPath, holder)
+			ErrLocked, dbPath, other.Holder)
+	case err != nil:
+		return nil, fmt.Errorf("store: locking %s: %w", dbPath, err)
 	}
-	stamp(file)
-	lock := &fileLock{path: path, file: file, holds: 1, discarding: discarding}
+	lock := &fileLock{path: path, held: held, holds: 1, discarding: discarding}
 	locksHeld.by[dbPath] = lock
 	return lock, nil
 }
 
-// ProbeLock is what an open of the database at path would meet at its lock
-// from another process: [ErrLocked] naming the holder where one holds it, nil
-// where none does, and any other error where the lock cannot be looked at. It
-// opens no database, creates no file and keeps no lock.
+// Probe reports whether another process holds the node database at dbPath —
+// its running engine, or an offline command working on it — as [ErrLocked]
+// naming the holder, WITHOUT OPENING THE FILE AND WITHOUT KEEPING THE CLAIM.
+// A claim this process holds already is shared for the moment, as a second
+// open's is, and answers nil.
 //
-// For a caller that decides from whether the engine is running BEFORE it opens
-// the file, and may then decline to open it at all. Finding that out by opening
-// is not free: an open applies any pending schema ([OpenNode]), so a newer
-// binary that opened a file only to learn it would not use it has migrated a
-// file it had no business changing.
+// For a process that does not use the database and needs to know whether the
+// engine runs: a `crewlet` command deciding how to reach the fleet's store.
+// Opening the file to learn it would migrate a database the command never
+// reads, and on a node that has never booted create one. And KEEPING the
+// claim would lock a file the command does not use: a second command would
+// then read the first as a running engine, and the engine would be refused
+// over a database nobody had open. What a command does use — a broker on the
+// stream's store directory — has a lock of its own, which is what keeps an
+// engine from starting under it.
 //
-// NOTHING IS CREATED. A database with no sidecar is held by no process: every
-// holder creates the sidecar before it locks it, and a release leaves it in
-// place ([fileLock.release]). Where there is one, the probe takes the lock for
-// the instant it asks — an open in another process landing in that instant is
-// refused, as it would be by any other opener here — and writes no stamp, so
-// the holder the sidecar names is still the last real one.
-//
-// A CLAIM THIS PROCESS HOLDS answers nil: it is not another process's. The
-// look at this process's claims and the probe are one step under their mutex,
-// as they are in [claimStore], so a claim taken here between the two cannot
-// be read as another process's.
-func ProbeLock(path string) error {
-	if path == "" || strings.HasPrefix(path, ":memory:") {
-		return nil
+// Not for a scratch store, which the engine deletes before it opens: a node
+// that holds no data has nothing here to ask about.
+func Probe(dbPath string) error {
+	lock, err := lockStore(dbPath)
+	if err != nil {
+		return err
 	}
-	locksHeld.mu.Lock()
-	defer locksHeld.mu.Unlock()
-	if locksHeld.by[path] != nil {
-		return nil
-	}
-	file, err := os.OpenFile(path+lockSuffix, os.O_RDWR, 0)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return nil
-	case err != nil:
-		return fmt.Errorf("store: opening the lock beside %s: %w", path, err)
-	}
-	defer func() { _ = file.Close() }()
-	held, err := tryLock(file)
-	switch {
-	case err != nil:
-		return fmt.Errorf("store: locking %s: %w", path, err)
-	case !held:
-		return fmt.Errorf("%w: %s is held by %s", ErrLocked, path, readHolder(file))
-	}
-	// The close releases it too; unlocking first is for the reason
-	// [fileLock.release] gives.
-	_ = unlock(file)
+	lock.release()
 	return nil
 }
 
@@ -271,7 +228,7 @@ func ProbeLock(path string) error {
 // was the last. Safe on a nil lock, which is what an in-memory database gets,
 // so every caller can defer it unconditionally.
 func (l *fileLock) release() {
-	if l == nil || l.file == nil {
+	if l == nil || l.held == nil {
 		return
 	}
 	locksHeld.mu.Lock()
@@ -285,72 +242,8 @@ func (l *fileLock) release() {
 			break
 		}
 	}
-	// UNLOCK BEFORE CLOSE even though closing releases it: on a descriptor
-	// this process duplicated (a fork, a test harness), the close of one
-	// copy is not the release of the lock.
-	_ = unlock(l.file)
-	_ = l.file.Close()
-	// The sidecar is deliberately NOT removed. Unlinking it races a peer
-	// that has already opened it and is about to lock: that peer would
-	// take a lock on an unlinked inode and a third process would create a
-	// new file and lock that, so both would believe they hold it. An empty
-	// file is cheap; a lock that excludes nobody is not.
-}
-
-// stamp records who holds the lock, best effort.
-//
-// DIAGNOSTIC ONLY — nothing reads it to make a decision, the kernel's answer
-// is the decision — so a failure to write it must not fail an open that has
-// already succeeded.
-func stamp(file *os.File) {
-	if err := file.Truncate(0); err != nil {
-		return
-	}
-	host, _ := os.Hostname()
-	_, _ = file.WriteAt([]byte(fmt.Sprintf("pid %d on %s since %s\n",
-		os.Getpid(), host, time.Now().UTC().Format(time.RFC3339))), 0)
-	_ = file.Sync()
-}
-
-// maxHolderStamp bounds the sidecar read.
-//
-// Not a truncation of the stamp — stamp() writes one line of well under a
-// kilobyte — but a bound on a file this process does not fully control: the
-// path is operator-supplied, and reading an arbitrary file whole into an error
-// message is how a mistyped store path becomes a gigabyte in the heap. 8 KiB
-// is an order of magnitude past the longest stamp a 253-byte hostname can
-// produce.
-const maxHolderStamp = 8 << 10
-
-// readHolder describes the process holding the lock, for the error message.
-//
-// THE WHOLE STAMP. It used to read into a fixed 256-byte buffer, and stamp()
-// writes "pid N on HOST since TIMESTAMP" — a hostname may be up to 253 bytes,
-// so the one diagnostic an operator gets for a locked store could lose the
-// host, which is the single field telling them WHICH machine to go and look
-// at. The file is one line this process wrote; reading it whole costs nothing.
-func readHolder(file *os.File) string {
-	raw, err := io.ReadAll(io.NewSectionReader(file, 0, maxHolderStamp))
-	if err != nil {
-		return "another crewlet process"
-	}
-	if line := strings.TrimSpace(string(raw)); line != "" {
-		return line
-	}
-	// An empty sidecar is the window between a peer's lock and its stamp,
-	// or a release that left the file behind. Both mean "somebody, and we
-	// cannot say who" — which is more useful than an invented pid.
-	return "another crewlet process"
-}
-
-// pidOf reads the holder's pid from a stamp, for tests and diagnostics.
-func pidOf(stamped string) (int, bool) {
-	fields := strings.Fields(stamped)
-	if len(fields) < 2 || fields[0] != "pid" {
-		return 0, false
-	}
-	pid, err := strconv.Atoi(fields[1])
-	return pid, err == nil
+	// The sidecar stays where it is — see [flock]'s package doc.
+	l.held.Release()
 }
 
 // discard deletes a database and every sidecar beside it, holding the store's

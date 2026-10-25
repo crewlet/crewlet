@@ -267,6 +267,29 @@ func (p *Provider) String() string {
 	return fmt.Sprintf("%s/%s/%s", providerName, p.agent, p.model)
 }
 
+// routeFor picks the channel one call's system prompt takes
+// ([cliprofile.Profile.RouteFor]), and a call that carries NO system prompt
+// takes a seat's route whatever its kind: the appending channel wherever the
+// profile declares one, so the CLI's own prompt stays in force.
+//
+// A side pass takes the replacing channel because its system prompt is the
+// whole instruction. With none, there is nothing to put in the vendor's place,
+// and the replacing channel would put nothing there: harmless where a channel
+// is passed only with text to carry, but a channel whose file carries policy is
+// passed on every call ([cliprofile.SystemPromptFile]), and its replacing form
+// then renders an EMPTY system prompt. On Kimi Code that is an agent file with
+// no body, which the CLI refuses outright ("Missing prompt body", exit 1,
+// measured on 0.42.0 and 2.3.1). The appending form with nothing to add is the
+// vendor's own prompt under the same policy, which is what a call with no
+// system prompt asks for. Every caller in the engine sends one today; this is
+// what holds the next that does not.
+func (p *Provider) routeFor(req llm.Request) cliprofile.Route {
+	if system, _ := SplitSystem(req); system == "" {
+		return p.profile.RouteFor(true)
+	}
+	return p.profile.RouteFor(req.Agent)
+}
+
 // Complete runs one CLI invocation and reads its answer.
 //
 // An entry its CLI last reported spent is NOT called while it sits out
@@ -282,10 +305,16 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
-	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
-	// before the transcript is rendered, so it is never both.
+	// THE SYSTEM PROMPT ON THE CHANNEL THIS KIND OF CALL TAKES: beside the
+	// CLI's own for a seat at work, in place of it for a text function —
+	// see [Provider.routeFor]. Lifted before the transcript is rendered, so
+	// it is never both.
+	route := p.routeFor(req)
+	if route.KeepsDefault {
+		req = withHarnessNote(req)
+	}
 	var system string
-	if p.profile.HasSystemChannel() {
+	if route.Channel.Declared() {
 		system, req = SplitSystem(req)
 	}
 	prompt, err := RenderPrompt(req)
@@ -314,7 +343,12 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		return nil, sitting
 	}
 
-	checkout, err := p.ws.Acquire(ctx, seat, callID, p)
+	var checkout *Checkout
+	if p.signsInWithKey() {
+		checkout, err = p.ws.AcquireForKey(ctx, seat, callID)
+	} else {
+		checkout, err = p.ws.Acquire(ctx, seat, callID, p)
+	}
 	if err != nil {
 		// CLASSIFIED, not fatal outright: a seat's generation runs the CLI
 		// itself now, so what failed may be a slow host or an unusable
@@ -398,27 +432,22 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
-	// have something to put in it — see [cliprofile.SystemPromptFile]. A profile whose
-	// prompt channel is a vendor agent file declares that CLI's tool
-	// denial in the same file, so skipping it on a request with no system
-	// prompt would hand the vendor's default agent, and every tool it has,
-	// to exactly the probes that exist to prove the tools are off.
-	if system != "" || p.profile.SystemPromptFile != nil {
-		// One channel or the other — the profile validator refuses a
-		// build that declares both.
+	// have something to put in it — see [cliprofile.SystemPromptFile]. A
+	// channel that is a vendor agent file declares that CLI's tool denial in
+	// the same file, so skipping it on a request with no system prompt
+	// would hand the vendor's default agent, and every tool it has, to
+	// exactly the calls that would never notice. A file that would hold the
+	// system prompt and nothing else is written only when there is one
+	// ([cliprofile.SystemPromptFile.CarriesPolicy]): a CLI that reads it on
+	// every run still reads an empty one, and passing no channel is what an
+	// empty system prompt means everywhere else ([SplitSystem]).
+	if ch := route.Channel; system != "" || ch.File.CarriesPolicy() {
+		// One shape or the other — the profile validator refuses a
+		// channel that declares both.
 		switch {
-		case len(p.profile.SystemPromptArgs) > 0:
+		case ch.Env != "":
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			args, err := systemArgs(
-				p.profile.SystemPromptArgs, p.profile.SystemPromptFile, system, checkout.Work)
-			if err != nil {
-				return nil, p.fail(llm.KindFatal, err)
-			}
-			in.args = append(in.args, args...)
-		case p.profile.SystemPromptEnv != "":
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			pair, err := systemEnv(
-				p.profile.SystemPromptEnv, p.profile.SystemPromptFile, system, checkout.Work)
+			pair, err := systemEnv(ch, system, checkout.Work)
 			if err != nil {
 				return nil, p.fail(llm.KindFatal, err)
 			}
@@ -426,6 +455,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// allowlist and the profile's own config_env above, and the
 			// last assignment of a name is the one exec applies.
 			in.env = append(in.env, pair)
+		case len(ch.Args) > 0 || ch.File.ReadAlways():
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			args, err := systemArgs(ch, system, checkout.Work)
+			if err != nil {
+				return nil, p.fail(llm.KindFatal, err)
+			}
+			in.args = append(in.args, args...)
 		}
 	}
 	// THE PROMPT LAST, and after the system args for the same reason the
@@ -521,7 +557,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	return p.completion(ctx, prompt, len(req.Tools) > 0, res, usageDoc)
+	return p.completion(ctx, system+prompt, len(req.Tools) > 0, res, usageDoc)
 }
 
 // newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
@@ -562,11 +598,18 @@ func (p *Provider) argv() []string {
 // and the one place that can say so is here, where the token counts that
 // explain it are still in hand.
 //
+// sent is everything the engine handed the CLI — the system prompt on its
+// channel and the rendered prompt — and is read only for the estimate a CLI
+// that reports no usage is charged. The system prompt is in it because a
+// budget charged for the transcript alone undercounts every call by the
+// largest stable thing in it; what is NOT in it is a vendor's own system
+// prompt kept beside the engine's, which the engine never sees.
+//
 // offeredTools says whether the prompt carried the response contract, which
 // [RenderPrompt] appends exactly when the request offered tools. Only then is
 // the reply read as an envelope: see the read below.
 func (p *Provider) completion(
-	ctx context.Context, prompt string, offeredTools bool, res *rawResult, usageDoc string,
+	ctx context.Context, sent string, offeredTools bool, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
@@ -592,6 +635,10 @@ func (p *Provider) completion(
 	}
 
 	out := extract(p.profile, res.stdout)
+	// Whether the CLI said the run FAILED — a non-zero exit, or its own flag
+	// at the profile's error_paths. It decides where a marker may stand, and
+	// that the call is refused below rather than answered.
+	failed := res.exitCode != 0 || out.failed
 	// The CLI's own report wins over anything stdout happened to carry:
 	// a profile only names one when its vendor puts the counts nowhere
 	// else, so a hit here is the only real figure there is. A report that
@@ -599,7 +646,14 @@ func (p *Provider) completion(
 	// then fall back to stdout's — an estimate, for a CLI that reports
 	// none there — on every call until somebody notices the budget
 	// figures are made up.
-	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() {
+	//
+	// NOT FOR A RUN THE CLI SAID FAILED, which is refused below and charged
+	// nothing, so no count falls back to anything. A vendor's report of a
+	// failed run may hold no counts by design — Hermes writes them as null
+	// for a refused key or a spent plan (measured on 0.21.5) — and warning
+	// of drift on every such call names the profile as broken exactly when
+	// the operator is reading the log for the refusal.
+	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
 		fallback := "an estimate, four characters a token"
 		if out.reported {
 			fallback = "the counts stdout reported"
@@ -636,8 +690,7 @@ func (p *Provider) completion(
 	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, cliOutput{
-		said: said, stdout: res.stdout, stderr: res.stderr,
-		failed: res.exitCode != 0 || out.failed,
+		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed,
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
@@ -667,7 +720,7 @@ func (p *Provider) completion(
 	// NOT BENCHED: only a spent plan sits the entry out ([Provider.bench]),
 	// because only a spent plan is known to last. A failure the next call
 	// may not meet must not hold every seat on the node off a working entry.
-	if res.exitCode != 0 || out.failed {
+	if failed {
 		what := fmt.Sprintf("the %s CLI exited %d", p.agent, res.exitCode)
 		if res.exitCode == 0 {
 			what = fmt.Sprintf("the %s CLI exited 0 and reported that the run failed", p.agent)
@@ -797,15 +850,19 @@ func (p *Provider) completion(
 		// InputTokens is ALWAYS the full prompt count, cache included —
 		// the contract's rule, and what keeps it a correct budget figure
 		// whatever the cache did. CacheRead and CacheWrite break the same
-		// total down for cost reporting; adding them again double-counts.
-		comp.InputTokens = out.input + out.cacheRead + out.cacheWrite
+		// total down for cost reporting; adding them again double-counts,
+		// which is why a vendor whose input count already holds them says
+		// so ([cliprofile.UsagePaths.InputIncludesCache]). A model-side
+		// tool's prompt a CLI reports apart from its input is billed as
+		// input, so it is charged as input — see [cliprofile.UsagePaths].
+		comp.InputTokens = p.profile.Usage.PromptTokens(out.input, out.cacheRead, out.cacheWrite) + out.toolPrompt
 		// Reasoning a CLI reports apart from its output is billed as
 		// output, so it is charged as output — see [cliprofile.UsagePaths].
 		comp.OutputTokens = out.output + out.reasoning
 		comp.CacheRead = out.cacheRead
 		comp.CacheWrite = out.cacheWrite
 	} else {
-		comp.InputTokens = EstimateTokens(prompt)
+		comp.InputTokens = EstimateTokens(sent)
 		comp.OutputTokens = EstimateTokens(out.text)
 	}
 

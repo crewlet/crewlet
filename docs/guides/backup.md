@@ -435,10 +435,11 @@ down anyway.
 1. **Export subscription logins first**, if any seats run on a coding CLI,
    while the fleet is still up: `crewlet llm export <key>` packs each into one
    portable bundle. It restores the entry's configured bundle before it reads
-   the login, so it reads the company's values through the running engine —
-   with one of its Tier A tokens in `CREWLET_API_TOKEN` — and is refused on a
-   stopped node that has run ([where a command reads the company's
-   values](../reference/cli.md#where-a-command-reads-the-companys-values)).
+   the login, so it reads the company's values: through the running engine,
+   with one of its Tier A tokens in `CREWLET_API_TOKEN`. Do it before the
+   drain, since with every node stopped a member of a cluster has no running
+   member to read through and is refused ([where a command reads the
+   company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 2. **Drain and stop every node** — SIGTERM or Ctrl+C once, and let the drain
    converge; see [graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
 3. **Copy, per node:** both store files — `store.path` and, on a node with

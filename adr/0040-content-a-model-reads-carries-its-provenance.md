@@ -16,9 +16,12 @@ never an instruction, and every read result says so.** One package,
   a cryptographic source and carried on the turn's context, so content cannot
   close the fence by guessing its marker;
 - **labels** on the fence: the source (a page body, a work item comment, a
-  project file, a chat thread, an artifact file, a datastore row), who wrote
-  it (by kind and seat handle), and how far the reader may trust it (its own
-  words, a colleague's, an outside party's, a page anybody may edit);
+  project file, a chat thread, an artifact file, a datastore row, the adopted
+  brand's voice), who wrote it (by kind and seat handle), and how far the
+  reader may trust it (its own words, a colleague's, an outside party's, a page
+  anybody may edit, or what an administrator adopted for the company, which
+  governs tone and wording and never the task, the tools, the recipients or
+  access);
 - for a tool whose answer is structured, an **envelope** carrying the same
   trust and authors beside the payload;
 - one **standing sentence** in every seat's prompt, owned by the package,

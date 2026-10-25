@@ -355,6 +355,42 @@ func TestSubjectPredicates(t *testing.T) {
 	}
 }
 
+// A PERSON IS NAMED ONE WAY in every auxiliary prompt: the classifier writes
+// a fact in this form and the memory filter matches the sender against it, so
+// the identity half — the part a rename leaves alone — has to be there on
+// both sides, and a seat is named by its handle even behind a display name.
+func TestASubjectIsNamedOneWay(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		s    learning.Subject
+		want string
+	}{
+		{"named on a platform",
+			learning.Subject{Name: "Sam", ExternalID: "U1", Platform: "slack"}, "Sam (slack:U1)"},
+		{"named with no platform",
+			learning.Subject{Name: "Sam", ExternalID: "U1"}, "Sam (U1)"},
+		{"a seat", learning.Subject{Handle: "dev"}, "dev"},
+		{"a seat behind a display name",
+			learning.Subject{Handle: "dev", Name: "Dev Bot"}, "Dev Bot (dev)"},
+		{"a seat also known on a platform",
+			learning.Subject{Handle: "sam", Name: "Sam", ExternalID: "U1", Platform: "slack"}, "Sam (sam)"},
+		{"an id on a platform", learning.Subject{ExternalID: "U1", Platform: "slack"}, "slack:U1"},
+		{"an id from nowhere", learning.Subject{ExternalID: "U1"}, "U1"},
+		{"a name with no identifier", learning.Subject{Name: "Sam"}, "Sam"},
+		{"a name that is the handle", learning.Subject{Handle: "sam", Name: "sam"}, "sam"},
+		{"padded", learning.Subject{Name: " Sam ", Handle: " dev "}, "Sam (dev)"},
+		{"nobody", learning.Subject{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.s.Label(); got != tc.want {
+				t.Errorf("Label(%+v) = %q, want %q", tc.s, got, tc.want)
+			}
+		})
+	}
+}
+
 // AN UNKEYED OBSERVATION MUST NOT DISARM THE GUARD.
 //
 // Unkeyed observations count (see TestUnkeyedObservationsAlwaysCount), but the

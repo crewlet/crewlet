@@ -254,15 +254,16 @@ Each run records what it mints where you send it — an env file (`-env-file`),
 the fleet's encrypted secret store (`-secret-store`) or your terminal
 (`-print`) — and a run that would mint takes exactly one of the three. It reads
 the company's values the way the engine does, the secret store before the
-environment: before a single node's first start from that node's own rows,
-which are then the whole store, and after it through the running engine, with
-`CREWLET_API_TOKEN` set to one of its Tier A tokens carrying `admin`, or through
-the running node `-api URL` names. Once the node has run, a run that reads the
-company's store is refused with its engine stopped, before it changes anything:
-every `gitlab`, `github` and `jira` run, its `-dry-run` included, and a
-`mattermost` or `slack` run with something to provision. A `mattermost` or
-`slack` run with `-dry-run` or nothing to provision reads nothing of the store
-and runs on any node
+environment: through the running engine, with `CREWLET_API_TOKEN` set to one
+of its Tier A tokens carrying `admin`, or through the running node `-api URL`
+names — and with the engine stopped from the fleet's store itself, which the
+command reaches through the node's own broker or the external one. A member of
+a cluster whose engine is stopped cannot reach the store alone, so a run there
+that reads it is refused before it changes anything, naming `-api`: every
+`gitlab`, `github` and `jira` run, its `-dry-run` included, and a `mattermost`
+or `slack` run with something to provision. A `mattermost` or `slack` run with
+`-dry-run` or nothing to provision reads nothing of the store and runs on any
+node
 ([where a command reads the company's values](docs/reference/cli.md#where-a-command-reads-the-companys-values)).
 Beside a running engine, `-secret-store` is the sink the engine reads with no
 restart, at its next configuration apply; an env file reaches it only when it

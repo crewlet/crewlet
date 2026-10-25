@@ -402,11 +402,9 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 // fleet has no pointer, or an OLDER one.
 //
 // This is what makes an offline `crewlet config import` reach the fleet. The
-// activation pointer lives in the coordination store, and on the default
-// embedded topology that store is inside the engine's own process — so a
-// command run while the engine is stopped cannot move it. It marks the
-// revision active in the node's own database instead, and this publishes it
-// at the next start.
+// activation pointer lives in the coordination store, which that command does
+// not open: it marks the revision active in the node's own database, where
+// the revision itself lives, and this publishes it at the next start.
 //
 // # The pointer wins when it is NEWER
 //

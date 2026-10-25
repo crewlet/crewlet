@@ -22,11 +22,10 @@
 # Re-runnable: every step is idempotent. Its COMPANY= provision reads the
 # company's stored values through ./crewlet.yaml when one is present, and
 # from the environment alone when none is. With that node's engine stopped it
-# runs only before a single node's first start, when the node's own rows are
-# the company's whole secret store; once the node has run, or on a member of
-# a cluster, run it with the engine up and CREWLET_API_TOKEN set to one of
-# crewlet.yaml's api.auth tokens whose grants include admin, or the provision
-# is refused.
+# reaches the fleet's secret store itself, through the node's own broker; with
+# the engine up it goes through it, so set CREWLET_API_TOKEN to one of
+# crewlet.yaml's api.auth tokens whose grants include admin. On a member of a
+# cluster whose engine is stopped the provision is refused, naming -api.
 set -euo pipefail
 
 GITLAB_CONTAINER="${GITLAB_CONTAINER:-$(docker compose ps -q gitlab 2>/dev/null || true)}"
@@ -144,11 +143,11 @@ if [ -z "${COMPANY}" ]; then
            -public-url ${ENGINE_URL} -env-file .env.gitlab
        source .env.gitlab && crewlet run -config crewlet.yaml -company ${SEED}
      The provision reads the company's stored values through ./crewlet.yaml
-     when one is here. With that node's engine stopped it runs only before
-     the node's first start; once the node has run, run it with the engine
-     up and CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens
-     whose grants include admin, or pass -api URL naming a running node,
-     and then restart the engine from the sourced shell.
+     when one is here: with that node's engine stopped from the fleet's
+     store itself, and with it up through the engine, with
+     CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens whose
+     grants include admin — or pass -api URL naming a running node — and
+     then restart the engine from the sourced shell.
 EONEXT
 else
   SEED="${COMPANY}"

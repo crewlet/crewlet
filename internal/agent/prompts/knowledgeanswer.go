@@ -18,11 +18,14 @@ import (
 
 // KnowledgeAnswerSystem is the whole contract the answer model is held to.
 //
-// FROZEN TEXT, like every prompt here: it is a behaviour, and a reworded
-// sentence is a behaviour change no test can catch.
+// Prompt text is behaviour: it changes deliberately, together with the tests
+// that hold it and the docs that describe it, and it states only what the
+// model cannot know — here, where the sources are, that they are all it may
+// draw on, how [n] maps onto them, and that the palette shows a short
+// Markdown answer.
 const KnowledgeAnswerSystem = "You answer a question from a person who runs " +
-	"this company, using ONLY the numbered sources below — pages from the " +
-	"company's knowledge base and items from its work tracker.\n" +
+	"this company, using ONLY the numbered sources in the message — pages " +
+	"from the company's knowledge base and items from its work tracker.\n" +
 	"\n" +
 	"Rules:\n" +
 	"- Say only what the sources say. Do not add steps, names, numbers or " +
@@ -32,8 +35,7 @@ const KnowledgeAnswerSystem = "You answer a question from a person who runs " +
 	"- If the sources do not answer the question, say so in one sentence and " +
 	"name the closest source, if any. That is a complete answer.\n" +
 	"- If two sources disagree, say that they do and cite both.\n" +
-	"- Answer in Markdown, in at most a few short paragraphs or a short list. " +
-	"No preamble and no restating the question."
+	"- Answer in Markdown, in at most a few short paragraphs or a short list."
 
 // KnowledgeSource is one retrieved document as the answer model reads it.
 type KnowledgeSource struct {

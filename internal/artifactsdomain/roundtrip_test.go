@@ -640,7 +640,7 @@ func TestTheListingShowsWhatTheViewerCanSee(t *testing.T) {
 			t.Fatalf("list %+v: %v", q, err)
 		}
 		var out []artifacts.ID
-		for _, item := range page.Items {
+		for _, item := range page.Contents {
 			out = append(out, item.ID)
 		}
 		slices.SortFunc(out, func(a, b artifacts.ID) int { return compareIDs(a, b) })
@@ -673,15 +673,16 @@ func TestTheListingShowsWhatTheViewerCanSee(t *testing.T) {
 		t.Error("bob's unshared artifact is listed for jane")
 	}
 	// A PAGE AT A TIME, the cursor carrying on where the last page ended.
-	first, err := n.reader.List(t.Context(), viewer, artifactsdomain.ListQuery{Limit: 2, Sort: artifactsdomain.SortTitle})
-	if err != nil || len(first.Items) != 2 || first.After == "" || first.Total != 4 {
-		t.Fatalf("the first page: %d items, after %q, total %d (%v)", len(first.Items), first.After, first.Total, err)
+	first, err := n.reader.List(t.Context(), viewer, artifactsdomain.ListQuery{MaxKeys: 2, Sort: artifactsdomain.SortTitle})
+	if err != nil || len(first.Contents) != 2 || first.NextContinuationToken == "" || first.Total != 4 ||
+		!first.IsTruncated || first.KeyCount != 2 {
+		t.Fatalf("the first page: %d items, after %q, total %d (%v)", len(first.Contents), first.NextContinuationToken, first.Total, err)
 	}
 	rest, err := n.reader.List(t.Context(), viewer, artifactsdomain.ListQuery{
-		Limit: 2, Sort: artifactsdomain.SortTitle, Cursor: first.After,
+		MaxKeys: 2, Sort: artifactsdomain.SortTitle, ContinuationToken: first.NextContinuationToken,
 	})
-	if err != nil || len(rest.Items) != 2 || rest.After != "" ||
-		rest.Items[0].Title <= first.Items[1].Title {
+	if err != nil || len(rest.Contents) != 2 || rest.NextContinuationToken != "" || rest.IsTruncated ||
+		rest.Contents[0].Title <= first.Contents[1].Title {
 		t.Errorf("the second page: %+v (%v)", rest, err)
 	}
 }
@@ -715,7 +716,7 @@ func TestAWorkItemListsTheArtifactsMadeForIt(t *testing.T) {
 			t.Fatalf("list for the item: %v", err)
 		}
 		var out []artifacts.ID
-		for _, item := range got.Items {
+		for _, item := range got.Contents {
 			out = append(out, item.ID)
 		}
 		slices.SortFunc(out, compareIDs)
@@ -731,8 +732,8 @@ func TestAWorkItemListsTheArtifactsMadeForIt(t *testing.T) {
 	}
 	none, err := n.reader.List(t.Context(), artifactsdomain.Viewer{Record: "jane"},
 		artifactsdomain.ListQuery{WorkItem: "CRW-9"})
-	if err != nil || len(none.Items) != 0 {
-		t.Errorf("an item nothing was made for lists %d (%v)", len(none.Items), err)
+	if err != nil || len(none.Contents) != 0 {
+		t.Errorf("an item nothing was made for lists %d (%v)", len(none.Contents), err)
 	}
 }
 

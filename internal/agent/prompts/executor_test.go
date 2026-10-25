@@ -45,12 +45,21 @@ func order(t *testing.T, got string, phrases ...string) {
 	}
 }
 
-func TestExecutorPromptCarriesCatalogueAndIdentity(t *testing.T) {
+func TestExecutorPromptCarriesTheToolsToDiscoverAndIdentity(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{
-		ToolCatalogue: "- foo: Does foo.\n- bar: Does bar.",
+		Discoverable: "- MCP server `github`\n- MCP server `atlassian`",
 	}).Text
-	contains(t, p, "## Your turn", "## Available tools", "- foo: Does foo.", "Engineer", "Acme")
+	contains(t, p, "## Your turn", "\n## Tools to discover\n- MCP server `github`",
+		"Engineer", "Acme")
+	// NOT "Available tools": that is the heading a text-mode prompt gives the
+	// JSON definitions of the tools the seat DOES hold, in the same
+	// conversation, and two sections under one heading saying different
+	// things is a model reading whichever it saw last.
+	excludes(t, p, "## Available tools")
+	// Nothing to discover is no section at all, not a heading over nothing.
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{Discoverable: " \n"}).Text,
+		"## Tools to discover")
 }
 
 // THE ACT RULE. A turn that ended with a composed reply nobody was sent is
@@ -66,22 +75,21 @@ func TestExecutorPromptSaysWritingIsNotDoing(t *testing.T) {
 }
 
 // Discovery is what stops an executor giving up when the tool it needs is not
-// already on its surface. It replaces the planner's tools_needed guess
-// entirely: nothing names tools in advance any more, so the prompt has to
-// teach the two-step lookup rather than mention it.
+// already on its surface. ONE SENTENCE: the two tools' own descriptions say
+// how each works, and what the header adds is the turn's rule — discover
+// before reporting that you cannot act.
 func TestExecutorPromptTeachesDiscovery(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
-		"`list_mcp_server_tools(server=...)`",
-		"`activate_tool(name=...)`",
-		"Prefer discovery over giving up",
-		// Server names only, which is WHY discovery is needed at all.
-		"lists those servers by NAME only",
+		"`list_mcp_server_tools`, then `activate_tool`",
+		"before reporting that you cannot act",
 	)
-	// And nothing survives of the reconciliation the two-phase engine
-	// needed: no declared tool list, and no phantom warning about one.
-	excludes(t, p, "tools_needed", "Heads-up")
+	// Nothing survives of the reconciliation the two-phase engine needed — no
+	// declared tool list, no phantom warning about one — nor of the
+	// API-era wording that described a vendor's tool channel this engine no
+	// longer has.
+	excludes(t, p, "tools_needed", "Heads-up", "tools=[", "next message")
 }
 
 // The originating-channel rule earned its place: a tracker-create task
@@ -89,31 +97,33 @@ func TestExecutorPromptTeachesDiscovery(t *testing.T) {
 // executor hit an unresolvable assignee, had no way to ask, and the requester
 // got silence. The rule must state the WHY, or a model cannot generalise it
 // to a novel case.
+//
+// And the work filed elsewhere is not the reply: a founder's direct message
+// was once "answered" with a work item they never heard about.
 func TestExecutorPromptRequiresStayingReachable(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
 		"Stay reachable on the channel the trigger arrived on",
-		"ask a follow-up",
+		"filing the ticket is the work, and the requester still has to be told",
+		"Ask a follow-up",
 		"confirm completion",
 		"the requester gets silence",
 	)
 	excludes(t, p, "slack_conversations_add_message", "jira_add_comment")
 }
 
-// no_action means "nobody was asking me", not "I was asked and I am ignoring
-// it". Without this rule a turn silently declines a direct ping and the
-// requester gets nothing back.
-func TestExecutorPromptRequiresVerboseDeclineForDirectAsk(t *testing.T) {
+// A direct ask that the seat declines still gets a reply — the decline IS the
+// reply — and the header says where it goes. What `no_action` MEANS is the
+// outcome field's to say, beside the field (runner's schema), and the decoder
+// refuses it on a turn somebody is waiting on: a second copy here was the
+// same rule written twice, for two texts to drift apart.
+func TestExecutorPromptRequiresADeclineOnTheOriginatingChannel(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{}).Text
-	contains(t, p,
-		`means "nobody was actually asking me to do anything"`,
-		"do NOT use `no_action`",
-		"@mentioned",
-		"originating channel's reply tool",
-		"closes the loop",
-	)
+	contains(t, ExecutorHeader,
+		"decline in one line through the originating channel's reply tool",
+		"naming the right owner")
+	excludes(t, ExecutorHeader, "no_action")
 }
 
 // Production failure: routed comment triggers produced recon only, and the
@@ -126,20 +136,22 @@ func TestExecutorPromptCallsOutTheFullArcRule(t *testing.T) {
 		// By capability, not by vendor tool name.
 		"the reply, the comment, the status change, the create",
 		"gathers data and stops has delivered nothing",
-		// A second pass exists but is not free, which is what stops the
-		// model treating recon-then-stop as the normal shape.
-		"a second pass over work one pass should have finished",
 	)
 	excludes(t, p, "`jira_add_comment`", "`jira_transition_issue`")
 }
 
-// The engine checks delivery claims against its own record, and a model that
-// does not know that names the tool it MEANT to call.
-func TestExecutorPromptSaysDeliveriesAreChecked(t *testing.T) {
+// ONE COPY OF EACH RULE. A fact about a submission field — that `deliveries`
+// is checked against the engine's record, what an outcome means — is the
+// field's own description, which reaches the model beside the field on every
+// round; the header carries the rules about the TURN. And it says nothing the
+// prompt already shows: the mission and the roster need no sentence saying
+// they are present.
+func TestTheExecutorContractLeavesFieldRulesToTheSchema(t *testing.T) {
 	t.Parallel()
-	contains(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
-		"`deliveries` must name calls you actually made",
-		"checks them against its own log")
+	excludes(t, ExecutorHeader,
+		"`deliveries`", "no_action",
+		"already in this prompt", "Mission, vision",
+		"A reviewer runs after you")
 }
 
 func TestExecutorPromptInlinesFullPolicies(t *testing.T) {
@@ -213,9 +225,10 @@ func TestExecutorPromptRendersOrgAndRoleContextInline(t *testing.T) {
 		"## Your Responsibilities", "- Write tests.",
 		"## Behavioral Guidelines", "- Be concise.",
 		"## Your Unit (Eng Team)", "**Purpose:** Build the thing.", "- Ship v1.0.",
-		// It has all of it inline — no knowledge-fetch pointer.
-		"Mission, vision, policies",
 	)
+	// It has all of it inline — and no knowledge-fetch pointer, nor a sentence
+	// telling the model what it can already read.
+	excludes(t, p, "no lookup needed")
 }
 
 func TestExecutorPromptDropsEmptySections(t *testing.T) {
@@ -281,17 +294,25 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 		"\n## Relevant knowledge\n", "\n## Similar prior work\n", "\n## Known counterparty\n")
 }
 
-// The knowledge note is a STATEMENT about the prompt, so it must only appear
-// when the block it points at does. Unconditional, it was a lie on every turn
-// the search was gated off — and an agent told the documentation is already
-// here does not go looking for it.
-func TestTheKnowledgeNoteOnlyAppearsWithABlock(t *testing.T) {
+// THE CONTRACT IS THE SAME WHATEVER WAS PREFETCHED. It used to carry a note
+// saying team documentation had been surfaced whenever the knowledge block was
+// present — which was false whenever that block was the prefetch's own hint
+// that the search found nothing, and redundant otherwise, since the block's
+// heading says what it is. A contract that changes with the prefetch is also
+// one sentence more that moves between two turns of one seat.
+func TestTheContractIsTheSameWhateverWasPrefetched(t *testing.T) {
 	t.Parallel()
-	contains(t, BuildExecutor(engineer(), ExecutorInput{
-		RelevantKnowledge: "- **Runbook**: steps.",
-	}).Text, "Relevant team documentation was surfaced")
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
-		"Relevant team documentation was surfaced")
+	with := BuildExecutor(engineer(), ExecutorInput{RelevantKnowledge: "- **Runbook**: steps."})
+	without := BuildExecutor(engineer(), ExecutorInput{})
+	a, okA := slice(with, "your_turn")
+	b, okB := slice(without, "your_turn")
+	if !okA || !okB {
+		t.Fatal("no your_turn section — this case compares nothing")
+	}
+	if a != b {
+		t.Errorf("the contract changed with the knowledge block:\nwith:    %q\nwithout: %q", a, b)
+	}
+	excludes(t, with.Text, "was surfaced")
 }
 
 // Both identity renderings must phrase a top-level seat the same way. They
@@ -307,11 +328,22 @@ func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 	contains(t, BuildReview(s, ReviewInput{}).Text, "None (top-level)")
 }
 
+// THE REVIEW IS THE SMALLER PROMPT of one seat's turn, because it renders a
+// one-line identity and its rules and never the executor's scaffold — the
+// whole turn's budget counts the roster once on that premise.
+//
+// Measured with EVERY GATE ON in both, the way production sends them to a
+// seat that holds every gated tool: the review's sandbox rule and `a2a_ask`,
+// and the executor's escalation, workers, sandbox and tools to discover
+// (referenceExecutor). An ungated review is the smallest one there is, and a
+// comparison made on it held for a review that had grown every rule it can
+// render.
 func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	t.Parallel()
 	s := lead()
-	exec := BuildExecutor(s, ExecutorInput{ToolCatalogue: "- foo: Does foo."}).Text
-	if review := BuildReview(s, ReviewInput{}).Text; len(review) >= len(exec) {
+	exec := BuildExecutor(s, referenceExecutor(t)).Text
+	review := BuildReview(s, ReviewInput{OffersSandbox: true, OffersA2A: true}).Text
+	if len(review) >= len(exec) {
 		t.Errorf("review prompt (%d) is not smaller than the executor's (%d)",
 			len(review), len(exec))
 	}
@@ -336,7 +368,8 @@ var forbiddenToolNames = []string{
 func TestPhaseContractsNameNoVendorTools(t *testing.T) {
 	t.Parallel()
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, forbiddenToolNames...)
-	excludes(t, BuildReview(engineer(), ReviewInput{}).Text, forbiddenToolNames...)
+	excludes(t, BuildReview(engineer(), ReviewInput{OffersSandbox: true, OffersA2A: true}).Text,
+		forbiddenToolNames...)
 }
 
 // Config-derived identity (a unit's configured chat channel) is data and may
@@ -344,12 +377,14 @@ func TestPhaseContractsNameNoVendorTools(t *testing.T) {
 func TestPhaseContractHeadersNameNoSpecificPlatforms(t *testing.T) {
 	t.Parallel()
 	contains(t, ExecutorHeader, "originating channel's reply tool")
+	// The review header with every gated rule rendered, so none hides a name.
+	review := reviewHeader(ReviewInput{OffersSandbox: true, OffersA2A: true})
 	for _, product := range []string{"Slack", "Jira", "Confluence", "Copilot", "GitHub"} {
 		if strings.Contains(ExecutorHeader, product) {
 			t.Errorf("ExecutorHeader names %q", product)
 		}
-		if strings.Contains(ReviewHeader, product) {
-			t.Errorf("ReviewHeader names %q", product)
+		if strings.Contains(review, product) {
+			t.Errorf("the review header names %q", product)
 		}
 	}
 }

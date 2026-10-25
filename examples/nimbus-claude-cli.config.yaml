@@ -22,12 +22,11 @@
 #     # 2. The model: authenticate the `claude` CLI inside Crewlet's own
 #     #    directory (-capture-token in place of -from-host mints a headless
 #     #    token instead), then prove it end to end BEFORE the first turn.
-#     #    Before this node's first start — while ./nimbus-data/stream,
-#     #    which nimbus.config.yaml shares, holds no broker state — its own
-#     #    rows are the company's whole secret store, so the doctor reads
-#     #    them; once it has run, run the doctor beside the running engine
-#     #    with CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER", or it is
-#     #    refused.
+#     #    With this node's engine stopped both reach the fleet's secret
+#     #    store themselves, through the node's own broker on
+#     #    ./nimbus-data/stream (which nimbus.config.yaml shares); once the
+#     #    engine runs, they go through it, with
+#     #    CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER".
 #     crewlet llm login  default -from-host -company examples/nimbus-claude-cli.company.yaml \
 #                                           -config  examples/nimbus-claude-cli.config.yaml
 #     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \

@@ -67,8 +67,11 @@ import { renderSlide } from "~/lib/slides.tsx";
 import { useWidth } from "~/lib/useWidth.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { DeckLayout, DeckSlide, DeckTheme, SlidesStartersAnswer } from "~/protocol/index.ts";
+import { useAdoptedBrand, type BrandAssets } from "~/lib/brand/useBrand.ts";
+import { logoSlotOf } from "~/lib/brand/brand.ts";
+import { BRAND_DECK_THEME } from "~/components/brand.tsx";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
+import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { AskAgentPanel, askTitleHold, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
@@ -98,9 +101,18 @@ const DECK_BRIEFS = [
 /** The longest brief, in characters: a task's description holds it and the plan. */
 const BRIEF_MAX = 4000;
 
+/** The engine's themes with the company's own, where it offers one, first. */
+function brandFirst(themes: readonly DeckTheme[]): DeckTheme[] {
+  return [
+    ...themes.filter((t) => t.id === BRAND_DECK_THEME),
+    ...themes.filter((t) => t.id !== BRAND_DECK_THEME),
+  ];
+}
+
 /**
- * The theme a new deck opens on: Crewlet's own. The engine's default plan
- * keeps the look its starter always had, for a create that names none.
+ * The theme a new deck opens on where the company has adopted no brand:
+ * Crewlet's own. The engine's default plan keeps the look its starter always
+ * had, for a create that names none.
  */
 const OPENING_THEME = "nightshade";
 
@@ -181,7 +193,20 @@ function ComposerSkeleton() {
 }
 
 /** Nothing on a starter slide is a file of a version: no image to resolve. */
-const noImage = () => null;
+/**
+ * What a theme's preview draws an image from: the brand theme's cover logo,
+ * which its sample names by path and holds no bytes of, from the adopted
+ * brand's own file; nothing for any other image a sample names.
+ */
+export function previewImages(
+  theme: DeckTheme,
+  assets: BrandAssets,
+): (path: string) => string | null {
+  const logo = theme.logo;
+  if (!logo) return () => null;
+  const slot = logoSlotOf(logo.slot);
+  return (path) => (slot && path === logo.path ? assets.logo(slot) : null);
+}
 
 export function SlidesCreate() {
   const starters = useRest<SlidesStartersAnswer>("slides-starters", (signal) =>
@@ -210,10 +235,16 @@ export function SlidesCreate() {
 function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const create = useCreateArtifact();
   const workItem = useWorkItem();
+  const { folder } = useSaveIn();
   const { root, phone, arrangement, stripInMain } = useComposerArrangement();
   const opening = useMemo(() => rowsOf(starters.default), [starters.default]);
+  const { adoption, assets } = useAdoptedBrand();
+  // THE COMPANY'S BRAND FIRST, AND CHOSEN: the engine offers its theme
+  // (`brand`) whenever a brand is adopted, and a new deck opens in it.
+  const themes = useMemo(() => brandFirst(starters.themes), [starters.themes]);
   const firstTheme =
-    starters.themes.find((t) => t.id === OPENING_THEME)?.id ??
+    themes.find((t) => t.id === BRAND_DECK_THEME)?.id ??
+    themes.find((t) => t.id === OPENING_THEME)?.id ??
     starters.default.theme ??
     starters.themes[0]?.id ??
     "";
@@ -228,6 +259,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
   const leave = useLeaveCreate();
 
   const theme = starters.themes.find((t) => t.id === themeId) ?? starters.themes[0]!;
+  const image = previewImages(theme, assets);
   const layouts = useMemo(
     () => new Map(starters.layouts.map((l) => [l.id, l])),
     [starters.layouts],
@@ -308,6 +340,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
           title: title.trim(),
           deck: planOf(theme.id, rows),
           shares: [{ audience: { kind: "seat", id: agent.handle }, role: "editor" }],
+          ...(folder ? { folder } : {}),
         }),
       );
       id =
@@ -366,7 +399,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       onSelect={setSelected}
       renderSlide={(id) => {
         const s = slides.find((x) => x.id === id);
-        return s ? renderSlide(s, { prefix: `new-t-${id}-`, image: noImage }) : null;
+        return s ? renderSlide(s, { prefix: `new-t-${id}-`, image }) : null;
       }}
       onReorder={(keys) => setRows(reorder(rows, keys))}
       onDuplicate={(key) => {
@@ -519,7 +552,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
                 framed
                 label={`Slide ${position + 1} of ${rows.length}, ${currentSlide.title || "Untitled"}`}
               >
-                {renderSlide(currentSlide, { prefix: "new-s-", image: noImage })}
+                {renderSlide(currentSlide, { prefix: "new-s-", image })}
               </SlideStage>
             </div>
           )}
@@ -550,16 +583,28 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
               label="Theme"
               value={theme.id}
               onValueChange={setThemeId}
-              themes={starters.themes.map((t) => ({
-                id: t.id,
-                name: t.name,
-                tag: t.tag,
-                group: "",
-              }))}
+              themes={themes.map((t) =>
+                t.id === BRAND_DECK_THEME
+                  ? {
+                      id: t.id,
+                      name: adoption?.document.name ?? t.name,
+                      tag: "Your company brand",
+                      // THE COMPANY'S OWN THEME SAYS SO ON ITS TILE, in the
+                      // accent's pill; the product's themes keep their tag
+                      // in the accessible name alone.
+                      tagTone: "brand",
+                      group: "",
+                    }
+                  : { id: t.id, name: t.name, tag: t.tag, group: "" },
+              )}
               groups={[]}
               columns={2}
               renderPreview={(t) => (
-                <ThemeCover theme={starters.themes.find((x) => x.id === t.id)!} title={title} />
+                <ThemeCover
+                  theme={starters.themes.find((x) => x.id === t.id)!}
+                  title={title}
+                  assets={assets}
+                />
               )}
             />
           </section>
@@ -630,7 +675,15 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
 }
 
 /** A theme's card: its cover drawn by the engine, with the title being typed. */
-function ThemeCover({ theme, title }: { theme: DeckTheme; title: string }) {
+function ThemeCover({
+  theme,
+  title,
+  assets,
+}: {
+  theme: DeckTheme;
+  title: string;
+  assets: BrandAssets;
+}) {
   const slide = previewSlide(
     theme,
     { key: `theme-${theme.id}`, layout: COVER_LAYOUT, title: "" },
@@ -640,7 +693,7 @@ function ThemeCover({ theme, title }: { theme: DeckTheme; title: string }) {
   if (!slide) return null;
   return (
     <SlideStage label={`${theme.name} cover`}>
-      {renderSlide(slide, { prefix: `new-th-${theme.id}-`, image: noImage })}
+      {renderSlide(slide, { prefix: `new-th-${theme.id}-`, image: previewImages(theme, assets) })}
     </SlideStage>
   );
 }

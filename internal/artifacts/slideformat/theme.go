@@ -55,6 +55,17 @@ type Theme struct {
 // the engine's starter deck has always had.
 const DefaultTheme = "ink"
 
+// BrandTheme is the theme of a deck drawn in the company's adopted brand.
+//
+// THIS PACKAGE HOLDS NO COLOURS FOR IT, because it knows no company: the caller
+// that reads the adopted brand resolves it to a [Theme] (the brand format's
+// slide theme) and composes with [ComposeBranded]. A deck's index naming it is
+// a deck in the format whatever the brand is now, or whether one is adopted at
+// all, since every slide holds its own styles and the index only records the
+// look the deck began in: a later adoption never rewrites a deck, and a person
+// who wants the new look starts again from it.
+const BrandTheme = "brand"
+
 // themes are the themes a starter can be drawn in, in the order a picker
 // offers them. Each one is held to the format with every layout by a test, so
 // a theme cannot ship a colour or a family the format refuses.
@@ -124,11 +135,12 @@ func ThemeByID(id string) (Theme, bool) {
 	return Theme{}, false
 }
 
-// themeIDs are the themes' ids, for a refusal that names them.
+// themeIDs are the themes' ids and [BrandTheme], for a refusal that names
+// them.
 func themeIDs() []string {
-	out := make([]string, len(themes))
+	out := make([]string, len(themes), len(themes)+1)
 	for i, t := range themes {
 		out[i] = t.ID
 	}
-	return out
+	return append(out, BrandTheme)
 }

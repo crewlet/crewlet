@@ -94,7 +94,7 @@ describe("the sidebar's Pinned group", () => {
     await mount((what, params) => {
       if (what === "viewer") return viewer([]);
       if (what === "artifacts" && params["pinned"] === true)
-        return { items: [listed("a-1", "Launch gates")], total: 1 };
+        return { contents: [listed("a-1", "Launch gates")], total: 1 };
       return undefined;
     });
     const link = await screen.findByRole("link", { name: /Launch gates/ });
@@ -108,7 +108,7 @@ describe("the sidebar's Pinned group", () => {
     await mount((what, params) => {
       if (what === "viewer") return viewer([]);
       if (what === "artifacts" && params["pinned"] === true)
-        return { items: pins, total: pins.length };
+        return { contents: pins, total: pins.length };
       return undefined;
     });
     await screen.findByRole("link", { name: /Launch gates/ });
@@ -120,7 +120,7 @@ describe("the sidebar's Pinned group", () => {
   test("is not drawn when nothing is pinned", async () => {
     await mount((what, params) => {
       if (what === "viewer") return viewer([]);
-      if (what === "artifacts" && params["pinned"] === true) return { items: [], total: 0 };
+      if (what === "artifacts" && params["pinned"] === true) return { contents: [], total: 0 };
       return undefined;
     });
     await screen.findByRole("navigation", { name: "Navigation" });

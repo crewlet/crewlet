@@ -26,9 +26,9 @@ import "strings"
 // called it wrong. Vendor-authored MCP descriptions are routinely several
 // paragraphs, and a catalogue is the only place they are ever shown.
 //
-// HERE, in the deepest package that needs it, because four callers render this
-// same line — the tool registry's catalogue, both list_mcp_server_tools
-// listings, and a sub-agent's surface — and a model sees more than one of them
+// HERE, in the deepest package that needs it, because two callers render this
+// same line — a snapshot's discoverable tools (the onboarding pass's and a
+// worker's prompt) and list_mcp_server_tools' listing — and a model sees both
 // in a single turn. Two renderers is how one of them starts cutting again;
 // internal/tools re-exports this rather than keeping a copy, since it already
 // imports this package and the dependency cannot run the other way.

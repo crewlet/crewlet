@@ -460,8 +460,8 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 // and exits non-zero. And no store can hold the name, so no run treats it as a
 // stored value: through a running node the run's batch never asks for it — the
 // node refuses a whole request over one such name, which would fail the doctor
-// on a value that cannot exist — and the refusal a stopped node that has run
-// gives never names it.
+// on a value that cannot exist — and with the engine stopped the fleet's store,
+// which refuses a read naming one the same way, is never asked for it either.
 //
 // Mutation: move the check after the mint, and the marker appears and stdin
 // is read; drop it, and every case is accepted or fails at the store instead;
@@ -616,20 +616,25 @@ roles:
 		}
 	})
 
-	t.Run("a stopped node that has run refuses the doctor naming no such name", func(t *testing.T) {
+	t.Run("llm doctor with the engine stopped asks the fleet's store for no such name", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapWithKeyring(t, "k1")
-		markBrokerRun(t, cfg)
+		// THE STORE REFUSES A WHOLE READ over one name outside the grammar,
+		// as the node's reveal does, so the command must never ask: the
+		// doctor reports the entry's problem rather than the store's.
 		var out, errOut bytes.Buffer
 		err := runLLM(noEnviron, []string{"doctor", "claude", "-no-smoke",
-			"-company", company(t, filepath.Join(t.TempDir(), "minted")), "-config", cfg},
-			&out, &errOut)
-		if !errors.Is(err, errStoppedNode) {
-			t.Fatalf("the doctor on a stopped node that has run = %v, want the refusal", err)
-		}
-		if strings.Contains(err.Error()+out.String()+errOut.String(), "MY-TOKEN") {
-			t.Errorf("the refusal names MY-TOKEN as a stored value: %v\n%s%s",
+			"-company", company(t, filepath.Join(t.TempDir(), "minted")),
+			"-config", bootstrapWithKeyring(t, "k1")}, &out, &errOut)
+		if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
+			t.Fatalf("the doctor = %v, want the entry's problem and a non-zero exit\n%s%s",
 				err, out.String(), errOut.String())
+		}
+		if !strings.Contains(errOut.String(), "the fleet's store") {
+			t.Errorf("the premise: the doctor did not reach the fleet's store:\n%s",
+				errOut.String())
+		}
+		if !strings.Contains(out.String(), `providers.llm.claude.overrides.token_env is "MY-TOKEN"`) {
+			t.Errorf("the report does not name the field:\n%s", out.String())
 		}
 	})
 
@@ -753,7 +758,7 @@ func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
 		{
 			name: "codex under api-key", agent: "codex", mode: cliagent.AuthAPIKey,
 			want: []string{"auth.mode api-key", `the "codex" profile names no token_env`,
-				"providers.llm.sub.auth.api_key, else OPENAI_API_KEY", "`crewlet secrets set`",
+				"providers.llm.sub.auth.api_key, else CODEX_API_KEY", "`crewlet secrets set`",
 				"none was minted or stored"},
 			notWant: []string{"auth.mode: subscription", "crewlet llm doctor", "overrides.token_env",
 				"a login of its own"},
@@ -922,11 +927,7 @@ func llmStoreAt(t *testing.T, environ config.Source, sub string, flags ...string
 	if !slices.Contains(flags, "-config") {
 		*at.bootstrap = filepath.Join(t.TempDir(), "absent.yaml")
 	}
-	use := readsTheCompany
-	if slices.Contains(llmActsOnItsOwn, sub) {
-		use = actsOnItsOwn
-	}
-	store, err := openCompanyStore(environ, at, "crewlet llm "+sub, use)
+	store, err := openCompanyStore(environ, at, "crewlet llm "+sub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -938,8 +939,9 @@ func llmStoreAt(t *testing.T, environ config.Source, sub string, flags ...string
 // `crewlet secrets set` says both. The engine resolves a token from the
 // snapshot it builds at each apply, and restores a bundle only when it builds
 // a company to run — at boot and at every apply — so a write through a running
-// node signs nothing in until the next apply, and one to a stopped node's own
-// rows reaches the fleet at that node's next start. A login or an export that
+// node signs nothing in until the next apply, and one made directly with this
+// node's engine stopped is read by it at its start, and by a node already
+// running on the same store at its next apply. A login or an export that
 // said only where the value went read as finished while the fleet went on
 // without it. The token is also said to be read under its conventional name,
 // so the company document needs no reference to it.
@@ -959,13 +961,13 @@ func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
 			return llmStoreAt(t, tokenEnviron(cliFixtureToken), sub, "-api", node.server.URL),
 				func(name string) bool { _, ok := node.holds(name); return ok }
 		}, secretsFleetNote},
-		{"this node's own rows", func(t *testing.T, sub string) (*companyStore, func(string) bool) {
+		{"the fleet's store, with the engine stopped", func(t *testing.T, sub string) (*companyStore, func(string) bool) {
 			cfg := bootstrapWithKeyring(t, "k1")
 			return llmStoreAt(t, noEnviron, sub, "-config", cfg), func(name string) bool {
-				_, ok := rowsOf(t, cfg)[name]
+				_, ok := fleetRowsOf(t, cfg)[name]
 				return ok
 			}
-		}, secretsLocalNote},
+		}, secretsStoppedNote},
 	} {
 		t.Run(route.name, func(t *testing.T) {
 			t.Parallel()
@@ -1085,10 +1087,10 @@ func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 			return llmStoreAt(t, tokenEnviron(cliFixtureToken), "export", "-api", node.server.URL),
 				func() bool { _, ok := node.holds(name); return ok }
 		}},
-		{"this node's own rows", func(t *testing.T) (*companyStore, func() bool) {
+		{"the fleet's store, with the engine stopped", func(t *testing.T) (*companyStore, func() bool) {
 			cfg := bootstrapWithKeyring(t, "k1")
 			return llmStoreAt(t, noEnviron, "export", "-config", cfg), func() bool {
-				_, ok := rowsOf(t, cfg)[name]
+				_, ok := fleetRowsOf(t, cfg)[name]
 				return ok
 			}
 		}},

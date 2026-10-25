@@ -9,14 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 )
 
-// Record is one stored secret's row, in whichever store holds it.
+// Record is one stored secret's row, whichever way it was reached.
 //
-// ONE SHAPE FOR BOTH STORES, and that is the point rather than a convenience.
-// A secret lives on the coordination KV, where every node reads it, and — for
-// a node that has not finished migrating off it — in that node's own database.
-// Two record types would have made the CLI, the API and the provisioning
-// sinks each pick a side, and a caller that could only speak one of them
-// would be a caller that only works on one of the two stores.
+// ONE SHAPE FOR EVERY WAY IN, and that is the point rather than a convenience.
+// A secret lives on the coordination KV, where every node reads it, and a
+// caller reaches it either through a running node's API or directly — the
+// engine, and a `crewlet` command with its node's engine stopped. One record
+// type is what lets the CLI, the API and the provisioning sinks speak to the
+// store without picking a side.
 type Record struct {
 	Name string
 
@@ -88,20 +88,18 @@ const (
 
 	// SourceProvision is a credential an integration's provisioning pass
 	// minted: the engine's own pass, or `crewlet <vendor> provision
-	// -secret-store` against a stopped node's own table.
+	// -secret-store` written to the fleet's store directly, with the node's
+	// engine stopped.
 	SourceProvision Source = "provision"
 
-	// SourceMigrated is a row the engine moved onto the fleet from a node's
-	// own table at boot. It replaces the word the stopped node stamped, so
-	// [SourceCLI] and [SourceLLMLogin] are never on the fleet.
-	SourceMigrated Source = "migrated"
-
-	// SourceCLI is `crewlet secrets set` against a stopped node's own table.
+	// SourceCLI is `crewlet secrets set` written to the fleet's store
+	// directly, with the node's engine stopped. Through a running node the
+	// same command's row is [SourceAPI].
 	SourceCLI Source = "cli"
 
 	// SourceLLMLogin is a coding CLI's login — `crewlet llm login`'s headless
-	// token, or `crewlet llm export -secret-store`'s bundle — stored against
-	// a stopped node's own table.
+	// token, or `crewlet llm export -secret-store`'s bundle — written to the
+	// fleet's store directly, with the node's engine stopped.
 	SourceLLMLogin Source = "llm-login"
 
 	// SourceIAM is the engine's own key material, minted by the engine
@@ -110,8 +108,8 @@ const (
 )
 
 // Sources are every write path's word.
-var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceMigrated,
-	SourceCLI, SourceLLMLogin, SourceIAM}
+var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceCLI,
+	SourceLLMLogin, SourceIAM}
 
 // Valid reports whether a source off the wire is one this build stamps.
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }
@@ -201,17 +199,16 @@ var ErrInvalidName = errors.New(
 // attacker — a `curl -d @big.tar` or a `crewlet secrets set X < big.tar` typo
 // is refused rather than sealed.
 //
-// ONE LIMIT, HERE, because a value outlives the store it was written to and
-// every reader of a revealed value through a node is sized from this one
-// number. A stopped node's own row is moved onto the fleet at the next start,
-// and a revealed value is read back — by `crewlet secrets get -reveal`, a
+// ONE LIMIT, HERE, because a value reaches the store by more than one path
+// and every reader of a revealed value through a node is sized from this one
+// number. A revealed value is read back — by `crewlet secrets get -reveal`, a
 // provisioning sink and a run resolving a company document through a node —
 // to the length this allows once spelled in the characters JSON escapes
-// longest. It was the API route's alone, so an offline `crewlet secrets set`
-// stored a value of any size and the next start moved it onto the fleet,
-// where a value past this limit can be longer, in those characters, than any
-// answer those readers take: a credential stored and possibly unreadable
-// through the node.
+// longest. It was the API route's alone, so a `crewlet secrets set` run with
+// the engine stopped, which writes the fleet's store directly, stored a value
+// of any size, and a value past this limit can be longer, in those
+// characters, than any answer those readers take: a credential stored and
+// possibly unreadable through the node.
 const MaxValueBytes = 64 << 10
 
 // ErrValueTooLarge reports a value longer than [MaxValueBytes].

@@ -32,6 +32,16 @@ import (
 //     compare-and-set rounds.
 //   - A reader's pins and opened marks ride the READER's subject, because they
 //     are one person's state and contend with nothing else.
+//   - The company's folder tree is ONE subject (`folder`, no id), because
+//     every folder write reads the whole tree: sibling names, the ancestor
+//     chain a move must not close into a cycle, the depth stamp, the live
+//     count. One subject makes the writer's snapshot the one the broker
+//     arbitrates, as the identity directory's one subject does. An
+//     artifact's MOVE rides the artifact's own subject, ordered against its
+//     publishes, and names the folders it reads in its scope.
+//   - The company's adopted brand is ONE subject (`brand`, no id): two
+//     administrators adopting at once contend there, and the later one is
+//     decided against the earlier one's adoption.
 
 // ObjectKind is what an object on the artifacts log is.
 //
@@ -74,6 +84,14 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain. The only kind that writes no row on any node.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindFolder is the company's folder tree, ONE subject with no id:
+	// every folder's create, rename, move and removal.
+	KindFolder ObjectKind = "folder"
+
+	// KindBrand is the company's adopted brand, ONE subject with no id: an
+	// adoption and a clear.
+	KindBrand ObjectKind = "brand"
 )
 
 // KindComment is RESERVED for the anchored comments a later build adds: no
@@ -82,7 +100,7 @@ const (
 // under the literal like any kind this build does not know.
 const KindComment ObjectKind = "comment"
 
-// ObjectKinds are the seven, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the nine, and THE ORDER IS LOAD-BEARING.
 //
 // The framework's conformance suite publishes the FIRST THREE a domain
 // declares, twice each, in order, so the declaration decides what the suite
@@ -90,9 +108,13 @@ const KindComment ObjectKind = "comment"
 // added to it, and a reader pinning it. An asset or a pin of an artifact no
 // create wrote is a record the applier refuses, so any other order would
 // certify a refusal.
+//
+// A KIND ADDED LATER IS APPENDED, never inserted: the folder tree and the
+// brand came after the base format, so a build that predates them retains
+// their records ([versionedFields] stamps each kind at its version).
 var ObjectKinds = []ObjectKind{
 	KindArtifact, KindAsset, KindReader, KindSource, KindEviction, KindGeneration,
-	KindBarrier,
+	KindBarrier, KindFolder, KindBrand,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -101,7 +123,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and so whether the framework keeps an anchor for it.
 //
-// SIX OF SEVEN DO. The barrier shares one subject across the whole domain, so
+// EIGHT OF NINE DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one. A reader's `opened` and `read_elevated` are additive writes on an
 // arbitrated kind: they carry no expectation of their own, and they move the
@@ -200,6 +222,18 @@ func GenerationSubject(gen uint32) Subject {
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 
+// FolderSubject is the company's folder tree: one subject for every folder.
+func FolderSubject() Subject { return Subject{Kind: KindFolder} }
+
+// BrandSubject is the company's adopted brand.
+func BrandSubject() Subject { return Subject{Kind: KindBrand} }
+
+// Singleton reports a kind with exactly one object, whose subject carries no
+// id: the barrier, the folder tree and the brand.
+func (k ObjectKind) Singleton() bool {
+	return k == KindBarrier || k == KindFolder || k == KindBrand
+}
+
 // String renders the subject's own path: what the framework appends to the
 // domain's subject prefix, and what a log line names.
 func (s Subject) String() string {
@@ -231,9 +265,15 @@ func (s Subject) Validate() error {
 		return fmt.Errorf("artifactsdomain: subject kind %q carries a separator "+
 			"or a wildcard, so the kind and the id could not be told apart", s.Kind)
 	}
-	if s.ID == "" && s.Kind != KindBarrier {
+	if s.ID == "" && !s.Kind.Singleton() {
 		return fmt.Errorf("artifactsdomain: a %s subject needs an id: only the "+
-			"barrier is a kind with exactly one object", s.Kind)
+			"barrier, the folder tree and the brand are kinds with exactly one "+
+			"object", s.Kind)
+	}
+	if s.ID != "" && (s.Kind == KindFolder || s.Kind == KindBrand) {
+		return fmt.Errorf("artifactsdomain: a %s subject carries no id: the kind "+
+			"has exactly one object, and %q would be a second subject arbitrating "+
+			"the same rows", s.Kind, s.ID)
 	}
 	if strings.ContainsAny(s.ID, " \t\r\n*>/") {
 		return fmt.Errorf("artifactsdomain: subject id %q carries whitespace, a "+

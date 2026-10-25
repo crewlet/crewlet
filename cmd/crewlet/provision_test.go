@@ -378,7 +378,7 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 		companySecrets, err := openCompanyStore(noEnviron, sinks.store,
-			"crewlet gitlab provision", readsTheCompany)
+			"crewlet gitlab provision")
 		if err != nil {
 			t.Fatalf("open the run's store: %v", err)
 		}
@@ -871,7 +871,7 @@ var outrankRoutes = []outrankRoute{
 		},
 	},
 	{
-		name: "on rows that are the whole store",
+		name: "on the fleet's store, with the engine stopped",
 		open: func(t *testing.T, held map[string]string) ([]string, *revealNode) {
 			cfg := bootstrapWithKeyring(t, "k1")
 			for name, value := range held {
@@ -886,7 +886,8 @@ var outrankRoutes = []outrankRoute{
 			if err != nil {
 				return err.Error()
 			}
-			return "this node's own rows at " + absolute(boot.Store.Path)
+			return "the fleet's store, reached through this node's broker on " +
+				boot.Stream.StoreDir + " — this node's engine is stopped"
 		},
 	},
 }
@@ -899,8 +900,8 @@ var outrankRoutes = []outrankRoute{
 // read: the vendor holds the new value and the engine goes on with the stored
 // one — a seat's earlier token retired under it, a hook re-keyed with a key
 // the engine does not hold. So each provisioner, through a running node and on
-// rows that are the whole store alike, refuses such a run naming the store,
-// the names, the sink and -secret-store, and:
+// the fleet's store reached directly with the engine stopped alike, refuses
+// such a run naming the store, the names, the sink and -secret-store, and:
 //
 //   - no vendor is reached — every vendor address here fails the case on any
 //     request, and Slack's run, whose vendor is no address this case can
@@ -988,7 +989,7 @@ func TestASinkTheStoreOutranksIsRefusedBeforeTheVendor(t *testing.T) {
 						}
 					}
 					if lines := strings.Split(strings.TrimSpace(out), "\n"); len(lines) != 1 ||
-						!strings.Contains(lines[0], "secret store") &&
+						!strings.Contains(lines[0], "fleet's store") &&
 							!strings.Contains(lines[0], "running node") || errs != "" {
 						t.Errorf("a refused run printed more than its route line:\n%s%s", out, errs)
 					}
@@ -1155,7 +1156,7 @@ func TestASlackRunWhoseSinkIsNoStoreOnlyListsTheStore(t *testing.T) {
 		"-ledger", filepath.Join(t.TempDir(), "slack-apps.json")}
 
 	out, errs, err := cliIn(t, tokenEnviron("a-machine-token"), args...)
-	if errors.Is(err, errOutrankedSink) || errors.Is(err, errStoppedNode) {
+	if errors.Is(err, errOutrankedSink) {
 		t.Fatalf("a run the store holds none of the names of was refused: %v\n%s%s", err, out, errs)
 	}
 	first, _, _ := strings.Cut(out, "\n")

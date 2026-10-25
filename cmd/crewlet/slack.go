@@ -84,7 +84,7 @@ func runSlackProvision(inv invocation, args []string, stdout, stderr io.Writer) 
 	// Loading it opens nothing: only a real run with seats to provision
 	// reaches the store, below, for what its sink needs of it.
 	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
-		"crewlet slack provision", readsTheCompany)
+		"crewlet slack provision")
 	if err != nil {
 		return err
 	}

@@ -122,6 +122,49 @@ const (
 	MaxAssetsPerCall         = 25 // one upload call
 )
 
+// Folder bounds (ADR-0047: an artifact lives in one folder, and a folder grants
+// nothing). Each is decided by the writer from its snapshot of the one tree
+// subject, and the depth is also STAMPED into every folder record
+// ([MaxFolderDepth]), so the applier enforces the bound a record was decided
+// under rather than its own build's constant.
+const (
+	// MaxFolderDepth is how deep a folder may sit, a top-level folder at
+	// depth one: four levels is a trail that still fits a 1024-pixel header
+	// and a move picker that still fits one screen, and every walk of the
+	// chain (a cycle check, a breadcrumb) is bounded by it. RAISE-ONLY: a
+	// lower value in a later build would refuse moves under folders an older
+	// build already made, while the stamp keeps old records applying the
+	// bound they were decided under.
+	MaxFolderDepth = 4
+
+	// MaxFolders bounds the live folders one company holds: the whole tree
+	// is one answer the dashboard reads at once (about 200 KiB at the
+	// bound), and one visibility pass over it is the set the gallery's
+	// folder filter is computed from.
+	MaxFolders = 2000
+
+	// MaxFolderChildren bounds the live folders directly in one folder: a
+	// folder page lists its subfolders before its artifacts, unpaged, and a
+	// thousand rows is past what anybody files by hand.
+	MaxFolderChildren = 1000
+
+	// MaxFolderNameBytes bounds one folder name in UTF-8 bytes: a tile line
+	// and one segment of a trail. Shorter than a title, because a path of
+	// four of them is what a move picker row shows.
+	MaxFolderNameBytes = 80
+
+	// TurnFolderCreates bounds the folder records one agent turn segment
+	// writes (each may create a short chain, up to [MaxFolderDepth]): an
+	// agent filing its work needs a folder or two, and a loop that makes a
+	// folder per artifact is stopped before it buries the tree.
+	TurnFolderCreates = 5
+
+	// MaxMovesPerCall bounds the artifacts one move call files, each its own
+	// record and its own decision: the tool's batch and the dashboard's bulk
+	// move alike, the same figure as an upload call's assets.
+	MaxMovesPerCall = 25
+)
+
 // Retention.
 const (
 	// VersionsKeptUnlabelled is how many unlabelled versions an artifact

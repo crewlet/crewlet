@@ -93,7 +93,7 @@ func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	}
 	ctx := context.Background()
 	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
-		"crewlet github provision", readsTheCompany)
+		"crewlet github provision")
 	if err != nil {
 		return err
 	}

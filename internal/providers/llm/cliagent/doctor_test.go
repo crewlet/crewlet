@@ -5,11 +5,13 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // The CLI runs on the ENGINE host. A provider whose binary is missing there
@@ -514,5 +516,119 @@ func TestDoctorNamesTheLogoutThatKeepsABundleOut(t *testing.T) {
 	// route that writes one.
 	if !strings.Contains(joined, "removed its login") || !strings.Contains(joined, "`crewlet llm login sub -from-host`") {
 		t.Errorf("the no-sign-in problem names neither the logout nor the way back:\n%s", joined)
+	}
+}
+
+// THE DOCTOR'S PROBES ASK AS A SEAT ASKS. They prove what a seat runs under —
+// that its CLI produces a tool call, that the shell is denied, that the web is
+// reached — so each is sent as a seat's call is: an agent call with a system
+// prompt, which takes the channel a seat's prompt takes. Sent with none, most
+// profiles passed no channel at all, the vendor's default prompt ran, and the
+// report described a configuration no seat ever had.
+//
+// Mutation: drop Agent from probeRequest, or its system message, and the
+// probes leave the appending channel and this is red.
+func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
+	t.Parallel()
+	rec := t.TempDir()
+	p := fakeProvider(t, map[string]string{
+		"FAKE_STDOUT":             `{"message":"","tool_calls":[{"name":"crewlet_smoke","arguments":{"ok":true}}]}`,
+		"FAKE_SHELL_PROBE_STDOUT": noLocalToolsReply,
+		"FAKE_WEB_PROBE_STDOUT":   "ts=" + nowEpoch(),
+		"FAKE_RECORD_ARGV":        rec,
+	}, map[string]any{
+		"local_tools":          string(cliprofile.LocalToolsDenied),
+		"version_args":         []any{"-test.run=NoSuchTest"},
+		"system_prompt":        map[string]any{"args": []any{"--replace-system-prompt", "{system}"}},
+		"append_system_prompt": map[string]any{"args": []any{"--append-system-prompt", "{system}"}},
+	})
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+	if !strings.HasPrefix(d.Smoke, "ok") || !strings.HasPrefix(d.Web, "ok") {
+		t.Fatalf("smoke = %q, web = %q — the fake did not answer the probes it was asked", d.Smoke, d.Web)
+	}
+	var probes [][]string
+	for _, argv := range recordedArgv(t, rec) {
+		// The version probe runs the binary too, with argv of its own.
+		if len(argv) > 0 && argv[0] == "-test.run=TestCLIAgentFakeCLI" {
+			probes = append(probes, argv)
+		}
+	}
+	if len(probes) != 3 {
+		t.Fatalf("recorded %d completions, want the smoke test and the two isolation "+
+			"probes: %q", len(probes), probes)
+	}
+	for _, argv := range probes {
+		system, ok := valueAfter(argv, "--append-system-prompt")
+		if !ok {
+			t.Errorf("argv = %q — a probe did not take the channel a seat's prompt takes", argv)
+			continue
+		}
+		if !strings.HasPrefix(system, harnessNote) || !strings.HasSuffix(system, "\n\n"+probeSystemPrompt) {
+			t.Errorf("a probe carried %q, want the probe's system prompt under the harness note", system)
+		}
+		if slices.Contains(argv, "--replace-system-prompt") {
+			t.Errorf("argv = %q — a probe replaced the CLI's prompt, which no seat does here", argv)
+		}
+	}
+}
+
+// THE REPORT SAYS WHICH PROMPT A SEAT RUNS UNDER, and which a side pass does:
+// beside the CLI's own, in place of it, or in the transcript under it, naming
+// the profile field an operator would override — so the vendor prompt a seat
+// answers under is read off the report rather than out of the profile.
+func TestTheReportSaysWhichPromptASeatRunsUnder(t *testing.T) {
+	t.Parallel()
+	replace := map[string]any{"args": []any{"--replace-system-prompt", "{system}"}}
+	appendTo := map[string]any{"args": []any{"--append-system-prompt", "{system}"}}
+	for name, tc := range map[string]struct {
+		overrides   map[string]any
+		seats, side []string // substrings of each line
+	}{
+		"both channels": {
+			overrides: map[string]any{"system_prompt": replace, "append_system_prompt": appendTo},
+			seats:     []string{"added to the CLI's own", "(append_system_prompt)"},
+			side:      []string{"replaces the CLI's own", "(system_prompt)"},
+		},
+		"only the replacing one": {
+			overrides: map[string]any{"system_prompt": replace},
+			seats:     []string{"replaces the CLI's own", "(system_prompt)"},
+			side:      []string{"replaces the CLI's own", "(system_prompt)"},
+		},
+		"neither": {
+			overrides: nil,
+			seats:     []string{"in the transcript, under the CLI's own"},
+			side:      []string{"in the transcript, under the CLI's own"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "fake-cli 1.0.0"}, tc.overrides)
+			d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: false})
+			if len(d.SystemPrompt) != 2 {
+				t.Fatalf("SystemPrompt = %q, want a line for seats and one for side passes", d.SystemPrompt)
+			}
+			for i, want := range []struct {
+				prefix string
+				parts  []string
+			}{{"seats: ", tc.seats}, {"side passes: ", tc.side}} {
+				line := d.SystemPrompt[i]
+				if !strings.HasPrefix(line, want.prefix) {
+					t.Errorf("line %d = %q, want it to start %q", i, line, want.prefix)
+				}
+				for _, part := range want.parts {
+					if !strings.Contains(line, part) {
+						t.Errorf("line %d = %q, want %q in it", i, line, part)
+					}
+				}
+			}
+		})
+	}
+
+	// Rendered under one label, the second line continuing the first.
+	d := Diagnosis{SystemPrompt: []string{"seats: A", "side passes: B"}}
+	var out strings.Builder
+	d.Render(&out)
+	if want := "system prompt : seats: A\n" + strings.Repeat(" ", 14) + ": side passes: B\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("the report does not carry the two lines under \"system prompt\":\n%s", out.String())
 	}
 }

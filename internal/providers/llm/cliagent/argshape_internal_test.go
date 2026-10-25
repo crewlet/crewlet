@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -10,14 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
-// THE GROK PROFILE'S ARGV MUST PARSE, and only the real binary can say so.
+// THE GROK PROFILE'S ARGV MUST PARSE, and only the real binary can say so —
+// on both of its system-prompt channels, with the transcript in a file, and
+// with every tool name it passes known to the CLI.
 //
 // `-p` takes the prompt as its VALUE. With it in complete_args, the model flag
-// that follows became the prompt and the real prompt became a stray
+// that followed became the prompt and the real prompt became a stray
 // positional, so every call exited on "a value is required for
 // '--single <PROMPT>'". Nothing in this repository could catch that: the fake
 // CLI accepts any argv, and a unit test over the slice only re-states the
-// profile back to itself.
+// profile back to itself. The tool lists fail the same silent way: a name
+// --tools does not know makes the CLI drop the whole allowlist with a warning,
+// and only the real binary knows its names.
 //
 // Skipped unless a `grok` is on PATH, and it asserts on ARGUMENT PARSING
 // alone — the CLI stops for want of a credential, which is exactly far enough
@@ -68,28 +73,50 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	}
 	t.Logf("against %s", version)
 
-	args := append([]string(nil), p.CompleteArgs...)
-	for _, a := range p.ModelArgs {
-		args = append(args, strings.ReplaceAll(a, "{model}", "grok-4-latest"))
-	}
-	for _, a := range p.SystemPromptArgs {
-		args = append(args, strings.ReplaceAll(a, "{system}", "You are Agent CTO."))
-	}
-	args = append(args, p.PromptArgs...)
-	args = append(args, "say hello")
+	for field, channel := range map[string]cliprofile.Channel{
+		"system_prompt":        p.SystemPrompt,
+		"append_system_prompt": p.AppendSystemPrompt,
+	} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			// ONE directory for both the home and the working directory,
+			// and the working directory matters as much as the
+			// environment: a vendor CLI reads AGENTS.md / CLAUDE.md from
+			// its cwd, and this repository has both. Left in the checkout,
+			// the probe answers with whatever the tree happens to contain
+			// rather than about the shipped profile.
+			dir := t.TempDir()
+			prompt := filepath.Join(dir, "crewlet-prompt.txt")
+			if err := os.WriteFile(prompt, []byte("## user\n\nsay hello\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// In the order a call assembles them: the profile's own
+			// flags, the model, the channel, the prompt flag last.
+			args := append([]string(nil), p.CompleteArgs...)
+			for _, a := range p.ModelArgs {
+				args = append(args, strings.ReplaceAll(a, "{model}", "grok-4-latest"))
+			}
+			if len(channel.Args) == 0 {
+				t.Fatalf("the grok profile declares no %s", field)
+			}
+			for _, a := range channel.Args {
+				args = append(args, strings.ReplaceAll(a, "{system}", "You are Agent CTO."))
+			}
+			for _, a := range p.PromptArgs {
+				args = append(args, strings.ReplaceAll(a, "{file}", prompt))
+			}
 
-	// ONE directory for both the home and the working directory, and the
-	// working directory matters as much as the environment: a vendor CLI
-	// reads AGENTS.md / CLAUDE.md from its cwd, and this repository has both.
-	// Left in the checkout, the probe answers with whatever the tree happens
-	// to contain rather than about the shipped profile — the kimi, pi and
-	// hermes cases were already right about this where this one was not.
-	dir := t.TempDir()
-	cmd := exec.Command(binary, args...) //nolint:gosec // args come from the shipped profile
-	cmd.Dir = dir
-	cmd.Env = vendorCLIEnv(p, dir, nil)
-	combined, _ := cmd.CombinedOutput()
-	assertArgvReachedAuth(t, args, string(combined))
+			cmd := exec.Command(binary, args...) //nolint:gosec // args come from the shipped profile
+			cmd.Dir = dir
+			cmd.Env = vendorCLIEnv(p, dir, nil)
+			combined, _ := cmd.CombinedOutput()
+			if strings.Contains(string(combined), "names no tool") {
+				t.Fatalf("the CLI does not know a tool name the profile passes — an unknown "+
+					"--tools entry drops the whole allowlist:\nargs: %v\n%s", args, combined)
+			}
+			assertArgvReachedAuth(t, args, string(combined))
+		})
+	}
 }
 
 // vendorCLIEnv is the environment a real-CLI case runs a vendor binary in.

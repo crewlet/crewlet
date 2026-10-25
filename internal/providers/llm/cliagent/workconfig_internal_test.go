@@ -29,10 +29,12 @@ func TestAWorkConfigDirIsInsideTheCallAndHoldsWhatTheCLIReads(t *testing.T) {
 			"seed_files": []any{map[string]any{
 				"path": ".vendor-config/settings.json", "in": "work", "content": `{"tools":"none"}`,
 			}},
-			"system_prompt_args": []any{"--agent", "seat"},
-			"system_prompt_file": map[string]any{
-				"name": ".vendor-config/agents/seat.md", "discovered": true,
-				"template": "---\nmode: primary\n---\n{system}\n",
+			"system_prompt": map[string]any{
+				"args": []any{"--agent", "seat"},
+				"file": map[string]any{
+					"name": ".vendor-config/agents/seat.md", "discovered": "selected",
+					"template": "---\nmode: primary\n---\n{system}\n",
+				},
 			},
 		})
 	comp, err := ask(t, p, llm.Request{Messages: []llm.Message{

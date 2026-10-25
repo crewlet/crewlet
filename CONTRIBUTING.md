@@ -279,11 +279,13 @@ What follows are the prerequisites that legitimately vary by machine.
   It needs no npm and no build: `static/dashboard/protocol.js` is committed
   along with the rest of the built tree.
 
-  **Which dashboard the replay tests is a parameter.** It resolves once, in
-  `tests/dashboard/js/dashboardRoot.mjs`, from `CREWLET_DASHBOARD_ROOT` —
-  unset, it is `static/dashboard`, the tree the binary embeds. Spell the path
-  in the script instead and it becomes a fact that can only ever be corrected
-  in most of the places it appears.
+  **Which dashboard the replay tests is a parameter.** The replay is
+  `internal/e2e/replay.mjs`, beside the `golden_test.go` that runs it, and it
+  reads the tree from `CREWLET_DASHBOARD_ROOT`, which the Go half always sets
+  to `static/dashboard`, the tree the binary embeds. Unset, it is that same
+  tree, and a relative value is read against the repository — the nearest
+  directory above the script holding a `go.mod` — rather than the directory it
+  is run from.
 
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
   wire protocol, the router's history rules, the ordering comparators, the
@@ -534,7 +536,11 @@ What follows are the prerequisites that legitimately vary by machine.
   ```
 
 Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
-files sit beside what they cover, as Go expects.
+files sit beside what they cover, as Go expects, and a test file that is not Go
+is no exception: the dashboard's Vitest suites sit beside their modules in
+`dashboard/src`, and `internal/e2e`'s client replay is
+`internal/e2e/replay.mjs`, beside the `golden_test.go` that runs it. There is
+no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on

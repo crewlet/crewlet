@@ -2,10 +2,13 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/flock"
 )
 
 // WHAT THE LOCK IS FOR.
@@ -72,12 +75,8 @@ func TestTheStampIdentifiesTheHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read sidecar: %v", err)
 	}
-	pid, ok := pidOf(strings.TrimSpace(string(raw)))
-	if !ok {
-		t.Fatalf("the stamp carries no pid: %q", raw)
-	}
-	if pid != os.Getpid() {
-		t.Fatalf("stamp pid = %d, want this process (%d)", pid, os.Getpid())
+	if want := fmt.Sprintf("pid %d ", os.Getpid()); !strings.HasPrefix(string(raw), want) {
+		t.Fatalf("the stamp is %q, want it to name this process (%q…)", raw, want)
 	}
 }
 
@@ -150,4 +149,32 @@ func TestAFailedOpenDoesNotStrandTheLock(t *testing.T) {
 		t.Fatalf("the failed open stranded its lock: %v", lockErr)
 	}
 	lock.release()
+}
+
+// PROBING A NODE'S DATABASE OPENS NOTHING AND KEEPS NOTHING, and still sees
+// another holder: a `crewlet` command asks it whether the engine runs, and must
+// neither create a database on a node that has never booted nor leave a claim
+// that a second command or the engine would read as a running engine.
+//
+// Mutation: make Probe open the database, and the file exists; make it keep
+// the claim, and the take after it is refused; make it skip the lock, and the
+// held case answers nil.
+func TestProbingADatabaseOpensNothingAndKeepsNothing(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	if err := Probe(path); err != nil {
+		t.Fatalf("probe a free database: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("probing the database created it (stat: %v)", err)
+	}
+	other, err := flock.Try(path + lockSuffix)
+	if err != nil {
+		t.Fatalf("the probe kept its claim: %v", err)
+	}
+	if err := Probe(path); !errors.Is(err, ErrLocked) {
+		t.Errorf("a probe beside another holder answered %v, want ErrLocked", err)
+	}
+	other.Release()
 }

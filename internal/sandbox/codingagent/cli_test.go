@@ -254,8 +254,9 @@ type openCodeConfig struct {
 	Rules     []struct {
 		Action, Resource, Effect string
 	} `json:"permissions"`
-	Providers map[string]any `json:"providers"`
-	MCP       *struct {
+	Providers    map[string]any `json:"providers"`
+	Instructions []string       `json:"instructions"`
+	MCP          *struct {
 		Servers map[string]struct {
 			Type        string            `json:"type"`
 			Command     []string          `json:"command"`

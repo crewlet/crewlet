@@ -132,9 +132,8 @@ type invocation struct {
 // logger, which is the process's state rather than the invocation's, so they
 // are read from the process.
 func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) {
-	// A READ OF THE RUN'S STORE THAT FAILED PART WAY THROUGH A COMMAND — a
-	// reveal through a node, or this node's own rows — stops it with a
-	// panic, because the lookup that made it has no error to return
+	// A READ OF A STORED VALUE THAT FAILED PART WAY THROUGH A COMMAND stops
+	// it with a panic, because the lookup that made it has no error to return
 	// and its only other answer, unset, is the one that mints over a working
 	// secret ([readFailed]). It is the command's failure, and answered here
 	// as one; any other panic is a bug, and goes on as it came.

@@ -38,6 +38,22 @@ import { audienceKey } from "./words.ts";
 
 const base = (id: string) => `/artifacts/${encodeURIComponent(id)}`;
 
+/**
+ * Where a new artifact is placed, as every create's body says it: the task it
+ * is made for (`work_item`), which lists it on that task's Artifacts card, and
+ * the folder it is filed in (`folder`, an id), which the engine admits only
+ * for a reader who may file into that folder. Either left out is none.
+ */
+function placement(fields: { workItem?: string; folder?: string }): {
+  work_item?: string;
+  folder?: string;
+} {
+  return {
+    ...(fields.workItem ? { work_item: fields.workItem } : {}),
+    ...(fields.folder ? { folder: fields.folder } : {}),
+  };
+}
+
 /** A publish names the head it was based on as `If-Match: "<n>"`, the form an artifact's head takes as an ETag. */
 export function ifMatch(head: number): Record<string, string> {
   return { "If-Match": `"${head}"` };
@@ -125,6 +141,78 @@ export function trashArtifact(id: string): Omit<KeyedRequest, "key"> {
   return { method: "DELETE", path: base(id) };
 }
 
+/**
+ * File an artifact in a folder, or at the top level with `folder` `""` (`PUT
+ * /artifacts/{id}/folder`): an editor's on the artifact who may file into the
+ * folder. A move changes nobody's access to it.
+ */
+export function fileArtifact(id: string, folder: string): Omit<KeyedRequest, "key"> {
+  return { method: "PUT", path: `${base(id)}/folder`, body: { folder } };
+}
+
+/**
+ * File several artifacts at once (`POST /artifacts/folder-moves`), each
+ * decided on its own and answered in `results`, at most
+ * `ARTIFACT_MOVE_MAX_ITEMS` in one request.
+ */
+export function fileArtifacts(
+  items: readonly { artifact: string; folder: string }[],
+): Omit<KeyedRequest, "key"> {
+  return { method: "POST", path: "/artifacts/folder-moves", body: { items } };
+}
+
+const folderBase = (id: string) => `/artifact-folders/${encodeURIComponent(id)}`;
+
+/**
+ * Make a folder (`POST /artifact-folders`): in `parent`, which decides who
+ * sees it, or at the top level, where a person says who sees it
+ * (`visibility`) and the engine refuses it below.
+ */
+export function createFolder(fields: {
+  name: string;
+  parent?: string;
+  visibility?: "company" | "private";
+}): Omit<KeyedRequest, "key"> {
+  return {
+    method: "POST",
+    path: "/artifact-folders",
+    body: {
+      name: fields.name,
+      ...(fields.parent ? { parent: fields.parent } : { visibility: fields.visibility }),
+    },
+  };
+}
+
+/** Rename a folder (`PATCH /artifact-folders/{id}`): its owner's, its owner's lead's or an administrator's. */
+export function renameFolder(id: string, name: string): Omit<KeyedRequest, "key"> {
+  return { method: "PATCH", path: folderBase(id), body: { name } };
+}
+
+/**
+ * Move a folder and everything in it under `parent`, `""` for the top level
+ * (`PATCH /artifact-folders/{id}`). A move that would let more people see it
+ * is refused `409 folder_widens` until it is sent again with `confirmWiden`.
+ */
+export function moveFolder(
+  id: string,
+  parent: string,
+  confirmWiden = false,
+): Omit<KeyedRequest, "key"> {
+  return {
+    method: "PATCH",
+    path: folderBase(id),
+    body: { parent, ...(confirmWiden ? { confirm_widen: true } : {}) },
+  };
+}
+
+/**
+ * Remove a folder (`DELETE /artifact-folders/{id}`): what was in it moves up
+ * to its parent, and nothing is deleted or trashed.
+ */
+export function removeFolder(id: string): Omit<KeyedRequest, "key"> {
+  return { method: "DELETE", path: folderBase(id) };
+}
+
 /** Take an artifact out of the trash (`POST /artifacts/{id}/restore`). */
 export function untrashArtifact(id: string): Omit<KeyedRequest, "key"> {
   return { method: "POST", path: `${base(id)}/restore`, body: {} };
@@ -147,6 +235,8 @@ export function createSheet(fields: {
   title: string;
   description?: string;
   workItem?: string;
+  /** The folder it is filed in (an id), at the top level when left out. */
+  folder?: string;
 }): Omit<KeyedRequest, "key"> {
   return {
     method: "POST",
@@ -155,7 +245,7 @@ export function createSheet(fields: {
       kind: "sheet",
       title: fields.title,
       ...(fields.description ? { description: fields.description } : {}),
-      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+      ...placement(fields),
     },
   };
 }
@@ -171,6 +261,8 @@ export function createFromStarter(fields: {
   kind: "doc" | "slides";
   title: string;
   workItem?: string;
+  /** The folder it is filed in (an id), at the top level when left out. */
+  folder?: string;
   /** A doc's text as its writer wrote it, under the title's heading. Doc only. */
   doc?: { body: string };
   /** A deck's plan: the theme it is drawn in and the slides it opens with. Slides only. */
@@ -185,7 +277,7 @@ export function createFromStarter(fields: {
       kind: fields.kind,
       title: fields.title,
       starter: true,
-      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+      ...placement(fields),
       ...(fields.kind === "doc" && fields.doc ? { doc: { body: fields.doc.body } } : {}),
       ...(fields.kind === "slides" && fields.deck ? { deck: fields.deck } : {}),
       ...(fields.shares && fields.shares.length > 0 ? { shares: fields.shares } : {}),
@@ -204,6 +296,8 @@ export function createDesign(fields: {
   layout: DesignLayout;
   shares?: { audience: ArtifactAudience; role: ShareableRole }[];
   workItem?: string;
+  /** The folder it is filed in (an id), at the top level when left out. */
+  folder?: string;
 }): Omit<KeyedRequest, "key"> {
   return {
     method: "POST",
@@ -214,7 +308,7 @@ export function createDesign(fields: {
       starter: true,
       layout: fields.layout,
       ...(fields.shares?.length ? { shares: fields.shares } : {}),
-      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+      ...placement(fields),
     },
   };
 }
@@ -231,6 +325,8 @@ export function createFromUpload(fields: {
   files: PublishFile[];
   entry: string;
   workItem?: string;
+  /** The folder it is filed in (an id), at the top level when left out. */
+  folder?: string;
 }): Omit<KeyedRequest, "key"> {
   return {
     method: "POST",
@@ -241,7 +337,7 @@ export function createFromUpload(fields: {
       upload: fields.upload,
       files: fields.files,
       entry: fields.entry,
-      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+      ...placement(fields),
     },
   };
 }
@@ -519,6 +615,8 @@ export function createPage(fields: {
   entry: string;
   capabilities: readonly ArtifactCapability[];
   workItem?: string;
+  /** The folder it is filed in (an id), at the top level when left out. */
+  folder?: string;
 }): Omit<KeyedRequest, "key"> {
   return {
     method: "POST",
@@ -530,7 +628,7 @@ export function createPage(fields: {
       files: fields.files,
       entry: fields.entry,
       capabilities: fields.capabilities,
-      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+      ...placement(fields),
     },
   };
 }
@@ -553,9 +651,16 @@ export async function checkPage(
   return answer.body as ArtifactCheckAnswer;
 }
 
-/** A file a publish names: one an upload brought, one carried by digest, or one removed. */
+/**
+ * A file a publish names: one an upload brought, one carried by digest, one
+ * carried from a retained version of the same artifact (`from`, no byte moved
+ * and none read here), or one removed.
+ */
 export type PublishFile =
-  { path: string; upload: true } | { path: string; carry: string } | { path: string; remove: true };
+  | { path: string; upload: true }
+  | { path: string; carry: string }
+  | { path: string; from: number }
+  | { path: string; remove: true };
 
 /** A file a save brings: its text, or a picture's bytes. */
 export interface UploadFile {

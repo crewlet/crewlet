@@ -728,8 +728,8 @@ func render(row secrets.Record) map[string]any {
 		"updated_at": row.UpdatedAt.Format(time.RFC3339Nano),
 		"updated_by": row.UpdatedBy,
 		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, the credential
-		// empty on a row no credential wrote: the engine's own, and one
-		// set on a stopped node and moved onto the fleet at its start.
+		// empty on a row no credential wrote: the engine's own, and one a
+		// `crewlet` command wrote directly with its node's engine stopped.
 		"updated_by_kind": row.UpdatedByKind,
 		"operator_id":     row.OperatorID,
 		"source":          row.Source,

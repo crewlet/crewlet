@@ -118,22 +118,51 @@ type TurnRef struct {
 }
 
 // LaunchRequest is everything one detached coding run needs.
+//
+// TWO TEXTS, KEPT APART to the end: what the coding agent is asked to do
+// (Brief) and how it is to work (System). The runner hands the first to its
+// CLI as the prompt and the second on the CLI's channel for adding to its own
+// system prompt ([RunRequest.System]), so the vendor's harness prompt stays in
+// force and the standing instructions sit beneath it rather than in front of
+// the task as a message the model reads as part of the request.
 type LaunchRequest struct {
 	Turn TurnRef
 
-	// Brief is the executor's own description of the code task. It is
-	// FRAMED, not passed through: the coding agent also gets the turn's
-	// task, its success criteria, and what its environment provides.
+	// System is the run's own standing instructions, empty for none. An
+	// agent-mode executor's is the seat's system prompt; a run_sandbox job
+	// has none of its own, its executor having written everything it means
+	// into the Brief. It is FRAMED as the brief is: what the box provides,
+	// and how to ask a person, follow it ([buildSystem]).
+	System string
+
+	// Brief is the task: an agent-mode executor's turn's ask, or the
+	// executor's own description of the code task.
 	Brief string
+
+	// Wider is the goal the Brief serves, framed after it ([buildBrief]): a
+	// run_sandbox job's turn task, of which its executor's brief is one
+	// step. Empty for an agent-mode executor, whose Brief IS the turn's ask
+	// — its task again under a second heading was paid for on every launch,
+	// and read as a goal beyond the one it was given.
+	Wider string
 
 	// Task is the ask the suspended turn was working on, carried onto the
 	// row so a resume has the brief when the trigger is long gone.
 	Task string
 
+	// Label is what a person sees the run named by — on the running-runs
+	// panel, live and after a restart alike ([LaunchRequest.label]). Empty
+	// takes the brief's first line, which for a run_sandbox job is the
+	// concrete code task its executor wrote. An agent-mode executor names
+	// its turn's task: its brief is the turn's whole message, which opens
+	// with a heading rather than with what the run is doing.
+	Label string
+
 	// Ask is the addendum telling the coding agent how to stop and ask a
 	// person — the ask shim's usage, with the names it may address. The
 	// ENGINE composes it, because the names are the chart's and this
-	// package holds none; empty adds nothing.
+	// package holds none; empty adds nothing. A standing instruction, so it
+	// rides System's channel ([buildSystem]).
 	Ask string
 
 	Spec       Spec
@@ -245,6 +274,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Placement:       string(req.Spec.Placement),
 		CodingAgent:     req.Spec.CodingAgent,
 		TaskDescription: req.Task,
+		Label:           req.label(),
 		PartitionKey:    req.Turn.PartitionKey,
 		// The conversation an answer is matched on and the resume
 		// reports back to, because a resume days later has neither the
@@ -295,8 +325,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}
 
 	handle, err := runner.Start(ctx, box, RunRequest{
-		Brief: buildBrief(req),
-		Env:   withTelemetry(m, req),
+		System: buildSystem(req),
+		Brief:  buildBrief(req),
+		Env:    withTelemetry(m, req),
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -339,7 +370,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// trigger arrived in.
 		ConversationKey: req.Turn.ConversationKey,
 		WorkItem:        req.Turn.WorkItem,
-		Task:            Summarise(req.Brief),
+		Task:            req.label(),
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -463,30 +494,42 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
 }
 
-// Summarise is a brief's first line, WHOLE: the label a running-runs panel
-// draws for a run. Exported because the live projection labels a run it
-// learned of from the durable record — a process that came up mid-run never
-// saw the announcement that carried the label — with the same rule, rather
-// than a second one.
+// label is what the run is named by, cut by [summarise]: the caller's own
+// label where it gave one, else the brief's first line. ONE ANSWER for the
+// announcement and the record, so a run a process learns of from the record
+// after a restart is named exactly as the one it saw announced.
+func (r LaunchRequest) label() string {
+	if strings.TrimSpace(r.Label) != "" {
+		return summarise(r.Label)
+	}
+	return summarise(r.Brief)
+}
+
+// summarise is a brief's first line, WHOLE: the label a running-runs panel
+// draws for a run. The record keeps the label it cut ([PendingRun.Label]), so
+// a process that learns of the run from the record after a restart names it as
+// the announcement did, with no second rule of its own.
 //
 // The first line because the brief opens with the concrete task the executor
-// asked for (see [buildBrief]) and the rest is the goal and the box. Never cut
+// asked for (see [buildBrief]) and the rest is the goal it serves. Never cut
 // to a width: it used to be held to 120 bytes and marked, which put a
 // sentence's first half on the run's page as its title — and a row too narrow
 // for a label is the renderer's to elide, which the dashboard's rows already
 // do, with the whole line still there to read.
-func Summarise(brief string) string {
+func summarise(brief string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
 	return strings.TrimSpace(line)
 }
 
-// buildBrief assembles what the coding agent is actually told.
+// buildBrief assembles what the coding agent is asked to do: the prompt its
+// CLI runs.
 //
-// THREE PARTS, in the order an engineer reads them: the concrete task the
-// executor asked for, the wider goal it serves, and what the environment
-// already provides. The last is the setup steps' own briefs — the mechanism
-// and the hint together, so the agent does not spend rounds rediscovering
-// that git auth is already wired.
+// TWO PARTS, in the order an engineer reads them: the concrete task the
+// executor asked for, then the wider goal it serves, where it has one
+// ([LaunchRequest.Wider]). Nothing standing is here
+// — what the box provides and how to ask a person are instructions for the
+// whole run rather than part of this request, and they ride the system
+// prompt's channel ([buildSystem]).
 //
 // There is no success-criteria section any more. It came from the planning
 // phase's declared criteria, and with one phase deciding and acting there is
@@ -495,19 +538,59 @@ func Summarise(brief string) string {
 func buildBrief(req LaunchRequest) string {
 	var b strings.Builder
 	b.WriteString(req.Brief)
-	if req.Task != "" && req.Task != req.Brief {
+	if req.Wider != "" && req.Wider != req.Brief {
 		b.WriteString("\n\n## The wider task\n")
-		b.WriteString(req.Task)
-	}
-	names := slices.Collect(maps.Keys(req.MCPServers))
-	b.WriteString("\n")
-	b.WriteString(EnvironmentBrief(req.Setup, names))
-	if req.Ask != "" {
-		b.WriteString("\n")
-		b.WriteString(req.Ask)
+		b.WriteString(req.Wider)
 	}
 	return b.String()
 }
+
+// buildSystem assembles the run's standing instructions: what its CLI adds to
+// its own system prompt ([RunRequest.System]).
+//
+// THREE PARTS, each present only where it says something: the run's own
+// instructions (an agent-mode executor's seat prompt), what the environment
+// already provides, and how to stop and ask a person. The environment is the
+// setup steps' own briefs — the mechanism and the hint together, so the agent
+// does not spend rounds rediscovering that git auth is already wired — and,
+// like the ask, it holds for every round of the run, which is what a system
+// prompt is for. The runner adds the last standing instruction, the report
+// it must write, because only it knows the box's path for it.
+//
+// THE RUN'S OWN TEXT FIRST, the framing after it: for an agent-mode executor
+// that text is who the model is and what it answers for, and the box and the
+// ask shim are details of where it is working.
+func buildSystem(req LaunchRequest) string {
+	names := slices.Collect(maps.Keys(req.MCPServers))
+	own := strings.TrimSpace(req.System)
+	if own != "" {
+		own = agentRunNote + "\n\n" + own
+	}
+	parts := []string{
+		own,
+		strings.TrimSpace(EnvironmentBrief(req.Setup, names)),
+		strings.TrimSpace(req.Ask),
+	}
+	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")
+}
+
+// agentRunNote opens a run's own instructions — an agent-mode executor's seat
+// prompt — where they follow the coding CLI's system prompt.
+//
+// The vendor's prompt says what the model is, and says it first: Claude Code
+// opens with "You are Claude Code, Anthropic's official CLI for Claude", and
+// no flag removes it. A seat prompt that only implies who it is loses to that,
+// so this says outright which of the two prompts is the role. The text-mode
+// backend opens its calls with the same note
+// (internal/providers/llm/cliagent harnessNote), less the sentence about
+// Crewlet's JSON envelope: here the run's tools are its own and the seat's,
+// called the way its CLI calls any tool. Constant, so it stays part of the
+// prefix a vendor caches.
+const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +
+	"Crewlet company, and Crewlet — not a person at a terminal — reads what you " +
+	"report. The tool's own instructions describe the program you run in, not your " +
+	"role: who you are and what you do are the instructions that follow, and they " +
+	"win wherever the two disagree."
 
 // withTelemetry adds the run's OTel environment to the spec's.
 //

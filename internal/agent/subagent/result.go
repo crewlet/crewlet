@@ -122,10 +122,8 @@ var defaultResultSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"result": map[string]any{
-			"type": "string",
-			"description": "Your answer to the task, complete on its own. The " +
-				"agent that delegated this reads only what you submit here — it " +
-				"cannot see your tool calls or your working.",
+			"type":        "string",
+			"description": "Your answer to the task, complete on its own.",
 		},
 		"notes": map[string]any{
 			"type": "string",
@@ -136,7 +134,15 @@ var defaultResultSchema = map[string]any{
 	"required": []any{"result"},
 }
 
-// submitDescription is the contract as the worker receives it.
+// submitDescription is the contract as the worker receives it, and its ONE
+// copy: the worker's prompt only names the tool (prompts.SubagentSubmitRule).
+//
+// Explicit about what is DISCARDED, because that is the part a model gets
+// wrong: it writes the answer as prose, calls the tool with a pointer to what
+// it just said, and the parent reads a field saying "see above" about a
+// conversation it cannot see. Said here rather than on the `result` field
+// because a task's own `output` schema has no such field, and this reaches
+// every worker whatever shape it answers in.
 const submitDescription = "Submit your answer and end. Call this exactly once, when " +
 	"you are done. The agent that delegated this task reads ONLY these fields — " +
 	"your tool calls, your reasoning and any prose you wrote are not passed on. " +

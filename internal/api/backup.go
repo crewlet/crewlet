@@ -17,11 +17,13 @@ import (
 // Taking a backup over HTTP.
 //
 // A route rather than a command, because what has to be copied is only
-// reachable from inside the running engine. The
-// store is one file this process holds an exclusive lock on, and the
-// coordination estate is a broker embedded in this process that binds no
-// socket — so a CLI run while the engine is down cannot read the second, and
-// one run while the engine is UP cannot safely open the first.
+// reachable, consistently, from inside the running engine. The store is one
+// file this process holds an exclusive lock on, and the coordination estate
+// is a broker embedded in this process whose store directory it holds too —
+// so a CLI run while the engine is UP can open neither. With the engine down a
+// command could reach the coordination store (engine.OpenFleetStore), but a
+// backup is the store, the streams and the estate taken together, and only
+// the engine that writes them can snapshot them as one.
 //
 // `crewlet backup` is a client of this route.
 

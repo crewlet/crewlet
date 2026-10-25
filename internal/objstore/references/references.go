@@ -37,6 +37,7 @@ var All = []objstore.ReferenceTable{
 	tracker.FileObjectReferences,
 	artifactsdomain.ObjectReferences,
 	artifactsdomain.AssetReferences,
+	artifactsdomain.BrandFileReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

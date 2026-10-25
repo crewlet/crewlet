@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
@@ -214,8 +213,10 @@ func (e *Engine) bootSecrets(ctx context.Context) error {
 			return fmt.Errorf("engine: the secret store holds a value this node "+
 				"cannot open, so its company's ${VAR} references cannot be "+
 				"resolved: put the key that sealed it back in secrets.keys, or set "+
-				"the value again with `crewlet secrets set` while the engine is "+
-				"stopped, which the next boot moves onto the fleet: %w", err)
+				"the value again with `crewlet secrets set`: with this engine "+
+				"stopped it writes the fleet's store itself, or, on a cluster "+
+				"member or a seats node, through a running node named with "+
+				"-api: %w", err)
 		}
 		wait := backoff.Jitter(backoff.Doubling(attempt, bootSecretsFirstWait,
 			configplane.ReconcileInterval), configplane.ReconcileJitter)
@@ -239,90 +240,28 @@ func (e *Engine) bootSecrets(ctx context.Context) error {
 // read from — every engine [New] builds, and a hand-built one only when it was
 // handed one.
 func (e *Engine) holdsSecretStore() bool {
-	return e.backends != nil && (e.backends.Store != nil || e.backends.Fleet != nil)
-}
-
-// migrateSecrets moves this node's own secret rows onto the fleet, once.
-//
-// Run at BOOT and nowhere else, because that is the only moment both stores
-// are reachable and nothing is resolving yet. `crewlet secrets set` on a
-// stopped node writes the local table — the default topology's broker lives
-// in the engine's own process, so there is nowhere else for it to go — and
-// this is what carries those rows to the peers.
-//
-// A FAILURE DOES NOT FAIL THE BOOT. [fleetsecrets.Migrate] removes nothing it
-// did not manage to copy, so a broken pass leaves the local rows intact and
-// [Engine.secretSnapshot] keeps reading them: the node runs on exactly what
-// it ran on before, and the next start retries. Failing the boot instead
-// would take a working node down over a store blip, and carrying on silently
-// would be worse still — hence the error log naming what did not move.
-func (e *Engine) migrateSecrets(ctx context.Context) {
-	if e.backends == nil || e.backends.Store == nil ||
-		e.backends.Fleet == nil || e.cipher == nil {
-		return
-	}
-	_, err := fleetsecrets.Migrate(ctx,
-		e.backends.Store.SecretValues(e.cipher),
-		fleetsecrets.New(e.backends.Fleet, e.cipher))
-	if err != nil {
-		log.ErrorContext(ctx, "secret_migration_incomplete", "error", err,
-			"detail", "this node's own secret rows not named moved are still local "+
-				"and no peer can see them; it keeps serving from them and retries "+
-				"at the next start")
-	}
+	return e.backends != nil && e.backends.Fleet != nil
 }
 
 // secretSnapshot reads and unseals every stored secret, or reports why not.
 //
-// THE FLEET'S STORE IS THE ONE, and the node's own database is read only as
-// the migration path off it. A credential is company-wide state: it
+// THE FLEET'S STORE IS THE ONLY ONE. A credential is company-wide state: it
 // was the last kind living somewhere only one node could see, so a rotation
-// reached the node an operator pointed the CLI at and nowhere else.
+// reached the node an operator pointed the CLI at and nowhere else — and a
+// command run with the engine stopped writes the fleet's store too, so there
+// is no node-local half left to read.
 //
-// Nil values with a nil error means an Engine with no store at all — one
-// built by hand in a test, since [New] refuses a set of backends without
-// them — which leaves the environment-only resolver in place.
+// Nil values with a nil error means an Engine with no fleet store at all —
+// one built by hand in a test, since [New] refuses a set of backends without
+// one — which leaves the environment-only resolver in place.
 func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) {
-	if e.backends == nil {
+	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, nil
 	}
-	cipher := e.cipher
-	local := e.backends.Store
-	fleet := e.backends.Fleet
-	if local == nil && fleet == nil {
-		return nil, nil
-	}
-	if cipher == nil {
+	if e.cipher == nil {
 		return nil, secrets.ErrNoKeyring
 	}
-
-	// THE LOCAL ROWS FIRST, so the fleet's win. In steady state there are
-	// none — [Engine.migrateSecrets] emptied the table at boot — and this
-	// read costs one query against an empty table. It is here for the one
-	// state where the table is NOT empty: a node whose migration could not
-	// finish. The fleet's copy is then what every node agrees on, so a
-	// surviving local row must never shadow it.
-	merged := map[string]string{}
-	if local != nil {
-		values, err := local.SecretValues(cipher).All(ctx)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(merged, values)
-		if len(values) > 0 {
-			log.WarnContext(ctx, "secrets_still_node_local", "secrets", len(values),
-				"detail", "the boot migration did not move these onto the "+
-					"fleet, so no peer can see them")
-		}
-	}
-	if fleet != nil {
-		values, err := fleetsecrets.New(fleet, cipher).All(ctx)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(merged, values)
-	}
-	return merged, nil
+	return fleetsecrets.New(e.backends.Fleet, e.cipher).All(ctx)
 }
 
 // openCipher builds this node's keyring cipher, or refuses the boot.

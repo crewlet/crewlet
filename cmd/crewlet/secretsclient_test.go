@@ -24,11 +24,10 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // secretsList is the run most of these cases stand for: `crewlet secrets list`,
@@ -408,8 +407,9 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 
 // THE ENGINE'S OWN KEYS ARE REFUSED BY NAME, on both sides of the wire.
 //
-// The command refuses a reserved name before it opens any store — a stopped
-// node's own table never holds one, and a running node refuses it too — and
+// The command refuses a reserved name before it reaches any store — the
+// fleet's store refuses one when written directly, and a running node refuses
+// it too — and
 // a node that answers `reserved_name` comes back as the same sentinel rather
 // than as a missing grant, which would send an operator off to ask for one.
 func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
@@ -539,18 +539,28 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	if !strings.Contains(out.String(), node.server.URL) {
 		t.Errorf("the output does not say which store it wrote: %q", out.String())
 	}
-	if strings.Contains(out.String(), "next start") {
-		t.Errorf("a fleet write was reported as a node-local one: %q", out.String())
-	}
 	// AND WHEN THE RUNNING FLEET READS IT: at its next apply, which a reload
-	// brings forward. Said by nothing, a rotated key the engine went on
-	// using read as a write that failed.
-	if !strings.Contains(out.String(), "POST /config/reload") {
-		t.Errorf("a fleet write does not say when the running fleet reads it: %q", out.String())
+	// brings forward — the running fleet's note, never the stopped engine's,
+	// which would tell an operator the value waits for a start that is not
+	// coming. Said by nothing, a rotated key the engine went on using read
+	// as a write that failed.
+	if !strings.Contains(out.String(), secretsFleetNote) {
+		t.Errorf("a write through a node does not say the running fleet reads it "+
+			"at its next apply: %q", out.String())
 	}
-	// The local database beside the Tier A file must not have been created.
-	if _, statErr := os.Stat(filepath.Join(filepath.Dir(cfg), "index.db")); statErr == nil {
-		t.Error("a database was created on a machine writing through a remote node")
+	if strings.Contains(out.String(), secretsStoppedNote) {
+		t.Errorf("a write through a running node was told the engine reads it "+
+			"when it starts: %q", out.String())
+	}
+	// Nothing of this machine's was reached: not the database lock the
+	// stopped-engine route asks, nor a broker's store directory.
+	for _, path := range []string{
+		filepath.Join(filepath.Dir(cfg), "index.db.lock"),
+		filepath.Join(filepath.Dir(cfg), "stream"),
+	} {
+		if _, statErr := os.Stat(path); statErr == nil {
+			t.Errorf("%s was touched by a write through a remote node", path)
+		}
 	}
 }
 
@@ -650,12 +660,13 @@ func TestTheSecretsCommandReachesANamedNodeWithNoTierAHere(t *testing.T) {
 	}
 }
 
-// A NODE-LOCAL WRITE SAYS SO, and says what will carry it to the fleet.
+// A WRITE WITH THE ENGINE STOPPED SAYS WHERE IT WENT AND WHO READS IT WHEN.
 //
-// An operator who wrote a value while the engine was stopped and saw nothing
-// propagate would reasonably conclude the write failed. "This node will put
-// it on the fleet at its next start" is not guessable.
-func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
+// It went to the fleet's store, through this node's own broker, and a node
+// reads it through its snapshot: this one's engine when it starts, one already
+// running at its next apply. An operator who rotated a key and saw a peer go on
+// using the old one would otherwise conclude the write failed.
+func TestAWriteWithTheEngineStoppedSaysWhereItWentAndWhoReadsIt(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	var out, errs bytes.Buffer
@@ -665,12 +676,10 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 		t.Fatalf("set: %v\n%s", err, errs.String())
 	}
 	for _, want := range []string{
-		"index.db",        // which store
-		"no peer can see", // and what that costs
-		// The note, whose phrasing is distinct from the store's own
-		// description on purpose: dropping it while keeping the path
-		// would still leave an operator without the way forward.
-		"To reach a RUNNING fleet now",
+		filepath.Join(filepath.Dir(cfg), "stream"), // which broker
+		"engine is stopped",                        // and why this way in
+		"reads it when it starts",                  // who reads it, when
+		"POST /config/reload",                      // and how to make a running one read it now
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output omits %q: %q", want, out.String())
@@ -928,21 +937,21 @@ func TestTheLargestValueTheStoreTakesIsRevealedBothWays(t *testing.T) {
 	}
 }
 
-// A VALUE SET ON A STOPPED NODE IS READ BACK WHOLE ONCE IT IS ON THE FLEET.
+// A VALUE SET WITH THE ENGINE STOPPED IS READ BACK WHOLE THROUGH A NODE.
 //
-// The offline write is the one path the node's own route never sees: the row
-// lands in this node's table and the engine's next start moves it onto the
-// fleet. Nothing held that write to the size the reveals are read to, so a
-// value the table took could be one no read of the fleet would give back. The
-// largest value every store takes, in the character JSON spells longest, goes
-// the whole way here: set offline, migrated as a start migrates it, and read
-// back through the node by both reveals.
-func TestAValueSetOfflineAtTheLimitIsReadBackFromTheFleet(t *testing.T) {
+// The direct write is the one path no node's route stands in front of: the
+// command writes the fleet's store itself, and a node reads the row back later
+// through its reveals. Nothing held that write to the size the reveals are read
+// to, so a value the store took could be one no read through a node would give
+// back. The largest value every store takes, in the character JSON spells
+// longest, goes the whole way here: set with the engine stopped, then read back
+// from the same store through a node by both reveals.
+func TestAValueSetWithTheEngineStoppedAtTheLimitIsReadBackThroughANode(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	value := strings.Repeat("&", secrets.MaxValueBytes)
 	if _, errs, err := secretsCmd(t, cfg, "set", "BIG", "-value", value); err != nil {
-		t.Fatalf("an offline set of a value at the limit: %v (%s)", err, errs)
+		t.Fatalf("a set of a value at the limit with the engine stopped: %v (%s)", err, errs)
 	}
 
 	boot, err := loadBootstrapForStore(cfg)
@@ -953,25 +962,19 @@ func TestAValueSetOfflineAtTheLimitIsReadBackFromTheFleet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := store.OpenNode(t.Context(), boot.Store.Path, store.Options{})
+	fs, err := engine.OpenFleetStore(t.Context(), boot)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open the fleet's store as the engine does: %v", err)
 	}
-	defer db.Close()
-	fleet := coordmem.NewFleet()
-	moved, err := fleetsecrets.Migrate(t.Context(), db.SecretValues(cipher),
-		fleetsecrets.New(fleet, cipher))
-	if err != nil || !slices.Equal(moved.Moved, []string{"BIG"}) {
-		t.Fatalf("the start's migration moved %v, %v; want BIG", moved.Moved, err)
-	}
+	defer fs.Close()
 
-	client := secretsNodeOver(t, fleet, cipher)
+	client := secretsNodeOver(t, fs.Fleet, cipher)
 	if got, err := client.Get(t.Context(), "BIG"); err != nil || got != value {
-		t.Errorf("GET reveal: %d bytes, %v; want the %d set offline", len(got), err, len(value))
+		t.Errorf("GET reveal: %d bytes, %v; want the %d set", len(got), err, len(value))
 	}
 	values, err := client.Values(t.Context(), []string{"BIG"})
 	if err != nil || values["BIG"] != value {
-		t.Errorf("POST reveal: %d bytes, %v; want the %d set offline",
+		t.Errorf("POST reveal: %d bytes, %v; want the %d set",
 			len(values["BIG"]), err, len(value))
 	}
 }

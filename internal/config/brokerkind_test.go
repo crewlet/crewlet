@@ -73,52 +73,6 @@ func TestBrokerMembershipComesFromTheStreamBlock(t *testing.T) {
 	}
 }
 
-// THE SOLE MEMBER IS A MEMBER NAMING NO CLUSTER, and nothing else: its broker
-// is then the fleet's whole broker. A member serving leaves still is one,
-// because a leaf holds no copy of anything; a named cluster is not, whatever
-// its peer list or replica count says, because the server is built clustered
-// on the name alone; and a leaf or a client of an external cluster is not,
-// because its streams are on somebody else's broker.
-func TestASoleMemberIsAMemberNamingNoCluster(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name   string
-		stream func(*Stream)
-		want   bool
-	}{
-		{"the default embedded broker", func(*Stream) {}, true},
-		{"an unset stream type", func(s *Stream) { s.Type = "" }, true},
-		{"a solo member serving leaves", func(s *Stream) { s.Leaf.Port = 7422 }, true},
-		{"a solo member asking one replica", func(s *Stream) { s.Replicas = 1 }, true},
-		{"a member naming a cluster", func(s *Stream) {
-			s.Cluster = StreamCluster{Name: "acme"}
-		}, false},
-		{"a member naming a cluster and its peers", func(s *Stream) {
-			s.Cluster = StreamCluster{Name: "acme", Peers: []string{"nats://b.example.com:6222"}}
-		}, false},
-		{"a single-replica member of a cluster", func(s *Stream) {
-			s.Replicas = 1
-			s.Cluster = StreamCluster{Name: "acme"}
-		}, false},
-		{"an embedded node joining through leaf urls", func(s *Stream) {
-			s.Leaf.URLs = []string{"nats-leaf://data-a.example.com:7422"}
-		}, false},
-		{"an external cluster", func(s *Stream) {
-			s.Type, s.URL = StreamNATS, "nats://nats.example.com:4222"
-		}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			b := DefaultBootstrap()
-			tc.stream(&b.Stream)
-			if got := b.SoleMember(); got != tc.want {
-				t.Fatalf("SoleMember() = %v, want %v (broker kind %q, cluster %q)",
-					got, tc.want, b.BrokerKind(), b.Stream.Cluster.Name)
-			}
-		})
-	}
-}
-
 // EVERY BROKER KIND × EVERY ROLE SET, with exactly the refusals each earns.
 //
 // The table is the rule set [Bootstrap.checkRolesAndBroker] states, written as

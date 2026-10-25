@@ -3,12 +3,15 @@ package artifactsdomain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/foldername"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -29,9 +32,12 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0043), so a fresh store already has them.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE is empty: every field this domain
-			// writes is in the base format.
+			// THE VERSIONED-FIELD TABLE names what version 2 added (the
+			// folder tree, the brand, a move, a create's folder, a brand
+			// kit's create and a version's brand pin), and carrying builds a
+			// record of each.
 			Fields:     artifactsdomain.VersionedFields(),
+			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
 			Rows:       artifactsdomain.NewRows,
 			Write:      suiteWrite,
@@ -186,8 +192,98 @@ func suitePayload(kind artifactsdomain.ObjectKind, artifact, id string) (
 			artifactsdomain.Generation{V: 1, Generation: 2, By: "suite", StreamAt: suiteStamped}
 	case artifactsdomain.KindBarrier:
 		return artifactsdomain.BarrierSubject(), artifactsdomain.OpBarrier, nil
+	case artifactsdomain.KindFolder:
+		return artifactsdomain.FolderSubject(), artifactsdomain.OpCreate, folderCreatePayload(id)
+	case artifactsdomain.KindBrand:
+		return artifactsdomain.BrandSubject(), artifactsdomain.OpAdopt, brandAdoptPayload(artifact)
 	}
 	return artifactsdomain.Subject{Kind: kind, ID: id}, artifactsdomain.OpPatch, nil
+}
+
+// folderCreatePayload is one top-level folder's create, named for id.
+func folderCreatePayload(id string) artifactsdomain.FolderCreatePayload {
+	name, key, err := foldername.Check("Suite " + id)
+	if err != nil {
+		panic(err)
+	}
+	return artifactsdomain.FolderCreatePayload{
+		V: 1, Owner: "suite", OwnerKind: iam.ActorHuman, MaxDepth: artifacts.MaxFolderDepth,
+		MaxFolders: artifacts.MaxFolders, MaxChildren: artifacts.MaxFolderChildren,
+		Folders: []artifactsdomain.FolderSpec{{
+			ID: artifactsdomain.FolderIDOf("suite-folder-"+id, 0).String(), Name: name, NameKey: key,
+		}},
+		Authority: suiteAuthority(),
+	}
+}
+
+// brandAdoptPayload is an adoption of version 1 of kit.
+func brandAdoptPayload(kit string) artifactsdomain.BrandAdoptPayload {
+	css := []byte(":root{--brand-primary:#2450e6}")
+	sum := objstore.HashOf(css)
+	return artifactsdomain.BrandAdoptPayload{
+		V: 1, Kit: kit, KitVersion: 1, BrandJSON: []byte(`{"v":1}`), CSSSha: string(sum),
+		Files: []artifactsdomain.BrandFile{{
+			Slot: "css", ContentType: "text/css; charset=utf-8",
+			Object: suiteObject("brand-css-"+kit, string(css)),
+		}},
+		Authority: suiteAuthority(),
+	}
+}
+
+// carryingSuiteRecord is a record carrying exactly one versioned field, its
+// version left for the encoder to stamp.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	artifact := suiteArtifact("carrying")
+	var (
+		subject = artifactsdomain.ArtifactSubject(mustID(artifact))
+		op      artifactsdomain.OpKind
+		payload any
+	)
+	switch field.Name {
+	case "Subject.Kind folder":
+		subject, op, payload = artifactsdomain.FolderSubject(), artifactsdomain.OpCreate,
+			folderCreatePayload("carrying")
+	case "Subject.Kind brand":
+		subject, op, payload = artifactsdomain.BrandSubject(), artifactsdomain.OpAdopt,
+			brandAdoptPayload(artifact)
+	case "RecordEnvelope.Op move":
+		op, payload = artifactsdomain.OpMove, artifactsdomain.MovePayload{
+			V: 1, To: artifactsdomain.FolderIDOf("suite-folder-carrying", 0).String(),
+			Authority: suiteAuthority(),
+		}
+	case "CreatePayload.Folder":
+		p := createPayload(artifact)
+		p.Folder = artifactsdomain.FolderIDOf("suite-folder-carrying", 0).String()
+		op, payload = artifactsdomain.OpCreate, p
+	case "VersionPayload.Brand":
+		p := createPayload(artifact)
+		p.Version.Brand = brandAdoptPayload(artifact).CSSSha
+		op, payload = artifactsdomain.OpCreate, p
+	case "CreatePayload.Kind brand":
+		op, payload = artifactsdomain.OpCreate, createPayloadOfKind(artifact, artifacts.KindBrand)
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	body, err := marshalPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	return artifactsdomain.Encode(artifactsdomain.MutationRecord{
+		RecordEnvelope: artifactsdomain.RecordEnvelope{
+			OpID: "suite-carrying", Subject: subject, Op: op, CreatedAt: suiteStamped,
+			Gen: 1, Writer: "suite-node", Scope: artifactsdomain.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "suite", ActorKind: iam.ActorOperator, OperatorID: "suite",
+	})
+}
+
+// mustID parses a suite artifact id.
+func mustID(raw string) artifacts.ID {
+	id, err := artifacts.ParseID(raw)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 // suiteAuthority is the stamp every suite record that consumes quota carries.
@@ -222,6 +318,74 @@ func createPayload(artifact string) artifactsdomain.CreatePayload {
 		},
 		Authority: suiteAuthority(),
 	}
+}
+
+// createPayloadOfKind is a create of kind's artifact, its first version the
+// kind's own entry.
+func createPayloadOfKind(artifact string, kind artifacts.Kind) artifactsdomain.CreatePayload {
+	p := createPayload(artifact)
+	p.Kind = kind
+	spec, ok := kind.Spec()
+	if !ok || len(spec.Entry.Defaults) == 0 {
+		return p
+	}
+	entry := spec.Entry.Defaults[0]
+	p.Version.Manifest = artifacts.Manifest{Entry: entry, Files: []artifacts.Entry{{
+		Path: entry, ContentType: "application/octet-stream",
+		Object: suiteObject(string(kind)+"-"+artifact, "{}"),
+	}}}
+	return p
+}
+
+// baseRecordKinds are the artifact kinds record version 1 shipped with. FROZEN:
+// a kind added since is a value an older build refuses, and needs its row.
+var baseRecordKinds = []artifacts.Kind{
+	artifacts.KindHTML, artifacts.KindDoc, artifacts.KindSlides,
+	artifacts.KindDashboard, artifacts.KindSheet, artifacts.KindDesign,
+}
+
+// A KIND THE BASE FORMAT LACKED STAMPS ITS CREATE PAST IT: an older build's
+// create apply refuses a kind it does not serve, so a create stamped at the
+// base version would be refused by an older node and applied by a newer one,
+// and the fleet would diverge. Every kind served now and missing from the base
+// format must be held back by its own row. Mutation: drop the brand kind's row
+// and the brand kit's create is stamped 1.
+func TestEveryArtifactKindTheBaseFormatLackedHasAVersionedRow(t *testing.T) {
+	t.Parallel()
+	for _, kind := range artifacts.Kinds {
+		body, err := createRecordOfKind(kind)
+		if err != nil {
+			t.Fatalf("%s: encode a create: %v", kind, err)
+		}
+		env, err := artifactsdomain.Domain{}.Envelope(body)
+		if err != nil {
+			t.Fatalf("%s: envelope: %v", kind, err)
+		}
+		base := slices.Contains(baseRecordKinds, kind)
+		if got := env.ReadableBy(1); got != base {
+			t.Errorf("a create of kind %q is stamped %d: a build reading the base format "+
+				"would apply it = %v, want %v; a kind added since the base format needs a "+
+				"versioned-field row at mutation.kind (record.go)", kind, env.V, got, base)
+		}
+	}
+}
+
+// createRecordOfKind is an encoded create of kind's artifact, stamped by the
+// domain's own encoder.
+func createRecordOfKind(kind artifacts.Kind) ([]byte, error) {
+	artifact := suiteArtifact("kind-" + string(kind))
+	body, err := marshalPayload(createPayloadOfKind(artifact, kind))
+	if err != nil {
+		return nil, err
+	}
+	return artifactsdomain.Encode(artifactsdomain.MutationRecord{
+		RecordEnvelope: artifactsdomain.RecordEnvelope{
+			OpID: "suite-kind-" + string(kind), Subject: artifactsdomain.ArtifactSubject(mustID(artifact)),
+			Op: artifactsdomain.OpCreate, CreatedAt: suiteStamped, Gen: 1, Writer: "suite-node",
+			Scope: artifactsdomain.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "suite", ActorKind: iam.ActorOperator, OperatorID: "suite",
+	})
 }
 
 // evictionOf is node's eviction, or its readmission.

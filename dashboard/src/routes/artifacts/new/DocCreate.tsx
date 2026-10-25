@@ -57,7 +57,14 @@ import { plural, utf8Bytes } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { DOC_TEMPLATES, docTemplate, type DocTemplate } from "~/lib/artifacts/docTemplates.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
+import {
+  briefFolder,
+  titleHold,
+  titleProblem,
+  useCreateArtifact,
+  useSaveIn,
+  useWorkItem,
+} from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import {
@@ -111,6 +118,7 @@ export function DocCreate() {
   const who = useWhoBuildsIt("doc");
   const access = useArtifactAccess({ app: true });
   const workItem = useWorkItem();
+  const saveIn = useSaveIn();
   const leaveCreate = useLeaveCreate();
   const panel = useAskPanel();
   const [templateParam] = useParam("template", "");
@@ -141,7 +149,7 @@ export function DocCreate() {
 
   const agent = chosenAgent(who)?.seat;
   const handed = docBrief(brief, body, template);
-  const taskText = artifactTaskBody("doc", handed);
+  const taskText = artifactTaskBody("doc", handed, undefined, briefFolder(saveIn));
   const taskBytes = utf8Bytes(taskText);
   const busy = create.busy || ask.busy;
   const hold = !access.can ? access.reason : titleHold(title);

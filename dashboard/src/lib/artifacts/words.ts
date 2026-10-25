@@ -62,14 +62,42 @@ export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   dashboard: "Dashboard",
   sheet: "Sheet",
   design: "Design",
+  brand: "Brand",
 };
+
+/**
+ * The order the kinds are offered to make in, by the gallery's Make row and
+ * its New menu: what people write first, then what they lay out, then data.
+ *
+ * NOT EVERY KIND: a brand kit is made and adopted on the company's Brand page
+ * (`#/company/brand`), the one place the company decides how it looks, so it
+ * has no create page under Artifacts and is never offered beside the kinds
+ * people make for work. Its kits still list in the gallery under their own
+ * kind.
+ */
+export const MAKE_ORDER = [
+  "doc",
+  "slides",
+  "design",
+  "dashboard",
+  "html",
+  "sheet",
+] as const satisfies readonly ArtifactKind[];
+
+/** A kind a person makes from the gallery: one with a create page under `#/artifacts/new/`. */
+export type MakeKind = (typeof MAKE_ORDER)[number];
+
+/** Whether a value names a kind with a create page under Artifacts. */
+export function isMakeKind(value: string): value is MakeKind {
+  return (MAKE_ORDER as readonly string[]).includes(value);
+}
 
 /**
  * What each kind's create page is called, in its bar and the trail
  * ("Artifacts › New doc"). Slides are made as a deck, and an HTML artifact is
  * a page, so each is said as what a person starts.
  */
-export const NEW_KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
+export const NEW_KIND_TITLES: Readonly<Record<MakeKind, string>> = {
   html: "New HTML page",
   doc: "New doc",
   slides: "New slide deck",
@@ -77,19 +105,6 @@ export const NEW_KIND_TITLES: Readonly<Record<ArtifactKind, string>> = {
   sheet: "New sheet",
   design: "New design",
 };
-
-/**
- * The order the kinds are offered to make in, by the gallery's Make row and
- * its New menu: what people write first, then what they lay out, then data.
- */
-export const MAKE_ORDER: readonly ArtifactKind[] = [
-  "doc",
-  "slides",
-  "design",
-  "dashboard",
-  "html",
-  "sheet",
-];
 
 /**
  * The article each kind's word takes in a sentence, by how it is said rather
@@ -102,6 +117,7 @@ export const KIND_ARTICLES: Readonly<Record<ArtifactKind, "a" | "an">> = {
   dashboard: "a",
   sheet: "a",
   design: "a",
+  brand: "a",
 };
 
 /** Every kind, in the engine's order, as the gallery's filter offers them. */
@@ -115,6 +131,7 @@ export const KIND_PLURAL_WORDS: Readonly<Record<ArtifactKind, string>> = {
   dashboard: "dashboards",
   sheet: "sheets",
   design: "designs",
+  brand: "brand kits",
 };
 
 /**
@@ -371,6 +388,12 @@ export function historyWords(
         return entry.work_item ? `linked it to ${entry.work_item}` : "linked it to a work item";
       case "read_elevated":
         return `opened version ${number || "?"} as an administrator`;
+      case "move":
+        // THE ROW NAMES FOLDERS BY ID ALONE, so a reader is never told the
+        // name of a folder they cannot see: the sentence says where it went,
+        // never which folder.
+        if (!s.to_folder) return "moved it to the top level";
+        return s.from_folder ? "moved it to another folder" : "filed it in a folder";
       default:
         return entry.op.replaceAll("_", " ");
     }
@@ -403,6 +426,7 @@ const HISTORY_OP_TAGS: Readonly<Record<ArtifactHistoryOp, string>> = {
   asset_remove: "remove asset",
   link_work_item: "link work item",
   read_elevated: "admin read",
+  move: "move",
 };
 
 /** A history op as the audit's What column says it: "admin read", "restore version". */
@@ -436,6 +460,7 @@ const HISTORY_REFUSAL_WORDS: Readonly<Record<string, string>> = {
   label_taken: "another version holds that label",
   version_not_found: "the version does not exist",
   source_taken: "another artifact holds that source",
+  folder_gone: "the folder was removed first",
 };
 
 /** A refused history row's reason in words: "a newer version was published first". */
@@ -457,6 +482,7 @@ function stripPast(said: string): string {
     ["stopped", "stop"],
     ["gave", "give"],
     ["moved", "move"],
+    ["filed", "file"],
     ["began", "begin"],
     ["added", "add"],
     ["removed", "remove"],

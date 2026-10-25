@@ -9,6 +9,13 @@
 // with, and nothing failed until a seat landed on one of them and a vendor
 // rejected a credential the operator believed they had rotated.
 //
+// Nor is there a node-local half any more. A command run while the engine is
+// stopped reaches this store through the node's own broker, or the external
+// one it dials (internal/engine's OpenFleetStore), rather than writing a
+// table of the node's own for the engine to carry here at its next start: a
+// command that read that table with the engine stopped read every value the
+// fleet held as unset, and a provisioner takes unset as the signal to mint.
+//
 // The company CONFIG already travels this way — the activation plane writes a
 // payload sealed with this very keyring into this very bucket family, and a
 // company document may itself carry credentials inline — so the secret store
@@ -22,10 +29,9 @@
 // can read the bucket learns which names exist and when they changed, not
 // what they are.
 //
-// The name is bound in as associated data, so an envelope moved to another
-// row fails to open rather than silently impersonating a different secret —
-// the same binding [store.SecretValues] uses, and the reason both can read
-// rows the other wrote during a migration.
+// The name is bound in as associated data ([secrets.AADForVar]), so an
+// envelope moved to another row fails to open rather than silently
+// impersonating a different secret.
 //
 // # Two views over one bucket: the operator's, and the engine's own
 //
@@ -57,11 +63,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
-
-var log = logging.Get("secrets.fleet")
 
 // Store is the fleet's secret values, sealed under one node's keyring, as the
 // OPERATOR's surfaces address them.
@@ -206,8 +209,7 @@ func (s *Store) get(ctx context.Context, name string) (string, error) {
 // namespace: no reference can name one, so decrypting the blind-index key into
 // each node's resolver on every apply was all exposure and no use.
 //
-// It FAILS CLOSED on the first row it cannot open, exactly as the local store
-// does. A partial snapshot is the worst outcome available: the names that are
+// It FAILS CLOSED on the first row it cannot open. A partial snapshot is the worst outcome available: the names that are
 // missing resolve to whatever the environment happens to hold, which is the
 // stale-.env shadowing this whole mechanism exists to prevent, and it would
 // happen silently. A row this node cannot open is not a fleet mid-rotation —
@@ -479,7 +481,7 @@ func (s *Store) rekeyRow(ctx context.Context, row coord.SecretRecord,
 		}
 		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(row.Name))
 		if err != nil {
-			// ABORTS THE WHOLE PASS, as the local store's does. A row
+			// ABORTS THE WHOLE PASS. A row
 			// this keyring cannot open is a key that was dropped from
 			// the config, and moving the others while leaving it would
 			// report a successful rekey over a secret that is now

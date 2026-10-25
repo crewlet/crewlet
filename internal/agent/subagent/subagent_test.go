@@ -601,11 +601,43 @@ func TestAChildWithNoDiscoveryStaysFrozen(t *testing.T) {
 	if !slices.Contains(offered, "read_file") {
 		t.Errorf("the granted tool was not offered: %v", offered)
 	}
-	// A catalogue is rendered only for a child that can act on it: listing
-	// tools to a worker with no activate is an invitation to call a name it
-	// was never offered.
-	if strings.Contains(res.SystemPrompt.Text, "## Available tools") {
-		t.Error("a frozen child was shown a catalogue it cannot use")
+	// Tools to discover are rendered only for a child that can act on them:
+	// listing tools to a worker with no activate is an invitation to call a
+	// name it was never offered — and telling it to discover, one to call a
+	// tool it does not have.
+	if strings.Contains(res.SystemPrompt.Text, "## Tools to discover") {
+		t.Error("a frozen child was shown tools to discover it cannot reach")
+	}
+	if strings.Contains(res.SystemPrompt.Text, "activate_tool") {
+		t.Error("a frozen child was told to call a discovery tool it does not have")
+	}
+}
+
+// shadowedActivator is the activator under a name a granted tool already
+// holds, so the child's surface refuses it.
+type shadowedActivator struct{ activator }
+
+func (a *shadowedActivator) Name() string { return "read_file" }
+
+// A CHILD THAT LOST ITS DISCOVERY TOOL IS NOT TOLD TO DISCOVER. A meta-tool
+// whose name a granted tool holds is dropped, which leaves discovery
+// configured and the worker without the tool its guidance names: told to call
+// activate_tool, it would spend a round on a name it was never offered.
+func TestAChildWhoseDiscoveryToolWasDroppedIsNotToldToDiscover(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub"}
+	cfg := baseConfig(t, w, p)
+	cfg.Discovery = func(get func() *tools.Surface) []tools.Callable {
+		return []tools.Callable{&shadowedActivator{activator{surface: get}}}
+	}
+
+	res := one(t, cfg, request("read_file"))
+	if strings.Contains(res.SystemPrompt.Text, "## Tools to discover") {
+		t.Error("a child without its discovery tool was shown tools to discover")
+	}
+	if strings.Contains(res.SystemPrompt.Text, "activate_tool") {
+		t.Error("a child without its discovery tool was told to call it")
 	}
 }
 
@@ -617,24 +649,27 @@ func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	cfg.Discovery = discovery
 
 	res := one(t, cfg, request("read_file"))
-	if !strings.Contains(res.SystemPrompt.Text, "## Available tools") {
-		t.Fatalf("no catalogue in a discovery-capable child's prompt:\n%s", res.SystemPrompt.Text)
+	if !strings.Contains(res.SystemPrompt.Text, "## Tools to discover") {
+		t.Fatalf("no tools to discover in a discovery-capable child's prompt:\n%s", res.SystemPrompt.Text)
 	}
 	if !strings.Contains(res.SystemPrompt.Text, "research") {
-		t.Error("the catalogue does not name the MCP server the child may discover")
+		t.Error("the list does not name the MCP server the child may discover")
 	}
-	// The CATALOGUE section only: the preamble legitimately says "do not
-	// delegate further", and matching the whole prompt for the tool's name
-	// would read that prohibition as an advertisement.
-	// The CATALOGUE SECTION ONLY: it is followed by the preamble, which
+	// The LIST SECTION ONLY: it is followed by the preamble, which
 	// legitimately says "do not delegate further", and matching to the end
 	// of the prompt would read that prohibition as an advertisement.
-	catalogue := res.SystemPrompt.Text[strings.Index(res.SystemPrompt.Text, "## Available tools"):]
-	catalogue, _, _ = strings.Cut(catalogue, "You are a short-lived worker")
+	list := res.SystemPrompt.Text[strings.Index(res.SystemPrompt.Text, "## Tools to discover"):]
+	list, _, _ = strings.Cut(list, "You are a short-lived worker")
 	for _, denied := range []string{"slack_post", subagent.ToolName} {
-		if strings.Contains(catalogue, denied) {
-			t.Errorf("the catalogue advertises %s, which the worker cannot have", denied)
+		if strings.Contains(list, denied) {
+			t.Errorf("the list advertises %s, which the worker cannot have", denied)
 		}
+	}
+	// AND NOT WHAT IT WAS GRANTED: read_file's whole definition reaches the
+	// worker with every request, so listing it again is its description
+	// paid for twice.
+	if strings.Contains(list, "read_file") {
+		t.Errorf("the list repeats a tool the worker already holds:\n%s", list)
 	}
 }
 

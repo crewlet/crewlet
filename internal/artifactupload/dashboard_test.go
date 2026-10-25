@@ -57,11 +57,11 @@ func TestABoardPublishesAsWritten(t *testing.T) {
 		}
 	}
 	if page, err := h.domain.reader.List(t.Context(), artifactsdomain.Viewer{Admin: true},
-		artifactsdomain.ListQuery{Q: "seven company days"}); err != nil || len(page.Items) != 1 {
-		t.Errorf("a search for the board's note found %d (%v)", len(page.Items), err)
+		artifactsdomain.ListQuery{Q: "seven company days"}); err != nil || len(page.Contents) != 1 {
+		t.Errorf("a search for the board's note found %d (%v)", len(page.Contents), err)
 	}
 	if page, _ := h.domain.reader.List(t.Context(), artifactsdomain.Viewer{Admin: true},
-		artifactsdomain.ListQuery{Q: "250000"}); len(page.Items) != 0 {
+		artifactsdomain.ListQuery{Q: "250000"}); len(page.Contents) != 0 {
 		t.Error("the search indexed a figure of a file dataset")
 	}
 }

@@ -85,6 +85,8 @@ func (a *Applier) applyArtifact(ctx context.Context, tx *sql.Tx, c applyContext)
 		return a.applyTransfer(ctx, tx, c, id, p)
 	case LinkPayload:
 		return a.applyLinkWorkItem(ctx, tx, c, id, p)
+	case MovePayload:
+		return a.applyMove(ctx, tx, c, id, p)
 	case StatusPayload:
 		switch c.record.Op {
 		case OpTrash:
@@ -196,6 +198,17 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	if len(carried) > 0 {
 		return no(RefusedCarriedObjectGone, HistorySummary{Paths: carried})
 	}
+	if p.Folder != "" {
+		// THE FOLDER WAS LIVE WHEN THE WRITER DECIDED, on another subject:
+		// a removal that landed since files nothing into it.
+		live, liveErr := folderLive(ctx, tx, p.Folder)
+		if liveErr != nil {
+			return 0, liveErr
+		}
+		if !live {
+			return no(RefusedFolderGone, HistorySummary{ToFolder: p.Folder})
+		}
+	}
 	plan, refusal, err := planObjects(ctx, tx, id, v.Manifest.Files, nil)
 	if err != nil {
 		return 0, err
@@ -230,12 +243,12 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 			(id, label, kind, title, description, icon, owner, owner_kind,
 			 source_key, head_number, contract, capabilities, status,
 			 access_epoch, bytes_held, search_text, created_by, created_by_kind,
-			 created_at, updated_by, updated_by_kind, updated_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 created_at, updated_by, updated_by_kind, updated_at, version, folder_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, parsed.Label().String(), string(p.Kind), p.Title, p.Description, p.Icon,
 		p.Owner, string(p.OwnerKind), p.SourceKey, v.Contract, capabilities,
 		string(StatusLive), plan.added, v.SearchText, actor.Name, string(actor.Kind),
-		c.at(), actor.Name, string(actor.Kind), c.at(), c.packed); err != nil {
+		c.at(), actor.Name, string(actor.Kind), c.at(), c.packed, p.Folder); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: create artifact %s at %s: %w", id, c.position, err)
 	}
 	rows++
@@ -875,6 +888,10 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		id, id).Scan(&versions, &assets); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: count what purging %s removes: %w", id, err)
 	}
+	pinned, err := pinsAnyBrand(ctx, tx, id, nil)
+	if err != nil {
+		return 0, err
+	}
 	for _, stmt := range []string{
 		`DELETE FROM artifact_versions WHERE artifact_id = ?`,
 		`DELETE FROM artifact_objects WHERE artifact_id = ?`,
@@ -900,6 +917,10 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	rows += n
+	if n, err = pruneRetiredBrands(ctx, tx, pinned); err != nil {
+		return 0, err
+	}
+	rows += n
 	a.move(id, MovePurge, head.epoch+1, head.head, c.position)
 	return rows, nil
 }
@@ -919,20 +940,24 @@ func writeVersion(ctx context.Context, tx *sql.Tx, c applyContext, id string,
 		forced = 1
 	}
 	versionID := v.VersionID
-	if _, err := uuid.Parse(versionID); err != nil {
+	if _, bad := uuid.Parse(versionID); bad != nil {
 		versionID = ""
+	}
+	brand, err := pinnedBrand(ctx, tx, v.Brand)
+	if err != nil {
+		return 0, err
 	}
 	actor := c.record.actor()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO artifact_versions
 			(artifact_id, number, version_id, base_number, restored_from, forced,
 			 label, entry, contract, capabilities, files, bytes, manifest, author,
-			 author_kind, created_at, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 author_kind, created_at, position, brand)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, v.Number, versionID, v.Base, v.RestoredFrom, forced, v.Label,
 		v.Manifest.Entry, v.Contract, capabilities, len(v.Manifest.Files),
 		manifest.Bytes(v.Manifest), encoded, actor.Name, string(actor.Kind), c.at(),
-		c.packed); err != nil {
+		c.packed, brand); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: write %s version %d: %w", id, v.Number, err)
 	}
 	return 1, nil
@@ -1018,11 +1043,19 @@ func retiredEntries(ctx context.Context, tx *sql.Tx, id string, prune []int, bel
 	return out, true, nil
 }
 
-// deleteVersions removes the versions a record retires.
+// deleteVersions removes the versions a record retires, and with them the files
+// of a superseded adoption the last of them pinned ([pruneRetiredBrands]).
 func deleteVersions(ctx context.Context, tx *sql.Tx, id string, numbers []int) (int, error) {
+	if len(numbers) == 0 {
+		return 0, nil
+	}
+	pinned, err := pinsAnyBrand(ctx, tx, id, numbers)
+	if err != nil {
+		return 0, err
+	}
 	rows := 0
 	for _, n := range numbers {
-		res, err := tx.ExecContext(ctx,
+		res, err := tx.ExecContext(ctx, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			`DELETE FROM artifact_versions WHERE artifact_id = ? AND number = ?`, id, n)
 		if err != nil {
 			return 0, fmt.Errorf("artifactsdomain: retire %s version %d: %w", id, n, err)
@@ -1030,7 +1063,44 @@ func deleteVersions(ctx context.Context, tx *sql.Tx, id string, numbers []int) (
 		k, _ := res.RowsAffected()
 		rows += int(k)
 	}
-	return rows, nil
+	pruned, err := pruneRetiredBrands(ctx, tx, pinned)
+	return rows + pruned, err
+}
+
+// pinsAnyBrand reports whether any version of artifact id numbered in numbers
+// (every version where numbers is nil) pins an adoption's stylesheet, read
+// before the versions are deleted.
+func pinsAnyBrand(ctx context.Context, tx *sql.Tx, id string, numbers []int) (bool, error) {
+	query := `SELECT EXISTS (SELECT 1 FROM artifact_versions WHERE artifact_id = ? AND brand != ''`
+	args := []any{id}
+	if numbers != nil {
+		query += ` AND number IN (` + strings.TrimSuffix(strings.Repeat("?, ", len(numbers)), ", ") + `)`
+		for _, n := range numbers {
+			args = append(args, n)
+		}
+	}
+	var pinned bool
+	if err := tx.QueryRowContext(ctx, query+`)`, args...).Scan(&pinned); err != nil {
+		return false, fmt.Errorf("artifactsdomain: read whether %s's retired versions pin a brand: %w", id, err)
+	}
+	return pinned, nil
+}
+
+// pruneRetiredBrands prunes, after versions that pinned a stylesheet are gone
+// (pinned), the files of every superseded adoption no retained version names
+// any more ([pruneBrandFiles] against the adoption that stands), so a page
+// pinned to an old brand keeps it served while it is retained and not an
+// apply longer. A record retiring a pinned version names the brand in its
+// scope ([namesBrand]); one whose versions pin nothing touches no brand row.
+func pruneRetiredBrands(ctx context.Context, tx *sql.Tx, pinned bool) (int, error) {
+	if !pinned {
+		return 0, nil
+	}
+	current, err := currentCSSSha(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return pruneBrandFiles(ctx, tx, current)
 }
 
 // ---- the reference table ------------------------------------------------ //

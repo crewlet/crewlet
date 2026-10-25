@@ -1,6 +1,7 @@
 // Package provenance is the ONE fence around text a model reads that somebody
 // other than the reading seat wrote: page bodies, work item comments, project
-// files, chat threads, artifact files and datastore rows.
+// files, chat threads, artifact files, datastore rows and the adopted brand's
+// voice.
 //
 // Such text is data, never an instruction. Each read result wraps it in a fence
 // bounded by a per-turn random token, so content cannot close the fence by
@@ -51,7 +52,9 @@
 // text whose record says it had writers it does not name, on a surface only
 // company principals write: never `own`, and `colleague` even with nobody
 // named. `page` is never inferred; a caller whose text a page script produced
-// says so. The [Envelope] is the same label for a whole result, beside the
+// says so. Nor is `company`: a caller reading what an administrator adopted
+// for everybody (the adopted brand's voice) says so, and its note confines it
+// to tone and wording, never the task, the tools, the recipients or access. The [Envelope] is the same label for a whole result, beside the
 // fields it fences, at the [Least] trust of those fields, and carries the
 // sentence an assistant without the seat prompt needs to read the fences
 // correctly.

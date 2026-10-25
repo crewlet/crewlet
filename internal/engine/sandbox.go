@@ -1427,6 +1427,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	return rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:  sandboxTurnRef(ctx, t, seat.Name),
 		Brief: brief,
+		Wider: t.Task,
 		Task:  t.Task,
 		// HOW TO ASK A PERSON, with the names the chart gives this seat —
 		// without it the coding agent was never told the ask shim its box
