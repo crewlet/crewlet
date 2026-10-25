@@ -139,6 +139,36 @@ func (l *CallLog) Fork() *CallLog {
 	return &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
 }
 
+// Admit records one call the moment it is ADMITTED and returns the log that
+// call counts from: this run's calls before it, as a fork ([CallLog.Fork]).
+//
+// FOR CALLS THAT RUN SIDE BY SIDE. [CallLog.Record] after each call returns is
+// the rule for calls made one after another, where the order they return in is
+// the order they were made in. A coding CLI makes a response's calls at once
+// and they return in whatever order their tools finish, so a count read
+// against a log their returns are recorded into would depend on which sibling
+// finished first — and a re-run, making the same calls, would not reproduce
+// it. Recorded at admission instead, in the order the calls arrived, every
+// count is a function of that order alone.
+//
+// ONE LOCK FOR BOTH HALVES, so two admissions cannot each take a fork before
+// the other's record and both count as the run's first of their kind.
+//
+// The fork is the call's own: whatever the call records on it is handed back
+// with [CallLog.Absorb] once the call has returned. A nil log admits nothing
+// and returns nil, which counts every call as the first of its kind.
+func (l *CallLog) Admit(tool string, args map[string]any) *CallLog {
+	if l == nil {
+		return nil
+	}
+	digest := ArgsDigest(args)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	fork := &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
+	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
+	return fork
+}
+
 // Absorb records the calls made on a fork, once the worker that made them is
 // done, so a later count in this run sees them.
 //
