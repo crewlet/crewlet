@@ -1,6 +1,7 @@
 package proposal
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -57,3 +58,8 @@ func ParseRevision(s string) (Revision, error) {
 	}
 	return r, nil
 }
+
+// ErrGone is what a [Revisions] answers for an object the person can no longer
+// read at all (deleted, or out of their reach since the preview): a revision
+// that moved as far as a revision can.
+var ErrGone = errors.New("proposal: the object the revision names is gone")
