@@ -56,6 +56,15 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "reads its key from OPENAI_API_KEY, a variable other vendors' keys are kept under too",
 		},
 		{
+			// inherit-env would forward whatever the engine's process
+			// holds under OPENAI_API_KEY — the embeddings key, on most
+			// hosts — to Qwen Code's endpoint.
+			name:  "inherit-env on a CLI whose key variable is shared",
+			lines: []string{"agent: qwen-code", "auth: {mode: inherit-env}"},
+			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
+			says: "inherit-env forwards OPENAI_API_KEY from the engine's own environment",
+		},
+		{
 			name:  "an API key under subscription",
 			lines: []string{"agent: claude-code", `auth: {api_key: "${ANTHROPIC_API_KEY}"}`},
 			path:  "providers.llm.sub.auth.api_key", kind: ErrConflict,

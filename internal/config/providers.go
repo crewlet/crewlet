@@ -910,6 +910,18 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		}
 	}
 
+	// NOR FROM THE ENGINE'S ENVIRONMENT BY MODE. inherit-env forwards the key
+	// variable as the engine's process holds it, and a shared one holds
+	// whichever vendor's key was exported under it — the embeddings key, on a
+	// host that runs any — sent to this CLI's endpoint all the same.
+	if mode == AuthInheritEnv && profile.APIKeyEnvShared {
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"inherit-env forwards %s from the engine's own environment, and the %q CLI's key "+
+				"variable is one other vendors' keys are kept under too, so the key it forwarded "+
+				"would be whichever was exported there: set auth.mode: api-key and name this "+
+				`entry's key as auth.api_key, e.g. api_key: "${DASHSCOPE_API_KEY}"`,
+			profile.APIKeyEnv, agent)
+	}
 	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
 		remedy := "sign the CLI in with `crewlet llm login`"
 		if profile.EnvSignIn {

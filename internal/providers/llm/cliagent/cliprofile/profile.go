@@ -1010,7 +1010,8 @@ type Profile struct {
 	// APIKeyEnvShared declares that APIKeyEnv is a GENERIC name, one other
 	// vendors' keys are kept under too, so an entry names its key
 	// (auth.api_key) and the engine never reads that variable from its own
-	// secret store or environment in its place.
+	// secret store or environment in its place — nor forwards the engine's
+	// own under auth.mode inherit-env, which config refuses for such a CLI.
 	//
 	// The fallback exists for a vendor's own variable: ANTHROPIC_API_KEY
 	// read for Claude Code is the key a person exported for exactly that
