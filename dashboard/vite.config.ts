@@ -410,6 +410,10 @@ export default defineConfig({
       // The adopted brand's files and its adoption (lib/brand/api.ts). The
       // brand itself is the socket's question.
       "/brand": { target: "http://localhost:8000" },
+      // The Dashboard Assistant: its conversations, a turn's stream of
+      // server-sent events, a stop, an approval and a table card's export
+      // (protocol/assistant.ts).
+      "/assistant": { target: "http://localhost:8000" },
     },
   },
 });
