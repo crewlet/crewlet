@@ -1145,8 +1145,13 @@ const (
 	// and without them on uilet 0.56.0): each screen's parser, gate and
 	// setters in that screen's chunk, the claim and report flow in the
 	// panel's, and the address helper and contract table they share. 4432
-	// KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 336<<10
+	// KiB, which still refuses a doubled baseline. uilet 0.57.2 measured
+	// 4432.4 KiB, up from 4431.6 KiB with the same dashboard source but the
+	// drawer's one prop: the release drops the result table's first column
+	// truncation and a flush side panel body's scrolling, and the drawer
+	// keeps a scrolling body for its offline notice. 4433 KiB, which still
+	// refuses a doubled baseline.
+	treeBudget = 4<<20 + 337<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

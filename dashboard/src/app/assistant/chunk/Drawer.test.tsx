@@ -24,6 +24,7 @@ import { withDerived } from "~/test/org.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
 import { queueQuestion, takeQueuedQuestion } from "../control.ts";
+import type { AssistantUnavailable } from "../availability.ts";
 import { Drawer } from "./Drawer.tsx";
 import { conversation, resetSessionForTest } from "./session.ts";
 
@@ -94,7 +95,7 @@ function engine() {
   return sent;
 }
 
-function mount() {
+function mount(unavailable: AssistantUnavailable | null = null) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
   const socket = new LiveSocket(store);
@@ -106,7 +107,7 @@ function mount() {
           <ToastProvider>
             <LayerHost>
               <Drawer
-                unavailable={null}
+                unavailable={unavailable}
                 onClose={() => {}}
                 initialFocus="composer"
                 name="Ada Lovelace"
@@ -209,4 +210,23 @@ test("a question queued from elsewhere is asked once the panel draws", async () 
   const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
   expect(JSON.parse(String(turn.init.body)).input).toEqual({ text: "Who spent most this week?" });
   expect(takeQueuedQuestion()).toBeNull();
+});
+
+// THE BODY IS FLUSH ONLY FOR THE THREAD, which scrolls itself. The offline
+// notice does not, so it keeps the panel's own scrolling body and stays
+// readable in a short window.
+test("the panel's body is flush for the thread and scrolls for the offline notice", () => {
+  engine();
+  const { container, unmount } = mount();
+  expect(container.ownerDocument.querySelector(".crewlet-side-panel__body--flush")).not.toBeNull();
+  unmount();
+
+  mount({
+    reason: "disabled",
+    short: "An admin turned the assistant off.",
+    title: "The assistant is off for Nimbus",
+    body: "An admin turned it off.",
+  });
+  expect(screen.getByText("The assistant is off for Nimbus")).toBeDefined();
+  expect(document.querySelector(".crewlet-side-panel__body--flush")).toBeNull();
 });

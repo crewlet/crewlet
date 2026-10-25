@@ -322,8 +322,11 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
         title="Crewlet Assistant"
         icon={<ProductMark product="assistant" size="md" />}
         // THE THREAD IS THE ONE SCROLLER and insets its own items, so the
-        // panel's body gives up its inset rather than doubling it.
-        flush
+        // panel's body gives up its inset rather than doubling it. A flush
+        // body clips rather than scrolls, so the offline notice, which does
+        // not scroll itself, keeps the ordinary body and can still be read
+        // in a short window.
+        flush={!offline}
         onClose={onClose}
         labels={{ close: () => "Close the assistant" }}
         initialFocus={initialFocus === "composer" && !offline ? composer : "heading"}
