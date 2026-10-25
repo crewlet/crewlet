@@ -17,7 +17,8 @@
  * kit is shared with to edit finishes with **Save for review**, a draft an
  * administrator adopts from the Brand page. Both ask first that every
  * low-contrast pair is acknowledged; the one pair that blocks an adoption
- * holds the Colours step itself.
+ * holds the Colours step itself. A finish tried too early says what holds it
+ * where it is fixed, on Review itself, and moves focus there.
  *
  * # One page of the kit's parts
  *
@@ -26,7 +27,7 @@
  * them is the Brand page's, drawing the draft as it stands.
  */
 
-import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   Button,
   Card,
@@ -157,6 +158,9 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   const [refused, setRefused] = useState<Partial<Record<BrandLogoSlot, string>>>({});
   const [said, setSaid] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(new Set());
+  // A FINISH WAS TRIED while something held it: Review marks what, in place.
+  const [tried, setTried] = useState(false);
+  const [held, setHeld] = useState(0);
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
   const [finishing, setFinishing] = useState(false);
 
@@ -251,11 +255,24 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   const finishHold =
     ready ??
     (unacknowledged > 0
-      ? `Confirm the ${unacknowledged === 1 ? "contrast warning" : `${unacknowledged} contrast warnings`} first.`
+      ? `Confirm the ${unacknowledged === 1 ? "low-contrast pair" : `${unacknowledged} low-contrast pairs`} first.`
       : undefined);
 
+  // FOCUS GOES TO WHAT HOLDS THE FINISH once Review has drawn it: the part
+  // missing a required value, or the first pair not yet confirmed.
+  useEffect(() => {
+    if (held > 0) body.current?.querySelector<HTMLElement>("[data-hold]")?.focus();
+  }, [held]);
+
   const finish = async () => {
-    if (finishHold) return hold(finishHold);
+    if (finishHold) {
+      // THE FIRST TIME, the marks themselves are alerts and say it; after
+      // that they are already drawn, so the reason is said again.
+      if (tried) announce(finishHold);
+      setTried(true);
+      setHeld((n) => n + 1);
+      return;
+    }
     const now = await save();
     if (now === null) return;
     if (!admin) {
@@ -407,6 +424,8 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
             <ReviewStep
               edit={edit}
               assets={assets}
+              admin={admin}
+              showErrors={tried}
               onEditStep={(to) => setStep(to)}
               acknowledged={acknowledged}
               onAcknowledge={(key, on) =>
@@ -419,9 +438,6 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
               }
             />
           )}
-          {step === "review" && finishHold ? (
-            <p className="brand-setup-hold">{finishHold}</p>
-          ) : null}
         </div>
       </SetupWizard>
       <ConfirmModal

@@ -199,81 +199,67 @@
 .brand-diff-was {
   color: var(--color-text-tertiary);
 }
-/* The brand setup (`#/company/brand/setup`): the Voice step's note, the
-   sentence that holds a finish, and Review's contrast checklist. */
-.brand-setup-note,
-.brand-setup-hold {
+/* The brand setup (`#/company/brand/setup`): the Voice step's note. */
+.brand-setup-note {
   margin: 0;
 }
-.brand-setup-hold {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-compact);
-}
-.brand-setup-warnings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-/* The setup's Review: the summary cards and the preview in two columns (the
-   preview a fixed 320px), one column where the content is narrow; then the
-   card of what to confirm before adopting. */
+/* The setup's Review: the summary (`ReviewList`) and, beside it, the column a
+   person decides in, the preview over "Before you adopt", at 22rem: the
+   wizard's 20rem aside wrapped "When you adopt" to ten lines. The decision
+   column ends above the finish action;
+   where the step is narrower than both need, it follows the summary in one
+   column, still ending where the finish is. */
 .brand-review {
   container: brand-review / inline-size;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
 }
-.brand-review-columns {
+.brand-review-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 22rem;
   gap: var(--spacing-5);
   align-items: start;
 }
-@container brand-review (width < 44rem) {
-  .brand-review-columns {
+@container brand-review (width < 48rem) {
+  .brand-review-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-.brand-review-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
-  gap: var(--spacing-4);
-  align-items: start;
+.brand-review-decide,
+.brand-review-before,
+.brand-review-stack,
+.brand-review-identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
 }
-.brand-review-card-title,
-.brand-review-card-actions {
-  display: inline-flex;
-  align-items: center;
+.brand-review-stack {
   gap: var(--spacing-2);
 }
-.brand-review-card-glyph {
-  display: inline-flex;
-  color: var(--color-text-secondary);
+.brand-review-identity {
+  gap: var(--spacing-1);
 }
-.brand-review-name,
-.brand-review-voice {
+.brand-review-identity > p,
+.brand-review-stack > p {
   margin: 0;
 }
-.brand-review-line {
-  margin: var(--spacing-1) 0 0;
+.brand-review-name {
+  font-weight: var(--font-weight-semibold);
 }
-/* Three a row where they fit, two and one on a phone, so a slot is never so
-   narrow that its name wraps over a logo drawn too small to read. */
+/* The three logos as thumbnails, one row of equal columns at every width. */
 .brand-review-logos {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
+  grid-template-columns: repeat(3, minmax(0, 9rem));
   gap: var(--spacing-3);
   align-items: start;
 }
 .brand-review-swatches,
-.brand-review-faces,
-.brand-review-before-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
+.brand-review-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(10rem, 100%), 1fr));
+  gap: var(--spacing-3) var(--spacing-4);
 }
-.brand-review-before-body {
-  gap: var(--spacing-4);
+.brand-review-faces {
+  grid-template-columns: repeat(auto-fill, minmax(min(12rem, 100%), 1fr));
 }
 /* "When you adopt" heads its three items at the small step: it sits under a
    dialog's title or a card's, which it must never outrank (the register is

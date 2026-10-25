@@ -255,11 +255,20 @@ test("an administrator adopts from Review once every contrast warning is acknowl
   mount(["admin"], [brandKitRow()]);
   expect(await stepHeading("Review")).toBeTruthy();
   const adopt = screen.getByRole("button", { name: "Adopt as the company brand" });
+  // NOTHING IS SAID BEFORE A FINISH IS TRIED.
+  expect(screen.queryByRole("alert")).toBeNull();
   fireEvent.click(adopt);
-  expect((await screen.findByRole("alert")).textContent).toMatch(/^Confirm the .*contrast warning/);
+  // WHAT HOLDS IT IS SAID AT THE FIELD, and focus moves to the box to tick.
+  const warnings = screen.getByRole("group", { name: "Confirm low contrast" });
+  const alert = await within(warnings).findByRole("alert");
+  expect(alert.textContent).toBe("Confirm the pair to adopt.");
+  const [box] = within(warnings).getAllByRole("checkbox");
+  await waitFor(() => expect(document.activeElement).toBe(box));
+  expect(box!.getAttribute("aria-invalid")).toBe("true");
+  expect(document.querySelector(".brand-setup-hold")).toBeNull();
   expect(writes(sent, /\/brand\/adoptions$/)).toHaveLength(0);
-  const warnings = screen.getByRole("region", { name: "Contrast warnings" });
-  for (const box of within(warnings).getAllByRole("checkbox")) fireEvent.click(box);
+  for (const each of within(warnings).getAllByRole("checkbox")) fireEvent.click(each);
+  expect(within(warnings).queryByRole("alert")).toBeNull();
   fireEvent.click(adopt);
   await waitFor(() => expect(writes(sent, /\/brand\/adoptions$/)).toHaveLength(1));
   // NOTHING CHANGED SINCE THE DRAFT WAS SAVED: the saved version is adopted,
@@ -277,6 +286,7 @@ test("an editor of the kit finishes with Save for review, and never adopts", asy
   mount([], [brandKitRow({ role: "editor" })]);
   expect(await stepHeading("Review")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Adopt as the company brand" })).toBeNull();
+  expect(screen.getByRole("region", { name: "Before you save for review" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save for review" }));
   await waitFor(() => expect(location.hash).toBe("#/company/brand"));
   expect(writes(sent, /\/brand\/adoptions$/)).toHaveLength(0);
@@ -353,7 +363,7 @@ test("the rail says the current step is optional, or needs attention, as well as
   );
 });
 
-test("Review shows each part's values and status beside the preview, then what to confirm before adopting", async () => {
+test("Review shows each part's values and status in one summary, beside the preview and what to confirm", async () => {
   engine(
     whole({
       colors: { primary: "#00baba" },
@@ -362,21 +372,49 @@ test("Review shows each part's values and status beside the preview, then what t
   );
   mount(["admin"], [brandKitRow()]);
   expect(await stepHeading("Review")).toBeTruthy();
-  const identity = screen.getByRole("region", { name: "Identity" });
-  expect(within(identity).getByText("FairSplit")).toBeTruthy();
-  expect(within(identity).getByText("Complete")).toBeTruthy();
-  const colours = screen.getByRole("region", { name: "Colours" });
-  expect(within(colours).getByText("Uses defaults")).toBeTruthy();
+  const summary = () => screen.getByRole("list", { name: "Brand summary" });
+  // READ AFRESH EACH TIME: Review is drawn again after an Edit and a return.
+  const part = (name: string) =>
+    within(summary())
+      .getAllByRole("listitem")
+      .find((row) => within(row).queryByRole("heading", { name }))!;
+  // ONE ROW A PART, in the order the setup walks them, each with its way back.
+  expect(
+    within(summary())
+      .getAllByRole("heading")
+      .map((h) => h.textContent),
+  ).toEqual(["Identity", "Logos", "Colours", "Typography", "Voice"]);
+  expect(within(part("Identity")).getByText("FairSplit")).toBeTruthy();
+  expect(within(part("Identity")).getByText("Complete")).toBeTruthy();
+  expect(within(part("Logos")).getByRole("group", { name: "Primary" })).toBeTruthy();
+  const colours = part("Colours");
+  // A LOW PAIR NOT YET CONFIRMED is what the colours need.
+  expect(within(colours).getByText("Needs attention")).toBeTruthy();
   expect(within(colours).getByText("#00baba")).toBeTruthy();
-  expect(within(colours).getByText("5 more use Crewlet's defaults.")).toBeTruthy();
-  const voice = screen.getByRole("region", { name: "Voice" });
+  expect(
+    within(colours).getByText(
+      "Crewlet's defaults: Primary on dark, Secondary, Text, Light ground and Dark ground.",
+    ),
+  ).toBeTruthy();
+  const voice = part("Voice");
   expect(within(voice).getByText("Plain, warm and exact.")).toBeTruthy();
-  expect(within(voice).getByText("Write like this: 0 lines. Avoid: 1 line.")).toBeTruthy();
+  expect(within(voice).getByText("Write like this: none. Avoid: 1 line.")).toBeTruthy();
+  fireEvent.click(within(part("Typography")).getByRole("button", { name: "Edit Typography" }));
+  expect(await stepHeading("Typography")).toBeTruthy();
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Brand setup steps" })).getByRole("button", {
+      name: /Review/,
+    }),
+  );
+  expect(await stepHeading("Review")).toBeTruthy();
   expect(screen.getByRole("region", { name: "Preview of your draft" })).toBeTruthy();
   const before = screen.getByRole("region", { name: "Before you adopt" });
   expect(within(before).getByRole("heading", { name: "When you adopt" })).toBeTruthy();
   expect(within(before).getByText("Docs and dashboards switch to it right away.")).toBeTruthy();
-  expect(within(before).getAllByRole("checkbox").length).toBeGreaterThan(0);
+  const boxes = within(before).getAllByRole("checkbox");
+  for (const box of boxes) fireEvent.click(box);
+  // CONFIRMED, the colours lean on Crewlet's defaults and nothing more.
+  expect(within(part("Colours")).getByText("Uses defaults")).toBeTruthy();
   // EXIT LEADS THE FOOTER, apart from the step's own actions.
   expect(screen.getByRole("button", { name: "Exit" })).toBeTruthy();
 });
