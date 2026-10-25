@@ -18,7 +18,7 @@ import (
 
 // THE PREVIEWS: what each write would change, read by the server from the
 // object as it is now, through the turn's grant, and never from what the model
-// said about it (ADR-0047). Each answers the exact request its tool builds, so
+// said about it (ADR-0050). Each answers the exact request its tool builds, so
 // the card the person approves and the request the approval sends are one
 // value.
 
