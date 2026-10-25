@@ -609,6 +609,18 @@ func full(err error) bool { return strings.Contains(err.Error(), maxBytesExceede
 // (server/store.go).
 const maxBytesExceeded = "maximum bytes exceeded"
 
+// FullRemedy is the room the bucket needs once it holds its whole reservation
+// ([objstore.Full.Remedy]): three gestures, each an operator's.
+//
+// THE RESERVATION IS RAISED ON AN EXTERNAL BROKER ONLY, and the sentence says
+// so: a bucket that exists keeps the ceiling it was created with
+// ([checkCeiling]), and the `nats stream update` that changes it cannot reach
+// an embedded broker, which has no client listener — so moving the files to a
+// provider's bucket comes first, as the one gesture every deployment has.
+const FullRemedy = "an operator makes room — moves the files to a bucket " +
+	"(crewlet objects migrate -to s3), raises the bucket's byte reservation on an " +
+	"external broker, or lets the collector remove what nothing names"
+
 // Usage answers how much of the bucket's reservation its objects take, from
 // the stream's own state and configuration: the ceiling the BROKER enforces,
 // never the figure this node was configured with, since a bucket that exists

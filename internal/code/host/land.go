@@ -293,7 +293,10 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		func(introduced []string, count int, unstored *code.PackRef) error {
 			return s.checkProposal(proposal(introduced, count, unstored))
 		})
-	var invalid *invalidProposal
+	var (
+		invalid *invalidProposal
+		full    *objstore.Full
+	)
 	switch {
 	case errors.As(err, &invalid):
 		// THE RECEIVER'S OWN BUG, found before its committer was asked and
@@ -304,6 +307,21 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		return landed{Commands: withRefs(v.commands, named), Result: result}, nil
 	case err != nil:
 		return landed{}, unchecked(err)
+	case errors.As(stored, &full):
+		// NO ROOM, WHICH NO RETRY MAKES: the store refuses this push the
+		// same way until an operator makes the room it names — so a
+		// refusal of its own naming that remedy, never unavailable's "run
+		// git push again", which sent a person, or a CI runner on a loop,
+		// to upload the whole pack again into a store that could not take
+		// it. The store's own words name its bucket, which is the
+		// operator's to read, in this line alone.
+		s.log.Warn("code_push_store_full", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
+			"bytes", ref.Size, "error", stored.Error())
+		cmds = refuseRest(cmds, code.RefusalStoreFull, fmt.Sprintf("the object store has no room for the "+
+			"%s this push stores, and nothing was stored; it lands only once %s", humanBytes(ref.Size),
+			full.Remedy))
+		result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalStoreFull)
+		return landed{Commands: cmds, Result: result}, nil
 	case stored != nil:
 		var bad *badBundle
 		detail := "object store unavailable: " + sentence(stored.Error())

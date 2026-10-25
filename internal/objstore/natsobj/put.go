@@ -339,9 +339,9 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 			// THE RESERVATION IS SPENT: the stream refused a message past
 			// its ceiling, which is the bucket filling, never the broker
 			// failing, and the one refusal its caller can name to a person
-			// ([objstore.ErrFull]).
-			return fmt.Errorf("natsobj: put %s: %w (%s holds as many bytes as it reserves): %w",
-				name, objstore.ErrFull, Bucket, err)
+			// ([objstore.ErrFull]), with the room this bucket needs.
+			return &objstore.Full{Remedy: FullRemedy, Err: fmt.Errorf(
+				"natsobj: put %s: %s holds as many bytes as it reserves: %w", name, Bucket, err)}
 		}
 		return fmt.Errorf("natsobj: put %s: %w", name, err)
 	}

@@ -2414,8 +2414,12 @@ func TestAFullBucketLeavesTheCoordinationRemainder(t *testing.T) {
 			break
 		}
 	}
-	if !errors.Is(refused, objstore.ErrFull) {
-		t.Fatalf("a put past the reservation answered %v, want ErrFull", refused)
+	full, ok := errors.AsType[*objstore.Full](refused)
+	if !ok || !errors.Is(refused, objstore.ErrFull) {
+		t.Fatalf("a put past the reservation answered %v, want an objstore.Full over ErrFull", refused)
+	}
+	if full.Remedy != natsobj.FullRemedy {
+		t.Errorf("a full bucket named the room %q, want the bucket's own, %q", full.Remedy, natsobj.FullRemedy)
 	}
 	usage, err := b.Usage(t.Context())
 	if err != nil {

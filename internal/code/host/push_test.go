@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -303,6 +304,73 @@ func TestAPushOverTheBlobLimitStoresNothing(t *testing.T) {
 	}
 	if n := len(e.seen("propose")); n > 0 {
 		t.Errorf("a push over the blob limit was proposed %d times", n)
+	}
+}
+
+// fullBucket is a backend with no room left: a put reads what it is handed and
+// is refused as a backend refuses one for room ([objstore.Full]), storing
+// nothing, naming a room of the case's own ([caseRemedy]) — so a line that
+// names it spliced the store's remedy rather than a spelling of its own.
+type fullBucket struct{ objstore.Backend }
+
+// caseRemedy is the room [fullBucket] names.
+const caseRemedy = "an operator makes room in this case's own bucket"
+
+func (fullBucket) Put(_ context.Context, name string, r io.Reader, _ objstore.PutMeta) error {
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	return &objstore.Full{Remedy: caseRemedy, Err: fmt.Errorf(
+		"fullbucket: put %s: OBJ_crewlet_files holds as many bytes as it reserves", name)}
+}
+
+// A PUSH THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL, naming the room
+// the store names: never `unavailable`, whose sentence says to run git push
+// again — into a store that refuses the same push the same way until an
+// operator makes room, so a person, or a CI runner on a loop, re-sent the
+// whole pack each time. Nothing was stored, nothing proposed, and the push is
+// recorded refused under its own class, so the audit tells a full store from
+// a store that failed.
+//
+// Mutation: answer a full store as `unavailable` again (land.go's
+// objstore.Full case removed) and this fails on the line git prints and on
+// the record; splice a room of the landing's own and it fails on the room.
+func TestAPushTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	l, e := &logs{}, &recording{}
+	c := newCase(t, codetest.SoloOptions{Objects: fullBucket{memobj.New()}, Logger: l.logger(),
+		Shape: codetest.Shape{WrapEstate: e.wrap}}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+
+	res := p.Push(c.Ctx, work, c.URL(0), "main")
+	reason, rejected := res.Rejected("refs/heads/main")
+	switch {
+	case !rejected || !strings.Contains(reason, "(store_full: the object store has no room for the "):
+		t.Errorf("a push the store has no room for printed %q, want (store_full: …): %s", reason, res)
+	case !strings.Contains(reason, caseRemedy):
+		t.Errorf("a push the store has no room for printed %q, which does not name the store's room %q",
+			reason, caseRemedy)
+	case strings.Contains(reason, "push again"):
+		t.Errorf("a push the store has no room for printed %q, which sends the person to push again "+
+			"into a store that refuses it the same", reason)
+	}
+	if names := objects(t, c); len(names) > 0 {
+		t.Errorf("a push the store had no room for stored %v", names)
+	}
+	if n := len(e.seen("propose")); n > 0 {
+		t.Errorf("a push the store had no room for was proposed %d times", n)
+	}
+	if rows := pushRows(t, c); len(rows) > 0 {
+		t.Errorf("a push the store had no room for left push rows %v", rows)
+	}
+	if audited := c.Fleet.Audited(); len(audited) != 1 || audited[0].Outcome != types.AuditRefused ||
+		audited[0].Refusal != string(code.RefusalStoreFull) {
+		t.Errorf("a push the store had no room for was recorded as %+v, want one refused/store_full", audited)
+	}
+	if n := l.count("code_push_store_full", `"level":"WARN"`, "OBJ_crewlet_files holds as many bytes"); n != 1 {
+		t.Errorf("code_push_store_full was logged %d times with the store's answer, want once: %q", n,
+			l.lines("code_push_store_full"))
 	}
 }
 

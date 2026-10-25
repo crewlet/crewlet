@@ -279,12 +279,20 @@ store:
   an embedded broker, which nothing outside the engine reaches. A node whose
   figure is derived does not start, and names both that setting and the
   `nats stream update` that bounds the bucket from outside.
-- **A full bucket refuses the upload** with the store's reservation named; the
+- **A full bucket refuses the upload**, and what made it says so as a refusal
+  of its own naming the room an operator makes — move the files to a bucket,
+  raise the reservation on an external broker (an embedded one keeps the
+  reservation it was created with), or let the collector remove what nothing
+  names — never as
+  a failure to try again, since every upload is refused the same until room is
+  made: a push is refused `store_full` ([what git
+  prints](code-host.md#what-git-prints-and-what-it-means)). The
   [`objects_bucket_near_ceiling`](#alarms) alarm fires once less than a fifth
   of the reservation is left, and the `crewlet.objects.bucket.bytes` and
   `crewlet.objects.bucket.max_bytes` gauges (from the node holding the
-  collector's duty) draw it over time. Raise the reservation, or [move the
-  files to a bucket](#moving-the-files-to-a-bucket).
+  collector's duty) draw it over time. [Move the files to a
+  bucket](#moving-the-files-to-a-bucket), or, on an external broker, raise the
+  reservation.
 - **Size the members' disks for the files as well as the logs.** Every member
   keeps a copy of the whole reservation's worth of objects. Past about 100 GiB
   of files at three copies, replacing a member re-replicates the whole bucket

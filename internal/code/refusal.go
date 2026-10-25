@@ -16,7 +16,7 @@ import (
 type Refusal string
 
 // The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
-// the last five are answers ABOUT a push, never part of one.
+// the last six are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
 	RefusalStale Refusal = "stale"
@@ -71,6 +71,22 @@ const (
 	RefusalBusy Refusal = "busy"
 	// RefusalUnavailable is the code log or the object store refusing.
 	RefusalUnavailable Refusal = "unavailable"
+	// RefusalStoreFull is a push whose bundle the object store refused
+	// because it has no room for it (objstore.ErrFull): nothing was stored
+	// and nothing proposed.
+	//
+	// NOT unavailable, whose sentence says to run git push again: a full
+	// store refuses the same push the same way until an operator makes the
+	// room it names (objstore.Full), so that sentence sent a person — and a
+	// CI runner on a loop — to push again into a store that could not take
+	// it. The landing's own line names that room; this fixed sentence names
+	// none, since the room is the store's to say.
+	//
+	// AN ANSWER ABOUT A PUSH, decided by the node that received it before
+	// any proposal: never recorded on a command ([Refusal.Recorded]) and
+	// never carried by the estate router, so it is no field of the code
+	// domain's records and takes no versionedFields row.
+	RefusalStoreFull Refusal = "store_full"
 	// RefusalNotApplied is a push durable on the log and applied nowhere.
 	RefusalNotApplied Refusal = "not_applied"
 	// RefusalUnknown is a push whose outcome could not be established.
@@ -87,7 +103,7 @@ func Refusals() []Refusal {
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
-		RefusalBusy, RefusalUnavailable, RefusalNotApplied, RefusalUnknown,
+		RefusalBusy, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown,
 		RefusalPending,
 	}
 }
@@ -96,11 +112,12 @@ func Refusals() []Refusal {
 func (r Refusal) Valid() bool { return slices.Contains(Refusals(), r) }
 
 // Recorded reports a code that may appear on a recorded command: every one but
-// the five that are answers ABOUT a push — whether it could be committed at
+// the six that are answers ABOUT a push — whether it could be committed at
 // all — rather than a verdict on one of its commands.
 func (r Refusal) Recorded() bool {
 	switch r {
-	case RefusalBusy, RefusalUnavailable, RefusalNotApplied, RefusalUnknown, RefusalPending:
+	case RefusalBusy, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown,
+		RefusalPending:
 		return false
 	}
 	return r.Valid()
@@ -134,6 +151,7 @@ var sentences = map[Refusal]string{
 	RefusalNotApplied:  "the push was durable and applied nowhere; run git push again",
 	RefusalUnknown:     "the push's outcome is unknown; fetch, then run git push again",
 	RefusalPending:     "the push is durable and unresolved here; run git push again (a push that landed reports up to date)",
+	RefusalStoreFull:   "the object store has no room for the push, and nothing was stored; it lands only once an operator makes room",
 }
 
 // Sentence is the code's fixed sentence, or the code itself for one this build

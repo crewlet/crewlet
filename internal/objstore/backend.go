@@ -48,16 +48,50 @@ var ErrStalled = errors.New("stalled")
 // ErrNoDeadline is a read asked for under a context with no deadline.
 var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 
-// ErrFull is a put the backend refused because its byte reservation is spent:
+// ErrFull is a put the backend refused because the store has no room for it:
 // the fleet's own bucket (natsobj) holds as many bytes as it was created to
 // reserve, and refuses a new object rather than discard an old one. Nothing is
 // stored, as for every failed put ([Backend.Put]).
 //
-// A SENTINEL rather than the broker's own text, because the caller's answer is
-// specific: the upload is refused for room the deployment has to make (raise
-// the reservation, collect what nothing names, or move the files to a bucket
-// with `crewlet objects migrate --to s3`), never retried as a blip.
-var ErrFull = errors.New("objstore: the object store's byte reservation is spent")
+// A SENTINEL rather than the backend's own text, because the caller's answer
+// is specific: the upload is refused for room the deployment has to make, never
+// retried as a blip. A backend answers it only inside a [*Full], which names
+// that room: errors.Is(err, ErrFull) holds of every such answer, and a surface
+// that refuses an upload for it takes the *Full with errors.As to say what an
+// operator does.
+var ErrFull = errors.New("objstore: the object store has no room left")
+
+// Full is a put a backend refused for room ([ErrFull]): Remedy is the room an
+// operator makes, and Err the backend's own answer.
+//
+// THE REMEDY IS THE BACKEND'S, carried by its answer, because the room is
+// made where the backend keeps its bytes and only the backend knows where that
+// is. Every surface that refuses an upload for a full store splices Remedy into
+// a sentence of its own vocabulary — a pushed ref's line, a tool's answer, an
+// HTTP refusal's hint — after "until" or "once", so it is one clause, naming
+// gestures that are each an operator's, that the uploader cannot make and that
+// no retry stands in for: asked again before one is made, the store answers the
+// same. In plain words rather than markup, because a git client prints it as
+// it is.
+//
+// ERR NAMES THE BUCKET, its endpoint and its keys, which none of those readers
+// can act on and a model reads into its prompt: it is the node's log's, never a
+// surface's sentence.
+type Full struct {
+	Remedy string
+	Err    error
+}
+
+// Error is the sentinel's sentence and the backend's own answer.
+func (e *Full) Error() string {
+	if e.Err == nil {
+		return ErrFull.Error()
+	}
+	return ErrFull.Error() + ": " + e.Err.Error()
+}
+
+// Unwrap is [ErrFull] and the backend's own answer, so errors.Is meets both.
+func (e *Full) Unwrap() []error { return []error{ErrFull, e.Err} }
 
 // Usage is how much of a backend's byte reservation its objects take: Bytes
 // stored, against MaxBytes reserved. Only a backend that holds a reservation
