@@ -815,6 +815,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	res, err := jira.Reconcile(ctx, jira.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 		Sink: in.Sink, WebhookBase: in.WebhookBase, WebhookBaseKey: in.WebhookBaseKey,
+		RecreateWebhook: in.Recreate,
 		// AND WHEN EACH SEAT'S ATLASSIAN CREDENTIAL WAS SEALED, which is
 		// the only thing that separates "Atlassian has not finished
 		// granting this brand new account" from "this credential is
