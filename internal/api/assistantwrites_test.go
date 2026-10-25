@@ -31,6 +31,11 @@ import (
 // record. What every call must leave instead: a proposal card in state
 // proposed, a step waiting on approval, a turn ended waiting for the person,
 // one stored proposal, NO request that is not a read, and NO `operator_acted`.
+// The one exception is a VIEW CHANGE a screen declares `confirm: none`
+// (contract 6.7, D11): it writes nothing to the company, so it is applied on
+// the person's screen at once, an action frame with no proposal card and a
+// turn that goes on to its answer, and the record of it is approved by the
+// turn itself. It still sends no request but reads and audits nothing.
 // A control at the end approves one write the way the approve route does and
 // sees the record appear, so the empty audit is the sink's own answer.
 //
@@ -53,6 +58,11 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 		}
 		proposing = append(proposing, tool)
 		rounds = append(rounds, evals.Call("c-"+tool.Name, tool.Name, args))
+		if tool.Kind == catalog.KindPageAction {
+			// The walk's page action is a view change, applied at once,
+			// so its turn goes on to an answer.
+			rounds = append(rounds, evals.Say("Done."))
+		}
 	}
 	if len(proposing) < 15 {
 		t.Fatalf("the catalogue proposes through %d tools, so the walk drives too few",
@@ -60,8 +70,14 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 	}
 	sent := &recordingDispatcher{inner: worldThenApp{app: fx.disp, world: assistanttest.World()}}
 	rig := writingRig(t, fx, sent, rounds)
+	appliedAtOnce := map[string]bool{}
 	for _, tool := range proposing {
 		frames := askOne(t, rig, fx, tool.Name, assistanttest.FilterPage())
+		if tool.Kind == catalog.KindPageAction {
+			appliedAtOnce[tool.Name] = true
+			requireAppliedAtOnce(t, frames, tool.Name)
+			continue
+		}
 		card := proposalCard(t, frames, tool.Name)
 		if card.State != wire.ProposalProposed {
 			t.Errorf("%s's proposal is %s, want proposed", tool.Name, card.State)
@@ -74,7 +90,7 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 			t.Errorf("%s's turn did not end waiting for the person: %+v", tool.Name, done)
 		}
 	}
-	assertNothingWritten(t, rig, sent, audit, len(proposing))
+	assertNothingWritten(t, rig, sent, audit, len(proposing), appliedAtOnce)
 
 	// THE CONTROL: a write the person approved is sent on an exec grant and
 	// audited, so the empty record above is the sink's answer, not its
@@ -168,7 +184,7 @@ func TestInjectedTextNeverBecomesAWrite(t *testing.T) {
 	}
 
 	// (2) THE STRUCTURE: proposals only, nothing sent, nothing acted.
-	assertNothingWritten(t, rig, sent, audit, len(obeyed))
+	assertNothingWritten(t, rig, sent, audit, len(obeyed), nil)
 }
 
 // writingRig is an assistant for the fixture's person offered every write
@@ -209,7 +225,7 @@ func (d worldThenApp) Do(ctx context.Context, g exec.Grant, r exec.Request) (exe
 // assertNothingWritten holds a walk to its proposals: want of them stored,
 // each still proposed, no request but a read sent, and no operator_acted.
 func assertNothingWritten(t *testing.T, rig *assistanttest.Rig, sent *recordingDispatcher,
-	audit *recordedAudit, want int) {
+	audit *recordedAudit, want int, appliedAtOnce map[string]bool) {
 
 	t.Helper()
 	for _, w := range sent.writes() {
@@ -223,6 +239,11 @@ func assertNothingWritten(t *testing.T, rig *assistanttest.Rig, sent *recordingD
 		t.Errorf("%d proposals stored, want %d", len(proposals), want)
 	}
 	for _, p := range proposals {
+		if appliedAtOnce[p.Tool] {
+			// A view change the turn applied, approved by the turn itself:
+			// it wrote nothing to the company (checked above).
+			continue
+		}
 		if p.State != wire.ProposalProposed {
 			t.Errorf("proposal %s (%s) is %s with nobody's approval", p.ID, p.Tool, p.State)
 		}
@@ -239,6 +260,25 @@ func operatorActed(audit *recordedAudit) int {
 		}
 	}
 	return n
+}
+
+// requireAppliedAtOnce holds a view change's turn to its contract: an action
+// frame that applies with no confirmation, no proposal card, and a turn that
+// completes rather than waiting on the person.
+func requireAppliedAtOnce(t *testing.T, frames []wire.Frame, tool string) {
+	t.Helper()
+	action := evals.Last(frames, wire.EventAction)
+	if action == nil || action.Action.Confirm != wire.ConfirmNone {
+		t.Errorf("%s's turn sent no action applied at once: %+v", tool, action)
+	}
+	for _, f := range frames {
+		if f.Kind == wire.EventCard && f.Card.Card.Proposal != nil {
+			t.Errorf("%s's view change drew a proposal card, which asks for an approval it does not need", tool)
+		}
+	}
+	if done := evals.Last(frames, wire.EventDone); done == nil || done.Done.State != wire.TurnCompleted {
+		t.Errorf("%s's turn did not go on to its answer: %+v", tool, done)
+	}
 }
 
 // proposalCard is the proposal card of tool's turn.
