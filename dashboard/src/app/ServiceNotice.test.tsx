@@ -88,6 +88,11 @@ test("each hidden place says why it is not here", () => {
   expect(noticeText("tracker", ["me"])).toBe(
     "My work is part of Worklet, which is not in use here.",
   );
+  // A PLACE ONLY ONE SECTION OF WHICH READS WORKLET IS NAMED BY THAT SECTION,
+  // never by its workspace: Settings is not part of Worklet.
+  expect(noticeText("tracker", ["settings", "spend", "tasks"])).toBe(
+    "Expensive tasks is part of Worklet, which is not in use here.",
+  );
   expect(noticeText("knowledge", ["doclet"])).toMatch(/^Doclet is not in use here\..*Memory tab/);
   expect(noticeTitle("tracker", { tracker: "none", knowledge: "doclet" })).toBe(
     "This company runs no work tracker",

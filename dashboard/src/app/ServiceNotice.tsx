@@ -22,7 +22,7 @@ import { ButtonLink, EmptyState } from "@crewlethq/ui";
 import { BookOpenGlyph, SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
 import { useBackends, type OrgServices } from "~/lib/services.ts";
 import { useHeldReading } from "~/lib/viewer.ts";
-import { closedBy, workspaceOf, workspaceRow, type Service } from "./nav.ts";
+import { closedBy, sectionOf, workspaceOf, workspaceRow, type Service } from "./nav.ts";
 import { href } from "./router.tsx";
 
 /** Where the services built into Crewlet are described, and what each runs. */
@@ -50,10 +50,13 @@ export function noticeText(service: Service, path: readonly string[]): string {
   if (path[0] === "artifacts") {
     return "A new design is made by an agent working a task, and Worklet, where tasks live, is not in use here.";
   }
-  // WORKLET'S OWN PAGES ARE THE SERVICE, so they name it once.
+  // WORKLET'S OWN PAGES ARE THE SERVICE, so they name it once. Elsewhere the
+  // place is named as the reader knows it: the workspace where all of it
+  // reads Worklet (My work), else the one section that does (Settings ›
+  // Expensive tasks).
   const row = workspaceRow(workspaceOf(path));
   if (row?.key === "worklet") return "Worklet is not in use here.";
-  const label = row?.label ?? "This page";
+  const label = (row?.service ? row.label : sectionOf(path)?.label) ?? "This page";
   return `${label} is part of Worklet, which is not in use here.`;
 }
 
