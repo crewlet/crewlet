@@ -215,9 +215,13 @@ export function ReplyProse({
   );
 }
 
-/** A proposal's change rows in `ChangeList`'s grammar (D10). */
+/**
+ * A proposal's change rows in `ChangeList`'s grammar (D10): the facts first,
+ * then WHO WILL SEE THE RESULT where its visibility changes (a share, a
+ * comment others are told of, D09), as one more fact, then the changes.
+ */
 export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
-  return proposal.changes.map((change): ChangeListRow => {
+  const rows = proposal.changes.map((change): ChangeListRow => {
     const note = change.note;
     const base = note === undefined ? { label: change.label } : { label: change.label, note };
     switch (CHANGE_KIND[change.kind]) {
@@ -237,6 +241,15 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
         };
     }
   });
+  const audience = proposal.audience ?? [];
+  if (audience.length === 0) return rows;
+  const facts = rows.findIndex((row) => row.kind !== "fact");
+  const at = facts < 0 ? rows.length : facts;
+  return [
+    ...rows.slice(0, at),
+    { kind: "fact", label: "Who will see it", value: audience.join(", ") },
+    ...rows.slice(at),
+  ];
 }
 
 /** What the person does with a proposal: the drawer's session answers each. */

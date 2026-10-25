@@ -20,6 +20,7 @@ import {
   RUN_STATE,
   STEP_STATE,
   WORD_OP,
+  changeRowsOf,
   runChipOf,
 } from "./blocks.tsx";
 import type { TurnView } from "./turn.ts";
@@ -121,5 +122,42 @@ describe("the run chip says the turn's state in words", () => {
       ],
     };
     expect(runChipOf(refused, at)).toMatchObject({ state: "refused", title: "Not permitted" });
+  });
+});
+
+describe("a proposal's change rows", () => {
+  const base = {
+    proposal_id: "p",
+    scope: "server" as const,
+    tool: "share_artifact",
+    title: "Share artifact",
+    digest: `sha256:${"a".repeat(64)}`,
+    expires_at: "2026-10-24T10:41:00Z",
+    state: "proposed" as const,
+    approve_label: "Share",
+    changes: [
+      { kind: "fact" as const, field: "artifact", label: "Artifact", to: "Q4 pricing brief" },
+      {
+        kind: "changed" as const,
+        field: "readers",
+        label: "Readers",
+        from: "Product",
+        to: "Everyone",
+      },
+    ],
+  };
+
+  test("say who will see the result as a fact, after the facts and before the changes (D09)", () => {
+    const rows = changeRowsOf({ ...base, audience: ["Product Management", "Everyone at Nimbus"] });
+    expect(rows.map((r) => r.label)).toEqual(["Artifact", "Who will see it", "Readers"]);
+    expect(rows[1]).toEqual({
+      kind: "fact",
+      label: "Who will see it",
+      value: "Product Management, Everyone at Nimbus",
+    });
+  });
+
+  test("carry no audience row where the visibility does not change", () => {
+    expect(changeRowsOf(base).map((r) => r.label)).toEqual(["Artifact", "Readers"]);
   });
 });

@@ -536,6 +536,30 @@ describe("the engine's golden stream, reduced", () => {
   });
 });
 
+describe("a reloaded transcript's compliance reads", () => {
+  test("are kept on the conversation for its owner to see, and a new conversation has none (D06)", () => {
+    const reads = [{ reader: "admin.ada", reason: "Legal hold 42", at: "2026-10-24T10:00:00Z" }];
+    const view = after({
+      type: "transcript",
+      transcript: {
+        conversation: {
+          id: CONV,
+          title: "Spend",
+          created_at: "2026-10-24T09:00:00Z",
+          updated_at: "2026-10-24T09:05:00Z",
+        },
+        messages: [],
+        steps: [],
+        cards: [],
+        open_turn: null,
+        audit_reads: reads,
+      },
+    });
+    expect(view.auditReads).toEqual(reads);
+    expect(reduce(view, { type: "reset" }).auditReads).toEqual([]);
+  });
+});
+
 describe("a reloaded transcript", () => {
   test("is grouped by turn, the page each question carried kept, and the open turn left open", () => {
     const view = after({

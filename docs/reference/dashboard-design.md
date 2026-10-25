@@ -4035,6 +4035,25 @@ action's result. An approved change shows its outcome on its card; a pure
 view change the screen declared needs no approval (D11) shows a receipt in
 the thread, with Undo while the page still shows what the change made of it.
 
+**What each screen offers** is one id per change, the same list the engine's
+catalogue holds, each parsed, gated and applied by the screen's own code over
+the vocabulary its own controls offer (`app/assistant/urlAction.ts` builds the
+ones that are address keys). Pure view changes apply at once: Home's window
+and feed (`home.range.set`, `home.feed.set`), the work list's filters, Clear
+and arrangement (`work.filter.apply`, `work.filters.clear`, `work.arrange.set`,
+never widening the person `#/me` is about), a project's lens
+(`project.lens.set`), a task's activity tab (`item.activity.set`), Spend's
+window and split (`spend.range.set`, `spend.group.set`), Live's and the Turns
+list's filters (`live.filter.apply`, `turns.filter.apply`) and Knowledge's
+search (`knowledge.search.set`). Changes to a draft ask for approval and write
+into the draft only, saving staying the person's: the org builder's draft
+(`org.draft.apply_ops`, recorded through the builder's own door so undo, the
+dry run and the review work unchanged), an open part of the principles
+(`principles.draft.set`), the page being edited (`page.draft.replace`) and a
+ceiling filled in for its editor (`budgets.ceiling.prefill`). A page of several
+components offers every one's actions together. The palette offers "Ask the
+assistant" for a typed question, which the panel asks as its own box would.
+
 **A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):
 one pure reducer over every gesture and every frame, a frame at or below the
 sequence a turn holds dropped, so a resumed stream never draws a delta twice.
@@ -4048,7 +4067,10 @@ maps every wire state to exactly one component state): the question in a
 `StepList` of the ordinary requests it made, the answer as prose with no
 container, and the engine's cards (`ResultTableCard` with its CSV and XLSX
 downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
-`RefusalCard`, `ProposalCard` with the before and after of every change).
+`RefusalCard`, `ProposalCard` with the before and after of every change, and,
+where the result's visibility changes, who will see it). A conversation an
+administrator read for compliance says so at its top, with each reader, when
+and the reason they gave.
 **A model's words are drawn inert**: a link is its label and the host it
 names, never an anchor; a picture is its alt text, never fetched
 (`ASSISTANT_WORDS` in `lib/markdown.ts`). The assistant moves the page only
