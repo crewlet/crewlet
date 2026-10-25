@@ -166,28 +166,31 @@
 // fails those questions too, which stops the audit ([failedInARow]).
 //
 // A STORE THAT LISTS IN ORDER IS ASKED A RANGE AT A TIME ([objstore.Ranged]):
-// the walk is cut into chunks of [rangeChunk] references, and one listing of
-// the range a chunk spans — the keys after the last chunk's and through its
-// own — answers what a stat of each object in it would: an object it hands
-// on is held, or held wrong, as it says; one it passes over waits for a
-// second look like any "not found". On S3 that is a request per nine hundred
-// referenced objects rather than a HEAD per object — a chunk is S3's page less
-// room for the objects between its references that no required row names
-// ([rangePageRoom]), so its range fits one page — and the ranges tile the key
-// space, so the audit lists the engine's corner of the bucket once. Only
-// because the walk is merged into ONE order: a range cut from one table's keys
-// would leave out another's between them. One whose range comes back out of
-// order ([objstore.ErrUnordered]) is read from its listing from then on, as a
-// store that keeps no order is, the listing beginning after the last range the
-// walk handed on and the ranges handed on but not yet listed asked about by
-// name.
+// the walk is cut into chunks of references, and one listing of the range a
+// chunk spans — the keys after the last chunk's and through its own — answers
+// what a stat of each object in it would: an object it hands on is held, or
+// held wrong, as it says; one it passes over waits for a second look like any
+// "not found". On S3 that is a request per range rather than a HEAD per
+// object, because a chunk is cut so that its range fills S3's page short of a
+// room ([rangePageRoom]): [rangeChunk] references where the store keeps
+// nothing between them, and fewer by the density of the objects between them
+// that no required row names — a retired or a derived row's, garbage — which
+// the walk MEASURES from the ranges it has listed, its first listed before it
+// cuts the second ([auditor.cut]). So a range fits one page whatever the store
+// keeps besides the references, and the ranges tile the key space, so the
+// audit lists the engine's corner of the bucket once. Only because the walk is
+// merged into ONE order: a range cut from one table's keys would leave out
+// another's between them. One whose range comes back out of order
+// ([objstore.ErrUnordered]) is read from its listing from then on, as a store
+// that keeps no order is, the listing beginning after the last range the walk
+// handed on and the ranges handed on but not yet listed asked about by name.
 //
 // A RANGE WHOSE LISTING FAILED TAKES ITS SECOND LOOK AS A RANGE: what the
 // listing had not reached waits, with the key it comes after, for ONE listing
 // more, and only an object that listing passes over is then asked about by
 // name. A listing fails once its deadline passes with the bucket still
 // throttling or failing it; asking by name there sent a HEAD for each of the
-// range's nine hundred objects to the prefix that had just said to slow down.
+// range's hundreds of objects to the prefix that had just said to slow down.
 // A re-listing that fails too leaves its objects UNANSWERED by the rule below,
 // and what a re-listing that comes back out of order had not reached is asked
 // about by name.
@@ -204,9 +207,11 @@
 //
 // A collection makes a request per object it deletes — or, on a store that
 // deletes in batches ([objstore.BatchDeleter]), one per judged batch of them.
-// An audit makes, on a store that lists in order, one per [rangeChunk] of the
-// objects it asks about while their range fits a page; on one that keeps no
-// order, one listing of the store per [auditWindow]; and a stat for each
+// An audit makes, on a store that lists in order, one per range — about one
+// per [rangeChunk] names among the objects it asks about, the store's others
+// between them counted, once the walk has measured how many those are
+// ([auditor.cut]); on one that keeps no order, one listing of the store per
+// [auditWindow]; and a stat for each
 // object its listings pass over, or for every object once a listing has
 // failed. One at a time those stats are round trips in a row: an audit of two
 // million objects by stat was two million of them, end to end. So the audit
@@ -246,14 +251,21 @@
 // against 13,300–13,400 by name — and cut into eight windows, eight listings
 // of every name (0.001 a reference) and 9,360–9,380 a second, the listings'
 // cost growing with the windows as [auditWindow] says. Listing ranges as S3
-// does, a page of a thousand names a request answered in 10 ms, over a store
-// holding one object no row names to every fifty referenced, it made one
-// request per nine hundred references (0.00111 a reference) and kept about
-// four and a half out: there the walk's own page reads, two a range, set the
-// pace, and a slower listing — S3's — keeps more of the bound out rather than
-// slowing the audit. With one to every five, as the last day's keys may hold,
-// each range spanned two pages: two requests a chunk (0.00222), eight out,
-// and the same pace.
+// does, a page of a thousand names a request answered in 10 ms (2026-10-26,
+// four E-cores of an Intel Core Ultra 7 265U, Go 1.27.2, -benchtime 3x
+// -count 1), over a store holding one object no required row names to every
+// fifty referenced, the walk cut its ranges to 882 references, nine hundred
+// names, and made 0.00115 requests a reference — about 3% more than a chunk
+// of nine hundred references made there (0.00111), the price of cutting by
+// names — keeping about four out: there the walk's own page reads, two a
+// range, set the pace (320,000 references a second), and a slower listing —
+// S3's — keeps more of the bound out rather than slowing the audit. With one
+// to every five, as the last day's keys may hold, it made 0.00135 — where a
+// chunk of nine hundred references spanned two pages, two requests a chunk
+// (0.00222) — four and a half out and the same pace; and with one beside
+// every reference, the most an index kept over packs puts among them,
+// 0.00223, a page of names a range, the fewest those names allow, six and a
+// half out and 290,000 references a second.
 // These are the model's figures, not any store's, and are taken again with
 //
 //	go test -run '^$' -bench BenchmarkAudit -benchtime 3x ./internal/objstore/collect/
@@ -309,9 +321,12 @@ const CollectInterval = time.Hour
 // event, not a drift: a durable store does not lose a little more each hour —
 // so how soon after one it pages is the trade, against what one audit costs.
 // No longer the requests on the production store: on an S3 bucket that lists
-// in order an audit of two million objects is some 2,200 listings and a HEAD
-// for each object they pass over, a minute or two of listing, and hourly would
-// cost little more. What it costs is bounded instead by the two parts that
+// in order an audit of two million objects is some 2,200 listings where the
+// bucket keeps little else among them — a listing per nine hundred names
+// more for every other object it keeps there, up to twice as many where a
+// derived object sits beside every live one — and a HEAD for each object
+// they pass over, a minute or two of listing, and hourly would cost little
+// more. What it costs is bounded instead by the two parts that
 // grow with every object a live row names whatever the store:
 //
 //   - A WALK OF THE WHOLE REQUIRED ESTATE on the duty's data node, a page of
@@ -348,7 +363,7 @@ const judgeBatch = 500
 
 // auditConcurrency is how many questions the audit has out to the store at
 // once: a stat of one object, or — on a store that lists in order — a listing
-// of a range of [rangeChunk] of them.
+// of a range of up to [rangeChunk] of them.
 //
 // THIRTY-TWO. Asked by name, an audit is one question per object a required
 // row names — on a store that keeps no order once its listing has failed —
@@ -359,7 +374,8 @@ const judgeBatch = 500
 // store's mean latency a second — whatever the store's latency is; nothing
 // here assumes a figure for it, and what each backend answers is its own
 // benchmark's, below. On one that lists in order the same two million are some
-// 2,200 listings ([rangeChunk]), which the bound takes thirty-two at a time; on
+// 2,200 listings and more by the bucket's other objects among them
+// ([auditor.cut]), which the bound takes thirty-two at a time; on
 // one that keeps no order its listing is the walk's own, a window at a time
 // ([auditWindow]), and the bound carries the second looks.
 //
@@ -443,44 +459,78 @@ const batchesInFlight = 1
 // keys a page.
 const rangePage = 1000
 
-// rangePageRoom is how much of a page a chunk leaves for the objects in its
-// range that no required row names ([rangeChunk]).
+// rangePageRoom is how much of a page a range is cut short of, for the objects
+// in it the walk could not count before it cut the range ([rangeChunk],
+// [auditor.cut]).
 //
-// A TENTH OF THE PAGE. A range holds every object the store keeps between its
-// references, and a page that fills before the range's last key costs a second
-// request — one that lists most of the next chunk's range besides, which that
-// chunk then lists again. So a chunk cut at the page itself took two requests
-// whenever its range held one object more than its references: a bucket's
-// everyday garbage doubled the audit (measured against the in-process S3 at a
-// thousand references a chunk: nineteen listings for ten thousand references
-// with one object in a thousand unnamed, against ten with none). What a range
-// holds besides its references depends on WHEN its keys were minted, since a
-// key carries its instant and the order is theirs:
+// A range holds every object the store keeps between its references, and a
+// page that fills before the range's last key costs a second request — one
+// that lists most of the next chunk's range besides, which that chunk then
+// lists again. So a chunk cut at the page itself took two requests whenever
+// its range held one object more than its references: a bucket's everyday
+// garbage doubled the audit (measured against the in-process S3 at a thousand
+// references a chunk: nineteen listings for ten thousand references with one
+// object in a thousand unnamed, against ten with none). What a range holds
+// besides its references is what no required row names — an object a row
+// stopped naming within the hour, which the next collection deletes; one a
+// retired row keeps for its grace; one a derived row names, which an index
+// kept over a repository's packs puts among the packs' keys at as many as one
+// for every one to eight of them; and, among the last day's keys, every upload
+// not yet named and every version of a file rewritten during the day
+// ([PendingGrace]). That density is the store's, not a constant's — near
+// nothing for a company that keeps files alone, up to as many objects again as
+// references where its rows are mostly packs — so the walk MEASURES it from the
+// ranges it has listed and cuts each range to fill the page less this room
+// ([auditor.cut]). The room is for what the measurement cannot see: how much
+// fuller a range is than the ones before it. A room for the density itself,
+// as there was when every chunk was nine hundred references, is right for
+// one density alone: a tenth of the page held a few objects in a thousand
+// with an order of magnitude to spare, and any more than one in nine cost
+// every chunk a second request — an index kept over packs at one object to
+// every few of them doubled the audit's requests. Cut by the names, a store
+// with a few objects in a hundred between its references pays up to a ninth
+// more requests, where nine hundred references would still have fitted (3%
+// at one in fifty, measured — the package doc), and every denser store fills
+// its pages.
 //
-//   - Among keys older than a day — nearly all of a company's — only the
-//     objects a row stopped naming within the hour, which the next
-//     collection deletes, those a retired row keeps for its grace, and those
-//     a derived row names, which the audit passes over as it passes over a
-//     retired one's: a few in a thousand while no declared table is derived,
-//     which a tenth of the page holds with an order of magnitude to spare.
-//   - Among the last day's keys, every upload not yet named and every version
-//     of a file rewritten during the day, kept until it is a day old ([PendingGrace]):
-//     there a chunk may take two requests, or more, and that range is a day of
-//     the company's uploads rather than its whole inventory.
-//
-// Less room pays a second request wherever a range is a little fuller; more
-// pays for part of a page on every chunk: at a tenth, an audit of a store that
-// holds nothing but its references makes a ninth more listings than chunks of a
-// whole page would.
+// A TENTH OF THE PAGE: placed independently, the objects a range of a whole
+// page holds besides its references number at most nine hundred, so they vary
+// from range to range by at most thirty, the root of that, and a hundred is
+// three of those — about one range in two thousand overflows. Objects uploaded
+// together — the parts of one large object a domain stores in pieces — sort
+// together and widen that spread by the root of how many go at once: a tenth
+// still holds a handful going at once, and a burst of a dozen or more is rare
+// among the ranges.
+// Less room pays a second request wherever a range is a little fuller than the
+// last; more pays for part of a page on every chunk: at a tenth, an audit of a
+// store that holds nothing but its references makes a ninth more listings than
+// chunks of a whole page would.
 const rangePageRoom = rangePage / 10
 
-// rangeChunk is how many references, consecutive in key order, the audit asks a
-// store that lists in order about with one ranged listing ([objstore.Ranged]):
-// a page less the room its range's other objects take ([rangePageRoom]), so a
-// chunk costs one listing request where it would cost nine hundred HEADs.
-// Larger, each question out holds more references in memory and a range
-// overflows its page; smaller, a chunk pays a request for less of a page.
+// rangeChunk is how many names a range is cut to hold, consecutive in key
+// order, when the audit asks a store that lists in order about them with one
+// ranged listing ([objstore.Ranged]): a page less the room the measured density
+// cannot see ([rangePageRoom]), so a range costs one listing request where it
+// would cost a HEAD of each object. It is also the MOST references a range
+// holds — every one of them where the store keeps nothing between them, and
+// fewer by the density it does ([auditor.cut]). Larger, each question out holds
+// more references in memory and a range overflows its page; smaller, a chunk
+// pays a request for less of a page.
 const rangeChunk = rangePage - rangePageRoom
+
+// rangeDensityWeight is how far the audit's estimate of a range's density
+// moves toward each range it lists: an eighth of the way ([auditor.measured]).
+//
+// AN EIGHTH, so the estimate is a mean of about the last fifteen ranges
+// listed: a range's own spread — the thirty names at worst that
+// [rangePageRoom] holds — is cut to about a quarter of it in what the walk
+// cuts by, while a change of density along the keys — a domain that began
+// keeping derived objects among its references, or the last day's uploads —
+// is followed within those fifteen ranges, behind the [auditConcurrency]
+// ranges already out when it began. Weighted any heavier, one range crowded
+// by a burst of uploads would shrink the next ranges for nothing; any
+// lighter, a change of density would cost more ranges a second request each.
+const rangeDensityWeight = 8
 
 // failedInARow is how many questions in a row the store may fail, with none
 // answered between, before the audit stops as a store failing rather than
@@ -1055,7 +1105,8 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	if err != nil {
 		return nil, err
 	}
-	a := &auditor{store: c.opts.Store, r: r, q: suspects{limit: c.suspectsHeld}, window: c.window}
+	a := &auditor{store: c.opts.Store, r: r, q: suspects{limit: c.suspectsHeld}, window: c.window,
+		probed: make(chan struct{})}
 	if !c.opts.Store.Ranged() {
 		a.mode.Store(askListing)
 	}
@@ -1066,24 +1117,31 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	// them out at once: a hand-off waits for a free slot, so the walk reads
 	// its next page only once the questions have caught up with this one,
 	// and a question that stops the audit ends actx, which stops the walk at
-	// its next reference. A question is a listing of a range of [rangeChunk]
-	// references on a store that lists in order, a second look's stat, or a
-	// stat of one object once the audit asks by name. On a store that keeps
-	// no order the walk itself takes each reference's first look, from the
-	// window of the store's listing it falls in ([auditor.listWindow]):
-	// a listing is a request between two reads of the estate, never inside
-	// one, and the walk needs its window before it can go on.
+	// its next reference. A question is a listing of a range of references
+	// on a store that lists in order — as many as fill [rangeChunk] names at
+	// the density the ranges before it listed ([auditor.cut]) — a second
+	// look's stat, or a stat of one object once the audit asks by name. On a
+	// store that keeps no order the walk itself takes each reference's first
+	// look, from the window of the store's listing it falls in
+	// ([auditor.listWindow]): a listing is a request between two reads of the
+	// estate, never inside one, and the walk needs its window before it can
+	// go on.
 	asks, actx := errgroup.WithContext(ctx)
 	asks.SetLimit(auditConcurrency)
 	var (
 		walkErr error
 		chunk   []objstore.Reference
+		// cut is how many references the chunk being gathered is cut at,
+		// decided as it begins.
+		cut int
 		// after is the last key of the chunk before this one, so the
 		// chunks' ranges tile the key space: (after, chunk's last]. The
 		// listing's first window begins there too, so a walk the store
 		// answered a range of out of order lists only what no range
 		// already holds.
 		after objstore.Key
+		// probing is whether the walk has yet to hand its first range on.
+		probing = true
 		// win is the listing's window the walk is in, nil until it
 		// needs one.
 		win *window
@@ -1093,6 +1151,20 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 		refs, from := chunk, after
 		asks.Go(func() error { return a.firstRange(actx, from, refs) })
 		after, chunk = refs[len(refs)-1].Object.Key, nil
+		if !probing {
+			return
+		}
+		probing = false
+		// THE FIRST RANGE IS LISTED BEFORE THE SECOND IS CUT, so every range
+		// but the first is cut from a density the store's own listing
+		// measured rather than guessed: the walk would otherwise hand on up
+		// to [auditConcurrency] ranges, thirty thousand references, before
+		// any came back. It waits once an audit, for one listing, whatever
+		// that listing answers — and for nothing once the audit is stopping.
+		select {
+		case <-a.probed:
+		case <-actx.Done():
+		}
 	}
 	// listed is ref's first look from the window of the store's listing its
 	// key falls in, listing the next window first once the walk has passed
@@ -1148,8 +1220,14 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 			// A CHUNK ENDS BETWEEN TWO KEYS, never inside one: the next
 			// range begins after the last key of this one, so a key on
 			// both sides of the cut would be left out of the second.
-			if len(chunk) >= c.rangeChunk && ref.Object.Key != chunk[len(chunk)-1].Object.Key {
+			// A CHUNK'S CUT IS DECIDED AS IT BEGINS, from the density
+			// measured by then ([auditor.cut]).
+			switch {
+			case len(chunk) == 0:
+				cut = a.cut(c.rangeChunk)
+			case len(chunk) >= cut && ref.Object.Key != chunk[len(chunk)-1].Object.Key:
 				list()
+				cut = a.cut(c.rangeChunk)
 			}
 			chunk = append(chunk, ref)
 			return nil
@@ -1257,6 +1335,12 @@ type auditor struct {
 	// unsorted and unlisted log each turn of the mode once an audit.
 	unsorted, unlisted sync.Once
 
+	// probed is closed once the first range handed on has come back,
+	// whatever it answered, which the walk waits for before it cuts its
+	// second ([auditor.probe]).
+	probed    chan struct{}
+	probeOnce sync.Once
+
 	// mu guards everything below, written by up to [auditConcurrency]
 	// questions at once.
 	mu sync.Mutex
@@ -1282,7 +1366,49 @@ type auditor struct {
 	// which [auditor.confirm] asks about again.
 	settled    objstore.Reference
 	hasSettled bool
+	// density is the names a range lists for each reference it is cut
+	// for, as the ranges listed so far measured it ([auditor.measured]);
+	// zero until one has.
+	density float64
 }
+
+// cut is how many references the walk gathers into its next range, the most
+// being chunk ([rangeChunk]): as many as fill chunk names at the density the
+// ranges listed so far held — every one of chunk where the store keeps
+// nothing between them, or holds less than they name, and fewer, never none,
+// the more it keeps between them. So a range fills a page short of its room
+// ([rangePageRoom]) whatever the store holds besides the references: a
+// derived row's objects, a retired row's, garbage.
+func (a *auditor) cut(chunk int) int {
+	a.mu.Lock()
+	d := a.density
+	a.mu.Unlock()
+	if d <= 1 {
+		return chunk
+	}
+	return max(1, int(float64(chunk)/d))
+}
+
+// measured folds one listed range into the density the walk cuts by: names
+// is how many names its listing handed on, refs how many references it was
+// cut for. The first range's density is taken as it is, each later one's a
+// [rangeDensityWeight]th of the way.
+func (a *auditor) measured(names, refs int) {
+	if refs == 0 {
+		return
+	}
+	d := float64(names) / float64(refs)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.density == 0 {
+		a.density = d
+		return
+	}
+	a.density += (d - a.density) / rangeDensityWeight
+}
+
+// probe says the first range handed on has come back ([auditor.probed]).
+func (a *auditor) probe() { a.probeOnce.Do(func() { close(a.probed) }) }
 
 // answer is what one question to the store found of one reference.
 type answer int
@@ -1427,7 +1553,9 @@ func (a *auditor) again(ctx context.Context, l lookAgain) error {
 // hands on is held, or held wrong, as the listing says; one it passes over is
 // one the store does not hold as far as the listing goes, and waits for a
 // second look like any "not found". A chunk costs one request while its range
-// fits a page ([rangeChunk]).
+// fits a page ([rangeChunk]), and a range the store listed whole tells the walk
+// how many names its next ranges may hold for each reference
+// ([auditor.measured]).
 //
 // A LISTING IS ONE QUESTION to the store's account: one it answers ends a run
 // of failures, and one that fails is a failure of the run, whose references it
@@ -1445,11 +1573,13 @@ func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []ob
 		// HANDED ON BEFORE ANOTHER RANGE CAME BACK OUT OF ORDER, and only
 		// now given its slot: asked by name, not listed in vain — the walk's
 		// listing begins after it.
+		a.probe()
 		return a.eachByName(ctx, chunk)
 	}
-	i := 0
+	i, names := 0, 0
 	var due []lookAgain
 	err := a.store.ListKeys(ctx, after, chunk[len(chunk)-1].Object.Key, func(k objstore.Key, info objstore.Info) error {
+		names++
 		for ; i < len(chunk) && chunk[i].Object.Key.Compare(k) < 0; i++ {
 			due = append(due, a.firstAnswer(chunk[i], absent)...)
 		}
@@ -1458,6 +1588,13 @@ func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []ob
 		}
 		return nil
 	})
+	// ONLY A RANGE LISTED TO ITS END is a density — one left out an
+	// undated object or two included, which a stat dates — and the walk
+	// goes on once this range has come back, whatever it answered.
+	if err == nil || errors.Is(err, objstore.ErrUndated) {
+		a.measured(names, len(chunk))
+	}
+	a.probe()
 	switch {
 	case errors.Is(err, objstore.ErrUnordered):
 		a.unordered(ctx, err)

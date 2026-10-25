@@ -34,10 +34,12 @@ import (
 // the references) — where each listing names every object again, which is
 // what [auditWindow] trades. And one that lists ranges in order a page of
 // [rangePage] names a request, as S3 does, given more references than its
-// bound has ranges out at once, and holding objects no row names between them
-// — one in fifty, and one in five, as the last day's keys may — since what a
-// range holds besides its references is what decides whether it fits one
-// page. The latencies are the model's inputs, not a measurement of any store
+// bound has ranges out at once, and holding objects no required row names
+// between them — one in fifty, one in five, as the last day's keys may, and one
+// beside every reference ("ranged_derived"), the most an index kept over packs
+// puts among them — since what a range holds besides its references is
+// what the walk's measured cut answers ([auditor.cut]). The latencies are the
+// model's inputs, not a measurement of any store
 // (a whole listing's is a name's cost at the broker's measured pace, about
 // eighty thousand names a second): what comes out is the depth the audit
 // keeps and the requests it makes, which no store's speed changes.
@@ -66,6 +68,7 @@ func BenchmarkAudit(b *testing.B) {
 		// MORE RANGES THAN THE BOUND, so the depth it keeps is measured.
 		{"ranged", true, false, 0, 2 * auditConcurrency * rangeChunk, 50},
 		{"ranged_dense", true, false, 0, 2 * auditConcurrency * rangeChunk, 5},
+		{"ranged_derived", true, false, 0, 2 * auditConcurrency * rangeChunk, 1},
 	} {
 		b.Run(store.name, func(b *testing.B) {
 			mem := memobj.New()

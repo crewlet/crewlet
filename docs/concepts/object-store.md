@@ -813,14 +813,20 @@ judged against the replicated estate the data node holds:
   report says what it deleted before it stopped and why it stopped.
 - **Audit, daily.** It asks the store about every object a **live** row names,
   up to thirty-two questions at a time, reading the rows a page at a time in
-  key order. On S3 a question is a **listing of a range**: the nine hundred
-  rows next in key order span a range of the bucket's keys, and one listing of
-  it answers what a HEAD of each object would. A listing request answers a
-  thousand keys, and the hundred left over are room for the objects in the
-  range no live row names, so a range fits one request and an audit costs a
-  request per nine hundred objects; only an object a listing passes over is
-  then asked about by name. On `nats`, whose listing keeps no order — and on
-  an S3 Express directory bucket, which lists in none — the audit reads the
+  key order. On S3 a question is a **listing of a range**: the rows next in key
+  order span a range of the bucket's keys, and one listing of it answers what a
+  HEAD of each object would. A listing request answers a thousand keys, and the
+  range holds the objects no live row names between those rows as well — a
+  replaced file's, a retired or derived row's, an upload not yet named — so
+  the audit measures how many each range it lists holds, and cuts the next to
+  fill nine hundred keys: nine hundred rows where the bucket keeps nothing
+  between them, and fewer the more it keeps, its first range listed before it
+  cuts a second. The hundred keys left over are room for a range fuller than
+  the ones before it, so a range fits one request, and an audit costs a
+  request per nine hundred keys among the live rows'; only an object a listing
+  passes over is then asked about by name. On `nats`, whose listing keeps no
+  order — and on an S3 Express directory bucket, which lists in none — the
+  audit reads the
   store's **whole listing a window at a time**: each listing keeps the hundred
   thousand smallest keys after the last window's (about thirteen MiB on the
   node running the duty), and the rows whose keys fall in that window are
@@ -1125,18 +1131,27 @@ dashboard draws the same under **Settings › File storage**.
   which lists in no order either, two million objects are forty thousand
   listing requests in about twenty minutes, against two million HEADs in
   twenty-three or twenty-four (an in-process fake held 20 ms away).
-- **An audit on S3 costs a listing request per nine hundred objects.** Its
-  ranges tile the bucket's `files/` keys, so the audit lists that corner once:
-  two million objects are about 2,200 `ListObjectsV2` requests a day where a
-  HEAD of each was two million, and a HEAD only for an object a listing passed
-  over. A range is cut a tenth short of the thousand keys a request lists, so
-  the objects in it that no live row names — a few in a thousand among keys
-  older than a day — still fit one request; among the last day's keys, which
-  hold every upload not yet named and every version of a file rewritten that
-  day, a range may take two, and those are a day of uploads rather than the
-  whole store. The S3 backend's benchmark listed 31,400–33,000 names a second
-  from a bucket 20 ms away and 15,600–16,900 from one 50 ms away, one listing
-  at a time, so those requests are one to two minutes of listing.
+- **An audit on S3 costs a listing request per nine hundred keys.** Its
+  ranges tile the bucket's `files/` keys, so the audit lists that corner once,
+  and a HEAD only for an object a listing passed over: two million objects
+  live rows name are about 2,200 `ListObjectsV2` requests a day where the
+  bucket keeps little else among them, where a HEAD of each was two million.
+  Every other object among their keys — a replaced file's, a retired or a
+  derived row's — costs the same as one of theirs, since the audit measures
+  how many each range it lists holds and cuts the next to fill nine hundred
+  keys, the fewest requests those keys allow: an index kept over a
+  repository's packs as one object for every one to eight of them adds up to
+  as many requests again as the packs' own. A range cut at nine hundred live
+  rows whatever lay between them, as one once was, overflowed into a second
+  request once one key in nine between them was no live row's; in a model of
+  the S3 listing, a bucket with an object beside every fifth live row cost
+  0.00222 requests a row that way, and 0.00135 cut by the density. Among the
+  last day's keys, which hold every upload not yet named and every version of
+  a file rewritten that day, the ranges the audit cut before it reached them
+  may take two requests, and those are a day of uploads rather than the whole
+  store. The S3 backend's benchmark listed 31,400–33,000 names a second from a
+  bucket 20 ms away and 15,600–16,900 from one 50 ms away, one listing at a
+  time, so those requests are one to two minutes of listing.
 - **The collector asks the store in parallel, and no harder.** The audit keeps
   up to 32 questions out to the store at once — a listing of a range on S3, a
   stat of an object a listing did not show, or of every object once a listing
