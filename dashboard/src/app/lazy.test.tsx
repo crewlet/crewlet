@@ -537,6 +537,25 @@ describe("a lazy screen", () => {
   });
 });
 
+describe("a suite's override", () => {
+  // A CASE THAT BREAKS ONE CHUNK BREAKS ONLY THAT ONE. Forgetting every chunk
+  // sent the rest the frame draws — the palette a case opens with ⌘K — back to
+  // a cold `import()`, which a loaded machine stretched past a wait's bound,
+  // and a case about a broken Spend screen failed on the palette.
+  test("forgets the chunk it replaces and keeps every other in memory", async () => {
+    let asks = 0;
+    serve("palette", () => {
+      asks++;
+      return Promise.resolve({ CommandPalette: () => null });
+    });
+    await loadChunk("palette");
+    serve("spend", () => Promise.reject(new Error("broken")));
+    await loadChunk("palette");
+    expect(asks).toBe(1);
+    await expect(loadChunk("spend")).rejects.toBeInstanceOf(ChunkLoadError);
+  });
+});
+
 describe("preload", () => {
   test("starts the chunk a path draws, and nothing for a path with no screen", async () => {
     const asked: Chunk[] = [];

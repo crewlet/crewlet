@@ -17,7 +17,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useSearchTarget } from "./searchTarget.ts";
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
-import { loadChunk } from "./lazyScreen.ts";
+import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
@@ -74,13 +74,17 @@ const INCOMPLETE: CoverageFacts = {
   },
 };
 
-// THE NEW TASK SHEET'S CODE IS IN BEFORE A CASE STARTS. The sheet is the work
-// chunk's, loaded on first open, and what these cases assert is that the
-// frame opens it, not how long a cold `import()` of that chunk takes under a
-// test transformer, which a `waitFor` would otherwise be measuring (the same
-// reason `App.test.tsx` loads every chunk first).
+// EVERY CHUNK THE FRAME DRAWS FROM IS IN BEFORE A CASE STARTS, as in
+// `App.test.tsx`. The frame draws lazy parts of its own — the New task sheet
+// (the Work chunk's), the palette (a chunk of its own), and each peek out of
+// its workspace's chunk — and what these cases assert is what the frame draws
+// and asks, not how long a cold `import()` takes under a test transformer,
+// which a `waitFor` would otherwise be measuring. Loading the Work chunk alone
+// left a peek of another workspace to suspend inside an act the case never
+// awaited, which React says in the console. The loading path is
+// `lazy.test.tsx`'s.
 beforeAll(async () => {
-  await loadChunk("work");
+  await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
 });
 
 beforeEach(() => {

@@ -583,17 +583,30 @@ const overrides = new Map<Chunk, () => Promise<unknown>>();
 
 /**
  * For a suite: fetch a chunk with this instead of its `import()` — a load that
- * fails, or one that is held until the suite lets it go. Forgets every chunk
- * already fetched, so the next render loads through the override. Returns the
- * undo.
+ * fails, or one that is held until the suite lets it go. Forgets that chunk if
+ * it was already fetched, so the next render loads through the override, and
+ * forgets it again on the undo, so the next render loads the real one. Returns
+ * the undo.
+ *
+ * THAT CHUNK AND NO OTHER. Forgetting every chunk sent each one the frame
+ * draws besides — the palette a case opens with ⌘K, a peek beside the screen
+ * — back to a cold `import()` under the test transformer, which a loaded
+ * machine stretches past a wait's bound, so a case about a broken Spend screen
+ * failed on the palette it never broke.
  */
 export function overrideChunkForTest(chunk: Chunk, load: () => Promise<unknown>): () => void {
   overrides.set(chunk, load);
-  resetChunksForTest();
+  forgetForTest(chunk);
   return () => {
     overrides.delete(chunk);
-    resetChunksForTest();
+    forgetForTest(chunk);
   };
+}
+
+/** For [overrideChunkForTest]: forget one chunk's load, whatever state it is in. */
+function forgetForTest(chunk: Chunk): void {
+  const load = pending.get(chunk);
+  if (load) forget(load);
 }
 
 /** For a suite: forget every chunk, so a load can be watched from the start. */

@@ -26,7 +26,7 @@ import { withDerived } from "~/test/org.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
-import { loadChunk } from "./lazyScreen.ts";
+import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { Router } from "./router.tsx";
 import { workspaceRow } from "./nav.ts";
 import { page } from "~/lib/session.ts";
@@ -52,13 +52,14 @@ let reloads: ReturnType<typeof vi.spyOn>;
 /** What `GET /auth/session` says the session holds. */
 let grants: string[];
 
-// THE TWO SCREENS' CHUNKS ARE THE SUITE'S TO LOAD, once: imported cold inside
-// the first case they took two of its five seconds alone, and past five under
-// the full suite's load, so that case timed out on whichever run was busiest.
+// EVERY CHUNK THE FRAME DRAWS FROM IS THE SUITE'S TO LOAD, once, as in
+// `App.test.tsx`: imported cold inside a case, a screen's took seconds of the
+// case's own time under the full suite's load. Loading the three this suite
+// once named left Spend's — the screen "a session holding no app" opens — to
+// suspend inside an act the case never awaited, which React says in the
+// console. The loading path is `lazy.test.tsx`'s.
 beforeAll(async () => {
-  await loadChunk("work");
-  await loadChunk("account");
-  await loadChunk("settings");
+  await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
 });
 
 beforeEach(() => {

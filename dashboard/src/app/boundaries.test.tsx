@@ -47,9 +47,10 @@ function breakExport(chunk: "spend" | "work", name: string, component: unknown) 
 /**
  * The application over a socket that answers each query from `answers`.
  *
- * AWAITED UNDER ACT, because a case that replaced a chunk has forgotten the
- * real ones and the first render suspends: React retries a suspended render
- * from act's queue, and a synchronous render never sees that retry.
+ * AWAITED UNDER ACT, because a case that replaced a chunk has forgotten that
+ * chunk's load and the first render suspends on it: React retries a
+ * suspended render from act's queue, and a synchronous render never sees that
+ * retry.
  */
 async function mount(answers: Record<string, unknown> = {}) {
   const store = new Store();
@@ -91,7 +92,8 @@ afterEach(async () => {
   for (const u of undo.reverse()) u();
   undo = [];
   location.hash = "#/";
-  // The overrides forgot every chunk; put the real ones back for the next case.
+  // Each undo forgot its chunk's load; load the real one again, so the next
+  // case meets every chunk loaded, as `beforeAll` left them.
   await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
 });
 

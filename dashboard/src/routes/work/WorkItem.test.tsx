@@ -23,6 +23,7 @@ import { Routing, TurnCard, changeSentence, turnPills } from "./item/Activity.ts
 import { Router, href } from "~/app/router.tsx";
 import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import { loadChunk } from "~/app/lazyScreen.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -1674,13 +1675,18 @@ test("the peek states each property once", async () => {
 // THE RAIL'S BODY IS KEYED ON ITS SUBJECT: `[` and `]` move the peek from task
 // A to task B, and a different object is a different mount.
 test("moving the rail to another task mounts a new body", async () => {
+  // THE PEEK'S BODY IS A LAZY CHUNK, and its code is in before the case: what
+  // this holds is the remount, not a cold `import()`, which a mount that is
+  // not awaited under act cannot wait out (React says so in the console).
+  // The loading path is `app/lazy.test.tsx`'s.
+  await loadChunk("work");
   location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
   const { container } = mount(
     <PeekNeighbours>
       <PeekHost />
     </PeekNeighbours>,
   );
-  // THE PEEK'S BODY IS A LAZY CHUNK, so it is waited for rather than settled.
+  // ITS OWN READS ANSWER before the head is drawn, so it is waited for.
   await waitFor(() => expect(container.querySelector(".crewlet-object-header")).toBeTruthy());
   const before = container.querySelector(".crewlet-object-header");
   location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
