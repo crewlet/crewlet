@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -141,15 +142,18 @@ func TestAnEntityIsOneRecordFromItsAnswer(t *testing.T) {
 	t.Parallel()
 	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourcePage, Root: "page", ID: "id",
 		Title: "title", Text: "body", Prose: true,
-		Facts: []cards.Fact{{Label: "Version", Path: "version", Type: wire.ColumnNumber},
-			{Label: "Took", Path: "took_ms", Type: wire.ColumnDuration}},
+		Facts: []cards.Fact{{Label: "Version", Path: "version", Type: wire.ColumnNumber,
+			Detail: true},
+			{Label: "Took", Path: "took_ms", Type: wire.ColumnDuration},
+			{Label: "Status", Path: "status", Type: wire.ColumnLabel},
+			{Label: "Author", Path: "author", Type: wire.ColumnText}},
 		Items: &cards.Items{Path: "comments", Kind: wire.ResourcePage, ID: "id", Label: "body"},
 		Open: &cards.Open{Screen: "page", Params: map[string]string{"id": "id"},
 			LabelFrom: "title"}}}
 	id := "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 	answer, _ := json.Marshal(map[string]any{
 		"page": map[string]any{"id": id, "title": "Runbook", "body": "Step one.",
-			"version": 4, "took_ms": 61000},
+			"version": 4, "took_ms": 61000, "status": "in_review", "author": "ada"},
 		"comments": []any{map[string]any{"id": "c1", "body": "Looks right"}}})
 	built, err := cards.Build(spec, answer, evals.Epoch)
 	if err != nil {
@@ -160,8 +164,15 @@ func TestAnEntityIsOneRecordFromItsAnswer(t *testing.T) {
 		e.Items[0].Label != "Looks right" {
 		t.Errorf("the entity is %+v", e)
 	}
-	if len(e.Facts) != 2 || e.Facts[0].Value != "4" || e.Facts[1].Value != "1m1s" {
-		t.Errorf("the facts are %+v", e.Facts)
+	// TYPED VALUES, AS THE API ANSWERED THEM: the dashboard words each as its
+	// screens word the same field. Text carries no type, and a detail fact
+	// stays on the card for the model.
+	want := []wire.Fact{{Label: "Version", Value: "4", Type: wire.ColumnNumber, Detail: true},
+		{Label: "Took", Value: "61000", Type: wire.ColumnDuration},
+		{Label: "Status", Value: "in_review", Type: wire.ColumnLabel},
+		{Label: "Author", Value: "ada"}}
+	if !reflect.DeepEqual(e.Facts, want) {
+		t.Errorf("the facts are %+v, want %+v", e.Facts, want)
 	}
 	if e.Open == nil || e.Open.Href != "#/knowledge/pages/"+id || e.Open.Label != "Runbook" {
 		t.Errorf("the entity opens %+v", e.Open)
@@ -256,5 +267,52 @@ func TestASummaryFitsItsBudgetWholeRows(t *testing.T) {
 		d.Note == "" || d.Access != cards.AccessNote {
 		t.Errorf("the summary is %d bytes, %d of %d rows, note %q, access %q", len(out),
 			d.Shown, d.RowCount, d.Note, d.Access)
+	}
+}
+
+// THE DRAWER DRAWS A FEW COLUMNS, NAME FIRST, and the card keeps the rest after
+// them as detail, so a download and the model still have every column.
+func TestATableLeadsWithTheColumnsTheDrawerDraws(t *testing.T) {
+	t.Parallel()
+	spec := cards.Spec{Table: &cards.Table{Title: "Tasks", Rows: "items",
+		Brief: []string{"title", "status"},
+		Columns: []cards.Column{{Key: "key", Label: "Key", Path: "key", Type: wire.ColumnText},
+			{Key: "title", Label: "Title", Path: "title", Type: wire.ColumnText, Prose: true},
+			{Key: "status", Label: "Status", Path: "status", Type: wire.ColumnLabel},
+			{Key: "due", Label: "Due", Path: "due", Type: wire.ColumnDatetime}}}}
+	answer := []byte(`{"items":[{"key":"FAIR-1","title":"Settle up","status":"todo"}]}`)
+	built, err := cards.Build(spec, answer, assistanttest.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range built.Card.Table.Columns {
+		got = append(got, fmt.Sprintf("%s:%t", c.Key, c.Detail))
+	}
+	want := []string{"title:false", "status:false", "key:true", "due:true"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the columns are %v, want %v", got, want)
+	}
+	if row := built.Card.Table.Rows[0]; row[0] != "Settle up" || row[1] != "todo" || row[2] != "FAIR-1" {
+		t.Errorf("the row is %v, in another order than its columns", row)
+	}
+}
+
+// A TABLE DRAWS AT MOST FOUR COLUMNS in the drawer, each one of its own.
+func TestATableDrawsAFewOfItsOwnColumns(t *testing.T) {
+	t.Parallel()
+	cols := []cards.Column{}
+	for _, k := range []string{"a", "b", "c", "d", "e"} {
+		cols = append(cols, cards.Column{Key: k, Label: k, Path: k, Type: wire.ColumnText})
+	}
+	for name, brief := range map[string][]string{
+		"too many": {"a", "b", "c", "d", "e"},
+		"unknown":  {"a", "z"},
+		"twice":    {"a", "a"},
+	} {
+		spec := cards.Spec{Table: &cards.Table{Title: "T", Columns: cols, Brief: brief}}
+		if err := spec.Validate(); err == nil {
+			t.Errorf("%s: a table drawing %v was accepted", name, brief)
+		}
 	}
 }

@@ -9,7 +9,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -256,5 +258,32 @@ func TestAnOpenInAppLinkProbesTheRecordsOwnRead(t *testing.T) {
 	if _, _, err := catalog.Open(catalog.Args{"screen": "item", "id": "a/b"}); !errors.Is(err,
 		catalog.ErrInvalidArguments) {
 		t.Errorf("a link with a path in its id = %v", err)
+	}
+}
+
+// EVERY TABLE FITS THE DRAWER: it names the few columns the drawer draws, the
+// first of them the text a row is known by (never a figure or a date), and
+// leaves the rest to the downloads and the model.
+func TestEveryTableDrawsAFewColumnsNameFirst(t *testing.T) {
+	t.Parallel()
+	for _, tool := range catalog.Tools() {
+		for variant, spec := range tool.Cards {
+			table := spec.Table
+			if table == nil {
+				continue
+			}
+			if len(table.Brief) == 0 || len(table.Brief) > cards.MaxBrief {
+				t.Errorf("%s %q draws %d columns in the drawer, want 1 to %d", tool.Name,
+					variant, len(table.Brief), cards.MaxBrief)
+				continue
+			}
+			for _, c := range table.Columns {
+				if c.Key == table.Brief[0] && c.Type != wire.ColumnText &&
+					c.Type != wire.ColumnLabel && c.Type != wire.ColumnDatetime {
+					t.Errorf("%s %q leads with %q, a %s column, rather than a name",
+						tool.Name, variant, c.Key, c.Type)
+				}
+			}
+		}
 	}
 }

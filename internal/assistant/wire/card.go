@@ -50,6 +50,9 @@ type Column struct {
 	Label string     `json:"label"`
 	Type  ColumnType `json:"type"`
 	Align Align      `json:"align,omitempty"`
+	// Detail marks a column the drawer leaves out to fit its width. It
+	// stays in the card, so the downloads and the model's summary keep it.
+	Detail bool `json:"detail,omitempty"`
 }
 
 // Exports are a table card's download paths.
@@ -85,8 +88,16 @@ type EntityCard struct {
 // Fact is one labelled value on an entity card.
 type Fact struct {
 	Label string `json:"label"`
+	// Value is the value as the API answered it, in the form its Type
+	// names: a number as written, an RFC 3339 instant, a closed set's slug.
+	// The dashboard draws it as it draws the same field on its screens.
 	Value string `json:"value"`
-	Mono  bool   `json:"mono,omitempty"`
+	// Type is how the value is drawn; absent, it is text.
+	Type ColumnType `json:"type,omitempty"`
+	Mono bool       `json:"mono,omitempty"`
+	// Detail marks a fact the card keeps for the model (a version an update
+	// is proposed against) that the drawer leaves out.
+	Detail bool `json:"detail,omitempty"`
 }
 
 // EntityItem is one row of an entity card's list. Depth indents a tree.
@@ -250,6 +261,12 @@ func (c Card) Validate() error {
 		if !c.Entity.Kind.Valid() {
 			return fmt.Errorf("%w: entity kind %q is not one of %v", ErrInvalid,
 				c.Entity.Kind, ResourceKinds)
+		}
+		for _, f := range c.Entity.Facts {
+			if f.Type != "" && !f.Type.Valid() {
+				return fmt.Errorf("%w: fact %q type %q is not one of %v", ErrInvalid,
+					f.Label, f.Type, ColumnTypes)
+			}
 		}
 		for _, item := range c.Entity.Items {
 			if !item.Kind.Valid() {

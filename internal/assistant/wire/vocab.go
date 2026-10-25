@@ -344,10 +344,17 @@ const (
 	ColumnDuration ColumnType = "duration"
 	// ColumnDatetime is an RFC 3339 instant, drawn on the company's clock.
 	ColumnDatetime ColumnType = "datetime"
+	// ColumnLabel is a value from one of the engine's closed sets (a
+	// status, a priority, an activity, an outcome), carried as the slug the
+	// API answers and drawn in the words the dashboard names it by
+	// elsewhere, so the drawer and the screens agree. An export keeps the
+	// slug.
+	ColumnLabel ColumnType = "label"
 )
 
-// ColumnTypes are the five, in declaration order.
-var ColumnTypes = []ColumnType{ColumnText, ColumnNumber, ColumnTokens, ColumnDuration, ColumnDatetime}
+// ColumnTypes are the six, in declaration order.
+var ColumnTypes = []ColumnType{ColumnText, ColumnNumber, ColumnTokens, ColumnDuration,
+	ColumnDatetime, ColumnLabel}
 
 // Valid reports whether t is a type this build knows.
 func (t ColumnType) Valid() bool { return slices.Contains(ColumnTypes, t) }

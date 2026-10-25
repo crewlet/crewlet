@@ -94,8 +94,12 @@ type AssistantChangeKind = "fact" | "changed" | "added" | "removed" | "text";
 /** What happened to one run of words in a text change. */
 type AssistantWordOp = "same" | "added" | "removed";
 
-/** How a table card's column is drawn and exported. */
-type AssistantColumnType = "text" | "number" | "tokens" | "duration" | "datetime";
+/**
+ * How a table card's column, or an entity's fact, is drawn and exported:
+ * `label` is a slug from one of the engine's closed sets (a status, a
+ * priority, an outcome), drawn in the words the dashboard's screens use.
+ */
+type AssistantColumnType = "text" | "number" | "tokens" | "duration" | "datetime" | "label";
 
 /** A table column's alignment. */
 type AssistantAlign = "start" | "end";
@@ -305,6 +309,8 @@ interface AssistantColumn {
   label: string;
   type: AssistantColumnType;
   align?: AssistantAlign;
+  /** Left out of the drawer to fit it; the downloads and the model keep it. */
+  detail?: boolean;
 }
 
 /** A table card's download paths. */
@@ -335,8 +341,13 @@ export interface AssistantEntityCard {
 /** One labelled value on an entity card. */
 interface AssistantFact {
   label: string;
+  /** The value as the API answered it, in the form its type names. */
   value: string;
+  /** How the value is drawn; absent, it is text. */
+  type?: AssistantColumnType;
   mono?: boolean;
+  /** Kept on the card for the model (a version an update is proposed against), not drawn. */
+  detail?: boolean;
 }
 
 /** One row of an entity card's list. */

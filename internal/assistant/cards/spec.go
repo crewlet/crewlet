@@ -36,6 +36,11 @@ type Table struct {
 	// budget windows, one row per window).
 	Expand  string
 	Columns []Column
+	// Brief are the keys of the columns the drawer draws, in the order it
+	// draws them, at most [MaxBrief]: the name a row is known by first. The
+	// card leads with them and keeps every other column after them, marked
+	// as detail, for the downloads and the model. None draws every column.
+	Brief []string
 	// Open links the whole card to its screen.
 	Open *Open
 }
@@ -51,6 +56,10 @@ type Column struct {
 	// snippet), which a model reads fenced.
 	Prose bool
 }
+
+// MaxBrief is the most columns a table draws in the drawer: what its narrowest
+// width (360px) holds without cutting a word.
+const MaxBrief = 4
 
 // Entity is one record, or the record and a list beneath it.
 type Entity struct {
@@ -76,6 +85,9 @@ type Fact struct {
 	Path  string
 	Type  wire.ColumnType
 	Mono  bool
+	// Detail marks a fact the card keeps for the model (a version an update
+	// is proposed against) that the drawer leaves out.
+	Detail bool
 }
 
 // Items is the list an entity card carries beneath its record.
@@ -186,6 +198,18 @@ func (s Spec) Validate() error {
 			}
 			keys[c.Key] = true
 		}
+		if len(t.Brief) > MaxBrief {
+			return fmt.Errorf("cards: table %q draws %d columns in the drawer, past the %d "+
+				"it holds", t.Title, len(t.Brief), MaxBrief)
+		}
+		drawn := map[string]bool{}
+		for _, k := range t.Brief {
+			if !keys[k] || drawn[k] {
+				return fmt.Errorf("cards: table %q draws %q, which is not one of its columns "+
+					"or is drawn twice", t.Title, k)
+			}
+			drawn[k] = true
+		}
 		links = append(links, t.Open)
 	}
 	if e := s.Entity; e != nil {
@@ -276,8 +300,10 @@ func buildTable(t *Table, doc any, now time.Time) (Built, error) {
 		rows = expand(rows, t.Expand)
 	}
 	card := &wire.TableCard{Title: t.Title, RowCount: len(rows), AsOf: now.UTC()}
-	for _, c := range t.Columns {
-		col := wire.Column{Key: c.Key, Label: c.Label, Type: c.Type}
+	columns := t.ordered()
+	for _, c := range columns {
+		col := wire.Column{Key: c.Key, Label: c.Label, Type: c.Type,
+			Detail: len(t.Brief) > 0 && !slices.Contains(t.Brief, c.Key)}
 		if c.Type != wire.ColumnText && c.Type != wire.ColumnDatetime {
 			col.Align = wire.AlignEnd
 		}
@@ -285,8 +311,8 @@ func buildTable(t *Table, doc any, now time.Time) (Built, error) {
 	}
 	card.Rows = make([][]any, 0, min(len(rows), MaxRows))
 	for _, row := range rows[:min(len(rows), MaxRows)] {
-		cells := make([]any, len(t.Columns))
-		for i, c := range t.Columns {
+		cells := make([]any, len(columns))
+		for i, c := range columns {
 			cells[i] = cell(c.Type, lookup(row, c.Path))
 		}
 		card.Rows = append(card.Rows, cells)
@@ -328,7 +354,11 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 	}
 	for _, f := range e.Facts {
 		if v := factValue(f.Type, lookup(record, f.Path)); v != "" {
-			card.Facts = append(card.Facts, wire.Fact{Label: f.Label, Value: v, Mono: f.Mono})
+			fact := wire.Fact{Label: f.Label, Value: v, Mono: f.Mono, Detail: f.Detail}
+			if f.Type != wire.ColumnText {
+				fact.Type = f.Type
+			}
+			card.Facts = append(card.Facts, fact)
 		}
 	}
 	if e.Text != "" {
@@ -382,6 +412,28 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 		built.Notice = &notice
 	}
 	return built, out.Validate()
+}
+
+// ordered are the table's columns in the card's order: the drawn ones first,
+// in the order [Table.Brief] names them, then every other in the spec's order.
+func (t *Table) ordered() []Column {
+	if len(t.Brief) == 0 {
+		return t.Columns
+	}
+	out := make([]Column, 0, len(t.Columns))
+	for _, k := range t.Brief {
+		for _, c := range t.Columns {
+			if c.Key == k {
+				out = append(out, c)
+			}
+		}
+	}
+	for _, c := range t.Columns {
+		if !slices.Contains(t.Brief, c.Key) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // expand is every entry of the list at path inside each row, each a row of its
@@ -502,18 +554,13 @@ func text(v any) string {
 	return ""
 }
 
-// factValue is a fact as its line shows it: a duration in words, a datetime as
-// the instant, anything else as its text.
+// factValue is a fact's value in the form its type names, as a table cell of
+// that type carries it: a number as written, a datetime as the RFC 3339
+// instant, anything else as its text. The dashboard words it, as it words the
+// same field on its screens, so the card and the screens never disagree.
 func factValue(typ wire.ColumnType, v any) string {
 	switch c := cell(typ, v).(type) {
-	case nil:
-		return ""
 	case json.Number:
-		if typ == wire.ColumnDuration {
-			if ms, err := c.Float64(); err == nil {
-				return (time.Duration(ms) * time.Millisecond).Round(time.Second).String()
-			}
-		}
 		return c.String()
 	case string:
 		return c

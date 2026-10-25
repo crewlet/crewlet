@@ -51,6 +51,7 @@ import type {
 } from "~/contract/assistant.ts";
 import { narrowCard } from "~/protocol/assistantWire.ts";
 import { exportFile } from "~/protocol/assistant.ts";
+import { statusLabel } from "~/lib/work.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtCount, fmtDateTime, fmtDuration, fmtExact } from "~/lib/format.ts";
 import { youNeedWords } from "~/lib/access.ts";
@@ -126,14 +127,31 @@ export const WORD_OP: Record<WireWordOp, "=" | "+" | "-"> = {
   removed: "-",
 };
 
-/** How a table's cell is written, by its column's type. */
+/**
+ * How a table's cell, or an entity's fact, is written, by its type: with the
+ * formatters the dashboard's own screens use for the same fields, so the
+ * drawer and the screens never word one value two ways.
+ */
 const CELL: Record<WireColumnType, (value: string | number | boolean | null) => string> = {
   text: (v) => (v === null ? "" : String(v)),
   number: (v) => (typeof v === "number" ? fmtExact(v) : v === null ? "" : String(v)),
   tokens: (v) => (typeof v === "number" ? fmtCount(v) : v === null ? "" : String(v)),
   duration: (v) => (typeof v === "number" ? fmtDuration(v) : v === null ? "" : String(v)),
   datetime: (v) => (typeof v === "string" ? fmtDateTime(v) : v === null ? "" : String(v)),
+  // A closed set's slug, in the words the work screens name it by (a
+  // project's own status words aside, which a card does not carry).
+  label: (v) => (typeof v === "string" && v !== "" ? statusLabel(v) : v === null ? "" : String(v)),
 };
+
+/** The types whose wire value is a number, which a fact carries as a string. */
+const NUMERIC = new Set<WireColumnType>(["number", "tokens", "duration"]);
+
+/** A fact's value as it is drawn, by its type. */
+export function factText(fact: { value: string; type?: WireColumnType }): string {
+  const type = fact.type ?? "text";
+  const n = Number(fact.value);
+  return CELL[type](NUMERIC.has(type) && fact.value !== "" && Number.isFinite(n) ? n : fact.value);
+}
 
 /** A number of seconds, as the run chip says it. */
 function seconds(ms: number): string {
@@ -397,9 +415,15 @@ function Table({
   cardId: string;
   on: CardHandlers;
 }) {
-  const align = table.columns.map((c) => c.align ?? (c.type === "text" ? "start" : "end"));
+  // THE DRAWER DRAWS THE COLUMNS THE ENGINE CHOSE FOR IT, name first; the
+  // rest stay in the card's downloads.
+  const drawn = table.columns.flatMap((c, i) => (c.detail ? [] : [i]));
+  const align = drawn.map((i) => {
+    const c = table.columns[i]!;
+    return c.align ?? (c.type === "text" || c.type === "label" ? "start" : "end");
+  });
   const cells = (row: (string | number | boolean | null)[]) =>
-    row.map((value, i) => CELL[table.columns[i]?.type ?? "text"](value));
+    drawn.map((i) => CELL[table.columns[i]!.type](row[i] ?? null));
   const base =
     table.title
       .replace(/[^a-z0-9]+/gi, "-")
@@ -415,7 +439,7 @@ function Table({
     <ResultTableCard
       title={table.title}
       window={table.window}
-      headers={table.columns.map((c) => c.label)}
+      headers={drawn.map((i) => table.columns[i]!.label)}
       rows={table.rows.map(cells)}
       align={align}
       total={table.total ? cells(table.total) : undefined}
@@ -511,10 +535,12 @@ export function CardBlock({
             <PropertyList
               groups={[
                 {
-                  items: entity.facts.map((fact) => ({
-                    label: fact.label,
-                    value: fact.mono ? <code>{fact.value}</code> : fact.value,
-                  })),
+                  items: entity.facts
+                    .filter((fact) => !fact.detail)
+                    .map((fact) => ({
+                      label: fact.label,
+                      value: fact.mono ? <code>{factText(fact)}</code> : factText(fact),
+                    })),
                 },
               ]}
             />
