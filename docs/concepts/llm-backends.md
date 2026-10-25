@@ -2007,7 +2007,11 @@ Available for a profile that declares `stdin_login` — an operator's own
 wrapper, or a self-hosted gateway CLI. No built-in profile declares one,
 because no shipped CLI has one: the `opencode` profile used to, with
 `auth login --username`, a flag no release of either OpenCode major accepts. The password is read from stdin or a declared environment variable,
-never from argv (which is visible in `ps` and lands in shell history).
+never from argv (which is visible in `ps` and lands in shell history). A piped
+password is refused past 4 KiB, not counting the line ending the pipe adds,
+and the pipe is read no further than that, its longest ending and one byte, so
+one pointed at the wrong file is refused before the CLI's login runs rather
+than read whole.
 
 Every built-in profile leaves `stdin_login` unset, and the command says so
 rather than failing obscurely, naming only the routes that entry has, chosen by

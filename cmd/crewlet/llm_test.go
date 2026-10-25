@@ -1131,3 +1131,52 @@ func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 		})
 	}
 }
+
+// A PASSWORD PIPED TO `crewlet llm login -username U -password-stdin` IS READ
+// NO FURTHER THAN A PASSWORD IS, and refused before the CLI's login runs.
+//
+// The command read its stdin to the end and handed the vendor's login
+// whatever arrived, so a file piped by mistake was read whole into memory and
+// a stream that never ended was a login that never began. A password is never
+// stored, so the bound is a password's ([maxPipedPasswordBytes]), not the size
+// every store keeps; the login script below leaves a marker if it ever runs.
+//
+// Mutation: read the login's stdin whole again, and the endless stream runs
+// into its reader's guard and is answered as a failed read.
+func TestAPasswordPipedToLLMLoginIsBoundedBeforeTheCLIRuns(t *testing.T) {
+	t.Parallel()
+	marker := filepath.Join(t.TempDir(), "login-ran")
+	p, err := cliagent.New(cliagent.Config{
+		Key: "gateway", Agent: "custom", StateDir: t.TempDir(),
+		Timeout: 30 * time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary": "sh", "complete_args": []any{"-p"}, "model_args": []any{},
+			"output":           "text",
+			"credential_paths": []any{".fake/creds.json"},
+			"stdin_login": map[string]any{
+				"args":           []any{"-c", "touch " + marker},
+				"stdin_template": "{password}\n",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
+	endless := &endlessReader{}
+	var out, errOut bytes.Buffer
+	err = loginLLM(t.Context(), loginRequest{
+		providers: []cliAgentProvider{{key: "gateway", provider: p}}, key: "gateway",
+		username: "ops@example.com", passwordStdin: true, stdin: endless,
+	}, &out, &errOut)
+	if !errors.Is(err, errPipedPasswordTooLong) {
+		t.Errorf("a password on a stream that never ends answered %v, want errPipedPasswordTooLong", err)
+	} else if strings.Contains(err.Error(), "second-factor") {
+		t.Errorf("the refusal speaks of a second-factor code this login never reads: %v", err)
+	}
+	if most := maxPipedPasswordBytes + len("\r\n") + 1; endless.read > most {
+		t.Errorf("read %d bytes of the stream to refuse it, want at most %d", endless.read, most)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("the CLI's login ran for a refused password (%v)", statErr)
+	}
+}

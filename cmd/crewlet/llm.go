@@ -677,11 +677,10 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 			return errors.New("-username requires -password-stdin: a password on argv is " +
 				"visible in ps and lands in shell history")
 		}
-		raw, err := io.ReadAll(req.stdin)
+		password, err := readPipedPassword(req.stdin)
 		if err != nil {
 			return fmt.Errorf("reading the password from stdin: %w", err)
 		}
-		password := strings.TrimRight(string(raw), "\r\n")
 		if password == "" {
 			return errors.New("stdin held no password")
 		}

@@ -214,7 +214,7 @@ func (s *Service) inviteSeatOf(ctx context.Context, handle string) *inviteSeat {
 // short is the invited person's to fix, told to nobody else.
 func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	adm := s.uncounted(r)
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return
