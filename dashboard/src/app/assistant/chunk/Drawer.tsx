@@ -327,23 +327,31 @@ export function Drawer({
     announce(`${crumb} added to this question`);
   };
 
+  const listed = (recents ?? []).map((r): MenuEntry => ({
+    key: r.id,
+    label: r.title || "Untitled conversation",
+    icon: <MessageSquareGlyph size="sm" />,
+    hint: relTime(r.updated_at, now),
+    onSelect: () => void openConversation(r.id),
+  }));
+  // CLEAR IS OFFERED ONLY FOR A CONVERSATION WITH SOMETHING IN IT: an empty
+  // one has nothing to clear, and a disabled entry there was an action that
+  // looked available and did nothing.
+  const clearable = view.id !== null && view.turns.length > 0;
   const menu: MenuEntry[] = [
-    ...(recents ?? []).map((r): MenuEntry => ({
-      key: r.id,
-      label: r.title || "Untitled conversation",
-      icon: <MessageSquareGlyph size="sm" />,
-      hint: relTime(r.updated_at, now),
-      onSelect: () => void openConversation(r.id),
-    })),
-    ...(recents && recents.length > 0 ? [{ kind: "separator" as const, key: "sep" }] : []),
-    {
-      key: "clear",
-      label: "Clear this conversation",
-      icon: <TrashGlyph size="sm" />,
-      danger: true,
-      disabled: view.id === null,
-      onSelect: () => setConfirming(true),
-    },
+    ...listed,
+    ...(listed.length > 0 && clearable ? [{ kind: "separator" as const, key: "sep" }] : []),
+    ...(clearable
+      ? [
+          {
+            key: "clear",
+            label: "Clear this conversation",
+            icon: <TrashGlyph size="sm" />,
+            danger: true,
+            onSelect: () => setConfirming(true),
+          },
+        ]
+      : []),
   ];
 
   const offline = unavailable !== null;

@@ -294,3 +294,84 @@ test("a ready model draws no notice", () => {
     "true",
   );
 });
+
+test("the history offers Clear only for a conversation with something in it", async () => {
+  const sent = engine();
+  const answered = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (new URL(String(url)).pathname === "/assistant/conversations" && init?.method !== "POST") {
+      return json({ conversations: [] });
+    }
+    return answered(url, init);
+  });
+  mount();
+  const history = screen.getByRole("button", { name: "Conversations" });
+
+  // AN EMPTY CONVERSATION HAS NOTHING TO CLEAR.
+  await act(async () => {
+    fireEvent.click(history);
+  });
+  await waitFor(() => expect(screen.getByText("Your recent conversations")).toBeDefined());
+  expect(screen.queryByText("Clear this conversation")).toBeNull();
+  await act(async () => {
+    fireEvent.click(history);
+  });
+  await waitFor(() => expect(screen.queryByText("Your recent conversations")).toBeNull());
+
+  // ONE WITH A QUESTION IN IT DOES.
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  fireEvent.change(box, { target: { value: "Fix the flaky sign-in test" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().turns.length).toBe(1));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+  });
+  await waitFor(() => expect(screen.getByText("Clear this conversation")).toBeDefined());
+  expect(sent.length).toBeGreaterThan(0);
+});
+
+test("an empty conversation opened from the history offers no Clear", async () => {
+  const EMPTY_ID = "5b0c7a52-41a3-4f0e-9d0e-2b8f1c3e9a10";
+  const summary = {
+    id: EMPTY_ID,
+    title: "",
+    created_at: "2026-10-24T09:41:00Z",
+    updated_at: "2026-10-24T09:41:00Z",
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/assistant/conversations") return json({ conversations: [summary] });
+      if (path === `/assistant/conversations/${EMPTY_ID}`) {
+        return json({
+          conversation: summary,
+          messages: [],
+          steps: [],
+          cards: [],
+          open_turn: null,
+          audit_reads: [],
+          turns: [],
+        });
+      }
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  mount();
+  const history = screen.getByRole("button", { name: "Conversations" });
+  await act(async () => {
+    fireEvent.click(history);
+  });
+  const entry = await screen.findByText("Untitled conversation");
+  await act(async () => {
+    fireEvent.click(entry);
+  });
+  await waitFor(() => expect(conversation().id).toBe(EMPTY_ID));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+  });
+  await screen.findByText("Your recent conversations");
+  expect(screen.queryByText("Clear this conversation")).toBeNull();
+});
