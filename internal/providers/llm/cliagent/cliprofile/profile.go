@@ -403,7 +403,7 @@ func (s SeedScope) Valid() bool { return s == SeedHome || s == SeedWork }
 // SeedFile is a settings file the engine writes for the CLI before a call.
 //
 // Some vendors take their tool policy from a file rather than a flag —
-// Gemini's settings.json, OpenCode's opencode.json, Cursor's cli.json — and
+// Gemini CLI's policy files, OpenCode's opencode.json, Cursor's cli.json — and
 // the seat HOME and the per-call working directory are both places the engine
 // controls, so the file is simply put where the CLI will look. Content is
 // written verbatim at 0600.

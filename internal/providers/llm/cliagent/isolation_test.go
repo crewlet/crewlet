@@ -229,8 +229,8 @@ func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 		must  []string
 		never []string
 	}{
-		"gemini-cli": {".gemini/settings.json", cliprofile.SeedHome,
-			[]string{"run_shell_command", "write_file", `"web_fetch"`}, nil},
+		// gemini-cli's tool policy is a policy file, not JSON: see
+		// TestGeminiOffersTheWebToolsAndNothingElse.
 		// An allowlist of the web tools, every other tool denied by name, and
 		// the web tools allowed to run unprompted.
 		"qwen-code": {".qwen/settings.json", cliprofile.SeedHome,

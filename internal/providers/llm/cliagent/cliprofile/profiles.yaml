@@ -481,58 +481,159 @@ codex:
 
 gemini-cli:
   binary: gemini
-  written_for: "Gemini CLI 0.58.x (`gemini --version`)"
+  written_for: "Gemini CLI 0.65.x, measured on 0.58.0 and 0.65.0 (`gemini --version`)"
   version_args: ["--version"]
+  # MEASURED on 0.58.0 and 0.65.0 through this backend's own code path — the
+  # built-in profile, cliagent.New and Complete — with the CLI pointed at a
+  # local stand-in for the Gemini API, and the state directory inside a git
+  # checkout holding, at every level above the call, a GEMINI.md, an AGENTS.md,
+  # a CLAUDE.md, a .env and a .gemini/.env (naming another base URL, API key,
+  # API version and system prompt file), and a .gemini/ with settings (hooks,
+  # an MCP server, a tool list), skills, agents, commands, an extension and a
+  # policy allowing the shell. None of it reached a request or ran, the CLI
+  # opened no file above the state directory, and its only connection was the
+  # API's. Everything that keeps it so is a file or a variable below; the argv
+  # is the output format, the approval mode and the model.
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
-  # Gemini takes its tool policy from settings.json in its config directory,
-  # which is under the seat HOME. Local tools are excluded from discovery
-  # (both the current and the pre-rename tool names, so the file holds across
-  # the releases it may meet), and the web tools are put on the no-confirmation
-  # list, because a headless run cannot answer a confirmation prompt and a
-  # fetch that waited for one would simply fail. The pre-1.0 top-level key is
-  # written beside the nested one for the same reason.
+  # Denied by the policy file below: the CLI's file, shell, sub-agent, plan and
+  # skill tools are not offered at all.
   local_tools: denied
   seed_files:
+    # privacy.usageStatisticsEnabled=false: on by default, it opens a
+    # connection to the vendor's logging service (play.googleapis.com) on every
+    # call, beside the API's. The tool lists of earlier profiles are gone from
+    # this file: both releases warn on every run that tools.exclude and
+    # tools.allowed "will be removed in 1.0", and the policy file replaces them.
     - path: .gemini/settings.json
-      content: '{"tools":{"exclude":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"],"allowed":["web_fetch","web_search","google_web_search"]},"excludeTools":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"]}'
+      content: '{"privacy":{"usageStatisticsEnabled":false}}'
+    # THE TOOLS ARE web_fetch AND google_web_search, by the vendor's policy
+    # engine, which both releases read from the policies directory of the
+    # seat's home: every tool denied, the two web tools allowed above the
+    # denial. A denied tool is not offered, and a call the model makes to one
+    # is answered `Tool "<name>" not found` and runs nothing (measured with
+    # run_shell_command, read_file, invoke_agent, enter_plan_mode and
+    # activate_skill). The wildcard is what makes it an allowlist: a deny list
+    # of the file and shell tools left invoke_agent (three sub-agents),
+    # enter_plan_mode, update_topic and activate_skill on offer, and would leave
+    # whatever a later release adds.
+    #
+    # web_fetch is ALLOWED, not merely left undenied: its own default is to ask
+    # first, and a headless run registers no tool whose answer would be to ask
+    # — without the allow, the model had no web_fetch at all.
+    # google_web_search's default already allows it. Each web tool asks a second
+    # model on the side (gemini-3-flash-preview on both releases), sending it
+    # the call's system prompt.
+    #
+    # The user tier this file sits in outranks the workspace and the CLI's
+    # defaults (priority 999 is the highest the tier takes); a machine-wide
+    # policy under /etc/gemini-cli/policies, which only an administrator of the
+    # host can write, outranks it.
+    - path: .gemini/policies/crewlet.toml
+      content: |
+        # Written by Crewlet: the two web tools are the only tools a call has.
+        [[rule]]
+        toolName = "*"
+        decision = "deny"
+        priority = 998
+
+        [[rule]]
+        toolName = ["web_fetch", "google_web_search"]
+        decision = "allow"
+        priority = 999
+    # THE CALL'S OWN ENVIRONMENT FILES, so the CLI reads none above its
+    # directory. It loads ONE environment file, the first `.gemini/.env` or
+    # `.env` it finds walking from its working directory to the root — not
+    # stopped by the engine's `.git` marker — and takes every key in it its
+    # environment lacks. Without these, an ancestor's `.gemini/.env` sent the
+    # call to the base URL and API version it named, and signed a keyless call
+    # in with its own GEMINI_API_KEY; with them, the walk ends where it starts
+    # and nothing is set. Both names, because the CLI looks for `.gemini/.env`
+    # only in a trusted directory and for `.env` in any; a comment, because a
+    # seed is never empty.
+    - path: .gemini/.env
+      in: work
+      content: "# Written by Crewlet: this call's own environment file, so none above it is read.\n"
+    - path: .env
+      in: work
+      content: "# Written by Crewlet: this call's own environment file, so none above it is read.\n"
+  # GEMINI_CLI_TRUST_WORKSPACE trusts the call's own directory, which a headless
+  # run requires: untrusted, every call exited 55 before sending anything ("Gemini
+  # CLI is not running in a trusted directory"). The variable rather than
+  # --skip-trust or a settings key, because the CLI reads it before any
+  # settings file, a machine-wide one included. What trust admits is the call's
+  # directory, which holds only what the engine writes there; GEMINI.md above
+  # it stays out because the engine's `.git` file there is the root the CLI's
+  # walk for it stops at.
+  env:
+    GEMINI_CLI_TRUST_WORKSPACE: "true"
   model_args: ["--model", "{model}"]
-  # NO FLAG EXISTS — this CLI takes its system prompt from a FILE named by an
-  # environment variable, which is why reading `--help` reports it as having
-  # no such channel at all (it was recorded that way here once). Verified
-  # against the shipped 0.58.0 bundle and its own docs/reference/
-  # configuration.md: "Replaces the built-in system prompt with content from
-  # a Markdown file… Any other string: Treat as a path".
+  # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
+  # the request's whole systemInstruction — no identity line of the vendor's
+  # and nothing per call — so a seat and a side pass both take it. NO CHANNEL
+  # KEEPS THE CLI'S OWN PROMPT in either release: no flag, setting or variable
+  # adds to it (GEMINI_WRITE_SYSTEM_MD only writes it out, and
+  # GEMINI_PROMPT_<SECTION>=0 only drops a section of it), and a GEMINI.md
+  # arrives as user content. The prompt it replaces opens "You are a
+  # non-interactive CLI agent specializing in software engineering tasks" for
+  # gemini-2.5-pro: 23,058 characters on 0.58.0 and 23,410 on 0.65.0 with the
+  # two web tools, and it carries the call's temporary directory.
   #
-  # A full replacement rather than a merge, which is the behaviour this
-  # backend wants for the same reason claude-code's profile records: an
-  # appended seat identity sits underneath the vendor's own coding-agent
-  # persona. There is no append variant here in any case.
+  # Two calls sent byte-identical systemInstructions and tool declarations, so
+  # the engine's text opens the request; the working directory, the date, a
+  # listing of the directory and the call's temporary directory follow in the
+  # first user turn, ahead of the prompt on stdin.
+  #
+  # THE CLI EDITS THE TEXT. Wherever it says ${AvailableTools}, ${AgentSkills},
+  # ${SubAgents} or ${<tool>_ToolName} for a tool the call has, the CLI writes
+  # in its tool list, its bundled skills (with their install path), its
+  # sub-agents, or the tool's name; and it collapses three or more newlines to
+  # two. No escape exists: `$${…}` and `\${…}` are expanded after their first
+  # character (read from both bundles, and measured). Any other $-sequence
+  # ($HOME, ${NAME}) arrives as written.
   system_prompt:
     env: "GEMINI_SYSTEM_MD"
   prompt_mode: stdin
   output: json
   text_paths: [["response"]]
-  # Gemini's usage block moved between releases and some builds omit it
-  # entirely; when none of these resolves the counts are estimated and
-  # `crewlet llm doctor` says so rather than reporting zeros as fact.
+  # PER MODEL: stats.models.<model>.tokens, one entry for every model the call
+  # used — the web tools ask a second one on the side — so each count is the
+  # sum over the models (`*`). `input` is the prompt less its cached part, as
+  # the CLI computes it; `candidates` is the answer, without the reasoning,
+  # which Gemini bills as output and reports as `thoughts`; and `tool` is the
+  # prompt a model-side tool built (the page a URL-context fetch read, the
+  # results a search grounding returned), which Gemini reports apart from the
+  # prompt and bills as input. Each model's `roles` repeat its counts and are
+  # not read.
   usage:
-    input: [["stats", "metrics", "input_tokens"], ["stats", "input_tokens"]]
-    output: [["stats", "metrics", "output_tokens"], ["stats", "output_tokens"]]
-    cache_read: [["stats", "metrics", "cached_content_tokens"]]
+    input: [["stats", "models", "*", "tokens", "input"]]
+    output: [["stats", "models", "*", "tokens", "candidates"]]
+    cache_read: [["stats", "models", "*", "tokens", "cached"]]
+    reasoning: [["stats", "models", "*", "tokens", "thoughts"]]
+    tool_prompt: [["stats", "models", "*", "tokens", "tool"]]
   credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
-  volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/sessions"]
+  # What a call leaves in the seat's home: its transcript and temporary
+  # directory under tmp/, a directory under history/, and an entry in
+  # projects.json, the registry naming each call's directory. Pruned when no
+  # call of the seat is in flight.
+  volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/projects.json"]
   host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
   api_key_env: "GEMINI_API_KEY"
   # A project id is configuration, not a credential, and Gemini genuinely
   # needs the ambient one on a Workspace account.
   passthrough_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
   login_args: []
+  # A failed call exits non-zero with the CLI's error on stderr. A spent daily
+  # quota is a TerminalQuotaError; a per-minute limit is retried ten times and
+  # then reported as a RetryableQuotaError; neither prints the API's
+  # RESOURCE_EXHAUSTED on its own.
   limit_markers:
-    - sentinel: "Quota exceeded"
-    - sentinel: "RESOURCE_EXHAUSTED"
+    - sentinel: "TerminalQuotaError"
+    - sentinel: "RetryableQuotaError"
+  # A refused login is relayed with the API's UNAUTHENTICATED, a refused key
+  # with the API's own sentence.
   auth_markers:
     - sentinel: "UNAUTHENTICATED"
-    - sentinel: "Please sign in"
+    - sentinel: "API key not valid"
 
 qwen-code:
   binary: qwen
