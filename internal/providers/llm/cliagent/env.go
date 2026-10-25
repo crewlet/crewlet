@@ -90,7 +90,7 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	env["XDG_DATA_HOME"] = filepath.Join(c.Home, ".local", "share")
 	env["XDG_STATE_HOME"] = filepath.Join(c.Home, ".local", "state")
 	env["XDG_CACHE_HOME"] = c.Cache
-	env["TMPDIR"] = filepath.Join(c.Home, "tmp")
+	env["TMPDIR"] = tempDir(c.Home)
 	for name, rel := range p.ConfigEnv {
 		env[name] = filepath.Join(c.Home, rel)
 	}
@@ -171,7 +171,36 @@ func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 		if p.APIKeyEnv != "" {
 			delete(env, p.APIKeyEnv)
 		}
+		// Part of the mode, so over the operator's env: what points the
+		// CLI at the login it would otherwise not choose
+		// ([cliprofile.Profile.SubscriptionEnv]).
+		for name, value := range p.SubscriptionEnv {
+			env[name] = value
+		}
 	}
+}
+
+// tempDir is the TMPDIR [childEnv] hands every command run in a home: a
+// directory inside that home, so what a CLI unpacks or spools there stays with
+// the seat it ran for rather than in the engine's own temporary directory.
+func tempDir(home string) string { return filepath.Join(home, seatTempDir) }
+
+// prepareHome creates a home, its cache and the [tempDir] its environment
+// names, 0700, before a command runs in it.
+//
+// THE TEMPORARY DIRECTORY TOO, because it is the one directory a program
+// expects to find rather than create: mktemp and every library like it fail
+// on a TMPDIR that names nothing. Named and never made, it failed every codex
+// call from 0.164 on, whose sandbox helper resolves TMPDIR before it reads
+// the call's AGENTS.md ("failed to resolve synthetic mount registry temp
+// directory"), and it would fail any CLI that writes a temporary file.
+func prepareHome(home, cache string) error {
+	for _, dir := range []string{home, cache, tempDir(home)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("cli-agent: preparing %q: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // probeEnv is the child environment for an invocation that belongs to no seat
@@ -196,12 +225,10 @@ func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 func (p *Provider) probeEnv() []string {
 	home := filepath.Join(p.ws.Root(), "probe-home")
 	cache := filepath.Join(p.ws.Root(), "probe-cache")
-	for _, dir := range []string{home, cache} {
-		// Best effort: a CLI that cannot write its config still prints
-		// its version, and a probe that refused to run over a mkdir
-		// would report the drift it exists to detect as an absence.
-		_ = os.MkdirAll(dir, 0o700)
-	}
+	// Best effort: a CLI that cannot write its config still prints its
+	// version, and a probe that refused to run over a mkdir would report the
+	// drift it exists to detect as an absence.
+	_ = prepareHome(home, cache)
 	return buildEnv(p.profile, &Checkout{Home: home, Cache: cache}, p.env, p.auth)
 }
 

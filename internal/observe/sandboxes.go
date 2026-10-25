@@ -149,11 +149,10 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.SandboxRecord {
 		entry := livestate.SandboxEntry{
 			TurnID: run.TurnID, Role: run.Role, AgentHandle: run.AgentHandle,
 			AgentID: run.AgentID, CodingAgent: run.CodingAgent, SandboxID: run.SandboxID,
-			// The label the announcement would have carried, cut the
-			// same way. The record keeps the task rather than the brief,
-			// so an entry this process never saw announced is labelled
-			// by what the run was asked to do.
-			Task:      sandbox.Summarise(run.TaskDescription),
+			// The label the announcement carried, kept on the record for
+			// exactly this: an entry this process never saw announced is
+			// named as the one it did see would have been.
+			Task:      run.Label,
 			Status:    status,
 			StartedAt: isoOrEmpty(started),
 			Question:  run.Question, Audience: run.Audience,

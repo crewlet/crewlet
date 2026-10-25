@@ -480,9 +480,19 @@ func (v *OriginView) RegisterWith(tool Callable, ann Annotations, opts ...Option
 // Unregister removes every tool this view registered.
 func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.origin) }
 
-// Catalogue renders the slim tool catalogue a phase is shown: first-party
-// tools by name and one-line description, MCP servers by name only, in
-// registration order.
+// Discoverable renders what a phase can reach but does not yet hold: every
+// first-party tool of the snapshot that active does not name, by name and
+// description, and every MCP server with a tool active does not name, by name
+// only — in registration order, or "" when there is nothing to discover.
+//
+// ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
+// reaches the model with every request — as the tool catalogue of a text-mode
+// prompt, or over an agent-mode CLI's tool bridge — and a second copy of its
+// description in the system prompt is the same words paid for twice. On the
+// executor, which holds every first-party tool from its first round, that copy
+// was most of its system prompt. What is left is what the model can learn
+// nowhere else: that a server exists, and that a tool it does not hold yet
+// does.
 //
 // MCP servers are named rather than expanded because a real server publishes
 // dozens of tools and a model shown all of them decides against a wall of
@@ -492,11 +502,18 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // OVER A SNAPSHOT, so a phase is shown the universe its own surface was built
 // from: a tool its snapshot leaves out is one it cannot activate, and a
 // catalogue read off the whole registry listed it anyway.
-func (s Snapshot) Catalogue() string {
+func (s Snapshot) Discoverable(active []string) string {
+	held := make(map[string]bool, len(active))
+	for _, name := range active {
+		held[name] = true
+	}
 	var lines []string
 	servers := map[string]bool{}
 	var serverOrder []string
 	for _, e := range s.entries {
+		if held[e.Name()] {
+			continue
+		}
 		if server, ok := e.FromMCP(); ok {
 			if !servers[server] {
 				servers[server] = true
@@ -507,10 +524,7 @@ func (s Snapshot) Catalogue() string {
 		lines = append(lines, CatalogueLine(e.Name(), e.Tool.Description()))
 	}
 	for _, server := range serverOrder {
-		lines = append(lines, "- MCP server `"+server+"` (use the discovery tools to list its tools)")
-	}
-	if len(lines) == 0 {
-		return "(no tools available)"
+		lines = append(lines, "- MCP server `"+server+"`")
 	}
 	return strings.Join(lines, "\n")
 }

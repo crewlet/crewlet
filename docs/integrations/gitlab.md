@@ -424,7 +424,7 @@ Routing mirrors GitLab's own notification semantics, in **two layers**:
 | `issue` | On `update`: newly-added assignees (diff of `changes.assignees`) + newly-added description `@mentions` (diff of `changes.description`). On open/reopen: assignees + description mentions. On `close`: **participants** (a human closing an agent's issue must reach the agent), assignees as fallback | `issue.assigned`, `issue.mention`, `issue.close` |
 | `merge_request` | On `update`: newly-added reviewers (`changes.reviewers`), assignees (`changes.assignees`), and description mentions. On `approval`/`approved`/`unapproval`/`unapproved`/`merge`/`close`: **participants**, assignees as fallback. On open: reviewers + assignees + description mentions. On reopen: same, plus a participants fan-out (the whole thread wakes) | `merge_request.review_requested`, `merge_request.assigned`, `merge_request.mention`, `merge_request.{approval,approved,unapproval,unapproved,merge,close,reopen}` |
 | `note` (comment) | Every **@-mentioned** registered username (directed), then **participants** (thread activity), noteable assignees as fallback | `note.mention`, `note.comment` |
-| `pipeline` | Only when `object_attributes.status == failed`: the actor who triggered it — the owner who needs to fix the build, and the one event in the whole engine allowed past the self-action rule | `pipeline.failed` |
+| `pipeline` | Only when `object_attributes.status == failed`: the actor who triggered it — the owner who needs to fix the build, and the one GitLab event allowed past the self-action rule | `pipeline.failed` |
 | `emoji` | Parsed but **not** routed (no reliable target on award events) | — |
 
 Each recipient gets **one** notification per event — the first, highest-signal reason wins, so a mentioned participant pings as a mention rather than as thread activity.
@@ -441,12 +441,14 @@ The prompt dispatches on the **routing reason**, not the event type, because one
 
 | `event_type` | Prompt behaviour |
 |---|---|
-| `merge_request.review_requested` | Read the **diff**, not the description; approve or comment on the diff; tell the requester where the conversation started. Declining is a reply, not silence — a review request is a direct ask |
-| `merge_request.assigned` / `issue.assigned` | Read the item in full, do the work (an issue's code changes go through the sandbox, which opens an MR under the agent's own identity), report back |
-| `note.mention`, `issue.mention`, `merge_request.mention` | Evaluate whether you were actually asked to do something, then respond on the same thread |
-| `issue.close` | **Stop.** An agent that keeps working a closed issue is spending budget on a deliverable nobody will take; say what was already done, and raise a disagreement on the issue rather than reopening it |
-| `pipeline.failed` | Read the **job log** — the status says nothing about the cause. The prompt states plainly that the agent is being told about its own action deliberately, or a seat that has learned "I am not notified of what I did" reads its own name as a routing mistake |
-| Everything else (approvals, non-mention comments, merges, participant thread activity, and any reason a later release adds) | You are informed because you take part in this thread — which is a reason to be informed, not a request to act |
+| `merge_request.review_requested` | The request and the MR's description, and how a review is declined here: request review from the right reviewer and remove yourself |
+| `merge_request.assigned` / `issue.assigned` | The item, and how an assignment is declined here: reassign it. For an issue it also says where code changes go — the sandbox, which opens an MR under the agent's own identity |
+| `note.mention`, `issue.mention`, `merge_request.mention` | Who named the agent and what they wrote. A mention is addressed, so the turn engine holds it to an answer and the prompt does not ask whether the agent was really asked |
+| `issue.close` | **Stop** any in-flight work: an agent that keeps working a closed issue is spending budget on a deliverable nobody will take |
+| `pipeline.failed` | The pipeline and who triggered it. The prompt states plainly that the agent is being told about its own action deliberately, or a seat that has learned "I am not notified of what I did" reads its own name as a routing mistake |
+| Everything else (approvals, non-mention comments, merges, participant thread activity, and any reason a later release adds) | You are informed because you take part in this thread — which is a reason to be informed, not a request to act — and you act only if it asks something of you or changes work you have in hand |
+
+The prompt states what only the engine knows — why the agent is reading this, the item by the reference a person would paste, and the product facts and decline gestures above. How to review a diff or fix a red pipeline is the model's own, and that a direct ask may not end in silence is the executor's contract, which the [turn engine enforces](../concepts/turn-engine.md#who-is-waiting-and-how-they-get-an-answer); neither is restated per event.
 
 Review requests, assignments, and failed pipelines are **pointer events**: they name a diff, a thread or a job log to fetch before the agent has real context, so the turn-start relevance prefetches skip their aux-LLM call rather than filtering against a pointer — the executor searches for itself once it has the context. A comment is not one — its body *is* what was said.
 

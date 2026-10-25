@@ -496,6 +496,10 @@ type extracted struct {
 	// reasoning is reasoning tokens a CLI reports APART from output, which
 	// the completion adds to the output count — see [cliprofile.UsagePaths].
 	reasoning int
+	// toolPrompt is the prompt a model-side tool put in front of the model,
+	// reported APART from the input count, which the completion adds to it —
+	// see [cliprofile.UsagePaths].
+	toolPrompt int
 	// reported is false when no usage path resolved, so the counts are
 	// estimates. `crewlet llm doctor` prints which of the two a provider
 	// gets, because a budget built on estimates is a different promise.
@@ -571,6 +575,7 @@ func extractObject(p cliprofile.Profile, stdout string) extracted {
 	out.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
 	out.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
 	out.reasoning, _ = firstInt(doc, p.Usage.Reasoning)
+	out.toolPrompt, _ = firstInt(doc, p.Usage.ToolPrompt)
 	return out
 }
 
@@ -623,6 +628,9 @@ func extractStream(p cliprofile.Profile, stdout string) extracted {
 		}
 		if got, ok := firstInt(doc, p.Usage.Reasoning); ok {
 			out.reasoning = got
+		}
+		if got, ok := firstInt(doc, p.Usage.ToolPrompt); ok {
+			out.toolPrompt = got
 		}
 	}
 	out.text = strings.TrimSpace(text.String())
@@ -704,6 +712,7 @@ func (e *extracted) applyUsageReport(p cliprofile.Profile, raw string) usageOutc
 	e.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
 	e.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
 	e.reasoning, _ = firstInt(doc, p.Usage.Reasoning)
+	e.toolPrompt, _ = firstInt(doc, p.Usage.ToolPrompt)
 	return usageApplied
 }
 
@@ -806,24 +815,48 @@ func decodeObject(s string) (map[string]any, bool) {
 func lookup(doc map[string]any, path cliprofile.Path) (any, bool) {
 	var current any = doc
 	for _, step := range path {
-		switch node := current.(type) {
-		case map[string]any:
-			next, ok := node[step]
-			if !ok {
-				return nil, false
-			}
-			current = next
-		case []any:
-			idx, err := strconv.Atoi(step)
-			if err != nil || idx < 0 || idx >= len(node) {
-				return nil, false
-			}
-			current = node[idx]
-		default:
+		next, ok := child(current, step)
+		if !ok {
 			return nil, false
 		}
+		current = next
 	}
 	return current, true
+}
+
+// child is one step of a path: an object's member by key, or an array's
+// element by decimal index.
+func child(node any, step string) (any, bool) {
+	switch n := node.(type) {
+	case map[string]any:
+		next, ok := n[step]
+		return next, ok
+	case []any:
+		idx, err := strconv.Atoi(step)
+		if err != nil || idx < 0 || idx >= len(n) {
+			return nil, false
+		}
+		return n[idx], true
+	default:
+		return nil, false
+	}
+}
+
+// members is every value of an object or an array, for a
+// [cliprofile.PathEvery] step; nothing else has members.
+func members(node any) []any {
+	switch n := node.(type) {
+	case map[string]any:
+		out := make([]any, 0, len(n))
+		for _, v := range n {
+			out = append(out, v)
+		}
+		return out
+	case []any:
+		return n
+	default:
+		return nil
+	}
 }
 
 // firstString reads the answer out of a decoded document, and reports whether
@@ -872,25 +905,55 @@ func firstBool(doc map[string]any, paths []cliprofile.Path) bool {
 	return false
 }
 
-// firstInt reads a token count, accepting the float64 every JSON number
-// decodes to as well as a string, which some CLIs emit for large counts.
+// firstInt reads a token count: the first path that resolves to one wins.
 func firstInt(doc map[string]any, paths []cliprofile.Path) (int, bool) {
 	for _, path := range paths {
-		v, ok := lookup(doc, path)
-		if !ok {
-			continue
+		if n, ok := countAt(doc, path); ok {
+			return n, true
 		}
-		switch n := v.(type) {
-		case float64:
-			return int(n), true
-		case json.Number:
-			if parsed, err := n.Int64(); err == nil {
-				return int(parsed), true
+	}
+	return 0, false
+}
+
+// countAt reads the count one path names. At a [cliprofile.PathEvery] step it
+// is the SUM of the count the rest of the path names under every member, and it
+// resolves when at least one member's does: a member without the count (a model
+// a call never billed) adds nothing, and a path no member resolves is a profile
+// that no longer describes its CLI, which the caller turns into an estimate
+// rather than a zero.
+func countAt(node any, path cliprofile.Path) (int, bool) {
+	for i, step := range path {
+		if step == cliprofile.PathEvery {
+			sum, found := 0, false
+			for _, member := range members(node) {
+				if n, ok := countAt(member, path[i+1:]); ok {
+					sum, found = sum+n, true
+				}
 			}
-		case string:
-			if parsed, err := strconv.Atoi(n); err == nil {
-				return parsed, true
-			}
+			return sum, found
+		}
+		next, ok := child(node, step)
+		if !ok {
+			return 0, false
+		}
+		node = next
+	}
+	return asCount(node)
+}
+
+// asCount reads one count, accepting the float64 every JSON number decodes to
+// as well as a string, which some CLIs emit for large counts.
+func asCount(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case json.Number:
+		if parsed, err := n.Int64(); err == nil {
+			return int(parsed), true
+		}
+	case string:
+		if parsed, err := strconv.Atoi(n); err == nil {
+			return parsed, true
 		}
 	}
 	return 0, false

@@ -250,7 +250,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	//
 	// It used to sit inside the block below, which was correct while the
 	// index was the knowledge base's alone and silently wrong the moment
-	// it stopped being: a company with `tracker.backend: native` and
+	// it stopped being: a company with `tracker.backend: worklet` and
 	// Confluence for its knowledge indexed none of its own work items,
 	// served no `search_work_items`, and went on paying the embedding
 	// duty for a vector on every one of them — because that duty is armed

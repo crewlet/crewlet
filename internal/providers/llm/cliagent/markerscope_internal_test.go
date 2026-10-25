@@ -96,16 +96,15 @@ func TestOnlyAVendorsOwnReportInTheAnswerClassifies(t *testing.T) {
 	}
 }
 
-// THE THREE PROFILES THAT NARROW IT ARE THE THREE THAT MEASURED IT, and the
-// ones that do NOT narrow it must keep the default: claude-code's spent plan
-// arrives on a zero exit with the vendor's sentence as the answer, so
-// confining its markers to stderr would silently stop the fallback chain from
-// ever firing on a spent Claude plan.
+// THE PROFILES THAT NARROW IT ARE THE ONES THAT MEASURED IT, and the ones that
+// do NOT narrow it must keep the default: claude-code's spent plan arrives on a
+// zero exit with the vendor's sentence as the answer, and hermes prints a
+// refused key or a spent plan on STDOUT with exit 2, so confining either's
+// markers to stderr would silently stop the fallback chain from ever firing.
 func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 	t.Parallel()
 	narrowed := map[string]cliprofile.MarkerScope{
 		"kimi-code": cliprofile.MarkerScopeStderr,
-		"hermes":    cliprofile.MarkerScopeStderr,
 		"pi":        cliprofile.MarkerScopeStderr,
 		// The other direction: OpenCode 2.0 reports a failure as an event of
 		// its own on stdout, which may follow an answer it located.
@@ -120,6 +119,75 @@ func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("%s: marker_scope = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// THE HERMES SENTINELS NAME WHAT HERMES PRINTS, and where it prints it: what
+// 0.21.5 printed for each failure, through `-z` under the profile's own argv,
+// against a stub answering 401, 429 with a quota body and 429 with a
+// rate-limit body — each on STDOUT with exit 2 and nothing on stderr — and for
+// a start with no credential, which never reaches a model and is the one
+// failure written to stderr, with exit 1. Each must classify, and an answer
+// that merely quotes one must not.
+//
+// Mutation: scope the profile's markers to stderr, or go back to the generic
+// sentinels, and a case here is red.
+func TestTheHermesSentinelsNameWhatHermesPrints(t *testing.T) {
+	t.Parallel()
+	p, ok := cliprofile.Builtin("hermes")
+	if !ok {
+		t.Fatal("no built-in hermes profile")
+	}
+	for name, tc := range map[string]struct {
+		stdout, stderr string
+		exit           int
+		want           llm.ErrorKind
+		fires          bool
+	}{
+		"a refused key": {
+			stdout: "custom rejected your API key, so the model can't be reached. Update it in " +
+				"Settings → Providers, or run `hermes setup` in a terminal.\n\n" +
+				"Provider said: HTTP 401: Incorrect API key provided: sk-test.\n",
+			exit: 2, want: llm.KindAuth, fires: true,
+		},
+		"a spent account": {
+			stdout: "Billing or credits exhausted: HTTP 429: You exceeded your current quota, please " +
+				"check your plan and billing details.\n\nCustom reported that billing, credits, or " +
+				"account entitlement is exhausted for stub-model.\nAdd credits or update billing with " +
+				"that provider, then retry.\nYou can switch providers temporarily with /model <model> " +
+				"--provider <provider>.\n",
+			exit: 2, want: llm.KindRateLimit, fires: true,
+		},
+		"a rate limit its retries could not wait out": {
+			stdout: "custom rate-limited every one of 3 attempts — it looks temporarily unavailable. " +
+				"Wait a minute and send /retry, or switch models with /model. To avoid this in future, " +
+				"add a backup provider with `hermes fallback add`.\n",
+			exit: 2, want: llm.KindRateLimit, fires: true,
+		},
+		"no credential at all": {
+			stderr: "hermes -z: agent failed: Hermes is not connected to any AI provider yet. Run " +
+				"`hermes model` to pick one (the free Nous tier needs no API key), type `/login` in " +
+				"chat, or add a key with `hermes auth add <provider>`. (Advanced: put an API key such " +
+				"as OPENROUTER_API_KEY in ~/.hermes/.env.)\n",
+			exit: 1, want: llm.KindAuth, fires: true,
+		},
+		"a provider named with no credential": {
+			stderr: "hermes -z: agent failed: provider 'custom' resolved without credentials (no " +
+				"endpoint or API key configured). If this is a named custom provider, use its real " +
+				"name (see providers: in config.yaml).\n",
+			exit: 1, want: llm.KindAuth, fires: true,
+		},
+		"an answer that quotes one": {
+			stdout: "If the provider answers with \"Billing or credits exhausted\", the seat falls " +
+				"back to its next model.\n",
+		},
+	} {
+		hit, fired := classifyMarkers(p, cliOutput{
+			said: tc.stdout, stdout: tc.stdout, stderr: tc.stderr, failed: tc.exit != 0,
+		})
+		if fired != tc.fires || (fired && hit.Kind != tc.want) {
+			t.Errorf("%s: fired = %v as %v, want fired = %v as %v", name, fired, hit.Kind, tc.fires, tc.want)
 		}
 	}
 }
@@ -343,7 +411,9 @@ func TestAnUnknownMarkerScopeIsRefused(t *testing.T) {
 func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := cliprofile.Load("kimi-code", map[string]any{
-		"system_prompt_args": []any{"--agent-file", "{file}", "--system-prompt", "{system}"},
+		"system_prompt": map[string]any{
+			"args": []any{"--agent-file", "{file}", "--system-prompt", "{system}"},
+		},
 	})
 	if err == nil {
 		t.Fatal("an override naming both {file} and {system} was accepted — it writes " +
@@ -361,12 +431,13 @@ func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 	} {
 		base := "kimi-code"
 		if name == "system only" {
-			// kimi-code ships a system_prompt_file, which is refused
-			// without a file channel — a different rule, tested
-			// elsewhere. Use a profile that ships neither.
+			// kimi-code's channel ships a file spec, which is refused
+			// without a file to write — a different rule, tested
+			// elsewhere. Use a profile whose channel has none.
 			base = "grok"
 		}
-		if _, err := cliprofile.Load(base, map[string]any{"system_prompt_args": override}); err != nil {
+		overrides := map[string]any{"system_prompt": map[string]any{"args": override}}
+		if _, err := cliprofile.Load(base, overrides); err != nil {
 			t.Errorf("%s: a single-placeholder override was refused: %v", name, err)
 		}
 	}

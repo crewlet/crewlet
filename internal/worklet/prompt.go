@@ -738,10 +738,9 @@ func promptContext(b *strings.Builder, meta map[string]string) {
 		return
 	}
 	b.WriteString("\n## Get full context" +
-		"\nRead **" + key + "** with `" + GetWorkItemTool + "` — its " +
-		"type, status, priority, description, links and the whole comment " +
-		"thread — before deciding on next steps. Do not act on partial " +
-		"information.\n")
+		"\nRead **" + key + "** with `" + GetWorkItemTool + "` before " +
+		"deciding anything: this notice carries what changed, not the task " +
+		"and its comment thread.\n")
 	if url := meta["url"]; url != "" {
 		b.WriteString("Link: " + url + "\n")
 	}
@@ -760,29 +759,30 @@ func promptWhyYou(b *strings.Builder, project string) {
 		where = "the **" + project + "** project"
 	}
 	b.WriteString("\n## Why you received this" +
-		"\nThis reached you because you lead the team that owns " + where +
-		", and the task names nobody here — no assignee on your team, no" +
-		" colleague watching it, no @-mention. You are the default owner by" +
-		" FALLBACK, not because the work is yours. This fires only when nobody" +
-		" else here is involved, so nobody else is watching it — if you walk" +
-		" away silently, it goes nowhere." +
+		"\nYou lead the team that owns " + where + ", and the task names" +
+		" nobody here — no assignee on your team, no watcher, no mention. You" +
+		" are its owner by FALLBACK, not because the work is yours, and nobody" +
+		" else is following it." +
 		"\n\nDecide one of:" +
 		"\n- **Delegate** — set the assignee to the right teammate with `" +
-		UpdateWorkItemTool + "`. Future changes route to them rather" +
-		" than back to you." +
-		"\n- **Take it yourself** — only if the work clearly falls to you." +
-		" Assign it to yourself so the routing reflects reality from now on." +
-		"\n- **Escalate** — if it is out of scope or you cannot identify the" +
-		" right owner, hand it to your own manager (named in your identity" +
-		" prompt): comment mentioning them with `" + CommentOnWorkTool +
-		"`, or reassign it to them. Either keeps the trail on the task.\n")
+		UpdateWorkItemTool + "`; later changes route to them." +
+		"\n- **Take it yourself** — only if the work clearly falls to you:" +
+		" assign it to yourself." +
+		"\n- **Escalate** — if it is out of scope or you cannot tell whose it" +
+		" is, hand it to your own manager: mention them with `" +
+		CommentOnWorkTool + "`, or reassign it to them.\n")
 }
 
 // promptHandling is the mechanics block.
 //
-// Tracker conventions only. Role-specific behaviour — ownership, tone, the
-// quality bar — belongs in the role's behavioural guidelines, and repeating it
-// here would put one team's standards on every seat.
+// Tracker conventions only — what a shared multi-agent surface needs that a
+// model would not assume: who stays out when nobody asked, the status and
+// assignee that tell everyone the work started, one summary rather than a
+// running log, and how a seat hands back a task it holds.
+// Role-specific behaviour — ownership, tone, the quality bar — belongs in the
+// role's behavioural guidelines, and repeating it here would put one team's
+// standards on every seat. Generic diligence (read the comments first, ask
+// rather than guess) is the model's own and is not restated.
 func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 	if ChangeKind(meta[MetaChangeKind]) == ChangePurged {
 		// A DIFFERENT INSTRUCTION FROM A REMOVAL, because the remedies
@@ -814,40 +814,50 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 		return
 	}
 
-	b.WriteString("\n## How to handle this" +
-		"\n1. **Are you the right owner?** If the task has an assignee who is" +
-		" not you and not on your team, observe and stay silent — comment only" +
-		" if you hold decision-blocking information they cannot see." +
-		"\n2. **Has this already been addressed?** Read the existing comments" +
-		" first. If your prior comment, or a teammate's, already covers the" +
-		" question, do not restate it." +
-		"\n3. **If you are acting**, move the task to an active status with `" +
-		UpdateWorkItemTool + "`, make sure the assignee names you, and" +
-		" post ONE substantive summary with `" + CommentOnWorkTool +
-		"` when you are done." +
-		` Avoid running commentary ("starting work", "still on it") — that is` +
-		" noise on a surface other people are reading." +
-		"\n4. **If anything is unclear**, comment mentioning the reporter and" +
-		" ask. Do not guess.")
-
-	if reason.Addressed() {
-		// A WATCHER IS NOT BEING ASKED. Watchers are on the task because
-		// the participants rule put them there, so telling one they owe
-		// an answer is precisely how a tracker fills up with "noted,
-		// thanks" — the running-commentary rule two lines up, produced
-		// by the prompt that forbade it.
-		b.WriteString(
-			"\n5. **If you were assigned or @-mentioned and have decided not" +
-				" to act** — out of scope, wrong owner, already handled — do" +
-				" NOT go quiet. Reassign it to the right teammate, or comment" +
-				" naming who should own it. If you cannot identify them," +
-				" mention your own manager so they can route it. An unanswered" +
-				" assignment or mention looks exactly like a message that was" +
-				" lost.")
+	b.WriteString("\n## How to handle this")
+	if !reason.Addressed() {
+		// STAYING OUT IS FOR A WAKE NOBODY IS WAITING ON. On an addressed
+		// one the delivery check refuses a silent end, so telling that
+		// seat to stay silent — because the task, as it usually is on a
+		// question or a mention, is a colleague's — is an instruction the
+		// engine sends straight back for a second round.
+		b.WriteString("\n- If its assignee is neither you nor on your team," +
+			" stay silent unless you hold information that blocks their" +
+			" decision.")
 	}
-	b.WriteString("\n\n**Never** post internal thinking, status" +
-		` acknowledgements, or "I agree with X" as comments. Substance only,` +
-		" and stay on this task.\n")
+	// TAKING THE TASK ON, not acting on the wake: a seat answering a
+	// question on a colleague's task acts on it too, and must not come
+	// away holding the assignee field.
+	b.WriteString("\n- If you take the task on, move it to an active status" +
+		" with `" + UpdateWorkItemTool + "`, make sure the assignee names" +
+		" you, and post ONE summary with `" + CommentOnWorkTool + "` when" +
+		" you are done. Other people read this surface: no running" +
+		" commentary, acknowledgements or agreement-only comments.")
+	if holdsTask(reason) {
+		// THE DECLINE GESTURE, AND ONLY FOR THE TASK'S HOLDER. That an
+		// addressed wake may not end in silence is the decoder's refusal,
+		// and that a decline names the right owner on the surface the ask
+		// came from is the executor's contract, so neither is restated;
+		// what only the tracker knows is that a task the seat HOLDS is
+		// declined by moving it. Every other reason is about a
+		// task that is ordinarily somebody else's — the person asked,
+		// mentioned or answered, the reporter, a thread participant — and
+		// telling that seat to reassign it hands a colleague's work away.
+		b.WriteString("\n- If the work is not yours, reassign it to the" +
+			" right teammate — your manager if you cannot tell.")
+	}
+	b.WriteString("\n")
+}
+
+// holdsTask reports the reasons whose seat holds the task the wake is about,
+// which are the two a task-level decline — reassigning it — is open to.
+//
+// `blocking` IS ONE: its only handle is the blocker's own assignee, and the
+// wake is written on the blocker, so the task in the prompt is this seat's.
+// Both are addressed ([Reason.Addressed]); nothing outside that set is offered
+// a decline, because a seat nobody is waiting on has nothing to decline.
+func holdsTask(reason Reason) bool {
+	return reason == ReasonAssignee || reason == ReasonBlocking
 }
 
 // promptSender renders the actor as a colleague.

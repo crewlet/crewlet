@@ -91,7 +91,7 @@ providers:
     #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
     # (and set providers.sandbox.default_coding_agent: claude-code below,
     # since a seat's code work runs on its entry's own CLI).  OpenAI's?
-    # `agent: codex`, `model: gpt-5`, the same `auth`, reading OPENAI_API_KEY.
+    # `agent: codex`, `model: gpt-5`, the same `auth`, reading CODEX_API_KEY.
     #
     # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
     # package) on the machine running `crewlet run`.  Check the whole entry

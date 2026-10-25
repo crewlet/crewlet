@@ -503,7 +503,7 @@ func interaction(registry *notify.Registry, source, rawType, sender, body string
 // A NIL SalientBody falls back to Body and an EMPTY one does not: nil means
 // this producer emits no distinct raw message, while empty means it set one
 // and it was genuinely empty. Falling back on empty would hand every worker
-// the same 1.5k of triage boilerplate and call it what the person said.
+// the same triage boilerplate and call it what the person said.
 func salientBody(n *types.ExternalNotification) string {
 	if n.SalientBody != nil {
 		return *n.SalientBody

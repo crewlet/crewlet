@@ -21,15 +21,20 @@ func TestHumanSeatsAreMarkedInBothIdentityRenderings(t *testing.T) {
 func TestHumanColleaguesNoteAppearsOnlyInMixedOrgs(t *testing.T) {
 	t.Parallel()
 	mixed := BuildExecutor(seatIn(mixedAcme(), "eng"), ExecutorInput{}).Text
-	contains(t, mixed, "## Human colleagues", "NOT on A2A", "asynchronously")
+	contains(t, mixed, "## Human colleagues", "never over A2A", "asynchronously",
+		// Both markers, because the identity line and the roster mark a
+		// person differently, and a note naming one would leave the other
+		// unexplained.
+		"(human)", "**human teammate**")
 
 	// A pure-agent company's prompts are unchanged by the feature existing.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "## Human colleagues")
 }
 
-// A human member's roster block renders their external identities, their
-// availability, and how to hand them work — there is no engine task
-// assignment that reaches a person.
+// A human member's roster block renders their external identities and their
+// availability. How a reachable person is handed work is the `## Human
+// colleagues` note's to say, ONCE: a lead of a mostly human team used to pay
+// for it per profile, out of the allowance that buys profiles.
 func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
@@ -63,8 +68,10 @@ func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	// different accounts.
 	contains(t, p, "Slack ID: U0HUMAN", "Jira ID: 5b10-s")
 	excludes(t, p, "Confluence ID: 5b10-s")
-	contains(t, p, "Availability: CET business hours",
-		"hand work over in the PM tool")
+	contains(t, p, "Availability: CET business hours")
+	if got := strings.Count(p, "PM tool"); got != 1 {
+		t.Errorf("how to hand a person work is said %d times, want once — in the note", got)
+	}
 	// Agent members keep the plain rendering.
 	contains(t, p, "**Engineer** (eng)")
 }
@@ -165,14 +172,14 @@ func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 
 	contains(t, p, "**Jane Founder** (jane-founder) — **human teammate**")
 	excludes(t, p, "Crewlet ID:", "crewlet")
-	contains(t, p, "nobody to @-mention")
-	excludes(t, p, "@-mention them on their team's chat")
+	contains(t, p, "nobody to @-mention", "assign their work to them in the PM tool")
 
-	// A colleague WITH a reachable account keeps the mention instruction.
+	// A colleague WITH a reachable account is mentioned as the note says,
+	// and the profile says nothing that would contradict it.
 	o.Units[0].Roles[1].Contact.SlackUserID = "U0FOUNDER"
 	o.Normalize()
 	with := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
-	contains(t, with, "Slack ID: U0FOUNDER", "@-mention them on their team's chat")
+	contains(t, with, "Slack ID: U0FOUNDER", "Reach them with an @-mention")
 	excludes(t, with, "nobody to @-mention")
 }
 
@@ -312,33 +319,35 @@ func TestRosterRendersNoIdentityForAWithheldSeat(t *testing.T) {
 	p := BuildExecutor(seat, ExecutorInput{}).Text
 	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**",
 		"cannot be reached on any chat or code-host account",
+		"in the PM tool, assigned to the seat",
 		"Availability: CET business hours")
-	excludes(t, p, "U0HUMAN", "@-mention them on their team's chat",
+	excludes(t, p, "U0HUMAN", "Slack ID:", "nobody to @-mention",
 		"suspended", "removed", "retired")
 }
 
-// A SEAT THAT CAN ASK IS TOLD HOW TO ASK FOR A DECISION, AND TO STOP.
+// A SEAT THAT CAN ASK IS TOLD WHEN TO ASK FOR A DECISION, AND TO STOP.
 //
-// The shape is the engine's — options, a recommendation, the evidence, the
-// role — because the person answers by choosing and the asker is woken with
-// the choice. And the guidance ends the branch: a seat that asked and carried
-// on has decided for the person, or is waiting inside a turn that cannot
-// receive the reply. Gated on the tool it names, like every other instruction
-// to call something: a seat without it is told nothing.
-func TestTheExecutorIsToldToAskWithOptionsAndStopOnTheBranch(t *testing.T) {
+// The ask is a structured `decision` because the person answers by choosing
+// and the asker is woken with the choice — and the shape of one (options, a
+// recommendation, the evidence, the role) is the `decision` argument's own
+// schema, which reaches the model with the tool: a list of it here was the
+// same contract twice. What only this section says is when, and that asking
+// ends the branch: a seat that asked and carried on has decided for the
+// person, or is waiting inside a turn that cannot receive the reply. Gated on
+// the tool it names, like every other instruction to call something: a seat
+// without it is told nothing.
+func TestTheExecutorIsToldToAskAndStopOnTheBranch(t *testing.T) {
 	t.Parallel()
 	asking := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"comment_on_work_item"},
 	}).Text
 	contains(t, asking,
 		"## When a decision is not yours to make",
-		"`ask` and `decision`",
-		"**Two to four options**",
-		"**Your recommendation**",
-		"**The evidence**",
-		"`approver`", "`contributor`",
+		"an `ask` and a `decision`",
+		"`comment_on_work_item`", "`create_work_item`",
 		"END THIS TURN BLOCKED ON THAT BRANCH",
 		"Their answer wakes you with the option")
+	excludes(t, asking, "Two to four options", "`approver`", "`contributor`")
 	// AFTER THE CONTRACT, which it qualifies, and before the tools.
 	if strings.Index(asking, "## When a decision") < strings.Index(asking, "## Your turn") {
 		t.Error("the escalation guidance renders before the turn contract it qualifies")

@@ -47,6 +47,24 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "config.toml), so put it there",
 		},
 		{
+			// OPENAI_API_KEY holds other vendors' keys too, and Qwen Code
+			// sends whatever it finds there to DashScope unless
+			// OPENAI_BASE_URL says otherwise: nothing falls back to it.
+			name:  "api-key naming no key on a CLI whose key variable is shared",
+			lines: []string{"agent: qwen-code", "auth: {mode: api-key}"},
+			path:  "providers.llm.sub.auth.api_key", kind: ErrMissing,
+			says: "reads its key from OPENAI_API_KEY, a variable other vendors' keys are kept under too",
+		},
+		{
+			// inherit-env would forward whatever the engine's process
+			// holds under OPENAI_API_KEY — the embeddings key, on most
+			// hosts — to Qwen Code's endpoint.
+			name:  "inherit-env on a CLI whose key variable is shared",
+			lines: []string{"agent: qwen-code", "auth: {mode: inherit-env}"},
+			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
+			says: "inherit-env forwards OPENAI_API_KEY from the engine's own environment",
+		},
+		{
 			name:  "an API key under subscription",
 			lines: []string{"agent: claude-code", `auth: {api_key: "${ANTHROPIC_API_KEY}"}`},
 			path:  "providers.llm.sub.auth.api_key", kind: ErrConflict,
@@ -65,6 +83,15 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "a token is read only under auth.mode subscription",
 		},
 		{
+			// Qwen Code keeps no login of its own and mints no token: under
+			// subscription, the mode that removes its key variable, nothing
+			// signs it in.
+			name:  "subscription on a CLI that signs in only with its key",
+			lines: []string{"agent: qwen-code"},
+			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
+			says: "set auth.mode: api-key and give the key as auth.api_key (the CLI reads it from OPENAI_API_KEY)",
+		},
+		{
 			name:  "inherit-env on a CLI that names neither variable",
 			lines: []string{"agent: pi", "auth: {mode: inherit-env}"},
 			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
@@ -81,6 +108,14 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			lines: []string{"agent: claude-code", `env: {CLAUDE_CODE_OAUTH_TOKEN: "${TOK}"}`},
 			path:  "providers.llm.sub.env.CLAUDE_CODE_OAUTH_TOKEN", kind: ErrConflict,
 			says: "the token as auth.token",
+		},
+		{
+			// Set with the mode, over env: under subscription a value here
+			// would be replaced on every call and nothing would say so.
+			name:  "a subscription's login selector in env",
+			lines: []string{"agent: gemini-cli", `env: {GOOGLE_GENAI_USE_GCA: "false"}`},
+			path:  "providers.llm.sub.env.GOOGLE_GENAI_USE_GCA", kind: ErrConflict,
+			says: "set by the \"gemini-cli\" profile under auth.mode subscription, to \"true\"",
 		},
 		{
 			// env is layered over the variables that keep every seat's
@@ -216,6 +251,14 @@ func TestEveryCredentialRouteACLIReadsIsAccepted(t *testing.T) {
 			"overrides: {api_key_env: OPENROUTER_API_KEY}"},
 		"cursor-agent's own key variable": {
 			"agent: cursor-agent", `auth: {mode: api-key, api_key: "${CURSOR_API_KEY}"}`},
+		// Under api-key the profile sets nothing there, so the operator's
+		// own choice of sign-in stands.
+		"a login selector in env under api-key": {
+			"agent: gemini-cli", `auth: {mode: api-key, api_key: "${GEMINI_API_KEY}"}`,
+			`env: {GOOGLE_GENAI_USE_GCA: "false"}`},
+		"qwen-code's key and its endpoint": {
+			"agent: qwen-code", `auth: {mode: api-key, api_key: "${DASHSCOPE_API_KEY}"}`,
+			"env: {OPENAI_BASE_URL: https://dashscope-intl.aliyuncs.com/compatible-mode/v1}"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -238,5 +281,25 @@ func TestACLIAgentProfileThatCannotLoadIsRefusedAtItsOverrides(t *testing.T) {
 		"providers.llm.sub.overrides")
 	if !errors.Is(err, ErrShape) || !strings.Contains(err.Error(), "complete_arg") {
 		t.Errorf("want a shape error naming the misspelled field, got %v", err)
+	}
+}
+
+// A SHARED KEY VARIABLE IS NEVER READ IN AN ENTRY'S PLACE. The fallback exists
+// for a vendor's own variable — ANTHROPIC_API_KEY for Claude Code is the key
+// somebody exported for exactly that CLI — and must not reach for a generic
+// one: Qwen Code's OPENAI_API_KEY on the engine's host is usually an OpenAI
+// key, and Qwen Code would send it to DashScope.
+func TestASharedKeyVariableIsNeverAnEntrysFallback(t *testing.T) {
+	t.Parallel()
+	for agent, want := range map[CLIAgentName]string{
+		"claude-code": "ANTHROPIC_API_KEY",
+		"codex":       "CODEX_API_KEY",
+		"qwen-code":   "",
+		"copilot":     "COPILOT_GITHUB_TOKEN",
+	} {
+		entry := LLMProvider{Agent: agent, Model: "m", Auth: CLIAgentAuth{Mode: AuthAPIKey}}
+		if got := entry.CredentialSources("sub").APIKey.Fallback; got != want {
+			t.Errorf("%s: an api-key entry naming no key falls back to %q, want %q", agent, got, want)
+		}
 	}
 }

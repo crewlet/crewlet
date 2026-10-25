@@ -17,7 +17,12 @@ import (
 // A reworded rule is a behaviour change, like every prompt in this tree.
 
 // baseRules is what every rewrite must honour, whatever the text is.
-const baseRules = `Your answer REPLACES the original for a reader who will act on it — it is not a summary for someone skimming.
+//
+// "Short lines or bullets are fine" is the counterweight to dropping
+// formatting and answering as plain text: without it a small model reads
+// both as "one paragraph", and a conversation, a report or an outcome whose
+// turns, actions and deliveries ran together reads worse than the original.
+const baseRules = `Your answer REPLACES the original for a reader who will act on it.
 
 Keep, exactly as written:
 - every identifier: ids, keys, ticket, issue and pull-request numbers, URLs, file paths, branch names, channel names, handles, email addresses, version numbers, error codes, quoted strings;

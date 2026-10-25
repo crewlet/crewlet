@@ -56,6 +56,13 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 		// never creates a login (see [Workspace.syncCredentialsOut]), and a
 		// headless call has nobody to complete a sign-in for it anyway — so
 		// the advice to make a call and then look was advice to watch it fail.
+		//
+		// And not "adopt it from the host" for a CLI that keeps no login at
+		// all: there is nothing on the host to adopt.
+		if !p.profile.KeepsLogin() {
+			return fmt.Errorf("%w: the %q CLI keeps no login for Crewlet to hold — %s",
+				ErrNoLoginCommand, p.agent, p.keyRemedy())
+		}
 		return fmt.Errorf("%w: the %q CLI declares no login subcommand — sign in with "+
 			"the CLI itself and adopt that login with `crewlet llm login %s -from-host`, "+
 			"or give the entry a key",
@@ -83,7 +90,7 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 // exports), so a login that left none there is one no seat would ever have
 // been signed in by.
 func (p *Provider) loginLeftNothing() error {
-	if len(p.profile.CredentialPaths) == 0 && p.profile.CredentialStore == nil {
+	if !p.profile.KeepsLogin() {
 		return fmt.Errorf("cliagent: the %q profile names no place a login is kept — no "+
 			"credential_paths and no credential_store — so nothing its login command stores "+
 			"can reach a seat; declare where it keeps one under "+
@@ -1001,10 +1008,11 @@ func (p *Provider) runInCredentialHome(
 	home := p.ws.loginHome()
 	cache := p.ws.loginCache()
 	record := filepath.Join(p.ws.Root(), loginGenerationFile)
-	for _, dir := range []string{home, cache, p.ws.CredentialsDir()} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return false, fmt.Errorf("cliagent: preparing %q: %w", dir, err)
-		}
+	if err := prepareHome(home, cache); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(p.ws.CredentialsDir(), 0o700); err != nil {
+		return false, fmt.Errorf("cliagent: preparing %q: %w", p.ws.CredentialsDir(), err)
 	}
 	unlock, lockErr := p.ws.lockLoginHome(ctx)
 	if lockErr != nil {

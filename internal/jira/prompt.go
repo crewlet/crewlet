@@ -59,14 +59,12 @@ func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 // lead fallback is the ticket landing somewhere rather than on somebody: a
 // seat obliged to answer either would comment on every field change in its
 // unit's projects.
-func (Prompt) Addressed(n notify.Inbound) bool {
-	switch n.Metadata[RoutedViaField] {
-	case ViaMention, ViaAssignee:
-		return true
-	default:
-		return false
-	}
-}
+func (Prompt) Addressed(n notify.Inbound) bool { return addressed(n.Metadata[RoutedViaField]) }
+
+// addressed is [Prompt.Addressed]'s rule on the routing reason alone, which
+// is all the handling block has — ONE rule for both, so "stay silent" is
+// shown to exactly the seats the delivery check does NOT hold to an answer.
+func addressed(via string) bool { return via == ViaMention || via == ViaAssignee }
 
 // PartitionKey implements [notify.Prompt]: the issue is the conversation.
 //
@@ -273,10 +271,9 @@ func getFullContext(b *strings.Builder, meta map[string]string) {
 		return
 	}
 	b.WriteString("\n## Get full context" +
-		"\nFetch the full details for **" + key + "** with your Jira tools —" +
-		" type, status, priority, reporter, description, acceptance criteria," +
-		" linked issues and the existing comments — before deciding on next" +
-		" steps. Do not act on partial information.\n")
+		"\nFetch **" + key + "** with your Jira tools before deciding" +
+		" anything: this notice carries what changed, not the issue and its" +
+		" comments.\n")
 	if url := meta["url"]; url != "" {
 		b.WriteString("Link: " + url + "\n")
 	}
@@ -296,31 +293,29 @@ func whyRouted(b *strings.Builder, project string) {
 		where = "the **" + project + "** Jira project"
 	}
 	b.WriteString("\n## Why you received this" +
-		"\nThis event was routed to you because you lead the team that owns " +
-		where + ", and the issue names nobody here — no assignee on your team," +
-		" no colleague watching it, no @-mention. You are the default owner by" +
-		" FALLBACK, not because the work is yours. Lead-fallback fires only" +
-		" when nobody else here is involved, so nobody else is watching this" +
-		" issue — if you walk away silently, it goes nowhere." +
+		"\nYou lead the team that owns " + where + ", and the issue names" +
+		" nobody here — no assignee on your team, no watcher, no mention. You" +
+		" are its owner by FALLBACK, not because the work is yours, and nobody" +
+		" else is following it." +
 		"\n\nDecide one of:" +
-		"\n- **Delegate** — assign the issue to the right teammate. Look them" +
-		" up on your team to resolve their Jira account id, then set the" +
-		" assignee. Future updates route to them rather than back to you." +
-		"\n- **Take it yourself** — only if the work clearly falls to you." +
-		" Assign the issue to yourself so the routing reflects reality from" +
-		" now on." +
-		"\n- **Escalate** — if it is out of scope or you cannot identify the" +
-		" right owner, hand it to your own manager (named in your identity" +
-		" prompt): comment on the issue mentioning them, or reassign it to" +
-		" them. Either keeps the trail on the issue, so the work is not" +
-		" lost.\n")
+		"\n- **Delegate** — assign the issue to the right teammate, looking" +
+		" them up on your team for their Jira account id; later updates route" +
+		" to them." +
+		"\n- **Take it yourself** — only if the work clearly falls to you:" +
+		" assign it to yourself." +
+		"\n- **Escalate** — if it is out of scope or you cannot tell whose it" +
+		" is, hand it to your own manager: mention them in a comment on the" +
+		" issue, or reassign it to them.\n")
 }
 
 // handling is the platform-level mechanics block.
 //
-// Jira's own conventions only. Role-specific behaviour — ownership, tone,
-// the quality bar — belongs in the role's behavioural guidelines, and
-// repeating it here would put one team's standards on every seat.
+// Worklet's conventions in Jira's vocabulary, and kept in step with that
+// prompt's (worklet.promptHandling) deliberately: a seat working both
+// should not learn two etiquettes for one kind of surface. Role-specific
+// behaviour — ownership, tone, the quality bar — belongs in the role's
+// behavioural guidelines, and generic diligence (read the comments first, ask
+// rather than guess) is the model's own; neither is restated here.
 func handling(b *strings.Builder, meta map[string]string) {
 	if meta["event_type"] == "jira:issue_deleted" {
 		// No fetch to send them on and no work to do: the issue is gone,
@@ -338,43 +333,41 @@ func handling(b *strings.Builder, meta map[string]string) {
 		return
 	}
 
-	b.WriteString("\n## How to handle this" +
-		"\n1. **Are you the right owner?** If the issue has an assignee who is" +
-		" not you and not on your team, observe and stay silent — comment only" +
-		" if you hold decision-blocking information they cannot see." +
-		"\n2. **Has this already been addressed?** Read the existing comments" +
-		" first. If your prior comment, or a teammate's, already covers the" +
-		" question, do not restate it." +
-		"\n3. **If you are acting**, move the issue to an active status, make" +
-		" sure the assignee field names you, and post ONE substantive summary" +
-		` when you are done. Avoid running commentary ("starting work", "still` +
-		` on it") — that is noise on a surface other people are reading.` +
-		"\n4. **If anything is unclear**, comment mentioning the reporter and" +
-		" ask. Do not guess.")
-
-	if directAsk(meta[RoutedViaField]) {
-		// A WATCHER IS NOT BEING ASKED. Watchers receive events because
-		// they once interacted, so telling one they owe an answer is
-		// precisely how a tracker fills up with "noted, thanks" — the
-		// running commentary rule two lines up, produced by the prompt
-		// that forbade it.
-		b.WriteString(
-			"\n5. **If you were assigned or @-mentioned and have decided not" +
-				" to act** — out of scope, wrong owner, already handled — do" +
-				" NOT go quiet. Reassign it to the right teammate (look them" +
-				" up to resolve their Jira account id), or comment naming who" +
-				" should own it. If you cannot identify them, mention your own" +
-				" manager so they can route it. An unanswered assignment or" +
-				" mention looks exactly like a message that was lost.")
+	via := meta[RoutedViaField]
+	b.WriteString("\n## How to handle this")
+	if !addressed(via) {
+		// STAYING OUT IS FOR A WAKE NOBODY IS WAITING ON — THROUGH
+		// [addressed], never a list of its own. A mentioned seat is held
+		// to an answer by the delivery check, and on the issue it was
+		// mentioned on the assignee is ordinarily somebody else, so
+		// "stay silent" there is an instruction the engine sends straight
+		// back for a second round.
+		b.WriteString("\n- If its assignee is neither you nor on your team," +
+			" stay silent unless you hold information that blocks their" +
+			" decision.")
 	}
-	b.WriteString("\n\n**Never** post internal thinking, status" +
-		` acknowledgements, or "I agree with X" as comments. Substance only,` +
-		" and stay on this issue.\n")
-}
-
-// directAsk reports a routing that asks the recipient for something.
-func directAsk(via string) bool {
-	return via == "" || via == ViaAssignee || via == ViaMention
+	// TAKING THE ISSUE ON, not acting on the wake: a seat answering a
+	// mention on a colleague's issue acts on it too, and must not come
+	// away holding the assignee field.
+	b.WriteString("\n- If you take the issue on, move it to an active" +
+		" status, make sure the assignee field names you, and post ONE" +
+		" summary when you are done. Other people read this surface: no" +
+		" running commentary, acknowledgements or agreement-only comments.")
+	if via == ViaAssignee {
+		// THE DECLINE GESTURE, AND ONLY FOR THE ISSUE'S HOLDER: Worklet's
+		// rule, for its reason: that an addressed wake may not end in
+		// silence is the decoder's refusal, and that a
+		// decline names the right owner on the surface the ask came from
+		// is the executor's contract; what only the tracker knows is that
+		// an issue the seat HOLDS is declined by moving it. A
+		// mentioned seat is asked about an issue that is ordinarily
+		// somebody else's, and telling it to reassign that hands a
+		// colleague's work away; a watcher is not being asked at all.
+		b.WriteString("\n- If the work is not yours, reassign it to the" +
+			" right teammate (look them up for their Jira account id) —" +
+			" your manager if you cannot tell.")
+	}
+	b.WriteString("\n")
 }
 
 // senderLabel renders the actor as a colleague.

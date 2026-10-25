@@ -28,7 +28,7 @@ func outlineCorpus() []outlined {
 	rescued := richReviewInput()
 	rescued.Rescued, rescued.Outcome = true, "incomplete"
 	prose := richSubagentInput()
-	prose.Submits, prose.Skills, prose.ToolCatalogue = false, nil, ""
+	prose.Submits, prose.Skills, prose.Discoverable = false, nil, ""
 	return []outlined{
 		{
 			name:   "executor, every block",
@@ -39,7 +39,7 @@ func outlineCorpus() []outlined {
 				"your_turn", "escalation", KeyUntrustedText, "sandbox",
 				KeyThreadContext, KeyPersonalMemory, KeySynthesizedSkills,
 				KeyRelevantKnowledge, KeyEpisodeRecall, KeyCounterparty,
-				"workers", "tool_skills", "available_tools",
+				"workers", "tool_skills", KeyDiscoverableTools,
 			},
 			nested: map[string][]string{
 				KeyThreadContext:     {"## not a heading of ours"},
@@ -77,9 +77,9 @@ func outlineCorpus() []outlined {
 		{
 			name: "onboarding",
 			prompt: BuildOnboarding(richSeat(), OnboardingInput{
-				Hint: "## Pages\n- handbook ✅", ToolCatalogue: "- atlassian",
+				Hint: "## Pages\n- handbook ✅", Discoverable: "- atlassian",
 			}),
-			keys:   []string{"identity", "onboarding_phase", "what_to_do", "available_tools"},
+			keys:   []string{"identity", "onboarding_phase", "what_to_do", KeyDiscoverableTools},
 			nested: map[string][]string{"what_to_do": {"## Pages"}},
 		},
 		{name: "onboarding, no seat", prompt: BuildOnboarding(Seat{}, OnboardingInput{}), keys: []string{"onboarding_phase"}},
@@ -87,7 +87,7 @@ func outlineCorpus() []outlined {
 		{
 			name:   "worker",
 			prompt: BuildSubagent(richSeat(), richSubagentInput()),
-			keys:   []string{"task", "tool_skills", "available_tools", "worker_rules"},
+			keys:   []string{"task", "tool_skills", KeyDiscoverableTools, "worker_rules"},
 			nested: map[string][]string{"task": {"## Steps", "all of it"}},
 		},
 		{name: "worker, prose", prompt: BuildSubagent(richSeat(), prose), keys: []string{"task", "worker_rules"}},

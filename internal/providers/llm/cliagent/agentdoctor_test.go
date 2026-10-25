@@ -17,7 +17,10 @@ func agentEntry(t *testing.T, agent string, mode bool) *Provider {
 		Timeout: time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": "crewlet-no-such-cli-binary", "complete_args": []any{"-p"},
-			"output": "text", "model_args": []any{},
+			// A text stream has no events to tell apart, so a profile that
+			// picks its answer out of one by event type drops the filter too.
+			"output": "text", "event_type_path": []any{}, "text_events": []any{},
+			"model_args": []any{},
 		},
 	})
 	if err != nil {

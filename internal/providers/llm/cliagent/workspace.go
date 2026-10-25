@@ -51,7 +51,9 @@ type Workspace struct {
 	agent    string
 	profile  cliprofile.Profile
 
-	mu    sync.Mutex
+	mu sync.Mutex
+	// seats is each home's share, by its seat directory: a seat's login home
+	// and its key home ([Workspace.AcquireForKey]) are two.
 	seats map[string]*seatState
 	// retries is when the next sweep may try a seat whose open generation
 	// it could not carry out, by seat slug ([Workspace.sweep]). Guarded by mu.
@@ -169,9 +171,17 @@ func (w *Workspace) Root() string { return w.root }
 // CredentialsDir is where the shared login lives — ONE per workspace.
 func (w *Workspace) CredentialsDir() string { return filepath.Join(w.root, "credentials") }
 
-// SeatDir is one seat's share of the workspace.
+// SeatDir is one seat's share of the workspace: its login home, and that
+// home's cache, lock and open generation.
 func (w *Workspace) SeatDir(seat string) string {
 	return filepath.Join(w.root, "seats", seatSlug(seat))
+}
+
+// KeySeatDir is one seat's KEY HOME — where its calls that sign in with a key
+// run ([Workspace.AcquireForKey]) — beside the login homes rather than among
+// them, so a sweep for a login to carry out never lists one.
+func (w *Workspace) KeySeatDir(seat string) string {
+	return filepath.Join(w.root, "key-seats", seatSlug(seat))
 }
 
 // loginHome is the home every `crewlet llm` auth command runs the CLI in,
@@ -303,6 +313,9 @@ type Checkout struct {
 
 	ws   *Workspace
 	seat *seatState
+	// keyed is a key home's checkout ([Workspace.AcquireForKey]), which
+	// carries nothing out.
+	keyed bool
 	// record is where the seat's open generation is kept on disk.
 	record string
 	// store is the generation's way back out for a login held in the CLI's
@@ -343,14 +356,57 @@ type Checkout struct {
 // sweep, for the other seats' homes, which is sound because a workspace drives
 // ONE CLI ([Shared]) and an export reads that CLI's database whichever entry
 // runs it.
-func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (_ *Checkout, err error) {
-	slug := seatSlug(seat)
-	state := w.seatState(seat)
+func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (*Checkout, error) {
 	dir := w.SeatDir(seat)
+	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
+		return w.openGeneration(ctx, seatSlug(seat), dir, state, store)
+	})
+	if err != nil {
+		return nil, err
+	}
+	checkout.record = filepath.Join(dir, generationFile)
+	checkout.store = store
+	return checkout, nil
+}
+
+// AcquireForKey prepares a place for one call whose CLI signs in with a KEY —
+// an entry under auth.mode api-key, or inherit-env handing it the engine's own
+// key — in the seat's key home ([Workspace.KeySeatDir]).
+//
+// A HOME APART FROM THE LOGIN'S, because a CLI may keep what a key signs it in
+// to in the very file its login lives in. Cursor Agent exchanges
+// CURSOR_API_KEY for a session and writes the session, and the key itself, to
+// the auth.json a login is kept in; on its next start it prefers the key that
+// file holds to the variable (read from the 2026.10.22 bundle). In the login
+// home that file was carried back over the login of record, and every
+// subscription seat on the workspace then signed in with the key — or, left
+// in the home, it outlived a switch to subscription and went on signing that
+// seat in with it.
+//
+// So a key home is never seeded with the login, and nothing in it is carried
+// out: each generation opens and closes it with no credential file in it
+// ([Workspace.dropCopies]), so a key the CLI wrote down stays no longer than
+// the calls it was handed to.
+func (w *Workspace) AcquireForKey(ctx context.Context, seat, callID string) (*Checkout, error) {
+	dir := w.KeySeatDir(seat)
+	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
+		return w.openKeyGeneration(ctx, dir, state)
+	})
+	if err != nil {
+		return nil, err
+	}
+	checkout.keyed = true
+	return checkout, nil
+}
+
+// checkOut is the part of a checkout the two kinds of home share: the call's
+// own working directory, prepared, and the seat's generation opened by open
+// when the call is its first.
+func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_ *Checkout, err error) {
+	state := w.seatState(dir)
 	home := filepath.Join(dir, "home")
 	cache := filepath.Join(dir, "cache")
 	work := filepath.Join(dir, "work", seatSlug(callID))
-	record := filepath.Join(dir, generationFile)
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -369,10 +425,24 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 	// The directories exist BEFORE the seed rather than after it, which is
 	// the order a seed that RUNS THE CLI needs: an import is a child whose
 	// HOME is this directory and whose working directory is too.
-	for _, d := range []string{home, cache, work} {
-		if err = os.MkdirAll(d, 0o700); err != nil {
-			return nil, fmt.Errorf("cli-agent: preparing %q: %w", d, err)
-		}
+	if err = prepareHome(home, cache); err != nil {
+		return nil, err
+	}
+	if err = os.MkdirAll(work, 0o700); err != nil {
+		return nil, fmt.Errorf("cli-agent: preparing %q: %w", work, err)
+	}
+	// THE CALL'S DIRECTORY IS ITS OWN PROJECT ROOT. Every vendor CLI here
+	// looks for project files — AGENTS.md, CLAUDE.md, its own rules, skills,
+	// hooks, a project config — from its working directory UP to the nearest
+	// repository root, so a state_dir inside a checkout handed every seat the
+	// instructions of a repository the engine does not control, and some
+	// CLIs ran git in it. A `.git` file here ends that walk where the call
+	// begins: measured, it confines codex, OpenCode, Kimi Code, Qwen Code,
+	// Hermes, Copilot's instruction files and Gemini CLI's GEMINI.md, and it
+	// changes nothing else they send. See [cliprofile.ProjectRootMarker].
+	if err = os.WriteFile(filepath.Join(work, cliprofile.ProjectRootMarker),
+		[]byte(cliprofile.ProjectRootGitdir), 0o600); err != nil {
+		return nil, fmt.Errorf("cli-agent: marking %q as the call's own project root: %w", work, err)
 	}
 	// The working directory is this call's own, so its settings files are
 	// written per call rather than per seat generation — and BEFORE a
@@ -384,15 +454,31 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 		return nil, err
 	}
 	if state.inflight == 0 {
-		if err = w.openGeneration(ctx, slug, dir, state, store); err != nil {
+		if err = open(state); err != nil {
 			return nil, err
 		}
 	}
 	state.inflight++
-	return &Checkout{
-		Home: home, Cache: cache, Work: work,
-		ws: w, seat: state, record: record, store: store,
-	}, nil
+	return &Checkout{Home: home, Cache: cache, Work: work, ws: w, seat: state}, nil
+}
+
+// openKeyGeneration is the first call into a key home taking its generation
+// lock and emptying the home of every credential file and volatile path —
+// whatever an earlier generation's CLI wrote down, a process that ended
+// mid-call included — before the home's own settings are seeded. On success
+// the lock is the seat's to hold until its last call is out.
+func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *seatState) error {
+	release, err := w.lockSeat(ctx, dir)
+	if err != nil {
+		return err
+	}
+	home := filepath.Join(dir, "home")
+	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome)); err != nil {
+		release()
+		return err
+	}
+	state.held = release
+	return nil
 }
 
 // openGeneration is the first call into a seat taking its generation lock,
@@ -493,6 +579,11 @@ func (c *Checkout) Release(ctx context.Context) error {
 			c.seat.held = nil
 		}
 	}()
+	if c.keyed {
+		// Nothing to carry: what a key signed the CLI in to goes with
+		// the generation ([Workspace.AcquireForKey]).
+		return errors.Join(workErr, c.ws.dropCopies(c.Home), c.ws.prune(c.Home))
+	}
 	if _, err := c.ws.syncCredentialsOut(ctx, c.Home, c.Cache, c.store, c.seat.gen); err != nil {
 		return errors.Join(workErr, fmt.Errorf("cli-agent: the login in %q could not be "+
 			"carried back to the shared directory, so the home was kept as it is for the "+
@@ -502,21 +593,36 @@ func (c *Checkout) Release(ctx context.Context) error {
 	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
 }
 
-// seatState returns a seat's share, creating it once.
-func (w *Workspace) seatState(seat string) *seatState {
+// seatState returns the share of the home in a seat directory, creating it
+// once.
+func (w *Workspace) seatState(dir string) *seatState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	state, ok := w.seats[seatSlug(seat)]
+	state, ok := w.seats[dir]
 	if !ok {
 		state = &seatState{}
-		w.seats[seatSlug(seat)] = state
+		w.seats[dir] = state
 	}
 	return state
 }
 
-// prune deletes the profile's volatile paths from a seat home.
+// seatTempDir is the directory TMPDIR names, under the seat's home.
+//
+// The ENGINE'S, not a profile's: every child is handed it, and every CLI
+// leaves something in it — Claude Code a probe directory on almost every call,
+// Qwen Code a compile cache, OpenCode its own scratch — so it is pruned with
+// the volatile paths whatever the profile lists, and made again, private and
+// empty, for the generation that follows. Kept, a seat's home grew by what
+// every call it ever made left behind.
+const seatTempDir = "tmp"
+
+// prune deletes the profile's volatile paths, and the engine's temporary
+// directory, from a seat home, and leaves that directory in place and empty.
+//
+// Run only where no call of the seat is in flight — a generation opening, a
+// login home being emptied — so nothing that is still writing loses its files.
 func (w *Workspace) prune(home string) error {
-	for _, rel := range w.profile.VolatilePaths {
+	for _, rel := range append(slices.Clone(w.profile.VolatilePaths), seatTempDir) {
 		target, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return err
@@ -524,6 +630,11 @@ func (w *Workspace) prune(home string) error {
 		if err := os.RemoveAll(target); err != nil {
 			return fmt.Errorf("cli-agent: pruning %q: %w", target, err)
 		}
+	}
+	// MADE AGAIN, because a CLI handed a TMPDIR that does not exist fails
+	// the first temporary file it opens rather than making the directory.
+	if err := os.MkdirAll(tempDir(home), 0o700); err != nil {
+		return fmt.Errorf("cli-agent: preparing the seat's temporary directory: %w", err)
 	}
 	return nil
 }
@@ -1125,8 +1236,14 @@ func (w *Workspace) syncCredentialsOut(
 		if err != nil {
 			return false, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
 		}
-		holds = true
 		name := filepath.Base(rel)
+		// A settings file the CLI also keeps its login in is carried with
+		// the rest, but answers "holds a login" only holding one
+		// ([cliprofile.Profile.HoldsLogin]): a login command that left
+		// just the CLI's own record of itself signed nobody in.
+		if w.profile.HoldsLogin(name, content) {
+			holds = true
+		}
 		if digestOf(content) != gen.Seeded[name] {
 			changed = append(changed, held{name: name, dst: filepath.Join(shared, name), content: content})
 		}
@@ -1517,15 +1634,15 @@ func holdsLogin(document []byte) bool {
 	return true
 }
 
-// HasLogin reports whether the shared directory holds any credential file.
+// HasLogin reports whether the shared directory holds a login.
 func (w *Workspace) HasLogin() bool {
 	return len(w.LoginFiles()) > 0
 }
 
-// LoginFiles lists the credential files present in the shared directory,
-// as absolute paths, sorted — a [cliprofile.CredentialStore]'s document among
-// them, which travels in a bundle and is removed by a logout exactly as a
-// credential file is.
+// LoginFiles lists the credential files in the shared directory that hold a
+// login ([Workspace.holdsLogin]), as absolute paths, sorted — a
+// [cliprofile.CredentialStore]'s document among them, which travels in a bundle
+// and is removed by a logout exactly as a credential file is.
 func (w *Workspace) LoginFiles() []string {
 	shared := w.CredentialsDir()
 	var candidates []string
@@ -1537,10 +1654,26 @@ func (w *Workspace) LoginFiles() []string {
 	}
 	var out []string
 	for _, path := range candidates {
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && w.holdsLogin(path) {
 			out = append(out, path)
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// holdsLogin reports whether a shared credential file is a login, by its
+// profile's [cliprofile.Profile.HoldsLogin]. A file that cannot be read counts
+// as one, as a file the rule cannot parse does: the direction that never drops
+// a login.
+func (w *Workspace) holdsLogin(path string) bool {
+	name := filepath.Base(path)
+	if _, named := w.profile.LoginKeys[name]; !named {
+		return true
+	}
+	content, err := os.ReadFile(path) //nolint:gosec // path is inside the state dir
+	if err != nil {
+		return true
+	}
+	return w.profile.HoldsLogin(name, content)
 }

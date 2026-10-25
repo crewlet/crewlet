@@ -564,8 +564,21 @@ type Runner interface {
 }
 
 // RunRequest is one coding run's inputs.
+//
+// NEVER PERSISTED: a run is started once, by the node that launched it, and
+// everything a later collection or resume needs is on the run's row and in the
+// box. So a field added here changes no record a peer of another build reads.
 type RunRequest struct {
-	Brief  string
+	// System is the run's standing instructions, which the runner hands its
+	// CLI on the channel that ADDS to the CLI's own system prompt rather than
+	// replacing it: the vendor's prompt is what teaches the harness this run
+	// exists to use. A runner adds its own standing instruction to it — the
+	// report the run writes before it stops, at the box's path for it.
+	System string
+
+	// Brief is the task: the prompt the CLI runs, and nothing standing.
+	Brief string
+
 	Env    map[string]string
 	Limits Limits
 

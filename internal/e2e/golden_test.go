@@ -515,6 +515,12 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			t.Errorf("the %s phase never ran; phases = %v", want, got)
 		}
 	}
+	// EACH ON ITS ROUTE: a seat's rounds keep the CLI's own prompt and add
+	// the seat's after it, and an auxiliary pass replaces it, having no use
+	// for a coding agent's instructions.
+	if bad := n.model.misrouted(); len(bad) > 0 {
+		t.Errorf("system prompts on the wrong channel: %s", strings.Join(bad, "; "))
+	}
 	// Onboarding runs BEFORE the executor and on its own budget — that is
 	// the whole reason it is a phase rather than a hint inside the
 	// executor's prompt, where it could spend the turn's budget on reading
@@ -851,11 +857,14 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 
 // --- the client's half ----------------------------------------------------- //
 
-// The replay script, tests/dashboard/js/replay.mjs, drives the dashboard's
+// The replay script beside this file, replayScript, drives the dashboard's
 // own protocol module, the store and the socket built as
 // static/dashboard/protocol.js, over the frames this server produced; it is
-// told where that build is through dashboardEnv.
+// told where that build is through dashboardEnv. The script is named relative
+// to this package's directory, where `go test` runs every test binary by
+// contract, so its path has no depth to count.
 const (
+	replayScript  = "replay.mjs"
 	dashboardEnv  = "CREWLET_DASHBOARD_ROOT"
 	replayTimeout = 60 * time.Second
 )
@@ -1163,9 +1172,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		t.Fatalf("writing the capture: %v", err)
 	}
 
-	root := sourcetree.Root(t)
-	tree := filepath.Join(root, "static", "dashboard")
-	script := filepath.Join(root, "tests", "dashboard", "js", "replay.mjs")
+	tree := filepath.Join(sourcetree.Root(t), "static", "dashboard")
 
 	runCtx, runCancel := context.WithTimeout(t.Context(), replayTimeout)
 	defer runCancel()
@@ -1173,7 +1180,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	if err := os.WriteFile(actPath, answer, 0o600); err != nil {
 		t.Fatalf("writing the act answer: %v", err)
 	}
-	cmd := exec.CommandContext(runCtx, node, script, path, actPath)
+	cmd := exec.CommandContext(runCtx, node, replayScript, path, actPath)
 	cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
 	out, err := cmd.CombinedOutput()
 	if runCtx.Err() != nil {

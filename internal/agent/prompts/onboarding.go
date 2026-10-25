@@ -1,26 +1,26 @@
 package prompts
 
-import "strings"
-
 // OnboardingHeader is the one-time setup contract, run on a seat's first turn
 // before the executor.
 //
-// Backend-neutral by design: it points at the team's knowledge-base MCP
-// server by CAPABILITY ("a page-search / get-page tool"), never by product,
-// so the same words read correctly whatever knowledge base the company runs.
-// Naming a product here would make the header wrong for anyone on another
-// one and right-looking for all of them.
+// It says what the pass is and how it reaches its pages, and nothing about
+// which pages or how it ends: the steps are the hint's ([OnboardingInput.Hint],
+// under its own heading), which ends on `mark_onboarded`, and that tool's own
+// description says it ends the pass. Both used to say so here as well — two
+// copies of one instruction, one of them a sentence before the other.
+//
+// BACKEND-NEUTRAL, by capability ("your knowledge-base tools"), never by
+// product or by tool name: on the native backend they are first-party tools
+// (`search_knowledge`, `get_page`) listed among the tools to discover, and on
+// Confluence the page reads are an MCP server's. It said once that they were
+// always MCP tools, which on the default backend sent every seat to list a
+// server for a tool it could have activated by name.
 const OnboardingHeader = "\n## ONBOARDING phase" +
-	"\nThis is a one-time setup pass that runs before your normal work, " +
-	"with its **own** budget. Do ONLY this now — not the task you were " +
-	"triggered on (that runs next).\n" +
-	"Your knowledge-base search / read tools are MCP tools: call " +
-	"`list_mcp_server_tools(server=...)` to find them (a page-search / " +
-	"get-page tool on your team's knowledge-base server), then " +
-	"`activate_tool(name=...)` to promote one into your `tools=[...]`. " +
-	"`reflect_and_persist` and `mark_onboarded` are already active — " +
-	"call them directly. Follow the steps below, then call " +
-	"`mark_onboarded` to end the pass."
+	"\nThis is a one-time setup pass with its **own** budget. Do ONLY the " +
+	"steps below now — not the task you were triggered on, which runs next. " +
+	"Your knowledge-base tools are among the tools to discover below: " +
+	"`activate_tool` makes one callable (an MCP server's are named by " +
+	"`list_mcp_server_tools` first)."
 
 // OnboardingInput is what the onboarding pass renders beyond the seat.
 type OnboardingInput struct {
@@ -28,15 +28,16 @@ type OnboardingInput struct {
 	// what to persist, and then mark_onboarded.
 	Hint string
 
-	// ToolCatalogue is the slim discovery catalogue, so the agent can
-	// locate its knowledge-base server.
-	ToolCatalogue string
+	// Discoverable is what the pass can reach but does not hold yet,
+	// rendered by [github.com/crewlet/crewlet/internal/tools.Snapshot.Discoverable]
+	// — its knowledge-base tools among them, which is how it finds them.
+	Discoverable string
 }
 
 // BuildOnboarding renders the first-turn onboarding system prompt.
 //
-// Lightweight and dedicated: identity line, the onboarding contract, the
-// discovery catalogue. No policies, no roster, no phase plumbing — onboarding
+// Lightweight and dedicated: identity line, the onboarding contract, the tools
+// to discover. No policies, no roster, no phase plumbing — onboarding
 // is a fixed read → persist → mark workflow, and it runs on its own budget so
 // that nothing it does can starve the executor that follows.
 //
@@ -48,9 +49,7 @@ func BuildOnboarding(seat Seat, in OnboardingInput) Prompt {
 	if in.Hint != "" {
 		b.Heading("what_to_do", "\n## What to do", in.Hint)
 	}
-	if strings.TrimSpace(in.ToolCatalogue) != "" {
-		b.Heading("available_tools", "\n## Available tools", in.ToolCatalogue)
-	}
+	b.Heading(KeyDiscoverableTools, discoverableSection(in.Discoverable)...)
 	return b.Build()
 }
 

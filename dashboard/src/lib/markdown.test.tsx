@@ -664,8 +664,10 @@ describe("emphasis", () => {
       });
 
       it("keeps a tool catalogue's names whole", () => {
-        // The executor's "## Available tools" lines, which name every tool
-        // bare — the prompt reader's default view of what the model was told.
+        // The "- name: description" lines of a "## Tools to discover" list
+        // (an onboarding or worker prompt) and of a list_mcp_server_tools
+        // answer, which name every tool bare — the prompt reader's default
+        // view of what the model was told.
         const el = inline(
           "- list_mcp_server_tools: list what a server offers\n- post_message: post to a chat_thread",
           options,

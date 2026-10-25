@@ -27,9 +27,9 @@ const (
 	//
 	// IT FIRES FOR FEWER THINGS THAN THE TRACKER'S. An unassigned work item
 	// is work nobody owns and must reach somebody; an unwatched page is
-	// ordinarily just a page. So the fallback here is for a page CREATED or
-	// TRASHED in a team's container — the two changes a lead has a reason
-	// to know about — and not for every save.
+	// ordinarily just a page. So the fallback here is for a page CREATED,
+	// TRASHED or changing STATUS in a team's container ([LeadWorthy]) — the
+	// changes a lead has a reason to know about — and not for every save.
 	ViaLeadFallback = "container_lead_fallback"
 )
 
@@ -136,8 +136,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 // LeadWorthy reports whether a change reaches the container's lead when
 // nobody else was named.
 //
-// TWO KINDS. A page appearing in a team's container and one being trashed are
-// facts a lead has a reason to know; a save, a label change or a move is not.
+// THREE KINDS, each a fact a lead has a reason to know: a page appearing in a
+// team's container, one being trashed, and one changing status — published,
+// or restored from the trash. A save, a label change or a move is not, and the
+// lead's prompt has an opener for exactly these three.
 func LeadWorthy(kind ChangeKind) bool {
 	return kind == ChangeCreated || kind == ChangeRemoved || kind == ChangeStatus
 }

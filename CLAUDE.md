@@ -126,14 +126,15 @@ internal/             # Everything else, mapped package by package in
                       #   config format and a wire protocol
 dashboard/            # The dashboard's SOURCE: React 19 + TypeScript, built by Vite.
                       #   src/contract/ is the ONE home of every declaration an engine
-                      #   test reads (clientsource). `make dashboard` builds it into
-                      #   static/dashboard and THAT IS COMMITTED, so `go build ./...`
-                      #   needs no Node; CI rebuilds and diffs it (`make dashboard-check`)
+                      #   test reads (clientsource), and its own suites are Vitest,
+                      #   beside the modules they cover (`make dashboard-test`).
+                      #   `make dashboard` builds it into static/dashboard and THAT IS
+                      #   COMMITTED, so `go build ./...` needs no Node; CI rebuilds and
+                      #   diffs it (`make dashboard-check`)
 static/               # Embedded assets; static/dashboard/ is that build output,
-                      #   compiled in via embed. NEVER hand-edited
-tests/dashboard/js/   # The e2e client replay only: internal/e2e's captured socket
-                      #   frames through static/dashboard/protocol.js under `node`.
-                      #   The dashboard's own suites are Vitest (`make dashboard-test`)
+                      #   compiled in via embed. NEVER hand-edited. Its protocol.js is
+                      #   the wire protocol alone, which internal/e2e/replay.mjs runs
+                      #   under `node`
 examples/             # The Nimbus example company — a working two-tier config
 docs/                 # Product documentation, published to docs.crewlet.ai
 schema/               # GENERATED JSON Schema for both config tiers (`crewlet schema
@@ -198,7 +199,7 @@ A `v*` tag is the only compatibility boundary: a surface no tag has shipped has 
 
 ## Testing
 - Run **`make test`** and **`make test-solo`**, never a bare `go test ./...`, which runs the cluster-forming packages beside everything else and bypasses `internal/skipgate`. One package with `go test ./internal/foo/` is a fine fast loop
-- Test files sit beside what they cover
+- Test files sit beside what they cover, a test file that is not Go included: the dashboard's Vitest suites beside their modules in `dashboard/src`, and `internal/e2e/replay.mjs` beside the `golden_test.go` that runs it. There is no top-level `tests/` tree
 - **A contract with more than one implementation gets ONE suite** (`queuetest`, `coordtest`, `storetest`, `scheduletest`, `sandboxtest`), which every backend runs, the memory twins included
 - **A store on a fresh path starts from the migrated image** — `storetest.OpenNode`, `storetest.OpenEstate`, or `storetest.Seed` before an engine boots on it. Only a test whose subject is migration opens a fresh file with `store.OpenNode`
 - Every subsystem needs tests, and a test names the invariant it protects, not the function it calls

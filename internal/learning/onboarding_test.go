@@ -194,6 +194,69 @@ func TestAChainHashNeedsBothAnOrgAndASeat(t *testing.T) {
 	}
 }
 
+// --- the hint -------------------------------------------------------------
+
+// THE HINT IS THE ONLY PLACE THE ONBOARDING PASS IS TOLD WHAT TO DO: which
+// pages, then keep what they say, then mark the pass done. The onboarding
+// header says how to reach the knowledge-base tools and nothing about the
+// steps, so a scope dropped from this text is a team's conventions no seat
+// reads, and a `reflect_and_persist` dropped from it is a pass that reads
+// every page and keeps nothing — and marks itself done, so it never runs
+// again for that chain.
+func TestTheOnboardingHintNamesEveryScopeOnTheChainThenEveryStepInOrder(t *testing.T) {
+	t.Parallel()
+	o, r := orgWithChain("Acme", []string{"Platform", "Operations", "SRE"}, "eng")
+	// A sibling off the seat's chain: its page is another team's, and a seat
+	// sent to read it onboards onto conventions that are not its own.
+	o.Units[0].Children = append(o.Units[0].Children, &org.Unit{Name: "Billing"})
+
+	chain := o.UnitChainFor(r)
+	if len(chain) != 3 {
+		t.Fatalf("the fixture's chain has %d units, want 3 — an order across "+
+			"fewer is no order", len(chain))
+	}
+	hint := learning.Hint(o, r)
+
+	// The org first, then each unit from the outermost down to the seat's
+	// own, then the steps — read, keep, mark — with mark last, because it
+	// ends the pass for good.
+	steps := []string{"**Acme**"}
+	for _, unit := range chain {
+		steps = append(steps, "**"+unit.Name+"**")
+	}
+	steps = append(steps, "`reflect_and_persist`", "`mark_onboarded`")
+	at := -1
+	for _, step := range steps {
+		i := strings.Index(hint, step)
+		if i < 0 {
+			t.Errorf("the hint never names %s:\n%s", step, hint)
+			continue
+		}
+		if i <= at {
+			t.Errorf("the hint names %s out of order:\n%s", step, hint)
+		}
+		at = i
+	}
+
+	// The page every scope's conventions live on, by the title the pass
+	// searches for.
+	if !strings.Contains(hint, "'"+learning.OnboardingPageTitle+"'") {
+		t.Errorf("the hint never names the page title %q:\n%s", learning.OnboardingPageTitle, hint)
+	}
+	if strings.Contains(hint, "Billing") {
+		t.Errorf("the hint sends the seat to a unit off its chain:\n%s", hint)
+	}
+
+	// A seat with no org or no role has no chain, and gets no hint rather
+	// than one naming nothing.
+	if got := learning.Hint(nil, r); got != "" {
+		t.Errorf("Hint(nil org) = %q, want empty", got)
+	}
+	if got := learning.Hint(o, nil); got != "" {
+		t.Errorf("Hint(nil role) = %q, want empty", got)
+	}
+}
+
 // --- the marker -----------------------------------------------------------
 
 func TestAMarkerAnswersForItsOwnChainOnly(t *testing.T) {

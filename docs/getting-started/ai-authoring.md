@@ -89,7 +89,7 @@ export MATTERMOST_FOUNDER_USERNAME="you"          # your chat username
 
 The model's own key is the one variable the config may *not* mention: an entry
 on `auth.mode: api-key` reads its CLI's key variable (`ANTHROPIC_API_KEY` for
-Claude Code, `OPENAI_API_KEY` for Codex) when it names none. An entry on a plan
+Claude Code, `CODEX_API_KEY` for Codex) when it names none. An entry on a plan
 needs no variable at all, but a login on the engine host —
 `crewlet llm login <key> -from-host` adopts the one your own CLI already has.
 Then check the model end to end before the first turn; unlike `validate`, this

@@ -7,32 +7,41 @@ import (
 
 // -- Onboarding ----------------------------------------------------------
 
-// The one-time pass points at the team's knowledge-base MCP server by
-// capability, not by product: the same header has to read correctly whatever
-// knowledge base a company runs.
+// The one-time pass points at the team's knowledge-base tools by capability,
+// not by product and not by tool name: on the native backend they are
+// first-party tools to activate, on Confluence an MCP server's, and the same
+// header has to read correctly on either. It once said they were always MCP
+// tools, which on the default backend sent every seat to list a server for a
+// tool it could have activated by name.
+//
+// AND IT DOES NOT SAY HOW THE PASS ENDS: the hint's last step names
+// `mark_onboarded`, and that tool's description says it ends the pass. Both
+// used to say so here too.
 func TestOnboardingHeaderIsBackendNeutral(t *testing.T) {
 	t.Parallel()
 	contains(t, OnboardingHeader,
-		"knowledge-base search / read tools",
-		"a page-search / get-page tool on your team's knowledge-base server")
+		"knowledge-base tools",
+		"`activate_tool` makes one callable",
+		"`list_mcp_server_tools`")
 	lowered := strings.ToLower(OnboardingHeader)
-	excludes(t, lowered, "confluence", "atlassian", "jira")
+	excludes(t, lowered, "confluence", "atlassian", "jira",
+		"are mcp tools", "search_knowledge", "get_page", "tools=[", "mark_onboarded")
 }
 
-func TestOnboardingPromptRendersHintAndCatalogue(t *testing.T) {
+func TestOnboardingPromptRendersHintAndTheToolsToDiscover(t *testing.T) {
 	t.Parallel()
 	p := BuildOnboarding(engineer(), OnboardingInput{
-		Hint:          "Read the 'Onboarding' pages on your chain.",
-		ToolCatalogue: "- knowledge_search: Search team pages.",
+		Hint:         "Read the 'Onboarding' pages on your chain.",
+		Discoverable: "- search_knowledge: Search team pages.",
 	}).Text
 	contains(t, p, "ONBOARDING phase", "## What to do",
 		"Read the 'Onboarding' pages on your chain.",
-		"## Available tools", "knowledge_search: Search team pages.")
+		"## Tools to discover", "search_knowledge: Search team pages.")
 
-	// A whitespace-only catalogue is no catalogue: it would leave a heading
-	// over nothing.
-	bare := BuildOnboarding(engineer(), OnboardingInput{ToolCatalogue: "  \n"}).Text
-	excludes(t, bare, "## What to do", "## Available tools")
+	// A whitespace-only list is nothing to discover: it would leave a
+	// heading over nothing.
+	bare := BuildOnboarding(engineer(), OnboardingInput{Discoverable: "  \n"}).Text
+	excludes(t, bare, "## What to do", "## Tools to discover")
 }
 
 // -- Sub-agent -----------------------------------------------------------
@@ -54,6 +63,23 @@ func TestSubagentPreambleStatesTheInvariants(t *testing.T) {
 	contains(t, SubagentPreamble,
 		"Do not delegate further",
 		"Do not contact colleagues")
+}
+
+// A WORKER IS TOLD HOW TO DISCOVER ONLY BESIDE SOMETHING TO DISCOVER. A worker
+// with no discovery tools, or with nothing left to reach, told to call
+// activate_tool is told to call a tool that can only refuse it — and the
+// preamble used to say so to every worker, frozen ones included.
+func TestAWorkerIsToldToDiscoverOnlyWhenItCan(t *testing.T) {
+	t.Parallel()
+	with := BuildSubagent(engineer(), SubagentInput{
+		ParentSystemPrompt: "p", Discoverable: "- MCP server `research`",
+	}).Text
+	contains(t, with, subagentDiscoveryRule)
+	order(t, with, "## Tools to discover", subagentDiscoveryRule)
+
+	without := BuildSubagent(engineer(), SubagentInput{ParentSystemPrompt: "p"}).Text
+	excludes(t, without, "activate_tool", "list_mcp_server_tools", "## Tools to discover")
+	contains(t, without, SubagentPreamble)
 }
 
 // HOW A WORKER ENDS depends on whether it HAS a submission tool, and the two
@@ -78,7 +104,7 @@ func TestAWorkerIsToldHowToEndTheWayItActuallyCan(t *testing.T) {
 	}
 }
 
-func TestSubagentPromptOrdersParentThenSkillsThenCatalogueThenPreamble(t *testing.T) {
+func TestSubagentPromptOrdersParentThenSkillsThenDiscoverableThenPreamble(t *testing.T) {
 	t.Parallel()
 	cat := &fakeCatalogue{skills: []fakeSkill{{
 		key: "mcp:github", mcpServer: "github", summary: "GITHUB-SUMMARY",
@@ -86,11 +112,11 @@ func TestSubagentPromptOrdersParentThenSkillsThenCatalogueThenPreamble(t *testin
 	}}}
 	p := BuildSubagent(engineer(), SubagentInput{
 		ParentSystemPrompt: "PARENT-PROMPT-MARKER",
-		ToolCatalogue:      "- foo: Does foo.",
+		Discoverable:       "- foo: Does foo.",
 		Skills:             cat,
 	}).Text
 	order(t, p, "PARENT-PROMPT-MARKER", "GITHUB-SUMMARY",
-		"## Available tools", SubagentPreamble)
+		"## Tools to discover", SubagentPreamble)
 	// No identity section and no policies: a sub-agent is a worker, not a
 	// teammate.
 	excludes(t, p, "## Your Identity", "Company policies", "LONG GITHUB BODY")
@@ -151,7 +177,7 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 		"Do not repeat a reply you already gave",
 		// Across turns this warning is stronger than within one: a read
 		// from last Tuesday is stale by construction.
-		"may be stale", "moved on")
+		"may be stale", "history, not the current state", "the task wins")
 	if !strings.HasSuffix(strings.TrimRight(withHistory, "\n"), "## Task\nany update?") {
 		t.Error("the ask must sit last when there is no prior work")
 	}

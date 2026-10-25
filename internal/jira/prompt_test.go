@@ -76,26 +76,54 @@ func TestOnlyTheLeadFallbackIsToldWhyItWasRouted(t *testing.T) {
 	}
 }
 
-// A WATCHER IS NOT BEING ASKED FOR ANYTHING.
+// THE HANDLING BLOCK NEVER CONTRADICTS THE DELIVERY CHECK, AND NEVER HANDS A
+// COLLEAGUE'S ISSUE AWAY: Worklet's two rules, in Jira's routings.
 //
-// Watchers receive events because they once interacted, so telling one they
-// owe an answer is precisely how a tracker fills up with "noted, thanks" —
-// the running-commentary noise the same prompt forbids two lines up.
-func TestOnlyADirectAskCarriesTheDoNotGoQuietRule(t *testing.T) {
+//   - STAYING OUT IS FOR AN UNADDRESSED ROUTING ONLY, through the same rule
+//     [jira.Prompt.Addressed] answers with. A mentioned seat may not end its
+//     turn in silence — the decoder refuses it — and on the issue it was
+//     mentioned on the assignee is ordinarily somebody else, so "stay silent"
+//     there is an instruction the engine sends back for a second round. A
+//     routing with no reason is framed as watching and held to no answer, so
+//     it is told to stay out like a watcher.
+//   - REASSIGNING IS FOR THE ASSIGNEE ONLY. A mentioned seat is asked about
+//     an issue that is not its to move, and a watcher is not asked at all.
+//
+// And the rule the engine enforces itself, that an ask may not end in silence,
+// is not restated: the executor's contract says it and the decoder refuses it.
+func TestTheHandlingBlockFitsTheRouting(t *testing.T) {
 	t.Parallel()
+	const (
+		stayOut = "stay silent"
+		decline = "reassign it to the right teammate"
+	)
 	for _, tc := range []struct {
-		via  string
-		want bool
+		via     string
+		stayOut bool
+		decline bool
 	}{
-		{jira.ViaAssignee, true},
-		{jira.ViaMention, true},
-		{jira.ViaWatcher, false},
+		{jira.ViaAssignee, false, true},
+		{jira.ViaMention, false, false},
+		{jira.ViaWatcher, true, false},
+		{"", true, false},
 	} {
-		got := (jira.Prompt{}).Build(inbound(tc.via, "jira:issue_updated", nil), nil)
-		has := strings.Contains(got, "do\n NOT go quiet") ||
-			strings.Contains(got, "do NOT go quiet")
-		if has != tc.want {
-			t.Errorf("%s: decline rule present = %v, want %v", tc.via, has, tc.want)
+		n := inbound(tc.via, "jira:issue_updated", nil)
+		got := (jira.Prompt{}).Build(n, nil)
+		if !strings.Contains(got, "## How to handle this") {
+			t.Fatalf("%q renders no handling block, so the case asserts nothing:\n%s", tc.via, got)
+		}
+		if tc.stayOut == (jira.Prompt{}).Addressed(n) {
+			t.Fatalf("%q: the case expects stay-out = %v on a routing whose Addressed is %v "+
+				"— the table and the delivery check disagree", tc.via, tc.stayOut, !tc.stayOut)
+		}
+		if has := strings.Contains(got, stayOut); has != tc.stayOut {
+			t.Errorf("%q: told to stay silent = %v, want %v:\n%s", tc.via, has, tc.stayOut, got)
+		}
+		if has := strings.Contains(got, decline); has != tc.decline {
+			t.Errorf("%q: told to reassign the issue = %v, want %v:\n%s", tc.via, has, tc.decline, got)
+		}
+		if strings.Contains(got, "go quiet") {
+			t.Errorf("%q restates the engine's own delivery rule:\n%s", tc.via, got)
 		}
 	}
 }

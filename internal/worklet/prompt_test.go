@@ -72,6 +72,65 @@ func TestAFallbackRoutingExplainsItself(t *testing.T) {
 	}
 }
 
+// THE HANDLING BLOCK NEVER CONTRADICTS THE DELIVERY CHECK, AND NEVER HANDS A
+// COLLEAGUE'S TASK AWAY.
+//
+// Two rules, both walked over every reason:
+//
+//   - STAYING OUT IS FOR AN UNADDRESSED WAKE ONLY. An addressed one may not
+//     end in silence — the decoder refuses it — and on a question, a mention
+//     or an answer the task is ordinarily somebody else's, so "stay silent if
+//     the assignee is not yours" there is an instruction the engine sends
+//     back for a second round.
+//   - REASSIGNING IS FOR THE TASK'S HOLDER ONLY: the assignee, and the
+//     blocker's assignee, whose wake is written on the blocker. The person
+//     asked, mentioned or answered, the reporter and a thread participant
+//     are being asked about a task that is not theirs to move, and a watcher
+//     is not being asked at all.
+//
+// The set is written out here rather than read off the package, so a reason
+// that starts or stops offering the gesture has to be decided in this list.
+// And the rule the engine enforces itself, that an ask may not end in silence,
+// is not restated: the executor's contract says it and the decoder refuses it.
+func TestTheHandlingBlockFitsTheReason(t *testing.T) {
+	t.Parallel()
+	const (
+		stayOut = "stay silent"
+		decline = "reassign it to the right teammate"
+	)
+	holds := map[worklet.Reason]bool{
+		worklet.ReasonAssignee: true,
+		worklet.ReasonBlocking: true,
+	}
+	for _, reason := range worklet.Reasons {
+		if reason == worklet.ReasonLeadFallback {
+			// Its delegate / take it / escalate block is the whole
+			// instruction, and is pinned on its own above.
+			continue
+		}
+		body := worklet.Prompt{}.Build(promptNotification(reason, worklet.ChangeComment), nil)
+		if !strings.Contains(body, "## How to handle this") {
+			t.Fatalf("%s renders no handling block, so the case asserts nothing:\n%s",
+				reason, body)
+		}
+		if got := strings.Contains(body, stayOut); got == reason.Addressed() {
+			t.Errorf("%s: told to stay silent = %v, and the reason is addressed = %v "+
+				"— an addressed wake may not end in silence:\n%s",
+				reason, got, reason.Addressed(), body)
+		}
+		if got := strings.Contains(body, decline); got != holds[reason] {
+			t.Errorf("%s: told to reassign the task = %v, and the seat holds it = %v:\n%s",
+				reason, got, holds[reason], body)
+		}
+		if holds[reason] && !reason.Addressed() {
+			t.Errorf("%s offers a decline, and nobody is waiting on it to decline", reason)
+		}
+		if strings.Contains(body, "go quiet") || strings.Contains(body, "Going silent") {
+			t.Errorf("%s restates the engine's own delivery rule:\n%s", reason, body)
+		}
+	}
+}
+
 // A REMOVED TASK SENDS NOBODY TO READ IT.
 //
 // Fetching a task that no longer exists costs the seat a round and a failed

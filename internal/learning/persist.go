@@ -32,8 +32,9 @@ import (
 //     the model to pick when unsure.
 //   - DOC: a STANDING RULE the team should follow. No diary write at all —
 //     the tier exists so the system can say "that is not memory, it is
-//     policy", and the lifecycle event is the audit trail an operator routes
-//     into the team's documentation.
+//     policy". The lifecycle event counts it, and the log line carrying the
+//     rule ([Directive]) is what an operator routes into the team's
+//     documentation.
 //   - LONG: a personal fact worth remembering indefinitely.
 //   - SHORT: a personal fact with a known expiry.
 //
@@ -159,17 +160,18 @@ func NewPersistDecider(models Models, d DiaryStore, opts PersistOptions) (*Persi
 
 // Directive is a standing rule the classifier saw and deliberately did not
 // memorise.
+//
+// It goes nowhere but the `persist_decider_doc_observed` log line: nothing
+// hands it to anyone, so it carries what an operator routing the rule into
+// the team's documentation reads there, and nothing else — a field the model
+// is asked for and nobody reads is output tokens on every DOC for nothing.
 type Directive struct {
-	// Content is the rule itself, written so a hand-off can quote it
-	// verbatim rather than paraphrasing what the agent saw.
+	// Content is the rule itself, in the model's words.
 	Content string
 
 	// TargetHint is where the model thinks it belongs, "" when it has no
 	// sense of that.
 	TargetHint string
-
-	// Rationale is one sentence on why it is a rule and not a memory.
-	Rationale string
 }
 
 // Decision is one classification and whatever it produced.
@@ -324,7 +326,6 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		dir := Directive{
 			Content:    content,
 			TargetHint: strings.TrimSpace(stringField(parsed, "target_hint")),
-			Rationale:  strings.TrimSpace(stringField(parsed, "rationale")),
 		}
 		log.InfoContext(ctx, "persist_decider_doc_observed", "turn_id", t.Event.TurnID,
 			"agent_handle", t.Event.AgentHandle, "target_hint", dir.TargetHint,
@@ -411,92 +412,54 @@ func (d *PersistDecider) write(
 // A const, so it is byte-stable across calls — provider prompt caching keys
 // on the prefix, and a prompt assembled per call would miss the cache on
 // every completed turn in the company.
-const PersistSystemPrompt = `You are a post-turn reflection classifier.
+//
+// IT STATES WHAT THE PASS NEEDS AND NOTHING THE CODE ALREADY DOES. The SHORT
+// tier's default and cap are [coerceTTLDays]'s, so the model is asked for a
+// number and the band is enforced after it; a turn that wrote its own memory
+// never reaches this prompt ([PersistDecider.Skip]). One example per tier,
+// because where DOC ends and LONG begins is the call an example settles, and
+// a second one settles nothing the first did not. The attribution example is
+// written as [Subject.Label] renders a person — the form of the user
+// message's Requester lines and of the memory filter's "Current sender:"
+// line, which is what a stored fact is later matched against.
+const PersistSystemPrompt = `You are a post-turn reflection classifier. Read the turn summary and decide
+which tier its content falls into:
 
-Read the turn summary and decide which of four categories the
-turn's content falls into:
+  NOOP  -- Nothing durable. The common case: pick it when in doubt.
 
-  NOOP  -- Nothing durable.  This is the common case.  Use it when
-           in doubt.
+  DOC   -- A STANDING RULE the team or org should follow, which belongs in
+           the team's documentation rather than in personal memory
+           (e.g. "review every backend PR before merge"). Nothing is
+           stored for it.
 
-  DOC   -- The turn surfaced a STANDING RULE that the team or org
-           should follow (e.g. "always commit in semantic style",
-           "review every backend PR before merge").  Things that
-           apply beyond just the agent's personal interactions and
-           belong in the team's documentation, not in personal
-           memory.  Output DOC; we do NOT memorize these -- the
-           agent will be nudged to hand off to a team lead who has
-           authority to update the docs.
+  LONG  -- A personal fact the agent should remember indefinitely: a
+           stakeholder's preference, a convention it met, a durable
+           observation (e.g. "The auth service reads a JWT from the
+           Authorization header").
 
-  LONG  -- A personal fact the agent should remember indefinitely.
-           Stakeholder preferences, project conventions the agent
-           personally encountered, durable observations:
-             - "Stakeholder Sam prefers terse replies"
-             - "The auth service uses JWT in the Authorization header"
-             - "Sarah Chen reviews backend PRs in the morning"
-           Stored at agent scope without an expiry.
+  SHORT -- A personal fact with a known expiry: operational context that
+           ages out (e.g. "Q2 launch freeze active until end of June").
+           Give "ttl_days", how many days it stays useful.
 
-  SHORT -- A personal fact with a known expiry: operational context
-           that ages out:
-             - "Sarah is OOO until 2026-05-08"
-             - "Q2 launch freeze active until end of June"
-             - "Production rollback in progress; hold non-critical
-                deploys"
-           When you choose SHORT, propose "ttl_days" -- how many
-           days the fact stays useful.  Default 30 if you can't tell.
-           Cap 180.
+Rules for LONG and SHORT:
 
-Writing-style rules (for LONG and SHORT):
+1. Declarative facts, not instructions: "Stakeholder X prefers weekly
+   digests", not "Always send weekly digests".
+2. Attribute the fact to the requester or subject the turn names, as it
+   names them: "Sam (slack:U0TESTUSER1) prefers terse replies", not "User
+   prefers terse replies". A fact without its "who" loses its meaning.
+3. Never persist what will not apply next time: a single ticket ID, one-off
+   debug output, ephemeral state.
+4. The user prompt may list what is "Already in your memory". Answer NOOP
+   when the fact restates an entry there, is a thinner version of one, or
+   is an instance a broader entry already covers.
 
-1. **Declarative facts, not instructions.**
-   - "Stakeholder X prefers weekly digests" (yes)
-   - "Always send weekly digests" (no)
-   - "Deploy script fails when CI is green but Slack webhook is
-     misconfigured" (yes)
-   - "Check the Slack webhook first" (no)
-
-2. **Always attribute the fact to the named requester / subject when
-   one is shown in the turn context.**  Crewlet is multi-party --
-   a fact stored without "who" loses its meaning.
-   - "User Sam (slack:U0TESTUSER1) prefers replies opened with
-     'hey sam'" (yes)
-   - "User prefers replies opened with 'hey sam'" (no)
-
-3. **Never persist task-specific details that won't apply next time**
-   (a single ticket ID, one-off debug output, ephemeral state).
-
-4. **Never persist anything the turn itself already wrote via a tool.**
-
-5. **Deduplicate against existing memory.**  The user prompt may
-   include an "Already in your memory" list of facts the agent
-   already remembers.  Return "NOOP" when the candidate fact:
-   - restates an existing entry (same fact, possibly paraphrased), or
-   - is a thinner / less-specific version of an existing entry
-     (e.g. "Sam is OOO this week" when memory already has
-     "Sam is OOO Mon-Fri, route backend reviews to Maria"), or
-   - is a more-specific instance already covered by a broader
-     existing rule.
-   Only emit a new "LONG" / "SHORT" when the candidate fact adds
-   information the existing entries do not already express.  Dedup
-   does not apply to "DOC" -- standing rules are independent of
-   personal memory.
-
-For DOC, write "content" as the standing rule itself (so the
-manager-handoff hint can include it verbatim) and "target_hint"
-if you have a sense of where it should land (e.g. "Engineering /
-commit conventions"), else empty.
-
-Output format (strict, JSON only -- no prose before or after):
+Answer with one JSON object and nothing else:
 
   {"kind": "NOOP"}
-
-  {"kind": "DOC", "content": "<rule>", "target_hint": "<hint or empty>",
-   "rationale": "<one short sentence>"}
-
+  {"kind": "DOC", "content": "<the rule itself>", "target_hint": "<where it belongs, or empty>"}
   {"kind": "LONG", "content": "<declarative fact>"}
-
-  {"kind": "SHORT", "content": "<declarative fact>",
-   "ttl_days": <int>}
+  {"kind": "SHORT", "content": "<declarative fact>", "ttl_days": <int>}
 `
 
 // buildPersistPrompt renders the turn and the seat's existing memory.
@@ -521,7 +484,7 @@ func buildPersistPrompt(t Turn, existing []DiaryEntry) string {
 	// stated it: collapsing four messages into one requester line loses
 	// which of them said the thing being remembered.
 	for _, in := range t.Event.Interactions {
-		who := DescribeSender(in.Sender)
+		who := SubjectOf(in.Sender).Label()
 		if who == "" {
 			continue
 		}
@@ -572,32 +535,6 @@ func renderExistingMemories(memories []DiaryEntry) string {
 	}
 	b.WriteString("\n")
 	return b.String()
-}
-
-// DescribeSender renders a counterparty for an auxiliary prompt.
-//
-// THE one rendering, exported for the read-side memory filter to share: two
-// prompts describing the same person differently desynchronise the facts one
-// writes from the lines the other filters against, and the filter's job is to
-// reject a memory naming somebody else.
-func DescribeSender(id types.CanonicalIdentity) string {
-	label := id.DisplayName
-	if label == "" {
-		label = id.Handle
-	}
-	switch {
-	case label != "" && id.ExternalID != "" && id.Platform != "":
-		return label + " (" + id.Platform + ":" + id.ExternalID + ")"
-	case label != "" && id.ExternalID != "":
-		return label + " (" + id.ExternalID + ")"
-	case label != "":
-		return label
-	case id.ExternalID != "" && id.Platform != "":
-		return id.Platform + ":" + id.ExternalID
-	case id.ExternalID != "":
-		return "unknown:" + id.ExternalID
-	}
-	return ""
 }
 
 // coerceTTLDays clamps the model's proposed duration into the supported band.

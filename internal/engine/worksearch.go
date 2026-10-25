@@ -116,7 +116,7 @@ func WorkSearcher(e *Engine) builtin.WorkSearcher {
 // A FUNCTION rather than three lines inside the startup, because the defect it
 // replaces could not be reached from a test without standing a whole company
 // up: the index was built inside the block gated on the WIKI's backend, so a
-// company with `tracker.backend: native` and Confluence for its knowledge
+// company with `tracker.backend: worklet` and Confluence for its knowledge
 // indexed none of its own work items and served no ranked item search — while
 // the embedding duty, armed on EITHER backend, went on paying for a vector on
 // every one of them.

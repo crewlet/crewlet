@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,62 @@ func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 	if _, err := os.Stat(session); !os.IsNotExist(err) {
 		t.Fatalf("a crashed call's transcript survived the next acquire: %v", err)
 	}
+}
+
+// WHAT A CALL LEAVES IN TMPDIR GOES WITH THE SEAT'S OTHER LEFTOVERS, for every
+// CLI, whatever its profile lists. The engine points TMPDIR inside the seat's
+// home and every CLI writes there, so a profile that forgot the directory let
+// its home grow by what each call left. And the directory is there, private
+// and empty, when the next call starts: a CLI handed a TMPDIR that does not
+// exist fails its first temporary file.
+func TestTheSeatsTemporaryDirectoryIsPrunedAndRemade(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	first, err := ws.Acquire(t.Context(), "dev", "call-1", nil)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	tmp := childEnv(ws.profile, first, nil, Auth{})["TMPDIR"]
+	if rel, err := filepath.Rel(first.Home, tmp); err != nil || !filepath.IsLocal(rel) {
+		t.Fatalf("TMPDIR = %q is not inside the seat home %q", tmp, first.Home)
+	}
+	if err := checkPrivateEmptyDir(tmp); err != nil {
+		t.Fatalf("at the first call: %v", err)
+	}
+	left := filepath.Join(tmp, "claude-1000", "fswatch-probe-1")
+	if err := os.MkdirAll(left, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Release(t.Context()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	second, err := ws.Acquire(t.Context(), "dev", "call-2", nil)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer func() { _ = second.Release(t.Context()) }()
+	if err := checkPrivateEmptyDir(tmp); err != nil {
+		t.Errorf("at the next call: %v", err)
+	}
+}
+
+// checkPrivateEmptyDir says what is wrong with dir as a fresh TMPDIR.
+func checkPrivateEmptyDir(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("%s is %v, want a 0700 directory", dir, info.Mode())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("%s holds %s, left by an earlier call", dir, entries[0].Name())
+	}
+	return nil
 }
 
 // Batched sub-agents belong to the SAME agent and run in parallel, so the

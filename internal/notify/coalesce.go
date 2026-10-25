@@ -128,10 +128,9 @@ func digest(prompt Prompt, ordered []constituent, superseded map[int]bool) strin
 	var b strings.Builder
 	b.WriteString("## Coalesced updates (" + strconv.Itoa(len(ordered)) +
 		" events in this conversation)\n")
-	b.WriteString("Multiple events for this conversation arrived in quick succession " +
-		"(or while you were busy). They are listed chronologically below; the MOST " +
-		"RECENT event is rendered in full afterwards. Handle them as ONE piece of " +
-		"work — read everything before acting, and reply at most once.\n\n")
+	b.WriteString("The earlier events are listed oldest first; the MOST RECENT is " +
+		"rendered in full after them. Handle them as ONE piece of work, and " +
+		"reply at most once.\n\n")
 	for i, c := range ordered[:len(ordered)-1] {
 		b.WriteString(digestLine(prompt, c, superseded[i]) + "\n")
 	}

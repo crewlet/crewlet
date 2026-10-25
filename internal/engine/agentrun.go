@@ -21,9 +21,10 @@ import (
 // EVERY MOVING PART HERE ALREADY EXISTED, which is the point of the shape.
 // The detachment, the durable row, the completion poll, the claim and the
 // re-entry are the sandbox layer's, unchanged — an agent-mode executor is a
-// coding run whose brief happens to be a prompt rather than a code task. The
-// tool surface is the bridge's, unchanged. What this file adds is the wiring
-// and the refusals that wiring makes possible.
+// coding run whose brief is the turn's ask rather than a code task, with the
+// seat's system prompt as its standing instructions. The tool surface is the
+// bridge's, unchanged. What this file adds is the wiring and the refusals that
+// wiring makes possible.
 
 // agentLauncher runs a seat's executor as its CLI's own agentic run.
 type agentLauncher struct {
@@ -158,8 +159,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Setup:      setup,
 		MCPServers: servers,
 		Model:      model,
+		System:     req.System,
 		Brief:      req.Brief,
 		Task:       l.turn.Task,
+		Label:      l.turn.Task,
 		Opened:     ledger.bind,
 	})
 	if err != nil {

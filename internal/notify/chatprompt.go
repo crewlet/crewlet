@@ -11,11 +11,17 @@ import (
 // a channel, a direct message or a thread — and the hard part is the same
 // for all of them: deciding whether the message was actually addressed to
 // this agent, and staying silent when it was not. That triage guidance is
-// the bulk of the prompt and is backend-neutral, so it exists once.
+// backend-neutral, so it exists once.
 //
 // What genuinely differs is small and mechanical: how a mention is written,
 // which collective addresses exist, and how a direct conversation is
 // recognised. A backend supplies those as fields.
+//
+// THE ENGINE STATES ONLY WHAT THE MODEL CANNOT KNOW: who is speaking, how this
+// seat is addressed here, where a reply goes and why the message reached it.
+// How to hold a conversation is the model's own, and what a seat must do when
+// it declines a direct ask is the executor's contract, enforced at decode
+// time — so neither is restated here.
 //
 // NOTHING HERE NAMES A TOOL. The prompt describes the capability and lets
 // the model pick the matching tool out of its own catalogue, because the
@@ -113,7 +119,8 @@ func (ChatPrompt) SubjectIsLabel(Inbound) bool { return true }
 // ONE IMPLEMENTATION, deliberately: the indicator says "this agent is working
 // on your message" and the delivery check says "this agent owes your message
 // an answer", and the two disagreeing would raise a spinner on a turn allowed
-// to end in silence, or end one in silence after raising a spinner.
+// to end in silence, or end one in silence after raising a spinner. [Build]
+// reads the same rule, through [addressOf], to tell the seat which it is.
 func (p ChatPrompt) Addressed(n Inbound) bool { return Addressed(n.Metadata, p.DMPrefix) }
 
 // IsDirect reports whether an event happened in a direct conversation.
@@ -261,11 +268,27 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	if p.SelfReference != nil {
 		self = p.SelfReference(meta)
 	}
-	marker := "`" + handle + "`"
-	if self != "" {
-		marker = self + " or " + marker
+	// THE ENGINE'S VERDICT WHERE IT HAS ONE, AND THE TRIAGE ONLY WHERE IT
+	// DOES NOT. An addressed message owes an answer — the delivery check
+	// refuses a silent end to it — so on a direct message, a mention or a
+	// followed thread the "were you asked?" question is already settled,
+	// and asking it anyway told a seat it might stay silent on exactly the
+	// messages it may not. The triage is for what is left: a message in an
+	// open channel, which the seat may rightly leave alone.
+	switch addressOf(meta, p.DMPrefix) {
+	case addressDirect:
+		b.WriteString("\n**Addressed to you:** this is a direct message.")
+	case addressMention:
+		b.WriteString("\n**Addressed to you:** the message names you.")
+	case addressThread:
+		b.WriteString("\n**Addressed to you:** you follow this thread.")
+	default:
+		marker := "`" + handle + "`"
+		if self != "" {
+			marker = self + " or " + marker
+		}
+		b.WriteString(p.triage(marker))
 	}
-	b.WriteString(p.triage(marker))
 
 	thread := meta["thread_ts"]
 	if thread != "" {
@@ -289,9 +312,8 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 			" (top-level message — reply as a thread)")
 	}
 	if ts := meta["ts"]; ts != "" {
-		b.WriteString("\n**Message id:** " + ts + " — the reference for acting on" +
-			" *this* message rather than replying to it (for example reacting" +
-			" to it) with your chat tools.")
+		b.WriteString("\n**Message id:** " + ts + " — for acting on this" +
+			" message itself (reacting to it) rather than replying.")
 	}
 	if p.MentionHint != nil {
 		if hint := p.MentionHint(meta); hint != "" {
@@ -301,66 +323,37 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	return b.String()
 }
 
-// triage is the addressee guidance, identical on every backend.
+// triage is the addressee guidance, identical on every backend, for a message
+// the engine has not already read as addressed to the seat.
 //
-// It is the bulk of the prompt because it is the hard part: a bot in a busy
-// channel is woken by everything, and a company where every agent answers
-// every message is unusable within an hour.
+// A PRINCIPLE, NOT A METHOD. It was a numbered procedure with worked examples
+// ("Engineers, welcome @newhire" → …), and a current model tells who a message
+// is for as well without them — while the examples read to the turn-start
+// relevance filters as people and roles the task involved. What the model
+// cannot know is how THIS seat is addressed here (its marker, the backend's
+// collectives), and that silence is the expected answer to most of what an
+// open channel carries: a company where every agent answers every message is
+// unusable within an hour, and nothing but this text keeps an unaddressed
+// seat quiet.
 func (p ChatPrompt) triage(marker string) string {
 	collectives := p.Collectives
 	if collectives == "" {
 		collectives = "`@channel` / `@here`"
 	}
 	return "\n## Triage — decide BEFORE replying" +
-		"\n" +
-		"\n**1. Find the addressee — who is the message asking to act?**" +
-		"\n- **Personal:** the message names you — " + marker +
-		`, or your role-name (e.g. "PM", "the CTO") in plain text.` +
-		"\n- **A group you belong to:** " + collectives +
-		` / 'everyone' / 'team', or a role-group like "engineers",` +
-		` "leadership", "PMs".` +
-		"\n- **Someone else:** a specific other person or role the message" +
-		" is directing." +
-		"\n- **No one (informational):** announcements, FYIs, status" +
-		" updates, welcomes or kudos *about* someone." +
-		"\n" +
-		"\n**Distinguish addressee from subject.** A mention can be either" +
-		" — read the verb, not just the `@`." +
-		"\n- \"Engineers, welcome @newhire\" → addressee = engineers;" +
-		" @newhire is the subject (the new hire)." +
-		"\n- \"@PM open a ticket for @SWE\" → addressee = PM;" +
-		" @SWE is the subject (assignee mentioned for context)." +
-		"\n- \"Thanks @SWE for the fix!\" → no addressee; @SWE is the" +
-		" subject of kudos. Don't reply." +
-		"\n" +
-		"\n**2. Decide.**" +
-		"\n- Personal addressee → respond." +
-		"\n- In an addressed group → respond only if you have a specific," +
-		" substantive contribution. For *action requests* the" +
-		" narrowest-matching role should answer (\"engineers\" + an auth" +
-		" question → the engineer who owns auth, not every engineer). For" +
-		" *social* messages (welcomes, kudos) a brief reply from anyone in" +
-		" the group is fine." +
-		"\n- Addressee is someone else, or the message is informational →" +
-		" stay silent unless you hold decision-changing information they" +
-		" cannot see." +
-		"\n" +
-		"\n**3. Default for non-addressed messages: silence beats noise.**" +
-		" When you weren't being asked — informational, a passing" +
-		" reference, the addressee is clearly someone else — stay silent." +
-		"\n" +
-		"\n**4. When the message names you SPECIFICALLY** (not just as part" +
-		" of an addressed group) **and you have decided not to act** — out" +
-		" of scope, already handled, deferring to someone else → do NOT" +
-		" skip silently. Post a brief reply in the same thread or channel;" +
-		" one sentence is enough (\"Not my area — try whoever owns auth.\"," +
-		" \"Already handled in <link>.\"). Group pings still allow silence" +
-		" when you have nothing substantive; this covers personal pings" +
-		" only — leaving a direct 1:1 ping unanswered looks like the" +
-		" message was lost."
+		"\nRead whom the message asks to act — the verb, not just the names" +
+		" in it." +
+		"\n- **You:** it names you — " + marker + ", or your role in plain" +
+		" text as the one to act → answer." +
+		"\n- **A group you belong to:** " + collectives + `, "everyone",` +
+		` "team", or a role group such as "engineers" → answer only with a` +
+		" specific contribution of your own." +
+		"\n- **Someone else, or nobody:** an FYI, an announcement, your role" +
+		" or team named only as its subject → silence beats noise: stay" +
+		" silent unless you hold information that changes the outcome."
 }
 
-// threadBlock is the thread-reply guidance, identical on every backend.
+// threadBlock marks a thread reply, identical on every backend.
 //
 // IT NO LONGER SENDS THE AGENT TO GO AND READ THE THREAD. That instruction
 // cost three rounds on a company whose chat tools come from a per-role MCP
@@ -372,25 +365,19 @@ func (p ChatPrompt) triage(marker string) string {
 // two sections with one name saying different things is a model reading
 // whichever it saw last.
 //
-// Everything else here stays: recognising the seat's own replies and not
-// repeating a take it already gave are properties of the CONVERSATION rather
-// than of where the thread came from, and they are what stop a seat answering
-// itself.
+// What stays is the one fact the model cannot work out for itself: which of
+// the thread's messages are its own, which is what stops a seat answering
+// itself. How to hold up its end of a conversation — not repeating a take it
+// already gave, letting a colleague finish — is the model's own, and telling
+// a seat to stay silent on an acknowledgement was telling it to do what the
+// engine refuses: a reply in a followed thread is addressed, and an addressed
+// turn may not end in silence.
 func threadBlock(self string) string {
 	reference := self
 	if reference == "" {
 		reference = "your own account"
 	}
 	return "\n## Thread context" +
-		"\nThis is a thread reply. Focus on the triggering message and" +
-		" treat the rest of the thread as background." +
-		"\n" +
-		"\n**Self-check before replying.** Messages from " + reference +
-		" in this thread are YOUR previous replies." +
-		"\n- If you already gave your take on this question, do not repeat it." +
-		"\n- If the new message is acknowledgement, status or agreement and" +
-		" asks you nothing new, stay silent." +
-		"\n- If another agent is updating their own progress rather than" +
-		" asking you, stay silent — let them finish." +
-		"\nEach fresh reply must answer a NEW question or make a NEW decision."
+		"\nThis message is a reply in a thread. Messages from " + reference +
+		" in this thread are YOUR previous replies."
 }

@@ -1235,7 +1235,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages: msgs,
 			Tools:    tools,
-			OnDelta:  onDelta,
+			// Every caller of this loop is a seat at work — a phase of
+			// its turn or a worker it delegated to — and nothing else is.
+			Agent:   true,
+			OnDelta: onDelta,
 		})
 		took := time.Since(began)
 		if err != nil {
