@@ -435,9 +435,9 @@ func prioritiesPreview(t Tool) proposal.Previewer {
 		a := Args(args)
 		handle := a.String("handle")
 		if handle == "" {
-			mine, err := readGet(ctx, read, "GET /work/my-work", nil, nil)
-			if err != nil {
-				return proposal.Preview{}, err
+			mine, mineErr := readGet(ctx, read, "GET /work/my-work", nil, nil)
+			if mineErr != nil {
+				return proposal.Preview{}, mineErr
 			}
 			handle = value(mine, "handle")
 		}

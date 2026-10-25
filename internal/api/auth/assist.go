@@ -353,18 +353,18 @@ func (d *Delegations) Derive(ctx context.Context, req AssistRequest) (exec.Grant
 		ReauthCeiling: p.ReauthAt.UTC(), Expires: expires,
 	}
 	if req.Scope == iam.AssistScopeExec {
-		u, err := req.Request.URL()
-		if err != nil {
-			return refuse(err.Error())
+		u, urlErr := req.Request.URL()
+		if urlErr != nil {
+			return refuse(urlErr.Error())
 		}
-		digest, err := opkey.RequestDigestOf(req.Request.Method, u, req.Request.Body)
-		if err != nil {
-			return refuse(err.Error())
+		digest, digestErr := opkey.RequestDigestOf(req.Request.Method, u, req.Request.Body)
+		if digestErr != nil {
+			return refuse(digestErr.Error())
 		}
 		claims.Proposal, claims.Action, claims.RequestDigest = req.Proposal, req.Action, digest
 	}
-	if err := claims.check(); err != nil {
-		return refuse(err.Error())
+	if invalid := claims.check(); invalid != nil {
+		return refuse(invalid.Error())
 	}
 	subject, err := encodeClaims(claims)
 	if err != nil {

@@ -194,11 +194,11 @@ func askEach[Q addressed, R reply, PQ binder[Q]](ctx context.Context, f *Fleet,
 		return fmt.Errorf("live: sign the request: %w", err)
 	}
 	err = f.broker.AskEach(askCtx, subject, sealed, func(raw []byte) bool {
-		rep, why, err := ch.OpenReply(raw, id)
+		rep, why, openErr := ch.OpenReply(raw, id)
 		switch {
-		case err != nil:
+		case openErr != nil:
 			f.log.WarnContext(ctx, "assistant_fleet_reply_unread", "subject", subject,
-				"turn", turn, "error", err)
+				"turn", turn, "error", openErr)
 			return true
 		case why != "":
 			f.log.WarnContext(ctx, "assistant_fleet_reply_refused", "subject", subject,
@@ -373,14 +373,14 @@ func (f *Fleet) answerReplay(ctx context.Context, raw []byte) ([]byte, error) {
 	if req.Probe {
 		// EVERY NODE ANSWERS A PROBE, one that knows nothing of the turn
 		// included, so the asker can stop as soon as the roster has.
-		last, err := server.LastHere(ctx, req.Owner, req.Turn)
+		last, probeErr := server.LastHere(ctx, req.Owner, req.Turn)
 		switch {
-		case errors.Is(err, ErrNotRunning):
+		case errors.Is(probeErr, ErrNotRunning):
 			out.Answer = AnswerNotRunning
-		case errors.Is(err, ErrNotYours):
+		case errors.Is(probeErr, ErrNotYours):
 			out.Answer = AnswerNotYours
-		case err != nil:
-			return nil, fmt.Errorf("live: probe turn %s: %w", req.Turn, err)
+		case probeErr != nil:
+			return nil, fmt.Errorf("live: probe turn %s: %w", req.Turn, probeErr)
 		default:
 			out.Answer, out.Last = AnswerDone, last
 		}

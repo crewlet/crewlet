@@ -484,8 +484,8 @@ func (f *Fleet) Follow(ctx context.Context, owner, turn uuid.UUID, node string, 
 		return "", fmt.Errorf("live: listen to turn %s: %w", turn, err)
 	}
 	defer func() {
-		if err := unsub(context.WithoutCancel(ctx)); err != nil {
-			f.log.Warn("assistant_follow_not_withdrawn", "turn", turn, "error", err)
+		if unsubErr := unsub(context.WithoutCancel(ctx)); unsubErr != nil {
+			f.log.Warn("assistant_follow_not_withdrawn", "turn", turn, "error", unsubErr)
 		}
 	}()
 

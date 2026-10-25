@@ -123,11 +123,11 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 		return Trial{}, err
 	}
 	defer func() {
-		if err := rig.Close(); err != nil {
+		if closeErr := rig.Close(); closeErr != nil {
 			// THE TRIAL IS JUDGED ALREADY, from frames the turn drew; a
 			// service that did not stop in time is a fault of the run,
 			// said where the operator reads it.
-			fmt.Fprintf(os.Stderr, "assistant eval: %s: %v\n", c.Name, err)
+			fmt.Fprintf(os.Stderr, "assistant eval: %s: %v\n", c.Name, closeErr)
 		}
 	}()
 	// TITLED, so the turn's only rounds are its own: an untitled

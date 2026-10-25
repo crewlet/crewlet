@@ -75,9 +75,9 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	}
 	trust := t.Trust
 	if t.TrustOf != nil {
-		answer, err := cards.Decode(body)
-		if err != nil {
-			return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, err)
+		answer, decodeErr := cards.Decode(body)
+		if decodeErr != nil {
+			return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, decodeErr)
 		}
 		trust = t.TrustOf(answer)
 	}
