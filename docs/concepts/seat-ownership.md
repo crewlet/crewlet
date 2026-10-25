@@ -190,7 +190,7 @@ It closes on the **epoch**, not on membership, because a seat can be lost and re
 |---|---|
 | An unreachable coordination store | Says nothing about ownership, so the heartbeat keeps the seat. Closing here would tear a healthy company's turns down over a two-second blip during which no peer could have claimed anything — the three-valued rule paying for itself |
 | A seat whose teardown could not be proven | The lease is kept and renewed precisely so no peer can take it, so the grant has not moved and the in-flight turn is racing nobody |
-| A detached run — a coding CLI in agent mode, or a sandbox job | It outlives its turn by design; its placement is on its own row and the process that collects it is often not the one that launched it. What is fenced is the **resume**, under the grant the collecting node holds |
+| A detached run — a coding CLI in box mode, or a sandbox job | It outlives its turn by design; its placement is on its own row and the process that collects it is often not the one that launched it. What is fenced is the **resume**, under the grant the collecting node holds |
 
 **The same fence carries a person's stop.** A pause that asked for the running turn to stop closes it at the same round boundary with `turn.ErrStoppedByPerson` — ownership is checked first, since a turn on a seat that moved is the successor's to stop or not. That turn is not deferred: the trigger is recorded in the completion ledger and acked, because the person stopped it so that it would not go on. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
 

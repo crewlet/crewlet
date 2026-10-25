@@ -7,7 +7,7 @@ routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
 A node **without** the `ingress` role binds `api.port` too, and serves only
-its two probes there — `/health` and `/ready` — plus a seats node's agent-mode
+its two probes there — `/health` and `/ready` — plus a seats node's box-mode
 tool bridge, unless `api.public` moves the bridge to its own listener: see
 [Probes on a node without ingress](#probes-on-a-node-without-ingress).
 
@@ -28,7 +28,7 @@ operator credential — move to that listener and are served nowhere else:
 |---|---|---|---|
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
-| `/mcp/{token}` | A sandbox calling its seat's tools (agent mode) | `api.port` | `api.public` only |
+| `/mcp/{token}` | A sandbox calling its seat's tools (box mode) | `api.port` | `api.public` only |
 | Everything else — `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/work/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
 A public route asked of `api.port` answers `404` with the code `no_route` and a
@@ -180,7 +180,7 @@ serve — and only for one it will serve:
 |---|---|---|
 | `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store bounds; nothing after the recovery holds it. See the phases below. |
 | `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
-| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its agent-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
+| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its box-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
 | A request on the artifact origin (`api.artifacts`) | An empty `503` with `Retry-After: 10` for a ticketed path, the runtime or the kit, and the empty `404` or `405` the origin gives anything else | The origin's own refusal under its own inert headers, never a JSON body, which would be a document an artifact page could read. |
 | Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
 
@@ -398,7 +398,7 @@ node means nothing was done.
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in box mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you — it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings a native backend up, and `404 no_route` on a company that runs neither natively |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to** — the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company with no native backend |
 
@@ -3158,7 +3158,7 @@ iteration, so the launch is part of that row's identity), its report as
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.
-Zero means *not measured* — an agent-mode executor's rounds ran inside a coding
+Zero means *not measured* — a box-mode executor's rounds ran inside a coding
 CLI's own loop, in another process — never *took no time*. A phase that failed
 before it reached a provider also truncates to zero at this resolution;
 `failed` is what separates the two.

@@ -5363,7 +5363,7 @@ Four rules replace it, and each one names what it fixes.
    self-iterating turns where the question gets asked — and so does every
    **nested** call, a delegate's worker and the round-cap judge included, which
    publish no start and so could never have been given one. Zero means *not
-   measured*, never *took no time*: an agent-mode executor's rounds ran inside
+   measured*, never *took no time*: a box-mode executor's rounds ran inside
    a coding CLI's own loop in another process, and that run's wall clock is on
    `sandbox_run_started` / `sandbox_run_completed` instead.
 
@@ -6485,7 +6485,7 @@ tab, then open the phase, to read a word of it.
 
 **A parked turn is watched on the same tab.** Its executor launched a detached
 coding run and suspended, so no phase is in flight while the engine still
-calls the seat working — for the whole of an agent-mode executor's turn, and
+calls the seat working — for the whole of a box-mode executor's turn, and
 for hours on a long native run. So while the turn is parked the Transcript
 leads with a **Coding run** card: the run's live output (the same
 `sandbox_tail` poll the Timeline's run span opens, read off the waterfall's
@@ -7922,7 +7922,7 @@ field, and the panel says so.
 through the same Admin-only `config` question the Configuration screen asks,
 in config order (the order a seat that names no model falls back through), each
 **as the engine will run it**: a field the entry leaves out is said as the
-default the engine applies — the CLI (`claude-code`), the mode (`text`), the
+default the engine applies — the CLI (`claude-code`), the mode (`host`), the
 sign-in (`subscription`), the 600-second timeout and four processes at once —
 from `contract/models.ts`, which
 `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes` holds to the
@@ -7931,7 +7931,7 @@ sign-in the engine does not apply. There is **no per-key state** to draw and
 nothing is asked of a node: a model is one CLI, which holds one sign-in and
 rotates nothing, so what an operator needs is how it signs in and whether
 anything still runs on it. Three tiles count the models (and how many no seat
-names), the models in **agent mode**, which run the executor in their CLI, and
+names), the models in **box mode**, which run the executor in their CLI, and
 the models **on an API key**, the ones billed to a metered account. Each row is the entry's key over its CLI and model
 (`claude-code · sonnet`), its mode (*Text*, or *Agent* with the cell its
 `run_in` names), how it **signs in** — *Subscription*, *API key* or *Engine
