@@ -16,11 +16,11 @@ data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.5
 event: step
-data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":5,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"get_task","label":"Reading ENG-7","request":{"method":"GET","route":"GET /work/{id}"},"state":"running","started_at":"2026-10-24T09:41:00Z"}}
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":5,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"get_task","label":"Reading ENG-7","request":{"method":"GET","route":"/work/{id}"},"state":"running","started_at":"2026-10-24T09:41:00Z"}}
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.6
 event: step
-data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":6,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"get_task","label":"Reading ENG-7","request":{"method":"GET","route":"GET /work/{id}"},"state":"done","started_at":"2026-10-24T09:41:00Z","summary":"1 record"}}
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":6,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"get_task","label":"Reading ENG-7","request":{"method":"GET","route":"/work/{id}"},"state":"done","started_at":"2026-10-24T09:41:00Z","summary":"1 record"}}
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.7
 event: status
