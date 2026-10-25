@@ -53,6 +53,9 @@ type assistApp struct {
 	keys   runtoken.Material
 	d      *auth.Delegations
 	disp   *auth.Dispatcher
+	// rows are the directory's rows the session arm resolves, for a case
+	// that signs somebody else in beside the person.
+	rows personRows
 }
 
 func newAssistApp(t *testing.T, grants []iam.Grant, probe interface {
@@ -80,6 +83,7 @@ func newAssistAppWith(t *testing.T, grants []iam.Grant, more func(*api.Options))
 		t.Fatal(err)
 	}
 	rows := personRows{}
+	out.rows = rows
 	out.arm, err = auth.NewSessions(auth.SessionsDeps{Signer: signer, Directory: rows,
 		Applier: rows, Chart: assistChart{}, External: out.b.API.ExternalBase(), Now: now})
 	if err != nil {
