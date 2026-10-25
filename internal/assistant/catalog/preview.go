@@ -68,7 +68,7 @@ func readOne(ctx context.Context, read proposal.Read, req exec.Request) (any, er
 		return nil, fmt.Errorf("%w: %w", ErrPreviewRead, err)
 	}
 	if !cards.Permitted(resp.Status) {
-		r := cards.Refusal(resp.Status, resp.Body)
+		r := exec.RefusalOf(resp)
 		return nil, fmt.Errorf("%w: %s (%s)", ErrPreviewRead, r.Message, r.Code)
 	}
 	if resp.Truncated {
