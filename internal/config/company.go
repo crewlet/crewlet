@@ -1257,6 +1257,14 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 		reached[box.Cell] = where.String()
 	}
+	// DEEP WORK'S CELL, where the catalogue serves it: the engine host is
+	// the engine's own confined cell (internal/engine), never the
+	// catalogue's unconfined direct one.
+	if cell, ok := c.DeepWorkPlacement(); ok && cell != PlacementDirect && cell.NeedsBackend() {
+		if _, seen := reached[cell]; !seen {
+			reached[cell] = "assistant.deep_work.llm"
+		}
+	}
 	return reached
 }
 

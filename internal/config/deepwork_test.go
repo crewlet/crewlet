@@ -100,3 +100,38 @@ func TestDeepWorkValidatesEveryRange(t *testing.T) {
 		})
 	}
 }
+
+// DEEP WORK RUNS IN A REMOTE OR CONTAINED CELL WHENEVER ONE IS CONFIGURED, and
+// on the engine host only when none is: the entry's own run_in first, then
+// e2b, then a container with an image, then the host. Mutation: prefer the
+// host and the e2b case reads direct.
+func TestDeepWorkPrefersAConfiguredSandbox(t *testing.T) {
+	t.Parallel()
+	e2b := "  sandbox:\n    e2b:\n      api_key: ${E2B_API_KEY}\n"
+	container := "  sandbox:\n    local: {image: crewlet/agent:1}\n"
+	for name, c := range map[string]struct {
+		sandbox, entry string
+		want           Placement
+	}{
+		"no catalogue":         {"", deepEntry, PlacementDirect},
+		"e2b configured":       {e2b, deepEntry, PlacementE2B},
+		"container with image": {container, deepEntry, PlacementContainer},
+		"the entry's own":      {e2b, deepEntry + "      run_in: direct\n", PlacementDirect},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			doc := "name: Acme\nproviders:\n" + c.sandbox + "  llm:\n" + assistantEntry + c.entry +
+				"assistant:\n  enabled: true\n  llm: [assistant]\n  deep_work:\n    llm: deep\n"
+			cfg := mustCompany(t, doc)
+			got, ok := cfg.DeepWorkPlacement()
+			if !ok || got != c.want {
+				t.Fatalf("DeepWorkPlacement = %q, %v; want %q", got, ok, c.want)
+			}
+			if c.want != PlacementDirect {
+				if _, reached := cfg.SandboxPlacements()[c.want]; !reached {
+					t.Errorf("deep work's %s cell is not reached, so its backend is never built", c.want)
+				}
+			}
+		})
+	}
+}

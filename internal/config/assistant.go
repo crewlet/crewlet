@@ -247,6 +247,30 @@ func (c *Company) AssistantDeepWork() (string, LLMProvider, error) {
 	return d.LLM, c.Providers.LLM[d.LLM], nil
 }
 
+// DeepWorkPlacement is the cell deep work runs in, and whether the company
+// runs deep work at all: its entry's own `run_in`, else the first of e2b and
+// container the company configures, else [PlacementDirect], the engine host,
+// where the engine confines every run (ADR-0053). A REMOTE OR CONTAINED CELL
+// IS PREFERRED whenever one is configured, because the host is the cell whose
+// boundary is the engine's to hold rather than a machine's.
+func (c *Company) DeepWorkPlacement() (Placement, bool) {
+	_, entry, err := c.AssistantDeepWork()
+	if err != nil {
+		return "", false
+	}
+	if entry.RunIn != "" {
+		return entry.RunIn, true
+	}
+	sb := c.Providers.Sandbox
+	switch {
+	case sb.Configured(PlacementE2B):
+		return PlacementE2B, true
+	case sb.Configured(PlacementContainer) && sb.Local != nil && sb.Local.Image != "":
+		return PlacementContainer, true
+	}
+	return PlacementDirect, true
+}
+
 // deepWorkProblems reports every way `assistant.deep_work` cannot run: no
 // entry, an unknown one, one not in agent mode, a CLI other than Claude
 // Code, or a run_in this company configures no backend for.
