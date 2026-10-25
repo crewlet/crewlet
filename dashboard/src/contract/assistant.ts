@@ -589,3 +589,34 @@ export interface AssistantViewerAssistant {
   available: boolean;
   reason?: AssistantViewerReason;
 }
+
+// --- page actions (WP12) ---
+
+/**
+ * Every page action a screen may declare, by id, and whether it asks the
+ * person's approval first (D11): `none` for a pure view change, applied at once
+ * with an Undo, and `approve` for a change into a draft the person then saves.
+ *
+ * THE DASHBOARD'S HALF OF ONE LIST: the engine accepts a proposal only for an
+ * id `catalog.PageActions` holds, and the page context offers only the ids
+ * declared here, so `internal/assistant/catalog`'s client gate holds the two
+ * equal in both directions, id and confirm alike.
+ */
+export const ASSISTANT_PAGE_ACTIONS = {
+  "home.range.set": { confirm: "none" },
+  "home.feed.set": { confirm: "none" },
+  "work.filter.apply": { confirm: "none" },
+  "work.filters.clear": { confirm: "none" },
+  "work.arrange.set": { confirm: "none" },
+  "project.lens.set": { confirm: "none" },
+  "item.activity.set": { confirm: "none" },
+  "spend.range.set": { confirm: "none" },
+  "spend.group.set": { confirm: "none" },
+  "live.filter.apply": { confirm: "none" },
+  "turns.filter.apply": { confirm: "none" },
+  "knowledge.search.set": { confirm: "none" },
+  "org.draft.apply_ops": { confirm: "approve" },
+  "principles.draft.set": { confirm: "approve" },
+  "page.draft.replace": { confirm: "approve" },
+  "budgets.ceiling.prefill": { confirm: "approve" },
+} as const satisfies Record<string, { confirm: AssistantActionConfirm }>;

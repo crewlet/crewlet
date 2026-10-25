@@ -195,7 +195,6 @@ export function Knowledge() {
         ),
       },
       nav,
-      confirm: "none",
     }),
   });
   // --- end assistant page actions (WP12) ---

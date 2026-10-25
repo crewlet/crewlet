@@ -63,7 +63,6 @@ export function Feed({ now }: { now: number }) {
       scope: "What Home's feed shows (view only)",
       keys: { feed: choiceKey("Feed", feedFilters(runs), "filter", "all") },
       nav,
-      confirm: "none",
     }),
   });
   // --- end assistant page actions (WP12) ---

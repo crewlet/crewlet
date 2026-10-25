@@ -74,7 +74,6 @@ export function useHomeData() {
       scope: "Home's window (view only)",
       keys: { range: choiceKey("Window", HOME_RANGES, "filter", DEFAULT_RANGE) },
       nav,
-      confirm: "none",
     }),
   });
   // --- end assistant page actions (WP12) ---
