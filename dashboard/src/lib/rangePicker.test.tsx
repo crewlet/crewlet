@@ -1,26 +1,29 @@
 /**
- * The custom window: the two claims this file still decides for itself.
+ * A screen's range, as the kit's `TimeRangePicker` is handed it.
  *
- * Everything the frame does — Escape, the veil, focus in and back, the three
- * bands — belongs to uilet's `Modal` and is asserted there. Two things do not,
- * and both were left uncovered when the dialog this drew in was our own:
+ * The control, its dialog, its width and its focus are uilet's and asserted
+ * there. What is decided HERE is what a window means on this engine: which
+ * segments a screen offers and in which order, that Today is the company's
+ * day, that a custom window is read on the reader's zone or as whole company
+ * days, and that a window holding nothing is refused with its reason. Each
+ * case below drives the kit's real control through [rangePickerProps].
  *
- * THE WIDTH. `sm` is 480 and `md` is 560, and two date boxes read in one
- * glance are neither. 420 travels as a component variable the package
- * publishes rather than as a step, which is a thing that compiles either way
- * and can only be seen.
- *
- * THE REFUSAL. A window is HALF-OPEN, so one that ends where it begins holds
- * nothing — and "nothing" is a perfectly good query the engine answers with an
- * empty screen, which reads as a quiet company rather than as a window nobody
- * meant. Apply is disabled and the reason is said.
+ * THE REFUSAL MATTERS. A window is HALF-OPEN, so one that ends where it
+ * begins holds nothing, and "nothing" is a perfectly good query the engine
+ * answers with an empty screen, which reads as a quiet company rather than as
+ * a window nobody meant. Apply is disabled and the reason is said.
  */
 
 import { afterEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { LayerHost } from "@crewlethq/ui";
-import { TimeRangePicker } from "./TimeRange.tsx";
-import type { TimeRange, Window } from "~/lib/range.ts";
+import { LayerHost, TimeRangePicker } from "@crewlethq/ui";
+import { rangePickerProps } from "./rangePicker.ts";
+import type { TimeRange, Window } from "./range.ts";
+
+/** The kit's control, as every screen draws it. */
+function Picker({ range }: { range: TimeRange }) {
+  return <TimeRangePicker {...rangePickerProps(range)} />;
+}
 
 afterEach(cleanup);
 
@@ -52,22 +55,12 @@ function picker(set: (next: Window) => void = vi.fn()): TimeRange {
 function open(range: TimeRange = picker()) {
   const out = render(
     <LayerHost>
-      <TimeRangePicker range={range} />
+      <Picker range={range} />
     </LayerHost>,
   );
   fireEvent.click(screen.getByTitle(/Name two instants|^Apr/));
   return out;
 }
-
-test("the width a two-field window needs reaches the frame", () => {
-  open();
-  const frame = document.querySelector(".crewlet-modal") as HTMLElement | null;
-  expect(frame).toBeTruthy();
-  // The VARIABLE rather than a computed width: jsdom lays nothing out, and
-  // what is being claimed is that the value reaches the element the package
-  // reads it on — not what a browser then does with it.
-  expect(frame?.style.getPropertyValue("--crewlet-modal-width")).toBe("420px");
-});
 
 test("a window that ends where it begins is refused, and says why", () => {
   const set = vi.fn();
@@ -103,7 +96,7 @@ test("Apply is the form's submit button, so Enter in a box applies", () => {
 test("a dismissed custom window leaves the reader on a tab stop", async () => {
   render(
     <LayerHost>
-      <TimeRangePicker range={picker()} />
+      <Picker range={picker()} />
     </LayerHost>,
   );
   const custom = screen.getByRole("radio", { name: "Custom" });
@@ -138,7 +131,7 @@ test("today leads the strip where it is offered, and sets the company's day", ()
   range.offer = { ...range.offer, today: true, zone: "UTC" };
   render(
     <LayerHost>
-      <TimeRangePicker range={range} />
+      <Picker range={range} />
     </LayerHost>,
   );
   const radios = screen.getAllByRole("radio");
@@ -151,7 +144,7 @@ test("today leads the strip where it is offered, and sets the company's day", ()
 test("a screen that does not offer today does not draw it", () => {
   render(
     <LayerHost>
-      <TimeRangePicker range={picker()} />
+      <Picker range={picker()} />
     </LayerHost>,
   );
   expect(screen.queryByText("Today")).toBeNull();
@@ -167,7 +160,7 @@ test("a screen of company days picks two dates on the company's clock", () => {
   range.offer = { ...range.offer, customDays: true, zone: "Asia/Tokyo" };
   render(
     <LayerHost>
-      <TimeRangePicker range={range} />
+      <Picker range={range} />
     </LayerHost>,
   );
   fireEvent.click(screen.getByTitle("Pick two dates"));
