@@ -75,10 +75,10 @@ Usage:
 Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
-  -api URL       The node holding data to read stored values through and store
-                 a token or bundle in; default is this node's store, or the
-                 running engine holding it. A seats node, which holds no data,
-                 names one
+  -api URL       A running node to read stored values through and store a
+                 token or bundle in; default is this node's engine when it
+                 runs, and the fleet's store itself when it is stopped. A
+                 seats node, which holds no data, names one
   -home PATH     Read a host login from somewhere other than this user's home
   -no-smoke      Skip doctor's real completions (the tool call and both probes)
   -print-token   Write a captured token to stdout instead of the store (login only)
@@ -105,12 +105,12 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	// and needed here for the node they rarely run on: a seats node holds
 	// no data, its store is scratch, and the logins of the seats it runs
 	// are made on it — so the company's stored values, and the store a
-	// captured token goes to, are a node that holds data, which nothing in
-	// a seats node's Tier A addresses.
+	// captured token goes to, are reached through a running node that
+	// holds data (see companyResolver for why a seats node is sent to one).
 	apiURL := fs.String("api", "",
-		"the node holding data to read stored values through and store a "+
-			"token or bundle in; default is this node's store, or the "+
-			"running engine holding it")
+		"a running node to read stored values through and store a token or "+
+			"bundle in; default is this node's engine when it runs, and the "+
+			"fleet's store itself when it is stopped")
 	fromHost := fs.Bool("from-host", false,
 		"adopt the login this machine already has (login only)")
 	captureToken := fs.Bool("capture-token", false,

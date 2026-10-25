@@ -388,8 +388,9 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 
 // THE ENGINE'S OWN KEYS ARE REFUSED BY NAME, on both sides of the wire.
 //
-// The command refuses a reserved name before it opens any store — a stopped
-// node's own table never holds one, and a running node refuses it too — and
+// The command refuses a reserved name before it reaches any store — the
+// fleet's store refuses one when written directly, and a running node refuses
+// it too — and
 // a node that answers `reserved_name` comes back as the same sentinel rather
 // than as a missing grant, which would send an operator off to ask for one.
 func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
@@ -519,18 +520,28 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	if !strings.Contains(out.String(), node.server.URL) {
 		t.Errorf("the output does not say which store it wrote: %q", out.String())
 	}
-	if strings.Contains(out.String(), "next start") {
-		t.Errorf("a fleet write was reported as a node-local one: %q", out.String())
-	}
 	// AND WHEN THE RUNNING FLEET READS IT: at its next apply, which a reload
-	// brings forward. Said by nothing, a rotated key the engine went on
-	// using read as a write that failed.
-	if !strings.Contains(out.String(), "POST /config/reload") {
-		t.Errorf("a fleet write does not say when the running fleet reads it: %q", out.String())
+	// brings forward — the running fleet's note, never the stopped engine's,
+	// which would tell an operator the value waits for a start that is not
+	// coming. Said by nothing, a rotated key the engine went on using read
+	// as a write that failed.
+	if !strings.Contains(out.String(), secretsFleetNote) {
+		t.Errorf("a write through a node does not say the running fleet reads it "+
+			"at its next apply: %q", out.String())
 	}
-	// The local database beside the Tier A file must not have been created.
-	if _, statErr := os.Stat(filepath.Join(filepath.Dir(cfg), "index.db")); statErr == nil {
-		t.Error("a database was created on a machine writing through a remote node")
+	if strings.Contains(out.String(), secretsStoppedNote) {
+		t.Errorf("a write through a running node was told the engine reads it "+
+			"when it starts: %q", out.String())
+	}
+	// Nothing of this machine's was reached: not the database lock the
+	// stopped-engine route asks, nor a broker's store directory.
+	for _, path := range []string{
+		filepath.Join(filepath.Dir(cfg), "index.db.lock"),
+		filepath.Join(filepath.Dir(cfg), "stream"),
+	} {
+		if _, statErr := os.Stat(path); statErr == nil {
+			t.Errorf("%s was touched by a write through a remote node", path)
+		}
 	}
 }
 

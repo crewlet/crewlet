@@ -568,6 +568,12 @@ func TestAReadBeyondTheScopeIsStillTheFleetsValue(t *testing.T) {
 		!strings.Contains(notes.String(), "as it was read") {
 		t.Errorf("the reveal beyond the scope was not said: %q", notes.String())
 	}
+	// AS A REVEAL, logged where it was made: the same words the command's
+	// first line used for its way in.
+	if !strings.Contains(notes.String(), "revealed ${GITLAB_READ_TOKEN}") ||
+		!strings.Contains(notes.String(), "logged there by name") {
+		t.Errorf("a reveal through the node was said as a direct read: %q", notes.String())
+	}
 	resolver.Value("${GITLAB_READ_TOKEN}")
 	resolver.Value("${NOT_HELD_BY_THE_FLEET}")
 	want := []string{"GITLAB_READ_TOKEN", "GITLAB_SIGNING_SECRET", "GITLAB_URL"}
@@ -751,9 +757,8 @@ func TestAStoppedNodeReadsWhatTheFleetHolds(t *testing.T) {
 // A machine token is refused every reveal, whatever it carries, and the
 // command has no other way to the values while the engine runs. So the lock
 // and the refusal are both in the error, with the token a reveal takes — and
-// stopping the engine is NOT offered: a stopped node's own table is not where
-// the fleet's values are, and reading it instead is the stale resolution that
-// mints a webhook secret over a working one.
+// stopping the engine is NOT offered: it would let the command reach the store
+// itself, but a node taken down to read a value is an outage to save a token.
 func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
@@ -774,8 +779,8 @@ func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
 		}
 	}
 	if strings.Contains(err.Error(), "stop `crewlet run`") {
-		t.Errorf("the refusal offers stopping the engine, whose own table does not "+
-			"hold the fleet's values: %v", err)
+		t.Errorf("the refusal offers stopping the engine — an outage to read a "+
+			"value — when the way round is the token: %v", err)
 	}
 }
 
@@ -798,16 +803,22 @@ func TestOnlyALockedStoreIsReadThroughTheNode(t *testing.T) {
 	}
 }
 
-// A NAMED NODE IS WHERE THE VALUES ARE READ, and the local path is never
-// opened: a vendor command's -api names the node its credentials are written
-// through, possibly from a machine that is not one, where opening the Tier A
-// store path would create an empty database and resolve every stored value as
+// A NAMED NODE IS WHERE THE VALUES ARE READ, and nothing of this node's is
+// touched: a vendor command's -api names the node its credentials are written
+// through, possibly from a machine that is not one, where reaching the store
+// the Tier A file describes would start a broker on a directory nobody meant —
+// creating a fleet store there — and read every value the named node holds as
 // unset.
 func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
 	cfg := bootstrapWithKeyring(t, "k1")
-	storePath := filepath.Join(filepath.Dir(cfg), "index.db")
+	// WHAT THE STOPPED-ENGINE ROUTE WOULD LEAVE: the database lock it asks,
+	// and the broker's store directory.
+	touched := []string{
+		filepath.Join(filepath.Dir(cfg), "index.db.lock"),
+		filepath.Join(filepath.Dir(cfg), "stream"),
+	}
 
 	env, _, closeEnv, err := companyResolver(t.Context(), tokenEnviron("ops-token"),
 		llmEntryReads(readingCompany(t), []string{"default"}), cfg, node.server.URL, &bytes.Buffer{})
@@ -818,9 +829,10 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	if got := env.Value("${PROXY_URL}"); got != "http://proxy.example.com:3128" {
 		t.Errorf("${PROXY_URL} = %q, not the named node's value", got)
 	}
-	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the local store at %s was opened for a run that named a node: %v",
-			storePath, err)
+	for _, path := range touched {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was touched by a run that named a node: %v", path, err)
+		}
 	}
 }
 

@@ -379,7 +379,8 @@ func TestARekeyDryRunReportsWithoutWriting(t *testing.T) {
 // PROVENANCE IS RECORDED, so "where did this credential come from" has an
 // answer months later — and it is the command's own, never a word its caller
 // picked. `-source` once stamped whatever it was given, so a row could claim
-// any path; the flag is gone, and a stopped node's table records `cli`.
+// any path; the flag is gone, and a write made directly, with the engine
+// stopped, records `cli`.
 // Mutation: stamp another word in setSecret and the row's source fails.
 func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")

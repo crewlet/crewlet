@@ -252,9 +252,9 @@ func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*config
 	if err != nil {
 		return nil, nil, fmt.Errorf("secrets keyring: %w", err)
 	}
-	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
-	// are the node's own, and this command reads nothing a state log
-	// applies, so it opens no replicated estate.
+	// THE NODE'S OWN FILE ALONE: revisions are the node's own, and this
+	// command reads nothing a state log applies, so it opens no replicated
+	// estate.
 	db, err := store.OpenNode(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout:  boot.Store.BusyTimeout(),

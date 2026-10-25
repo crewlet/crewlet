@@ -458,8 +458,18 @@ func (n *storedValues) Lookup(name string) (string, bool) {
 			name, n.where, err, revealRemedy(err))})
 	}
 	if ok {
-		fmt.Fprintf(n.notes, "read ${%s} from %s as it was read, beyond the "+
-			"values this command reads before it runs.\n", name, n.where)
+		// THE SAME WORDS THE COMMAND'S FIRST LINE USED for its way in: a
+		// read through a node is a reveal, logged there by name against
+		// the caller, and the operator is told so for this one as for the
+		// rest.
+		if n.throughNode {
+			fmt.Fprintf(n.notes, "revealed ${%s} through %s as it was read, beyond "+
+				"the values this command reveals before it runs; logged there by "+
+				"name.\n", name, n.where)
+		} else {
+			fmt.Fprintf(n.notes, "read ${%s} from %s as it was read, beyond the "+
+				"values this command reads before it runs.\n", name, n.where)
+		}
 	}
 	return value, ok
 }
@@ -621,9 +631,13 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 
 	// RESOLVED BEFORE THE PLAN IS PRINTED, because the plan's most
 	// consequential line depends on it: whether this run will replace the
-	// key a working hook signs with. Reading the store is not a mutation,
-	// so a -dry-run does it too — a dry run that could not say this would
-	// be silent about the one outcome an operator most needs warning of.
+	// key a working hook signs with. Reading the store is not a mutation of
+	// it, so a -dry-run does it too — a dry run that could not say this
+	// would be silent about the one outcome an operator most needs warning
+	// of. With the engine stopped that read starts this node's broker, which
+	// on a node that has never booted creates the fleet's buckets as the
+	// engine's first boot would (engine.OpenFleetStore): the store is made,
+	// not changed.
 	ctx := context.Background()
 	env, boot, closeEnv, err := companyResolver(ctx, environ,
 		gitlabProvisionReads(cfg), *sinks.bootstrap,
